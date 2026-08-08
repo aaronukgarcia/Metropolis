@@ -1,6 +1,12 @@
 {
   "$schema_note": "Metropolis FEAT-009 georeference pin. CRS is British National Grid (EPSG:27700), all easting/northing in metres. Produced by research pass 2026-08-08 from public web sources (OS docs + landmark grid references); NOT yet cross-checked against an authoritative BNG converter or the real OS Terrain 50 tiles. See confidence fields and openQuestions before treating any coordinate as final.",
   "crs": "EPSG:27700",
+  "designDecision": {
+    "decidedBy": "Aaron",
+    "date": "2026-08-08",
+    "decision": "Option (a): the start tile is an ARTISTICALLY COMPRESSED representation of real ground. All §2.1 features (shore south, shelf, M20 corridor + junction, escarpment rising north) are present in-tile; true real-world distances (shore-to-crest ~4.4km) are foreshortened onto the 2km/200-cell grid by the terrain importer. Real elevations and feature identities are preserved; north-south distances are non-linearly compressed. J13/Seabrook literal-containment questions are moot under compression — both features are represented.",
+    "implementation": "engine.world (MOD-017) terrain importer implements the compression mapping; coordinates below remain the real-world anchor frame and MUST still be OSTN15-verified against downloaded Terrain 50 data at that point."
+  },
   "startTile": {
     "swEasting": 620000,
     "swNorthing": 135000,
