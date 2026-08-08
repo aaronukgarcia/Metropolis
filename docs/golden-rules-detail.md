@@ -996,5 +996,59 @@ Don't claim full deploy until both have happened.
 
 ---
 
-*See also: `CLAUDE.md` for the one-line summaries of all 19 rules.*
+---
+
+# METROPOLIS AMENDMENTS (approved by Aaron, 2026-08-08)
+
+The rules above are inherited verbatim from Prix Six. The following amendments and additions are Metropolis-specific, approved with the sprint plan (`docs/planning/sprint-plan-v1.md` §7, commit 78c368f).
+
+## Rule #2 — Version Discipline (Metropolis profile)
+
+The intent of GR#2 — every build traceable to a version, every push verified — is preserved; the mechanism changes because M0-ENG §3 bans hand-maintained version files:
+
+- **App version** = `git describe --tags --dirty`, injected at build via `-ldflags`, shown in the F12 info panel. Never a hand-edited file.
+- **Milestone cuts** are annotated tags `v0.<milestone>.<n>` (M0-ENG §5).
+- **Commit gate**: once `cmd/` or `internal/` exist, every commit touching `cmd/`, `internal/` or `data/` must carry a valid BOW `[mkey]` reference in its message (validated by hook; commit hash auto-`ref`'d onto the BOW item — FEAT-002 + MOD-007 track the hook work).
+- Root tooling (`claude-*.js`, `tools/`, `docs/`, `.claude/`) stays version-guard-exempt as today.
+- **Verify after every push** is unchanged: confirm the pushed commit on `origin` and, once CI exists, that the pipeline went green.
+
+### Compliance checklist
+- [ ] No hand-maintained version file exists anywhere in the Go app
+- [ ] Build info in F12 comes from `-ldflags` only
+- [ ] Engine/UI/data commits carry a BOW ref that resolves (`node claude-bow.js show <mkey>`)
+- [ ] Milestone tags are annotated and pushed
+
+## Rule #20 — Contract-First, Stub-Forever (NEW)
+
+No module consumes another except through its registered interface; every module keeps a passing `Stub` implementation for the life of the project.
+
+- Interfaces are declared in `code.json` (generated from the master plan) with inbound/outbound GUIDs; **changing an interface requires a version note on its code.json entry** and a BOW comment on the owning item.
+- The engine must boot with ANY real/stub mix (M0-ENG §2); stub conformance (same command log ⇒ schema-identical delta shapes) is a CI suite from Sprint 2.
+- The UI never imports engine internals: `internal/ui/* → internal/engine/*` is a lint-enforced forbidden import (the decoupling that keeps gRPC/cloud a config flip).
+- Definition of Done (M0-ENG §6.3) extends: a module is not done while its stub fails.
+
+### Compliance checklist
+- [ ] New module registered with interface + stub before any consumer lands
+- [ ] No cross-module import bypasses the registered interface (lint)
+- [ ] Stub conformance fixtures updated with the module's change
+- [ ] Interface changes: code.json version note + BOW comment present
+
+## Rule #21 — A Red Determinism Gate Stops the Line (NEW)
+
+Any determinism CI failure (snapshot-hash mismatch across runs or worker counts, camera-variance, cache-content dependence) is **automatically P0** and blocks all other merges until green.
+
+- Rationale: determinism debt is unpayable later — one nondeterministic merge poisons every fixture, replay and balance run recorded after it.
+- The BOW schema's rule stands: any bug flagged `determinism` is P0, no discussion.
+- The gate itself (FEAT-004) is built FIRST, on the stub engine, before any simulation logic (A8 TDD order).
+- Reverting the offending commit is always an acceptable first response; diagnosis can follow on a branch.
+
+### Compliance checklist
+- [ ] Determinism gate green on `main` at all times
+- [ ] Red gate ⇒ no other merges until resolved (revert counts as resolution)
+- [ ] Determinism-affecting commits carry a `DETERMINISM:` body line (M0-ENG §5)
+
+---
+
+*See also: `CLAUDE.md` for the one-line summaries of all 21 rules.*
 *Audit history: `docs/gr-audit-2026-05-06.md` documents the bug-cross-reference that surfaced rules #14-#19.*
+*Metropolis amendments approved 2026-08-08 with sprint plan v1 (commit 78c368f).*

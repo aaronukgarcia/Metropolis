@@ -1,6 +1,6 @@
 # CLAUDE.md - Metropolis Project Brief
 
-> **Last updated:** 2026-08-08 (Book of Work added: metro BOW tables + claude-bow.js; checkin now prints the startup summary)
+> **Last updated:** 2026-08-08 (master plan v2.1 loaded: sprints S0–S11 in BOW, code.json module registry, GR#2 amended + GR#20/#21 added, Prix-Six Firebase skills retired — see docs/planning/sprint-plan-v1.md)
 > **Read this entire file at the start of every session.**
 
 ---
@@ -30,7 +30,7 @@ These rules are inherited from Prix Six and apply to every piece of code written
 | Rule | Summary |
 |------|---------|
 | #1 | Aggressive Error Trapping — log, type, correlation ID, selectable display |
-| #2 | Version Discipline — bump on every commit, verify after every push |
+| #2 | Version Discipline — **Metropolis profile (2026-08-08):** app version = git describe via ldflags + milestone tags; BOW `[mkey]` ref required on engine/UI/data commits; root tooling exempt; verify after every push |
 | #3 | Single Source of Truth — no duplication without validation |
 | #4 | Identity Prefix — every response starts with `bill>`, `bob>`, or `ben>` |
 | #5 | Verbose Confirmations — explicit, timestamped, version-numbered confirmations |
@@ -48,6 +48,8 @@ These rules are inherited from Prix Six and apply to every piece of code written
 | #17 | Silent Failure Detection — every service with a user-visible status field MUST have automated freshness monitoring, and every monitoring FAILURE must also write a registry error |
 | #18 | Migration Dead-Code Audit — when eliminating a collection/field/feature, audit for orphaned readers/validators in the SAME commit |
 | #19 | Deploy Bundling — every commit changing deployable functions MUST end with the deploy command bundling ALL pending function changes |
+| #20 | Contract-First, Stub-Forever — modules consume each other ONLY via registered interfaces (GUIDs in code.json); every module keeps a passing stub for life; `internal/ui → internal/engine` imports lint-banned |
+| #21 | Red Determinism Gate Stops the Line — any determinism CI failure is auto-P0; nothing else merges until green; revert first, diagnose after |
 
 > **Full implementation patterns, code templates, and compliance checklists:** `docs/golden-rules-detail.md`
 > (Carried over verbatim from Prix Six — Firebase-specific examples apply once Metropolis has its own stack; adapt as the architecture solidifies.)
@@ -137,7 +139,7 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 
 ## Skills (.claude/commands) — inherited from Prix Six
 
-All Prix Six slash commands were copied over. **Process skills** (`/commit`, `/bump`, `/bye`, `/rca`, `/diagnose`, `/health-check`, `/security-audit`, `/silent-failures`, `/memory-hygiene`, `/audit`, `/danger`, `/upgrade`) are project-agnostic and usable now. **Adapted to Metropolis:** `/bow` (metro MariaDB Book of Work via `claude-bow.js`, 2026-08-08). **Prix-Six-specific skills** (`/openf1`, `/check-race-data`, `/bot-status`, `/cc`, `/fn-status`, `/deploy`, `/rules-deploy`, `/iam-check`, `/new-secret`, `/new-collection`, `/feedback`, `/triage-errors`, `/fs`, `/codejson-audit`, `/sync-codejson`, `/register-guid`, `/new-error`) reference the Prix Six Firebase project — adapt or delete them as Metropolis's stack is decided.
+**Process skills** (`/commit`, `/bump`, `/bye`, `/rca`, `/diagnose`, `/health-check`, `/security-audit`, `/silent-failures`, `/memory-hygiene`, `/audit`, `/danger`, `/upgrade`) are project-agnostic and usable now. **Metropolis-native:** `/bow` (metro BOW via `claude-bow.js`), `/sprint` (sprint board + ready-to-build), `/codejson-audit` (plan-drift + registry consistency), `/register-guid` (master-plan registration flow), `/new-error` (MET-xxx registry codes) — all 2026-08-08. **Retired 2026-08-08 (Aaron-approved, recoverable from git):** the 13 Prix-Six Firebase skills (`/openf1`, `/check-race-data`, `/bot-status`, `/cc`, `/fn-status`, `/deploy`, `/rules-deploy`, `/iam-check`, `/new-secret`, `/new-collection`, `/feedback`, `/triage-errors`, `/fs`) plus `/sync-codejson`, whose job (hand-registering GUIDs into code.json) is impossible by design now that code.json is generated from the master plan. `/health-check` gains determinism-gate/perf-CI/ready-queue checks when those exist (BOW-tracked).
 
 ---
 
