@@ -117,6 +117,24 @@
       ]
     },
     {
+      "mkey": "tool.secretguard",
+      "type": "feature",
+      "title": "Secret & hardcoding guard hook: commits blocked when staged content carries credentials or GR#15 violations",
+      "desc": "claude-secret-guard.js (PreToolUse on git commit): scans STAGED content (git diff --cached) for secrets — private key blocks, API key/token patterns, passwords in URLs/connection strings, high-entropy literals — and hardcoding smells (GR#15: expected counts/values as literals in validator-shaped code). Fail-closed on detection with per-line evidence; CLAUDE_DISABLE_SECRET_GUARD=1 escape hatch (same posture as tool.planguard); allowlist file for sanctioned patterns (e.g. the documented localhost/root/no-password metro DB default, UUID literals). Mechanises GR#11's secrets half so it no longer depends on lead vigilance. [spec: GR#11; GR#15; M0-ENG §5 (hooks)] [path: claude-secret-guard.js]",
+      "seq": 67,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "GR#11; GR#15; M0-ENG §5 (hooks)",
+      "guid": "1c0a8c46-ba8a-4063-92f8-0bbcdb580753",
+      "guidIn": "9175b0d6-8eed-4a1e-b5a8-6a9f98778687",
+      "guidOut": "ee1eb6df-d942-474c-8c6b-f92372a56748",
+      "deps": [
+        "plan.pipeline"
+      ]
+    },
+    {
       "mkey": "tool.ready",
       "type": "feature",
       "title": "BOW ready-to-build view: claude-bow.js ready + /sprint skill",

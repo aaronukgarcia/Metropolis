@@ -26,15 +26,28 @@ Documents in this directory are edited by their owning junior developer while in
 
 | Doc | BOW mkey | Code | Status |
 |---|---|---|---|
-| `errors.md` | `foundation.errors` | MOD-002 | in progress — not yet doc-passed |
-| `protocol.md` | `int.protocol` | INT-001 | in progress — not yet doc-passed |
-| `save-format.md` | `int.serializer` | INT-002 | in progress — not yet doc-passed |
-| `solver-contract.md` | `int.solver` | INT-003 | in progress — not yet doc-passed |
+| `errors.md` | `foundation.errors` | MOD-002 | tested PASS — awaiting freeze review |
+| `protocol.md` | `int.protocol` | INT-001 | tested PASS — awaiting freeze review |
+| `save-format.md` | `int.serializer` | INT-002 | tested PASS — awaiting freeze review |
+| `solver-contract.md` | `int.solver` | INT-003 | tested PASS — awaiting freeze review |
 
 (Table updated as each doc is doc-passed and as new design docs are added under later sprints.)
 
 ## Freeze review packet for Aaron
 
-Sprint 0's exit gate (`docs/planning/sprint-plan-v1.md` §3) is Aaron reviewing and freezing v1 of the three contracts — `int.protocol`, `int.serializer`, `int.solver` — plus the error registry foundation (`foundation.errors`) they all depend on. This section will collect, for each of the four Sprint-0 documents above, a doc-passed link and a one-line "ready for freeze review" note once the Tester has passed the item and the Documentation pass is complete.
+Sprint 0's exit gate (`docs/planning/sprint-plan-v1.md` §3) is Aaron reviewing and freezing v1 of the three contracts — `int.protocol`, `int.serializer`, `int.solver` — plus the error registry foundation (`foundation.errors`) they all depend on. All four wave-2 items have passed testing and had a documentation pass; ready for Aaron's review.
 
-Nothing is listed here yet — all four documents are still in progress.
+| Doc | mkey / code | Open questions | Notes |
+|---|---|---|---|
+| `protocol.md` | `int.protocol` / INT-001 | 5 (§7) | The engine↔UI contract; MOD-008/009/012/013 all block on this freezing. |
+| `save-format.md` | `int.serializer` / INT-002 | 5 | Save format IS the fixture format (M0-ENG §2.2, H-REPLAY); binary-format size threshold (A3) still unset. |
+| `solver-contract.md` | `int.solver` / INT-003 | 5 | CPU/GPU/cloud offload seam; four `ProblemKind` slots, three are minimal stubs pending owning engine modules. |
+| `errors.md` | `foundation.errors` / MOD-002 | 5 | Every other module depends on this one; GR#1/GR#7 enforcement. |
+
+**Two cross-cutting freeze questions the lead is adding, on top of each document's own open questions:**
+
+(a) **OD matrix cell precision: `f32` vs `f64`.** Logged on INT-003 (`solver-contract.md` open question 1): R3's worked example ("~5,000 zones ⇒ ~100 MB of OD") only reconciles if OD cells are `float32`; the current `TrafficAssignmentRequestV1`/`VDFParamsV1`/`sizing.go` use `float64` throughout, which gives ~200 MB for the same worked example. Needs a decision before `engine.traffic` builds against the sizing tables.
+
+(b) **Duplicate correlation-ID generators.** `internal/protocol` (`envelope.go`, referenced in `protocol.md` §2 — "Minted by the initiating side (`NewCorrelationID()` or caller-supplied)") and `internal/foundation/errs` (`correlation.go`, documented in `errors.md` under "Correlation IDs") each mint their own UUIDv4 correlation IDs. This is deliberate v1 duplication — `int.protocol` is neutral ground (`internal/protocol/doc.go`: "imports nothing from internal/engine or internal/ui") and cannot depend on `internal/foundation/errs` without breaking that ban — but it means two independent UUIDv4 implementations exist for the same concept. Freeze review should confirm this duplication is acceptable for v1 or direct that a shared leaf package (below both, imported by both, itself neutral ground) mint correlation IDs once.
+
+Neither (a) nor (b) is currently listed as an open question inside the four documents themselves; they are cross-cutting concerns the lead is layering on top at the freeze-review stage, so this table — not the individual docs — is the right place for them.
