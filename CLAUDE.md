@@ -95,6 +95,7 @@ A new software development project. **Architecture, purpose, and module structur
 - **Node:** `C:\Program Files\nodejs\node.exe`
 - **Project root:** `E:\git\Metropolis`
 - **Launcher:** `metro.bat` (in `C:\Users\aarongarcia\AppData\Local\Microsoft\WindowsApps`, on PATH)
+- **Database:** MariaDB 12.2, database `metro` on localhost:3306 (root, no password). Client: `"C:\Program Files\MariaDB 12.2\bin\mysql.exe"`. Bootstrap table `project_meta` holds project facts (`status` row = online). Charset utf8mb4. Created 2026-08-08.
 - **MCPs:** configured user-level in `C:\Users\aarongarcia\.claude.json` (Vestige memory, GitHub, MS 365, etc.) — available automatically in every session
 
 ---
