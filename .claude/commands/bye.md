@@ -1,6 +1,6 @@
 ---
 description: Session end (Metropolis) — git status check, claude-sync checkout (metro MariaDB), Vestige session summary, graceful sign-off
-allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(node claude-sync.js:*)
+allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(node claude-sync.js:*), Bash(node claude-bow.js:*)
 ---
 
 ## Context
@@ -9,6 +9,7 @@ allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(node 
 - Uncommitted changes: !`git diff --stat HEAD`
 - Today's commits: !`git log --oneline --since="24 hours ago"`
 - Current permit: !`node claude-sync.js read 2>/dev/null | head -20`
+- BOW state: !`node claude-bow.js summary 2>/dev/null`
 
 ## Your task
 
@@ -24,6 +25,16 @@ Check git status above. If there are uncommitted changes:
 - Ask the user: "There are uncommitted changes — do you want to commit before ending the session, or leave them staged?"
 - If committing: run `/commit` first, then return here
 - If leaving: note what's pending in the session summary
+
+---
+
+### STEP 1B — BOW reconciliation
+
+Look at the BOW state above against what happened this session:
+
+- Items worked on this session: is their status honest (`in_progress` / `done`), and does every completed item carry its git ref (`node claude-bow.js ref <CODE> <hash>`)?
+- Work discovered but not done: does it have a BOW item yet? If not, add one now (`node claude-bow.js add ...`) — next session's checkin summary is how it gets remembered.
+- Fix any drift before checkout; mention the BOW top item in the sign-off's "Next session" line.
 
 ---
 

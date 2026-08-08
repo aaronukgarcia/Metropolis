@@ -1,5 +1,5 @@
 ---
-description: Full repo security audit — scan for secrets, hardcoded values, committed sensitive files, untracked local config, gitignore gaps, and stale service account keys. Produces SEC-NNN findings ready to add to book_of_work.
+description: Full repo security audit — scan for secrets, hardcoded values, committed sensitive files, untracked local config, gitignore gaps, and stale service account keys. Produces SEC-NNN findings ready to add to the BOW (claude-bow.js).
 allowed-tools: Bash(node:*), Bash(git:*), Bash(grep:*), Bash(find:*)
 ---
 
@@ -220,7 +220,7 @@ bill> Security Audit — [date]
 
 **A CLEAN posture may only be declared if STEP 0 passed and every negative result names its pattern + scope.** An empty grep with an unvalidated pattern or a stale path is not evidence of absence — it is evidence you didn't look.
 
-Number findings sequentially. If previous SEC findings exist in `book_of_work`, pick up from the next available number.
+Number findings sequentially. If previous SEC findings exist in the BOW (`node claude-bow.js list --all` — look for titles starting `SEC-`), pick up from the next available number.
 
 ---
 
@@ -228,10 +228,10 @@ Number findings sequentially. If previous SEC findings exist in `book_of_work`, 
 
 For each CRITICAL or HIGH finding:
 - Offer to fix immediately (git rm --cached, remove fallback, rotate key)
-- Offer to add findings to `book_of_work` as SEC-NNN entries
+- Offer to add findings to the BOW as bug items: `node claude-bow.js add bug "SEC-NNN: <summary>" --priority P0` (P0 for CRITICAL, P1 for HIGH), detail in `--desc` or a follow-up `comment`
 
 For MEDIUM findings:
-- Offer to add to `book_of_work` for tracking
+- Offer to add to the BOW for tracking: `node claude-bow.js add bug "SEC-NNN: <summary>" --priority P2`
 
 ---
 

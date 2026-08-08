@@ -1,6 +1,6 @@
 ---
 description: Metropolis pre-commit workflow — Golden Rules compliance, security review, version check, then commit
-allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git log:*), Bash(node claude-sync.js:*), Bash(grep:*)
+allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git log:*), Bash(node claude-sync.js:*), Bash(node claude-bow.js:*), Bash(grep:*)
 ---
 
 ## Context
@@ -252,10 +252,24 @@ Only proceed if ALL 7 gates pass. Stage appropriate files and commit using:
 
 Then log to coordination: `node claude-sync.js write "committed vX.Y.Z — [one-line summary]"`
 
+### After the commit — BOW linkage
+
+**Gotcha:** `claude-version-guard.js` inspects the staging area at hook time — a chained `git add X && git commit` is evaluated BEFORE the add and gets blocked. Stage in one command, commit in the next.
+
+If this commit completes or advances a Book of Work item (check `node claude-bow.js list` if unsure):
+
+```bash
+node claude-bow.js ref <CODE> <full-commit-hash> --note "[what this commit did for the item]"
+node claude-bow.js done <CODE> --note "[resolution]"        # only if fully complete
+node claude-bow.js set <CODE> --status in_progress           # if merely advanced
+```
+
+Never claim a tracked item is finished without its git ref. If the commit surfaced NEW work, add a BOW item for it now.
+
 Confirm with your identity prefix:
 ```
 bill> ✅ Committed vX.Y.Z — [summary]
      GR#0 ✅  GR#2 ✅  GR#7 ✅  GR#1 ✅  GR#6 ✅  GR#11 ✅  Docs ✅  Rules ✅  fn-deploy ✅
-     Logged to claude-sync.
+     Logged to claude-sync. BOW: [FEAT-NNN ref'd/done | no tracked item]
 ```
 

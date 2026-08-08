@@ -40,28 +40,13 @@ Flag anything that looks like in-progress work that shouldn't be left hanging.
 
 ### CHECK 3 — BOW open items
 
-Pull open BOW items from Firestore:
+Pull open BOW items from the metro MariaDB:
 
-```javascript
-const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
-const path = require('path');
-if (!getApps().length) initializeApp({ credential: cert(path.resolve('service-account.json')) });
-const db = getFirestore();
-db.collection('book_of_work')
-  .where('status', 'in', ['open', 'tbd', 'monitoring'])
-  .get()
-  .then(snap => {
-    if (snap.empty) { console.log('BOW: CLEAN'); return; }
-    const p1p2 = snap.docs.filter(d => (d.data().priority || 99) <= 2);
-    const other = snap.docs.filter(d => (d.data().priority || 99) > 2);
-    console.log(`BOW: ${snap.size} open (${p1p2.length} P1/P2)`);
-    p1p2.forEach(d => console.log(`  [P${d.data().priority} ${d.data().status?.toUpperCase()}] ${d.id} — ${d.data().title || d.data().summary || ''}`));
-    if (other.length) console.log(`  + ${other.length} P3/P4 items`);
-  });
+```bash
+node claude-bow.js list
 ```
 
-Write to temp file and run. Report P1/P2 items by name; give count only for P3/P4.
+Report P0/P1 items by name (including any ⛓ blocked-on-dependency markers); give count only for P2/P3. Flag any item stuck `in_progress` or `blocked` with no recent comment/git ref — that is silent-stall territory.
 
 ---
 
@@ -318,7 +303,7 @@ bill> 🏥 Prix Six Health Check — vX.Y.Z — [date]
      ─────────────────────────────────────────
      Version sync:      ✅ / ❌
      Uncommitted work:  ✅ clean / ⚠️ [what's pending]
-     BOW P1/P2:         ✅ none / ❌ N items — [list]
+     BOW P0/P1:         ✅ none / ❌ N items — [list]
      BOW total open:    N items
      Firestore rules:   ✅ committed, no local changes / ⚠️ uncommitted changes
      Branch:            main ✅ / ⚠️ [branch name]

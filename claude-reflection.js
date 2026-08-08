@@ -62,6 +62,10 @@ process.stdin.on('end', () => {
    - Does MEMORY.md or any memory file need updating?
    - Should the /diagnose skill be updated with new learnings?
 
+6. **Book of Work:**
+   - Does this commit complete or advance a BOW item? If yes: node claude-bow.js ref <CODE> <hash>, then done/set status.
+   - Did this work surface NEW work? Add a BOW item for it now — don't carry it in your head.
+
 Answer briefly (2-3 words per item is fine). Skip items that clearly don't apply.
 If ALL items are clean, just say "✅ Reflection clean — no actions needed."
 </user-prompt-submit-hook>`;
