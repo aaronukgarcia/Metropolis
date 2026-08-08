@@ -52,7 +52,7 @@
       "layer": "interface",
       "title": "Engine<->UI protocol v1: commands, events, deltas, view subscriptions",
       "desc": "Versioned message schema (BuyLand, SetBudget, AdvanceTicks...; state deltas + events out), correlation IDs on every command, view-subscription contract (named projections, deltas only for live subscriptions — also the remote-play seam). In-process channels v1, gRPC transport implemented but dormant behind a config flag.",
-      "specRef": "§15; UI-SPEC §6; V.2.1",
+      "specRef": "§15; UI-SPEC §1, §6; M0-ENG §1.1; V.2.1",
       "path": "internal/protocol/",
       "inbound": {
         "name": "ProtocolV1",
