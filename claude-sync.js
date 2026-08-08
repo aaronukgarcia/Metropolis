@@ -45,6 +45,8 @@
 'use strict';
 
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 
@@ -161,7 +163,21 @@ async function acquire(db, name, prevRow) {
     await db.query('REPLACE INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
       [WINDOW_ID, name, now]);
   }
+  writeIdentityFiles(name);
   return sessionId;
+}
+
+/** Keep the statusline truthful: it reads .claude/.identity-<window> first,
+ *  falling back to the shared .identity. Writing both here (on every acquire,
+ *  including wake recovery and IDENTITY CHANGED) means the statusline follows
+ *  identity changes without depending on the startup hook re-running. */
+function writeIdentityFiles(name) {
+  try {
+    const dotClaude = path.join(__dirname, '.claude');
+    fs.mkdirSync(dotClaude, { recursive: true });
+    if (WINDOW_ID) fs.writeFileSync(path.join(dotClaude, `.identity-${WINDOW_ID}`), name.toLowerCase(), 'utf8');
+    fs.writeFileSync(path.join(dotClaude, '.identity'), name.toLowerCase(), 'utf8');
+  } catch { /* statusline nicety — never fail a checkin over it */ }
 }
 
 function printSuccess(name, sessionId) {

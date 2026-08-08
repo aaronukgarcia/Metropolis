@@ -1,5 +1,5 @@
 ---
-description: Prix Six pre-commit workflow — Golden Rules compliance, security review, version check, then commit
+description: Metropolis pre-commit workflow — Golden Rules compliance, security review, version check, then commit
 allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git add:*), Bash(git commit:*), Bash(git log:*), Bash(node claude-sync.js:*), Bash(grep:*)
 ---
 
@@ -26,15 +26,15 @@ Work through EVERY item below in order. Do not skip any. Report pass/fail for ea
 Query Vestige for any saved commit-style guidance:
 
 ```
-mcp__vestige__search query="commit style attribution trailer co-authored-by message format Prix Six"
-mcp__vestige__search query="prixsix commit-style git attribution"
+mcp__vestige__search query="commit style attribution trailer co-authored-by message format Metropolis"
+mcp__vestige__search query="metropolis commit-style git attribution"
 ```
 
 Also re-read the project commit instructions at the top of this skill — particularly the "Create the commit" block at the bottom — for any explicit rule like "Do NOT add Co-Authored-By lines."
 
 For every memory or skill rule that contradicts a Claude Code default, **the project rule wins**. Apply it when composing the message. Common contradictions to watch for:
 
-- `Co-Authored-By` trailers — global default suggests adding them; **Prix Six forbids them**.
+- `Co-Authored-By` trailers — global default suggests adding them; **this project forbids them** (hook-enforced).
 - Commit message format — project format is `[type]: brief description (vX.Y.Z)` with a body explaining the *why*; no auto-generated authorship metadata.
 - HEREDOC composition — even when using `cat <<'EOF' ... EOF`, end the message at the body. Do not append automated trailers.
 
@@ -47,6 +47,8 @@ If a memory says one thing and the skill says another, the skill is more recent 
 ### GATE 1 — Golden Rule #2: Version Discipline
 
 Check both version locations above match. If they do NOT match, or if neither has been bumped relative to the last commit, **STOP** and run `/bump` first before continuing.
+
+**Metropolis note:** until the app skeleton exists, both version locations read NOT FOUND — everything in the repo is tooling/docs, so the no-bump exemption below applies to every commit. This gate becomes live the moment `app/package.json` + `app/src/lib/version.ts` are created.
 
 Report: `GR#2 ✅ vX.Y.Z in both files` or `GR#2 ❌ mismatch — run /bump first`
 

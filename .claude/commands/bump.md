@@ -57,4 +57,4 @@ If they don't match, fix immediately before proceeding.
 
 ### STEP 5 — Reminder
 
-The version will only appear correctly on https://prix6.win/about and https://prix6.win/login **after a successful deploy to main**. Run `/deploy` after pushing to verify.
+Post-deploy version verification (the Prix Six /deploy pattern of checking the live About/Login pages) is **not yet wired for Metropolis** — no hosting exists. When the app gets deployed hosting, update this step and `/deploy` with the live URLs to verify.

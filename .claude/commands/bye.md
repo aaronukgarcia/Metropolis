@@ -1,5 +1,5 @@
 ---
-description: Session end — git status check, claude-sync checkout, Vestige session summary, graceful sign-off
+description: Session end (Metropolis) — git status check, claude-sync checkout (metro MariaDB), Vestige session summary, graceful sign-off
 allowed-tools: Bash(git status:*), Bash(git log:*), Bash(git diff:*), Bash(node claude-sync.js:*)
 ---
 
@@ -38,7 +38,7 @@ Use `mcp__vestige__smart_ingest` to write a session summary. Include:
 - Work left incomplete / what to pick up next session
 - Any Golden Rule violations (if any)
 
-Tag with: `prixsix`, `session-summary`, current date
+Tag with: `metropolis-dev`, `session-summary`, current date
 
 ---
 
@@ -56,9 +56,7 @@ If `$CLAUDE_SESSION_ID` is not set, check `node claude-sync.js read` for the act
 
 ### STEP 4 — Update MEMORY.md
 
-If the current version number has changed, or any architectural gotcha was discovered this session, update `C:\Users\aarongarcia\.claude\projects\E--git-prix6\memory\MEMORY.md` to reflect it.
-
-NOTE: project location moved 2026-04 from `E:\GoogleDrive\Papers\03-PrixSix\` to `E:\git\prix6\` — memory dir is at `C:\Users\aarongarcia\.claude\projects\E--git-prix6\memory\`. Older session prompts may reference the legacy path.
+If the current version number has changed, or any architectural gotcha was discovered this session, update the project memory at `C:\Users\aarongarcia\.claude\projects\E--git-Metropolis\memory\` (add/update the relevant memory file and its `MEMORY.md` index line).
 
 ---
 
@@ -69,29 +67,18 @@ Light-touch reminder, NOT a blocking gate. Surfaces obvious issues without forci
 Search Vestige for memories with timestamp-anchored "current X" facts that may be stale:
 
 ```
-mcp__vestige__search query="prix six current version as of"
-mcp__vestige__search query="prix six version state"
+mcp__vestige__search query="metropolis current version as of"
+mcp__vestige__search query="metropolis dev project state"
 ```
 
-If results contain memories like `Prix Six current version is 2.0.12 as of 2026-03-04` and the current version differs, flag in the sign-off:
+If results contain stale "current state" claims (superseded versions, setup details that have since changed), flag in the sign-off:
 
 ```
 ⚠️  N stale "current state" memories detected in Vestige. Consider running
     /memory-hygiene next session to clean these up. (Not blocking sign-off.)
 ```
 
-Search for memories pointing to the legacy path:
-
-```
-mcp__vestige__search query="E:\\GoogleDrive\\Papers\\03-PrixSix"
-```
-
-If results > 0, flag:
-
-```
-⚠️  N memories reference the legacy project path. /memory-hygiene
-    can rewrite these to the current path E:\git\prix6\.
-```
+Also watch for cross-contamination: results tagged `papers_bow` about the 18/22-Metropolis papers are a DIFFERENT project — never "fix" those from here.
 
 The full hygiene pass is `/memory-hygiene` — this gate just notices issues.
 
