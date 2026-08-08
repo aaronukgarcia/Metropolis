@@ -1,0 +1,84 @@
+{
+  "$schema_note": "Metropolis FEAT-009 georeference pin. CRS is British National Grid (EPSG:27700), all easting/northing in metres. Produced by research pass 2026-08-08 from public web sources (OS docs + landmark grid references); NOT yet cross-checked against an authoritative BNG converter or the real OS Terrain 50 tiles. See confidence fields and openQuestions before treating any coordinate as final.",
+  "crs": "EPSG:27700",
+  "startTile": {
+    "swEasting": 620000,
+    "swNorthing": 135000,
+    "sizeM": 2000,
+    "cellSizeM": 10,
+    "gridCells": 200,
+    "bounds": {
+      "minE": 620000, "maxE": 622000,
+      "minN": 135000, "maxN": 137000
+    },
+    "osSquares": ["TR23"],
+    "landmarksConsidered": [
+      { "name": "Sandgate seafront / promenade", "gridRef": "TR 2050 3514 (approx, derived from a slipway record TR20504 35139)", "easting": 620500, "northing": 135140, "role": "south shoreline anchor", "confidence": "medium" },
+      { "name": "Seabrook", "gridRef": "TR1859534983", "easting": 618595, "northing": 134983, "role": "shoreline place-name from the design doc; falls ~1.4km WEST of the chosen tile's west edge (620000) and is NOT inside this tile", "confidence": "high (source ref) / excluded by choice" },
+      { "name": "Folkestone West railway station", "gridRef": "TR209364 (6-fig, ~100m precision)", "easting": 620900, "northing": 136400, "role": "namesake landmark for 'Folkestone West'; sits centrally in the tile", "confidence": "medium" },
+      { "name": "M20 Junction 13 / Castle Hill Interchange", "gridRefSource": "WGS84 lat/lon 51.095285, 1.156569 from roads.org.uk, converted to BNG by local linear interpolation against the Folkestone West anchor (NOT a proper Helmert/OSTN15 transform)", "easting": 621100, "northing": 137500, "estimateUncertaintyM": 200, "role": "the one grade-separated junction the spec wants in-tile", "confidence": "low-medium — sits AT OR JUST NORTH of the tile's north edge (137000); may fall outside by up to ~500m depending on true position" },
+      { "name": "Cheriton Hill (North Downs escarpment)", "gridRef": "TR197396", "easting": 619700, "northing": 139600, "role": "escarpment high ground referenced as the character of the 'north edge'; the actual hill/ridge is ~2.6km north of the shoreline and NOT inside this 2km tile — only the beginning of the rising scarp slope can be in-tile", "confidence": "high (source ref), but its relevance is a compromise — see notes" }
+    ],
+    "confidence": "medium",
+    "notes": [
+      "Chosen square: SW (620000,135000) to NE (622000,137000), snapped to 1km grid lines, single OS Terrain 50 10km tile TR23.",
+      "South edge (N=135000) sits ~100-150m north of Seabrook's coastal point and right at the Sandgate promenade band — a reasonable proxy for 'shingle shore in the south edge', but Seabrook itself (E618595) is excluded because it is west of this tile; the design doc's 'Sandgate/Seabrook shoreline' phrase is treated as a loose area label, not a literal requirement to contain both named places.",
+      "Folkestone West station sits centrally-north in the tile (N=136400), which is a good fit for 'Folkestone West' as the tile's namesake.",
+      "M20 Junction 13 (Castle Hill Interchange) is the best-fit junction candidate but its estimated position (N~137500) is at or slightly beyond the tile's north edge (N=137000) given the ~200m uncertainty in the ad-hoc lat/lon->BNG conversion used here. THIS IS THE MAIN OPEN RISK — see openQuestions.",
+      "The true North Downs escarpment crest (Cheriton Hill, N=139600) is ~2.6km north of the shoreline, which exceeds the 2km tile span on its own. The tile as chosen can only include the START of the rising scarp slope near its north edge, not the ridge/summit. Read literally, the design brief's 'north edge: escarpment rising past 120m' is compatible with just the beginning of that rise (chalk slopes here are steep — the doc itself says buildable land is scarce), but this is a compromise, not a literal fit of 'the escarpment' as a landform.",
+      "COMPROMISE FLAG for Bill/Aaron: shore-to-escarpment-crest span in this real location is provably >2km (measured shore ~N135000-135200 to escarpment crest ~N139600 = ~4.4km; even shore-to-J13 alone is ~2.3-2.5km). The 2x2km start tile as specified in prose (escarpment north / M20 upper-third / shelf middle / shore south, ALL within 2km) cannot be a literal, fully-accurate real-world crop of this location. Recommend either (a) accept this tile as an artistically-compressed real-ground approximation (elevations/features present but foreshortened versus true distances — common in city-builders), or (b) relax one requirement (e.g. drop the requirement that the true escarpment crest be visible in-tile; it will appear once the player expands north), or (c) shift the tile north by up to 1km to better anchor J13, accepting a reduced/partial shoreline strip at the south edge instead of open beach."
+    ]
+  },
+  "expansion": {
+    "swEasting": 590000,
+    "swNorthing": 110000,
+    "neEasting": 650000,
+    "neNorthing": 170000,
+    "sizeKm": 60,
+    "tiles10k": [
+      "TQ91","TQ92","TQ93","TQ94","TQ95","TQ96",
+      "TR01","TR02","TR03","TR04","TR05","TR06",
+      "TR11","TR12","TR13","TR14","TR15","TR16",
+      "TR21","TR22","TR23","TR24","TR25","TR26",
+      "TR31","TR32","TR33","TR34","TR35","TR36",
+      "TR41","TR42","TR43","TR44","TR45","TR46"
+    ],
+    "tiles10kTotal": 36,
+    "tiles10kEstimatedOnLand": "approximately 24-28 of the 36 (rough estimate only — see notes; NOT verified against a coastline dataset)",
+    "landmarksConsidered": [
+      { "name": "Ashford town centre", "gridRef": "TR005425", "easting": 600500, "northing": 142500 },
+      { "name": "Dover town centre", "gridRef": "TR315415", "easting": 631500, "northing": 141500 },
+      { "name": "Dungeness", "gridRef": "TR0917 (4-fig, ~1km precision)", "easting": 609000, "northing": 117000 },
+      { "name": "Folkestone start tile", "easting": "620000-622000", "northing": "135000-137000", "role": "fully inside the expansion box, well clear of any edge" },
+      { "name": "Canterbury (context, near-north edge)", "gridRef": "~TR1495 7580", "easting": 614950, "northing": 157580, "confidence": "low — approximate" },
+      { "name": "Margate / Thanet", "gridRef": "~TR35xx 71xxx", "easting": 637000, "northing": 171000, "confidence": "low — approximate; falls just OUTSIDE the box's north edge (170000). Flag: if Thanet should be reachable, the box needs to extend north." }
+    ],
+    "confidence": "medium",
+    "notes": [
+      "Box: SW (590000,110000) to NE (650000,170000), exactly 60km x 60km, snapped to 10km grid lines.",
+      "Contains Ashford, Dover, Dungeness and the Folkestone start tile comfortably; south edge sits ~7km south of Dungeness (into the Channel, matching the 'sea on two sides' framing); east edge sits well offshore past Dover (matching sea on the east side too, with Deal/Sandwich/Ramsgate land clipped by the eastern portion of the box, not fully open sea).",
+      "Margate/Thanet falls just north of the box's north edge (170000) on current numbers — flagged as an open question: extend the box north (e.g. to 180000, making it 60x70km) if full Thanet coverage is wanted.",
+      "The on-land tile count (36 total 10km squares intersected) is NOT coastline-verified — it's a geography-knowledge estimate. The actual land/sea split per tile should be computed programmatically by the terrain importer (tools/terrain/) when it clips real OS Terrain 50 tiles against a coastline polygon, rather than trusted from this document."
+    ]
+  },
+  "source": {
+    "product": "OS Terrain 50",
+    "url": "https://osdatahub.os.uk/downloads/open/Terrain50",
+    "docsUrl": "https://docs.os.uk/os-downloads/products/land-and-terrain-portfolio/os-terrain-50",
+    "licence": "OGL v3 (OS OpenData)",
+    "attribution": "Contains OS data © Crown copyright and database right [YEAR]",
+    "formats": ["ASCII Grid (.asc, ESRI ASCII grid, 50m post spacing, 200x200 points per 10km tile)", "GML 3.2.1"],
+    "tileNamingConvention": "10km x 10km tiles named by the National Grid reference of their SW corner, e.g. TR23 = SW corner (620000, 130000)",
+    "resolutionNote": "Native OS Terrain 50 post spacing is 50m; Metropolis downsamples/interpolates to the game's 10m cell grid (200x200 cells per 2km tile) at build time.",
+    "confidence": "medium — attribution wording is the generic OS OpenData OGL statement (verified via web search of OS's public licensing pages), not fetched from the product's own licence file. Verify the [YEAR] and exact wording against the licence.txt bundled in an actual downloaded Terrain50 zip before shipping."
+  },
+  "openQuestions": [
+    "Is M20 Junction 13 (Castle Hill Interchange) actually inside the chosen tile (620000-622000 E, 135000-137000 N)? My estimate (621100, 137500 +/-200m) puts it at or just past the north edge. This was derived from a WGS84 lat/lon (roads.org.uk) linearly interpolated against a separately-sourced grid reference for Folkestone West station — NOT a proper OSTN15/Helmert transform. Needs verification with an authoritative lat/lon->BNG converter or, better, by actually loading the OS Terrain 50 / OS Open Roads tile for TR23 and reading the junction's real coordinates.",
+    "Should the tile be nudged ~500m-1km north to more safely capture J13, accepting a thinner/partial shoreline strip at the south edge? Or is a compressed/artistic version of the escarpment-M20-shelf-shore layout acceptable, given the real-world span (shore to escarpment crest) is ~4.4km, more than double the 2km tile?",
+    "Is 'Seabrook' in the design doc meant literally (i.e. the tile MUST contain Seabrook itself, E~618595) or just as a loose place-name for 'this stretch of coast'? As chosen, Seabrook is ~1.4km outside the tile's west edge. If literal inclusion is required, the tile needs to shift west, which would then likely lose J13 on the east/north side entirely — the two requirements may be mutually exclusive at 2km scale.",
+    "Expansion box: should the north edge (170000) extend further to include Margate/Thanet? Currently Thanet's approximate position (N~171000) falls just outside.",
+    "The on-land tile count for the 60x60km expansion box (36 total 10km squares) has not been verified against a real coastline dataset — treat the 'approximately 24-28' figure as a placeholder only.",
+    "The OGL attribution string is the generic OS OpenData wording found via public documentation searches, not lifted directly from an OS Terrain 50 licence file — confirm exact wording (and required [YEAR] handling) when the actual data is downloaded.",
+    "None of the coordinates in this file have been checked against an actual downloaded OS Terrain 50 tile or OS Open Names/Open Roads dataset — everything here is derived from public web search snippets (Wikipedia, gridreferencefinder-style sites, roads.org.uk, docs.os.uk). Treat this file as a first-pass pin, not a surveyed result."
+  ]
+}
