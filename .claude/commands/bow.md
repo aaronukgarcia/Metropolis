@@ -1,18 +1,20 @@
 ---
-description: Book of Work — view open items, mark done, or add new items to the book_of_work Firestore collection
-allowed-tools: Bash(node:*), Bash(npx:*)
+description: Book of Work — view, add, update Metropolis work items (modules/features/bugs/interfaces) in the metro MariaDB via claude-bow.js
+allowed-tools: Bash(node:*)
 ---
 
 ## Context
 
-- Current version: !`node -e "try{console.log(require('./app/package.json').version)}catch(e){console.log('check package.json')}" 2>/dev/null`
+- BOW summary: !`node claude-bow.js summary`
 - Today: !`node -e "console.log(new Date().toISOString().split('T')[0])"`
 
 ## Your task
 
-Manage the `book_of_work` Firestore collection. The BOW is the single source of truth for open bugs, features, and chores.
+Manage the Metropolis Book of Work — the single source of truth for planned/active work. Backend: `bow_items` / `bow_dependencies` / `bow_comments` / `bow_git_refs` tables in the `metro` MariaDB, driven entirely through `claude-bow.js` (never raw SQL for writes).
 
-**ARGUMENTS:** $ARGUMENTS — if provided, treat as a sub-command (see below). If empty, default to VIEW.
+Every item has a GUID, a short code (`MOD-001` / `FEAT-001` / `BUG-001` / `INT-001`), priority `P0`–`P3`, status (`open` / `in_progress` / `blocked` / `done` / `cancelled`), dependencies, comments (optionally with example code), and git commit refs.
+
+**ARGUMENTS:** $ARGUMENTS — if provided, treat as a sub-command. If empty, default to VIEW.
 
 ---
 
@@ -20,104 +22,36 @@ Manage the `book_of_work` Firestore collection. The BOW is the single source of 
 
 | Argument | Action |
 |----------|--------|
-| (empty) or `view` | Show all open/monitoring/tbd items grouped by priority |
-| `done <ID>` | Mark a single BOW item as done |
-| `add` | Create a new BOW item (will prompt for details) |
-| `all` | Show ALL items including done/resolved (for audit) |
+| (empty) or `view` | `node claude-bow.js list` — open items grouped by priority |
+| `all` | `node claude-bow.js list --all` — every item incl. done/cancelled |
+| `show <CODE>` | `node claude-bow.js show <CODE>` — full detail: deps, comments, code, git refs |
+| `add` | Create a new item (infer details from context, confirm with user) |
+| `done <CODE>` | Mark done — ask for a one-line resolution note first |
 
 ---
 
-### VIEW — Show open items
+### Command reference (claude-bow.js)
 
-Run this Node.js script to pull open items:
-
-```javascript
-const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
-const path = require('path');
-if (!getApps().length) initializeApp({ credential: cert(path.resolve('service-account.json')) });
-const db = getFirestore();
-db.collection('book_of_work')
-  .where('status', 'in', ['open', 'tbd', 'monitoring'])
-  .get()
-  .then(snap => {
-    if (snap.empty) { console.log('BOW is clean — no open items.'); return; }
-    const byPriority = {};
-    snap.docs.forEach(d => {
-      const data = d.data();
-      const p = data.priority || 99;
-      if (!byPriority[p]) byPriority[p] = [];
-      byPriority[p].push({ id: d.id, ...data });
-    });
-    Object.keys(byPriority).sort().forEach(p => {
-      console.log(`\nP${p}:`);
-      byPriority[p].forEach(item => {
-        const title = item.title || item.summary || '(no title)';
-        console.log(`  [${(item.status || '').toUpperCase()}] ${item.id} — ${title}`);
-      });
-    });
-    console.log(`\nTotal open: ${snap.size}`);
-  });
-```
-
-Write this to a temp file and run it with node. Present the output as a clean table grouped by priority.
-
-After displaying, ask: **"Would you like to mark any of these as done, or add a new item?"**
-
----
-
-### DONE — Mark item as done
-
-When the user provides an ID (e.g. `bow done BUG-PC-003` or `bow done EpiZJiDowkmvv8OpWOmU`):
-
-```javascript
-const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
-const path = require('path');
-if (!getApps().length) initializeApp({ credential: cert(path.resolve('service-account.json')) });
-const db = getFirestore();
-const id = 'ITEM_ID_HERE';
-db.collection('book_of_work').doc(id).update({
-  status: 'done',
-  resolvedAt: new Date().toISOString(),
-  resolutionNote: 'RESOLUTION_NOTE_HERE',
-}).then(() => console.log('Marked done: ' + id));
-```
-
-Ask for a one-line resolution note before marking done (e.g. "Fixed in v2.0.1 — added Firestore rule").
-
----
-
-### ADD — Create new BOW item
-
-Collect from the user or infer from context:
-- `id` — short identifier (e.g. BUG-XX-001, FEAT-XX-001, CHORE-XX-001)
-- `title` — one-line description
-- `category` — `bug` | `feat` | `chore` | `security`
-- `severity` — `critical` | `high` | `medium` | `low`
-- `priority` — 1 (do now) to 4 (backlog)
-- `status` — default `open`
-- `notes` — detail, root cause, suggested fix
-
-```javascript
-const { initializeApp, getApps, cert } = require('firebase-admin/app');
-const { getFirestore } = require('firebase-admin/firestore');
-const path = require('path');
-if (!getApps().length) initializeApp({ credential: cert(path.resolve('service-account.json')) });
-const db = getFirestore();
-db.collection('book_of_work').doc('ITEM_ID').set({
-  title: 'TITLE',
-  category: 'CATEGORY',
-  severity: 'SEVERITY',
-  priority: PRIORITY,
-  status: 'open',
-  notes: 'NOTES',
-  createdAt: new Date().toISOString(),
-  version: 'CURRENT_VERSION',
-});
+```bash
+node claude-bow.js add <module|feature|bug|interface> "title" [--priority P0..P3] [--desc "..."]
+node claude-bow.js list [--type T] [--status S] [--all]
+node claude-bow.js show <CODE|GUID>
+node claude-bow.js comment <CODE> "text" [--example-file F | --example "code"] [--lang js]
+node claude-bow.js depend <CODE> --on <CODE> [--note "..."]     # cycle-checked
+node claude-bow.js undepend <CODE> --on <CODE>
+node claude-bow.js ref <CODE> <commit-hash> [--note "..."]      # link a git commit
+node claude-bow.js set <CODE> [--priority P1] [--status in_progress|blocked|open]
+node claude-bow.js done <CODE> [--note "resolution"] [--force]  # GR#12: blocked while deps open
 ```
 
 ---
+
+### Discipline
+
+- **When you complete work tracked by a BOW item:** after the commit, run `ref <CODE> <hash>` to link it, then `done <CODE> --note "..."`. Never mark done without the git ref if code changed.
+- **GR#12:** `done` refuses while the item has open dependencies. Only use `--force` when the user confirms the dependency is genuinely not a blocker.
+- **New work discovered mid-task:** add it as a BOW item immediately rather than carrying it in your head.
+- Comments carrying design decisions or example code beat re-deriving them next session — be generous with `comment`.
 
 ### Confirm
 
@@ -125,12 +59,11 @@ db.collection('book_of_work').doc('ITEM_ID').set({
 bill> 📋 BOW — N open items
      P1: [list]
      P2: [list]
-     P3: [list]
-     Monitoring: [list]
 ```
 
-or after update:
+or after an update:
+
 ```
-bill> ✅ BOW updated — [ID] marked done
+bill> ✅ BOW updated — FEAT-003 marked done (linked commit abc1234)
      Resolution: [note]
 ```

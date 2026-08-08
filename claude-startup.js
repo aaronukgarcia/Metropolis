@@ -73,18 +73,35 @@ function fmtMs(ms) {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
-/** Emit the mandatory startup instructions for a successfully-claimed identity */
-function emitSuccess(name) {
+const SUMMARY_MARKER = '── METROPOLIS STARTUP SUMMARY ──';
+
+/** Emit the mandatory startup instructions for a successfully-claimed identity.
+ *  checkinOutput is the raw claude-sync checkin stdout — it carries the startup
+ *  summary block (BOW state from the metro DB, Vestige check, git sync check),
+ *  which is relayed verbatim so it reaches Claude's context every session. */
+function emitSuccess(name, checkinOutput) {
   fs.writeFileSync(identityPath, name, 'utf-8');
   console.log(`IDENTITY: ${name}>`);
   console.log(`PREFIX EVERY RESPONSE with "${name}>". No exceptions.`);
   console.log(`HOOKS: ACTIVE.`);
+
+  const idx = (checkinOutput || '').indexOf(SUMMARY_MARKER);
+  if (idx !== -1) {
+    console.log(``);
+    console.log(checkinOutput.slice(idx).trim());
+  } else {
+    console.log(``);
+    console.log(`WARNING: checkin returned no startup summary (BOW/Vestige/git state unknown).`);
+    console.log(`Run it manually as your first action: node claude-bow.js startup-summary`);
+  }
+
   console.log(``);
   console.log(`MANDATORY STARTUP SEQUENCE — DO ALL OF THESE BEFORE YOUR FIRST RESPONSE:`);
   console.log(`1. Use the mcp__vestige__search tool NOW with query "who am I, identity, session startup" to load memory.`);
   console.log(`2. Read CLAUDE.md for full Golden Rules.`);
   console.log(`3. Run 'node claude-sync.js read' to check coordination state.`);
-  console.log(`4. Your first response to the user must confirm: identity, hooks status, Vestige status, and current version.`);
+  console.log(`4. Your first response to the user must confirm: identity, hooks status, the BOW summary above (metro DB health), Vestige status (live search worked), and git sync state.`);
+  console.log(`If the summary above shows git NOT SYNCED or a Vestige problem, surface that to the user immediately.`);
   console.log(`DO NOT skip step 1. Memory recall is not optional. If Vestige tools are unavailable, state that explicitly.`);
 }
 
@@ -158,7 +175,7 @@ if (requestedIdentity) {
 
   if (first.output && parseName(first.output)) {
     // Got the requested slot — perfect
-    emitSuccess(parseName(first.output));
+    emitSuccess(parseName(first.output), first.output);
 
   } else if (isNameOccupied(first.stderr)) {
     // Requested slot is taken (live holder) or reserved (idle holder may return)
@@ -172,7 +189,7 @@ if (requestedIdentity) {
       const assigned = parseName(second.output);
       console.log(`NOTE: You requested "${requestedIdentity}" but that slot was taken.`);
       console.log(`You have been assigned "${assigned}" instead.`);
-      emitSuccess(assigned);
+      emitSuccess(assigned, second.output);
 
     } else if (isAllFull(second.stderr)) {
       handleAllFull(second.stderr);
@@ -200,7 +217,7 @@ if (requestedIdentity) {
   const result = tryCheckin('node claude-sync.js checkin');
 
   if (result.output && parseName(result.output)) {
-    emitSuccess(parseName(result.output));
+    emitSuccess(parseName(result.output), result.output);
 
   } else if (isAllFull(result.stderr)) {
     handleAllFull(result.stderr);

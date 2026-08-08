@@ -13,7 +13,10 @@
  *
  * Commands:
  *   init                        - Create coordination tables (auto-runs on every command)
- *   checkin [--name N] [--any]  - Acquire a permit slot (5-min TTL)
+ *   checkin [--name N] [--any]  - Acquire a permit slot (5-min TTL). On success also
+ *                                 prints the METROPOLIS STARTUP SUMMARY (BOW state from
+ *                                 the metro DB, Vestige check, git sync check) via
+ *                                 claude-bow.js printStartupSummary.
  *           [--force --human-ok]  Force-evict a live holder (HUMAN AUTHORISATION ONLY)
  *   renew [--auto] [--session ID] - Extend permit; --auto only renews when < 3.5 min left
  *   ping [--session ID]         - Renew + heartbeat + status line
@@ -180,11 +183,18 @@ function writeIdentityFiles(name) {
   } catch { /* statusline nicety — never fail a checkin over it */ }
 }
 
-function printSuccess(name, sessionId) {
+async function printSuccess(name, sessionId, db) {
   console.log(`YOU ARE: ${name}`);
   console.log(`Session: ${sessionId}`);
   console.log(`Permit TTL: 5 minutes — auto-renewed by the PostToolUse hook while you work.`);
   console.log(`Prefix every response with "${name.toLowerCase()}>".`);
+  // Startup summary: BOW state (proves the metro DB answers), Vestige, git sync.
+  // A summary failure must never cost the checkin — but say so, don't go silent.
+  try {
+    await require('./claude-bow.js').printStartupSummary(db);
+  } catch (err) {
+    console.log(`(startup summary unavailable: ${err.message})`);
+  }
 }
 
 /** Resolve the permit row held by this window (active only unless allowStale). */
@@ -221,7 +231,7 @@ async function cmdCheckin(db) {
     await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
       [now + TTL_MS, now, mine.row.name]);
     await db.commit();
-    printSuccess(mine.row.name, mine.row.session_id);
+    await printSuccess(mine.row.name, mine.row.session_id, db);
     return;
   }
 
@@ -245,7 +255,7 @@ async function cmdCheckin(db) {
         await log(db, name, `${name} FORCE-EVICTED previous holder (human-authorised) and checked in`);
         await db.commit();
         console.log(`Evicted previous ${name} holder (human-authorised).`);
-        printSuccess(name, sessionId);
+        await printSuccess(name, sessionId, db);
         return;
       }
       if (flags.force) {
@@ -265,7 +275,7 @@ async function cmdCheckin(db) {
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} reservation overridden (human-authorised)`);
         await db.commit();
-        printSuccess(name, sessionId);
+        await printSuccess(name, sessionId, db);
         return;
       }
       await db.rollback();
@@ -278,7 +288,7 @@ async function cmdCheckin(db) {
     const sessionId = await acquire(db, name);
     await log(db, name, `${name} checked in`);
     await db.commit();
-    printSuccess(name, sessionId);
+    await printSuccess(name, sessionId, db);
     return;
   }
 
@@ -299,7 +309,7 @@ async function cmdCheckin(db) {
   const sessionId = await acquire(db, free);
   await log(db, free, `${free} checked in`);
   await db.commit();
-  printSuccess(free, sessionId);
+  await printSuccess(free, sessionId, db);
 }
 
 async function cmdRenew(db) {

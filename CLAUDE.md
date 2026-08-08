@@ -1,6 +1,6 @@
 # CLAUDE.md - Metropolis Project Brief
 
-> **Last updated:** 2026-08-08 (initial scaffold — hooks, skills, and Golden Rules inherited from Prix Six)
+> **Last updated:** 2026-08-08 (Book of Work added: metro BOW tables + claude-bow.js; checkin now prints the startup summary)
 > **Read this entire file at the start of every session.**
 
 ---
@@ -60,11 +60,15 @@ Same protocol as Prix Six (Bill/Bob/Ben slots, 5-min TTL permits, wake recovery,
 
 ### Session Start — handled by the SessionStart hook
 
-`claude-startup.js` runs `node claude-sync.js checkin` automatically and prints your identity. Announce yourself:
+`claude-startup.js` runs `node claude-sync.js checkin` automatically and prints your identity **plus the METROPOLIS STARTUP SUMMARY**: the Book of Work state (which doubles as the metro MariaDB health check — if the BOW summary printed, the DB answered), a Vestige availability check, and the git sync state (dirty files, ahead/behind origin).
+
+Your first response must confirm all of it — identity, hooks, BOW summary, Vestige (live `mcp__vestige__search` worked), and git sync:
 
 ```
-bill> Good morning, I'm Bill on branch main. No conflicts detected.
+bill> Good morning, I'm Bill on branch main. BOW: 3 open (1 P1). Vestige live. Git synced. No conflicts detected.
 ```
+
+If the summary shows git NOT SYNCED or a Vestige problem, surface that to the user immediately. If the summary is missing, run `node claude-bow.js startup-summary` manually.
 
 ### 🛑 GOLDEN RULE #4: Identity Prefix — EVERY SINGLE RESPONSE
 
@@ -78,6 +82,17 @@ bill> Good morning, I'm Bill on branch main. No conflicts detected.
 - Full command reference: see `claude-sync.js` header comments.
 
 **If you need to modify a file in a NO-TOUCH ZONE, STOP and ask first.**
+
+---
+
+## 📋 Book of Work (BOW)
+
+The BOW is the **single source of truth for planned/active work**: modules, features, bugs, interfaces. It lives in the `metro` MariaDB (`bow_items` / `bow_dependencies` / `bow_comments` / `bow_git_refs`) and is driven entirely through `claude-bow.js` — never raw SQL for writes. Every item has a GUID, short code (`MOD-001`/`FEAT-001`/`BUG-001`/`INT-001`), priority `P0`–`P3`, status, dependency links (cycle-checked; `done` refuses while dependencies are open — GR#12), comments that may carry example code, and git commit refs.
+
+- View/manage: `/bow` skill, or `node claude-bow.js list | show <CODE> | add | comment | depend | ref | set | done`
+- **After committing work tracked by an item:** `node claude-bow.js ref <CODE> <hash>` then `done <CODE> --note "..."`
+- New work discovered mid-task gets a BOW item immediately.
+- The checkin startup summary shows the top of the BOW every session.
 
 ---
 
@@ -95,7 +110,7 @@ A new software development project. **Architecture, purpose, and module structur
 - **Node:** `C:\Program Files\nodejs\node.exe`
 - **Project root:** `E:\git\Metropolis`
 - **Launcher:** `metro.bat` (in `C:\Users\aarongarcia\AppData\Local\Microsoft\WindowsApps`, on PATH)
-- **Database:** MariaDB 12.2, database `metro` on localhost:3306 (root, no password). Client: `"C:\Program Files\MariaDB 12.2\bin\mysql.exe"`. Charset utf8mb4. Created 2026-08-08. Tables: `project_meta` (project facts, `status` row = online) + `sync_permits`/`sync_activity`/`sync_file_claims`/`sync_window_map` (session coordination). Override connection via `METRO_DB_HOST/PORT/USER/PASSWORD/NAME` env vars.
+- **Database:** MariaDB 12.2, database `metro` on localhost:3306 (root, no password). Client: `"C:\Program Files\MariaDB 12.2\bin\mysql.exe"`. Charset utf8mb4. Created 2026-08-08. Tables: `project_meta` (project facts, `status` row = online) + `sync_permits`/`sync_activity`/`sync_file_claims`/`sync_window_map` (session coordination) + `bow_items`/`bow_dependencies`/`bow_comments`/`bow_git_refs` (Book of Work). Override connection via `METRO_DB_HOST/PORT/USER/PASSWORD/NAME` env vars.
 - **MCPs:** configured user-level in `C:\Users\aarongarcia\.claude.json` (Vestige memory, GitHub, MS 365, etc.) — available automatically in every session
 
 ---
@@ -122,7 +137,7 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 
 ## Skills (.claude/commands) — inherited from Prix Six
 
-All Prix Six slash commands were copied over. **Process skills** (`/commit`, `/bump`, `/bye`, `/rca`, `/diagnose`, `/health-check`, `/security-audit`, `/silent-failures`, `/memory-hygiene`, `/audit`, `/danger`, `/upgrade`) are project-agnostic and usable now. **Prix-Six-specific skills** (`/openf1`, `/check-race-data`, `/bot-status`, `/cc`, `/fn-status`, `/deploy`, `/rules-deploy`, `/iam-check`, `/new-secret`, `/new-collection`, `/feedback`, `/triage-errors`, `/fs`, `/bow`, `/codejson-audit`, `/sync-codejson`, `/register-guid`, `/new-error`) reference the Prix Six Firebase project — adapt or delete them as Metropolis's stack is decided.
+All Prix Six slash commands were copied over. **Process skills** (`/commit`, `/bump`, `/bye`, `/rca`, `/diagnose`, `/health-check`, `/security-audit`, `/silent-failures`, `/memory-hygiene`, `/audit`, `/danger`, `/upgrade`) are project-agnostic and usable now. **Adapted to Metropolis:** `/bow` (metro MariaDB Book of Work via `claude-bow.js`, 2026-08-08). **Prix-Six-specific skills** (`/openf1`, `/check-race-data`, `/bot-status`, `/cc`, `/fn-status`, `/deploy`, `/rules-deploy`, `/iam-check`, `/new-secret`, `/new-collection`, `/feedback`, `/triage-errors`, `/fs`, `/codejson-audit`, `/sync-codejson`, `/register-guid`, `/new-error`) reference the Prix Six Firebase project — adapt or delete them as Metropolis's stack is decided.
 
 ---
 
