@@ -1,6 +1,23 @@
-# Metropolis Dev-Team Process v1.3
+# Metropolis Dev-Team Process v1.4
 
-**2026-08-08 · directed by Aaron after Sprint 0 wave 1 (v1.1: Tester + Documentation roles; v1.2: BA role; v1.3: independent QA role) · supersedes the wave-1 "lead reviews everything directly" flow**
+**2026-08-08 · directed by Aaron after Sprint 0 wave 1 (v1.1: Tester + Documentation roles; v1.2: BA role; v1.3: independent QA role; v1.4: pipelined sprint cadence) · supersedes the wave-1 "lead reviews everything directly" flow**
+
+## Pipelined cadence (v1.4)
+
+The stages run **concurrently across sprints**, not serially within one:
+
+| Workstream | Working on |
+|---|---|
+| Jnr developers | Sprint **N** (current build sprint) |
+| BAs | Sprints **N+1 … N+3** — user stories + acceptance criteria written ahead, so no developer ever waits on criteria |
+| Tester | Sprint **N** items as they land (plus re-verifies after bounces) |
+| Documentation | Sprint **N** passes + keeping the freeze packet current |
+| QA | Trailing audits of committed sprints + pre-commit audits of N on Bill's demand |
+| Bill | Reviews/commits test-clean **N** output; freezes contracts at sprint gates; briefs N+1 |
+
+- **BA deliverable per item** (extended in v1.4): `docs/planning/acceptance/<mkey>.md` now opens with **user stories** ("As the <engine module/player/UI screen/harness>, I need … so that …", traced to spec §) followed by the numbered acceptance criteria as before.
+- **Multiple BA agents are allowed** with disjoint sprint ownership (one sprint's files belong to exactly one BA); the lead assigns sprints.
+- A sprint's build may not start until its criteria exist; criteria exist long before because BAs run ahead. Criteria for future sprints are drafts until the sprint's build starts — the owning BA refreshes them at dispatch time if the spec or contracts moved (the header carries `status: draft-ahead` vs `active`).
 
 ## Roles
 
