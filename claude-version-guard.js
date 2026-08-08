@@ -88,6 +88,10 @@ process.stdin.on('end', () => {
       /^\.claude\//,           // skills / settings, if ever tracked
       /^claude-[\w.-]+\.js$/,  // root coordination + hook tooling scripts
       /^\.gitignore$/,
+      // Metropolis: ROOT package.json holds only hook-tooling deps (mysql2 for
+      // claude-sync) — the versioned app manifest will live at app/package.json.
+      /^package\.json$/,
+      /^package-lock\.json$/,
     ];
     const relPaths = stagedFiles.map(f => f.replace(/^03\.Current\//, ''));
     if (relPaths.length > 0 && relPaths.every(f => EXEMPT_PATTERNS.some(rx => rx.test(f)))) {

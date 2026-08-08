@@ -15,9 +15,9 @@ metro
 
 This runs `metro.bat`, which:
 1. Sets `CLAUDE_IDENTITY=Bill` (preferred slot for the primary window)
-2. Sets `CLAUDE_SYNC_DOC=coordination/claude-state-metropolis` — Metropolis has its **own** coordination document, so sessions here never collide with Prix Six sessions
-3. Points `GOOGLE_APPLICATION_CREDENTIALS` at the Prix Six service account (the credential file lives in the prix6 tree and is **never** committed here)
-4. Changes to `E:\git\Metropolis` and starts `claude --add-dir "E:\AI\Memory\source"`
+2. Changes to `E:\git\Metropolis` and starts `claude --add-dir "E:\AI\Memory\source"`
+
+Session coordination is fully self-contained: `claude-sync.js` is a MariaDB port of the Prix Six permit system, backed by this project's own `metro` database (`sync_permits` / `sync_activity` / `sync_file_claims` / `sync_window_map` tables). No Firebase, no shared state with Prix Six.
 
 The `SessionStart` hook then runs checkin automatically and tells you your identity.
 
@@ -56,7 +56,7 @@ These rules are inherited from Prix Six and apply to every piece of code written
 
 ## 🚨 MANDATORY: Session Coordination Protocol
 
-Identical to Prix Six, but scoped to this project's coordination document (`coordination/claude-state-metropolis` via the `CLAUDE_SYNC_DOC` env var set by `metro.bat`).
+Same protocol as Prix Six (Bill/Bob/Ben slots, 5-min TTL permits, wake recovery, human-only force-evict), but backed by the `metro` MariaDB database instead of Firestore — Metropolis sessions can never collide with Prix Six sessions.
 
 ### Session Start — handled by the SessionStart hook
 
@@ -95,7 +95,7 @@ A new software development project. **Architecture, purpose, and module structur
 - **Node:** `C:\Program Files\nodejs\node.exe`
 - **Project root:** `E:\git\Metropolis`
 - **Launcher:** `metro.bat` (in `C:\Users\aarongarcia\AppData\Local\Microsoft\WindowsApps`, on PATH)
-- **Database:** MariaDB 12.2, database `metro` on localhost:3306 (root, no password). Client: `"C:\Program Files\MariaDB 12.2\bin\mysql.exe"`. Bootstrap table `project_meta` holds project facts (`status` row = online). Charset utf8mb4. Created 2026-08-08.
+- **Database:** MariaDB 12.2, database `metro` on localhost:3306 (root, no password). Client: `"C:\Program Files\MariaDB 12.2\bin\mysql.exe"`. Charset utf8mb4. Created 2026-08-08. Tables: `project_meta` (project facts, `status` row = online) + `sync_permits`/`sync_activity`/`sync_file_claims`/`sync_window_map` (session coordination). Override connection via `METRO_DB_HOST/PORT/USER/PASSWORD/NAME` env vars.
 - **MCPs:** configured user-level in `C:\Users\aarongarcia\.claude.json` (Vestige memory, GitHub, MS 365, etc.) — available automatically in every session
 
 ---
@@ -143,7 +143,7 @@ Remote: private GitHub repository `aaronukgarcia/Metropolis`.
 
 ## Versioning
 
-MAJOR.MINOR.PATCH. When the app skeleton exists, the version must live in BOTH `app/package.json` and `app/src/lib/version.ts` (enforced by `claude-version-guard.js`). Root `package.json` exists only for hook-script dependencies (`firebase-admin` for claude-sync).
+MAJOR.MINOR.PATCH. When the app skeleton exists, the version must live in BOTH `app/package.json` and `app/src/lib/version.ts` (enforced by `claude-version-guard.js`). Root `package.json` exists only for hook-script dependencies (`mysql2` for claude-sync) and is version-guard-exempt.
 
 ---
 

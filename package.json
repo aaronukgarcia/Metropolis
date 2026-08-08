@@ -4,6 +4,6 @@
   "private": true,
   "description": "Metropolis — project scaffold with Claude Code hooks, skills, and Golden Rules inherited from Prix Six",
   "dependencies": {
-    "firebase-admin": "^13.0.0"
+    "mysql2": "^3.23.2"
   }
 }
