@@ -1,0 +1,60 @@
+BOW code: INT-003
+
+# Acceptance criteria — int.solver (INT-003)
+
+**BOW code:** INT-003
+**Spec refs:** §15 (Architecture — cloud path, solver offload, `docs/METROPOLIS-MASTER-v2.1.md` line 265); A4 (Assignment structure amendment, lines 1346, 1364); A9 (Cloud thresholds, line 1369); M0-ENG §1 (target hardware & resource doctrine, lines 786-840, esp. line 790's "CPU (v1, always works) -> GPU sidecar -> cloud" and line 840's "v1 ships CPU-only... mandatory local-fallback"); code.json `int.solver` entry.
+**Date:** 2026-08-08
+**Status:** active
+**Package under test:** `internal/foundation/solver/` (path from `node claude-bow.js show INT-003`)
+**Standard gates:** see `README.md` — all apply, package for SG-4/SG-7 is `./internal/foundation/solver/...`.
+
+## Scope
+
+The stateless request/response solver contract (CPU v1, GPU/cloud interchangeable later), the mandatory CPU fallback, zone-aggregated OD sizing tables (A4), and cloud-threshold estimator helpers (A9).
+
+## Acceptance criteria
+
+### Functional
+
+- **AC-1 (GR#20).** A `Solver` interface exists with `Solve(req Request) (Response, error)` and `Supports(problem ProblemKind) bool`. Check: `go doc ./internal/foundation/solver Solver` shows both methods with these (or equivalent) signatures. This interface IS the GR#20 seam: engine modules (traffic, projections) must consume solvers only through it, never a concrete backend type directly.
+- **AC-2.** `Request` is stateless and backend-agnostic: it carries `Problem` (a `ProblemKind`), `SchemaVersion`, `Seed`, `Deterministic`, and an opaque `Payload []byte` — no field ties it to a specific backend. Check: `go doc ./internal/foundation/solver Request` lists these fields and none named after a specific backend (no `GPUOptions`, `CPUThreads`, etc. on the shared struct).
+- **AC-3.** `Response.Payload` is documented as required to be bit-identical across backends for a `Deterministic` request; `Response.Backend` and `Response.Stats` are documented as diagnostic-only and forbidden from influencing simulation state. Check: `grep -n "bit-identical\|byte-identical" internal/foundation/solver/contract.go` matches on `Response`'s doc comment, and `grep -n "DIAGNOSTIC ONLY\|diagnostic-only\|MUST NOT" internal/foundation/solver/contract.go` matches near `Backend` and `Stats`.
+- **AC-4 (GR#20).** A mandatory, always-available CPU backend exists (`CPUBackend` or equivalent) implementing `Solver`. Check: `grep -n "type CPUBackend" internal/foundation/solver/*.go` matches (doc.go references `cpu.go — CPUBackend, the mandatory always-available fallback`; confirm the file and type actually exist, not just the doc comment), and `go build ./internal/foundation/solver/...` compiles it against the interface. GR#20's "every module keeps a passing stub for life" is embodied here as the mandatory CPU fallback — it is the solver seam's permanent, always-real minimum implementation, analogous to a stub that never gets deleted.
+- **AC-5 (GR#20).** A registry/selection mechanism exists that, given a `ProblemKind`, selects among registered backends and falls back to the CPU backend when no other backend is registered or available, failing loudly (a typed/logged error, not a silent zero-value) if even the CPU backend cannot handle the problem kind. Check: `grep -n "Fallback\|fallback" internal/foundation/solver/*.go` (excluding doc.go's prose-only mentions) shows this implemented in code (e.g. a `Get`/`Registry.Solve` function), and a passing test asserts CPU is used when no other backend is registered, plus a passing test asserts a loud error when the requested `ProblemKind` isn't supported by any registered backend including CPU (`grep -rn "func Test.*[Ff]allback" internal/foundation/solver/*_test.go` finds coverage).
+- **AC-6.** Backend selection/failover is observable — the chosen backend's identity is surfaced (e.g. via `Response.Backend` or a logged event), not silently swapped without a trace. Check: a passing test asserts `Response.Backend` differs (or a log/event fires) when failover from a non-CPU backend to CPU occurs (`grep -rn "func Test.*[Ff]ailover\|Backend ==" internal/foundation/solver/*_test.go` finds such an assertion).
+- **AC-7.** A4 zone-aggregated OD sizing constants/tables exist: `ODZoneCountMin`/`ODZoneCountMax` (or equivalent) bounding 10^3-10^4 zones. Check: `grep -n "ODZoneCount" internal/foundation/solver/sizing.go` matches, and the values are within the A4-specified range (1,000 to 10,000) — `grep -n "1000\|1_000\|10000\|10_000" internal/foundation/solver/sizing.go` corroborates.
+- **AC-8 (order-of-magnitude tolerance is intentional — lead-confirmed, NOT a Tester FAIL condition).** An `EstimateODBytes(zones int) int64` (or equivalent) estimator helper exists and returns a value in the right order of magnitude for A4's worked example (~5,000 zones ⇒ approximately 100MB, order-of-magnitude tolerance documented). Check: `go doc ./internal/foundation/solver EstimateODBytes` matches, and a passing test asserts `EstimateODBytes(5000)` is within a documented tolerance band of the spec's ~100MB figure (`grep -rn "func Test.*EstimateODBytes" internal/foundation/solver/*_test.go` finds it, and the test's own asserted bound is stated in a comment referencing A4/R3). Root cause (Bill-confirmed, 2026-08-08): the ~200MB-vs-~100MB gap is float32-vs-float64 OD cell width — `5000² zones × 4 bytes = 100MB` exactly at float32, so the spec's figure assumes f32 cells while the current estimator uses float64. **This is an open freeze-review question (OD cell precision — f32 recommended), not a defect**; it should be logged as a BOW comment/note on INT-003 for the freeze review, and the Tester MUST NOT fail this AC over the 100MB-vs-200MB discrepancy as long as the order-of-magnitude assertion and the source-level explanation (in `sizing.go`'s doc comment) are both present.
+- **AC-9.** A9 cloud-threshold helpers exist: `ExceedsLocalCPUCeiling(citizenCount int64) bool` (20M) and `ExceedsLocalCPUCeilingHigh(citizenCount int64) bool` (30M), or equivalents bounding the A9-specified 20-30M citizen range. Check: `go doc ./internal/foundation/solver ExceedsLocalCPUCeiling ExceedsLocalCPUCeilingHigh` shows both, and a passing test asserts the boundary values (`grep -rn "func Test.*Ceiling" internal/foundation/solver/*_test.go` finds coverage of both the low and high thresholds).
+- **AC-10.** A GPU-VRAM-envelope helper exists (`FitsGPUEnvelope(totalBytes int64) bool` or equivalent) reflecting the 4GB VRAM budget from M0-ENG §1. Check: `grep -n "FitsGPUEnvelope\|4.*GB\|4_000_000_000\|4 \* 1024" internal/foundation/solver/sizing.go` matches.
+- **AC-11.** `ProblemKind` is an extensible, versioned enumeration (not a hardcoded switch that would need a breaking change per new problem type), with at least a plumbing-proof kind (e.g. `EchoProblem`) usable to test registry/fallback/determinism logic before real problem kinds (traffic equilibrium, etc.) exist. Check: `grep -n "type ProblemKind\|EchoProblem" internal/foundation/solver/problems.go` matches.
+
+### Error handling
+
+- **AC-12.** `Solve` returns a non-nil `error` (never a panic) when given an unsupported `ProblemKind`, and the registry/fallback path (AC-5) does likewise when no backend at all can serve the request. Check: passing tests cover both (`grep -rn "func Test.*[Uu]nsupported" internal/foundation/solver/*_test.go` finds at least one, and `go test ./internal/foundation/solver/... -race -count=1` passes).
+- **AC-13.** `Deterministic == false` is documented as a not-yet-supported mode that a v1 `Solver` implementation should reject with a typed error rather than silently honouring it as deterministic. Check: `grep -n "Deterministic" internal/foundation/solver/contract.go` doc comment states this SHOULD-reject guidance (already present per source inspection — Tester confirms the wording is still there, not removed).
+
+### Determinism & safety
+
+- **AC-14 (SG-7 scoped; GR#21).** `grep -rn "time.Now\|time.Since" internal/foundation/solver/contract.go` (the contract file specifically) returns no matches outside `SolveStats`'s doc comment discussion — the contract package itself never calls wall-clock time; only backend *implementations* (outside this package, or in a clearly separate file like `cpu.go`) may populate `SolveStats.ElapsedMS` from `time.Now()`/`time.Since()`. Check: confirm any `time.Now`/`time.Since` match found anywhere in the package is inside a backend implementation file populating `SolveStats`, never inside `contract.go`, `problems.go`, or `sizing.go`.
+- **AC-15 (GR#21).** `Response.Backend` and `Response.Stats` are never read back into `Request` or fed into another `Solve` call's `Payload`/`Seed` within this package's own code (there is no code path in this package that closes that loop) — Tester confirms by reading `contract.go`/`cpu.go`/registry code for any such feedback; none should exist.
+- **AC-16 (GR#21).** Same `(Problem, Seed, Payload)` triple produces the same `Response.Payload` bytes from the CPU backend across repeated calls (determinism baseline, even with only one backend implemented in v1). Check: a passing test calls the CPU backend's `Solve` twice with identical `Request` values and asserts `Response.Payload` bytes are equal (`grep -rn "func Test.*[Dd]eterminis" internal/foundation/solver/*_test.go` finds it). A failure here is auto-P0 under GR#21.
+- **AC-17 (GR#21).** `go test ./internal/foundation/solver/... -race -count=1` passes with no data race — `Solve` implementations are documented and tested as safe for concurrent use by multiple goroutines (per `contract.go`'s doc comment on `Solve`). Check: `grep -n "go func()" internal/foundation/solver/*_test.go` finds at least one concurrency test.
+
+### Documentation
+
+- **AC-18.** `internal/foundation/solver/doc.go` states the module key `int.solver` and cites §15/A4/A9/M0-ENG §1. Check: `grep -n "int.solver" internal/foundation/solver/doc.go` and `grep -n "A4\|A9\|M0-ENG" internal/foundation/solver/doc.go` both match.
+- **AC-19.** `sizing.go` documents the A4/A9 source figures it transcribes (zone counts, OD matrix worked example, local-CPU citizen ceiling) in a comment block, not just as bare constants. Check: `grep -n "A4\|A9\|R3" internal/foundation/solver/sizing.go` finds citations next to the relevant constants/functions.
+
+## Out of scope
+
+- Actual GPU sidecar (`solver-gpu.exe`, C++/CUDA) implementation — that is `MOD-068`, explicitly "LATER" per M0-ENG §1's process topology diagram.
+- Azure cloud backend implementation — that is part of `MOD-069`.
+- Real problem-kind payloads for traffic equilibrium, cold-pass batches, deep projections, batch life-writing — those land with the engine modules that consume them (`MOD-023` and others); this item only needs the contract shape plus the plumbing-proof `EchoProblem`.
+- gRPC wire encoding of `Request`/`Response` — the contract is "Go interface + gRPC-ready messages" per code.json, meaning gRPC-compatible shapes, not a built gRPC service in this item.
+- Surrogate-model / non-deterministic backend support — spec explicitly defers the `Deterministic=false` error contract to when such a backend actually exists.
+
+## Escalations
+
+- **Resolved.** GR#20/GR#21 exist (`CLAUDE.md` lines 51-52) — see `foundation.errors.md`'s Escalations section. Cited above as AC-1/AC-4/AC-5 (GR#20) and AC-14/AC-15/AC-16/AC-17 (GR#21).
+- **Resolved.** AC-8's ~100MB-vs-~200MB gap for `EstimateODBytes` is confirmed by Bill as float32-vs-float64 OD cell width (5000² × 4B = 100MB exactly at f32). The order-of-magnitude tolerance stands as written and is explicitly marked NOT a Tester FAIL condition. Open item for the freeze review: OD cell precision (f32 recommended) — should be logged as a BOW comment on `INT-003` (`node claude-bow.js comment INT-003 "..."`, a write command outside the BA's remit — Bill or the junior should log it).
