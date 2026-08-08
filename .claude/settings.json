@@ -1,0 +1,81 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-version-guard.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node claude-pre-commit-check.js",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node claude-pre-push-check.js",
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-memory-prefetch.js",
+            "timeout": 2
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-startup.js"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo \"CRITICAL CONTEXT TO PRESERVE: [1] You are bob/bill/ben - prefix ALL responses. [2] Run node claude-sync.js checkin after compaction. [3] Golden Rules: error trapping, version discipline, single source of truth, identity prefix, verbose confirmations, GUID documentation. [4] Never commit to main without version bump in package.json AND version.ts. [5] Read CLAUDE.md for full rules.\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-ping-check.js"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-reflection.js",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "node claude-statusline.js"
+  }
+}

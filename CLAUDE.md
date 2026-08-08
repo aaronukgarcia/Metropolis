@@ -1,0 +1,158 @@
+# CLAUDE.md - Metropolis Project Brief
+
+> **Last updated:** 2026-08-08 (initial scaffold — hooks, skills, and Golden Rules inherited from Prix Six)
+> **Read this entire file at the start of every session.**
+
+---
+
+## 🚀 HOW TO START A SESSION (do this before anything else)
+
+**Every Claude Code window must be launched via the `metro` command** (on PATH):
+
+```powershell
+metro
+```
+
+This runs `metro.bat`, which:
+1. Sets `CLAUDE_IDENTITY=Bill` (preferred slot for the primary window)
+2. Sets `CLAUDE_SYNC_DOC=coordination/claude-state-metropolis` — Metropolis has its **own** coordination document, so sessions here never collide with Prix Six sessions
+3. Points `GOOGLE_APPLICATION_CREDENTIALS` at the Prix Six service account (the credential file lives in the prix6 tree and is **never** committed here)
+4. Changes to `E:\git\Metropolis` and starts `claude --add-dir "E:\AI\Memory\source"`
+
+The `SessionStart` hook then runs checkin automatically and tells you your identity.
+
+---
+
+## ⚠️ GOLDEN RULES — INVIOLABLE, NON-NEGOTIABLE
+
+These rules are inherited from Prix Six and apply to every piece of code written and every response given in this project. No exceptions. No shortcuts. Ever.
+
+| Rule | Summary |
+|------|---------|
+| #1 | Aggressive Error Trapping — log, type, correlation ID, selectable display |
+| #2 | Version Discipline — bump on every commit, verify after every push |
+| #3 | Single Source of Truth — no duplication without validation |
+| #4 | Identity Prefix — every response starts with `bill>`, `bob>`, or `ben>` |
+| #5 | Verbose Confirmations — explicit, timestamped, version-numbered confirmations |
+| #6 | GUID Documentation — read comments before changing code, update GUID versions and code.json |
+| #7 | Registry-Sourced Errors — every error MUST be created from the error registry, no exceptions |
+| #8 | Prompt Identity Enforcement — "who" check, violation logging to Vestige memory, scorekeeping |
+| #9 | Shell Preference — Microsoft PowerShell first, then CMD, then bash if needed |
+| #10 | Dependency Update Discipline — check for updates on any dependency encountered during bug fixes or feature builds |
+| #11 | Pre-Commit Security Review — mandatory security threat modeling before every commit |
+| #12 | Dependency & Completeness Check — never mark complete until ALL dependents implemented; never feature without backup, never backup without restore test |
+| #13 | Complete All Identified Issues — when user lists N failures, fix ALL N; never "TODO" or "lower priority" them |
+| #14 | Memory Recall at Task Start — query Vestige before composing commits, replying to bug reports, or starting a new task type |
+| #15 | Validators Derive From Data — expected counts/values must come from data files or runtime queries, never hardcoded constants |
+| #16 | Type-Safe Storage Boundaries — never trust TS types about stored data; coerce via `safeX()` helpers |
+| #17 | Silent Failure Detection — every service with a user-visible status field MUST have automated freshness monitoring, and every monitoring FAILURE must also write a registry error |
+| #18 | Migration Dead-Code Audit — when eliminating a collection/field/feature, audit for orphaned readers/validators in the SAME commit |
+| #19 | Deploy Bundling — every commit changing deployable functions MUST end with the deploy command bundling ALL pending function changes |
+
+> **Full implementation patterns, code templates, and compliance checklists:** `docs/golden-rules-detail.md`
+> (Carried over verbatim from Prix Six — Firebase-specific examples apply once Metropolis has its own stack; adapt as the architecture solidifies.)
+
+---
+
+## 🚨 MANDATORY: Session Coordination Protocol
+
+Identical to Prix Six, but scoped to this project's coordination document (`coordination/claude-state-metropolis` via the `CLAUDE_SYNC_DOC` env var set by `metro.bat`).
+
+### Session Start — handled by the SessionStart hook
+
+`claude-startup.js` runs `node claude-sync.js checkin` automatically and prints your identity. Announce yourself:
+
+```
+bill> Good morning, I'm Bill on branch main. No conflicts detected.
+```
+
+### 🛑 GOLDEN RULE #4: Identity Prefix — EVERY SINGLE RESPONSE
+
+**EVERY response MUST start with your assigned name prefix** (`bill> `, `bob> `, or `ben> `). Every 5 responses, mentally verify you are still using it. If you drop it: add it immediately and apologise.
+
+### Permit auto-renewal, polling, session end
+
+- Permits have a 5-minute TTL; the `PostToolUse` hook (`claude-ping-check.js`) auto-renews — no manual pings needed.
+- Poll coordination state every ~30 seconds / few messages: `node claude-sync.js read`
+- When the user says goodnight / end session: `node claude-sync.js checkout --session $env:CLAUDE_SESSION_ID` then sign off gracefully.
+- Full command reference: see `claude-sync.js` header comments.
+
+**If you need to modify a file in a NO-TOUCH ZONE, STOP and ask first.**
+
+---
+
+## What is Metropolis?
+
+A new software development project. **Architecture, purpose, and module structure are TBD** — update this section as soon as the first design decisions are made.
+
+**Human developer:** Aaron. All architectural decisions go through Aaron.
+
+---
+
+## Environment
+
+- **Platform:** Windows
+- **Node:** `C:\Program Files\nodejs\node.exe`
+- **Project root:** `E:\git\Metropolis`
+- **Launcher:** `metro.bat` (in `C:\Users\aarongarcia\AppData\Local\Microsoft\WindowsApps`, on PATH)
+- **MCPs:** configured user-level in `C:\Users\aarongarcia\.claude.json` (Vestige memory, GitHub, MS 365, etc.) — available automatically in every session
+
+---
+
+## Hooks (inherited from Prix Six)
+
+Configured in `.claude/settings.json`; scripts live in the project root:
+
+| Hook | Script | Purpose |
+|------|--------|---------|
+| PreToolUse (Bash) | `claude-version-guard.js` | Blocks commits without a version bump (docs/tooling-only commits exempt) |
+| PreToolUse (Bash) | `claude-pre-commit-check.js` | Blocks Co-Authored-By trailers in commits |
+| PreToolUse (Bash) | `claude-pre-push-check.js` | Blocks pushes with unbundled function deploys (GR#19) |
+| UserPromptSubmit | `claude-memory-prefetch.js` | GR#14 Vestige recall reminder |
+| SessionStart | `claude-startup.js` | Auto checkin + identity assignment |
+| PreCompact | (inline echo) | Preserves identity + Golden Rules context across compaction |
+| PostToolUse | `claude-ping-check.js` | DHCP-style permit auto-renewal |
+| PostToolUse (Bash) | `claude-reflection.js` | Post-action Golden Rules reflection |
+| statusLine | `claude-statusline.js` | Identity/status display |
+
+> **Note:** `claude-version-guard.js` currently expects `app/package.json` + `app/src/lib/version.ts` (the Prix Six layout). When Metropolis gets its app skeleton, either follow that layout or update the guard's paths. Until then, docs/tooling commits pass through the exemption.
+
+---
+
+## Skills (.claude/commands) — inherited from Prix Six
+
+All Prix Six slash commands were copied over. **Process skills** (`/commit`, `/bump`, `/bye`, `/rca`, `/diagnose`, `/health-check`, `/security-audit`, `/silent-failures`, `/memory-hygiene`, `/audit`, `/danger`, `/upgrade`) are project-agnostic and usable now. **Prix-Six-specific skills** (`/openf1`, `/check-race-data`, `/bot-status`, `/cc`, `/fn-status`, `/deploy`, `/rules-deploy`, `/iam-check`, `/new-secret`, `/new-collection`, `/feedback`, `/triage-errors`, `/fs`, `/bow`, `/codejson-audit`, `/sync-codejson`, `/register-guid`, `/new-error`) reference the Prix Six Firebase project — adapt or delete them as Metropolis's stack is decided.
+
+---
+
+## Git Discipline
+
+| Branch | Purpose |
+|--------|---------|
+| `main` | Production-ready code only — never commit directly once CI/CD exists |
+| `develop` | Integration branch for features |
+| `feature/*` | Individual feature work |
+
+Commit message format: `[type]: brief description` — types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`.
+**No Co-Authored-By trailers** (enforced by hook).
+
+Remote: private GitHub repository `aaronukgarcia/Metropolis`.
+
+---
+
+## Versioning
+
+MAJOR.MINOR.PATCH. When the app skeleton exists, the version must live in BOTH `app/package.json` and `app/src/lib/version.ts` (enforced by `claude-version-guard.js`). Root `package.json` exists only for hook-script dependencies (`firebase-admin` for claude-sync).
+
+---
+
+## Compacting / Context Recovery
+
+When you compact the conversation, you **must**:
+1. Re-read this entire `CLAUDE.md` file
+2. Run `node claude-sync.js read` to check coordination state
+3. Inform the user you are caught up with the instructions
+
+---
+
+*This file is the single source of truth for project context. Keep it updated.*

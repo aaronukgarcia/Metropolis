@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Claude Code session state (per-window, machine-local)
+.claude/settings.local.json
+.claude/.identity*
+.claude/.last-ping*
+.claude/worktrees/
+.claude-heartbeat-*
+.claude-session-key
+.claude-session-map.json
+
+# Secrets — never commit anywhere
+service-account.json
+serviceAccountKey*.json
+*-credentials.json
+*.pem
+*.key
+*.cert
+*.p8
+.env
+.env.*
+!.env.example
+*.env
+*.env.local
+
+# Build / logs
+dist/
+out/
+.next/
+*.log
+firebase-debug.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+nul

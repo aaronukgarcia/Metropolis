@@ -1,0 +1,9 @@
+{
+  "name": "metropolis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Metropolis — project scaffold with Claude Code hooks, skills, and Golden Rules inherited from Prix Six",
+  "dependencies": {
+    "firebase-admin": "^13.0.0"
+  }
+}
