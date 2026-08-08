@@ -1,0 +1,42 @@
+# Metropolis golangci-lint config — M0 skeleton.
+#
+# Module key: foundation.repo (see code.json)
+# Spec ref:   M0-ENG §5; A8
+#
+# Standard linters now; the custom determinism rules (map-range ban on
+# tick paths, mandatory pre-allocation) arm in Sprint 1 alongside
+# foundation.det / engine.core, per the CI placeholder job in
+# .github/workflows/ci.yml.
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - unused
+    - ineffassign
+    - gofmt
+    - gosimple
+    - depguard
+
+linters-settings:
+  # Golden Rule #20 (Contract-First, Stub-Forever): modules consume each
+  # other ONLY via registered interfaces (internal/protocol). Packages
+  # under internal/ui must never import internal/engine directly — this is
+  # the mechanical enforcement of that rule.
+  depguard:
+    rules:
+      ui-must-not-import-engine:
+        list-mode: lax
+        files:
+          - "internal/ui/**/*.go"
+        deny:
+          - pkg: "github.com/aaronukgarcia/Metropolis/internal/engine"
+            desc: "GR#20: internal/ui must not import internal/engine — consume it only via internal/protocol"
+
+issues:
+  exclude-dirs:
+    - fixtures

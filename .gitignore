@@ -35,3 +35,13 @@ firebase-debug.log
 .DS_Store
 Thumbs.db
 nul
+
+# Go build artifacts
+*.exe
+*.test
+*.out
+/bin/
+
+# Go saves (curated fixtures are the exception; committed explicitly)
+*.ndjson.gz
+!fixtures/**/*.ndjson.gz
