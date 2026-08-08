@@ -28,8 +28,16 @@
  *   done <code> [--note "resolution"] [--force]
  *                                         - Blocked while open dependencies remain (GR#12)
  *                                           unless --force
+ *   import <plan-file.json> [--dry-run]   - Bulk upsert items+deps from a generated plan
+ *                                           (tools/plan/bow-import.json; idempotent by mkey)
  *   summary                               - Compact BOW summary (used at checkin)
  *   startup-summary                       - BOW summary + Vestige check + git sync check
+ *
+ * v2 planning fields (2026-08-08): every item may carry mkey (machine key,
+ * matches code.json module key), seq (global build-order sequence number),
+ * milestone (M0..M4/future), layer, spec_ref (master doc §), guid_in/guid_out
+ * (interface GUIDs mirrored from code.json), estimate_days.
+ * List supports --by-seq to show build order.
  *
  * DB config via the same env vars as claude-sync.js:
  *   METRO_DB_HOST (127.0.0.1)  METRO_DB_PORT (3306)
@@ -58,7 +66,8 @@ const argv = process.argv.slice(2);
 const command = argv[0] || 'summary';
 const positional = [];
 const flags = {};
-const VALUE_FLAGS = ['priority', 'desc', 'status', 'type', 'on', 'note', 'example', 'example-file', 'lang', 'author'];
+const VALUE_FLAGS = ['priority', 'desc', 'status', 'type', 'on', 'note', 'example', 'example-file', 'lang', 'author',
+  'mkey', 'seq', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate'];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) { flags[a.slice(2)] = argv[++i]; }
@@ -100,6 +109,20 @@ async function ensureSchema(db) {
     INDEX idx_bow_status (status),
     INDEX idx_bow_type (item_type)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  // v2 planning columns (2026-08-08, master-plan load): global build sequence,
+  // machine key for idempotent import, milestone/layer, spec cross-reference and
+  // the code.json inbound/outbound interface GUID mirrors (traceability).
+  await db.query(`ALTER TABLE bow_items
+    ADD COLUMN IF NOT EXISTS mkey VARCHAR(64) NULL AFTER code,
+    ADD COLUMN IF NOT EXISTS seq INT NULL AFTER mkey,
+    ADD COLUMN IF NOT EXISTS milestone VARCHAR(16) NULL AFTER priority,
+    ADD COLUMN IF NOT EXISTS layer VARCHAR(32) NULL AFTER milestone,
+    ADD COLUMN IF NOT EXISTS spec_ref VARCHAR(200) NULL AFTER layer,
+    ADD COLUMN IF NOT EXISTS guid_in CHAR(36) NULL,
+    ADD COLUMN IF NOT EXISTS guid_out CHAR(36) NULL,
+    ADD COLUMN IF NOT EXISTS estimate_days DECIMAL(5,1) NULL`);
+  await db.query('ALTER TABLE bow_items ADD UNIQUE INDEX IF NOT EXISTS idx_bow_mkey (mkey)');
+  await db.query('ALTER TABLE bow_items ADD INDEX IF NOT EXISTS idx_bow_seq (seq)');
   await db.query(`CREATE TABLE IF NOT EXISTS bow_dependencies (
     item_guid       CHAR(36) NOT NULL,
     depends_on_guid CHAR(36) NOT NULL,
@@ -136,7 +159,7 @@ async function ensureSchema(db) {
 async function findItem(db, ref) {
   if (!ref) return null;
   const [rows] = await db.query(
-    'SELECT * FROM bow_items WHERE guid = ? OR UPPER(code) = UPPER(?) LIMIT 1', [ref, ref]);
+    'SELECT * FROM bow_items WHERE guid = ? OR UPPER(code) = UPPER(?) OR mkey = ? LIMIT 1', [ref, ref, ref]);
   return rows.length ? rows[0] : null;
 }
 
@@ -191,8 +214,12 @@ async function cmdAdd(db) {
   const guid = crypto.randomUUID();
   const code = await nextCode(db, type);
   await db.query(
-    'INSERT INTO bow_items (guid, code, item_type, title, description, priority) VALUES (?, ?, ?, ?, ?, ?)',
-    [guid, code, type, title, flags.desc || null, priority]);
+    `INSERT INTO bow_items (guid, code, mkey, seq, item_type, title, description, priority,
+       milestone, layer, spec_ref, guid_in, guid_out, estimate_days)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [guid, code, flags.mkey || null, flags.seq != null ? Number(flags.seq) : null, type, title,
+     flags.desc || null, priority, flags.milestone || null, flags.layer || null, flags.spec || null,
+     flags['guid-in'] || null, flags['guid-out'] || null, flags.estimate != null ? Number(flags.estimate) : null]);
   console.log(`Added ${code} [${type}/${priority}] "${title}"`);
   console.log(`GUID: ${guid}`);
 }
@@ -211,14 +238,16 @@ async function cmdList(db) {
           JOIN bow_items di ON di.guid = d.depends_on_guid
         WHERE d.item_guid = i.guid AND di.status IN ('open','in_progress','blocked')) AS open_deps
      FROM bow_items i ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-     ORDER BY priority, item_type, code`, params);
+     ORDER BY ${flags['by-seq'] ? 'ISNULL(seq), seq, priority' : 'priority, ISNULL(seq), seq, item_type, code'}`, params);
 
   if (!items.length) { console.log('BOW is clean — no matching items.'); return; }
   let currentP = null;
   for (const it of items) {
-    if (it.priority !== currentP) { currentP = it.priority; console.log(`\n${currentP}:`); }
-    const dep = it.open_deps > 0 ? `  ⛓ waiting on ${it.open_deps} dep(s)` : '';
-    console.log(`  ${it.code.padEnd(9)} [${it.status.toUpperCase().padEnd(11)}] ${it.title}${dep}`);
+    if (!flags['by-seq'] && it.priority !== currentP) { currentP = it.priority; console.log(`\n${currentP}:`); }
+    const dep = it.open_deps > 0 ? `  ⛓ ${it.open_deps} dep(s)` : '';
+    const seq = it.seq != null ? String(it.seq).padStart(4) : '   -';
+    const ms = it.milestone ? ` ${it.milestone.padEnd(6)}` : '       ';
+    console.log(`  ${seq} ${it.code.padEnd(9)}${flags['by-seq'] ? ' ' + it.priority : ''}${ms}[${it.status.toUpperCase().padEnd(11)}] ${it.title}${dep}`);
   }
   console.log(`\nTotal: ${items.length}`);
 }
@@ -228,6 +257,13 @@ async function cmdShow(db) {
   console.log(`${item.code} — ${item.title}`);
   console.log(`  GUID:     ${item.guid}`);
   console.log(`  Type:     ${item.item_type}   Priority: ${item.priority}   Status: ${item.status}`);
+  if (item.mkey || item.seq != null) console.log(`  Key:      ${item.mkey || '-'}   Seq: ${item.seq != null ? item.seq : '-'}`);
+  if (item.milestone || item.layer) console.log(`  Phase:    ${item.milestone || '-'}   Layer: ${item.layer || '-'}`);
+  if (item.spec_ref) console.log(`  Spec:     ${item.spec_ref}`);
+  if (item.guid_in || item.guid_out) {
+    console.log(`  IF in:    ${item.guid_in || '-'}`);
+    console.log(`  IF out:   ${item.guid_out || '-'}`);
+  }
   console.log(`  Created:  ${ts(item.created_at)}   Updated: ${ts(item.updated_at)}`);
   if (item.closed_at) console.log(`  Closed:   ${ts(item.closed_at)}${item.closed_note ? ' — ' + item.closed_note : ''}`);
   if (item.description) console.log(`  Desc:     ${item.description}`);
@@ -357,7 +393,15 @@ async function cmdSet(db) {
     if (s === 'done' || s === 'cancelled') { updates.push('closed_at = CURRENT_TIMESTAMP'); }
     else { updates.push('closed_at = NULL'); updates.push('closed_note = NULL'); }
   }
-  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status open|in_progress|blocked|done|cancelled]'); process.exit(1); }
+  if (flags.mkey) { updates.push('mkey = ?'); params.push(flags.mkey); }
+  if (flags.seq != null) { updates.push('seq = ?'); params.push(Number(flags.seq)); }
+  if (flags.milestone) { updates.push('milestone = ?'); params.push(flags.milestone); }
+  if (flags.layer) { updates.push('layer = ?'); params.push(flags.layer); }
+  if (flags.spec) { updates.push('spec_ref = ?'); params.push(flags.spec); }
+  if (flags['guid-in']) { updates.push('guid_in = ?'); params.push(flags['guid-in']); }
+  if (flags['guid-out']) { updates.push('guid_out = ?'); params.push(flags['guid-out']); }
+  if (flags.estimate != null) { updates.push('estimate_days = ?'); params.push(Number(flags.estimate)); }
+  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D]'); process.exit(1); }
   params.push(item.guid);
   await db.query(`UPDATE bow_items SET ${updates.join(', ')} WHERE guid = ?`, params);
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);
@@ -380,6 +424,115 @@ async function cmdDone(db) {
     'UPDATE bow_items SET status = ?, closed_at = CURRENT_TIMESTAMP, closed_note = ? WHERE guid = ?',
     ['done', flags.note || null, item.guid]);
   console.log(`${item.code} marked DONE${flags.note ? ' — ' + flags.note : ''}${openDeps.length ? ' (--force: open deps overridden)' : ''}.`);
+}
+
+/**
+ * Bulk import from a generated plan file (tools/plan/bow-import.json).
+ * Idempotent: items are upserted by mkey — existing items keep their code, guid
+ * and status; planning fields (title/desc/seq/priority/milestone/layer/spec/
+ * guid_in/guid_out) are refreshed. Dependencies are re-asserted (REPLACE).
+ * File shape: { items: [{ mkey, type, title, desc, seq, priority, milestone,
+ *   layer, specRef, guid, guidIn, guidOut, deps: [mkey...] }] }
+ */
+async function cmdImport(db) {
+  const file = positional[0];
+  if (!file) { console.error('Usage: node claude-bow.js import <plan-file.json> [--dry-run]'); process.exit(1); }
+  let plan;
+  try { plan = JSON.parse(fs.readFileSync(file, 'utf8')); }
+  catch (err) { console.error(`claude-bow: cannot read plan file: ${err.message}`); process.exit(1); }
+  const items = Array.isArray(plan.items) ? plan.items : null;
+  if (!items || !items.length) { console.error('claude-bow: plan file has no items[].'); process.exit(1); }
+
+  // ── Validate before touching the database (all-or-nothing) ──
+  const errors = [];
+  const byKey = new Map();
+  const seqSeen = new Map();
+  for (const it of items) {
+    const where = `item "${it.mkey || it.title || '?'}"`;
+    if (!it.mkey || !/^[a-z0-9][a-z0-9._-]*$/i.test(it.mkey)) errors.push(`${where}: missing/invalid mkey`);
+    else if (byKey.has(it.mkey)) errors.push(`${where}: duplicate mkey`);
+    else byKey.set(it.mkey, it);
+    if (!TYPES.includes(it.type)) errors.push(`${where}: invalid type "${it.type}"`);
+    if (!it.title) errors.push(`${where}: missing title`);
+    if (it.priority && !PRIORITIES.includes(it.priority)) errors.push(`${where}: invalid priority "${it.priority}"`);
+    if (it.seq != null) {
+      if (!Number.isInteger(it.seq)) errors.push(`${where}: seq must be an integer`);
+      else if (seqSeen.has(it.seq)) errors.push(`${where}: duplicate seq ${it.seq} (also ${seqSeen.get(it.seq)})`);
+      else seqSeen.set(it.seq, it.mkey);
+    }
+  }
+  // Dependency targets must exist in the file or already in the DB.
+  const [dbKeyRows] = await db.query('SELECT mkey FROM bow_items WHERE mkey IS NOT NULL');
+  const dbKeys = new Set(dbKeyRows.map(r => r.mkey));
+  for (const it of items) {
+    for (const dep of it.deps || []) {
+      if (dep === it.mkey) errors.push(`item "${it.mkey}": depends on itself`);
+      if (!byKey.has(dep) && !dbKeys.has(dep)) errors.push(`item "${it.mkey}": unknown dependency "${dep}"`);
+    }
+  }
+  // Cycle check over in-file edges (Kahn).
+  const indeg = new Map([...byKey.keys()].map(k => [k, 0]));
+  for (const it of items) for (const dep of it.deps || []) if (byKey.has(dep)) indeg.set(it.mkey, indeg.get(it.mkey) + 1);
+  const queue = [...indeg.entries()].filter(([, d]) => d === 0).map(([k]) => k);
+  let visited = 0;
+  while (queue.length) {
+    const k = queue.pop(); visited++;
+    for (const it of items) {
+      if ((it.deps || []).includes(k) && byKey.has(it.mkey)) {
+        indeg.set(it.mkey, indeg.get(it.mkey) - 1);
+        if (indeg.get(it.mkey) === 0) queue.push(it.mkey);
+      }
+    }
+  }
+  if (visited < byKey.size) errors.push(`dependency cycle detected among: ${[...indeg.entries()].filter(([, d]) => d > 0).map(([k]) => k).join(', ')}`);
+
+  if (errors.length) {
+    console.error(`claude-bow import: ${errors.length} validation error(s) — nothing imported:`);
+    for (const e of errors) console.error(`  - ${e}`);
+    process.exit(1);
+  }
+  if (flags['dry-run']) { console.log(`Dry run OK: ${items.length} items validate clean.`); return; }
+
+  // ── Pass 1: upsert items (in seq order so codes roughly follow the sequence) ──
+  let added = 0, updated = 0;
+  const sorted = [...items].sort((a, b) => (a.seq ?? 1e9) - (b.seq ?? 1e9));
+  for (const it of sorted) {
+    const [rows] = await db.query('SELECT guid FROM bow_items WHERE mkey = ?', [it.mkey]);
+    if (rows.length) {
+      await db.query(
+        `UPDATE bow_items SET title = ?, description = ?, seq = ?, priority = ?, milestone = ?,
+           layer = ?, spec_ref = ?, guid_in = ?, guid_out = ? WHERE mkey = ?`,
+        [it.title, it.desc || null, it.seq ?? null, it.priority || 'P2', it.milestone || null,
+         it.layer || null, it.specRef || null, it.guidIn || null, it.guidOut || null, it.mkey]);
+      updated++;
+    } else {
+      const guid = it.guid || crypto.randomUUID();
+      const code = await nextCode(db, it.type);
+      await db.query(
+        `INSERT INTO bow_items (guid, code, mkey, seq, item_type, title, description, priority,
+           milestone, layer, spec_ref, guid_in, guid_out)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [guid, code, it.mkey, it.seq ?? null, it.type, it.title, it.desc || null, it.priority || 'P2',
+         it.milestone || null, it.layer || null, it.specRef || null, it.guidIn || null, it.guidOut || null]);
+      added++;
+    }
+  }
+
+  // ── Pass 2: dependencies (validated acyclic above) ──
+  let depCount = 0;
+  for (const it of items) {
+    if (!(it.deps || []).length) continue;
+    const [me] = await db.query('SELECT guid FROM bow_items WHERE mkey = ?', [it.mkey]);
+    for (const dep of it.deps) {
+      const [target] = await db.query('SELECT guid FROM bow_items WHERE mkey = ?', [dep]);
+      if (!me.length || !target.length) continue; // validated above; belt-and-braces
+      await db.query(
+        'REPLACE INTO bow_dependencies (item_guid, depends_on_guid, note) VALUES (?, ?, ?)',
+        [me[0].guid, target[0].guid, 'requires (master plan)']);
+      depCount++;
+    }
+  }
+  console.log(`Import complete: ${added} added, ${updated} updated, ${depCount} dependency link(s) asserted.`);
 }
 
 // ── Startup summary (checkin integration) ─────────────────────────────────────
@@ -496,11 +649,12 @@ if (require.main === module) {
         case 'ref': await cmdRef(db); break;
         case 'set': await cmdSet(db); break;
         case 'done': await cmdDone(db); break;
+        case 'import': await cmdImport(db); break;
         case 'summary': await printBowSummary(db); break;
         case 'startup-summary': await printStartupSummary(db); break;
         default:
           console.error(`Unknown command: ${command}`);
-          console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, done, summary, startup-summary');
+          console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, done, import, summary, startup-summary');
           process.exit(1);
       }
     } catch (err) {
