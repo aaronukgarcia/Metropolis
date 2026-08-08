@@ -99,7 +99,7 @@ Bill brief → BA acceptance criteria (docs/planning/acceptance/<mkey>.md, BEFOR
           → Bill final architectural review → commit "[type]: ... [mkey]" → BOW ref + done
 ```
 
-BA / Tester / Documentation are **persistent agents** — reuse them via follow-up messages, don't respawn per item. Basic errors must never reach Bill. Full role mandates: `docs/planning/dev-team-process.md`.
+BA / Tester / Documentation are **persistent agents** — reuse them via follow-up messages, don't respawn per item. Basic errors must never reach Bill. Additionally an **independent QA agent** (never talks to the other agents, reports ONLY to Bill) audits the pipeline itself: re-verifies samples of Tester evidence, checks code.json/BOW/plan for drift, Golden Rules compliance, and spot-checks code quality (error trapping, inline docs, naming, data types, capitalisation) — advisory, at least once per wave. Full role mandates: `docs/planning/dev-team-process.md`.
 
 ## 📋 Book of Work (BOW)
 

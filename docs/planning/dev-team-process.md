@@ -1,6 +1,6 @@
-# Metropolis Dev-Team Process v1.2
+# Metropolis Dev-Team Process v1.3
 
-**2026-08-08 · directed by Aaron after Sprint 0 wave 1 (v1.1: Tester + Documentation roles; v1.2: BA role added) · supersedes the wave-1 "lead reviews everything directly" flow**
+**2026-08-08 · directed by Aaron after Sprint 0 wave 1 (v1.1: Tester + Documentation roles; v1.2: BA role; v1.3: independent QA role) · supersedes the wave-1 "lead reviews everything directly" flow**
 
 ## Roles
 
@@ -11,6 +11,7 @@
 | **Jnr developers** (per item) | Sonnet | Build to the brief. Fix their own test failures — every bounce goes back to the SAME junior with its context intact. |
 | **Tester** (one, persistent) | Sonnet | Verification ONLY: runs the build/vet/test/-race/gofmt suite plus the item brief's specific checks, confirms deliverables match the brief. Output is PASS or FAIL with exact evidence. **Never edits a file, never suggests fixes** — a FAIL hands straight back to the junior. |
 | **Documentation** (one, persistent) | Sonnet | Owns documentation consistency: house style, spec refs, code.json keys in package headers, `docs/design/` index + freeze-review packet. **May edit .md files only** — doc problems inside .go files go back to the junior as a FAIL item. |
+| **QA** (one, persistent, INDEPENDENT) | Sonnet | Bill's eyes on the ground. Audits the pipeline itself, not just the work: checks the checker (independently re-verifies samples of the Tester's cited evidence), code.json/BOW/master-plan alignment (no drift), Golden Rules compliance, and spot-checks code quality — error trapping (GR#1/#7), inline documentation, naming quality, correct data types, capitalisation/idiom conventions. **Fully independent**: never communicates with BA/Tester/Docs/juniors, never edits any file, reports findings DIRECTLY and only to Bill, who decides the action (bounce, BOW bug, accept). Advisory — QA never blocks the pipeline; Bill does, on QA's evidence. Runs at least once per wave and on Bill's demand. |
 
 ## Flow per BOW item
 
