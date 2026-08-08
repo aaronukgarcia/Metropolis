@@ -24,6 +24,8 @@ Every item has a GUID, a short code (`MOD-001` / `FEAT-001` / `BUG-001` / `INT-0
 |----------|--------|
 | (empty) or `view` | `node claude-bow.js list` — open items grouped by priority |
 | `all` | `node claude-bow.js list --all` — every item incl. done/cancelled |
+| `seq` or `order` | `node claude-bow.js list --by-seq` — build order (seq + sprint) |
+| `ready` | `node claude-bow.js ready` — open items with no open deps, by sprint (see also /sprint) |
 | `show <CODE>` | `node claude-bow.js show <CODE>` — full detail: deps, comments, code, git refs |
 | `add` | Create a new item (infer details from context, confirm with user) |
 | `done <CODE>` | Mark done — ask for a one-line resolution note first |
@@ -34,14 +36,21 @@ Every item has a GUID, a short code (`MOD-001` / `FEAT-001` / `BUG-001` / `INT-0
 
 ```bash
 node claude-bow.js add <module|feature|bug|interface> "title" [--priority P0..P3] [--desc "..."]
-node claude-bow.js list [--type T] [--status S] [--all]
-node claude-bow.js show <CODE|GUID>
+                       [--mkey k] [--seq N] [--sprint N] [--milestone M1] [--layer L] [--spec "§n"]
+node claude-bow.js list [--type T] [--status S] [--all] [--by-seq]
+node claude-bow.js ready                                        # open items, no open deps, by sprint+seq
+node claude-bow.js show <CODE|GUID|mkey>
 node claude-bow.js comment <CODE> "text" [--example-file F | --example "code"] [--lang js]
 node claude-bow.js depend <CODE> --on <CODE> [--note "..."]     # cycle-checked
 node claude-bow.js undepend <CODE> --on <CODE>
 node claude-bow.js ref <CODE> <commit-hash> [--note "..."]      # link a git commit
-node claude-bow.js set <CODE> [--priority P1] [--status in_progress|blocked|open]
+node claude-bow.js set <CODE> [--priority P1] [--status ...] [--seq N] [--sprint N] [...]
 node claude-bow.js done <CODE> [--note "resolution"] [--force]  # GR#12: blocked while deps open
+node claude-bow.js import tools/plan/bow-import.json [--dry-run] # bulk load from master plan (idempotent)
+```
+
+**Master-plan items** (those with an `mkey` matching `docs/planning/master-plan-v2.1.json`) are edited in the plan file, then `node tools/plan/generate.js` regenerates `code.json` + `tools/plan/bow-import.json`, then `import` refreshes the BOW. Ad-hoc items (bugs, discovered work) live only in the BOW.
+```bash
 ```
 
 ---

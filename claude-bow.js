@@ -30,6 +30,8 @@
  *                                           unless --force
  *   import <plan-file.json> [--dry-run]   - Bulk upsert items+deps from a generated plan
  *                                           (tools/plan/bow-import.json; idempotent by mkey)
+ *   ready                                 - Open items with no open deps, by sprint+seq
+ *                                           (the v_ready_to_build equivalent — work from here)
  *   summary                               - Compact BOW summary (used at checkin)
  *   startup-summary                       - BOW summary + Vestige check + git sync check
  *
@@ -67,7 +69,7 @@ const command = argv[0] || 'summary';
 const positional = [];
 const flags = {};
 const VALUE_FLAGS = ['priority', 'desc', 'status', 'type', 'on', 'note', 'example', 'example-file', 'lang', 'author',
-  'mkey', 'seq', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate'];
+  'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate'];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) { flags[a.slice(2)] = argv[++i]; }
@@ -115,6 +117,7 @@ async function ensureSchema(db) {
   await db.query(`ALTER TABLE bow_items
     ADD COLUMN IF NOT EXISTS mkey VARCHAR(64) NULL AFTER code,
     ADD COLUMN IF NOT EXISTS seq INT NULL AFTER mkey,
+    ADD COLUMN IF NOT EXISTS sprint INT NULL AFTER seq,
     ADD COLUMN IF NOT EXISTS milestone VARCHAR(16) NULL AFTER priority,
     ADD COLUMN IF NOT EXISTS layer VARCHAR(32) NULL AFTER milestone,
     ADD COLUMN IF NOT EXISTS spec_ref VARCHAR(200) NULL AFTER layer,
@@ -257,7 +260,7 @@ async function cmdShow(db) {
   console.log(`${item.code} — ${item.title}`);
   console.log(`  GUID:     ${item.guid}`);
   console.log(`  Type:     ${item.item_type}   Priority: ${item.priority}   Status: ${item.status}`);
-  if (item.mkey || item.seq != null) console.log(`  Key:      ${item.mkey || '-'}   Seq: ${item.seq != null ? item.seq : '-'}`);
+  if (item.mkey || item.seq != null) console.log(`  Key:      ${item.mkey || '-'}   Seq: ${item.seq != null ? item.seq : '-'}   Sprint: ${item.sprint != null ? item.sprint : '-'}`);
   if (item.milestone || item.layer) console.log(`  Phase:    ${item.milestone || '-'}   Layer: ${item.layer || '-'}`);
   if (item.spec_ref) console.log(`  Spec:     ${item.spec_ref}`);
   if (item.guid_in || item.guid_out) {
@@ -395,6 +398,7 @@ async function cmdSet(db) {
   }
   if (flags.mkey) { updates.push('mkey = ?'); params.push(flags.mkey); }
   if (flags.seq != null) { updates.push('seq = ?'); params.push(Number(flags.seq)); }
+  if (flags.sprint != null) { updates.push('sprint = ?'); params.push(Number(flags.sprint)); }
   if (flags.milestone) { updates.push('milestone = ?'); params.push(flags.milestone); }
   if (flags.layer) { updates.push('layer = ?'); params.push(flags.layer); }
   if (flags.spec) { updates.push('spec_ref = ?'); params.push(flags.spec); }
@@ -424,6 +428,29 @@ async function cmdDone(db) {
     'UPDATE bow_items SET status = ?, closed_at = CURRENT_TIMESTAMP, closed_note = ? WHERE guid = ?',
     ['done', flags.note || null, item.guid]);
   console.log(`${item.code} marked DONE${flags.note ? ' — ' + flags.note : ''}${openDeps.length ? ' (--force: open deps overridden)' : ''}.`);
+}
+
+/**
+ * Ready-to-build: open items with no open dependencies, in sprint+seq order.
+ * The metro equivalent of the spec's v_ready_to_build view (M0-ENG §4) —
+ * "order of work: always from ready, priority then milestone order" (§6.2).
+ */
+async function cmdReady(db) {
+  const [items] = await db.query(
+    `SELECT i.* FROM bow_items i
+     WHERE i.status IN ('open','in_progress') AND NOT EXISTS (
+       SELECT 1 FROM bow_dependencies d
+       JOIN bow_items di ON di.guid = d.depends_on_guid
+       WHERE d.item_guid = i.guid AND di.status IN ('open','in_progress','blocked'))
+     ORDER BY ISNULL(sprint), sprint, ISNULL(seq), seq, priority, code`);
+  if (!items.length) { console.log('Nothing is ready to build — check `list --status blocked` for what is stuck.'); return; }
+  let currentSprint;
+  for (const it of items) {
+    const s = it.sprint != null ? `Sprint ${it.sprint}` : 'Unscheduled';
+    if (s !== currentSprint) { currentSprint = s; console.log(`\n${s}:`); }
+    console.log(`  ${String(it.seq ?? '-').padStart(4)} ${it.code.padEnd(9)} ${it.priority} [${it.status.toUpperCase().padEnd(11)}] ${it.title}`);
+  }
+  console.log(`\n${items.length} item(s) ready — no open dependencies.`);
 }
 
 /**
@@ -500,19 +527,19 @@ async function cmdImport(db) {
     const [rows] = await db.query('SELECT guid FROM bow_items WHERE mkey = ?', [it.mkey]);
     if (rows.length) {
       await db.query(
-        `UPDATE bow_items SET title = ?, description = ?, seq = ?, priority = ?, milestone = ?,
+        `UPDATE bow_items SET title = ?, description = ?, seq = ?, sprint = ?, priority = ?, milestone = ?,
            layer = ?, spec_ref = ?, guid_in = ?, guid_out = ? WHERE mkey = ?`,
-        [it.title, it.desc || null, it.seq ?? null, it.priority || 'P2', it.milestone || null,
+        [it.title, it.desc || null, it.seq ?? null, it.sprint ?? null, it.priority || 'P2', it.milestone || null,
          it.layer || null, it.specRef || null, it.guidIn || null, it.guidOut || null, it.mkey]);
       updated++;
     } else {
       const guid = it.guid || crypto.randomUUID();
       const code = await nextCode(db, it.type);
       await db.query(
-        `INSERT INTO bow_items (guid, code, mkey, seq, item_type, title, description, priority,
+        `INSERT INTO bow_items (guid, code, mkey, seq, sprint, item_type, title, description, priority,
            milestone, layer, spec_ref, guid_in, guid_out)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [guid, code, it.mkey, it.seq ?? null, it.type, it.title, it.desc || null, it.priority || 'P2',
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [guid, code, it.mkey, it.seq ?? null, it.sprint ?? null, it.type, it.title, it.desc || null, it.priority || 'P2',
          it.milestone || null, it.layer || null, it.specRef || null, it.guidIn || null, it.guidOut || null]);
       added++;
     }
@@ -650,6 +677,7 @@ if (require.main === module) {
         case 'set': await cmdSet(db); break;
         case 'done': await cmdDone(db); break;
         case 'import': await cmdImport(db); break;
+        case 'ready': await cmdReady(db); break;
         case 'summary': await printBowSummary(db); break;
         case 'startup-summary': await printStartupSummary(db); break;
         default:

@@ -79,6 +79,7 @@ for (const it of items) {
   else seqSeen.set(it.seq, it.key);
   if (!PRIORITIES.includes(it.priority)) errors.push(`MET-T016 "${id}": invalid priority "${it.priority}"`);
   if (!MILESTONES.includes(it.milestone)) errors.push(`MET-T017 "${id}": invalid milestone "${it.milestone}"`);
+  if (it.sprint != null && (!Number.isInteger(it.sprint) || it.sprint < 0)) errors.push(`MET-T019 "${id}": sprint must be a non-negative integer or null`);
   if (!it.specRef) errors.push(`MET-T018 "${id}": missing specRef — every item must trace to the master document`);
 }
 for (const it of items) {
@@ -145,6 +146,7 @@ const modules = [...items].sort((a, b) => a.seq - b.seq).map(it => {
     key: it.key,
     bowType: it.type,
     seq: it.seq,
+    sprint: it.sprint ?? null,
     title: it.title,
     priority: it.priority,
     milestone: it.milestone,
@@ -194,6 +196,7 @@ const bowImport = {
       title: it.title,
       desc: `${it.desc} [spec: ${it.specRef}]${it.path ? ` [path: ${it.path}]` : ''}`,
       seq: it.seq,
+      sprint: it.sprint ?? null,
       priority: it.priority,
       milestone: it.milestone,
       layer: it.layer,
