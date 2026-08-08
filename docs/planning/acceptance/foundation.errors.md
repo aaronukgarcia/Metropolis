@@ -35,7 +35,17 @@ The error registry, correlation-ID propagation, and structured NDJSON logging fo
 
 ### Determinism & safety
 
-- **AC-13 (SG-7 scoped; GR#21).** `grep -rn "time.Now" internal/foundation/errs/*.go` (excluding `_test.go`) matches only inside the clock-plumbing var block and the default-clock assignment in `errs.go` (i.e. the `var (... clock = time.Now)` declaration) — no other file in the package calls `time.Now()` directly. A violation here is a determinism-gate-class defect per GR#21 (Red Determinism Gate Stops the Line) once this package is on any tick path.
+- **AC-13 (SG-7 scoped; GR#21).** Check: `grep -rn "time\.Now" internal/foundation/errs/*.go | grep -v _test.go | grep -vE ':[0-9]+:[[:space:]]*//'` (the trailing filter drops comment-only lines — doc prose like "Defaults to time.Now." is not a code call and must not be counted) — this must return matches from **exactly three** legitimate injectable-clock default sites, and no others:
+  (a) `errs.go` — the package-wide `clock` variable's default assignment (`clock = time.Now` inside the `var ( clockMu ...; clock = time.Now )` block);
+  (b) `log.go` — `NewLogger`'s `now: time.Now` struct-literal field default;
+  (c) `log.go` — `NewFileLogger`'s `now: time.Now` struct-literal field default.
+  Every one of these three is a *default value for an overridable field/var* (`SetClock` on the package and on `*Logger` respectively let callers replace it) — that is what makes it a legitimate injectable-clock site rather than a wall-clock call on the tick path. Any code-level match outside these three — in particular `correlation.go`, which must read time exclusively through the package-level `now()` helper (see `degradedCorrelationID`), never `time.Now()` directly — is a FAIL. Expected result today (verified 2026-08-08 against the current tree): the filtered command prints exactly these 3 lines —
+  ```
+  internal/foundation/errs/errs.go:16:	clock   = time.Now
+  internal/foundation/errs/log.go:46:	return &Logger{w: w, now: time.Now}
+  internal/foundation/errs/log.go:69:		now:        time.Now,
+  ```
+  (exact line numbers may drift as the file changes; match on file+content, not line number) — zero lines from `correlation.go`, `registry.go`, or any other file in the package. A 4th match, or any match attributed to a file other than `errs.go`/`log.go`, fails this AC — including doc-comment prose that gets miscounted because the filter above wasn't applied; the Tester must run the filtered command, not the bare `grep -rn "time.Now"` from earlier drafts of this criterion.
 - **AC-14 (GR#21).** Concurrent construction is safe: `go test ./internal/foundation/errs/... -race -count=1` reports no data race when multiple goroutines call `New`/`Wrap`/`SetClock` concurrently (a concurrency test exists — `grep -n "go func()" internal/foundation/errs/*_test.go` finds at least one goroutine-based test). A data race here is itself a determinism hazard (GR#21) — treat any `-race` failure as an auto-P0, not a routine bug.
 - **AC-15.** The registry is loaded and validated once and cached, not re-read from disk on every `New`/`Wrap` call. Check: `grep -n "sync.Once\|sync.RWMutex" internal/foundation/errs/registry.go` shows a caching/synchronization mechanism guarding the load.
 

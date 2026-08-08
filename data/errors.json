@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "ranges": {
+    "format": "MET-<layer><NNN> — layer is a single letter, NNN is a zero-padded 3-digit sequence within that layer.",
+    "layers": {
+      "F": "foundation — internal/foundation/* (registry, correlation IDs, logging, determinism, serialization, solver, build info)",
+      "P": "protocol — internal/protocol (engine/UI command/event/delta contract)",
+      "E": "engine — internal/engine/* (simulation modules)",
+      "U": "ui — internal/ui/* (screens, widgets, input, render)",
+      "T": "tooling — build/plan/generate scripts (currently JS, outside the Go registry)"
+    },
+    "reserved": {
+      "F000-F009": "errs package self-errors (registry load/validation, unregistered code) — always available even if the registry fails to load",
+      "F010-F099": "foundation.errors (this module): logging, correlation",
+      "F100-F199": "reserved for foundation.registry (module registry)",
+      "F200-F299": "reserved for foundation.det (determinism/RNG)",
+      "F300-F399": "reserved for foundation.serialize (save/fixture format)",
+      "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
+      "F500-F599": "reserved for foundation.repo (build info, CI)"
+    },
+    "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
+  },
+  "codes": {
+    "MET-F001": {
+      "severity": "fatal",
+      "module": "foundation.errors",
+      "message": "error registry failed to load from {path}: {cause}",
+      "remedy": "Check that data/errors.json exists, is valid JSON, and passes schema validation (unique codes, required fields, MET-<layer><NNN> format). Set METROPOLIS_ERRORS_PATH to override the resolved path if it was found in the wrong place."
+    },
+    "MET-F002": {
+      "severity": "fatal",
+      "module": "foundation.errors",
+      "message": "error registry at {path} failed validation: {cause}",
+      "remedy": "Fix the offending entry in data/errors.json (duplicate code, bad code format, or missing severity/module/message/remedy field) and reload."
+    },
+    "MET-F003": {
+      "severity": "error",
+      "module": "foundation.errors",
+      "message": "unregistered error code {code} requested via {constructor} (correlation {correlationId})",
+      "remedy": "Add {code} to data/errors.json before using it — GR#7 forbids ad-hoc error construction. This wrapper error is itself always available even if the registry failed to load, so the failure is never silent."
+    },
+    "MET-F004": {
+      "severity": "error",
+      "module": "foundation.errors",
+      "message": "correlation ID missing or empty when constructing error {code}",
+      "remedy": "Every errs.New/errs.Wrap call must carry a non-empty correlation ID. Mint one with errs.NewCorrelationID() at the boundary (protocol command, CLI invocation, test setup) and propagate it through the call chain."
+    },
+    "MET-F010": {
+      "severity": "error",
+      "module": "foundation.errors",
+      "message": "failed to write NDJSON log entry to {path}: {cause}",
+      "remedy": "Check disk space and file permissions on the logs/ directory. The error is still retained in the in-memory ring buffer (Recent()) even when the write fails."
+    },
+    "MET-F011": {
+      "severity": "warn",
+      "module": "foundation.errors",
+      "message": "log file {path} rotation failed: {cause}",
+      "remedy": "Check that logs/ is writable and that rotated files (.1, .2, .3) are not locked by another process. Logging continues to the current file uncapped until rotation succeeds."
+    },
+    "MET-F012": {
+      "severity": "fatal",
+      "module": "foundation.errors",
+      "message": "cannot open log file {path} for writing: {cause}",
+      "remedy": "Ensure the logs/ directory exists and is writable, or set an explicit writer via NewLogger. Falls back to the in-memory ring buffer sink so errors are never printed-and-lost."
+    },
+    "MET-F013": {
+      "severity": "error",
+      "module": "foundation.errors",
+      "message": "malformed log entry could not be marshalled to JSON: {cause}",
+      "remedy": "Ensure ctx values passed to errs.New/Wrap are JSON-marshalable (no channels, funcs, or cyclic structures)."
+    },
+    "MET-F020": {
+      "severity": "error",
+      "module": "foundation.errors",
+      "message": "correlation ID {correlationId} failed format validation",
+      "remedy": "Correlation IDs must be UUIDv4-formatted strings minted by errs.NewCorrelationID(). Do not hand-construct correlation IDs."
+    }
+  }
+}
