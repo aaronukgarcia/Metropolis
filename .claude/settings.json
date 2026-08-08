@@ -1,4 +1,25 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Bash(npm *)",
+      "Bash(node claude-sync.js*)",
+      "Bash(mysql *)",
+      "Bash(mariadb *)",
+      "Bash(\"C:\\\\Program Files\\\\MariaDB 12.2\\\\bin\\\\mysql.exe\" *)",
+      "Bash(\"C:/Program Files/MariaDB 12.2/bin/mysql.exe\" *)",
+      "PowerShell(git *)",
+      "PowerShell(gh *)",
+      "PowerShell(npm *)",
+      "PowerShell(node claude-sync.js*)",
+      "PowerShell(mysql *)",
+      "PowerShell(mariadb *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\MariaDB 12.2\\\\bin\\\\mysql.exe\" *)",
+      "PowerShell(& \"C:\\\\Program Files\\\\MariaDB 12.2\\\\bin\\\\mariadb.exe\" *)",
+      "PowerShell(Get-Service *)"
+    ]
+  },
   "hooks": {
     "PreToolUse": [
       {
