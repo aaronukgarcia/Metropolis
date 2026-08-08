@@ -87,6 +87,20 @@ If the summary shows git NOT SYNCED or a Vestige problem, surface that to the us
 
 ---
 
+## 👥 Dev-Team Process (MANDATORY for build work — Aaron-directed, 2026-08-08)
+
+Bill (Fable 5) is the **lead: architecture, briefs, final review of test-clean work only, commits, BOW state**. All build work is delegated to subagents on **Sonnet** (save Fable tokens for lead judgement):
+
+```
+Bill brief → BA acceptance criteria (docs/planning/acceptance/<mkey>.md, BEFORE dev dispatch)
+          → Jnr developer builds to criteria
+          → Tester: PASS/FAIL vs criteria ONLY — never fixes; FAIL bounces to the SAME junior (loop)
+          → Documentation pass (.md only)
+          → Bill final architectural review → commit "[type]: ... [mkey]" → BOW ref + done
+```
+
+BA / Tester / Documentation are **persistent agents** — reuse them via follow-up messages, don't respawn per item. Basic errors must never reach Bill. Full role mandates: `docs/planning/dev-team-process.md`.
+
 ## 📋 Book of Work (BOW)
 
 The BOW is the **single source of truth for planned/active work**: modules, features, bugs, interfaces. It lives in the `metro` MariaDB (`bow_items` / `bow_dependencies` / `bow_comments` / `bow_git_refs`) and is driven entirely through `claude-bow.js` — never raw SQL for writes. Every item has a GUID, short code (`MOD-001`/`FEAT-001`/`BUG-001`/`INT-001`), priority `P0`–`P3`, status, dependency links (cycle-checked; `done` refuses while dependencies are open — GR#12), comments that may carry example code, and git commit refs.

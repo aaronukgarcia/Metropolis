@@ -17,6 +17,7 @@ Show the current state of the sprint-structured Book of Work and what is ready t
    - The top ready items in seq order with their spec refs (`node claude-bow.js show <code>` for detail).
    - Anything `blocked` and what unblocks it.
 4. If asked to start an item: `node claude-bow.js set <code> --status in_progress`, read its `spec_ref` sections of `docs/METROPOLIS-MASTER-v2.1.md` IN FULL first (working agreement §6.1), and check its inbound/outbound contracts in `code.json`.
+5. **Build work goes through the dev-team pipeline** (`docs/planning/dev-team-process.md`, mandatory): BA writes `docs/planning/acceptance/<mkey>.md` BEFORE the junior developer (Sonnet subagent) is dispatched; the Tester verdicts PASS/FAIL against those criteria and never fixes (FAILs bounce to the same junior); the Documentation agent passes the .md files; the lead reviews only test-clean work, then commits with the `[mkey]` ref. BA/Tester/Docs are persistent agents — message them, don't respawn.
 
 ## Rules
 
