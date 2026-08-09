@@ -149,6 +149,19 @@ This work is **complete and self-verified** by its junior (before/after attack d
 
 **Standing context a fresh session needs**: the dev-team process is at v1.8 (`docs/planning/dev-team-process.md`) — read the three weakness patterns and the assumption rules before dispatching anything. The BOW is the authority on item state (`node claude-bow.js list --by-seq`); this file is the authority on *why*.
 
+### 12. `main` went red for three commits — and the cause was the control I'd written that morning
+
+After pushing the engine.core copy-safety chain I ran `gh run list`, saw the run **in progress**, and never went back. Two more commits landed on top before CI's failure was noticed. Both defects were test-only, and the determinism gate stayed green throughout — but `main` was red for three commits.
+
+- `TestSEC003_ConcurrentRegisterDuringAdvanceTicks` was **scheduling-dependent**: it needed a registration to land *after* the seal, and on CI every one landed first. The invariant held perfectly; the test couldn't observe it. Same class as BUG-005 that morning.
+- `staticcheck SA4006` flagged a dead store in a test — a rule `golangci-lint` enforces and `go vet` does not.
+
+**This is BUG-006, the item I raised myself that morning**, whose interim control I wrote as *"after ANY push, run `gh run list` and eyeball it."* Watching a run **start** is not the control; confirming it **finished** is. A human-remembered check failed within hours of being written down — which is the argument *for* the branch-protection half Aaron approved, not against it. Logged as BUG-021, against myself.
+
+**The systemic finding is the more useful one.** `golangci-lint run` was in nobody's habit. Testers ran `go build`, `go vet`, `gofmt`, `go test -race` — but CI runs golangci-lint as a **blocking** job with a stricter rule set, and nothing local matched it. So a lint error walked past a junior, a Tester, a Destructive agent *and* the lead, because everyone was running a different tool and calling it the same thing. It is now in the standard Tester baseline and every junior verify list.
+
+Also folded into the process: **concurrency tests must be deterministic, not probable** — construct the state (drive the operation to completion, then assert) rather than racing for the timing, and delete an ordering-dependent assertion rather than padding it with retries. Twice in one day the same shape cost a red build.
+
 ### 11. New capability — Docker gives us a second GOOS (2026-08-09, post-pause)
 
 Aaron advised that WSL and Docker are installed. Verified rather than assumed, and the real picture is narrower than the headline:
