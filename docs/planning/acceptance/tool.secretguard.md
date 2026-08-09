@@ -1,0 +1,69 @@
+BOW code: FEAT-028
+
+# Acceptance criteria — tool.secretguard (FEAT-028)
+
+**BOW code:** FEAT-028
+**Spec refs:** GR#11 (Pre-Commit Security Review, `CLAUDE.md` line 42); GR#15 (Validators Derive From Data, line 46); M0-ENG §5 (Git — repository & conventions, hygiene/hooks, `docs/METROPOLIS-MASTER-v2.1.md` lines 985-990); `claude-plan-guard.js` (`tool.planguard`, the shipped sibling hook whose deny-JSON convention, fail-closed posture, escape hatch, and BOM-tolerant/commit-scoped-fail-closed stdin parsing this item must match).
+**Date:** 2026-08-08
+**Status:** active — normal pipeline order (criteria written before junior dispatch)
+**Package under test:** `claude-secret-guard.js` (repo root, per `node claude-bow.js show FEAT-028`'s `path:`)
+**Standard gates:** see `README.md` for the general convention; this is a **Node.js hook script, not a Go package** — SG-1/SG-2/SG-4/SG-7 (go build/vet/test/determinism-grep) do not apply. This item's own gates are AC-1 through AC-3 below (no new npm dependency, `node --check` syntax validity, and the item's own test suite), plus SG-5 (forbidden-touch) and SG-6 (no Co-Authored-By) unchanged.
+
+## User stories
+
+- As **Bill** (GR#11), I need every `git commit` to be scanned for staged secrets and hardcoding smells mechanically, so security review no longer depends on a human catching it by eye every time.
+- As **a developer**, I need the metro DB's documented localhost/root/no-password default and GUID/UUID literals to never trip the guard, so legitimate, already-sanctioned patterns don't block routine commits.
+- As **a developer in an emergency**, I need `CLAUDE_DISABLE_SECRET_GUARD=1` as a documented, deliberate escape hatch, so a false positive can never brick a session (mirrors `tool.planguard`'s `CLAUDE_DISABLE_PLAN_GUARD`).
+- As **any non-commit Bash command** (`git status`, `npm install`, …), I need to run unaffected by this hook even when its stdin is malformed, so a hook-input hiccup never blocks unrelated work — the lesson `tool.planguard` already learned and hardcoded (commit-scoped fail-closed blast radius).
+
+## Scope
+
+`claude-secret-guard.js`: a `PreToolUse` hook on `Bash` that, for `git commit` commands only, scans `git diff --cached` for private-key blocks, API-key/token patterns, passwords in URLs/connection strings, high-entropy string literals, and GR#15 hardcoding smells; denies with per-line evidence unless every match is allowlisted; wired into `.claude/settings.json` immediately after `claude-plan-guard.js`.
+
+## Acceptance criteria
+
+### Functional
+
+- **AC-1.** `claude-secret-guard.js` exists at the repo root and is valid, syntactically-checkable Node.js. Check: `node --check claude-secret-guard.js` exits 0.
+- **AC-2.** It is wired into `.claude/settings.json`'s `PreToolUse` → `Bash` hooks array, positioned **after** `claude-plan-guard.js` and before `claude-pre-push-check.js` (matching the brief's "settings.json wiring after the plan guard"). Check: `grep -n "claude-plan-guard.js\|claude-secret-guard.js\|claude-pre-push-check.js" .claude/settings.json` shows the three in that relative order within the same hooks array.
+- **AC-3.** No new npm dependency is introduced: `package.json`'s `dependencies` is unchanged from before this item (still exactly `mysql2`), and `claude-secret-guard.js` uses only Node.js built-in modules. Check: `git diff --cached -- package.json` (at the junior's commit time) shows no new dependency entries, and `grep -n "require(" claude-secret-guard.js` lists only stdlib modules (`fs`, `path`, `crypto`, `child_process`, etc.) — no bare package-name `require()`.
+- **AC-4.** Non-`git commit` Bash commands exit 0 immediately with no stdout — matching `claude-plan-guard.js`'s behaviour. Check: a test harness feeds `{"tool":"Bash","tool_input":{"command":"git status"}}` on stdin and asserts exit code 0, empty stdout.
+- **AC-5.** For a `git commit` command, the hook inspects **staged content only**, via `git diff --cached` (or an equivalent staged-scope diff/show), never the working-tree unstaged diff and never full-file contents of untracked files. Check: `grep -n "diff --cached\|--staged" claude-secret-guard.js` matches, and a test stages a clean file while leaving an unstaged secret-bearing edit in the same file, then asserts the commit is allowed (the unstaged secret is invisible to the scan).
+- **AC-6.** Detects private-key blocks: a staged diff line containing `-----BEGIN ... PRIVATE KEY-----` (RSA/EC/OPENSSH/generic) is flagged. Check: a passing test stages a fixture private-key block and asserts the hook denies.
+- **AC-7.** Detects common API-key/token patterns (e.g. `AKIA[0-9A-Z]{16}`, `sk-[A-Za-z0-9]{20,}`, `ghp_[A-Za-z0-9]{36}`, `xox[baprs]-`, generic `[a-zA-Z0-9_-]{32,}` bearer-token-shaped assignments to a variable named like `token`/`key`/`secret`) is flagged. Check: passing tests cover at least 3 distinct pattern families and assert denial for each.
+- **AC-8.** Detects passwords in URLs or connection strings (`scheme://user:password@host`, e.g. `mysql://`, `postgres://`, `mongodb(+srv)://`, `redis://`, generic `://.*:.*@`) — flagged **unless** the exact string matches an allowlist entry (AC-11). Check: passing tests cover at least 2 distinct connection-string schemes and assert denial when the password segment is non-trivial (not the documented sanctioned default).
+- **AC-9.** Detects high-entropy string literals (Shannon entropy above a documented threshold, over a minimum length to avoid false positives on short tokens) as a heuristic "looks like a secret" signal, separate from the pattern-based checks above. Check: a passing test stages a random 32+ char base64-ish literal and asserts it is flagged as high-entropy; a passing test stages an ordinary English sentence/identifier of similar length and asserts it is NOT flagged.
+- **AC-10.** GR#15 hardcoding-smell check: staged code in validator-shaped context (a comparison/assertion against a literal number or string where the surrounding code reads as "expected count/value", e.g. `assert(count === 45)`, `if (total != 1200)`, a bare numeric literal compared against a runtime-computed count) is flagged as a hardcoding smell distinct from the secret-detection categories above. Check: a passing test stages a fixture snippet matching this shape and asserts it is flagged with a category distinguishable from "secret" (e.g. `category: "hardcoding"` in the evidence output), and a passing test stages an equivalent snippet that instead reads the expected value from a data file/config (the GR#15-compliant form) and asserts it is NOT flagged.
+- **AC-11.** A committed, documented allowlist file exists (e.g. `data/secret-guard-allowlist.json` or `.secretguardignore` — junior's choice, but it must be a tracked, reviewable file, not an env var or gitignored local file) containing at minimum: (a) the documented metro DB default connection string (localhost/root/no-password, as described in `CLAUDE.md`'s Environment section), and (b) a pattern class for GUID/UUID literals (matching the `[0-9a-f]{8}-[0-9a-f]{4}-...` canonical form used throughout `code.json`/BOW GUIDs) so they are never flagged as high-entropy secrets. Check: `go`... n/a (this is JS) — check: the allowlist file exists, is valid JSON (or documented format), is tracked in git (not `.gitignore`d), and a passing test stages the exact metro DB default connection string plus a sample GUID literal and asserts both are allowed (no denial) specifically because of the allowlist match (verified by a test case that removes/empties the allowlist and re-asserts the same inputs ARE flagged, proving the allowlist — not an accidental pattern gap — is what suppresses them).
+- **AC-12.** Allowlist matching is precise, not fuzzy: an allowlist entry matches only the specific documented string/pattern class, not any string that merely contains a substring of it (e.g. allowlisting the exact metro DB default connection string must not also allowlist `mysql://root:realpassword@production-host/metro`). Check: a passing test asserts a similar-but-different connection string (same scheme/user, different host or a non-empty password) is still flagged.
+- **AC-13.** Fail-closed deny includes per-line evidence: the denial reason names the file, the line number(s), and the detection category (private-key / api-key / connection-string-password / high-entropy / hardcoding-smell) for every match, not just an aggregate "secrets found" message. Check: a passing test with 2 distinct findings in 2 different files asserts the deny reason enumerates both, each with file+line+category.
+- **AC-14.** `CLAUDE_DISABLE_SECRET_GUARD=1` bypasses the guard entirely (same posture as `tool.planguard`'s `CLAUDE_DISABLE_PLAN_GUARD`) — check: `grep -n "CLAUDE_DISABLE_SECRET_GUARD" claude-secret-guard.js` matches, and a passing test sets the env var, stages an obvious private-key fixture, and asserts the commit is allowed (exit 0, no deny output).
+
+### Error handling
+
+- **AC-15.** Unparseable stdin JSON does **not** deny non-commit-looking input — the fail-closed posture is scoped to commits only (the lead-review lesson from `tool.planguard`'s BOM incident): a raw-substring fallback checks whether the unparsed input text contains `git commit`; if not, exit 0 immediately. Check: `grep -n "git commit" claude-secret-guard.js` shows this fallback substring check present in the catch/parse-failure path (mirroring `claude-plan-guard.js` lines 96-109), and a passing test feeds garbage (non-JSON) stdin with no `git commit` substring and asserts exit 0.
+- **AC-16.** Unparseable stdin JSON that **does** contain `git commit` as a raw substring denies (fail-closed) with a clear message that input was unparseable — matching `claude-plan-guard.js`'s exact fallback behaviour. Check: a passing test feeds garbage stdin containing the substring `git commit` and asserts a deny with a message naming the parse failure.
+- **AC-17.** BOM-tolerant stdin parsing: a UTF-8 BOM (`﻿`) prepended to stdin (as PowerShell pipes do) is stripped before `JSON.parse`, matching `claude-plan-guard.js`'s `input.replace(/^﻿/, '')`. Check: `grep -n "\\\\uFEFF" claude-secret-guard.js` matches, and a passing test prepends a BOM to valid JSON stdin and asserts the hook parses it correctly (does not fall into the unparseable-input path).
+- **AC-18.** An internal error during scanning (e.g. `git diff --cached` itself fails — not in a repo, git not on PATH) results in a DENY for a `git commit` command, fail-closed by design (mirroring `claude-plan-guard.js`'s top-level try/catch → deny), with the error message attached. Check: a passing test mocks/forces the `git diff --cached` call to fail and asserts a `git commit` command is denied with the underlying error surfaced.
+- **AC-19.** Deny output uses the exact `hookSpecificOutput` JSON convention: `{ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "..." } }`, written to stdout, process exits 0 (not a non-zero exit — denial is communicated via the JSON payload, per the existing hooks' convention). Check: `grep -n "hookSpecificOutput\|permissionDecision" claude-secret-guard.js` matches the same shape as `claude-plan-guard.js`'s `deny()` helper.
+
+### Determinism & safety
+
+- **AC-20.** Scanning the same staged diff twice (no changes between runs) produces identical verdicts and identical evidence output — no randomness, no wall-clock-dependent detection logic. Check: a passing test runs the scan function twice against the same fixture diff and asserts byte-identical output.
+- **AC-21.** The guard never modifies the working tree, the index, or any file — it is read-only with respect to the repository (unlike `claude-plan-guard.js`, which deliberately regenerates files; this guard has no equivalent write step). Check: a passing test snapshots `git status --porcelain` before and after invoking the guard against a fixture and asserts no change.
+
+### Documentation
+
+- **AC-22.** `claude-secret-guard.js` carries a header comment in the same style as `claude-plan-guard.js`: BOW mkey (`tool.secretguard`), spec refs (GR#11, GR#15, M0-ENG §5), a behaviour summary, an explicit fail-closed-posture note scoped to commit-only, and the escape-hatch env var name.
+- **AC-23.** The allowlist file documents its own format inline (a comment block or adjacent `.md`) so a future contributor can add a new sanctioned pattern correctly (what fields are required, whether entries are exact-string or regex, how GUID-class entries differ from literal-string entries).
+
+## Out of scope
+
+- Any secret-scanning of files outside `git diff --cached`'s staged scope (e.g. scanning the whole working tree, or historical commits) — that is a separate, heavier audit (`/security-audit` skill territory), not this hook's job.
+- Automatic remediation (stripping/redacting the secret from the diff, auto-rotating credentials) — this item only denies with evidence; fixing is the developer's job.
+- A configurable severity/threshold UI — the entropy threshold and pattern list are code/data-file constants for v1, not a runtime-tunable setting.
+- CLAUDE.md's hooks table being updated to list this new hook — that belongs to the Documentation role's pass, not this item's junior.
+
+## Escalations
+
+- None at draft time. This item's criteria were written before dispatch per normal pipeline order; no spec/brief conflict found. One judgement call flagged for Bill's awareness rather than as a conflict: AC-19 mandates the `hookSpecificOutput` deny convention with `process.exit(0)` (matching `claude-plan-guard.js`) rather than a non-zero process exit code, since that is how the existing hook family communicates denial to the harness — the BOW item description didn't specify this explicitly, but deviating from the shipped sibling's convention would be inconsistent with "same posture as tool.planguard" in the brief.
