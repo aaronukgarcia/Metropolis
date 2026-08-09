@@ -79,6 +79,30 @@ The very first Destructive sweep produced the same root cause three times, in th
 
 This is what the weakness count is for. Three instances of one class in one sweep is not three bugs — it is one habit, and the response is teaching, which is why it is written here rather than only in three BOW items.
 
+### Weakness pattern #3: fix the class, not the demonstrated instance (2026-08-09)
+
+Every round of the SEC-003 → SEC-014 → SEC-016 → SEC-018 chain closed **exactly the path the proof-of-concept exercised**, and left structurally identical siblings standing:
+
+| Round | Fixed | Left standing |
+|---|---|---|
+| SEC-003 | the unlocked `hooks` read | — |
+| SEC-014 | copy detection on the two `hooks` paths | the check ran *after* the lock |
+| SEC-016 | check moved before the lock, on those same two paths | **six other `e.mu.Lock()` sites** with no check at all |
+| SEC-018 | (open) | — |
+
+`Clock()`, `handleSetSpeed`, `handlePause`, `handleResume` and `Snapshot()` are reachable from any Command sent to a copied Engine, and every one of them hangs on the same mechanism. Only 2 of 8 lock sites were guarded. A Tester reproduced it: 1,786 of 3,000 calls returned; the rest wedged permanently.
+
+The same shape appeared in `harness.stub` (bounded `AdvanceTicks` in `engine.core`, unbounded in the stub) and in the hooks (four bypasses fixed, a fifth in `secret-guard` left because it wasn't cited).
+
+**The rule:**
+
+- **When you fix a defect, grep for its shape before declaring done.** If the bug is "an unguarded call to X", find *every* call to X. If it is "unvalidated input to Y", find every path into Y. The PoC is one instance the attacker happened to show you, not the boundary of the problem.
+- **Briefs must ask for the class.** A brief saying "fix this call site" will get that call site. Say "fix this and every structurally identical site, and tell me how you enumerated them."
+- **Testers and Destructive agents should hunt siblings by default** — every round of the chain above, the sibling was found by a verifier, never by the fixer.
+- If you deliberately leave a sibling — legitimately, e.g. it is out of scope — **log it as an assumption naming what you left**, so it is a decision rather than an oversight.
+
+Fixing the instance feels like progress and produces a green test. It also guarantees the next round.
+
 ### Weakness pattern #2: a value duplicated across a module boundary needs a drift test
 
 GR#20 forbids some imports (notably `internal/ui` → `internal/engine`), and modules are deliberately decoupled elsewhere. That legitimately forces a value to exist in two places. It has happened twice already:
