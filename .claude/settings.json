@@ -51,6 +51,36 @@
             "timeout": 6
           }
         ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-version-guard.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node claude-pre-commit-check.js",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node claude-plan-guard.js",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node claude-secret-guard.js",
+            "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node claude-pre-push-check.js",
+            "timeout": 6
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -79,7 +109,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"CRITICAL CONTEXT TO PRESERVE: [1] You are bob/bill/ben - prefix ALL responses. [2] Run node claude-sync.js checkin after compaction. [3] Golden Rules: error trapping, version discipline, single source of truth, identity prefix, verbose confirmations, GUID documentation. [4] Never commit to main without version bump in package.json AND version.ts. [5] Read CLAUDE.md for full rules.\""
+            "command": "echo \"CRITICAL CONTEXT TO PRESERVE: [1] You are bob/bill/ben - prefix ALL responses. [2] Run node claude-sync.js checkin after compaction. [3] Golden Rules 1-21: error trapping, GR#2 Metropolis profile (version = git describe/ldflags + milestone tags, NO version files), SSOT, identity prefix, contract-first/stub-forever, red determinism gate stops the line. [4] Dev-team pipeline v1.5: BA criteria -> Sonnet junior -> Tester pass/fail -> Docs -> Bill review; recover mid-cycle state from docs/planning/checkpoint.md + BOW. [5] Read CLAUDE.md for full rules.\""
           }
         ]
       }
