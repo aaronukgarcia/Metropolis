@@ -5,7 +5,7 @@ BOW code: FEAT-008
 **BOW code:** FEAT-008
 **Spec refs:** §14 (Debug Mode, `docs/METROPOLIS-MASTER-v2.1.md` lines 257-260); M0-ENG §3 (Debug mode & the Info Panel, lines 853-865, esp. "debug-touched saves are flagged forever"); `int.serializer`'s `Header.DebugTouched`/`TouchDebug`/`MergeDebugTouched` (INT-002, already frozen Sprint 0).
 **Date:** 2026-08-08
-**Status:** draft-ahead (Sprint 1)
+**Status:** active (Sprint 1) — refreshed against landed APIs 2026-08-09 by BA-1, see Escalations
 **Package under test:** `internal/engine/debug/` (confirm via `node claude-bow.js show FEAT-008` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/engine/debug/...`.
 
@@ -57,4 +57,8 @@ The runtime debug-mode switch: enable paths (`--debug` flag, config, `:debug on`
 
 ## Escalations
 
-- None at draft time. `status: draft-ahead` — depends on `int.serializer` (already frozen, low risk) and the module registry (`MOD-005`, for `CanToggle`-style gating consistency with `ui.screen.debug`); refresh AC-3/AC-4's exact `Header` method names against `internal/foundation/serialize/header.go` at dispatch (already confirmed as `TouchDebug`/`MergeDebugTouched` in Sprint 0's landed code, low drift risk).
+- **2026-08-09, BA-1, dispatch refresh (no escalation needed — all references confirmed against landed code):**
+  - `node claude-bow.js show FEAT-008` confirms `path: internal/engine/debug/`, matching this doc's "Package under test" — no drift.
+  - AC-3/AC-4: `internal/foundation/serialize/header.go` confirms `Header.TouchDebug()` (sets `DebugTouched = true`, no way to clear via this package's API) and `Header.MergeDebugTouched(incoming bool)` (ORs into `DebugTouched`) exist verbatim as drafted — zero drift, no change made.
+  - AC-5: `internal/engine/core/clock.go` confirms the speed set: `Speed1x`/`Speed2x`/`Speed4x` (already supported) plus `Speed8xDebug` (value 8), with `Paused` as a separate bool rather than a speed value — matching the criterion's "pause/1x/2x/4x ... +8× under debug" framing exactly. `clock.go`'s own doc comment explicitly notes `Speed8xDebug` is "reserved for feat.debugmode" and that `engine.core` accepts it via `SetSpeed`/`ValidSpeed` but does **not** itself enforce the debug-mode gate — confirming this item (not `engine.core`) owns the `IsOn()==true` gating AC-5 requires. No change needed.
+  - Net: no criterion required softening or escalation. Both upstream dependencies (`int.serializer`'s `Header`, `engine.core`'s clock) provide everything AC-3/AC-4/AC-5 need, exactly as named in the draft.
