@@ -30,3 +30,25 @@ Each item file (`MOD-002.md`, `INT-001.md`, `INT-002.md`, `INT-003.md`) has:
 5. Escalations — spec/brief conflicts or untestable requirements, for Bill. May be empty.
 
 A PASS on an item requires **all** Standard gates above AND every AC in the item's own list. A single FAILing AC (numbered or standard-gate) is enough to bounce the item back to the same junior with the exact AC/gate ID that failed.
+
+## Conventions ratified during Sprint 1
+
+- **Per-module error subranges are claimed at build time by the owning
+  module**, not pre-allocated in a master table. When an item's junior
+  developer needs registry-sourced errors (GR#7), they claim the next free
+  subrange within their layer's block in `data/errors.json` and record the
+  claim there (e.g. `ui.screen.map`/FEAT-005 claimed `MET-U100`–`U100-U199`
+  for the F1 map screen — see `data/errors.json`'s range table and
+  `internal/ui/screens/map/errors.go`). The Tester's SG-5 (forbidden-touch)
+  gate already allows `data/errors.json` as a sanctioned touch path for
+  exactly this reason.
+- **`_test.go` files are exempt from the GR#20 depguard ban** on
+  `internal/ui` importing `internal/engine`. GR#20 (Contract-First,
+  Stub-Forever) protects *production* decoupling — UI code must consume the
+  engine only via `internal/protocol` — but test files may import
+  `internal/engine/stub` to build fixtures (the sanctioned H-STUB test
+  path). This is enforced mechanically in `.golangci.yml`'s
+  `depguard.rules.ui-must-not-import-engine.files` list (`"!**/*_test.go"`
+  exclusion), lead ruling 2026-08-09. Example: `internal/ui/screens/map/map_test.go`
+  imports `internal/engine/stub` for fixture JSON; `internal/ui/screens/map/screen.go`
+  and its non-test siblings do not and must not.

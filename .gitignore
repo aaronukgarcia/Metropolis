@@ -35,6 +35,8 @@ firebase-debug.log
 .DS_Store
 Thumbs.db
 nul
+# Microsoft Office lock files (e.g. docs/~$cloud.md while Word has it open)
+~$*
 
 # Go build artifacts
 *.exe

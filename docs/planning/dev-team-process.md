@@ -1,6 +1,12 @@
-# Metropolis Dev-Team Process v1.5
+# Metropolis Dev-Team Process v1.6
 
-**2026-08-08/09 · directed by Aaron (v1.1: Tester + Documentation; v1.2: BA; v1.3: independent QA; v1.4: pipelined cadence; v1.5: Resource Manager, saturation rule, team caps, heavy checkpointing) · supersedes the wave-1 "lead reviews everything directly" flow**
+**2026-08-08/09 · directed by Aaron (v1.1: Tester + Documentation; v1.2: BA; v1.3: independent QA; v1.4: pipelined cadence; v1.5: Resource Manager, saturation rule, team caps, heavy checkpointing; v1.6: second Tester) · supersedes the wave-1 "lead reviews everything directly" flow**
+
+## Second Tester (v1.6 — Aaron, 2026-08-09)
+
+The Tester cap rises from 1 to **2**. The single Tester was the pipeline's queue bottleneck: a wave of parallel juniors delivers faster than one verifier can clear, and items sat waiting on a verdict while their dependants idled.
+
+The two Testers are **independent verifiers, not a team**: they never communicate with each other, they own **disjoint items** (the lead assigns), and each reports its verdict directly and only to Bill. One item never gets two verdicts — that would invite verdict-shopping and dissolve accountability for a bad PASS. Everything else in the Tester mandate is unchanged: verification only, never edits, never suggests fixes, a FAIL goes straight back to the same junior.
 
 ## Saturation rule & Resource Manager (v1.5)
 
@@ -8,7 +14,7 @@
 
 - Maintains `docs/planning/team-board.md`: every agent, current assignment, status (busy/blocked/idle), what they return to when unblocked.
 - When an agent blocks (e.g. a dev waiting on a Tester verdict), the RM proposes interim work for it and remembers the return point; when the blocker clears, the RM proposes the return.
-- **Team caps** (RM enforces by flagging breaches to Bill): max **4 concurrent Jnr developers**, **1 Tester**, **2 BAs** (disjoint sprint ownership), **1 Documentation**, **1 QA**, **1 RM**. Growth beyond caps requires Aaron.
+- **Team caps** (RM enforces by flagging breaches to Bill): max **4 concurrent Jnr developers**, **2 Testers** (raised from 1 by Aaron, 2026-08-09, to cut verification-queue latency — see v1.6 note below), **2 BAs** (disjoint sprint ownership), **1 Documentation**, **1 QA**, **1 RM**. Growth beyond caps requires Aaron.
 - The RM is **advisory**: it recommends dispatches/reassignments; Bill executes them (only the lead messages agents). RM never edits code and never talks to other agents.
 - **At-risk parallel starts**: the lead may start sprint N+1 items whose dependencies are code-complete but whose sprint gate (e.g. Aaron's contract freeze) is pending — the RM tracks every at-risk item and its rebase exposure so a freeze-review change fans out correctly.
 
