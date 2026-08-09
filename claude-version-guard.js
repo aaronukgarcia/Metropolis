@@ -1,21 +1,126 @@
 /**
- * PreToolUse hook — Golden Rule #2 enforcement.
- * Blocks any `git commit` command unless BOTH package.json and version.ts
- * are staged (git added) in the current commit — EXCEPT docs/tooling-only
- * commits (docs/, *.md, .claude/, root claude-*.js), which are GR#2-exempt
- * per Aaron 2026-07-29 and pass without a bump (see @FIX v3.1.11 below).
+ * PreToolUse hook — Golden Rule #2 enforcement (Metropolis Go-monorepo
+ * profile; BOW mkey: legacy.versionguard / FEAT-002).
  *
- * Why: On 2026-03-24, 10 consecutive commits were pushed to main under the
- * same version number (2.5.6) because raw git commands bypassed the /commit
- * skill. This hook makes it impossible to commit without a version bump,
- * regardless of whether /commit is used or git is called directly.
+ * GR#2 ("Version Discipline") is satisfied differently in this repo's Go
+ * layout than in the retired Prix-Six-style `app/package.json` +
+ * `app/src/lib/version.ts` two-file pattern: M0-ENG §3 mandates that the
+ * app version come SOLELY from `git describe --tags --dirty`, injected at
+ * build time via `-ldflags -X ...buildinfo.Version=...` (see
+ * `internal/foundation/buildinfo/buildinfo.go`), with milestone cuts marked
+ * by annotated tags `v0.<milestone>.<n>` (M0-ENG §5). Hand-maintained
+ * version files are explicitly banned for this stack — so this hook no
+ * longer requires one to be staged. `MOD-001` (the app/ skeleton the old
+ * two-file check targeted) was cancelled; `MOD-003` (Go monorepo skeleton)
+ * is what actually landed.
+ *
+ * Retargeted behaviour once `cmd/` or `internal/` exist in the repo (they
+ * do, as of MOD-003):
+ *   1. DENY a commit that stages a hand-maintained version file: the
+ *      retired `app/package.json` / `app/src/lib/version.ts` paths, any
+ *      file named exactly `VERSION`, or a `version.go` file whose staged
+ *      content hardcodes a semver literal instead of relying on ldflags.
+ *      `internal/foundation/buildinfo/buildinfo.go` is exempt by path — its
+ *      `"dev"` defaults are the sanctioned ldflags injection target.
+ *   2. WARN (allow, with a stdout note) when a commit touches `cmd/` or
+ *      `internal/` — a reminder that milestone tags are the version
+ *      mechanism here, and that BOW `[mkey]` commit-message enforcement is
+ *      `tool.bow`'s (MOD-007) job, not this hook's (see Escalation #1 in
+ *      docs/planning/acceptance/legacy.versionguard.md — this item is
+ *      scoped to retiring the two-file check ONLY).
+ *   3. The docs/tooling exemption (docs/, *.md, .claude/, root
+ *      claude-*.js, .gitignore, root package.json/package-lock.json) is
+ *      unchanged.
+ *
+ * Rationale / history: Aaron's 2026-08-08 16:15 DECIDED note (BOW
+ * legacy.versionguard comment) approved this retarget. Left unretargeted,
+ * this hook demanded two files (`app/package.json`, `app/src/lib/version.ts`)
+ * that no longer exist in the plan, blocking every non-exempt commit to
+ * `cmd/`, `internal/`, or `data/` — see the acceptance file's status note
+ * (2026-08-09) for the live-blocking symptom this fix addresses.
+ *
+ * Fails OPEN on any unexpected error (parse failure, git failure, fs
+ * error) — unchanged from every prior version of this hook. This is a
+ * deliberate departure from claude-plan-guard.js / claude-secret-guard.js's
+ * fail-closed posture: GR#2 here is a hygiene check, not a security gate,
+ * and a hook bug must never brick unrelated commits (AC-8).
  *
  * Receives JSON on stdin: { tool: "Bash", tool_input: { command: "..." } }
  * Returns JSON to block: { hookSpecificOutput: { permissionDecision: "deny" } }
- * Returns nothing to allow.
+ * Returns JSON with permissionDecision "allow" + a reason to warn-but-allow.
+ * Returns nothing to allow silently.
+ *
+ * Escape hatch (unchanged name): CLAUDE_DISABLE_VERSION_GUARD=1
  */
 
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
 const { execSync } = require('child_process');
+
+const ROOT = __dirname;
+
+// The two retired Prix-Six-style version files (MOD-001, cancelled).
+const HAND_MAINTAINED_EXACT_PATHS = new Set([
+  'app/package.json',
+  'app/src/lib/version.ts',
+]);
+
+// The one sanctioned ldflags-injection target — its "dev" defaults are not
+// a hardcoded version, they're the pre-build placeholder (see file header).
+const BUILDINFO_EXEMPT_PATH = 'internal/foundation/buildinfo/buildinfo.go';
+
+const VERSION_GO_RE = /(^|\/)version\.go$/;
+const SEMVER_LITERAL_RE = /["'`]v?\d+\.\d+\.\d+/;
+
+function isHandMaintainedVersionFile(relPath) {
+  if (HAND_MAINTAINED_EXACT_PATHS.has(relPath)) return true;
+  if (path.basename(relPath) === 'VERSION') return true;
+  return false;
+}
+
+// A version.go file (other than the exempt buildinfo.go) is only a
+// violation if its STAGED content actually hardcodes a semver-looking
+// literal — merely existing under that filename isn't itself banned.
+function stagedDiffHasHardcodedSemver(relPath) {
+  let diff = '';
+  try {
+    diff = execSync(`git diff --cached -- "${relPath}"`, {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+  } catch {
+    return false;
+  }
+  return diff.split('\n').some(
+    line => line.startsWith('+') && !line.startsWith('+++') && SEMVER_LITERAL_RE.test(line)
+  );
+}
+
+function deny(reason) {
+  const output = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  });
+  process.stdout.write(output);
+  process.exit(0);
+}
+
+function warnAllow(reason) {
+  const output = JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      permissionDecisionReason: reason,
+    },
+  });
+  process.stdout.write(output);
+  process.exit(0);
+}
 
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -89,7 +194,8 @@ process.stdin.on('end', () => {
       /^claude-[\w.-]+\.js$/,  // root coordination + hook tooling scripts
       /^\.gitignore$/,
       // Metropolis: ROOT package.json holds only hook-tooling deps (mysql2 for
-      // claude-sync) — the versioned app manifest will live at app/package.json.
+      // claude-sync) — never the versioned app manifest (that pattern is retired,
+      // see @RETARGET below).
       /^package\.json$/,
       /^package-lock\.json$/,
     ];
@@ -98,59 +204,62 @@ process.stdin.on('end', () => {
       process.exit(0); // docs/tooling-only commit — GR#2 exempt, no bump required
     }
 
-    const hasPackageJson = staged.includes('package.json');
-    const hasVersionTs = staged.includes('version.ts');
+    // @RETARGET (v4.0.0, 2026-08-09, FEAT-002/legacy.versionguard): the old
+    //   two-file (app/package.json + app/src/lib/version.ts) check is retired.
+    //   GR#2 is now satisfied via git-describe + ldflags (see file header) for
+    //   any repo where the Go skeleton exists. Evaluated fresh every
+    //   invocation — this is a fresh process per hook call, so there is no
+    //   stale-cache risk.
+    const hasGoSkeleton =
+      fs.existsSync(path.join(ROOT, 'cmd')) || fs.existsSync(path.join(ROOT, 'internal'));
 
-    if (hasPackageJson && hasVersionTs) {
-      // Both files staged — now verify the version ACTUALLY changed (not just re-staged)
-      let versionDiff = '';
-      try {
-        versionDiff = execSync('git diff --cached -- app/package.json app/src/lib/version.ts', {
-          encoding: 'utf8',
-          timeout: 5000,
-        });
-      } catch {
-        // If diff fails, allow — don't block on tooling errors
-        process.exit(0);
-      }
-
-      if (versionDiff.includes('+') && (versionDiff.includes('"version"') || versionDiff.includes('APP_VERSION'))) {
-        // Version string actually changed — allow
-        process.exit(0);
-      }
-
-      // Files staged but version didn't change — block
-      const reason = `🛑 GOLDEN RULE #2: Version files are staged but the version number hasn't changed.\n` +
-        `Run /bump to increment the version before committing.`;
-      const output = JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason: reason,
-        },
-      });
-      process.stdout.write(output);
+    if (!hasGoSkeleton) {
+      // No Go skeleton yet, and the app/ layout it would have replaced
+      // (MOD-001) is cancelled — there is nothing left for this hook to
+      // check. Allow.
       process.exit(0);
     }
 
-    // Build a clear message about what's missing
-    const missing = [];
-    if (!hasPackageJson) missing.push('package.json');
-    if (!hasVersionTs) missing.push('src/lib/version.ts');
+    const offending = [];
+    for (const f of relPaths) {
+      if (isHandMaintainedVersionFile(f)) {
+        offending.push(f);
+        continue;
+      }
+      if (VERSION_GO_RE.test(f) && f !== BUILDINFO_EXEMPT_PATH) {
+        if (stagedDiffHasHardcodedSemver(f)) {
+          offending.push(f);
+        }
+      }
+    }
 
-    const reason = `🛑 GOLDEN RULE #2 VIOLATION: Version bump required.\n` +
-      `Missing from staged files: ${missing.join(' + ')}\n` +
-      `Run /bump first, then commit. Every commit to main must bump the version.`;
+    if (offending.length > 0) {
+      const reason =
+        `🛑 GOLDEN RULE #2 VIOLATION (Metropolis profile): hand-maintained version file(s) staged.\n` +
+        `Offending: ${offending.join(', ')}\n` +
+        `M0-ENG §3 bans hand-maintained version files for this stack — the app version comes ` +
+        `SOLELY from \`git describe --tags --dirty\`, injected via -ldflags at build ` +
+        `(see internal/foundation/buildinfo/buildinfo.go). Cut a milestone tag ` +
+        `(v0.<milestone>.<n>) instead of hand-editing a version string.`;
+      deny(reason);
+      return;
+    }
 
-    const output = JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason,
-      },
-    });
+    // WARN-but-allow: cmd/ or internal/ commits are the ones GR#2's
+    // milestone-tag discipline actually governs, and (separately) the ones
+    // tool.bow (MOD-007) will require a BOW [mkey] ref on — not this hook's
+    // job (AC-7). Just a reminder, never a block.
+    const touchesEngineCode = relPaths.some(f => /^cmd\//.test(f) || /^internal\//.test(f));
+    if (touchesEngineCode) {
+      warnAllow(
+        'ℹ️  GR#2 note: this commit touches cmd/ or internal/. Version discipline for this repo ' +
+        'is milestone tags (v0.<milestone>.<n>) + -ldflags injection, not a hand-edited file — ' +
+        'no action needed here. BOW [mkey] commit-message enforcement is tool.bow\'s (MOD-007) job, ' +
+        'not this hook\'s.'
+      );
+      return;
+    }
 
-    process.stdout.write(output);
     process.exit(0);
 
   } catch (err) {
