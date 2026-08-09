@@ -17,7 +17,8 @@
       "F300-F399": "reserved for foundation.serialize (save/fixture format)",
       "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
       "F500-F599": "reserved for foundation.repo (build info, CI)",
-      "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)"
+      "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
+      "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -87,6 +88,12 @@
       "module": "ui.core",
       "message": "malformed delta for subscription {subscriptionId} at tick {tick} could not be applied: {cause}",
       "remedy": "The delta's Patch was not valid JSON (or otherwise failed to apply) and was dropped; the view model for that subscription keeps its last-known-good state. If this persists, check the sending engine module's view-patch encoding for that view."
+    },
+    "MET-U100": {
+      "severity": "warn",
+      "module": "ui.screen.map",
+      "message": "malformed f1.viewport patch could not be applied: {cause}",
+      "remedy": "The patch was not valid f1.viewport v1 JSON (bad JSON, unrecognised schemaVersion, or a sparse patch received before any full snapshot) and was dropped; the map screen's grid keeps its last-known-good state. If this persists, check the sending engine module's f1.viewport patch encoding (internal/engine/stub/viewport.go documents the v1 schema)."
     }
   }
 }
