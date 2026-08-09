@@ -55,8 +55,18 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
-const TYPES = ['module', 'feature', 'bug', 'interface', 'assumption'];
-const TYPE_PREFIX = { module: 'MOD', feature: 'FEAT', bug: 'BUG', interface: 'INT', assumption: 'ASM' };
+const TYPES = ['module', 'feature', 'bug', 'interface', 'assumption', 'finding'];
+const TYPE_PREFIX = { module: 'MOD', feature: 'FEAT', bug: 'BUG', interface: 'INT', assumption: 'ASM', finding: 'SEC' };
+// Weakness classes for security findings. The point of a closed list is
+// COUNTING: if one class keeps recurring, that is a training signal about how
+// the team writes code, not just N separate bugs to fix. Add a class only when
+// something genuinely does not fit — a long tail of one-offs defeats the count.
+const FINDING_CLASSES = [
+  'input-validation', 'bounds-overflow', 'integer-conversion', 'type-confusion',
+  'encapsulation-leak', 'insecure-call-surface', 'concurrency-safety',
+  'resource-exhaustion', 'error-disclosure', 'injection', 'auth-trust-boundary',
+  'crypto-randomness', 'other',
+];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const STATUSES = ['open', 'in_progress', 'blocked', 'done', 'cancelled'];
 const OPEN_STATUSES = ['open', 'in_progress', 'blocked'];
@@ -70,7 +80,7 @@ const positional = [];
 const flags = {};
 const VALUE_FLAGS = ['priority', 'desc', 'status', 'type', 'on', 'note', 'example', 'example-file', 'lang', 'author',
   'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate',
-  'code-path', 'codejson'];
+  'code-path', 'codejson', 'class'];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) { flags[a.slice(2)] = argv[++i]; }
@@ -227,6 +237,25 @@ async function cmdAdd(db) {
       process.exit(1);
     }
   }
+  // Security findings (Destructive agent). Same traceability rule as
+  // assumptions, plus a closed weakness class — an uncounted finding cannot
+  // reveal a pattern, and the pattern is the point.
+  if (type === 'finding') {
+    const missing = [];
+    if (!flags['code-path']) missing.push('--code-path "<file:line or dir>"');
+    if (!flags.codejson) missing.push('--codejson "<code.json module key or GUID>"');
+    if (!flags.class) missing.push(`--class <${FINDING_CLASSES.join('|')}>`);
+    if (missing.length) {
+      console.error('claude-bow: a security finding MUST be traceable and classified. Missing:');
+      for (const m of missing) console.error(`  ${m}`);
+      process.exit(1);
+    }
+    if (!FINDING_CLASSES.includes(String(flags.class))) {
+      console.error(`claude-bow: unknown finding class "${flags.class}". Valid: ${FINDING_CLASSES.join(', ')}`);
+      console.error('Use "other" only if it genuinely fits nothing — a long tail of one-offs defeats the pattern count.');
+      process.exit(1);
+    }
+  }
   const priority = String(flags.priority || 'P2').toUpperCase();
   if (!PRIORITIES.includes(priority)) {
     console.error(`Invalid priority "${flags.priority}". Valid: ${PRIORITIES.join(', ')}`);
@@ -236,12 +265,13 @@ async function cmdAdd(db) {
   const code = await nextCode(db, type);
   await db.query(
     `INSERT INTO bow_items (guid, code, mkey, seq, item_type, title, description, priority,
-       milestone, layer, spec_ref, guid_in, guid_out, estimate_days, code_path, codejson_ref)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       milestone, layer, spec_ref, guid_in, guid_out, estimate_days, code_path, codejson_ref,
+       finding_class)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [guid, code, flags.mkey || null, flags.seq != null ? Number(flags.seq) : null, type, title,
      flags.desc || null, priority, flags.milestone || null, flags.layer || null, flags.spec || null,
      flags['guid-in'] || null, flags['guid-out'] || null, flags.estimate != null ? Number(flags.estimate) : null,
-     flags['code-path'] || null, flags.codejson || null]);
+     flags['code-path'] || null, flags.codejson || null, flags.class || null]);
   console.log(`Added ${code} [${type}/${priority}] "${title}"`);
   console.log(`GUID: ${guid}`);
 }
@@ -401,6 +431,52 @@ async function cmdRef(db) {
     'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note) VALUES (?, ?, ?, ?)',
     [item.guid, hash.toLowerCase(), branch, flags.note || null]);
   console.log(`Linked commit ${hash.slice(0, 10)} to ${item.code}${flags.note ? ' — ' + flags.note : ''}.`);
+}
+
+/**
+ * Weakness-pattern report over security findings.
+ *
+ * The reason findings carry a closed `finding_class` is so this report can
+ * exist. A list of N findings is a to-do list; N findings where 6 share one
+ * class is a statement about how the team writes code, and the fix for that is
+ * teaching, not tickets. Recurrence is the signal — so recurring classes are
+ * called out explicitly rather than left for a reader to notice.
+ */
+async function cmdWeakness(db) {
+  const [rows] = await db.query(
+    `SELECT finding_class AS cls, status, COUNT(*) AS n
+       FROM bow_items WHERE item_type = 'finding' GROUP BY finding_class, status`);
+  if (!rows.length) { console.log('No security findings recorded yet.'); return; }
+
+  const byClass = new Map();
+  let total = 0, open = 0;
+  for (const r of rows) {
+    const cls = r.cls || '(unclassified)';
+    const e = byClass.get(cls) || { total: 0, open: 0 };
+    e.total += Number(r.n);
+    if (OPEN_STATUSES.includes(r.status)) e.open += Number(r.n);
+    byClass.set(cls, e);
+    total += Number(r.n);
+    if (OPEN_STATUSES.includes(r.status)) open += Number(r.n);
+  }
+
+  console.log(`Security weakness patterns — ${total} finding(s), ${open} still open\n`);
+  const sorted = [...byClass.entries()].sort((a, b) => b[1].total - a[1].total);
+  const width = Math.max(...sorted.map(([c]) => c.length));
+  for (const [cls, e] of sorted) {
+    const bar = '#'.repeat(Math.min(e.total, 40));
+    console.log(`  ${cls.padEnd(width)}  ${String(e.total).padStart(3)} total  ${String(e.open).padStart(3)} open  ${bar}`);
+  }
+
+  const recurring = sorted.filter(([, e]) => e.total >= 3);
+  if (recurring.length) {
+    console.log('\nRECURRING (>=3) — these are training signals, not just defects:');
+    for (const [cls, e] of recurring) {
+      console.log(`  ${cls} x${e.total} — the devs keep writing this. Fixing each instance treats the symptom.`);
+    }
+  } else {
+    console.log('\nNo class has recurred 3+ times yet — too early to call a pattern.');
+  }
 }
 
 async function cmdSet(db) {
@@ -712,6 +788,7 @@ if (require.main === module) {
         case 'import': await cmdImport(db); break;
         case 'ready': await cmdReady(db); break;
         case 'summary': await printBowSummary(db); break;
+        case 'weakness': await cmdWeakness(db); break;
         case 'startup-summary': await printStartupSummary(db); break;
         default:
           console.error(`Unknown command: ${command}`);

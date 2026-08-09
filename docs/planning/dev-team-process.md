@@ -24,6 +24,41 @@ The git index is a **shared mutable resource** across concurrent agents. Rules:
 - **Juniors**: never leave anything staged between tool calls — any stage→verify→reset test sequence must complete atomically inside a single command invocation.
 - **Lead**: commits use explicit pathspecs (`git commit -m "..." -- <paths>`) or verify `git diff --cached --stat` matches the intended set immediately before committing — a concurrent agent's staged file must never ride along. (Incident: a junior's staged `VERSION` test fixture was swept into an unrelated docs commit; caught and reverted within two commits.)
 
+## The Destructive agent (v1.8 — Aaron, 2026-08-09)
+
+A new pipeline stage, sitting **after the Tester and before Documentation**:
+
+```
+BA criteria → Jnr builds → Tester (PASS/FAIL vs criteria) → DESTRUCTIVE (attack it) → Docs → Bill review → commit
+                                                                  │ REJECT → same Jnr fixes → Tester again → Destructive again
+```
+
+**Why it exists.** The Tester asks *"does this do what the criteria say?"* Nobody was asking *"what happens when someone uses it wrongly, or maliciously?"* Passing tests and being hard to misuse are different properties, and today's own history proves it: a transport `Close()` that panicked on a live race passed every test in the suite for the project's entire life, because the test that looked like it covered it quietly didn't.
+
+**Mandate.** The Destructive agent tries to break things. Per module it asks:
+- **Input validation & trust boundaries** — what enters unvalidated? What does it trust that it shouldn't?
+- **Bounds & overflow** — slice indexing, integer conversion (`int` → `int32`, unchecked `len()` arithmetic), off-by-one, unbounded growth.
+- **Type safety & confusion** — `interface{}`/`any` round-trips, unchecked type assertions, JSON into loose types.
+- **Encapsulation** — is the exported surface bigger than it needs to be? Can a caller reach into internal state and corrupt an invariant?
+- **Insecure call-ability** — *can a caller use this API correctly-looking and get an unsafe result?* An API that is easy to hold wrongly is the finding, even if every current caller holds it right.
+- **Concurrency** — races, deadlocks, TOCTOU, lock-order inversion, unsynchronised teardown.
+- **Resource exhaustion** — unbounded allocation, goroutine leaks, work proportional to attacker-controlled input.
+- **Error-path disclosure** — do errors leak internals, paths, or secrets?
+
+**Rights and duties.**
+- It **may reject work back to the developer**, exactly as a Tester FAIL does. A rejection returns to the *same* junior, is re-Tested, and comes back through Destructive again.
+- Every rejection is logged as a **BOW `finding` (`SEC-` code)** carrying the rejection reason, the code location, the code.json reference, and a **weakness class** — all tool-enforced:
+  ```
+  node claude-bow.js add finding "<what breaks and how>" --priority P0..P3 \
+    --code-path "<file:line>" --codejson "<module key>" --class <weakness-class> \
+    --desc "<attack/misuse path, impact, and what the fix must achieve>"
+  ```
+- It **never edits code** and never fixes what it finds — same separation as the Tester. Finding and fixing in one head is how a fixer talks itself out of a finding.
+
+**The pattern count is the real deliverable.** `node claude-bow.js weakness` reports findings grouped by class and flags any class recurring 3+ times. A single finding is a defect; the same class six times is a statement about **how the team writes code**, and the response to that is *teaching*, not tickets. The lead is expected to act on recurrence by changing briefs and criteria, not by filing more bugs.
+
+**Scan stamps.** Each module's adversarial-review state lives in `data/security-scans.json` and is merged into `code.json`'s `securityScan` field by `tools/plan/generate.js`. `code.json` is generated and must never be hand-edited (GR#3/GR#6), so the ledger is the SSOT and the stamp still appears where readers look for it. **Absent = never scanned** — unscanned must never be mistaken for clean.
+
 ## Assumptions are logged or the work is rejected (v1.7 — Aaron, 2026-08-09)
 
 **The standard is that the criterion holds, not that the test passes.** A test proves what it asserts; a criterion states what must be true. The gap between those two is where assumptions live, and an assumption nobody wrote down is indistinguishable from a fact until it is wrong.
