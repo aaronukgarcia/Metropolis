@@ -2,5 +2,26 @@
   "$comment": "Security-scan ledger — the SSOT for adversarial ('Destructive agent') review state, keyed by code.json module key. code.json is GENERATED from the master plan and must never be hand-edited (GR#3, GR#6), so scan stamps live HERE and tools/plan/generate.js merges them into each module's `securityScan` field at generation time. That way `code.json` shows the stamp, as required, without the stamp being destroyed by the next regeneration. Written by Destructive agents; read by the lead and /health-check.",
   "scanVersion": "v1",
   "scanVersionMeaning": "v1 = manual adversarial review by a Destructive agent against the v1 checklist: input validation and trust boundaries, integer/slice bounds and conversion safety, type confusion, encapsulation and exported-surface leakage, concurrency safety, resource exhaustion, error-path information disclosure, insecure-call-ability (can a caller use this API wrongly and get an unsafe result?). Bumping this version invalidates every stamp below and requires a fresh sweep.",
-  "scans": {}
+  "scans": {
+    "int.serializer": { "scannedAt": "2026-08-09T17:34:30Z", "scanVersion": "v1", "by": "Destructive-1", "findings": ["SEC-001"], "verdict": "findings-raised" },
+    "int.protocol": { "scannedAt": "2026-08-09T17:36:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
+    "foundation.data": { "scannedAt": "2026-08-09T17:37:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
+    "foundation.errors": { "scannedAt": "2026-08-09T17:38:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
+    "foundation.registry": { "scannedAt": "2026-08-09T17:39:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
+    "foundation.det": { "scannedAt": "2026-08-09T17:40:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
+    "int.solver": { "scannedAt": "2026-08-09T17:41:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
+    "engine.core": { "scannedAt": "2026-08-09T17:39:26Z", "scanVersion": "v1", "by": "Destructive-2", "findings": ["SEC-003", "SEC-005"], "verdict": "findings-raised" },
+    "harness.stub": { "scannedAt": "2026-08-09T17:39:26Z", "scanVersion": "v1", "by": "Destructive-2", "findings": ["SEC-006"], "verdict": "findings-raised" },
+    "feat.detgate": { "scannedAt": "2026-08-09T17:39:26Z", "scanVersion": "v1", "by": "Destructive-2", "findings": [], "verdict": "clean" },
+    "feat.debugmode": { "scannedAt": "2026-08-09T17:39:26Z", "scanVersion": "v1", "by": "Destructive-2", "findings": [], "verdict": "clean" },
+    "ui.core": { "scannedAt": "2026-08-09T17:45:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-011"], "verdict": "findings-raised" },
+    "ui.widgets": { "scannedAt": "2026-08-09T17:46:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-011"], "verdict": "findings-raised" },
+    "ui.screen.map": { "scannedAt": "2026-08-09T17:47:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-009"], "verdict": "findings-raised" },
+    "ui.screen.debug": { "scannedAt": "2026-08-09T17:48:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-011"], "verdict": "findings-raised" },
+    "foundation.repo": { "scannedAt": "2026-08-09T17:49:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-010"], "verdict": "findings-raised" },
+    "feat.skeleton": { "scannedAt": "2026-08-09T17:49:30Z", "scanVersion": "v1", "by": "Destructive-3", "findings": [], "verdict": "clean" },
+    "tool.bow": { "scannedAt": "2026-08-09T17:50:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-004", "SEC-007", "SEC-012"], "verdict": "findings-raised" },
+    "tool.planguard": { "scannedAt": "2026-08-09T17:50:15Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-008"], "verdict": "findings-raised" },
+    "legacy.versionguard": { "scannedAt": "2026-08-09T17:50:30Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-002"], "verdict": "findings-raised" }
+  }
 }

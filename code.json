@@ -94,7 +94,13 @@
         "guid": "665c8aaa-f1b8-460d-947d-825a9ca89639",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:36:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "8ee49e96-0de9-4326-9b90-e94622874f94",
@@ -148,7 +154,15 @@
         "guid": "2048b403-0ec3-4e7f-a243-fc6f6f30f569",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:34:30Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [
+          "SEC-001"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "783c1559-4a3c-4502-91f7-834e6a5fb2c7",
@@ -194,7 +208,13 @@
         "guid": "f44ff17e-16f7-415f-82e3-36734dae7921",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:41:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "04773af2-1d23-4b2c-8a19-fd682052091f",
@@ -224,7 +244,13 @@
         "guid": "8144f385-2138-49e1-83c7-58e209c981a6",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:38:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "2186df22-9f30-4feb-a61e-2f5679fdc9dd",
@@ -249,7 +275,15 @@
         "guid": "ffc1b37c-b6eb-4267-90b8-6fbcc0a52a2e",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:49:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-010"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "5f71974a-a612-4113-ba75-8e91546b8977",
@@ -274,7 +308,15 @@
         "guid": "20baae0c-01ff-46c5-9aff-3b2720b2e385",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:50:15Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-008"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "1c0a8c46-ba8a-4063-92f8-0bbcdb580753",
@@ -354,7 +396,13 @@
         "guid": "4d387884-937a-4b9b-8e72-3eac16c86fee",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:40:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "d6460761-184d-4bee-aac7-5f1408242a0c",
@@ -392,7 +440,13 @@
         "guid": "a19afdb7-7ad8-4947-a1c6-631da0d7461d",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:39:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "58dbb120-caed-4e55-99f7-b90894e97794",
@@ -466,7 +520,13 @@
         "guid": "c2cbe598-733e-4c5b-9e16-b19f1fc41750",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:37:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-1",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "3345f6d6-c82f-46b9-b834-3d73a8ab117b",
@@ -491,7 +551,17 @@
         "guid": "43ad10cc-454d-47df-a707-918c9425cd4e",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:50:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-004",
+          "SEC-007",
+          "SEC-012"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "c254728b-4a1c-490f-a1a7-42e08f8605ff",
@@ -522,7 +592,15 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:39:26Z",
+        "scanVersion": "v1",
+        "by": "Destructive-2",
+        "findings": [
+          "SEC-006"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
@@ -574,7 +652,15 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:45:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-011"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
@@ -622,7 +708,15 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:46:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-011"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
@@ -744,7 +838,16 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:39:26Z",
+        "scanVersion": "v1",
+        "by": "Destructive-2",
+        "findings": [
+          "SEC-003",
+          "SEC-005"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "fac130bf-4875-417b-88b0-67b83208aaae",
@@ -775,7 +878,13 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:39:26Z",
+        "scanVersion": "v1",
+        "by": "Destructive-2",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "01272dbc-234b-47a1-a645-f61f538089e9",
@@ -821,7 +930,15 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:47:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-009"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "aedcd472-ec92-4d21-a0ff-4a5dcc7916f4",
@@ -846,7 +963,13 @@
         "guid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:49:30Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "98b0e2b3-169e-4592-b90a-1a2f21b6771a",
@@ -887,7 +1010,15 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:48:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-011"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "d46840c1-b7d1-480b-a46d-e93d58fd7aa4",
@@ -923,7 +1054,13 @@
           }
         ]
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T17:39:26Z",
+        "scanVersion": "v1",
+        "by": "Destructive-2",
+        "findings": [],
+        "verdict": "clean"
+      }
     },
     {
       "guid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",

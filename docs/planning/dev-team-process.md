@@ -59,6 +59,25 @@ BA criteria → Jnr builds → Tester (PASS/FAIL vs criteria) → DESTRUCTIVE (a
 
 **Scan stamps.** Each module's adversarial-review state lives in `data/security-scans.json` and is merged into `code.json`'s `securityScan` field by `tools/plan/generate.js`. `code.json` is generated and must never be hand-edited (GR#3/GR#6), so the ledger is the SSOT and the stamp still appears where readers look for it. **Absent = never scanned** — unscanned must never be mistaken for clean.
 
+### Weakness pattern #1: an invariant stated in prose is not enforced (2026-08-09, first sweep)
+
+The very first Destructive sweep produced the same root cause three times, in three different packages, written by three different juniors:
+
+| Finding | The prose | The reality |
+|---|---|---|
+| SEC-005 | "this order IS the contract — never reordered at runtime" | exported mutable package-level slice; reversing it reversed actual execution |
+| SEC-003 | "hooks are registered at boot only" | nothing prevented late registration; the unlocked map read is a **fatal** runtime crash |
+| SEC-001 | the package doc correctly names itself the hostile-input surface | the shard *name* — also a path component — was the one field not treated as hostile |
+
+**The rule that follows, binding on BAs and developers:**
+
+- **A comment saying "never X at runtime" is a code smell, not a control.** If an invariant matters, the API must make violating it impossible or loud — an unexported var with a copy-returning accessor, a lock, a sealed state that errors on late mutation. `foundation.registry.List()` returning a defensive copy is the pattern this project already knows how to write; follow it.
+- **BAs**: when criteria state an invariant, add a criterion that the invariant **cannot be broken through the public API**, not merely that correct use produces the right answer. "Verify the API cannot be misused to break this" is now expected wording wherever an invariant is asserted.
+- **Developers**: if you write "callers must not…", stop and ask what happens when they do. If the answer is "it silently corrupts" or "it crashes", the comment is not the fix.
+- **A field that becomes a path segment, a key, or an identifier is input**, however inert its name makes it look. `Name` read like a label; it was a path.
+
+This is what the weakness count is for. Three instances of one class in one sweep is not three bugs — it is one habit, and the response is teaching, which is why it is written here rather than only in three BOW items.
+
 ## Assumptions are logged or the work is rejected (v1.7 — Aaron, 2026-08-09)
 
 **The standard is that the criterion holds, not that the test passes.** A test proves what it asserts; a criterion states what must be true. The gap between those two is where assumptions live, and an assumption nobody wrote down is indistinguishable from a fact until it is wrong.
