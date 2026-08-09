@@ -82,7 +82,7 @@ func openAppend(path string) (*os.File, int64, error) {
 	}
 	info, err := f.Stat()
 	if err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, 0, err
 	}
 	return f, info.Size(), nil

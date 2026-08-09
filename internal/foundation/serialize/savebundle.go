@@ -147,7 +147,7 @@ func validateShardFile(dir string, meta ShardMeta) error {
 	if err != nil {
 		return fmt.Errorf("shard %q: opening %q: %w", meta.Name, path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	hasher := sha256.New()
 	n, err := io.Copy(hasher, f)

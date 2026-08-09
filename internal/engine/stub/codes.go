@@ -39,8 +39,4 @@ const (
 	// explicitly assigns this job to the receiving engine ("It does NOT
 	// validate payload-internal invariants... that is the engine's job").
 	codeInvalidPayload = "MET-P091"
-
-	// codeInvalidChaosConfig is requested by NewStubEngine/ChaosConfig.Validate
-	// when a ChaosConfig option is invalid (e.g. a negative delay) — AC-10.
-	codeInvalidChaosConfig = "MET-P093"
 )

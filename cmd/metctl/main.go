@@ -129,14 +129,14 @@ func exportShard(srcDir, destDir string, meta serialize.ShardMeta) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() { _ = src.Close() }()
 
 	outPath := filepath.Join(destDir, meta.Name+".ndjson")
 	out, err := os.Create(outPath)
 	if err != nil {
 		return fmt.Errorf("creating %q: %w", outPath, err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	enc := json.NewEncoder(out)
 	handle := func(rec serialize.Record) error {

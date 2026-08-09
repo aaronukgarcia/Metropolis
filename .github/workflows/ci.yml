@@ -1,13 +1,15 @@
 # Metropolis CI — M0 skeleton.
 #
 # Module key: foundation.repo (see code.json)
-# Spec ref:   M0-ENG §5; A8
+# Spec ref:   M0-ENG §5; A8; §1.2 point 5 (determinism gate); GR#21;
+#             BUG-002 (lint job arming)
 #
 # main is always green (M0-ENG §5): build, unit tests, gofmt, go vet on
-# every push/PR. The determinism gate, UI snapshot tests, invariant suite
-# and perf smoke (M0-ENG §5, §1.2 step 5) land with the modules that make
-# them meaningful — they are not stubbed here, they simply do not exist
-# yet.
+# every push/PR, plus (as of the feat.detgate/FEAT-004 sprint 1 arming)
+# the determinism gate and golangci-lint. UI snapshot tests, invariant
+# suite and perf smoke (M0-ENG §5, §1.2 step 5) land with the modules
+# that make them meaningful — they are not stubbed here, they simply do
+# not exist yet.
 
 name: CI
 
@@ -48,27 +50,59 @@ jobs:
             exit 1
           }
 
-  # --- Sprint 1: arms with A8 mechanical enforcement -------------------
-  # golangci-lint (custom determinism rules: map-range ban on tick paths,
-  # pre-allocation rules, GR#20 internal/ui -> internal/engine import ban
-  # via .golangci.yml) + escape-analysis gate (`go build -gcflags="-m"`,
-  # allocations on tick paths fail the build mechanically) +
-  # `GODEBUG=gctrace=1` perf-harness check (M0-ENG §1.1, R9/A8).
-  # Left commented out until foundation.det / engine.core exist — there is
-  # no tick path to gate yet.
-  #
-  # lint-and-escape-analysis:
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-go@v5
-  #       with:
-  #         go-version: "1.25"
-  #     - name: golangci-lint
-  #       uses: golangci/golangci-lint-action@v6
-  #       with:
-  #         version: latest
-  #     - name: escape analysis gate (tick paths must not allocate)
-  #       run: go build -gcflags="-m" ./... 2>&1 | Select-String "escapes to heap"
-  #     - name: gctrace perf smoke
-  #       run: $env:GODEBUG="gctrace=1"; go test ./... -run TestPerfSmoke
+  # --- Determinism gate (FEAT-004, GR#21) -------------------------------
+  # Master doc §1.2 point 5: "CI runs the determinism gate on every
+  # merge." A red result here is AUTOMATICALLY P0 (Rule #21,
+  # docs/golden-rules-detail.md) and blocks every other merge until
+  # green — see internal/engine/detgate's doc comment and
+  # TestDeterminismGate's failure message for the full statement.
+  # timeout-minutes is explicit (not left at the Actions default) per
+  # feat.detgate AC-6 — the gate itself runs in well under a second on
+  # the stub engine; 10 minutes is a generous CI-cold-start budget, not
+  # a tuned figure, so a hang fails fast and visibly rather than
+  # silently eating the job's full default budget.
+  determinism-gate:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: go build ./...
+        run: go build ./...
+
+      - name: Determinism gate (TestDeterminismGate)
+        run: go test ./internal/engine/detgate/ -run TestDeterminismGate -count=1
+
+  # --- Lint (A8 mechanical enforcement / BUG-002) -----------------------
+  # golangci-lint enforces GR#20 (internal/ui must not import
+  # internal/engine — see .golangci.yml's depguard rule) mechanically,
+  # not by review. Version is PINNED (never `latest` — GR#2 Version
+  # Discipline: an unpinned linter version can start failing a green
+  # build on a Tuesday with no code change). The custom determinism
+  # rules (map-range ban on tick paths, mandatory pre-allocation) arm in
+  # a later sprint alongside more of foundation.det / engine.core going
+  # real; the escape-analysis (`-gcflags="-m"`) and `gctrace` perf gates
+  # are separate A8 checks, out of scope for this job (feat.detgate's
+  # acceptance doc "Out of scope").
+  lint:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.5.0

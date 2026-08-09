@@ -1,12 +1,45 @@
-# Metropolis golangci-lint config — M0 skeleton.
+# Metropolis golangci-lint config — v2 syntax.
 #
 # Module key: foundation.repo (see code.json)
-# Spec ref:   M0-ENG §5; A8
+# Spec ref:   M0-ENG §5; A8; BUG-002 (v1->v2 config migration)
 #
-# Standard linters now; the custom determinism rules (map-range ban on
-# tick paths, mandatory pre-allocation) arm in Sprint 1 alongside
-# foundation.det / engine.core, per the CI placeholder job in
-# .github/workflows/ci.yml.
+# BUG-002: this file previously used golangci-lint v1's linters-settings
+# shape with no top-level `version` key. golangci-lint v2 drops/errors on
+# that shape, so the GR#20 ui->engine depguard rule (below) had ZERO live
+# enforcement — the CI lint job was also commented out in
+# .github/workflows/ci.yml, so nothing ever ran this file at all. Fixed by
+# the feat.detgate (FEAT-004) sprint 1 lint-job arming: migrated to v2
+# via `golangci-lint migrate` (golangci-lint 2.5.0, pinned — see ci.yml,
+# never `latest` per GR#2 Version Discipline). Structural changes v2
+# required, beyond the top-level `version: "2"` key:
+#   - `linters-settings` -> `linters.settings` (nested, not sibling)
+#   - `issues.exclude-dirs` -> `linters.exclusions.paths` /
+#     `formatters.exclusions.paths` (issues.exclude-dirs is rejected by
+#     v2's JSON schema outright — `golangci-lint config verify` catches
+#     this)
+#   - `gofmt` is a formatter, not a linter, in v2: moved out of
+#     `linters.enable` into a new top-level `formatters.enable` block
+#   - `gosimple` no longer exists as a standalone linter name in v2 (its
+#     checks are folded into `staticcheck`); removed rather than left as
+#     a config error
+#   - `govet` is v2's own default-enabled set, so it's listed explicitly
+#     below for GR#3 Single Source of Truth (this file should say what
+#     runs, not rely on a reader knowing golangci-lint's current
+#     defaults) even though omitting it would still enable it
+# Verified with `golangci-lint config verify` and a deliberate scratch
+# violation of the depguard rule below (see FEAT-004's dispatch report
+# for the captured output; the scratch file itself was never committed).
+#
+# One more BUG-002-adjacent finding along the way: the original `files`
+# glob ("internal/ui/**/*.go", no leading "**/") never actually matched
+# anything under golangci-lint v2's doublestar matching, even once the
+# v1/v2 shape bug above was fixed — the rule was STILL dormant. Confirmed
+# by testing against a deliberate scratch violation: zero issues with the
+# old glob, correctly flagged once changed to "**/internal/ui/**/*.go"
+# below. This was a second, independent reason GR#20 had zero live
+# enforcement, not just the v1/v2 shape.
+
+version: "2"
 
 run:
   timeout: 5m
@@ -18,25 +51,33 @@ linters:
     - errcheck
     - unused
     - ineffassign
-    - gofmt
-    - gosimple
     - depguard
+  settings:
+    # Golden Rule #20 (Contract-First, Stub-Forever): modules consume
+    # each other ONLY via registered interfaces (internal/protocol).
+    # Packages under internal/ui must never import internal/engine
+    # directly — this is the mechanical enforcement of that rule.
+    depguard:
+      rules:
+        ui-must-not-import-engine:
+          list-mode: lax
+          files:
+            - "**/internal/ui/**/*.go"
+            # Test files are EXEMPT (lead ruling, 2026-08-09): GR#20 protects
+            # PRODUCTION decoupling; _test.go files may import internal/engine/stub
+            # to build fixtures (the sanctioned H-STUB test path, e.g.
+            # internal/ui/screens/map/map_test.go). Non-test ui code stays banned.
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/aaronukgarcia/Metropolis/internal/engine"
+              desc: "GR#20: internal/ui must not import internal/engine — consume it only via internal/protocol"
+  exclusions:
+    paths:
+      - fixtures
 
-linters-settings:
-  # Golden Rule #20 (Contract-First, Stub-Forever): modules consume each
-  # other ONLY via registered interfaces (internal/protocol). Packages
-  # under internal/ui must never import internal/engine directly — this is
-  # the mechanical enforcement of that rule.
-  depguard:
-    rules:
-      ui-must-not-import-engine:
-        list-mode: lax
-        files:
-          - "internal/ui/**/*.go"
-        deny:
-          - pkg: "github.com/aaronukgarcia/Metropolis/internal/engine"
-            desc: "GR#20: internal/ui must not import internal/engine — consume it only via internal/protocol"
-
-issues:
-  exclude-dirs:
-    - fixtures
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    paths:
+      - fixtures

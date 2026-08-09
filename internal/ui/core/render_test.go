@@ -40,8 +40,8 @@ func TestRenderLoop_DrawsAndFlushesViaSimulationScreen(t *testing.T) {
 	if drawCalls != 1 {
 		t.Fatalf("draw called %d times, want 1", drawCalls)
 	}
-	ch, _, _, _ := sim.GetContent(0, 0)
-	if ch != 'H' {
+	ch, _, _ := sim.Get(0, 0)
+	if ch != "H" {
 		t.Fatalf("simulated screen cell (0,0) = %q, want 'H'", ch)
 	}
 	stats := r.LastStats()

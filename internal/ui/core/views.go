@@ -171,7 +171,7 @@ func (l *ViewsLoop) apply(d protocol.Delta) {
 }
 
 func (l *ViewsLoop) logMalformed(d protocol.Delta, cause string) {
-	errs.New("MET-U002", l.correlationID, map[string]any{
+	_ = errs.New("MET-U002", l.correlationID, map[string]any{
 		"subscriptionId": string(d.SubscriptionID),
 		"tick":           int64(d.Tick),
 		"cause":          cause,

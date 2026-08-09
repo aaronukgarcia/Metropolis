@@ -169,7 +169,7 @@ func TestBundleRoundTripAndValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenShardReader: %v", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	var readBack int
 	if err := (NDJSONSerializer{}).ReadShard(r, func(Record) error { readBack++; return nil }); err != nil {
 		t.Fatalf("ReadShard: %v", err)
@@ -194,7 +194,7 @@ func TestValidateBundleCatchesCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteShard: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	h := NewHeader(1, 1, 1, "test-build")
 	h.ShardIndex = append(h.ShardIndex, meta)

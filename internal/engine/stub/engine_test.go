@@ -361,7 +361,7 @@ func TestNewStubEngine_InvalidChaos_Rejected(t *testing.T) {
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
 	)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	_, err := NewStubEngine(tr, WithChaos(ChaosConfig{
 		DelayedDeltas: DelayConfig{Enabled: true, MinDelay: -1},

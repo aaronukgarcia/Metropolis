@@ -135,7 +135,7 @@ func (NDJSONSerializer) ReadShard(r io.Reader, handle RecordHandler) error {
 	if err != nil {
 		return fmt.Errorf("serialize: opening gzip stream: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }()
 
 	br := bufio.NewReader(gz)
 	var lineNo int64

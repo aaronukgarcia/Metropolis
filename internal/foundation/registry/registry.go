@@ -293,9 +293,7 @@ func (r *Registry) BootOrder() []ModuleEntry {
 // sortedEntriesLocked must be called with r.mu held (read or write).
 func (r *Registry) sortedEntriesLocked() []ModuleEntry {
 	keys := make([]string, 0, len(r.modules))
-	for _, key := range r.order {
-		keys = append(keys, key)
-	}
+	keys = append(keys, r.order...)
 	sort.Strings(keys)
 
 	out := make([]ModuleEntry, 0, len(keys))

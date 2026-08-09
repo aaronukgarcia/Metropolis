@@ -18,7 +18,7 @@ func testCommand(corr CorrelationID) Command {
 
 func TestInProcTransport_CommandSendReceive(t *testing.T) {
 	tr := NewInProcTransport(DefaultCommandBuffer, DefaultResultBuffer, DefaultEventBuffer, DefaultDeltaBuffer)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	cmd := testCommand("c1")
 	if err := tr.SendCommand(cmd); err != nil {
@@ -37,7 +37,7 @@ func TestInProcTransport_CommandSendReceive(t *testing.T) {
 
 func TestInProcTransport_SendCommand_RejectsInvalid(t *testing.T) {
 	tr := NewInProcTransport(DefaultCommandBuffer, DefaultResultBuffer, DefaultEventBuffer, DefaultDeltaBuffer)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	invalid := testCommand("") // missing correlation ID
 	err := tr.SendCommand(invalid)
@@ -54,7 +54,7 @@ func TestInProcTransport_SendCommand_RejectsInvalid(t *testing.T) {
 
 func TestInProcTransport_SendCommand_QueueFull(t *testing.T) {
 	tr := NewInProcTransport(1, DefaultResultBuffer, DefaultEventBuffer, DefaultDeltaBuffer)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	if err := tr.SendCommand(testCommand("c1")); err != nil {
 		t.Fatalf("first SendCommand: %v", err)
@@ -74,7 +74,7 @@ func TestInProcTransport_SendCommand_QueueFull(t *testing.T) {
 
 func TestInProcTransport_ResultEventDeltaSendReceive(t *testing.T) {
 	tr := NewInProcTransport(DefaultCommandBuffer, DefaultResultBuffer, DefaultEventBuffer, DefaultDeltaBuffer)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	if ok := tr.SendResult(CommandResult{CorrelationID: "c1", Tick: 1, Accepted: true}); !ok {
 		t.Fatal("SendResult returned false, want true")
@@ -105,7 +105,7 @@ func TestInProcTransport_ResultEventDeltaSendReceive(t *testing.T) {
 func TestInProcTransport_DeltaDropPolicy(t *testing.T) {
 	const bufSize = 4
 	tr := NewInProcTransport(DefaultCommandBuffer, DefaultResultBuffer, DefaultEventBuffer, bufSize)
-	defer tr.Close()
+	defer func() { _ = tr.Close() }()
 
 	const totalSent = 20
 	for seq := uint64(1); seq <= totalSent; seq++ {
@@ -237,5 +237,5 @@ func TestInProcTransport_Race(t *testing.T) {
 	}()
 
 	wg.Wait()
-	tr.Close()
+	_ = tr.Close()
 }

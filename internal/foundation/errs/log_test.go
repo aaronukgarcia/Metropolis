@@ -81,7 +81,7 @@ func TestFileLogger_RotationTrigger(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileLogger: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	entry := Entry{Level: "error", Code: "MET-F900", CorrelationID: "corr", Module: "foundation.errors", Msg: "a fairly long message to fill bytes"}
 	for i := 0; i < 10; i++ {
@@ -103,7 +103,7 @@ func TestFileLogger_RotationKeepsAtMostNBackups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileLogger: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	entry := Entry{Level: "error", Code: "MET-F900", CorrelationID: "corr", Module: "foundation.errors", Msg: "filler message text"}
 	for i := 0; i < 40; i++ {
@@ -155,7 +155,7 @@ func TestLogEntry_FallsBackToRingOnSinkWriteFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileLogger: %v", err)
 	}
-	l.Close() // closed file -> subsequent writes fail
+	_ = l.Close() // closed file -> subsequent writes fail
 	SetSink(l)
 
 	logEntry(Entry{Code: "MET-F900", Msg: "write should fail"})
@@ -171,7 +171,7 @@ func TestLogger_ConcurrentWritesAreSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewFileLogger: %v", err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
