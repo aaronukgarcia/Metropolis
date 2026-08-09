@@ -1,6 +1,25 @@
-# Metropolis Dev-Team Process v1.4
+# Metropolis Dev-Team Process v1.5
 
-**2026-08-08 · directed by Aaron after Sprint 0 wave 1 (v1.1: Tester + Documentation roles; v1.2: BA role; v1.3: independent QA role; v1.4: pipelined sprint cadence) · supersedes the wave-1 "lead reviews everything directly" flow**
+**2026-08-08/09 · directed by Aaron (v1.1: Tester + Documentation; v1.2: BA; v1.3: independent QA; v1.4: pipelined cadence; v1.5: Resource Manager, saturation rule, team caps, heavy checkpointing) · supersedes the wave-1 "lead reviews everything directly" flow**
+
+## Saturation rule & Resource Manager (v1.5)
+
+**No agent idles while non-blocking work exists.** A dedicated **Resource Manager (RM)** agent — persistent, reporting DIRECTLY to Bill — owns the assignment board:
+
+- Maintains `docs/planning/team-board.md`: every agent, current assignment, status (busy/blocked/idle), what they return to when unblocked.
+- When an agent blocks (e.g. a dev waiting on a Tester verdict), the RM proposes interim work for it and remembers the return point; when the blocker clears, the RM proposes the return.
+- **Team caps** (RM enforces by flagging breaches to Bill): max **4 concurrent Jnr developers**, **1 Tester**, **2 BAs** (disjoint sprint ownership), **1 Documentation**, **1 QA**, **1 RM**. Growth beyond caps requires Aaron.
+- The RM is **advisory**: it recommends dispatches/reassignments; Bill executes them (only the lead messages agents). RM never edits code and never talks to other agents.
+- **At-risk parallel starts**: the lead may start sprint N+1 items whose dependencies are code-complete but whose sprint gate (e.g. Aaron's contract freeze) is pending — the RM tracks every at-risk item and its rebase exposure so a freeze-review change fans out correctly.
+
+## Heavy checkpointing (v1.5)
+
+The session can die at any moment (token exhaustion) — mid-build, mid-test, mid-commit. Recovery must be possible from cold:
+
+- **`docs/planning/checkpoint.md`** (RM maintains, Bill commits): current sprint state; every in-flight agent with its assignment, last known status and expected next event; pending verdicts/bounces; standing orders from Aaron; exact next actions with enough context to re-dispatch from scratch (agent transcripts do not survive a restart — checkpoint text must be self-sufficient).
+- **Cadence**: updated at every pipeline transition (dispatch, verdict, bounce, doc pass, commit); committed at least at every commit-bearing event (it rides along with the commit).
+- **BOW mirror**: every transition also writes a one-line BOW comment on the affected item (`dispatched to dev`, `tester FAIL #2`, `doc-passed`, ...) so item-level state survives even without the checkpoint file. The BOW `status` field + comments + checkpoint.md together are the full recovery surface.
+- **Recovery protocol** (also in CLAUDE.md): a fresh session reads checkpoint.md, `node claude-bow.js list --by-seq` + recent comments, and `git log -10`, then reconstructs the board and re-dispatches — completed work is never redone (commits + BOW are the truth).
 
 ## Pipelined cadence (v1.4)
 

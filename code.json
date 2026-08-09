@@ -27,7 +27,7 @@
     },
     "determinism": "Same seed + same command log => bit-identical world at any worker count (§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG §6.4)."
   },
-  "moduleCount": 95,
+  "moduleCount": 96,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -172,6 +172,10 @@
           {
             "key": "cloud.gpu",
             "outboundGuid": "b6d792c2-85ac-49aa-978f-5a1817faeee4"
+          },
+          {
+            "key": "cloud.netpolicy",
+            "outboundGuid": "5355dbc3-1574-4377-a6c0-6e1119ceef79"
           },
           {
             "key": "engine.projections",
@@ -4129,6 +4133,36 @@
             "key": "engine.citizens",
             "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
             "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          }
+        ]
+      }
+    },
+    {
+      "guid": "91fa099b-1918-4cf5-a606-fd33eb03e301",
+      "key": "cloud.netpolicy",
+      "bowType": "interface",
+      "seq": 885,
+      "sprint": null,
+      "title": "Remote-call policy: retries, rate limiting, authn/z — secure & resilient by design",
+      "priority": "P2",
+      "milestone": "future",
+      "layer": "cloud",
+      "specRef": "GR#11; §15 (cloud path); A9; docs/cloud.md",
+      "path": "internal/foundation/solver/ + cloud/",
+      "inbound": {
+        "guid": "5c8071d9-c119-4822-ab9c-be633e5e1613",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "5355dbc3-1574-4377-a6c0-6e1119ceef79",
+        "calls": [
+          {
+            "key": "int.solver",
+            "moduleGuid": "783c1559-4a3c-4502-91f7-834e6a5fb2c7",
+            "inboundGuid": "d20c26e9-5a1a-4628-9c93-f95938547f19"
           }
         ]
       }

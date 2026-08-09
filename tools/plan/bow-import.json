@@ -1724,6 +1724,24 @@
       ]
     },
     {
+      "mkey": "cloud.netpolicy",
+      "type": "interface",
+      "title": "Remote-call policy: retries, rate limiting, authn/z — secure & resilient by design",
+      "desc": "The contract every remote call (solver offload, Blob saves, LLM soft layer) must follow BEFORE any remote backend ships: authn via short-lived tokens/managed identity (never long-lived keys in config — repo side enforced by tool.secretguard); TLS everywhere; least-privilege authz; correlation IDs extended over the wire; retries with exponential backoff + jitter, budget-bounded, safe because requests are stateless/idempotent with request IDs; client-side token-bucket rate limiting + server throttle-signal respect; mandatory timeouts; failure degrades to local compute per the solver contract's fallback rule, never to a broken game. Design doc section lives in docs/cloud.md; this item turns it into enforced contract language when cloud items build. [spec: GR#11; §15 (cloud path); A9; docs/cloud.md] [path: internal/foundation/solver/ + cloud/]",
+      "seq": 885,
+      "sprint": null,
+      "priority": "P2",
+      "milestone": "future",
+      "layer": "cloud",
+      "specRef": "GR#11; §15 (cloud path); A9; docs/cloud.md",
+      "guid": "91fa099b-1918-4cf5-a606-fd33eb03e301",
+      "guidIn": "5c8071d9-c119-4822-ab9c-be633e5e1613",
+      "guidOut": "5355dbc3-1574-4377-a6c0-6e1119ceef79",
+      "deps": [
+        "int.solver"
+      ]
+    },
+    {
       "mkey": "cloud.gpu",
       "type": "module",
       "title": "GPU solver sidecar (C++/CUDA)",
