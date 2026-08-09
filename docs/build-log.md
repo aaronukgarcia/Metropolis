@@ -147,3 +147,16 @@ This work is **complete and self-verified** by its junior (before/after attack d
 3. Then: the `input-validation` ×9 criteria rule (the last of the four pattern write-ups, still owed).
 
 **Standing context a fresh session needs**: the dev-team process is at v1.8 (`docs/planning/dev-team-process.md`) — read the three weakness patterns and the assumption rules before dispatching anything. The BOW is the authority on item state (`node claude-bow.js list --by-seq`); this file is the authority on *why*.
+
+### 11. New capability — Docker gives us a second GOOS (2026-08-09, post-pause)
+
+Aaron advised that WSL and Docker are installed. Verified rather than assumed, and the real picture is narrower than the headline:
+
+- **Docker works.** Desktop running, engine 29.6.2, **Linux** containers, x86_64. But the CLI is **not on PATH** — invoke by full path, `& "C:\Program Files\Docker\Docker\resources\bin\docker.exe"`.
+- **WSL's only distro is `docker-desktop`**, Docker's internal utility VM. There is no Ubuntu or equivalent, so `wsl <cmd>` is *not* a route to arbitrary Linux tooling. Git Bash (the Bash tool) remains the POSIX shell; Docker is the route to genuine Linux.
+
+**Why this is more than a convenience.** The most expensive lesson in this log is that *"it passes locally" was never evidence about CI* — BUG-004 made CI fail on **every run from the first commit** while `gofmt -l .` stayed clean on every developer machine, because Windows runners checked out CRLF files that `gofmt` rejects. The divergence between environments **was** the bug, so local checking could never have found it.
+
+Docker removes that blind spot: `docker run --rm -v ${PWD}:/src -w /src golang:1.25 go test ./...` gives a **Linux** run before pushing. Directly relevant to ASM-037, which correctly scoped the stub/core drift test's guarantee to "whatever build config CI actually runs" — CI is `windows-latest` only today.
+
+Recorded in `CLAUDE.md`'s Environment section, in Vestige, and in the session memory index.
