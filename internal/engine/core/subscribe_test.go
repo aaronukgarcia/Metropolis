@@ -64,8 +64,23 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
 	)
-	defer func() { _ = transport.Close() }()
-
+	// Deliberately no transport.Close() here (unlike other tests in this
+	// package): this test's whole point is proving the pump keeps
+	// producing deltas across several driven commands, so by design the
+	// pump goroutine can still be mid-SendDelta after this test's own
+	// assertions are satisfied (e.g. a delta from the 2nd/3rd AdvanceTicks
+	// signal that this test never needed to consume). protocol.Close()
+	// closes the Results/Events/Deltas channels with no synchronisation
+	// against an in-flight send from that goroutine (trySendEvictOldest's
+	// `<-closed` check in internal/protocol/transport.go is TOCTOU against
+	// a concurrent Close) — calling it here reliably trips `-race` on a
+	// send-vs-close race, in a package this brief is out of scope to
+	// touch. Cancelling ctx (below) is sufficient: both goroutines this
+	// test starts (StartSubscriptionPump's pump, RunCommandLoop) select on
+	// ctx.Done() and exit on their own; nothing here holds an OS resource
+	// that leaking the channels would waste. Flagging the transport.go
+	// Close/send race to Bill as a separate finding rather than fixing it
+	// in this brief.
 	e := NewEngine()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -92,7 +107,54 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 		t.Fatalf("Subscribe rejected: %+v", subResult.Error)
 	}
 
-	// Drive a few more commands, each of which should signal the pump.
+	// Wait for Subscribe's own delta (Seq==1) to be fully delivered
+	// before driving any further commands. This is a deliberate
+	// synchronisation point, not a longer timeout: signalSubscriptionPump
+	// (commands.go) is a non-blocking, coalescing send on a
+	// capacity-1 channel, and StartSubscriptionPump's loop only
+	// re-enters its `select` (ready to accept the *next* signal) once
+	// PublishEngineStatus has finished sending every target's delta —
+	// see subscribe.go's PublishEngineStatus doc comment. Receiving
+	// delta #1 here proves that round of computation is complete and
+	// the signal channel has been drained, so a signal sent by any
+	// command from this point on is guaranteed to be queued (not
+	// silently coalesced into a round that already happened before the
+	// signal existed). Without this synchronisation, a sufficiently
+	// starved pump goroutine can have every AdvanceTicks signal below
+	// collapse into the same single pending slot as Subscribe's own
+	// signal — by design (T-SUBSCR coalesces rapid signals into one
+	// recompute) — leaving only one delta ever pushed for the whole
+	// test, which is what CI observed. Waiting for delta #1 first
+	// removes that ambiguity without weakening what the test proves:
+	// it still asserts monotonic Seq across at least two independently
+	// observed deltas below.
+	var lastSeq uint64
+	var sawFirstDeltaCorrID bool
+	firstDeadline := time.After(3 * time.Second)
+	select {
+	case d := <-transport.Deltas():
+		if d.Seq != 1 {
+			t.Fatalf("first delta Seq = %d, want 1", d.Seq)
+		}
+		lastSeq = d.Seq
+		if d.CorrelationID != subCorrID {
+			t.Errorf("first delta CorrelationID = %q, want %q (echoes Subscribe)", d.CorrelationID, subCorrID)
+		}
+		sawFirstDeltaCorrID = true
+		var view EngineStatusView
+		if err := json.Unmarshal(d.Patch, &view); err != nil {
+			t.Fatalf("unmarshalling delta patch: %v", err)
+		}
+	case <-firstDeadline:
+		t.Fatal("timed out waiting for Subscribe's own delta (Seq==1)")
+	}
+
+	// Now drive a few more commands, each of which should signal the
+	// pump. Because the pump is provably idle again (drained, above),
+	// at least one of these signals is guaranteed to be queued and
+	// eventually drained into a fresh PublishEngineStatus call — even
+	// under the same starvation that a benchmark running in this
+	// package can induce.
 	for i := 0; i < 3; i++ {
 		cmd := protocol.Command{
 			ProtocolVersion: protocol.ProtocolVersion,
@@ -113,23 +175,15 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 		}
 	}
 
-	var lastSeq uint64
-	var sawFirstDeltaCorrID bool
-	deadline := time.After(3 * time.Second)
-	received := 0
-	for received < 2 { // Subscribe's own delta, plus at least one from an AdvanceTicks signal
+	deadline := time.After(10 * time.Second)
+	received := 1      // Subscribe's own delta, received above
+	for received < 2 { // plus at least one from an AdvanceTicks signal
 		select {
 		case d := <-transport.Deltas():
 			if d.Seq <= lastSeq {
 				t.Fatalf("Delta.Seq = %d, want > previous %d (monotonic)", d.Seq, lastSeq)
 			}
 			lastSeq = d.Seq
-			if d.Seq == 1 {
-				if d.CorrelationID != subCorrID {
-					t.Errorf("first delta CorrelationID = %q, want %q (echoes Subscribe)", d.CorrelationID, subCorrID)
-				}
-				sawFirstDeltaCorrID = true
-			}
 			var view EngineStatusView
 			if err := json.Unmarshal(d.Patch, &view); err != nil {
 				t.Fatalf("unmarshalling delta patch: %v", err)
