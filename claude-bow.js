@@ -55,8 +55,8 @@ const crypto = require('crypto');
 const { execSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
-const TYPES = ['module', 'feature', 'bug', 'interface'];
-const TYPE_PREFIX = { module: 'MOD', feature: 'FEAT', bug: 'BUG', interface: 'INT' };
+const TYPES = ['module', 'feature', 'bug', 'interface', 'assumption'];
+const TYPE_PREFIX = { module: 'MOD', feature: 'FEAT', bug: 'BUG', interface: 'INT', assumption: 'ASM' };
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const STATUSES = ['open', 'in_progress', 'blocked', 'done', 'cancelled'];
 const OPEN_STATUSES = ['open', 'in_progress', 'blocked'];
@@ -69,7 +69,8 @@ const command = argv[0] || 'summary';
 const positional = [];
 const flags = {};
 const VALUE_FLAGS = ['priority', 'desc', 'status', 'type', 'on', 'note', 'example', 'example-file', 'lang', 'author',
-  'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate'];
+  'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate',
+  'code-path', 'codejson'];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) { flags[a.slice(2)] = argv[++i]; }
@@ -206,8 +207,25 @@ async function cmdAdd(db) {
   const type = String(positional[0] || '').toLowerCase();
   const title = positional[1];
   if (!TYPES.includes(type) || !title) {
-    console.error('Usage: node claude-bow.js add <module|feature|bug|interface> "title" [--priority P0..P3] [--desc "..."]');
+    console.error('Usage: node claude-bow.js add <module|feature|bug|interface|assumption> "title" [--priority P0..P3] [--desc "..."]');
+    console.error('  assumption additionally REQUIRES: --code-path "<file or dir>" --codejson "<module key or GUID>"');
     process.exit(1);
+  }
+  // Assumption logging rule (Aaron, 2026-08-09): an assumption that is not
+  // traceable to the code it concerns is not logged, it is just a note. Any
+  // agent may raise one, but never without both references — the Tester and
+  // the developer are both required to reject work carrying unlogged
+  // assumptions, and they can only check that if the link exists.
+  if (type === 'assumption') {
+    const missing = [];
+    if (!flags['code-path']) missing.push('--code-path "<file or dir the assumption is about>"');
+    if (!flags.codejson) missing.push('--codejson "<code.json module key or GUID>"');
+    if (missing.length) {
+      console.error('claude-bow: an assumption MUST be traceable to code. Missing:');
+      for (const m of missing) console.error(`  ${m}`);
+      console.error('If the assumption is not about any code yet, it belongs in the item description of the work that prompted it, not here.');
+      process.exit(1);
+    }
   }
   const priority = String(flags.priority || 'P2').toUpperCase();
   if (!PRIORITIES.includes(priority)) {
@@ -218,11 +236,12 @@ async function cmdAdd(db) {
   const code = await nextCode(db, type);
   await db.query(
     `INSERT INTO bow_items (guid, code, mkey, seq, item_type, title, description, priority,
-       milestone, layer, spec_ref, guid_in, guid_out, estimate_days)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       milestone, layer, spec_ref, guid_in, guid_out, estimate_days, code_path, codejson_ref)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [guid, code, flags.mkey || null, flags.seq != null ? Number(flags.seq) : null, type, title,
      flags.desc || null, priority, flags.milestone || null, flags.layer || null, flags.spec || null,
-     flags['guid-in'] || null, flags['guid-out'] || null, flags.estimate != null ? Number(flags.estimate) : null]);
+     flags['guid-in'] || null, flags['guid-out'] || null, flags.estimate != null ? Number(flags.estimate) : null,
+     flags['code-path'] || null, flags.codejson || null]);
   console.log(`Added ${code} [${type}/${priority}] "${title}"`);
   console.log(`GUID: ${guid}`);
 }
@@ -263,6 +282,10 @@ async function cmdShow(db) {
   if (item.mkey || item.seq != null) console.log(`  Key:      ${item.mkey || '-'}   Seq: ${item.seq != null ? item.seq : '-'}   Sprint: ${item.sprint != null ? item.sprint : '-'}`);
   if (item.milestone || item.layer) console.log(`  Phase:    ${item.milestone || '-'}   Layer: ${item.layer || '-'}`);
   if (item.spec_ref) console.log(`  Spec:     ${item.spec_ref}`);
+  if (item.code_path || item.codejson_ref) {
+    console.log(`  Code:     ${item.code_path || '-'}`);
+    console.log(`  code.json:${item.codejson_ref || '-'}`);
+  }
   if (item.guid_in || item.guid_out) {
     console.log(`  IF in:    ${item.guid_in || '-'}`);
     console.log(`  IF out:   ${item.guid_out || '-'}`);
@@ -405,7 +428,9 @@ async function cmdSet(db) {
   if (flags['guid-in']) { updates.push('guid_in = ?'); params.push(flags['guid-in']); }
   if (flags['guid-out']) { updates.push('guid_out = ?'); params.push(flags['guid-out']); }
   if (flags.estimate != null) { updates.push('estimate_days = ?'); params.push(Number(flags.estimate)); }
-  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D]'); process.exit(1); }
+  if (flags['code-path']) { updates.push('code_path = ?'); params.push(String(flags['code-path'])); }
+  if (flags.codejson) { updates.push('codejson_ref = ?'); params.push(String(flags.codejson)); }
+  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D] [--code-path P] [--codejson K]'); process.exit(1); }
   params.push(item.guid);
   await db.query(`UPDATE bow_items SET ${updates.join(', ')} WHERE guid = ?`, params);
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);

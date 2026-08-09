@@ -24,6 +24,53 @@ The git index is a **shared mutable resource** across concurrent agents. Rules:
 - **Juniors**: never leave anything staged between tool calls — any stage→verify→reset test sequence must complete atomically inside a single command invocation.
 - **Lead**: commits use explicit pathspecs (`git commit -m "..." -- <paths>`) or verify `git diff --cached --stat` matches the intended set immediately before committing — a concurrent agent's staged file must never ride along. (Incident: a junior's staged `VERSION` test fixture was swept into an unrelated docs commit; caught and reverted within two commits.)
 
+## Assumptions are logged or the work is rejected (v1.7 — Aaron, 2026-08-09)
+
+**The standard is that the criterion holds, not that the test passes.** A test proves what it asserts; a criterion states what must be true. The gap between those two is where assumptions live, and an assumption nobody wrote down is indistinguishable from a fact until it is wrong.
+
+**Any agent may log an assumption. Every agent must.** An assumption is anything you decided that the spec, the criteria, or the brief did not decide for you: a chosen tolerance, a picked default, a read of an ambiguous requirement, a "this obviously means X", a scope boundary you drew yourself.
+
+Log it with:
+
+```
+node claude-bow.js add assumption "<the assumption, stated as a claim that could be wrong>" \
+  --priority P0..P3 \
+  --code-path "<the file or directory it concerns>" \
+  --codejson "<code.json module key or GUID>" \
+  --desc "<why you assumed it, what you'd have needed to not assume, and what breaks if it's wrong>"
+```
+
+Both references are **mandatory and enforced by the tool** — an assumption that cannot be traced to code is a note, not a record, and the checks below are impossible without it. Assumptions get `ASM-` codes and live in the BOW alongside everything else.
+
+**The reciprocal rejection duties — these are what give the rule teeth:**
+
+| Role | Duty |
+|---|---|
+| **BA** | Logs every assumption made while writing criteria. Criteria that rest on an unlogged assumption are incomplete work. |
+| **Jnr developer** | **Must reject the ask** if the BA's criteria contain assumptions that are not logged. Bounce it back to the lead — do not "just build it" and do not silently resolve the ambiguity yourself. If you resolve it, that is your assumption now, and you log it. |
+| **Tester** | **Must actively look for assumptions** in the delivered work, not only verify criteria. An assumption found in the code or the tests that has no `ASM-` item is an automatic **FAIL**, regardless of whether every criterion passed. |
+| **Lead** | Rules on logged assumptions: accept, correct, or escalate to Aaron. Also answerable to this rule — a lead ruling is itself an assumption unless it is written down. |
+
+**Why the rejection is mutual rather than one-way**: a single checkpoint can be tired, rushed, or agreeable. Requiring the receiver of work to refuse unlogged assumptions means an assumption has to survive two people deciding to ignore the rule, not one.
+
+**What this is not**: it is not a demand to log every keystroke-level choice. If the spec or criteria decided it, it is not an assumption. The test is simple — *could a reasonable person have decided this differently, and would the work still have passed?* If yes, log it.
+
+### Mandatory spawn block (v1.7)
+
+Agent transcripts do not survive a session, so a rule that lives only in the lead's head dies with the window. **Every agent spawn brief must carry this block verbatim**, adapted only in the role line:
+
+> **Assumptions (GR-adjacent, mandatory).** Build so that the *criterion holds*, not merely so the *test passes* — a test proves what it asserts, a criterion states what must be true, and the gap between them is where silent assumptions live. Anything you decide that the spec, criteria or brief did not decide for you is an assumption: a chosen tolerance, a picked default, a reading of an ambiguous requirement, a scope boundary you drew yourself.
+>
+> Log every one before you report, with both references — the tool rejects an assumption that cannot be traced to code:
+> ```
+> node claude-bow.js add assumption "<the assumption, stated as a claim that could be wrong>" \
+>   --priority P0..P3 --code-path "<file or dir>" --codejson "<code.json module key or GUID>" \
+>   --desc "<why you assumed it, what you'd have needed in order not to, and what breaks if it's wrong>"
+> ```
+> Then cite the `ASM-` codes in your report.
+>
+> **Your rejection duty**: *(developer)* if the acceptance criteria rest on an assumption the BA did not log, **reject the ask** and bounce it to the lead — do not build it and do not quietly resolve the ambiguity yourself; if you resolve it, it is your assumption and you log it. *(Tester)* actively hunt for assumptions in the delivered code and tests, not just verify criteria — an assumption with no `ASM-` item is an automatic **FAIL** even if every criterion passed. *(BA)* log every assumption made while writing criteria; criteria resting on an unlogged assumption are incomplete work.
+
 ## File ownership is transferred, never duplicated (v1.6.1 — from the feat.skeleton incident, 2026-08-09)
 
 Acceptance files are owned by exactly one BA. That rule already existed; what it lacked was a **handover procedure**, and the gap cost real work.
