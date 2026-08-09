@@ -55,7 +55,20 @@ const { spawnSync } = require('child_process');
 const ROOT = __dirname;
 const ALLOWLIST_PATH = path.join(ROOT, 'claude-secret-guard.allow.json');
 
+// Why 3.7: a canonical hex GUID/UUID ("1c0a8c46-ba8a-4063-92f8-0bbcdb580753")
+// measures ~3.8 bits/char and must clear this bar so it gets flagged as
+// high-entropy by default — the allowlist's guid-uuid-literal pattern is
+// what proves it suppresses that flag (see AC-11), not an accidental gap in
+// the detector. Ordinary English prose is excluded upstream by the
+// base64/hex shape prefilter (TOKEN_SHAPE_RE rejects whitespace), not by
+// this threshold, so lowering it further does not risk flagging sentences.
 const ENTROPY_THRESHOLD = 3.7;
+// Why 20: shorter literals (short flags, enum values, single words) produce
+// noisy entropy estimates and would false-positive constantly; 20 chars is
+// comfortably below the shortest secret shapes this guard targets elsewhere
+// (e.g. the 32-char AWS secret key, 36-char GitHub PAT) while still catching
+// the metro-DB-default / GUID-length (36-char) fixtures used to prove the
+// allowlist path in AC-11.
 const ENTROPY_MIN_LENGTH = 20;
 
 const SENSITIVE_FILE_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.jks', '.crt', '.cer'];
@@ -97,8 +110,26 @@ function loadAllowlist() {
   }
   const allowedPaths = data.allowedPaths;
   const allowedPatterns = data.allowedPatterns;
-  if (!Array.isArray(allowedPaths) || !allowedPaths.every(p => typeof p === 'string')) {
-    throw new Error('allowlist "allowedPaths" must be an array of strings');
+  if (!Array.isArray(allowedPaths)) {
+    throw new Error('allowlist "allowedPaths" must be an array');
+  }
+  // BUG-001 follow-up: entries must be {path, reason} objects — bare strings
+  // are rejected (same "mandatory, non-empty reason" discipline as
+  // allowedPatterns), and a path of exactly "**" or "*" is rejected outright
+  // as over-broad (it would allowlist the entire staged tree).
+  for (const [i, entry] of allowedPaths.entries()) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`allowlist "allowedPaths[${i}]" must be an object {path, reason} — bare strings are not accepted`);
+    }
+    if (typeof entry.path !== 'string' || entry.path.trim().length === 0) {
+      throw new Error(`allowlist "allowedPaths[${i}].path" must be a non-empty string`);
+    }
+    if (entry.path.trim() === '**' || entry.path.trim() === '*') {
+      throw new Error(`allowlist "allowedPaths[${i}].path" ("${entry.path}") is over-broad — it would allowlist the entire staged tree; use a specific path or a scoped glob like "docs/**"`);
+    }
+    if (typeof entry.reason !== 'string' || entry.reason.trim().length === 0) {
+      throw new Error(`allowlist "allowedPaths[${i}].reason" is mandatory and must be a non-empty string`);
+    }
   }
   if (!Array.isArray(allowedPatterns)) {
     throw new Error('allowlist "allowedPatterns" must be an array');
@@ -146,8 +177,8 @@ function isAllowlistedValue(candidate, allowedPatterns) {
 
 function isAllowlistedPath(filePath, allowedPaths) {
   const normalized = filePath.replace(/\\/g, '/');
-  for (const pattern of allowedPaths) {
-    if (globMatch(pattern, normalized)) return true;
+  for (const entry of allowedPaths) {
+    if (globMatch(entry.path, normalized)) return true;
   }
   return false;
 }
@@ -197,9 +228,26 @@ function looksHighEntropy(candidate) {
 // Redaction
 // ---------------------------------------------------------------------------
 
+// BUG-001 (QA finding on FEAT-028, commit 0d09b04): a fixed 4-prefix+4-suffix
+// reveal was up to 89% disclosure for a 9-char secret. Reveal is now capped
+// at <=25% of the secret's length (rounded down), split as evenly as
+// possible between prefix and suffix, with a mask floor of >=50% of length
+// enforced explicitly (redundant with the 25% cap today, but keeps the
+// invariant self-documenting if the reveal cap is ever loosened). Secrets of
+// 8 chars or fewer stay fully masked — there is no safe partial reveal at
+// that length.
 function redact(secret) {
-  if (secret.length <= 8) return '*'.repeat(secret.length);
-  return `${secret.slice(0, 4)}${'*'.repeat(Math.max(4, secret.length - 8))}${secret.slice(-4)}`;
+  const len = secret.length;
+  if (len <= 8) return '*'.repeat(len);
+  const maxRevealTotal = Math.floor(len * 0.25); // never reveal more than 25% of characters
+  const minMaskLen = Math.ceil(len * 0.5); // mask floor: always mask at least half the characters
+  const revealTotal = Math.max(0, Math.min(maxRevealTotal, len - minMaskLen));
+  const prefixLen = Math.floor(revealTotal / 2);
+  const suffixLen = revealTotal - prefixLen;
+  const maskLen = len - prefixLen - suffixLen;
+  const prefix = prefixLen > 0 ? secret.slice(0, prefixLen) : '';
+  const suffix = suffixLen > 0 ? secret.slice(-suffixLen) : '';
+  return `${prefix}${'*'.repeat(maskLen)}${suffix}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +471,17 @@ process.stdin.on('end', () => {
     // Fail-CLOSED by design (see header comment), scoped to commits only:
     // an internal guard error (git failure, malformed allowlist, etc.) must
     // never silently let a possibly-secret-bearing commit through.
+    //
+    // ** UNREDACTED CHANNEL — BUG-001 follow-up (QA note) **
+    // err.stack (and err itself) is echoed to the deny reason VERBATIM below,
+    // with no redact() pass. That is safe today because every throw on this
+    // path is guard-internal plumbing (git invocation failures, allowlist
+    // parse errors) — never scanned repo content. It MUST stay that way:
+    // never construct or rethrow an Error whose message/stack embeds a
+    // matched line, literal, or candidate secret from runScan()/scanLine(),
+    // or this catch-all becomes a way to leak exactly what redact() exists
+    // to hide. Findings must only ever reach the user through
+    // formatFindings(), which redacts every evidence string.
     deny(
       '🛑 SECRET GUARD: internal error while scanning staged content — denying commit ' +
       '(fail-closed by design; see claude-secret-guard.js header).\n\n' +
