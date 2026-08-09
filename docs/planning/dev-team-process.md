@@ -79,6 +79,31 @@ The very first Destructive sweep produced the same root cause three times, in th
 
 This is what the weakness count is for. Three instances of one class in one sweep is not three bugs — it is one habit, and the response is teaching, which is why it is written here rather than only in three BOW items.
 
+### Weakness pattern #4: a value in a privileged position is input, however inert it looks (2026-08-09)
+
+`input-validation` is the largest class in the ledger — nine findings, across Go and JavaScript, engine and tooling, written by different hands. Grouping them shows it is **not** "the team forgets to validate". Every one of these packages validates its payload carefully. The defect is narrower and much more specific:
+
+**The dangerous value was almost never the payload. It was the metadata around it** — a name, a size, a path, an identifier — used in a position where it stops being data and starts being *instruction*.
+
+| Finding | The value | The privileged position it reached |
+|---|---|---|
+| SEC-001 / SEC-010 / SEC-013 | `ShardMeta.Name` | a **path segment** — arbitrary file read/write |
+| SEC-009 | `Extent.Width/Height` off the wire | an **allocation size** — OOM from one patch |
+| SEC-011 | any rendered string, e.g. an error message | **terminal control bytes** — escape injection |
+| SEC-002 | a staged file path | **shell syntax** — `%VAR%` expanded, check silently defeated |
+| SEC-008 / SEC-012 | a command string, a remote name | a **security decision** — guard fires or doesn't |
+| SEC-015 / SEC-021 | an identifier, a test literal | a **heuristic's verdict** — false positives that train people to bypass |
+
+`serialize`'s own doc comment correctly names it as the hostile-input surface, and it treats bytes as bytes throughout. The one field that escaped that discipline was the shard **name** — which reads like a label right up until you notice it is also a path component.
+
+**The rule:**
+
+- **Ask what a value *becomes*, not where it came from.** If it ends up as a path segment, an allocation size, a format string, shell or SQL syntax, a terminal byte sequence, a map key, or the basis of a security decision — it is input, and it needs a validated domain at the boundary, no matter how internal its origin looks.
+- **State the allowed domain positively.** "Valid" is not a specification. `ValidateShardName` is the model: a single clean path component — not `/`, not `\`, not `:`, not `..`, not absolute, not volume-relative, no trailing dot or space. A future reader can check that; they cannot check "sanitised".
+- **Reject, never sanitise.** Trimming a hostile value into a plausible one hides the attack and destroys the evidence. Every fix in this class rejects loudly with a registry-sourced error.
+- **BAs**: for each input crossing a trust boundary, criteria must name (a) the privileged position it reaches, (b) the exact allowed domain, and (c) that violations are rejected rather than repaired. A criterion saying "handles malformed input gracefully" is unverifiable and has already let three of these through.
+- **Bound anything attacker-influenced that sizes work or memory** — `Extent`, tick counts, retry loops. An unbounded size taken from a peer is a denial of service with extra steps.
+
 ### Weakness pattern #3: fix the class, not the demonstrated instance (2026-08-09)
 
 Every round of the SEC-003 → SEC-014 → SEC-016 → SEC-018 chain closed **exactly the path the proof-of-concept exercised**, and left structurally identical siblings standing:
