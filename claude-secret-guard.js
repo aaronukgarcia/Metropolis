@@ -38,7 +38,20 @@
  * immediately. A hook-input hiccup must never brick `git status`, `npm
  * install`, or any other unrelated Bash command.
  *
- * To disable deliberately: set env var CLAUDE_DISABLE_SECRET_GUARD=1.
+ * To disable deliberately: set env var CLAUDE_DISABLE_SECRET_GUARD=1 in the
+ * environment of the harness process that runs this hook (e.g. the shell
+ * that launches Claude Code, or a persistent env entry in its settings) —
+ * BEFORE the session starts, not inside a command an agent submits for
+ * approval. This is a human/operator-only escape hatch, not a per-command
+ * agent bypass: PreToolUse hooks run in the harness process to decide
+ * whether to allow a proposed command, so they never inherit env vars set
+ * inline within that same proposed command string (`CLAUDE_DISABLE_SECRET_GUARD=1
+ * git commit ...` in a Bash tool_input does not reach this process — it
+ * would only apply, if anything, to the child shell that runs the command
+ * AFTER this hook has already allowed or denied it). That is intentional,
+ * not a bug: an agent must never be able to self-authorize bypassing a
+ * fail-closed security guard from within the very command being gated (see
+ * ASM-045, ASM-048 follow-up — SEC-015).
  *
  * Receives JSON on stdin: { tool: "Bash", tool_input: { command: "..." } }
  * Denies via: { hookSpecificOutput: { hookEventName: "PreToolUse",
@@ -72,6 +85,22 @@ const ENTROPY_THRESHOLD = 3.7;
 const ENTROPY_MIN_LENGTH = 20;
 
 const SENSITIVE_FILE_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.jks', '.crt', '.cer'];
+
+// @FIX (SEC-008 follow-up, Bill-directed scope expansion 2026-08-09): this
+// hook's commit-intercept used to be a bare `command.includes('git commit')`
+// substring test — the same unanchored-substring fragility flagged in
+// claude-plan-guard.js / claude-pre-commit-check.js (SEC-008), just not one
+// of the five findings a single Destructive-agent sweep happened to sample.
+// Bill's ruling: fix it here too rather than leave one hook below the
+// standard the other four were just raised to — a below-standard hook left
+// in place produces false confidence that the class is closed. Replaced with
+// the same shell-command-boundary-anchored regex already proven in
+// claude-version-guard.js / claude-bow-ref-check.js / claude-plan-guard.js /
+// claude-pre-commit-check.js: the phrase must sit at the start of the
+// command or immediately after a shell separator (`;`, `&`, `|`, `(`,
+// newline), so a quoted mention never matches but every real invocation
+// still does.
+const GIT_COMMIT_RE = /(?:^|[;&|(\n])\s*git\s+(?:-C\s+\S+\s+)?commit\b/;
 
 function deny(reason) {
   const output = JSON.stringify({
@@ -275,8 +304,77 @@ const CONNECTION_STRING_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([A-Za-z0-9_.%-]+)
 // `assert(count === 45)`, `if (total != 1200)`. Comparisons against a
 // non-literal (EXPECTED.count, a config lookup) are the compliant form and
 // are not matched here because the RHS/LHS group requires \d.
-const HARDCODE_KEYWORD_RE = /(count|total|expected|actual|num|length|size)/i;
+//
+// SEC-015 fix (2026-08-09): the original heuristic had two independent
+// false-positive sources, both fixed here rather than allowlisted (SEC-015's
+// explicit instruction — allowedPaths must not be used to blind the guard on
+// real source):
+//
+//  1. Keyword match was a bare substring test (`/count|total|.../i.test(ident)`),
+//     so `accountNumber` matched `num` and `sizeLimit` matched `size` purely
+//     by letters-in-sequence, with no relation to what the identifier means.
+//     Fixed by requiring the keyword to equal one whole WORD of the
+//     identifier — identifiers are split on `.`/`_` and camelCase boundaries
+//     (isHardcodeKeywordIdentifier below), so `accountNumber` -> "account",
+//     "number" (no match) but `expectedCount` -> "expected", "count" (match,
+//     correctly).
+//  2. No distinction was drawn between a STRUCTURAL check (is this container
+//     empty / does it have exactly one element?) and a DOMAIN assertion (is
+//     this magnitude the specific number the spec says it must be?).
+//     `x.length === 0`, `results.length === 1` assert nothing about domain
+//     data — emptiness and singleton-ness are properties of the container,
+//     true for literally any correctly-functioning collection in that state.
+//     `results.length === 24` and `expectedCount === 12` assert a specific
+//     domain magnitude, which is exactly what GR#15 requires be sourced from
+//     data/config, not hardcoded. The line is drawn at {0, 1} only, not
+//     wider: 2 is already a real cardinality claim ("exactly two drivers"),
+//     and every value above 1 is unambiguously about domain content rather
+//     than container shape. HARDCODE_EXEMPT_LITERALS below encodes that cut.
+const HARDCODE_KEYWORDS = new Set(['count', 'total', 'expected', 'actual', 'num', 'length', 'size']);
+const HARDCODE_EXEMPT_LITERALS = new Set([0, 1]);
 const HARDCODE_CMP_RE = /\b([A-Za-z_$][A-Za-z0-9_.$]*)\s*(===|!==|==|!=)\s*(\d+(?:\.\d+)?)\b|\b(\d+(?:\.\d+)?)\s*(===|!==|==|!=)\s*([A-Za-z_$][A-Za-z0-9_.$]*)\b/g;
+
+// Splits an identifier (possibly dotted, e.g. `filePaths.length`) into its
+// constituent words on `.`, `_`, and camelCase boundaries, lowercased.
+//
+// Bill/Tester-2 regression fix (2026-08-09, second pass on this code — logged
+// per v1.7.2 as ASM-049): the first version split on a lookahead before
+// EVERY uppercase letter (`seg.split(/(?=[A-Z])/)`), which is correct for
+// `expectedCount` (one boundary, before `C`) but SHATTERS an all-uppercase
+// run into single letters — `MAX_COUNT` -> "m","a","x","c","o","u","n","t" —
+// so no word ever equals a whole keyword and the check went silently blind
+// on SCREAMING_SNAKE_CASE constants, an entirely ordinary pattern for
+// hardcoded literals. That is a false NEGATIVE in a security guard, strictly
+// worse than the false positives this fix exists to remove, and the old
+// substring regex caught it (accidentally) before this file was touched.
+//
+// Fixed with the standard two-boundary insertion technique instead of a
+// single blanket lookahead:
+//   1. lower/digit -> upper   ("fooBar" -> "foo_Bar", "file9Bar" -> "file9_Bar")
+//   2. upper-run -> upper+lower  ("HTTPServer" -> "HTTP_Server": the run
+//      "HTTP" ends and "Server" begins at the last capital before a
+//      lowercase letter, not at every capital)
+// Both insert a separator; the string is then split on `.`/`_`/inserted
+// separators as one pass. This keeps a same-case run (SCREAMING_SNAKE_CASE,
+// or an all-lowercase word) intact as a single word, which is exactly what
+// closes the regression: "MAX_COUNT" already has explicit underscores, so no
+// case-boundary insertion is even needed there — split on `_` alone now
+// yields ["MAX","COUNT"], not eight single letters.
+function identifierWords(ident) {
+  return ident
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+    .split(/[._]+/)
+    .map(w => w.toLowerCase())
+    .filter(Boolean);
+}
+
+// True only if one WHOLE word of the identifier equals one of the
+// hardcoding-smell keywords — never a substring match (see SEC-015 point 1
+// above).
+function isHardcodeKeywordIdentifier(ident) {
+  return identifierWords(ident).some(w => HARDCODE_KEYWORDS.has(w));
+}
 
 function scanLine(lineText) {
   const findings = [];
@@ -315,7 +413,12 @@ function scanLine(lineText) {
   HARDCODE_CMP_RE.lastIndex = 0;
   while ((hcMatch = HARDCODE_CMP_RE.exec(lineText))) {
     const ident = hcMatch[1] || hcMatch[6];
-    if (ident && HARDCODE_KEYWORD_RE.test(ident)) {
+    const literalStr = hcMatch[3] || hcMatch[4];
+    if (ident && isHardcodeKeywordIdentifier(ident)) {
+      // Structural emptiness/singleton checks (x.length === 0, x.length ===
+      // 1) are not GR#15 violations — see SEC-015 point 2 above. Everything
+      // else (a real domain magnitude) is still flagged.
+      if (HARDCODE_EXEMPT_LITERALS.has(parseFloat(literalStr))) continue;
       findings.push({ category: 'hardcoding-smell', evidence: lineText.trim().slice(0, 160) });
     }
   }
@@ -419,11 +522,22 @@ function formatFindings(findings) {
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
+//
+// ASM (logged as SEC-015 follow-up testability note, not a behaviour change):
+// wrapped in `require.main === module` so a test harness can `require()` this
+// file to reach the pure functions below (scanLine, isHardcodeKeywordIdentifier,
+// etc.) without the process blocking on stdin — this guard previously could
+// only be exercised end-to-end via a real `git commit` hook invocation, which
+// is why it had no test suite at all. When run directly as the hook (the only
+// way it is invoked in production — PreToolUse always execs it as a script,
+// never requires it), require.main === module is always true, so behaviour is
+// unchanged.
 
-let input = '';
-process.stdin.setEncoding('utf8');
-process.stdin.on('data', chunk => { input += chunk; });
-process.stdin.on('end', () => {
+function main() {
+  let input = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', chunk => { input += chunk; });
+  process.stdin.on('end', () => {
   try {
     if (process.env.CLAUDE_DISABLE_SECRET_GUARD === '1') {
       process.exit(0);
@@ -446,8 +560,9 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    // Only intercept git commit commands.
-    if (!command.includes('git commit')) {
+    // Only intercept real git commit invocations (SEC-008-class fix — see
+    // GIT_COMMIT_RE comment above).
+    if (!GIT_COMMIT_RE.test(command)) {
       process.exit(0);
     }
 
@@ -488,4 +603,28 @@ process.stdin.on('end', () => {
       `${err && err.stack ? err.stack : err}`
     );
   }
-});
+  });
+}
+
+if (require.main === module) {
+  main();
+} else {
+  // Exported for tests only (see comment above `main`). Not part of the
+  // hook's runtime contract — these are internal helpers, kept intentionally
+  // ungrouped so a test file can import exactly the pure functions it needs.
+  module.exports = {
+    scanLine,
+    identifierWords,
+    isHardcodeKeywordIdentifier,
+    HARDCODE_KEYWORDS,
+    HARDCODE_EXEMPT_LITERALS,
+    looksHighEntropy,
+    shannonEntropy,
+    redact,
+    isAllowlistedValue,
+    isAllowlistedPath,
+    globMatch,
+    parseAddedLines,
+    loadAllowlist,
+  };
+}
