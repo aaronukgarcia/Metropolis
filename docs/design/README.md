@@ -60,3 +60,13 @@ Two Sprint 1 items have started **before** `int.protocol` clears freeze review:
 - `ui.core` (MOD-009) — consumes `int.protocol`'s `Transport`/`Delta` contract for `T-VIEWS`. Same `draft-ahead` status; same "refresh against `int.protocol`'s frozen v1 schema before dispatch" instruction in its own Escalations section.
 
 **Consequence for freeze review:** any change Aaron makes to `int.protocol` during freeze review (envelope fields, `Transport` method set, view-subscription naming, the evict-oldest drop policy, or any of `protocol.md` §7's five open questions) fans out to both items' acceptance criteria before either is dispatched to a junior. Both acceptance files already carry the refresh instruction, so this is a known, contained risk, not a silent one — but it means **freeze review on `int.protocol` should happen before `harness.stub`/`ui.core` dispatch, not in parallel with it**, or the two BAs (or Bill) need to re-diff those two acceptance files against the frozen schema as a dispatch-gate step. Flagging here so the freeze packet carries this dependency explicitly rather than leaving it buried in two separate acceptance-file Escalations sections.
+
+### Pending decision: cloud provider (`docs/cloud.md`)
+
+Not a Sprint 0 contract freeze — a separate decision document (doc-passed 2026-08-09), but it belongs in this packet because it is likewise waiting on Aaron and gates real spend (Sprint S8/M2 batch-tuning is the first actual cloud cost on the roadmap). `docs/cloud.md` §5 asks Aaron three things:
+
+1. **Provider choice.** Keep the master doc's incumbent Azure, or pick AWS/GCP now? The document's own recommendation is "keep Azure, low confidence, revisit at M2" — no load in its §2 comparison table gives any provider a decisive technical win, so this is explicitly Aaron's call (existing credits/familiarity), not an engineering one.
+2. **M2 batch-tuning budget appetite.** The first real spend on the roadmap (Sprint S8) — order-of-magnitude only ("dozens to low hundreds of pounds per sweep campaign") until H-HEADLESS produces a real per-run timing, so this is a heads-up to avoid a surprise at S8, not a number Aaron can act on yet.
+3. **Account/billing shape.** Personal/free-tier account vs. a proper billing account with spend alerts from the start, before the first Blob-sync or Batch experiment.
+
+Also worth Aaron's attention: the document opens by clarifying that "AWS" appearing in a recent commit was only the secret-scanning regex bank (`claude-secret-guard.js` matching AWS/GitHub/OpenAI/etc. key formats indiscriminately) — not a provider decision already made without consulting him. `docs/cloud.md` is this document's first actual provider consultation.

@@ -1,9 +1,24 @@
 # Cloud in Metropolis — what it's for, which provider, and how it stays safe
 
-**Status:** decision document, not a spec. Nothing described here is built. Read this
-alongside `docs/design/solver-contract.md` (the actual interface cloud backends will
-implement) and `docs/METROPOLIS-MASTER-v2.1.md` §15 / A9 (the design decisions this
-document explains).
+**What this is:** a decision document, not a spec — nothing described here is built.
+It surveys the five cloud use cases the architecture already has seams for, adjudicates
+whether the master doc's incumbent "Azure" placeholder should stand, and sets out the
+secure/resilient-by-design contract every future remote call must follow.
+
+**Audience:** Aaron. This document exists to get a provider decision (and a first read on
+budget appetite) out of Aaron directly — see "Open questions for Aaron" (§5) — not to
+record an engineering-team decision already made.
+
+**Status:** awaiting Aaron's provider decision. Nothing here is frozen or actioned; §2's
+recommendation ("keep Azure, low confidence, revisit at M2") is a proposal, not a choice
+made on Aaron's behalf.
+
+**Spec refs:** `docs/METROPOLIS-MASTER-v2.1.md` §15 (Architecture — cloud path) and A9
+(Cloud thresholds); `docs/design/solver-contract.md` (INT-003, the frozen interface any
+cloud backend implements against); `docs/planning/sprint-plan-v1.md` §6 (Go vs C#
+adjudication — the perf-CI guard-rail that triggers pulling GPU/cloud forward) and its
+"Unscheduled (future)" row; BOW items `cloud.azure` (MOD-069), `cloud.gpu`, `cloud.netpolicy`
+(INT-004).
 
 First, the thing that needs clearing up: you may have noticed "AWS" go past in a recent
 commit — that was only a regex in the secret-scanning pre-commit hook
@@ -135,9 +150,9 @@ builds against the frozen solver contract.
 - **Authentication:** short-lived tokens or managed identity only. Never a long-lived key
   committed to config or code — this is the repo-side half of what
   `claude-secret-guard.js` already enforces mechanically (the AWS/GitHub/OpenAI/etc.
-  regex bank from §0 of this document); the cloud-side half is choosing services and
-  auth flows that never require a static secret to sit in a config file in the first
-  place.
+  regex bank the opening clarification above describes); the cloud-side half is
+  choosing services and auth flows that never require a static secret to sit in a
+  config file in the first place.
 - **Transport:** TLS everywhere, no exceptions, no "internal network so it's fine."
 - **Authorisation:** least-privilege per service — a batch-compute job identity gets
   exactly the storage/queue permissions it needs and nothing else; a solver-offload
@@ -201,7 +216,7 @@ Order-of-magnitude honesty only; nobody should budget against these numbers.
   only activates on a measured perf-CI breach, so it is spend triggered by evidence, not
   a standing cost.
 
-## Open questions for Aaron
+## 5. Open questions for Aaron
 
 1. **Does Azure stay, or does a different provider get picked now?** Section 2's
    recommendation is "keep it, low confidence" — if Aaron already has cloud credits,
