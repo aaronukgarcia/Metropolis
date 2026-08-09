@@ -36,20 +36,33 @@ const (
 	PhaseFinance              PhaseKind = "finance"
 )
 
-// DailyPhaseOrder is the fixed phase set executed on every daily
+// dailyPhaseOrder is the fixed phase set executed on every daily
 // logistics tick (§8). v1 (draft-ahead, MOD-012) exposes exactly one
 // named daily phase; this is the barrier hook the citizens/logistics
 // modules (MOD-017/018) fill in later, including A2's amortised cold
 // pass (1/30 of shards per daily tick on a fixed schedule) — see
 // SCHEDULE below.
-var DailyPhaseOrder = []PhaseKind{
+//
+// UNEXPORTED AND FIXED-SIZE (SEC-005 fix). This used to be an exported
+// []PhaseKind — a package-level mutable slice any importer could
+// reorder/truncate/append to with a plain assignment, defeating the
+// "never reordered at runtime" contract at the type level (GR#21). It
+// is now a private array: nothing outside this file can name it, let
+// alone mutate it, and internal readers (advanceOneDailyTick, validPhase
+// below) range over it directly with zero allocation — the same
+// zero-cost access the old exported slice had on the hot path, just not
+// exported. External callers get DailyPhaseOrder(), a function that
+// returns a fresh copy (see below) — allocates, but is never called from
+// the per-tick path, only at boot/test time.
+var dailyPhaseOrder = [...]PhaseKind{
 	PhaseDailyTick,
 }
 
-// MonthlyPhaseOrder is the fixed, documented order the monthly tick
-// executes phases in (§3, AC-3, AC-16). This slice's order IS the
+// monthlyPhaseOrder is the fixed, documented order the monthly tick
+// executes phases in (§3, AC-3, AC-16). This array's order IS the
 // contract — never re-sliced, sorted, or otherwise reordered at
-// runtime.
+// runtime. See dailyPhaseOrder's doc comment above for why this is an
+// unexported array rather than an exported slice (SEC-005).
 //
 // MIRRORED ELSEWHERE — read before changing this list. The F12 info
 // panel keeps a literal copy of these six names in
@@ -57,12 +70,12 @@ var DailyPhaseOrder = []PhaseKind{
 // internal/ui from importing internal/engine, so it cannot reference
 // this slice directly. Reordering, renaming, adding or removing a
 // phase here therefore requires the same edit there. A drift test in
-// internal/ui/screens/debug/determinism_test.go imports this slice
+// internal/ui/screens/debug/determinism_test.go imports MonthlyPhaseOrder()
 // (the sanctioned test-file exemption) and fails if the two diverge —
 // so a mistake is caught, but by CI rather than by reading. That note
 // exists so you find out now instead of then; see that file's doc
 // comment for the full rationale.
-var MonthlyPhaseOrder = []PhaseKind{
+var monthlyPhaseOrder = [...]PhaseKind{
 	PhaseProduction,
 	PhaseLogisticsSettlement,
 	PhaseConsumptionShortfall,
@@ -71,16 +84,43 @@ var MonthlyPhaseOrder = []PhaseKind{
 	PhaseFinance,
 }
 
+// DailyPhaseOrder returns a fresh copy of the fixed daily phase order
+// (SEC-005: callers may freely mutate the returned slice — append,
+// reorder, truncate — without touching the Engine's actual pipeline
+// order, since it is a copy of the unexported dailyPhaseOrder array, not
+// a reference to it). Matches the defensive-copy pattern
+// foundation.registry.List() already uses for the same reason
+// (registry.go). Allocates — call this at boot/test time, never from a
+// per-tick hot path (advanceOneDailyTick ranges over the unexported
+// array directly, at zero cost).
+func DailyPhaseOrder() []PhaseKind {
+	out := make([]PhaseKind, len(dailyPhaseOrder))
+	copy(out, dailyPhaseOrder[:])
+	return out
+}
+
+// MonthlyPhaseOrder returns a fresh copy of the fixed, documented order
+// the monthly tick executes phases in (§3, AC-3, AC-16) — see
+// DailyPhaseOrder's doc comment for the mutation-safety and allocation
+// argument, which applies identically here.
+func MonthlyPhaseOrder() []PhaseKind {
+	out := make([]PhaseKind, len(monthlyPhaseOrder))
+	copy(out, monthlyPhaseOrder[:])
+	return out
+}
+
 // validPhase reports whether kind is one of the fixed phases above.
 // Called only at RegisterPhaseHook time (boot-time, not the tick path),
-// so the linear scan over two small fixed slices is fine.
+// so the linear scan over two small fixed arrays is fine. Reads the
+// unexported arrays directly (no copy needed — nothing here mutates
+// them).
 func validPhase(kind PhaseKind) bool {
-	for _, k := range DailyPhaseOrder {
+	for _, k := range dailyPhaseOrder {
 		if k == kind {
 			return true
 		}
 	}
-	for _, k := range MonthlyPhaseOrder {
+	for _, k := range monthlyPhaseOrder {
 		if k == kind {
 			return true
 		}
@@ -190,11 +230,19 @@ func (e *Engine) runPhaseForHook(correlationID string, hook PhaseHook) error {
 }
 
 // runPhase runs every hook registered against kind, in registration
-// order (e.hooks[kind] is a slice, never a map — see the map-range note
-// on Engine.hooks), invoking the optional PhaseObserver first. Returns
-// the first hook error encountered, aborting the remaining hooks for
-// this phase (AC-10) — the caller (advanceOneDailyTick) then aborts the
-// remaining phases for this tick.
+// order (e.hooks[kind] is a slice, never a map), invoking the optional
+// PhaseObserver first. Returns the first hook error encountered,
+// aborting the remaining hooks for this phase (AC-10) — the caller
+// (advanceOneDailyTick) then aborts the remaining phases for this tick.
+//
+// This reads e.hooks[kind] WITHOUT taking e.mu (SEC-003). That is safe
+// only because AdvanceTicks calls e.seal() before any phase ever runs,
+// and RegisterPhaseHook refuses to mutate e.hooks once sealed — see the
+// Engine.sealed field's doc comment (engine.go) for the full argument.
+// Do not "fix" this by adding a lock here without first reading that
+// comment: a lock taken once per phase per tick would cost contention
+// this package's 0-alloc/low-overhead steady-state benchmark (AC-9) was
+// written to catch regressing.
 func (e *Engine) runPhase(correlationID string, kind PhaseKind) error {
 	if e.observer != nil {
 		e.observer(kind, e.clock.Tick(), e.clock.Month())

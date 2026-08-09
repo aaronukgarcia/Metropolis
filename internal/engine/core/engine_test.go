@@ -7,6 +7,23 @@ import (
 	"testing"
 )
 
+// clockOrFatal calls e.Clock() and fails the test immediately if it
+// errors. Clock() only errors for a struct-copied/zero-value Engine
+// (SEC-014/SEC-016/SEC-018) — every test in this package other than the
+// dedicated copy/zero-value regressions (sec014_poc_test.go,
+// sec016_poc_test.go, sec016_zerovalue_test.go) uses a real,
+// singly-constructed Engine, so an error here always indicates a test
+// bug, not an expected outcome — hence Fatalf rather than a silent
+// zero-value fallback.
+func clockOrFatal(t *testing.T, e *Engine) Clock {
+	t.Helper()
+	c, err := e.Clock()
+	if err != nil {
+		t.Fatalf("Clock(): %v", err)
+	}
+	return c
+}
+
 func TestEngine_BootsWithZeroModules(t *testing.T) {
 	e := NewEngine()
 	if e == nil {
@@ -15,7 +32,7 @@ func TestEngine_BootsWithZeroModules(t *testing.T) {
 	if err := e.AdvanceTicks("corr-zero", 5); err != nil {
 		t.Fatalf("AdvanceTicks with zero registered hooks: %v", err)
 	}
-	if got := e.Clock().Tick(); got != 5 {
+	if got := clockOrFatal(t, e).Tick(); got != 5 {
 		t.Fatalf("Tick() = %d, want 5", got)
 	}
 }
@@ -25,7 +42,7 @@ func TestEngine_AdvanceTicks65_MonthRollovers(t *testing.T) {
 	if err := e.AdvanceTicks("corr-65", 65); err != nil {
 		t.Fatalf("AdvanceTicks(65): %v", err)
 	}
-	c := e.Clock()
+	c := clockOrFatal(t, e)
 	if got := c.Month(); got != 2 {
 		t.Errorf("Month() = %d, want 2 (2 months + 5 days)", got)
 	}
@@ -50,7 +67,7 @@ func TestEngine_AdvanceTicks_RejectsInvalidN(t *testing.T) {
 		}
 	}
 	// No partial advance on rejection.
-	if got := e.Clock().Tick(); got != 0 {
+	if got := clockOrFatal(t, e).Tick(); got != 0 {
 		t.Errorf("Tick() after rejected AdvanceTicks calls = %d, want 0", got)
 	}
 }

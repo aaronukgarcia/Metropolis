@@ -48,8 +48,8 @@ func TestHandleCommand_AdvanceTicks(t *testing.T) {
 	if result.CorrelationID != corrID {
 		t.Errorf("CorrelationID = %q, want %q", result.CorrelationID, corrID)
 	}
-	if e.Clock().Tick() != 3 {
-		t.Errorf("Tick() = %d, want 3", e.Clock().Tick())
+	if clockOrFatal(t, e).Tick() != 3 {
+		t.Errorf("Tick() = %d, want 3", clockOrFatal(t, e).Tick())
 	}
 }
 
@@ -80,8 +80,8 @@ func TestHandleCommand_SetSpeed(t *testing.T) {
 	if !result.Accepted {
 		t.Fatalf("SetSpeed(4): rejected, error = %+v", result.Error)
 	}
-	if e.Clock().Speed() != Speed4x {
-		t.Errorf("Speed() = %d, want %d", e.Clock().Speed(), Speed4x)
+	if clockOrFatal(t, e).Speed() != Speed4x {
+		t.Errorf("Speed() = %d, want %d", clockOrFatal(t, e).Speed(), Speed4x)
 	}
 
 	invalid := protocol.Command{
@@ -106,7 +106,7 @@ func TestHandleCommand_PauseResume_Idempotent(t *testing.T) {
 			t.Fatalf("Pause call %d: rejected, error = %+v", i, result.Error)
 		}
 	}
-	if !e.Clock().Paused() {
+	if !clockOrFatal(t, e).Paused() {
 		t.Error("Paused() = false after Pause commands, want true")
 	}
 
@@ -117,7 +117,7 @@ func TestHandleCommand_PauseResume_Idempotent(t *testing.T) {
 			t.Fatalf("Resume call %d: rejected, error = %+v", i, result.Error)
 		}
 	}
-	if e.Clock().Paused() {
+	if clockOrFatal(t, e).Paused() {
 		t.Error("Paused() = true after Resume commands, want false")
 	}
 }
@@ -199,7 +199,7 @@ func TestRunCommandLoop_RoundTripOverInProcTransport(t *testing.T) {
 		t.Fatal("timed out waiting for CommandResult")
 	}
 
-	if e.Clock().Tick() != 7 {
-		t.Errorf("Tick() = %d, want 7", e.Clock().Tick())
+	if clockOrFatal(t, e).Tick() != 7 {
+		t.Errorf("Tick() = %d, want 7", clockOrFatal(t, e).Tick())
 	}
 }

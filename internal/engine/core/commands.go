@@ -32,6 +32,23 @@ type DeltaSink interface {
 // (AdvanceTicks) — there is no I/O and no wall-clock wait anywhere in
 // this file.
 func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
+	// SEC-018: identity-checked BEFORE anything else in this function,
+	// including cmd.Validate()'s own rejection path — reject() calls
+	// Clock() (now itself guarded, see engine.go), but building the
+	// CommandResult directly here means a copied Engine never even
+	// reaches Clock() for ANY command, valid or not. This is the single
+	// choke point for every command-based entry into e.mu (handleSetSpeed/
+	// handlePause/handleResume, each of which ALSO carries its own
+	// pre-lock check below — defence in depth, not the only line, same as
+	// SEC-016's RegisterPhaseHook/seal pattern).
+	if err := e.checkNotCopied(string(cmd.CorrelationID), nil); err != nil {
+		return protocol.CommandResult{
+			CorrelationID: cmd.CorrelationID,
+			Tick:          0,
+			Accepted:      false,
+			Error:         toErrorRef(err),
+		}
+	}
 	if err := cmd.Validate(); err != nil {
 		return e.reject(cmd, errs.New(ErrInvalidEnvelope, "", map[string]any{"cause": err.Error()}))
 	}
@@ -62,7 +79,7 @@ func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
 func (e *Engine) accept(cmd protocol.Command) protocol.CommandResult {
 	return protocol.CommandResult{
 		CorrelationID: cmd.CorrelationID,
-		Tick:          protocol.Tick(e.Clock().Tick()),
+		Tick:          e.clockTickForResult(),
 		Accepted:      true,
 	}
 }
@@ -70,10 +87,26 @@ func (e *Engine) accept(cmd protocol.Command) protocol.CommandResult {
 func (e *Engine) reject(cmd protocol.Command, err error) protocol.CommandResult {
 	return protocol.CommandResult{
 		CorrelationID: cmd.CorrelationID,
-		Tick:          protocol.Tick(e.Clock().Tick()),
+		Tick:          e.clockTickForResult(),
 		Accepted:      false,
 		Error:         toErrorRef(err),
 	}
+}
+
+// clockTickForResult returns the current tick for a CommandResult, or 0
+// if Clock() reports e is a struct-copied Engine (SEC-018). In practice
+// this error branch is unreachable via HandleCommand's own dispatch:
+// HandleCommand's entry-point identity check and every individual
+// handler's own pre-lock check already reject a copy before accept()/
+// reject() is ever called here. Handled anyway because Clock() itself
+// is guarded and returns an error rather than hanging — consistent with
+// never treating any single check as the only line of defence (SEC-016).
+func (e *Engine) clockTickForResult() protocol.Tick {
+	c, err := e.Clock()
+	if err != nil {
+		return 0
+	}
+	return protocol.Tick(c.Tick())
 }
 
 // toErrorRef converts any error into a protocol.ErrorRef. Every error
@@ -117,6 +150,14 @@ func (e *Engine) handleSetSpeed(cmd protocol.Command, correlationID string) prot
 			return e.reject(cmd, err)
 		}
 	}
+	// SEC-018: identity-checked BEFORE e.mu — one of eight e.mu.Lock()
+	// sites in this package's non-test files. Also caught by
+	// HandleCommand's own entry-point check (defence in depth, not the
+	// only line), but guarded here directly too so this method is safe
+	// even if ever called by a future non-HandleCommand path.
+	if err := e.checkNotCopied(correlationID, map[string]any{"kind": string(cmd.Kind)}); err != nil {
+		return e.reject(cmd, err)
+	}
 	e.mu.Lock()
 	e.clock.setSpeed(speed)
 	e.mu.Unlock()
@@ -154,6 +195,14 @@ func (e *Engine) checkSpeed8xAllowed(correlationID string) error {
 // handlePause pauses the clock. Idempotent (per PausePayload's doc
 // comment): pausing an already-paused world is a no-op Accept.
 func (e *Engine) handlePause(cmd protocol.Command) protocol.CommandResult {
+	// SEC-018: identity-checked BEFORE e.mu — one of eight e.mu.Lock()
+	// sites in this package's non-test files. Also caught by
+	// HandleCommand's own entry-point check (defence in depth, not the
+	// only line), but guarded here directly too so this method is safe
+	// even if ever called by a future non-HandleCommand path.
+	if err := e.checkNotCopied(string(cmd.CorrelationID), nil); err != nil {
+		return e.reject(cmd, err)
+	}
 	e.mu.Lock()
 	e.clock.setPaused(true)
 	e.mu.Unlock()
@@ -164,6 +213,10 @@ func (e *Engine) handlePause(cmd protocol.Command) protocol.CommandResult {
 
 // handleResume resumes at the previously set speed. Idempotent.
 func (e *Engine) handleResume(cmd protocol.Command) protocol.CommandResult {
+	// SEC-018: see handlePause's identical note above.
+	if err := e.checkNotCopied(string(cmd.CorrelationID), nil); err != nil {
+		return e.reject(cmd, err)
+	}
 	e.mu.Lock()
 	e.clock.setPaused(false)
 	e.mu.Unlock()

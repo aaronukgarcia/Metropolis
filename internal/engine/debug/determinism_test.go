@@ -25,7 +25,11 @@ func TestTogglingDebugDoesNotAffectEngineState(t *testing.T) {
 	if _, err := e.Snapshot(&before, "corr-snap-before"); err != nil {
 		t.Fatalf("Snapshot (before): %v", err)
 	}
-	tickBefore := e.Clock().Tick()
+	clockBefore, err := e.Clock()
+	if err != nil {
+		t.Fatalf("Clock() (before): %v", err)
+	}
+	tickBefore := clockBefore.Tick()
 
 	// Toggle debug on/off and invoke a cheat on a State entirely
 	// unconnected to e — this is the point being proven: nothing here
@@ -44,7 +48,11 @@ func TestTogglingDebugDoesNotAffectEngineState(t *testing.T) {
 	if _, err := e.Snapshot(&after, "corr-snap-after"); err != nil {
 		t.Fatalf("Snapshot (after): %v", err)
 	}
-	tickAfter := e.Clock().Tick()
+	clockAfter, err := e.Clock()
+	if err != nil {
+		t.Fatalf("Clock() (after): %v", err)
+	}
+	tickAfter := clockAfter.Tick()
 
 	if tickBefore != tickAfter {
 		t.Fatalf("engine tick changed by toggling debug: before=%d after=%d", tickBefore, tickAfter)

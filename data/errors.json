@@ -306,6 +306,18 @@
       "message": "RegisterPhaseHook called after the engine sealed (first AdvanceTicks call)",
       "remedy": "Register every PhaseHook before the first AdvanceTicks call. There is no hot re-registration API: once AdvanceTicks has run once, the Engine seals its hook set permanently so runPhase's per-tick reads never need to synchronise against a concurrent writer (SEC-003). Construct the Engine, call RegisterPhaseHook for every hook, then start advancing ticks."
     },
+    "MET-E012": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterPhaseHook/AdvanceTicks called on a copied Engine value, not the one NewEngine constructed",
+      "remedy": "Always use the *Engine pointer NewEngine returned. Do not dereference-and-reassign it ('e2 := *e') or pass it by value -- that produces a second Engine value with its own mutex and sealed flag but an aliased hooks map, defeating this package's concurrency-safety invariant (SEC-014). If you need a second independent Engine, call NewEngine again."
+    },
+    "MET-E013": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "Subscribe/Unsubscribe/PublishEngineStatus called on a copied SubscriptionServer value, not the one NewSubscriptionServer constructed",
+      "remedy": "Always use the *SubscriptionServer pointer NewSubscriptionServer returned. Do not dereference-and-reassign it ('s2 := *s') or pass it by value -- that produces a second SubscriptionServer value with its own mutex but an aliased subs map, defeating this package's concurrency-safety invariant (SEC-019, same class as SEC-014/016 on Engine). If you need a second independent SubscriptionServer, call NewSubscriptionServer again."
+    },
     "MET-E100": {
       "severity": "error",
       "module": "engine.detgate",

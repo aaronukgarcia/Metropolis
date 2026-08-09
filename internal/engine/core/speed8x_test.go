@@ -54,8 +54,8 @@ func TestHandleCommand_SetSpeed_Speed8x_DefaultDeny(t *testing.T) {
 		t.Fatal("SetSpeed(8x) with no gate injected: accepted, want rejected (unsafe default)")
 	}
 	wantPlaceholderCode(t, result.Error, ErrInvalidSpeed)
-	if e.Clock().Speed() != Speed1x {
-		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged Speed1x (%d)", e.Clock().Speed(), Speed1x)
+	if clockOrFatal(t, e).Speed() != Speed1x {
+		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged Speed1x (%d)", clockOrFatal(t, e).Speed(), Speed1x)
 	}
 }
 
@@ -80,8 +80,8 @@ func TestHandleCommand_SetSpeed_Speed8x_RefusedWithDebugOff(t *testing.T) {
 	if !setFour.Accepted {
 		t.Fatalf("SetSpeed(4x) with debug off: rejected, error = %+v (4x must be unaffected by the 8x gate)", setFour.Error)
 	}
-	if e.Clock().Speed() != Speed4x {
-		t.Fatalf("Speed() = %d after SetSpeed(4x), want %d", e.Clock().Speed(), Speed4x)
+	if clockOrFatal(t, e).Speed() != Speed4x {
+		t.Fatalf("Speed() = %d after SetSpeed(4x), want %d", clockOrFatal(t, e).Speed(), Speed4x)
 	}
 
 	result := e.HandleCommand(speed8xCommand())
@@ -91,8 +91,8 @@ func TestHandleCommand_SetSpeed_Speed8x_RefusedWithDebugOff(t *testing.T) {
 	if result.Error == nil || result.Error.Code != debug.ErrDebugRequired {
 		t.Errorf("SetSpeed(8x) with debug off: error = %+v, want code %s (feat.debugmode's own registry code)", result.Error, debug.ErrDebugRequired)
 	}
-	if e.Clock().Speed() != Speed4x {
-		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged %d", e.Clock().Speed(), Speed4x)
+	if clockOrFatal(t, e).Speed() != Speed4x {
+		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged %d", clockOrFatal(t, e).Speed(), Speed4x)
 	}
 }
 
@@ -113,7 +113,7 @@ func TestHandleCommand_SetSpeed_Speed8x_AcceptedWithDebugOn(t *testing.T) {
 	if !result.Accepted {
 		t.Fatalf("SetSpeed(8x) with debug on (real feat.debugmode gate): rejected, error = %+v", result.Error)
 	}
-	if e.Clock().Speed() != Speed8xDebug {
-		t.Errorf("Speed() = %d after accepted SetSpeed(8x), want %d", e.Clock().Speed(), Speed8xDebug)
+	if clockOrFatal(t, e).Speed() != Speed8xDebug {
+		t.Errorf("Speed() = %d after accepted SetSpeed(8x), want %d", clockOrFatal(t, e).Speed(), Speed8xDebug)
 	}
 }

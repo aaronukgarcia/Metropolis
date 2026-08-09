@@ -47,6 +47,31 @@ const (
 	// present in DailyPhaseOrder or MonthlyPhaseOrder.
 	ErrUnknownPhase = "MET-E008"
 
+	// ErrEngineSealed: RegisterPhaseHook was called after the Engine
+	// sealed its hook set (SEC-003 — see Engine.sealed's doc comment).
+	// Sealing happens the first time AdvanceTicks runs; registration is
+	// boot-only, and after the seal it is rejected rather than silently
+	// accepted-but-ignored or left to race runPhase's unsynchronized read.
+	ErrEngineSealed = "MET-E011"
+
+	// ErrEngineCopied: RegisterPhaseHook or AdvanceTicks was called on an
+	// Engine value that is not the one NewEngine constructed — i.e. a
+	// struct copy (SEC-014: `e2 := *e` is legal, unsafe-free, reflect-
+	// free Go, and defeats mu/sealed's per-instance safety because the
+	// copy gets its OWN mu and sealed but ALIASES the original's hooks
+	// map). See Engine.self's doc comment.
+	ErrEngineCopied = "MET-E012"
+
+	// ErrSubscriptionServerCopied: Subscribe, Unsubscribe, or
+	// PublishEngineStatus was called on a SubscriptionServer value that
+	// is not the one NewSubscriptionServer constructed — i.e. a struct
+	// copy (SEC-019: same class as SEC-014/SEC-016 on Engine — `s2 := *s`
+	// is legal, unsafe-free, reflect-free Go, and defeats mu's per-
+	// instance safety because the copy gets its OWN mu but ALIASES the
+	// original's subs map, a reference type). See
+	// SubscriptionServer.self's doc comment.
+	ErrSubscriptionServerCopied = "MET-E013"
+
 	// ErrInvalidEnvelope: HandleCommand received a Command that fails
 	// protocol.Command.Validate (wrong ProtocolVersion, empty
 	// CorrelationID, nil/mismatched Payload). Defensive: protocol's

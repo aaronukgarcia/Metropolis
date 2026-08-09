@@ -41,6 +41,19 @@ type snapshotMeta struct {
 // assertion, which uses a deliberately slow w and a channel/counter,
 // never a wall-clock timing assertion).
 func (e *Engine) Snapshot(w io.Writer, correlationID string) (serialize.Header, error) {
+	// SEC-018: identity-checked BEFORE snapshotStateLocked ever touches
+	// mu — one of eight e.mu.Lock() sites in this package's non-test
+	// files. snapshotStateLocked has exactly one caller (this method), so
+	// guarding here covers it; a copy's mu can read as permanently
+	// "locked" if captured mid-Lock on the original, and
+	// snapshotStateLocked would otherwise hang forever exactly like
+	// RegisterPhaseHook did pre-SEC-016. Snapshot is called directly by
+	// feat.detgate's determinism gate (internal/engine/detgate/gate.go),
+	// not only via HandleCommand, so it needs its own guard rather than
+	// relying on a HandleCommand-level check.
+	if err := e.checkNotCopied(correlationID, nil); err != nil {
+		return serialize.Header{}, err
+	}
 	tick, month, seed := e.snapshotStateLocked()
 
 	header := serialize.NewHeader(int64(seed), tick, month, buildinfo.Version)

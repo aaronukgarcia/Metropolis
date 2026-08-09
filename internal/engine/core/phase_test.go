@@ -96,7 +96,7 @@ func TestPhaseOrder_FixedAndObservable(t *testing.T) {
 
 	var entered []string
 	var enteredMu sync.Mutex
-	for _, phase := range append(append([]PhaseKind{}, DailyPhaseOrder...), MonthlyPhaseOrder...) {
+	for _, phase := range append(append([]PhaseKind{}, DailyPhaseOrder()...), MonthlyPhaseOrder()...) {
 		hook := newRecordingHook(string(phase), &enteredMu, &entered)
 		if err := e.RegisterPhaseHook(phase, hook); err != nil {
 			t.Fatalf("RegisterPhaseHook(%s): %v", phase, err)
@@ -109,7 +109,7 @@ func TestPhaseOrder_FixedAndObservable(t *testing.T) {
 		t.Fatalf("AdvanceTicks: %v", err)
 	}
 
-	wantTail := append(append([]PhaseKind{}, DailyPhaseOrder...), MonthlyPhaseOrder...)
+	wantTail := append(append([]PhaseKind{}, DailyPhaseOrder()...), MonthlyPhaseOrder()...)
 	mu.Lock()
 	defer mu.Unlock()
 	if len(observed) < len(wantTail) {
