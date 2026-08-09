@@ -16,7 +16,8 @@
       "F200-F299": "reserved for foundation.det (determinism/RNG)",
       "F300-F399": "reserved for foundation.serialize (save/fixture format)",
       "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
-      "F500-F599": "reserved for foundation.repo (build info, CI)"
+      "F500-F599": "reserved for foundation.repo (build info, CI)",
+      "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -74,6 +75,18 @@
       "module": "foundation.errors",
       "message": "correlation ID {correlationId} failed format validation",
       "remedy": "Correlation IDs must be UUIDv4-formatted strings minted by errs.NewCorrelationID(). Do not hand-construct correlation IDs."
+    },
+    "MET-U001": {
+      "severity": "fatal",
+      "module": "ui.core",
+      "message": "tcell screen initialization failed: {cause}",
+      "remedy": "Run inside a real terminal (Windows Terminal or conhost) that tcell supports. If running headless (CI, scripts), use core.NewScreen with an injected tcell.SimulationScreen instead of the real terminal constructor. Check TERM/terminfo if this occurs on an unusual terminal emulator."
+    },
+    "MET-U002": {
+      "severity": "warn",
+      "module": "ui.core",
+      "message": "malformed delta for subscription {subscriptionId} at tick {tick} could not be applied: {cause}",
+      "remedy": "The delta's Patch was not valid JSON (or otherwise failed to apply) and was dropped; the view model for that subscription keeps its last-known-good state. If this persists, check the sending engine module's view-patch encoding for that view."
     }
   }
 }
