@@ -23,7 +23,13 @@ func TestPhaseOrder_ReturnedCopyMutationDoesNotAffectEngine(t *testing.T) {
 		got[i], got[j] = got[j], got[i]
 	}
 	// Also try truncating and appending a bogus phase, for good measure.
+	// The mutated local slice is logged below (not just discarded) so
+	// this assignment isn't a dead store (staticcheck SA4006) — the
+	// logged value is itself evidence the mutation attempt was genuinely
+	// made against the CALLER's copy, distinct from whatever
+	// MonthlyPhaseOrder() returns on a later, fresh call.
 	got = append(got[:2], PhaseKind("bogus-injected-phase"))
+	t.Logf("caller's local copy after reverse+truncate+append (must not affect the Engine below): %v", got)
 
 	var mu sync.Mutex
 	var observed []PhaseKind
