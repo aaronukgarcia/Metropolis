@@ -25,7 +25,8 @@
       "E100-E199": "reserved for engine.detgate (internal/engine/detgate: the multi-run determinism gate — FEAT-004. NOTE: this range collided with a mistaken E100-E199 registration by feat.debugmode on 2026-08-09 [BUG-008] because detgate's claim existed only in source comments, not here; feat.debugmode was renumbered to E200-E299. This entry is the fix — always check this table AND `grep -rn MET-E internal/ cmd/` before claiming a new sub-range.)",
       "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
-      "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)"
+      "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
+      "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -413,6 +414,12 @@
       "module": "feat.skeleton",
       "message": "metropolis failed to boot: {component} failed to initialize: {cause}",
       "remedy": "Check the named component ({component}: e.g. tcell screen, harness.stub fixture load, or the module registry) for the underlying cause. cmd/metropolis exits non-zero and never renders a partial/blank screen on this path (AC-7) — rerun with the printed correlation ID to trace the full boot sequence in the log."
+    },
+    "MET-P000": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "SendCommand/Close/SendResult/SendEvent/SendDelta/Commands/Results/Events/Deltas called on a copied InProcTransport value, not the one NewInProcTransport constructed",
+      "remedy": "Always use the *InProcTransport pointer NewInProcTransport returned. Do not dereference-and-reassign it ('t2 := *t') or pass it by value -- that produces a second InProcTransport value with its own closeMu but ALIASED cmdCh/resultCh/eventCh/deltaCh and closeOnce, so the copy's Close() can race the original's in-flight sends and reopen BUG-007's send-on-closed-channel panic (SEC-020 wave 1). If you need a second independent transport, call NewInProcTransport again."
     },
     "MET-P090": {
       "severity": "error",
