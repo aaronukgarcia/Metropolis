@@ -239,3 +239,65 @@ func TestInProcTransport_Race(t *testing.T) {
 	wg.Wait()
 	_ = tr.Close()
 }
+
+// TestInProcTransport_CloseRacesWithConcurrentSend is the BUG-007
+// regression test. Unlike TestInProcTransport_Race above (which runs its
+// producer/consumer goroutines to completion via wg.Wait() BEFORE calling
+// Close, so it never actually overlaps a send with Close), this test
+// calls Close() while multiple sender goroutines are still actively
+// mid-flight in SendResult/SendEvent/SendDelta, with tiny channel buffers
+// to maximise how often trySendEvictOldest's evict-retry loop is running
+// at the exact moment Close fires.
+//
+// Before the closeMu fix (transport.go), this reliably PANICS with "send
+// on closed channel" — a peeked-then-stale `<-closed` check in
+// trySendEvictOldest is a TOCTOU race against Close closing the channel
+// out from under an in-flight send. That is a real crash, not a
+// data-race warning, so this test's failure mode on unfixed code is the
+// test binary panicking (non-zero exit, package reported FAILED), not a
+// t.Fatal. After the fix, Close cannot run concurrently with any sender
+// (RWMutex), so no send can ever observe the channel closing mid-attempt.
+//
+// Run repeatedly under -race (go test ./internal/protocol/... -race
+// -count=20) since a single run can get lucky even against the unfixed
+// code — many senders in a tight loop against a fresh Close call on every
+// iteration make that increasingly unlikely, not merely a nice-to-have.
+func TestInProcTransport_CloseRacesWithConcurrentSend(t *testing.T) {
+	const senders = 16
+
+	// Tiny buffers: forces every send through trySendEvictOldest's
+	// evict-then-retry loop almost immediately, which is exactly the
+	// multi-step, non-atomic window Close needs to land inside of to
+	// trigger the pre-fix panic.
+	tr := NewInProcTransport(1, 1, 1, 1)
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	wg.Add(senders)
+	for i := 0; i < senders; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				tr.SendResult(CommandResult{CorrelationID: "race"})
+				tr.SendEvent(Event{Kind: "race.event"})
+				tr.SendDelta(Delta{SubscriptionID: "sub-race"})
+			}
+		}()
+	}
+
+	// No sleep before Close: the goal is to catch senders mid-flight, and
+	// giving them a head start (or none at all) both land inside the
+	// race window depending on the scheduler — not sleeping keeps the
+	// test fast and, empirically, races harder against unfixed code.
+	if err := tr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	close(stop)
+	wg.Wait()
+}

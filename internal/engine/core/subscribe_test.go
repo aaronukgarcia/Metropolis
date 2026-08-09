@@ -64,24 +64,27 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
 	)
-	// Deliberately no transport.Close() here (unlike other tests in this
-	// package): this test's whole point is proving the pump keeps
-	// producing deltas across several driven commands, so by design the
-	// pump goroutine can still be mid-SendDelta after this test's own
-	// assertions are satisfied (e.g. a delta from the 2nd/3rd AdvanceTicks
-	// signal that this test never needed to consume). protocol.Close()
-	// closes the Results/Events/Deltas channels with no synchronisation
-	// against an in-flight send from that goroutine (trySendEvictOldest's
-	// `<-closed` check in internal/protocol/transport.go is TOCTOU against
-	// a concurrent Close) — calling it here reliably trips `-race` on a
-	// send-vs-close race, in a package this brief is out of scope to
-	// touch. Cancelling ctx (below) is sufficient: both goroutines this
-	// test starts (StartSubscriptionPump's pump, RunCommandLoop) select on
-	// ctx.Done() and exit on their own; nothing here holds an OS resource
-	// that leaking the channels would waste. Flagging the transport.go
-	// Close/send race to Bill as a separate finding rather than fixing it
-	// in this brief.
+	// transport.Close() is called again on teardown (BUG-007, fixed):
+	// this test's whole point is proving the pump keeps producing deltas
+	// across several driven commands, so the pump goroutine can still be
+	// mid-SendDelta after this test's own assertions are satisfied (e.g.
+	// a delta from the 2nd/3rd AdvanceTicks signal that this test never
+	// needed to consume). Close() used to close the Results/Events/Deltas
+	// channels with no synchronisation against such an in-flight send
+	// (trySendEvictOldest's `<-closed` check in
+	// internal/protocol/transport.go was TOCTOU against a concurrent
+	// Close), which reliably tripped `-race` — and worse, could panic —
+	// on exactly this teardown path. InProcTransport now serialises every
+	// sender against Close with an RWMutex (transport.go's closeMu), so
+	// Close is safe to call here again; ctx cancellation still runs first
+	// so both goroutines (StartSubscriptionPump's pump, RunCommandLoop)
+	// have a chance to exit on their own via ctx.Done() before Close
+	// tears down the channels underneath them.
 	e := NewEngine()
+	// Deferred in this order so cancel() runs FIRST at teardown (LIFO):
+	// give the pump/command-loop goroutines their chance to exit via
+	// ctx.Done() before Close tears down the channels underneath them.
+	defer func() { _ = transport.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	e.StartSubscriptionPump(ctx, transport)

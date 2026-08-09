@@ -1,6 +1,9 @@
 package protocol
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
 
 // Default buffer sizes for NewInProcTransport. Chosen generously for
 // skeleton-era traffic (a handful of subscriptions, human-paced command
@@ -133,6 +136,27 @@ type InProcTransport struct {
 
 	closed    chan struct{}
 	closeOnce func()
+
+	// closeMu serialises every send (SendCommand and the engine-side
+	// SendResult/SendEvent/SendDelta) against Close. BUG-007: Close used
+	// to close the channels with no synchronisation at all, so a sender
+	// that passed the `<-closed` peek in trySendEvictOldest could still
+	// land its `ch <- v` after Close closed that same channel underneath
+	// it — a send-on-closed-channel panic, not a benign data race.
+	//
+	// Senders take closeMu.RLock() for the duration of their send
+	// attempt; Close takes closeMu.Lock() before closing anything, so it
+	// cannot run concurrently with any send that is already past the
+	// closed-check-and-send window, and any sender that arrives after
+	// Close has the write lock blocks until Close finishes and then
+	// observes t.closed as already closed. This cannot deadlock Close
+	// against a stuck sender: every send under RLock
+	// (trySendEvictOldest's bounded evict-retry loop, and SendCommand's
+	// single non-blocking `select`) is non-blocking by construction, so
+	// the longest Close can ever wait for an RLock holder is bounded by
+	// that holder's own non-blocking work, never by a slow or absent
+	// reader on the other end.
+	closeMu sync.RWMutex
 }
 
 // NewInProcTransport constructs an InProcTransport with the given buffer
@@ -166,6 +190,12 @@ func (t *InProcTransport) SendCommand(cmd Command) error {
 	if err := cmd.Validate(); err != nil {
 		return err
 	}
+	// Hold closeMu for the duration of the closed-check-and-send window;
+	// see the closeMu doc comment on InProcTransport (BUG-007) for why
+	// this is required to avoid a send-on-closed-channel panic against a
+	// concurrent Close.
+	t.closeMu.RLock()
+	defer t.closeMu.RUnlock()
 	select {
 	case <-t.closed:
 		return ErrTransportClosed
@@ -189,7 +219,16 @@ func (t *InProcTransport) Events() <-chan Event { return t.eventCh }
 func (t *InProcTransport) Deltas() <-chan Delta { return t.deltaCh }
 
 // Close implements Transport. Idempotent.
+//
+// Close takes closeMu's write lock before closing anything, which blocks
+// until every sender currently mid-send (holding closeMu.RLock — see the
+// closeMu doc comment above, BUG-007) has finished. That is safe rather
+// than deadlock-prone specifically because sends are non-blocking by
+// construction: nothing holding the RLock can be stuck waiting on a
+// reader, so the wait here is always bounded.
 func (t *InProcTransport) Close() error {
+	t.closeMu.Lock()
+	defer t.closeMu.Unlock()
 	t.closeOnce()
 	return nil
 }
@@ -206,12 +245,19 @@ func (t *InProcTransport) Commands() <-chan Command { return t.cmdCh }
 // sent) or true otherwise (sent, though an older queued result may have
 // been evicted to make room — see the policy doc above).
 func (t *InProcTransport) SendResult(r CommandResult) bool {
+	// See the closeMu doc comment on InProcTransport (BUG-007): holding
+	// RLock for the whole trySendEvictOldest call is what closes the
+	// send-vs-Close TOCTOU window.
+	t.closeMu.RLock()
+	defer t.closeMu.RUnlock()
 	return trySendEvictOldest(t.closed, t.resultCh, r)
 }
 
 // SendEvent pushes an Event toward the UI under the same policy as
 // SendResult.
 func (t *InProcTransport) SendEvent(e Event) bool {
+	t.closeMu.RLock()
+	defer t.closeMu.RUnlock()
 	return trySendEvictOldest(t.closed, t.eventCh, e)
 }
 
@@ -219,6 +265,8 @@ func (t *InProcTransport) SendEvent(e Event) bool {
 // SendResult. Callers should route Delta.Seq through a SeqTracker
 // (subscription.go) on the receiving side to detect evictions.
 func (t *InProcTransport) SendDelta(d Delta) bool {
+	t.closeMu.RLock()
+	defer t.closeMu.RUnlock()
 	return trySendEvictOldest(t.closed, t.deltaCh, d)
 }
 
