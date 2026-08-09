@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "residential": {
+    "waterLitresPerPersonPerDay": 145,
+    "electricityKWhPerPersonPerDay": 3.5,
+    "gasKWhPerPersonPerDay": 13,
+    "foodStaplesKgPerPersonPerDay": 1.4,
+    "foodFreshKgPerPersonPerDay": 0.7,
+    "householdWasteKgPerPersonPerDay": 1.1,
+    "wastewaterFractionOfWater": 0.95
+  },
+  "classes": {
+    "school": { "unit": "pupil", "waterL": 18, "elecKWh": 1.5, "gasKWh": 3.0, "wasteKg": 0.20 },
+    "university": { "unit": "student", "waterL": 30, "elecKWh": 4.0, "gasKWh": 3.5, "wasteKg": 0.30 },
+    "clinic": { "unit": "visit", "waterL": 40, "elecKWh": 3.0, "gasKWh": 2.0, "wasteKg": 0.50 },
+    "hospital": { "unit": "bed", "waterL": 400, "elecKWh": 28, "gasKWh": 30, "wasteKg": 3.2 },
+    "elderCareHome": { "unit": "resident", "waterL": 220, "elecKWh": 9, "gasKWh": 14, "wasteKg": 1.4 },
+    "office": { "unit": "desk", "waterL": 25, "elecKWh": 5, "gasKWh": 2, "wasteKg": 0.35 },
+    "shop": { "unit": "m2SalesPer10", "waterL": 6, "elecKWh": 4.5, "gasKWh": 0.8, "wasteKg": 0.9 },
+    "restaurantCafe": { "unit": "cover", "waterL": 25, "elecKWh": 2.5, "gasKWh": 2.0, "wasteKg": 0.6 },
+    "hotel": { "unit": "roomNight", "waterL": 300, "elecKWh": 20, "gasKWh": 18, "wasteKg": 2.0 },
+    "lightIndustry": { "unit": "worker", "waterL": 60, "elecKWh": 22, "gasKWh": 12, "wasteKg": 4 },
+    "heavyIndustry": { "unit": "worker", "waterL": 400, "elecKWh": 90, "gasKWh": 60, "wasteKg": 15 },
+    "leisureVenue": { "unit": "visitor", "waterL": 15, "elecKWh": 1.8, "gasKWh": 0.5, "wasteKg": 0.25 },
+    "stadium": { "unit": "spectatorEvent", "waterL": 25, "elecKWh": 1.2, "gasKWh": 0.3, "wasteKg": 0.4 },
+    "swimmingPoolLeisureCentre": { "unit": "visitor", "waterL": 80, "elecKWh": 5, "gasKWh": 6, "wasteKg": 0.2 },
+    "park": { "unit": "visitor", "waterL": 4, "elecKWh": 0.1, "gasKWh": 0, "wasteKg": 0.15 },
+    "stationRailMetro": { "unit": "boarding", "waterL": 2, "elecKWh": 0.4, "gasKWh": 0, "wasteKg": 0.05 },
+    "airport": { "unit": "passenger", "waterL": 15, "elecKWh": 6, "gasKWh": 2, "wasteKg": 0.7 }
+  }
+}
