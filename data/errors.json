@@ -18,7 +18,10 @@
       "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
       "F500-F599": "reserved for foundation.repo (build info, CI)",
       "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
-      "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)"
+      "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)",
+      "U200-U299": "reserved for ui.screen.debug (F12 info panel: pane-unavailable states)",
+      "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
+      "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -94,6 +97,96 @@
       "module": "ui.screen.map",
       "message": "malformed f1.viewport patch could not be applied: {cause}",
       "remedy": "The patch was not valid f1.viewport v1 JSON (bad JSON, unrecognised schemaVersion, or a sparse patch received before any full snapshot) and was dropped; the map screen's grid keeps its last-known-good state. If this persists, check the sending engine module's f1.viewport patch encoding (internal/engine/stub/viewport.go documents the v1 schema)."
+    },
+    "MET-U200": {
+      "severity": "warn",
+      "module": "ui.screen.debug",
+      "message": "F12 module registry pane unavailable: {cause}",
+      "remedy": "The module registry has not been wired into the debug screen yet (nil Registry) or has not finished booting. The F12 panel renders an explicit \"unavailable\" state for this pane rather than a blank panel; no action needed until the registry is constructed and passed to debug.NewScreen."
+    },
+    "MET-U201": {
+      "severity": "warn",
+      "module": "ui.screen.debug",
+      "message": "F12 error tail pane unavailable: {cause}",
+      "remedy": "The debug screen's error-tail source was explicitly unset (WithErrorTailSource(nil)) or returned no usable data. The F12 panel renders an explicit \"unavailable\" state for this pane; wire a source (defaults to errs.Recent) to restore it."
+    },
+    "MET-U202": {
+      "severity": "warn",
+      "module": "ui.screen.debug",
+      "message": "F12 BoW pane unavailable: {cause}",
+      "remedy": "No BoWSource was configured (WithBoWSource) or the configured source's Summary() call failed. The F12 panel renders an explicit \"unavailable\" state for this pane rather than a blank one; check the metro BOW connection if a source is configured."
+    },
+    "MET-E200": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "debug mode is off; {capability} is unreachable until debug is enabled",
+      "remedy": "Enable debug via the --debug flag, config, or the :debug on palette command before invoking {capability}. This is a deliberate rejection, not a silent no-op — debug-gated capabilities never run partially or invisibly with debug off."
+    },
+    "MET-E201": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "cannot enable debug via {source}: no save header configured to sticky-flag",
+      "remedy": "Wire the active save header via debug.WithHeader before calling Enable. Enabling debug without a header to touch would silently skip the mandatory DebugTouched sticky-flag write (M0-ENG §3), so this is refused rather than treated as a no-op."
+    },
+    "MET-E202": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "enabling debug via {source} failed: the sticky DebugTouched flag did not persist to the save header: {cause}",
+      "remedy": "Check the save header write path (foundation.serialize / the caller's PersistFunc) for the underlying cause. Debug enable is refused rather than reporting success with an unpersisted sticky flag, per M0-ENG §3's balance-data hygiene contract."
+    },
+    "MET-E203": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "unknown debug enable source {source} requested",
+      "remedy": "Enable debug via one of the defined EnableSource values (flag, config, palette) — this should be unreachable outside a caller bug; check the call site."
+    },
+    "MET-E204": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "cheat {kind} was invoked with no effect callback configured",
+      "remedy": "Wire a non-nil debug.CheatEffect for {kind} before invoking InvokeCheat — this package never applies a cheat's domain effect itself (e.g. engine.finance owns free money/instant build, engine.unlocks owns force milestone)."
+    },
+    "MET-E205": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "cheat {kind} effect failed: {cause}",
+      "remedy": "Check the injected CheatEffect implementation for {kind} (the owning domain module) for the underlying failure. The cheat is not recorded as used when its effect fails."
+    },
+    "MET-E206": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "entity inspector has no lookup configured for ref {ref}",
+      "remedy": "Wire debug.WithEntityLookup at State construction before calling InspectEntity."
+    },
+    "MET-E207": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "entity inspector lookup for {ref} failed: {cause}",
+      "remedy": "Check the injected EntityLookup implementation for the underlying failure resolving {ref}."
+    },
+    "MET-E208": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "entity inspector could not marshal {ref} to JSON: {cause}",
+      "remedy": "Ensure the entity type returned by EntityLookup is JSON-marshalable (no channels, funcs, or cyclic structures)."
+    },
+    "MET-E209": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "fidelity dial has no implementation configured",
+      "remedy": "Wire debug.WithFidelityDial at State construction before calling FidelityDial."
+    },
+    "MET-E210": {
+      "severity": "warn",
+      "module": "feat.debugmode",
+      "message": "cheat used: {kind} (correlation {correlationId})",
+      "remedy": "Informational audit entry (balance-data hygiene, M0-ENG §3): a debug cheat was invoked successfully. No action required unless unexpected in a shared/demo save; cross-check against the save header's DebugTouched flag and State.CheatLog()."
+    },
+    "MET-E900": {
+      "severity": "fatal",
+      "module": "feat.skeleton",
+      "message": "metropolis failed to boot: {component} failed to initialize: {cause}",
+      "remedy": "Check the named component ({component}: e.g. tcell screen, harness.stub fixture load, or the module registry) for the underlying cause. cmd/metropolis exits non-zero and never renders a partial/blank screen on this path (AC-7) — rerun with the printed correlation ID to trace the full boot sequence in the log."
     }
   }
 }
