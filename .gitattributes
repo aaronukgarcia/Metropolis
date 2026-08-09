@@ -1,0 +1,41 @@
+# Metropolis line-ending policy — BUG-004.
+#
+# Module key: foundation.repo (see code.json)
+# Spec ref:   M0-ENG §5 ("main is always green")
+#
+# WHY THIS FILE EXISTS. Without it, line endings are decided by whatever
+# each machine's core.autocrlf happens to be. This repo's blobs are LF,
+# but GitHub's windows-latest runners check out with core.autocrlf=true,
+# so every .go file arrived in the runner's working directory as CRLF —
+# and gofmt reports CRLF files as unformatted. That is why CI's gofmt
+# check failed on EVERY run from the very first commit (5faf2ed) while
+# `gofmt -l .` stayed clean on every developer machine: the divergence
+# between local and CI *was* the bug, so no amount of local checking
+# could ever have found it.
+#
+# Pinning eol=lf makes the checked-out bytes identical everywhere, which
+# is the only state in which "gofmt is clean locally" is evidence about
+# CI at all.
+#
+# Do not "fix" this by relaxing the gofmt check. The check was right.
+
+# Default: normalise all text to LF in the repo and in every working
+# directory, on every platform.
+* text=auto eol=lf
+
+# Go tooling requires LF; state it explicitly so the intent survives any
+# future edit to the default line above.
+*.go     text eol=lf
+*.mod    text eol=lf
+*.sum    text eol=lf
+
+# Windows batch files are the genuine exception: cmd.exe can mis-parse
+# LF-only .bat/.cmd, so these keep CRLF deliberately.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+
+# Binary assets — never touch these.
+*.png    binary
+*.jpg    binary
+*.gz     binary
+*.exe    binary
