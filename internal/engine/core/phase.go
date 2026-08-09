@@ -50,6 +50,18 @@ var DailyPhaseOrder = []PhaseKind{
 // executes phases in (§3, AC-3, AC-16). This slice's order IS the
 // contract — never re-sliced, sorted, or otherwise reordered at
 // runtime.
+//
+// MIRRORED ELSEWHERE — read before changing this list. The F12 info
+// panel keeps a literal copy of these six names in
+// internal/ui/screens/debug/phase.go, because GR#20 forbids
+// internal/ui from importing internal/engine, so it cannot reference
+// this slice directly. Reordering, renaming, adding or removing a
+// phase here therefore requires the same edit there. A drift test in
+// internal/ui/screens/debug/determinism_test.go imports this slice
+// (the sanctioned test-file exemption) and fails if the two diverge —
+// so a mistake is caught, but by CI rather than by reading. That note
+// exists so you find out now instead of then; see that file's doc
+// comment for the full rationale.
 var MonthlyPhaseOrder = []PhaseKind{
 	PhaseProduction,
 	PhaseLogisticsSettlement,
