@@ -2,6 +2,7 @@ package stub
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -153,8 +154,30 @@ func (s *StubEngine) handleAdvanceTicks(cmd protocol.Command) protocol.CommandRe
 	if p.N <= 0 {
 		return s.reject(cmd, codeInvalidPayload, map[string]any{"n": p.N, "cause": "AdvanceTicksPayload.N must be positive"})
 	}
+	// SEC-006: bound N the same way engine.core.AdvanceTicks bounds it
+	// (maxAdvanceTicksPerCall, codes.go) — reject, never silently clamp.
+	if p.N > maxAdvanceTicksPerCall {
+		return s.reject(cmd, codeAdvanceTicksOutOfBounds, map[string]any{"n": p.N, "max": maxAdvanceTicksPerCall})
+	}
 
 	s.mu.Lock()
+	// SEC-006 (Weakness pattern #1 — guard the arithmetic, not just the
+	// input): bounding N per call does not by itself prove s.tick, which
+	// accumulates across every call for the life of the engine, can
+	// never overflow int64. With N capped at maxAdvanceTicksPerCall
+	// (~3600), reaching math.MaxInt64 would take on the order of 2.5e15
+	// calls — not reachable by any real client in this engine's
+	// lifetime — but "practically unreachable" is not the same claim as
+	// "impossible", so the running total is checked explicitly rather
+	// than trusted. A call that would overflow is rejected outright
+	// (the tick counter is left unchanged), exactly like an
+	// out-of-bounds N.
+	if s.tick > protocol.Tick(math.MaxInt64)-protocol.Tick(p.N) {
+		s.mu.Unlock()
+		return s.reject(cmd, codeAdvanceTicksOutOfBounds, map[string]any{
+			"n": p.N, "currentTick": int64(s.tick), "cause": "would overflow the tick counter",
+		})
+	}
 	s.tick += protocol.Tick(p.N)
 	tick := s.tick
 	subsSnapshot := make([]*subState, 0, len(s.subs))

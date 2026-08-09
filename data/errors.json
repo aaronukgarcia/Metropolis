@@ -150,6 +150,12 @@
       "message": "BinarySerializer method not implemented for shard {name}",
       "remedy": "BinarySerializer is a reserved-but-unbuilt StateSerializer (A3: arrives only when profiling shows JSON marshalling is the amortised cold-pass bottleneck at 100M-citizen scale). Use NDJSONSerializer, the canonical serializer for every save/fixture/config/protocol-debug shard today, instead."
     },
+    "MET-F301": {
+      "severity": "error",
+      "module": "foundation.serialize",
+      "message": "shard name {name} is not a valid single path component; rejected to prevent path traversal / zip-slip (SEC-001)",
+      "remedy": "A ShardMeta.Name decoded from a bundle's header.json is untrusted input, not a trusted local value — it must be a single clean path component with no separators, drive/volume markers, or '.'/'..' segments. This bundle's header.json claims a shard name that fails that check; treat the bundle as hostile or corrupt rather than trying to sanitise the name into something plausible. If this fires on a bundle you trust, the name itself (not this check) is the bug — fix whatever produced header.json."
+    },
     "MET-F600": {
       "severity": "fatal",
       "module": "foundation.data",
@@ -294,6 +300,12 @@
       "message": "HandleCommand received an invalid command envelope: {cause}",
       "remedy": "This should be unreachable via the normal transport path: protocol.InProcTransport.SendCommand already validates the envelope (ProtocolVersion, CorrelationID, Payload) before enqueueing. If seen, a caller invoked HandleCommand directly with a hand-built Command that skipped that check (e.g. a test, or a future transport) — validate before calling, or fix the transport."
     },
+    "MET-E011": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterPhaseHook called after the engine sealed (first AdvanceTicks call)",
+      "remedy": "Register every PhaseHook before the first AdvanceTicks call. There is no hot re-registration API: once AdvanceTicks has run once, the Engine seals its hook set permanently so runPhase's per-tick reads never need to synchronise against a concurrent writer (SEC-003). Construct the Engine, call RegisterPhaseHook for every hook, then start advancing ticks."
+    },
     "MET-E100": {
       "severity": "error",
       "module": "engine.detgate",
@@ -401,6 +413,12 @@
       "module": "engine.stub",
       "message": "StubEngine rejected command {kind}: payload failed semantic validation",
       "remedy": "The command's envelope validated (protocol.Command.Validate) but its payload failed StubEngine's own semantic checks — e.g. AdvanceTicksPayload.N <= 0, an unsupported SetSpeedPayload.Speed, a SubscribePayload.ViewName that fails protocol.ValidateViewName, an UnsubscribePayload for an unknown subscription, or an empty InspectEntityPayload.EntityRef/DebugPayload.Op. Fix the payload's contents before resending."
+    },
+    "MET-P092": {
+      "severity": "error",
+      "module": "engine.stub",
+      "message": "StubEngine.AdvanceTicks requested with N={n}, must be > 0 and <= {max}",
+      "remedy": "Send AdvanceTicksPayload.N as a positive integer no greater than StubEngine's maxAdvanceTicksPerCall (mirrors engine.core.MaxAdvanceTicksPerCall, SEC-006). The request is rejected outright rather than clamped — split it into multiple calls if you need more ticks. This code is also requested when a well-formed N would overflow the running tick counter (currentTick + n > math.MaxInt64), which the reject leaves unchanged."
     }
   }
 }

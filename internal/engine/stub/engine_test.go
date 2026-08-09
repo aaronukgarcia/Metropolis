@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -178,13 +179,118 @@ func TestStubEngine_AdvanceTicks_FakeTicks(t *testing.T) {
 // semantic check — must be rejected with a registry-sourced ErrorRef,
 // never accepted and never a panic.
 func TestStubEngine_AdvanceTicks_InvalidN_Rejected(t *testing.T) {
-	tr, _ := newTestEngine(t)
-	r := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: 0})
-	if r.Accepted {
-		t.Fatal("AdvanceTicks(N=0) was accepted, want rejected")
+	cases := []struct {
+		name string
+		n    int64
+	}{
+		{"zero", 0},
+		{"negative", -1},
+		{"large negative", -100},
 	}
-	if r.Error == nil || r.Error.Code == "" {
-		t.Fatalf("rejected result missing a registry ErrorRef: %#v", r.Error)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, _ := newTestEngine(t)
+			r := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: tc.n})
+			if r.Accepted {
+				t.Fatalf("AdvanceTicks(N=%d) was accepted, want rejected", tc.n)
+			}
+			if r.Error == nil || r.Error.Code == "" {
+				t.Fatalf("rejected result missing a registry ErrorRef: %#v", r.Error)
+			}
+		})
+	}
+}
+
+// SEC-006: AdvanceTicksPayload.N must be bounded the same way
+// engine.core.AdvanceTicks bounds it — rejected with a registry-sourced
+// ErrorRef naming the offending value and the limit, never silently
+// clamped, and the tick counter must not move at all on a rejected call.
+func TestStubEngine_AdvanceTicks_UpperBound_Rejected(t *testing.T) {
+	cases := []struct {
+		name string
+		n    int64
+	}{
+		{"limit+1", maxAdvanceTicksPerCall + 1},
+		{"far beyond limit", maxAdvanceTicksPerCall * 1000},
+		{"MaxInt64", math.MaxInt64},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tr, eng := newTestEngine(t)
+			r := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: tc.n})
+			if r.Accepted {
+				t.Fatalf("AdvanceTicks(N=%d) was accepted, want rejected (limit=%d)", tc.n, maxAdvanceTicksPerCall)
+			}
+			if r.Error == nil || r.Error.Code == "" {
+				t.Fatalf("rejected result missing a registry ErrorRef: %#v", r.Error)
+			}
+			if r.Error.Code != codeAdvanceTicksOutOfBounds {
+				t.Fatalf("rejected result Code = %q, want %q", r.Error.Code, codeAdvanceTicksOutOfBounds)
+			}
+			if got := eng.Tick(); got != 0 {
+				t.Fatalf("Tick() after rejected AdvanceTicks(N=%d) = %d, want 0 (reject, never partial advance)", tc.n, got)
+			}
+		})
+	}
+}
+
+// SEC-006: N == maxAdvanceTicksPerCall (the boundary) is still legal and
+// advances the clock exactly N ticks — the bound rejects only N >
+// maxAdvanceTicksPerCall, mirroring engine.core.AdvanceTicks's
+// "n > MaxAdvanceTicksPerCall" check exactly (not "n >=").
+func TestStubEngine_AdvanceTicks_UpperBound_Boundary(t *testing.T) {
+	tr, eng := newTestEngine(t)
+	r := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: maxAdvanceTicksPerCall})
+	if !r.Accepted {
+		t.Fatalf("AdvanceTicks(N=maxAdvanceTicksPerCall) rejected, want accepted: %#v", r.Error)
+	}
+	if r.Tick != protocol.Tick(maxAdvanceTicksPerCall) {
+		t.Fatalf("CommandResult.Tick = %d, want %d", r.Tick, maxAdvanceTicksPerCall)
+	}
+	if got := eng.Tick(); got != protocol.Tick(maxAdvanceTicksPerCall) {
+		t.Fatalf("Tick() = %d, want %d", got, maxAdvanceTicksPerCall)
+	}
+}
+
+// SEC-006 (Weakness pattern #1 — "guard the arithmetic, not just the
+// input"): bounding N per call does not by itself prove the running
+// s.tick total, which accumulates across every call for the life of the
+// engine, cannot be driven to overflow. This test forces the scenario
+// directly (white-box: same package, sets the unexported tick field)
+// rather than relying on ~2.5e15 legal calls to reach it, and asserts a
+// call that would overflow protocol.Tick (int64) is rejected — with the
+// same registry code as an out-of-bounds N — and leaves the counter
+// unchanged, rather than silently wrapping to a negative/nonsensical
+// value.
+func TestStubEngine_AdvanceTicks_AccumulationOverflow_Rejected(t *testing.T) {
+	tr, eng := newTestEngine(t)
+
+	eng.mu.Lock()
+	eng.tick = protocol.Tick(math.MaxInt64 - 5)
+	eng.mu.Unlock()
+
+	// A perfectly legal, in-bounds N (well under maxAdvanceTicksPerCall)
+	// that would nonetheless push the running total past math.MaxInt64.
+	r := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: 10})
+	if r.Accepted {
+		t.Fatalf("AdvanceTicks that would overflow the tick counter was accepted, want rejected: Tick=%d", r.Tick)
+	}
+	if r.Error == nil || r.Error.Code != codeAdvanceTicksOutOfBounds {
+		t.Fatalf("rejected result Code = %#v, want %q", r.Error, codeAdvanceTicksOutOfBounds)
+	}
+	if got := eng.Tick(); got != protocol.Tick(math.MaxInt64-5) {
+		t.Fatalf("Tick() after rejected overflow-risking AdvanceTicks = %d, want unchanged at %d", got, int64(math.MaxInt64-5))
+	}
+
+	// A small enough N that it fits exactly must still be accepted —
+	// the overflow guard must not be over-eager and reject legal calls
+	// near the ceiling.
+	r2 := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: 5})
+	if !r2.Accepted {
+		t.Fatalf("AdvanceTicks(N=5) at the exact remaining headroom was rejected, want accepted: %#v", r2.Error)
+	}
+	if got := eng.Tick(); got != protocol.Tick(math.MaxInt64) {
+		t.Fatalf("Tick() = %d, want math.MaxInt64", got)
 	}
 }
 
