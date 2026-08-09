@@ -656,7 +656,15 @@ async function printStartupSummary(db) {
   printGitCheck();
 }
 
-module.exports = { printStartupSummary, printBowSummary, SUMMARY_MARKER };
+// Canonical item lookup, exported for reuse by the tool.bow (MOD-007) hooks
+// (claude-bow-ref-check.js, claude-bow-autoref.js) so they never re-derive
+// this WHERE clause themselves (BUG-003: a bespoke reimplementation drifted
+// from this exact matching behaviour — case-sensitive mkey, no guid branch).
+// Pure extraction: findItem's body is unchanged, just given a stable exported
+// name. Callers own their own `db` connection/handle.
+const findItemByRef = findItem;
+
+module.exports = { printStartupSummary, printBowSummary, SUMMARY_MARKER, findItemByRef };
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
 

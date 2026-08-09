@@ -10,9 +10,12 @@
  * `internal/`, or `data/` (checked via `git diff --cached --name-only`,
  * never via the command string), the commit message must carry at least one
  * `[mkey]` or `[CODE-NNN]` tag (e.g. `[tool.bow]` or `[MOD-007]`) that
- * resolves to a live row in the metro BOW's `bow_items` table (matched
- * case-insensitively against `code` or `mkey`). Commits that don't touch
- * those trees are exempt and pass through silently (AC-2/AC-3).
+ * resolves to a live row in the metro BOW's `bow_items` table — resolution
+ * uses claude-bow.js's own canonical `findItemByRef(db, ref)` (guid exact /
+ * code case-insensitive / mkey case-sensitive), never a bespoke query, so
+ * this hook can never drift from the CLI's own lookup behaviour (BUG-003).
+ * Commits that don't touch those trees are exempt and pass through silently
+ * (AC-2/AC-3).
  *
  * FAIL-OPEN POSTURE (deliberate, LEAD-CONFIRMED — see tool.bow.md Escalation
  * #2): unlike claude-plan-guard.js / claude-secret-guard.js (which are
@@ -49,6 +52,7 @@
 
 const { execSync } = require('child_process');
 const mysql = require('mysql2/promise');
+const { findItemByRef } = require('./claude-bow.js');
 
 const ROOT = __dirname;
 const ENFORCED_PATH_RE = /^(cmd|internal|data)\//;
@@ -127,16 +131,8 @@ async function connectReadOnly() {
   });
 }
 
-/** Does a tag resolve to a live bow_items row (code or mkey, case-insensitive)? */
-async function tagExists(db, tag) {
-  const [rows] = await db.query(
-    'SELECT code, mkey FROM bow_items WHERE UPPER(code) = UPPER(?) OR UPPER(mkey) = UPPER(?) LIMIT 1',
-    [tag, tag]
-  );
-  return rows.length > 0;
-}
-
-/** Near-miss LIKE suggestions for an unknown tag (best-effort UX, not load-bearing). */
+/** Near-miss LIKE suggestions for an unknown tag (best-effort UX, not load-bearing;
+ *  does not affect the pass/fail resolution, which is findItemByRef's alone). */
 async function nearMisses(db, tag) {
   const [rows] = await db.query(
     'SELECT code, mkey FROM bow_items WHERE code LIKE ? OR mkey LIKE ? ORDER BY code LIMIT 5',
@@ -248,8 +244,8 @@ async function main() {
     const unknown = [];
     for (const tag of tags) {
       // eslint-disable-next-line no-await-in-loop
-      const exists = await tagExists(db, tag);
-      if (!exists) unknown.push(tag);
+      const item = await findItemByRef(db, tag);
+      if (!item) unknown.push(tag);
     }
 
     if (unknown.length > 0) {

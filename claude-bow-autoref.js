@@ -8,12 +8,14 @@
  * a `git commit` that actually landed, reads the real, just-made commit via
  * `git log -1 --format=%H%x1f%s%x1f%B` (never trusts the tool's captured
  * stdout for the hash — the working tree is the source of truth), extracts
- * `[mkey]`/`[CODE]` tags from the full commit message, and for each tag that
- * resolves to a live `bow_items` row, INSERTs a `bow_git_refs` row — the
- * exact same statement claude-bow.js's own `ref` command runs (item_guid
- * lookup, hash, current branch, note "auto-ref (hook)"). This is the ONE
- * sanctioned direct DB *write* among this project's hooks; everything else
- * (including claude-bow-ref-check.js) is read-only.
+ * `[mkey]`/`[CODE]` tags from the full commit message, resolves each one via
+ * claude-bow.js's own canonical `findItemByRef(db, ref)` (never a bespoke
+ * query — BUG-003 was exactly this hook reimplementing that lookup with
+ * drift), and for each tag that resolves, INSERTs a `bow_git_refs` row — the
+ * exact same statement claude-bow.js's own `ref` command runs (item_guid,
+ * hash, current branch, note "auto-ref (hook)"). This is the ONE sanctioned
+ * direct DB *write* among this project's hooks; everything else (including
+ * claude-bow-ref-check.js) is read-only.
  *
  * Idempotent (AC-9): before inserting, checks for an existing
  * (item_guid, commit_hash) row and skips if already present — safe to run
@@ -46,6 +48,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const mysql = require('mysql2/promise');
+const { findItemByRef } = require('./claude-bow.js');
 
 const ROOT = __dirname;
 const LOG_PATH = path.join(ROOT, 'claude-bow-autoref.log');
@@ -78,15 +81,6 @@ async function connectReadWrite() {
     database: process.env.METRO_DB_NAME || 'metro',
     connectTimeout: 4000,
   });
-}
-
-/** Resolve an item by short code or mkey, case-insensitive (mirrors claude-bow.js's findItem). */
-async function findItem(db, ref) {
-  const [rows] = await db.query(
-    'SELECT guid, code, mkey FROM bow_items WHERE UPPER(code) = UPPER(?) OR UPPER(mkey) = UPPER(?) LIMIT 1',
-    [ref, ref]
-  );
-  return rows.length ? rows[0] : null;
 }
 
 /** Has this (item_guid, commit_hash) pair already been ref'd? */
@@ -127,7 +121,7 @@ async function autoRefForCommit(db, { hash, message, branch }) {
   const results = [];
   for (const tag of tags) {
     // eslint-disable-next-line no-await-in-loop
-    const item = await findItem(db, tag);
+    const item = await findItemByRef(db, tag);
     if (!item) {
       results.push({ tag, status: 'unknown-tag' });
       continue;
@@ -241,7 +235,7 @@ if (require.main === module) {
 
 module.exports = {
   extractTags,
-  findItem,
+  findItemByRef,
   refExists,
   insertRefIdempotent,
   autoRefForCommit,
