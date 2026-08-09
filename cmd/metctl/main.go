@@ -71,7 +71,17 @@ func runVerify(args []string) error {
 		return err
 	}
 
-	fmt.Printf("metctl verify: %s OK (formatVersion=%s, worldSeed=%d, createdAtTick=%d, gameMonth=%d, debugTouched=%t, shards=%d)\n",
+	// h.FormatVersion is header-derived (SEC-022 class); it's %q rather
+	// than %s here even though this success path is only reachable once
+	// ValidateBundle -> CheckFormatVersion -> ParseSemVer has already
+	// accepted it (currently a strict digit-and-dot grammar, so no
+	// control bytes can survive to here). That upstream-sanitisation
+	// argument is real but lives only in this comment/reasoning, not in
+	// the type system — and ParseSemVer's own doc comment already flags
+	// "no pre-release or build-metadata suffixes" as a CURRENT
+	// restriction, not a permanent one. %q removes the need to keep
+	// re-verifying that argument every time the grammar changes.
+	fmt.Printf("metctl verify: %q OK (formatVersion=%q, worldSeed=%d, createdAtTick=%d, gameMonth=%d, debugTouched=%t, shards=%d)\n",
 		dir, h.FormatVersion, h.WorldSeed, h.CreatedAtTick, h.GameMonth, h.DebugTouched, len(h.ShardIndex))
 	return nil
 }
@@ -125,6 +135,15 @@ type exportLine struct {
 }
 
 func exportShard(srcDir, destDir string, meta serialize.ShardMeta) error {
+	// meta.Name is decoded from the source bundle's header.json, i.e. it
+	// is untrusted (SEC-001) — validate before using it to build our own
+	// output path, exactly as ShardPath does for the read side. Checked
+	// separately from OpenShardReader below because this path targets
+	// destDir (an arbitrary output directory), not ShardsDir(srcDir).
+	if err := serialize.ValidateShardName(meta.Name); err != nil {
+		return err
+	}
+
 	src, err := serialize.OpenShardReader(srcDir, meta)
 	if err != nil {
 		return err

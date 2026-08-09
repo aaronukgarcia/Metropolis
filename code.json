@@ -95,11 +95,13 @@
         "calls": []
       },
       "securityScan": {
-        "scannedAt": "2026-08-09T17:36:00Z",
+        "scannedAt": "2026-08-09T18:20:00Z",
         "scanVersion": "v1",
         "by": "Destructive-1",
-        "findings": [],
-        "verdict": "clean"
+        "findings": [
+          "SEC-023"
+        ],
+        "verdict": "findings-raised"
       }
     },
     {
@@ -155,11 +157,12 @@
         "calls": []
       },
       "securityScan": {
-        "scannedAt": "2026-08-09T17:34:30Z",
+        "scannedAt": "2026-08-09T18:05:00Z",
         "scanVersion": "v1",
         "by": "Destructive-1",
         "findings": [
-          "SEC-001"
+          "SEC-001",
+          "SEC-022"
         ],
         "verdict": "findings-raised"
       }

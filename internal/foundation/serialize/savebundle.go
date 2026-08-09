@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Bundle layout on disk:
@@ -50,9 +51,91 @@ func shardFileExt(encoding string) (string, error) {
 	}
 }
 
+// errShardNameInvalidCode is MET-F301, registered in data/errors.json
+// under foundation.serialize's F300-F399 range (GR#7). It is raised by
+// ValidateShardName — see that function's doc comment.
+const errShardNameInvalidCode = "MET-F301"
+
+// ValidateShardName rejects any ShardMeta.Name that is not a single
+// clean path component, closing SEC-001 (path traversal / zip-slip):
+// ShardMeta.Name is not trusted local data — ReadHeader/ValidateBundle
+// decode it straight out of a bundle's header.json, which may have come
+// from a shared save file or bug report, i.e. from an attacker. Every
+// place a shard name becomes a filesystem path must call this first.
+// ShardPath does so below, which covers every read/write call site that
+// goes through it (validateShardFile, CreateShardWriter,
+// OpenShardReader); cmd/metctl's export destination path is built
+// separately (it targets an output directory, not ShardsDir) and calls
+// this directly.
+//
+// This deliberately does NOT lean on filepath.Clean (or any other
+// "fix up the name" transform) to sanitise a hostile name: Clean("../x")
+// is still "../x", so cleaning alone does not stop an upward walk, and
+// silently rewriting a hostile name into a plausible-looking one would
+// hide the attack rather than reject it — worse than doing nothing.
+// Every rule below is an explicit rejection, never a rewrite.
+//
+// Cross-platform note (this project is Windows-first, but a bundle's
+// header.json can be authored on any OS and read on any other): Go's
+// path/filepath is OS-dependent — filepath.IsAbs, filepath.VolumeName,
+// and what counts as a separator all vary by GOOS. A check that only
+// used those functions would hold on the OS it was tested on and not
+// necessarily elsewhere. So the primary checks here are OS-independent
+// string tests (explicit "/" and "\" rejection, since "\" is a
+// separator on Windows but not Unix; explicit ":" rejection, since Go's
+// own filepath.IsAbs never flags a Windows drive-relative name like
+// "C:foo" as absolute — on Windows that resolves relative to whatever
+// the current directory on the C: drive happens to be, which is exactly
+// the kind of surprising escape this function exists to close), with
+// filepath.IsAbs/filepath.VolumeName layered on top as a second,
+// OS-native line of defence (catches UNC "\\server\share" forms when
+// actually running on Windows).
+//
+// SEC-013 (Tester-1, 2026-08-09 / ASM-025): trailing dots and trailing
+// whitespace are also rejected, for a different reason than the above —
+// not directory escape, but same-directory ALIASING. Windows' file APIs
+// silently strip a trailing "." or " " when a file is actually created
+// (verified empirically: os.Create("citizens.0042.") materialises on
+// disk as "citizens.0042"), but filepath.Base does not perform that
+// stripping, so "citizens.0042." satisfies every check above and only
+// collides with a legitimately-named "citizens.0042" shard once the OS
+// gets involved — a hostile bundle could shadow or overwrite a real
+// shard's file this way. Rejected outright rather than trimmed, for the
+// same "never rewrite a hostile name" reason as every other check here.
+func ValidateShardName(name string) error {
+	reject := func(reason string) error {
+		return fmt.Errorf("%s: shard name %q is not a valid single path component (%s)", errShardNameInvalidCode, name, reason)
+	}
+	if name == "" || name == "." || name == ".." {
+		return reject("empty or dot/dotdot rejected, SEC-001")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return reject("path separator rejected, SEC-001")
+	}
+	if strings.Contains(name, ":") {
+		return reject("drive/volume marker rejected, SEC-001")
+	}
+	if filepath.IsAbs(name) || filepath.VolumeName(name) != "" {
+		return reject("absolute or volume-qualified path rejected, SEC-001")
+	}
+	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
+		return reject("trailing dot or space rejected — Windows silently strips these on file creation, which would let this name alias a different shard's on-disk file, SEC-013")
+	}
+	if filepath.Base(name) != name {
+		return reject("not a single clean path component rejected, SEC-001")
+	}
+	return nil
+}
+
 // ShardPath returns the path a shard with the given ShardMeta lives (or
-// should be written) at within bundle directory dir.
+// should be written) at within bundle directory dir. meta.Name is run
+// through ValidateShardName first (SEC-001) — it is decoded from
+// untrusted bundle data (see that function's doc comment), so this is
+// the single choke point every shard read/write path goes through.
 func ShardPath(dir string, meta ShardMeta) (string, error) {
+	if err := ValidateShardName(meta.Name); err != nil {
+		return "", err
+	}
 	ext, err := shardFileExt(meta.Encoding)
 	if err != nil {
 		return "", err
@@ -160,7 +243,19 @@ func validateShardFile(dir string, meta ShardMeta) error {
 	}
 	gotHash := hex.EncodeToString(hasher.Sum(nil))
 	if gotHash != meta.SHA256 {
-		return fmt.Errorf("shard %q: SHA256 mismatch: header says %s, file %q hashes to %s", meta.Name, meta.SHA256, path, gotHash)
+		// meta.SHA256 is decoded straight from a hostile bundle's
+		// header.json, exactly like meta.Name (SEC-001/SEC-013) — never
+		// validated as hex anywhere upstream. %q (not %s) so a crafted
+		// SHA256 containing terminal control bytes (OSC/SGR escape
+		// sequences, etc.) renders as an escaped literal instead of
+		// being interpreted by whatever terminal this error's %v
+		// eventually gets printed to (SEC-022). gotHash is our own
+		// hex.EncodeToString output, so it can't carry hostile bytes,
+		// but it's %q too — matching verbs on both sides of the
+		// comparison makes the invariant ("nothing here is trusted
+		// enough for %s") obvious to the next reader, not just correct
+		// today.
+		return fmt.Errorf("shard %q: SHA256 mismatch: header says %q, file %q hashes to %q", meta.Name, meta.SHA256, path, gotHash)
 	}
 	return nil
 }
