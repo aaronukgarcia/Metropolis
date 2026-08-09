@@ -47,6 +47,11 @@
           },
           {
             "type": "command",
+            "command": "node claude-bow-ref-check.js",
+            "timeout": 8
+          },
+          {
+            "type": "command",
             "command": "node claude-pre-push-check.js",
             "timeout": 6
           }
@@ -74,6 +79,11 @@
             "type": "command",
             "command": "node claude-secret-guard.js",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node claude-bow-ref-check.js",
+            "timeout": 8
           },
           {
             "type": "command",
@@ -126,6 +136,26 @@
       {
         "matcher": "Bash",
         "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-bow-autoref.js",
+            "timeout": 8
+          },
+          {
+            "type": "command",
+            "command": "node claude-reflection.js",
+            "timeout": 3
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-bow-autoref.js",
+            "timeout": 8
+          },
           {
             "type": "command",
             "command": "node claude-reflection.js",
