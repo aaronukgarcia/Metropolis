@@ -3,7 +3,7 @@ BOW code: MOD-016
 # Acceptance criteria — harness.synth (MOD-016)
 
 **BOW code:** MOD-016
-**Spec refs:** M0-ENG §2.4 (`docs/METROPOLIS-MASTER-v2.1.md` line 849: "H-SYNTH — synthetic world generator. Parametric cities (population, sprawl, network shape) for perf/scale testing: we must know the 10M-citizen tick cost in month 3 of development, not month 30. Perf CI graphs tick-time vs scale per commit."); M0-ENG §6.5 / working agreement point 5 (line 998: "Perf is a test, not a hope: H-SYNTH perf runs in CI; a commit that regresses monthly-tick time >10% at the 1M-citizen synthetic fails."); §5.3 (100M-citizen memory/storage envelope, region shards, cold pass streaming, lines 181-182); M0-ENG §1 (target hardware: i7 8C/16T, 20GB RAM, RTX 3050-class 4GB VRAM, line 787); code.json `harness.synth` entry (consumes `engine.core` MOD-012 and `harness.headless` MOD-015).
+**Spec refs:** M0-ENG §2.4 (`docs/METROPOLIS-MASTER-v2.1.md` line 849: "H-SYNTH — synthetic world generator. Parametric cities (population, sprawl, network shape) for perf/scale testing: we must know the 10M-citizen tick cost in month 3 of development, not month 30. Perf CI graphs tick-time vs scale per commit."); M0-ENG §6 point 5 (working agreement, line 998: "Perf is a test, not a hope: H-SYNTH perf runs in CI; a commit that regresses monthly-tick time >10% at the 1M-citizen synthetic fails."); §5.3 (100M-citizen memory/storage envelope, region shards, cold pass streaming, lines 181-182); M0-ENG §1 (target hardware: i7 8C/16T, 20GB RAM, RTX 3050-class 4GB VRAM, line 787); code.json `harness.synth` entry (consumes `engine.core` MOD-012 and `harness.headless` MOD-015).
 **Date:** 2026-08-08
 **Status:** draft-ahead
 **Package under test:** `internal/harness/synth/` (path from `node claude-bow.js show MOD-016`)
@@ -13,7 +13,7 @@ BOW code: MOD-016
 
 - **US-1.** As the development team, I need to know the 10M-citizen monthly-tick cost in month 3 of development (Sprint 2), not month 30 (M0-ENG §2.4), so that a scale problem is discovered while there is still runway to pull the GPU sidecar forward per the sprint plan's guard-rail.
 - **US-2.** As CI, I need parametric synthetic cities (population, sprawl, network shape) generated deterministically from a seed and a size parameter, so that every commit can be perf-tested against the same reproducible scale points without needing a hand-built save.
-- **US-3.** As the perf CI job, I need tick-time-vs-scale graphed per commit and a hard fail when monthly-tick time regresses >10% at the 1M-citizen synthetic, so that performance is a test, not a hope (M0-ENG §5 working agreement point 5).
+- **US-3.** As the perf CI job, I need tick-time-vs-scale graphed per commit and a hard fail when monthly-tick time regresses >10% at the 1M-citizen synthetic, so that performance is a test, not a hope (M0-ENG §6 point 5).
 - **US-4.** As `balance.harness` (a later, Sprint 8 consumer per code.json), I need H-SYNTH's generated worlds to be usable as its own parameter-sweep inputs, so that balance tuning and perf testing share one synthetic-city generator rather than two.
 
 ## Scope
@@ -39,7 +39,7 @@ Parametric synthetic-city generation (population, sprawl, network shape, seeded/
 ### Determinism & safety
 
 - **AC-9 (GR#21).** The same `(seed, citizenCount, sprawl params)` tuple always generates a byte-identical world across repeated runs and across worker-pool sizes (consistent with §5's counter-based hash-stream determinism rule and the shard-count invariance property the sprint plan's S3 exit gate later depends on). Check: a passing test generates the same synthetic twice (and, if feasible at this stage, at two different `GOMAXPROCS`/worker settings) and asserts identical output bytes or hash (`grep -rn "func Test.*[Dd]eterminis" internal/harness/synth/*_test.go`).
-- **AC-10 (M0-ENG §5; GR#21 "perf is a test, not a hope").** The perf CI command from AC-6 is wired to actually fail the build (non-zero exit) on regression — not merely log a warning. Check: `grep -n "os.Exit(1)\|log.Fatal" internal/harness/synth/cmd/perfci/*.go` (or equivalent) matches on the regression path.
+- **AC-10 (M0-ENG §6 point 5; GR#21 "perf is a test, not a hope").** The perf CI command from AC-6 is wired to actually fail the build (non-zero exit) on regression — not merely log a warning. Check: `grep -n "os.Exit(1)\|log.Fatal" internal/harness/synth/cmd/perfci/*.go` (or equivalent) matches on the regression path.
 - **AC-11.** `go test ./internal/harness/synth/... -race -count=1` passes with no data race in generation or perf-measurement code that uses the shard worker pool. Check: `grep -n "go func()" internal/harness/synth/*_test.go` finds at least one concurrency test, if the generator itself is parallelised; if generation is single-threaded by design, `doc.go` states that explicitly and this AC is satisfied by SG-4 passing with `-race` and no goroutine use.
 
 ### Documentation

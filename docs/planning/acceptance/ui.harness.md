@@ -3,7 +3,7 @@ BOW code: MOD-014
 # Acceptance criteria — ui.harness (MOD-014)
 
 **BOW code:** MOD-014
-**Spec refs:** UI-SPEC §5 (`docs/METROPOLIS-MASTER-v2.1.md` lines 765-777: performance budget table + "Headless UI tests drive the widget layer with scripted key sequences against recorded delta streams and assert cell-buffer snapshots — the UI gets the same regression rigour as the sim."); M0-ENG §5 working agreement point 5 (line 998: "UI budgets (UI-SPEC §5) are asserted in the headless UI harness"); UI-SPEC §1 (`docs/METROPOLIS-MASTER-v2.1.md` lines 722-728: retained cell-buffer renderer, diff flushing, decoupled input/render loops); code.json `ui.harness` entry (consumes `ui.core` MOD-009 and `harness.replay` MOD-013).
+**Spec refs:** UI-SPEC §5 (`docs/METROPOLIS-MASTER-v2.1.md` lines 765-777: performance budget table + "Headless UI tests drive the widget layer with scripted key sequences against recorded delta streams and assert cell-buffer snapshots — the UI gets the same regression rigour as the sim."); M0-ENG §6 point 5 (working agreement, line 998: "UI budgets (UI-SPEC §5) are asserted in the headless UI harness"); UI-SPEC §1 (`docs/METROPOLIS-MASTER-v2.1.md` lines 722-728: retained cell-buffer renderer, diff flushing, decoupled input/render loops); code.json `ui.harness` entry (consumes `ui.core` MOD-009 and `harness.replay` MOD-013).
 **Date:** 2026-08-08
 **Status:** draft-ahead
 **Package under test:** `internal/harness/uitest/` (path from `node claude-bow.js show MOD-014`)
@@ -13,7 +13,7 @@ BOW code: MOD-014
 
 - **US-1.** As the UI test harness, I need to drive the widget layer with scripted key sequences (not a real keyboard) so that every screen can be regression-tested headlessly in CI (UI-SPEC §5).
 - **US-2.** As the UI test harness, I need to feed recorded delta streams from H-REPLAY into the widget layer so that snapshot assertions run against stable, reproducible data rather than a live/nondeterministic engine (M0-ENG §2.2/§5).
-- **US-3.** As CI, I need every UI-SPEC §5 latency budget (keystroke echo <10ms, screen switch <30ms, diff flush <3ms typical/<8ms worst, pane focus <5ms, map pan <8ms, delta apply <15ms) asserted automatically per commit, so that a regression is caught before Bill's review, not after (M0-ENG §5).
+- **US-3.** As CI, I need every UI-SPEC §5 latency budget (keystroke echo <10ms, screen switch <30ms, diff flush <3ms typical/<8ms worst, pane focus <5ms, map pan <8ms, delta apply <15ms) asserted automatically per commit, so that a regression is caught before Bill's review, not after (M0-ENG §6 point 5).
 - **US-4.** As a future junior building an F-screen, I need cell-buffer snapshot assertions so that a screen's rendered output is provably unchanged (or intentionally changed) across a refactor, the same regression rigour the sim gets from the determinism gate (UI-SPEC §5).
 
 ## Scope
@@ -39,8 +39,8 @@ Headless driving of `ui.core`'s widget layer via scripted key sequences and `har
 ### Determinism & safety
 
 - **AC-9 (GR#21).** Running the same scripted sequence against the same fixture twice produces byte-identical cell-buffer output both times (no nondeterministic rendering — e.g. no time-based animation cell touched by a snapshot test). Check: a passing test runs the same script twice and asserts identical captured buffers (`grep -rn "func Test.*[Dd]eterminis" internal/harness/uitest/*_test.go`).
-- **AC-10 (UI-SPEC §5; M0-ENG §5).** CI-runnable latency assertions exist for at least: keystroke→echo (<10ms), screen switch (<30ms), full-terminal diff flush (<3ms typical, <8ms worst on resize). Check: `go test ./internal/harness/uitest/... -race -count=1 -v` shows tests named for each budget (`grep -rn "func Test.*[Ll]atency\|func Test.*[Bb]udget" internal/harness/uitest/*_test.go` finds at least 3 distinct budget tests), and each asserts against the numeric threshold from UI-SPEC §5 (not an arbitrary looser number).
-- **AC-11 (M0-ENG §5, GR#21 "perf is a test, not a hope").** A CI job (or documented `go test` target) fails the build when a latency budget from AC-10 is exceeded — the assertion is a hard test failure, not a logged warning. Check: the test functions in AC-10 use `t.Fatalf`/`t.Errorf` on budget breach, not `t.Log`.
+- **AC-10 (UI-SPEC §5; M0-ENG §6 point 5).** CI-runnable latency assertions exist for at least: keystroke→echo (<10ms), screen switch (<30ms), full-terminal diff flush (<3ms typical, <8ms worst on resize). Check: `go test ./internal/harness/uitest/... -race -count=1 -v` shows tests named for each budget (`grep -rn "func Test.*[Ll]atency\|func Test.*[Bb]udget" internal/harness/uitest/*_test.go` finds at least 3 distinct budget tests), and each asserts against the numeric threshold from UI-SPEC §5 (not an arbitrary looser number).
+- **AC-11 (M0-ENG §6 point 5, GR#21 "perf is a test, not a hope").** A CI job (or documented `go test` target) fails the build when a latency budget from AC-10 is exceeded — the assertion is a hard test failure, not a logged warning. Check: the test functions in AC-10 use `t.Fatalf`/`t.Errorf` on budget breach, not `t.Log`.
 - **AC-12.** `go test ./internal/harness/uitest/... -race -count=1` passes with no data race — the harness's key-injection and delta-consumption paths run on separate goroutines mirroring the real T-INPUT/T-VIEWS split (UI-SPEC §1) and must be race-clean under that split. Check: `grep -n "go func()" internal/harness/uitest/*_test.go` finds at least one concurrency test.
 
 ### Documentation

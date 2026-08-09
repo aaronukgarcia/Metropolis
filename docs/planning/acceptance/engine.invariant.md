@@ -3,7 +3,7 @@ BOW code: MOD-019
 # Acceptance criteria — engine.invariant (MOD-019)
 
 **BOW code:** MOD-019
-**Spec refs:** §14 (`docs/METROPOLIS-MASTER-v2.1.md` line 259: "invariant checker every tick (conservation: people, money, goods must balance — hard assert in dev)"); §19.3/§19 intro (line 337: "nothing ever despawns — vehicle-conservation is an invariant-checker assert. Gridlock is real, visible, and yours to fix."); M0-ENG §5 working agreement point 3 (Definition of Done: "determinism-relevant modules also add a shard-count invariance test"); code.json `engine.invariant` entry (consumes `engine.core` MOD-012).
+**Spec refs:** §14 (`docs/METROPOLIS-MASTER-v2.1.md` line 259: "invariant checker every tick (conservation: people, money, goods must balance — hard assert in dev)"); §19.3/§19 intro (line 337: "nothing ever despawns — vehicle-conservation is an invariant-checker assert. Gridlock is real, visible, and yours to fix."); M0-ENG §6 point 3 (working agreement, Definition of Done: "determinism-relevant modules also add a shard-count invariance test"); code.json `engine.invariant` entry (consumes `engine.core` MOD-012).
 **Date:** 2026-08-08
 **Status:** draft-ahead
 **Package under test:** `internal/engine/invariant/` (path from `node claude-bow.js show MOD-019`)
@@ -44,7 +44,7 @@ The invariant-checker framework (hard assert in dev / registry-logged error in r
 ### Determinism & safety
 
 - **AC-13 (GR#21).** Running the invariant suite twice against the same tick's state produces identical `Violation` results (no nondeterministic floating-point accumulation order causing a flaky false-positive). Check: a passing test asserts determinism (`grep -rn "func Test.*[Dd]eterminis" internal/engine/invariant/*_test.go`).
-- **AC-14 (M0-ENG §5 DoD; shard-count invariance).** The invariant suite produces identical results run against the same world computed under different shard/worker counts (1 vs. N workers) — this is the specific DoD requirement for determinism-relevant modules. Check: `grep -rn "func Test.*[Ss]hard.*[Ii]nvarian\|func Test.*[Ww]orkerCount" internal/engine/invariant/*_test.go` finds coverage, and it passes.
+- **AC-14 (M0-ENG §6 point 3 DoD; shard-count invariance).** The invariant suite produces identical results run against the same world computed under different shard/worker counts (1 vs. N workers) — this is the specific DoD requirement for determinism-relevant modules. Check: `grep -rn "func Test.*[Ss]hard.*[Ii]nvarian\|func Test.*[Ww]orkerCount" internal/engine/invariant/*_test.go` finds coverage, and it passes.
 - **AC-15 (SG-7 scoped; GR#21).** `grep -rn "time.Now\|time.Since" internal/engine/invariant/*.go` (excluding `_test.go`) returns no matches — invariant checks run against simulation tick/state data only, never wall clock.
 - **AC-16.** `go test ./internal/engine/invariant/... -race -count=1` passes with no data race when invariants are checked concurrently across the 256-shard worker pool (§1.2/M0-ENG §1) that `engine.core` will eventually drive this from. Check: `grep -n "go func()" internal/engine/invariant/*_test.go` finds at least one concurrency test.
 
