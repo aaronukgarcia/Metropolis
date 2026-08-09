@@ -126,3 +126,24 @@ Kept here deliberately: a build log that only records successes teaches nothing.
 - Outstanding: turn the `input-validation` recurrence into a criteria rule, the way the other three patterns were handled.
 
 **Open questions for Aaron:** the contract freeze (OD f32-vs-f64 — ruling *against* f32 costs nothing since it's what's built; and the duplicate correlation-ID generators, where the real risk is their differing `crypto/rand`-failure fallbacks).
+
+### 10. PAUSED — 2026-08-09, on Aaron's instruction
+
+All agents stopped. State captured here so the next session resumes rather than reconstructs.
+
+**Repository state at pause**
+- HEAD `2487a0c`, pushed. Working tree **builds clean**, full suite green.
+- One cleanup was needed: the stopped `InProcTransport` junior had added two imports and been stopped *before* writing the code that used them, leaving the build broken. Those two lines were removed by hand (a `git checkout --` revert was correctly refused as destructive). `transport.go` is byte-identical to its committed state; **no substantive work was lost** — the agent's last action was "now let's write the fix", so nothing had been written.
+
+**Uncommitted, verified-but-unlanded — SEC-001 / SEC-013** (path traversal + Windows trailing-dot aliasing):
+`internal/foundation/serialize/savebundle.go`, `savebundle_security_test.go` (new), `cmd/metctl/main.go`, `main_test.go`, `data/errors.json`.
+This work is **complete and self-verified** by its junior (before/after attack demonstrated against a scratch pre-fix tree). It had FAILed once on v1.7 grounds, both gaps were closed, and it was mid-**re**-verification when paused. Tester-1's last observation before stopping: *"Confirmed pre-fix still leaks. Now confirm the current working tree (with SEC-013's added branch) still blocks it — full ordering re-check."* That is precisely where to pick up.
+
+**Not started — SEC-020 wave 1** (`InProcTransport`). Brief is written and in the transcript; nothing on disk. This is the **highest-consequence remaining item**: a copy's independent `closeMu` reopens BUG-007's send-on-closed-channel panic, fixed earlier the same day.
+
+**Resume order**
+1. Finish Tester-1's SEC-001/013 re-verification → Destructive re-attack → commit. It is the oldest open P0 and the only verified work not yet landed.
+2. SEC-020 wave 1: `InProcTransport`, then `StubEngine` + debug `State`, then the two Registries / `Logger` / `SeqTracker`, then the two UI screens. One agent per package; never two in the same package concurrently.
+3. Then: the `input-validation` ×9 criteria rule (the last of the four pattern write-ups, still owed).
+
+**Standing context a fresh session needs**: the dev-team process is at v1.8 (`docs/planning/dev-team-process.md`) — read the three weakness patterns and the assumption rules before dispatching anything. The BOW is the authority on item state (`node claude-bow.js list --by-seq`); this file is the authority on *why*.
