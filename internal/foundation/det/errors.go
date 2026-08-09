@@ -1,18 +1,10 @@
 package det
 
-// Placeholder registry error codes for foundation.det.
-//
-// data/errors.json reserves MET-F200-F299 for this module (see its
-// "reserved" table), but none of the codes below are registered there
-// yet — registry wiring (adding severity/module/message/remedy entries)
-// is noted as future work, per the MOD-004 brief. Passing an
-// unregistered code to errs.New/errs.Wrap is not a silent failure: the
-// errs package (GR#7) detects the unregistered code at construction time
-// and transparently falls back to the always-available MET-F003
-// "unregistered error code" wrapper, so every error path below already
-// fails loudly today and will simply pick up its real registry entry
-// (message/remedy/severity) the moment someone lands it in
-// data/errors.json — no call site here will need to change.
+// Registry error codes for foundation.det — reserved range F200-F299 in
+// data/errors.json's "reserved" table. Every code below IS registered
+// there with real severity/module/message/remedy fields (GR#7; closed
+// under BUG-008). The internal/foundation/errs source-scan test guards
+// against this ever drifting out of sync again.
 const (
 	// ErrShardOutOfRange: a shard index fell outside [0, NumShards) when
 	// validating a caller-supplied ShardResult/Message.

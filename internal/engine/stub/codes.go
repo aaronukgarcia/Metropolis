@@ -1,24 +1,14 @@
 package stub
 
-// Placeholder registry error codes (AC-9, AC-10).
-//
-// These are NOT yet entries in data/errors.json. Per GR#7 / the errs
-// package contract (internal/foundation/errs/errs.go), errs.New/errs.Wrap
-// never panic or bypass the registry for an unregistered code — they
-// degrade to the well-formed MET-F003 "unregistered error code" fallback,
-// carrying the originally-requested code (below) in the resulting *errs.E's
-// context and, via renderTemplate, in its Display() string. That means
-// today a StubEngine rejection's ErrorRef.Code is actually "MET-F003" on
-// the wire, not one of the codes below — the codes below are what get
-// requested, and are the identifiers to register once data/errors.json
-// grows a harness.stub or protocol range for them.
-//
-// Registering these for real is future work (out of scope for this item;
-// see the dispatch report for MOD-008) — reserve them under the "P"
-// (protocol) layer per docs/design/protocol.md's "ErrorRef... Code is a
-// data/errors.json registry code (MET-P### for this package's own
-// errors)" note, since StubEngine speaks the protocol seam even though it
-// physically lives under internal/engine/stub.
+// Registry error codes (AC-9, AC-10), module key "engine.stub". Range:
+// P090-P099, declared in data/errors.json's "ranges.reserved" table
+// under the "P" (protocol) layer per docs/design/protocol.md's
+// "ErrorRef... Code is a data/errors.json registry code" note, since
+// StubEngine speaks the protocol seam even though it physically lives
+// under internal/engine/stub. Both codes below ARE registered with real
+// severity/module/message/remedy fields (GR#7; closed under BUG-008).
+// The internal/foundation/errs source-scan test guards against this
+// ever drifting out of sync again.
 const (
 	// codeUnknownKind is requested when StubEngine's dispatch switch sees
 	// a Command.Kind it does not handle. In practice this is defensive:

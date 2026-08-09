@@ -7,15 +7,11 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
-// Placeholder error codes — reserved range F100-F199 (data/errors.json's
-// "ranges.reserved" section) belongs to foundation.registry, but none of
-// the codes below exist in data/errors.json yet. Until a maintainer adds
-// them (see /new-error), errs.New degrades every one of these to the
-// MET-F003 "unregistered code" fallback per GR#7 — loud (the requested
-// code and a cause are rendered into the MET-F003 message) rather than
-// silent or fatal. Replace these constants with nothing; once the codes
-// land in the registry, errs.New starts resolving them for real with no
-// call-site changes required here.
+// Registry error codes for foundation.registry — reserved range
+// F100-F199 in data/errors.json's "ranges.reserved" section. Every code
+// below IS registered there with real severity/module/message/remedy
+// fields (GR#7; closed under BUG-008). The internal/foundation/errs
+// source-scan test guards against this ever drifting out of sync again.
 const (
 	// codeDuplicateKey: Register called twice with the same module key.
 	codeDuplicateKey = "MET-F100"

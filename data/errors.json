@@ -10,18 +10,22 @@
       "T": "tooling — build/plan/generate scripts (currently JS, outside the Go registry)"
     },
     "reserved": {
-      "F000-F009": "errs package self-errors (registry load/validation, unregistered code) — always available even if the registry fails to load",
-      "F010-F099": "foundation.errors (this module): logging, correlation",
+      "F000-F009": "reserved for foundation.errors (errs package self-errors: registry load/validation, unregistered code — always available even if the registry fails to load)",
+      "F010-F099": "reserved for foundation.errors (this module: logging, correlation)",
       "F100-F199": "reserved for foundation.registry (module registry)",
       "F200-F299": "reserved for foundation.det (determinism/RNG)",
       "F300-F399": "reserved for foundation.serialize (save/fixture format)",
       "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
       "F500-F599": "reserved for foundation.repo (build info, CI)",
+      "F600-F699": "reserved for foundation.data (internal/foundation/data: the §24 typed config loaders, data-dir resolution, and hot-reload path — F400-F499 is already claimed by foundation.solver, so this module's delivery report picked the first free F-sub-range instead)",
       "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
       "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)",
       "U200-U299": "reserved for ui.screen.debug (F12 info panel: pane-unavailable states)",
+      "E000-E099": "reserved for engine.core (internal/engine/core: tick/command handling, phase hooks, subscriptions, snapshotting — MOD-012)",
+      "E100-E199": "reserved for engine.detgate (internal/engine/detgate: the multi-run determinism gate — FEAT-004. NOTE: this range collided with a mistaken E100-E199 registration by feat.debugmode on 2026-08-09 [BUG-008] because detgate's claim existed only in source comments, not here; feat.debugmode was renumbered to E200-E299. This entry is the fix — always check this table AND `grep -rn MET-E internal/ cmd/` before claiming a new sub-range.)",
       "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
-      "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)"
+      "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
+      "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -80,6 +84,114 @@
       "message": "correlation ID {correlationId} failed format validation",
       "remedy": "Correlation IDs must be UUIDv4-formatted strings minted by errs.NewCorrelationID(). Do not hand-construct correlation IDs."
     },
+    "MET-F100": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: key {key} is already registered",
+      "remedy": "Register each module key exactly once. There is no re-registration API by design — construct a fresh Registry (one per boot/test) instead of calling Register twice for the same key."
+    },
+    "MET-F101": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: Register called for key {key} with a nil stub",
+      "remedy": "GR#20 requires every registered module to pair a mandatory stub with its (optional) real implementation. Pass a non-nil Module for stub — real may be nil, stub may not."
+    },
+    "MET-F102": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: key {key} was never registered",
+      "remedy": "Call Register for {key} before calling Get/UpdateHealth/RecordTickCost/SetStatus/TickCostHistory against it. Check for a typo'd key or a boot-order bug (this module's Register call running after the one that failed)."
+    },
+    "MET-F103": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: key {key} does not allow runtime status toggling",
+      "remedy": "Pass registry.WithCanToggle(true) when registering {key} if the F12 UI should be able to toggle its status; toggling is opt-in, never inferred, so an entry registered without it always rejects SetStatus."
+    },
+    "MET-F104": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: SetStatus for key {key} was called with a missing or mismatched confirm token",
+      "remedy": "Pass confirmToken equal to the exact module key being toggled (the confirm-token pattern the F12 UI satisfies by having the user re-confirm the key). A blank or wrong token is refused rather than silently ignored."
+    },
+    "MET-F105": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: key {key} cannot move to status:real — no real implementation was registered for it",
+      "remedy": "Pass a non-nil real Module to Register for {key} (or via a future re-registration path) before requesting StatusReal, either at registration (WithStatus(StatusReal)) or via SetStatus."
+    },
+    "MET-F200": {
+      "severity": "error",
+      "module": "foundation.det",
+      "message": "shard index {shard} is out of range",
+      "remedy": "Every ShardResult/Message must carry a Shard index in [0, NumShards). Check the sharding function that produced this result for an off-by-one or a stale NumShards value."
+    },
+    "MET-F201": {
+      "severity": "error",
+      "module": "foundation.det",
+      "message": "shard merge incomplete: got {got} shard results, want {want}",
+      "remedy": "MergeInOrder requires exactly NumShards results, one per shard, before it will merge deterministically. Check the caller's shard-fan-out loop for a shard that failed to report (e.g. a goroutine that panicked or returned early) rather than let the merge proceed on partial data."
+    },
+    "MET-F202": {
+      "severity": "error",
+      "module": "foundation.det",
+      "message": "duplicate shard result for shard {shard}",
+      "remedy": "MergeInOrder requires exactly one result per shard index. Check the caller's shard-fan-out loop for a shard index computed twice (e.g. a modulo bug) rather than merge two results for the same shard, which would make the merge order-dependent and break determinism."
+    },
+    "MET-F220": {
+      "severity": "error",
+      "module": "foundation.det",
+      "message": "Micropounds arithmetic overflow in op {op}",
+      "remedy": "The requested Micropounds add/sub/mulrat operation would overflow int64 (or divide by zero, for mulrat). This is reported rather than silently wrapped or truncated so money never drifts (AC-11) — check the calling code for an unreasonably large input rather than retry with the same values."
+    },
+    "MET-F300": {
+      "severity": "error",
+      "module": "foundation.serialize",
+      "message": "BinarySerializer method not implemented for shard {name}",
+      "remedy": "BinarySerializer is a reserved-but-unbuilt StateSerializer (A3: arrives only when profiling shows JSON marshalling is the amortised cold-pass bottleneck at 100M-citizen scale). Use NDJSONSerializer, the canonical serializer for every save/fixture/config/protocol-debug shard today, instead."
+    },
+    "MET-F600": {
+      "severity": "fatal",
+      "module": "foundation.data",
+      "message": "data/ directory could not be resolved (checked ${env}, executable-relative search, and working-directory-upward search)",
+      "remedy": "Set METROPOLIS_DATA_DIR to the repo's data/ directory explicitly, or run from within (or below) the repo so the upward search can find it. The search requires one of the known §24 config files (e.g. consumption.json) to actually be present, not just a directory named data."
+    },
+    "MET-F601": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "config file not found at {path}",
+      "remedy": "Check that the resolved data directory contains the expected §24 file, and that ResolveDataDir found the correct directory (see MET-F600's search order)."
+    },
+    "MET-F602": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "config file at {path} is not well-formed JSON: {cause}",
+      "remedy": "Fix the JSON syntax error at {path}. Check the underlying cause for the line/column the decoder stopped at."
+    },
+    "MET-F603": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "config file at {path} is missing a valid top-level \"version\" field",
+      "remedy": "Every §24 config file must declare a positive integer \"version\" field. Add or correct it at {path}."
+    },
+    "MET-F604": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "config file at {path} failed schema validation: field {field}: {rule}",
+      "remedy": "Fix the named field at {path} per the reported rule (required/type/range check) in the file's Validate() implementation."
+    },
+    "MET-F605": {
+      "severity": "warn",
+      "module": "foundation.data",
+      "message": "Reload for {path} was requested while debug mode is disabled",
+      "remedy": "Hot-reload of config files is gated on debug mode (feat.debugmode) being enabled on the Store's shared DebugFlag. Enable debug mode via the --debug flag, config, or the :debug on palette command before calling Reload, or wait for the debug console to expose the reload control."
+    },
+    "MET-F606": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "Reload for {path} failed: {cause}",
+      "remedy": "Check the underlying cause (malformed JSON, missing version, schema violation — see MET-F601-F604) and fix the file at {path}. The previously-loaded config remains live and unaffected until a Reload succeeds (AC-11)."
+    },
     "MET-U001": {
       "severity": "fatal",
       "module": "ui.core",
@@ -115,6 +227,96 @@
       "module": "ui.screen.debug",
       "message": "F12 BoW pane unavailable: {cause}",
       "remedy": "No BoWSource was configured (WithBoWSource) or the configured source's Summary() call failed. The F12 panel renders an explicit \"unavailable\" state for this pane rather than a blank one; check the metro BOW connection if a source is configured."
+    },
+    "MET-E000": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "AdvanceTicks requested with N={n}, must be > 0 and <= {max}",
+      "remedy": "Send AdvanceTicksPayload.N as a positive integer no greater than MaxAdvanceTicksPerCall. The request is rejected outright rather than clamped to the limit (AC-11) — split it into multiple calls if you need more ticks."
+    },
+    "MET-E001": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "phase hook failed on shard {shard}: {cause}",
+      "remedy": "Check the registered PhaseHook's RunShard implementation named in the correlation ID's log trail for the underlying failure. That phase's barrier still ran for whatever effects were already emitted, but the tick's remaining phases were aborted (AC-10) — fix the hook and re-issue AdvanceTicks."
+    },
+    "MET-E002": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "SetSpeed requested unsupported multiplier {speed}",
+      "remedy": "Send SetSpeedPayload.Speed as one of the documented multipliers (1, 2, 4; 8x is reserved for feat.debugmode and rejected here when debug is off)."
+    },
+    "MET-E003": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "Subscribe requested with malformed view name {view}: {cause}",
+      "remedy": "Send SubscribePayload.ViewName in the documented naming scheme (protocol.ValidateViewName). Check the underlying cause for the specific rule violated."
+    },
+    "MET-E004": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "Subscribe requested unknown view {view}",
+      "remedy": "engine.core v1 serves exactly one view, \"engine.status\". Request that view name, or wait for the view you need to land."
+    },
+    "MET-E005": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "Unsubscribe requested unknown subscription {subscriptionId}",
+      "remedy": "Only unsubscribe a subscription ID previously returned by a successful Subscribe call. This subscription may already have been unsubscribed, or never existed on this engine instance."
+    },
+    "MET-E006": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "snapshot of shard {shard} failed: {cause}",
+      "remedy": "Check the caller-supplied io.Writer for Snapshot (disk space, permissions, or a closed writer) — the underlying cause names the specific failure from the NDJSON shard-write step."
+    },
+    "MET-E007": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterPhaseHook called for phase {phase} with a nil hook",
+      "remedy": "Pass a non-nil PhaseHook to RegisterPhaseHook. A nil hook is rejected rather than silently skipped during phase execution."
+    },
+    "MET-E008": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterPhaseHook called with unknown phase {phase}",
+      "remedy": "Pass a PhaseKind present in DailyPhaseOrder or MonthlyPhaseOrder. Check for a typo'd or stale phase constant."
+    },
+    "MET-E009": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "HandleCommand received unhandled command kind {kind}",
+      "remedy": "This should be unreachable in practice: protocol.Command.Validate's commandRegistry already closes the Kind<->payload mapping before a command reaches HandleCommand. If seen, a new protocol.CommandKind was added without a matching case in engine.core's dispatch switch — add one."
+    },
+    "MET-E010": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "HandleCommand received an invalid command envelope: {cause}",
+      "remedy": "This should be unreachable via the normal transport path: protocol.InProcTransport.SendCommand already validates the envelope (ProtocolVersion, CorrelationID, Payload) before enqueueing. If seen, a caller invoked HandleCommand directly with a hand-built Command that skipped that check (e.g. a test, or a future transport) — validate before calling, or fix the transport."
+    },
+    "MET-E100": {
+      "severity": "error",
+      "module": "engine.detgate",
+      "message": "determinism gate requested with months={months}, must be > 0",
+      "remedy": "Call RunGate with a positive months value. A gate that runs zero or negative months cannot advance any ticks to compare."
+    },
+    "MET-E101": {
+      "severity": "error",
+      "module": "engine.detgate",
+      "message": "determinism gate requested with only {runs} RunSpec(s), need at least 2",
+      "remedy": "Pass at least two RunSpecs to RunGate. A gate that only ever runs once can never detect a determinism mismatch between runs (AC-9's \"a gate that can't fail is no gate\", enforced here at construction time rather than left as a design footnote)."
+    },
+    "MET-E102": {
+      "severity": "error",
+      "module": "engine.detgate",
+      "message": "AdvanceTicks command for run {run} was rejected: {engineErrorCode}",
+      "remedy": "Check the underlying engine rejection ({engineErrorCode}) for run {run} — this is an infrastructure failure of the command path itself, distinct from a hash mismatch between runs (which is not an error; see GateReport.Verdict)."
+    },
+    "MET-E103": {
+      "severity": "error",
+      "module": "engine.detgate",
+      "message": "snapshot encoding failed for run {run}: {cause}",
+      "remedy": "Check the underlying cause — json.Marshal of the serialize.Header returned by Engine.Snapshot should be unreachable in practice since Header's fields are all plain JSON-safe types, so this points at a Header field type having changed incompatibly."
     },
     "MET-E200": {
       "severity": "error",
@@ -187,6 +389,18 @@
       "module": "feat.skeleton",
       "message": "metropolis failed to boot: {component} failed to initialize: {cause}",
       "remedy": "Check the named component ({component}: e.g. tcell screen, harness.stub fixture load, or the module registry) for the underlying cause. cmd/metropolis exits non-zero and never renders a partial/blank screen on this path (AC-7) — rerun with the printed correlation ID to trace the full boot sequence in the log."
+    },
+    "MET-P090": {
+      "severity": "error",
+      "module": "engine.stub",
+      "message": "StubEngine received unhandled command kind {kind}",
+      "remedy": "This should be unreachable in practice: every Command reaching StubEngine already passed protocol.DecodeCommand/commandRegistry. If seen, protocol's command vocabulary (commands.go) grew a new Kind without a matching case in StubEngine's dispatch switch — add one."
+    },
+    "MET-P091": {
+      "severity": "error",
+      "module": "engine.stub",
+      "message": "StubEngine rejected command {kind}: payload failed semantic validation",
+      "remedy": "The command's envelope validated (protocol.Command.Validate) but its payload failed StubEngine's own semantic checks — e.g. AdvanceTicksPayload.N <= 0, an unsupported SetSpeedPayload.Speed, a SubscribePayload.ViewName that fails protocol.ValidateViewName, an UnsubscribePayload for an unknown subscription, or an empty InspectEntityPayload.EntityRef/DebugPayload.Op. Fix the payload's contents before resending."
     }
   }
 }

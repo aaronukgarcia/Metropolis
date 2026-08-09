@@ -5,16 +5,17 @@ import (
 	"io"
 )
 
-// errNotImplementedCode is a placeholder for the eventual registry-sourced
-// error code. foundation/errs (the error registry, F010-F099) is not
-// necessarily merged yet, so BinarySerializer cannot depend on it — GR#7
-// still applies once it can.
-//
-// TODO(foundation.errors): once internal/foundation/errs lands, register
-// this under the F300-F399 range reserved for foundation.serialize in
-// data/errors.json (see that file's "reserved" table) and switch every use
-// below from fmt.Errorf(errNotImplementedCode+...) to
-// errs.New(codeConstant, correlationID, ctx).
+// errNotImplementedCode is MET-F300, registered in data/errors.json
+// under the F300-F399 range reserved for foundation.serialize (GR#7;
+// closed under BUG-008 — the internal/foundation/errs source-scan test
+// now guards against this code drifting out of sync with the
+// registry). It is still surfaced via fmt.Errorf rather than
+// errs.New/errs.Wrap below: this package predates
+// internal/foundation/errs and BinarySerializer is unimplemented
+// scaffolding (see the doc comment above) with no correlation ID at its
+// call sites to construct a proper *errs.E with — switching to
+// errs.Wrap is straightforward future work whenever BinarySerializer
+// itself is actually implemented (A3).
 const errNotImplementedCode = "MET-F300"
 
 // BinarySerializer is the RESERVED, NOT YET IMPLEMENTED binary

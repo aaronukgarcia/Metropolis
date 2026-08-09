@@ -22,17 +22,12 @@ func testCorrelationID() string {
 }
 
 // assertPlaceholderCode checks that err is a registry-sourced *errs.E
-// constructed against wantCode. This package's codes (CodeFileNotFound
-// etc.) are deliberate placeholders not yet entered in
-// data/errors.json (see errors.go's doc comment and the delivery
-// report's registry-wiring note) — so per errs' documented contract
-// (errs.go's construct/constructUnregistered), an unregistered code
-// always degrades to the well-formed MET-F003 fallback rather than
-// panicking, and the *originally requested* code is preserved in
-// e.Ctx["code"], not in e.Code itself. wantSubstr, if non-empty, must
-// appear in err.Error() (which includes the wrapped cause via Wrap),
-// proving the specific field/rule detail survived even through the
-// fallback path.
+// constructed against wantCode, and resolved as a real registry entry
+// (data/errors.json — BUG-008 closed the gap where this package's
+// codes were raised in source but not yet registered; see errors.go's
+// doc comment). wantSubstr, if non-empty, must appear in err.Error()
+// (which includes the wrapped cause via Wrap), proving the specific
+// field/rule detail survived into the rendered message/context.
 func assertPlaceholderCode(t *testing.T, err error, wantCode, wantSubstr string) {
 	t.Helper()
 	if err == nil {
@@ -42,11 +37,8 @@ func assertPlaceholderCode(t *testing.T, err error, wantCode, wantSubstr string)
 	if !ok {
 		t.Fatalf("expected *errs.E, got %T: %v", err, err)
 	}
-	if e.Code != "MET-F003" {
-		t.Errorf("e.Code = %s, want MET-F003 (code %s is not yet registered)", e.Code, wantCode)
-	}
-	if got := e.Ctx["code"]; got != wantCode {
-		t.Errorf("e.Ctx[code] = %v, want %s", got, wantCode)
+	if e.Code != wantCode {
+		t.Errorf("e.Code = %s, want %s", e.Code, wantCode)
 	}
 	if wantSubstr != "" && !strings.Contains(err.Error(), wantSubstr) {
 		t.Errorf("err.Error() = %q, want it to contain %q", err.Error(), wantSubstr)

@@ -1,20 +1,15 @@
 package data
 
-// Placeholder registry-sourced error codes for this package. These are
-// NOT yet entered in data/errors.json (foundation.errors owns that
-// registry, and adding new codes is a deliberate registry edit this
-// package's delivery leaves for review — see the delivery report). They
-// are used exactly as any other errs.New/errs.Wrap code: when the
-// registry does not (yet) recognise one of these codes, errs.New/Wrap
-// degrades to the well-formed MET-F003 "unregistered code" fallback per
-// their documented contract — never a panic, never silent.
-//
-// Range chosen: F600-F699. NOTE (registry-wiring): the delivery report
-// for this item flags that the acceptance doc's suggested F400-F499
-// range is already reserved for foundation.solver in data/errors.json's
-// "reserved" table; F600-F699 is the first free foundation sub-range
-// and is used here instead, pending a real registry entry + reservation
-// table update.
+// Registry-sourced error codes for this package (module key
+// "foundation.data"). Range: F600-F699 — the acceptance doc's suggested
+// F400-F499 range was already reserved for foundation.solver in
+// data/errors.json's "reserved" table, so this module's delivery report
+// picked the first free foundation sub-range instead. Every code below
+// IS registered in data/errors.json with real severity/module/message/
+// remedy fields (GR#7; closed under BUG-008) — see that file's
+// "F600-F699" reserved-range entry and its "codes" section. The
+// internal/foundation/errs source-scan test guards against this ever
+// drifting out of sync again.
 const (
 	// CodeDataDirNotFound: data/ directory could not be resolved via
 	// $METROPOLIS_DATA_DIR, executable-relative search, or CWD-upward

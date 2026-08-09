@@ -1,28 +1,13 @@
 package core
 
-// Placeholder registry error codes for engine.core (MOD-012).
-//
-// data/errors.json's "ranges.layers" section reserves the single letter
-// "E" for "engine — internal/engine/* (simulation modules)" but, as of
-// this writing, its "ranges.reserved" table (which subdivides F000-F599
-// and U000-U099 into per-module blocks) has no entry carving out a
-// sub-range for engine.core specifically — no other engine.* module has
-// claimed E000-E099 either (checked via `grep MET-E data/errors.json`
-// before picking this range). This package claims MET-E000-MET-E099 as
-// engine.core's block, mirroring foundation.det's F200-F299 pattern
-// (see internal/foundation/det/errors.go); a maintainer should add the
-// "E000-E099: reserved for engine.core" line to data/errors.json's
-// reserved table in the same change that registers these codes for
-// real (see /new-error).
-//
-// None of the codes below are registered in data/errors.json yet. This
-// is not a silent failure (GR#7): errs.New/errs.Wrap detects an
-// unregistered code at construction time and falls back to the
-// always-available MET-F003 "unregistered error code" wrapper, so every
-// error path below already fails loudly today (code + correlation ID
-// + a note that the code isn't registered) and will pick up its real
-// registry entry (message/remedy/severity) the moment someone lands it
-// in data/errors.json — no call site here will need to change.
+// Registry error codes for engine.core (MOD-012). Range: E000-E099,
+// declared in data/errors.json's "ranges.reserved" table. Every code
+// below IS registered there with real severity/module/message/remedy
+// fields (GR#7; closed under BUG-008) — see that file's "E000-E099"
+// reserved-range entry and its "codes" section. The
+// internal/foundation/errs source-scan test guards against this ever
+// drifting out of sync again, and against another module's range
+// accidentally overlapping this one (BUG-008's root cause).
 const (
 	// ErrInvalidAdvanceTicks: AdvanceTicksPayload.N was <= 0 or exceeded
 	// MaxAdvanceTicksPerCall (AC-11: rejected, never silently clamped).
