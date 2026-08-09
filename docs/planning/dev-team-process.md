@@ -125,6 +125,16 @@ Both references are **mandatory and enforced by the tool** — an assumption tha
 
 **What this is not**: it is not a demand to log every keystroke-level choice. If the spec or criteria decided it, it is not an assumption. The test is simple — *could a reasonable person have decided this differently, and would the work still have passed?* If yes, log it.
 
+### Fast path for paperwork-only FAILs (v1.7.1 — 2026-08-09, on Tester-2's proposal)
+
+Within hours of v1.7 landing, two items FAILed on assumption-logging alone: content correct, behaviour correct, one sentence missing. The rule caught real forks both times — but the *enforcement* was uniformly heavy regardless of stakes, spending a full Tester → lead → junior → lead → Tester cycle on "write one BOW comment".
+
+So, narrowly: where a FAIL is **assumption-logging only** — no code change wanted, no behaviour in question, the assumption is P3 — the Tester may bounce **straight to the junior** and re-confirm on return, without a lead round trip in each direction. The lead is told, not asked. Anything touching code, behaviour, or an assumption above P3 keeps the full loop.
+
+**What was deliberately NOT adopted, and why it matters more than the shortcut:** the obvious cheap fix is to let the Tester log the assumption itself and pass. **Rejected.** The rationale has to come from the person who made the trade-off, not be reconstructed afterwards by whoever is verifying — a Tester-authored assumption puts words in the junior's mouth about its own reasoning, and the traceability the rule buys is precisely *who decided what, and why they thought it was right at the time*. Better to pay the cycle than to hollow out the record.
+
+*(Origin: Tester-2 proposed both halves — the fast path and the argument against the shortcut — when asked whether the rule was over-firing. Recorded because a process change should carry its reasoning, not just its conclusion.)*
+
 ### Mandatory spawn block (v1.7)
 
 Agent transcripts do not survive a session, so a rule that lives only in the lead's head dies with the window. **Every agent spawn brief must carry this block verbatim**, adapted only in the role line:
