@@ -14,7 +14,7 @@ The two Testers are **independent verifiers, not a team**: they never communicat
 
 - Maintains `docs/planning/team-board.md`: every agent, current assignment, status (busy/blocked/idle), what they return to when unblocked.
 - When an agent blocks (e.g. a dev waiting on a Tester verdict), the RM proposes interim work for it and remembers the return point; when the blocker clears, the RM proposes the return.
-- **Team caps** (RM enforces by flagging breaches to Bill): max **4 concurrent Jnr developers**, **2 Testers** (raised from 1 by Aaron, 2026-08-09, to cut verification-queue latency — see v1.6 note below), **2 BAs** (disjoint sprint ownership), **1 Documentation**, **1 QA**, **1 RM**. Growth beyond caps requires Aaron.
+- **Team caps** (RM enforces by flagging breaches to Bill): max **4 concurrent Jnr developers**, **2 Testers** (raised from 1 by Aaron, 2026-08-09, to cut verification-queue latency — see v1.6 note below), **BAs as needed** (cap lifted by Aaron, 2026-08-09 — but **disjoint ownership is absolute**: every acceptance file belongs to exactly one BA, assigned by the lead, and BAs never communicate with each other), **1 Documentation**, **1 QA**, **1 RM**. Growth beyond caps requires Aaron.
 - The RM is **advisory**: it recommends dispatches/reassignments; Bill executes them (only the lead messages agents). RM never edits code and never talks to other agents.
 - **At-risk parallel starts**: the lead may start sprint N+1 items whose dependencies are code-complete but whose sprint gate (e.g. Aaron's contract freeze) is pending — the RM tracks every at-risk item and its rebase exposure so a freeze-review change fans out correctly.
 
@@ -23,6 +23,18 @@ The two Testers are **independent verifiers, not a team**: they never communicat
 The git index is a **shared mutable resource** across concurrent agents. Rules:
 - **Juniors**: never leave anything staged between tool calls — any stage→verify→reset test sequence must complete atomically inside a single command invocation.
 - **Lead**: commits use explicit pathspecs (`git commit -m "..." -- <paths>`) or verify `git diff --cached --stat` matches the intended set immediately before committing — a concurrent agent's staged file must never ride along. (Incident: a junior's staged `VERSION` test fixture was swept into an unrelated docs commit; caught and reverted within two commits.)
+
+## File ownership is transferred, never duplicated (v1.6.1 — from the feat.skeleton incident, 2026-08-09)
+
+Acceptance files are owned by exactly one BA. That rule already existed; what it lacked was a **handover procedure**, and the gap cost real work.
+
+Incident: the lead hired BA-3 onto `feat.skeleton.md` while BA-1 was already mid-refresh of it under an earlier instruction, then messaged BA-1 to drop it. The message lost the race — BA-1 had already finished and written. With two agents writing one file, BA-1's version did not survive; the file was later found back at its committed state with the work gone. Detected only because BA-3, acting as reviewer, checked the disk against what it had been told and reported the discrepancy instead of assuming.
+
+Rules:
+- **Never assign a file to a second agent until the first has confirmed it has stopped.** An instruction to drop work is not the same as knowing it was dropped — messages are delivered at the recipient's next tool round, which may be after it has already written.
+- **Reassignment is a transfer**: incumbent stops and confirms → lead commits or captures whatever the incumbent produced → new owner starts.
+- **Commit delivered `.md` work promptly.** Agent output that exists only in the working tree is one concurrent write away from being lost; a committed file can always be recovered.
+- Root cause was lead sequencing, not agent execution. Recorded here so the procedure changes, not so anyone is blamed.
 
 ## Heavy checkpointing (v1.5)
 
