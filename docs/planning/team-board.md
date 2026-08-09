@@ -17,8 +17,8 @@
 | Tester | Tester | Verifying `harness.stub` (MOD-008, J9's build — 21 tests reported green by dev) | busy | — | Verdict PASS/FAIL pending. secretguard cleared this queue (PASS, committed `0d09b04`) — harness.stub is next in line. | — |
 | Docs | Documentation | Acceptance-corpus audit + freeze-packet upkeep; also owes a doc pass on `cloud.md` | busy | — | **Pending report:** Docs' `cloud.md` pass. | — |
 | QA | QA | Trailing audit of wave-1 commits + the shipped hook pair (`claude-plan-guard.js`, `claude-secret-guard.js` — now committed at `0d09b04`, redaction-audit trailing per the item's own git-ref note) | busy | — | **Pending report:** QA trailing audit, findings to Bill only. | — |
-| J8 | Jnr dev | **Released** — `tool.secretguard` shipped (Tester PASS, committed `0d09b04`, standing order executed, no check-back needed) | **idle — rehire queued** | — | **Recommended next: `foundation.data` (MOD-006), criteria active**, the moment a dev slot frees (currently 4/4 — see caps). `tool.bow` (MOD-007, criteria also active) queues immediately behind it for whichever slot frees next. | — |
-| J9 | Jnr dev | **Released** — `harness.stub` dev-complete (21 tests green), now with the Tester | **idle — awaiting verdict, not yet rehired** | Tester verdict on harness.stub | On PASS: item closes, J9 available for rehire (no criteria-ready S1/S2 item is currently unassigned once J8 claims `foundation.data`/`tool.bow` — RM to re-scan `docs/planning/acceptance/` for a fresh target before parking J9 idle). On FAIL: report returns to J9 directly. | — |
+| J8 | Jnr dev | **Correction — NOT idle.** Rehired on a QA bounce: **BUG-001** (secret-guard `redact()` under-redaction fix — QA found 9–20 char secrets show up to 89% cleartext, min-mask-floor fix + 3 hardening notes) | busy (bounce, off-cap) | — | Bounces return to the originating junior and **do not consume a dev-cap slot** (process v1.5). J8 returns to the Tester for BUG-001 re-verification once fixed; `foundation.data` (MOD-006, criteria active) and `tool.bow` (MOD-007, criteria active) still queue for the **first slot freed among J10–J13** — J8 no longer the presumed recipient by default, just next-available-junior once a real cap slot opens (J8 himself, if free by then, or a rehire of J9). | — |
+| J9 | Jnr dev | **Released** — `harness.stub` dev-complete (21 tests green), now with the Tester | **idle — awaiting verdict, not yet rehired** | Tester verdict on harness.stub | On PASS: item closes, J9 available for rehire — first in line for `foundation.data` (MOD-006) or `tool.bow` (MOD-007) if either is still unclaimed, since J8 is now off-cap on the BUG-001 bounce rather than available. On FAIL: report returns to J9 directly. | — |
 | J10 | Jnr dev | `ui.core` (MOD-009), Sprint 1 | busy — **still building** | — | Criteria `ui.core.md` (`draft-ahead`); tcell dependency already sanctioned. | **YES — high (pre-freeze)** |
 | J11 | Jnr dev | `foundation.det` (MOD-004), Sprint 0, P0 | busy — building | — | Criteria active (`foundation.det.md`). Highest-priority open S0 item; blocks `MOD-012`. | — |
 | J12 | Jnr dev | `foundation.registry` (MOD-005), Sprint 0, P0 | busy — building | — | Criteria active (`foundation.registry.md`). Blocks `FEAT-007`, `FEAT-008`, `MOD-012`. | — |
@@ -44,11 +44,11 @@ Sanctioned at-risk starts (standing order from Aaron via Bill, confirmed this re
 
 ## Dispatch queue (priority order)
 
-Dev cap is now **4/4** (J10, J11, J12, J13). No new dispatch fits until a slot frees. Next up the instant one does:
+Dev cap is now **4/4** (J10, J11, J12, J13). J8 is off-cap on a bounce (BUG-001, does not count against the 4). No new cap-slot dispatch fits until one of J10–J13 frees. Next up the instant one does:
 
-1. **`foundation.data` (MOD-006, P1, seq 90) → J8 (rehire)**. Criteria active. Large fan-out (blocks 7 later items).
-2. **`tool.bow` (MOD-007, P1, seq 95) → next freed slot (or J8 again if he clears data first)**. Criteria active. Commit-msg `[mkey]` validation + auto-ref-on-commit; deliberately sequenced to land after `legacy.versionguard` (J13) so the two don't collide on the same commit-hook surface.
-3. **J9 rehire target — TBD.** No criteria-ready Sprint 1/2 item is currently unassigned once `foundation.data`/`tool.bow` are claimed by J8. RM will re-scan `docs/planning/acceptance/` for the next ready item (H-REPLAY criteria don't exist yet; check before parking J9) as soon as the harness.stub verdict lands.
+1. **`foundation.data` (MOD-006, P1, seq 90) → first freed slot** (J8 if his BUG-001 bounce clears and re-passes first, otherwise J9 once released by the harness.stub verdict, otherwise whichever of J10–J13 finishes first). Criteria active. Large fan-out (blocks 7 later items).
+2. **`tool.bow` (MOD-007, P1, seq 95) → next freed slot after (1)**. Criteria active. Commit-msg `[mkey]` validation + auto-ref-on-commit; deliberately sequenced to land after `legacy.versionguard` (J13) so the two don't collide on the same commit-hook surface.
+3. **BUG-002 (golangci v2 config defect)** — QA finding on `foundation.repo` (MOD-003, commit `5faf2ed`): `.golangci.yml` is v1-syntax, CI lint job is commented out, so the GR#20 `ui→engine` import-ban depguard rule has zero live enforcement today. Not dispatched yet — **scheduled into the Sprint-1 lint-arming pass** (`feat.detgate` sprint work: migrate config to v2 via `golangci-lint migrate`, uncomment the CI job pinned to a specific version, prove the rule fires on a deliberate scratch violation). Add to the dispatch queue once `feat.detgate` is in play; P1, no dev assigned yet.
 
 **Sequencing note carried into checkpoint:** the PowerShell hook-matcher fix (making all commit guards fire on the lead's own commits, not just Bash-tool commits) is gated on `legacy.versionguard` (J13) shipping first — do not schedule that fix earlier even if a slot is free.
 
@@ -58,7 +58,7 @@ Dev cap is now **4/4** (J10, J11, J12, J13). No new dispatch fits until a slot f
 
 | Role | Cap | Current count | Holders | Status |
 |---|---|---|---|---|
-| Jnr developer | 4 | **4** | J10, J11, J12, J13 (building) — J8 idle/queued for rehire, J9 idle pending verdict | **AT CAP** — J8's rehire must wait for a slot; do not exceed 4 |
+| Jnr developer | 4 | **4** | J10, J11, J12, J13 (building) — J8 busy off-cap on BUG-001 bounce (does not count), J9 idle pending harness.stub verdict | **AT CAP** — the 4 slots are J10–J13; J8's bounce and J9's idle wait are both outside/behind the cap, not filling it |
 | Tester | 1 | 1 | Tester (on harness.stub) | at cap |
 | BA | 2 | 2 | BA-1 (S0–S1, deliverable landed, next assignment pending), BA-2 (S4–S5) | at cap, disjoint sprint ownership confirmed |
 | Documentation | 1 | 1 | Docs | at cap |
@@ -66,4 +66,10 @@ Dev cap is now **4/4** (J10, J11, J12, J13). No new dispatch fits until a slot f
 | Resource Manager | 1 | 1 | RM (this agent) | at cap |
 | — outside caps — | | | (none active — cloud.md writer sunset) | — |
 
-**No cap breaches.** Flag for Bill: J8 is idle with a ready, criteria-active target (`foundation.data`) and cannot be dispatched until one of J10/J11/J12/J13 frees a slot — this is a real (if brief) starvation risk on an otherwise-ready item, not a process gap. Recommend rehiring J8 the instant any of the four building items closes, ahead of any other queued work.
+**No cap breaches.** J8 is correctly off-cap on the BUG-001 bounce (bounces don't consume a dev slot per v1.5) — he is busy, not idle, and this refresh corrects the previous snapshot's error on that point. The real gap: `foundation.data` and `tool.bow` both have active criteria and no dev, and cannot be dispatched until one of J10–J13 frees **or** J9's harness.stub verdict lands and releases him for rehire. Recommend the first of those two events triggers immediate dispatch of `foundation.data`.
+
+## Incident / constraint log
+
+- **VERSION-fixture staging incident (2026-08-09):** a junior's staged `VERSION` test fixture rode along into an unrelated docs commit via a concurrent agent's dirty staging area; caught and reverted within two commits (`a6885e5` reverts the stray fixture). Root cause: the git index is shared mutable state across concurrent agents.
+- **New rule — staging-area discipline (v1.5.1, `docs/planning/dev-team-process.md`, commit `9b6e1b7`):** (1) juniors must never leave anything staged between tool calls — stage→verify→reset sequences complete atomically inside one command invocation; (2) the lead commits with explicit pathspecs (`git commit -m "..." -- <paths>`) or verifies `git diff --cached --stat` matches the intended set immediately before committing. RM should treat any future commit that touches unexpected paths as a v1.5.1 violation to flag immediately.
+- **BUG-002 (golangci v2 config defect)** — tracked above in the dispatch queue; recorded here too since it's a QA finding on already-shipped foundation.repo, not a fresh dispatch.
