@@ -49,6 +49,31 @@
 //   - harness.headless (MOD-015) — see the -headless flag's seam in run.go
 //     (AC-6, supplementary).
 //
+// # What this binary does NOT prove (read before demoing it)
+//
+// Watching this run, you are watching harness.stub's StubEngine render
+// Folkestone-64. You are NOT watching engine.core's tick orchestrator —
+// it is registered in the module registry, but this binary never
+// constructs a core.Engine, and nothing on screen would look any
+// different if it did. The two claims below are both true, both
+// valuable, and NOT the same claim:
+//
+//   - PROVEN end to end, in this binary: int.protocol -> harness.stub ->
+//     ui.core -> ui.screen.map, with the module registry booting clean
+//     (every module stub / health ok).
+//   - PROVEN only in isolation, elsewhere: engine.core's determinism,
+//     via feat.detgate's gate, which builds its own Engine instances and
+//     never enters this package.
+//
+// That is the correct intended state for Sprint 1 — M0-ENG §2's
+// stub-everything discipline says one module goes real at a time, and
+// engine.core is not supposed to drive anything yet. It is recorded
+// here, with its own heading, because "the Sprint 1 exit gate passed"
+// invites a stronger reading than the wiring supports, and a reader who
+// was not there when it was built has no way to see the difference.
+// Tracked as ASM-001 in the Book of Work; resolve when engine.core
+// actually drives this binary.
+//
 // Module key: feat.skeleton (see code.json)
 // Spec ref:   M0-ENG §6.4 (line 997); M0-ENG §2 (lines 842-851)
 // Acceptance: docs/planning/acceptance/feat.skeleton.md (FEAT-006)
