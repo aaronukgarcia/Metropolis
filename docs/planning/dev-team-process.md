@@ -12,6 +12,12 @@
 - The RM is **advisory**: it recommends dispatches/reassignments; Bill executes them (only the lead messages agents). RM never edits code and never talks to other agents.
 - **At-risk parallel starts**: the lead may start sprint N+1 items whose dependencies are code-complete but whose sprint gate (e.g. Aaron's contract freeze) is pending — the RM tracks every at-risk item and its rebase exposure so a freeze-review change fans out correctly.
 
+## Staging-area discipline (v1.5.1 — from the VERSION-fixture incident, 2026-08-09)
+
+The git index is a **shared mutable resource** across concurrent agents. Rules:
+- **Juniors**: never leave anything staged between tool calls — any stage→verify→reset test sequence must complete atomically inside a single command invocation.
+- **Lead**: commits use explicit pathspecs (`git commit -m "..." -- <paths>`) or verify `git diff --cached --stat` matches the intended set immediately before committing — a concurrent agent's staged file must never ride along. (Incident: a junior's staged `VERSION` test fixture was swept into an unrelated docs commit; caught and reverted within two commits.)
+
 ## Heavy checkpointing (v1.5)
 
 The session can die at any moment (token exhaustion) — mid-build, mid-test, mid-commit. Recovery must be possible from cold:
