@@ -22,6 +22,7 @@ The two Testers are **independent verifiers, not a team**: they never communicat
 
 The git index is a **shared mutable resource** across concurrent agents. Rules:
 - **Juniors**: never leave anything staged between tool calls — any stage→verify→reset test sequence must complete atomically inside a single command invocation.
+- **`git stash` is BANNED for everyone except the lead** (added 2026-08-09 after a near-miss, self-reported). Stash operates on the *entire* working tree, not your files — with four juniors and three Destructive agents live, stashing sweeps away every other agent's uncommitted work, and popping it back is a merge, not an undo. If you need a "before" tree to compare against, use `git archive HEAD | tar -x` into a scratch directory outside the repo. That technique is safe, established, and used repeatedly today. The same reasoning bans `git checkout -- .`, `git reset --hard`, and `git clean`.
 - **Lead**: commits use explicit pathspecs (`git commit -m "..." -- <paths>`) or verify `git diff --cached --stat` matches the intended set immediately before committing — a concurrent agent's staged file must never ride along. (Incident: a junior's staged `VERSION` test fixture was swept into an unrelated docs commit; caught and reverted within two commits.)
 
 ## The Destructive agent (v1.8 — Aaron, 2026-08-09)
