@@ -57,7 +57,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 
 const ROOT = __dirname;
 
@@ -83,16 +83,45 @@ function isHandMaintainedVersionFile(relPath) {
 // A version.go file (other than the exempt buildinfo.go) is only a
 // violation if its STAGED content actually hardcodes a semver-looking
 // literal — merely existing under that filename isn't itself banned.
+// @FIX (SEC-002): relPath used to be interpolated into an execSync shell
+//   string (`git diff --cached -- "${relPath}"`). On Windows, execSync runs
+//   via cmd.exe, which percent-expands `%VAR%` tokens EVEN INSIDE double
+//   quotes — a staged path containing a literal '%' (legal on NTFS) could
+//   silently retarget the diff at an unrelated/nonexistent path, `git`
+//   would then fail, and the old catch block swallowed that and returned
+//   `false` ("no hardcoded semver found") — silently defeating GR#2 for
+//   that commit. Fixed by passing relPath as a single argv element to
+//   spawnSync (shell:false, the default) — no shell ever re-parses it, so
+//   there is nothing left to expand, exactly like claude-secret-guard.js /
+//   claude-plan-guard.js already do for git-derived values.
+//
+// A genuine (non-injection) git failure here is still possible (e.g. this
+// hook running outside a git repo). This hook's documented posture (see
+// file header) is fail-OPEN for GR#2 as a whole — a hygiene check, not a
+// security gate — so we still return `false` (no violation found) rather
+// than blocking the commit. But per the "never let an error silently pass"
+// lesson from this finding, that fallback is no longer SILENT: it is
+// surfaced on stderr so a human reviewing hook output can see a check was
+// skipped, rather than the commit passing with false confidence and no
+// trace. See ASM-* logged for this file.
 function stagedDiffHasHardcodedSemver(relPath) {
-  let diff = '';
-  try {
-    diff = execSync(`git diff --cached -- "${relPath}"`, {
-      encoding: 'utf8',
-      timeout: 5000,
-    });
-  } catch {
+  const result = spawnSync('git', ['diff', '--cached', '--', relPath], {
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  if (result.error || result.status !== 0) {
+    const details = result.error
+      ? result.error.message
+      : (result.stderr || '').trim() || `git diff --cached -- ${relPath} exited ${result.status}`;
+    process.stderr.write(
+      `⚠️  GR#2 GUARD: could not diff staged file "${relPath}" to check for a hardcoded semver ` +
+      `(${details}). Skipping this file's check rather than blocking the commit (fail-open, ` +
+      'by this hook\'s documented posture) — but this means the hardcoded-semver check for this ' +
+      'file was NOT performed. Please verify manually.\n'
+    );
     return false;
   }
+  const diff = result.stdout || '';
   return diff.split('\n').some(
     line => line.startsWith('+') && !line.startsWith('+++') && SEMVER_LITERAL_RE.test(line)
   );

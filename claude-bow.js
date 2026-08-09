@@ -52,7 +52,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
 const TYPES = ['module', 'feature', 'bug', 'interface', 'assumption', 'finding'];
@@ -716,18 +716,40 @@ function printVestigeCheck() {
   }
 }
 
-/** Git sync state: branch, dirty files, ahead/behind origin (with a quick fetch). */
+/** Git sync state: branch, dirty files, ahead/behind origin (with a quick fetch).
+ *
+ * @FIX (SEC-004): git-derived values (notably the current branch name) MUST
+ *   NEVER be re-interpolated into a second shell command string — a branch
+ *   name is attacker-influenceable (fork/remote checkout) the moment we
+ *   aren't the only ones choosing it, and git-check-ref-format permits many
+ *   shell-metacharacter-adjacent characters. This helper now always invokes
+ *   `git` via spawnSync with an argv ARRAY (shell:false, the default), so
+ *   every argument — including `origin/${branch}...HEAD` — is passed as one
+ *   literal argv element and never re-parsed by a shell, on Windows or POSIX.
+ *   Same pattern already used by claude-secret-guard.js / claude-plan-guard.js.
+ */
 function printGitCheck() {
-  const git = (args, timeout = 5000) =>
-    execSync(`git ${args}`, { cwd: __dirname, encoding: 'utf8', timeout, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
+  const git = (args, timeout = 5000) => {
+    const result = spawnSync('git', args, {
+      cwd: __dirname,
+      encoding: 'utf8',
+      timeout,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) {
+      throw new Error((result.stderr || result.stdout || `git ${args.join(' ')} failed`).trim());
+    }
+    return (result.stdout || '').trim();
+  };
   try {
-    const branch = git('rev-parse --abbrev-ref HEAD');
+    const branch = git(['rev-parse', '--abbrev-ref', 'HEAD']);
     let fetched = true;
-    try { git('fetch --quiet origin', 15000); } catch { fetched = false; }
-    const dirty = git('status --porcelain').split('\n').filter(Boolean).length;
+    try { git(['fetch', '--quiet', 'origin'], 15000); } catch { fetched = false; }
+    const dirty = git(['status', '--porcelain']).split('\n').filter(Boolean).length;
     let ahead = null, behind = null;
     try {
-      const lr = git(`rev-list --left-right --count origin/${branch}...HEAD`).split(/\s+/);
+      const lr = git(['rev-list', '--left-right', '--count', `origin/${branch}...HEAD`]).split(/\s+/);
       behind = Number(lr[0]); ahead = Number(lr[1]);
     } catch { /* no upstream for this branch */ }
 
