@@ -78,6 +78,22 @@ The very first Destructive sweep produced the same root cause three times, in th
 
 This is what the weakness count is for. Three instances of one class in one sweep is not three bugs — it is one habit, and the response is teaching, which is why it is written here rather than only in three BOW items.
 
+### Weakness pattern #2: a value duplicated across a module boundary needs a drift test
+
+GR#20 forbids some imports (notably `internal/ui` → `internal/engine`), and modules are deliberately decoupled elsewhere. That legitimately forces a value to exist in two places. It has happened twice already:
+
+- `internal/ui/screens/debug/phase.go` mirrors `engine.core`'s six phase names.
+- `internal/engine/stub` mirrors `engine.core`'s `MaxAdvanceTicksPerCall`, so the stub and the real engine agree on what input is legal.
+
+**The duplication is acceptable. Silent divergence is not.** The standing remedy, both times:
+
+1. Duplicate the value as a literal in the consuming package — no production import, so the boundary holds.
+2. Add a **drift test in a `_test.go` file** that imports the real source (test-file imports are the sanctioned exemption) and asserts the two agree.
+3. Make the failure message explain *why* the duplication exists and that changing one requires changing the other — a bare `got X, want Y` teaches a stranger nothing.
+4. **Verify the drift test can actually fail.** A Tester had to prove exactly this about the phase mirror; a drift test that cannot fail is decoration, and it is worse than nothing because it looks like coverage.
+
+If you find yourself copying a constant across a boundary and *not* doing this, you are choosing to be told about the divergence by a user instead of by CI.
+
 ## Assumptions are logged or the work is rejected (v1.7 — Aaron, 2026-08-09)
 
 **The standard is that the criterion holds, not that the test passes.** A test proves what it asserts; a criterion states what must be true. The gap between those two is where assumptions live, and an assumption nobody wrote down is indistinguishable from a fact until it is wrong.
