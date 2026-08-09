@@ -5,13 +5,16 @@ It surveys the five cloud use cases the architecture already has seams for, adju
 whether the master doc's incumbent "Azure" placeholder should stand, and sets out the
 secure/resilient-by-design contract every future remote call must follow.
 
-**Audience:** Aaron. This document exists to get a provider decision (and a first read on
-budget appetite) out of Aaron directly — see "Open questions for Aaron" (§5) — not to
-record an engineering-team decision already made.
+**Audience:** Aaron, and anyone at the M2 review point re-checking this decision. This
+document originally existed to get a provider decision (and a first read on budget
+appetite) out of Aaron directly; §2 now records that decision rather than proposing one —
+see "Open questions for Aaron" (§5) for what's still outstanding.
 
-**Status:** awaiting Aaron's provider decision. Nothing here is frozen or actioned; §2's
-recommendation ("keep Azure, low confidence, revisit at M2") is a proposal, not a choice
-made on Aaron's behalf.
+**Status:** DECIDED. **Aaron ruling, 2026-08-09: Azure confirmed as the cloud platform,
+standing until Aaron says otherwise.** See §2 for the ruling, the reasoning preserved as
+history, and the M2 review trigger. Two of the three original open questions in §5 are
+answered by the ruling and by the existing-estate detail below; one (M2 budget appetite)
+remains genuinely open.
 
 **Spec refs:** `docs/METROPOLIS-MASTER-v2.1.md` §15 (Architecture — cloud path) and A9
 (Cloud thresholds); `docs/design/solver-contract.md` (INT-003, the frozen interface any
@@ -111,26 +114,47 @@ Assessed honestly against the four concrete loads above:
 | **GPU instances** (far-future cloud-GPU tier, use (c)/(d) at the far end) | Available, generally tighter capacity/quota friction for a small/new account | Broadest GPU SKU range, most mature spot-GPU market | Competitive GPU availability, improving quota story | This tier is years out on the roadmap (unscheduled — triggered only by a perf-CI breach); not worth weighting heavily today. All three are viable when it matters; AWS is marginally ahead on raw availability. |
 | **Developer-tooling fit** (Windows-first single developer, no existing org cloud estate) | Best native Windows-developer story (Visual Studio/`.NET`/PowerShell tooling lineage), free-tier credits comparable to the others | Broadest documentation and community-example base for almost any problem you'll hit; CLI/SDK quality is strong and Go-friendly | Cleanest CLI/SDK ergonomics of the three in many developers' experience, smallest "getting lost in the console" tax | For a solo Windows developer with no existing cloud estate, weight goes to whichever has the shallowest learning curve and best free-tier runway to try things without commitment risk — Azure and AWS are both reasonable here; GCP's simpler console is a genuine but secondary plus. |
 
-**Recommendation: keep Azure, but downgrade it from "assumed" to "chosen, low
-confidence, revisit at M2."**
+**Ruling (Aaron, 2026-08-09), recorded on BOW item `cloud.azure` / MOD-069: Azure is
+confirmed as the cloud platform, standing until Aaron says otherwise.** This closes the
+provider question below — the original "keep Azure, low confidence, revisit at M2"
+recommendation and its reasoning are preserved as history immediately below, since they
+are still the honest record of *why*, but the decision itself is no longer provisional.
 
-Reasoning: no load above gives any provider a decisive win — this is a "any of the three
-would work fine" situation, which means the deciding factors are really operational
-(what Aaron already knows, what's easiest to set up alone, what free-tier credit is
-already available) rather than technical. Azure was the incumbent in the design docs, it
-has no disqualifying weakness for any of the four uses, and switching cost is genuinely
-low right now (see below) — so there's no engineering reason to force a change before
-M2. But this was never adjudicated against alternatives until this document, so it
-shouldn't be read as a strong recommendation — it's "no reason to move it, revisit with
-real information at M2."
+**Reasoning preserved from the original comparison (history):** no load above gave any
+provider a decisive win — this was a "any of the three would work fine" situation, which
+meant the deciding factors were really operational (what Aaron already knows, what's
+easiest to set up alone, what free-tier credit is already available) rather than
+technical. Azure was the incumbent in the design docs, had no disqualifying weakness for
+any of the four uses, and switching cost was genuinely low at the time this was written —
+so there was no engineering reason to force a change. The comparison above was
+qualitative service-shape adjudication, not benchmarked pricing or a trial account; it
+was superseded by the fact below, exactly as flagged as a possibility at the time.
 
-**Confidence: low-to-medium.** The comparison above is qualitative service-shape
-adjudication, not benchmarked pricing or a trial account. If Aaron already has Azure, AWS,
-or GCP credits/familiarity from other work, that single fact should probably override
-this table.
+**What actually decided it:** Aaron already has a live garcia.ltd Azure estate, in active
+use for other work (Prix Six's WhatsApp worker) — a storage account (resource group
+`garcia`, region `uksouth`, Pay-As-You-Go subscription), an ACR instance, and a Container
+Apps environment with the scale-to-zero pattern already proven in production (~£4–10/mo
+observed cost, not a paper estimate). This is exactly the kind of "existing
+credits/familiarity" fact the original recommendation said should override the
+qualitative table if it existed — and it does.
 
-**This is Aaron's decision, not an engineering one** — nothing above is a technical
-constraint that locks in a provider.
+**Existing-estate reuse — lead ruling:** Metropolis's Blob saves get **their own
+container** in the existing storage account, never the `whatsapp-session` container
+Prix Six's worker uses — different lifecycle, different owner; sharing it would let
+Prix Six ops delete Metropolis saves incidentally. The proven scale-to-zero Container
+Apps pattern applies directly to use (c) (stateless solver offload) when that tier is
+built. Prix Six's hard-won operational lesson carries over to any Metropolis worker
+built on this estate: exactly **one instance per stateful session**, or you get
+`connectionReplaced` ping-pong.
+
+**M2 review trigger, unchanged:** the concrete first commitment is still the M2
+batch-compute choice (use (b), Sprint S8) — that remains the natural point to compare
+Azure Batch pricing against alternatives with real numbers if Aaron ever wants to
+revisit, rather than a scheduled re-decision. Nothing below requires that revisit to
+happen; it is a standing option, not a deadline.
+
+**This was Aaron's decision, not an engineering one** — nothing above was a technical
+constraint that locked in a provider; the existing estate is what settled it.
 
 **Switching cost today is low, and stays low until M2.** Nothing cloud-shaped is built
 yet. The solver contract is provider-neutral (gRPC + opaque byte payloads); the save path
@@ -218,15 +242,17 @@ Order-of-magnitude honesty only; nobody should budget against these numbers.
 
 ## 5. Open questions for Aaron
 
-1. **Does Azure stay, or does a different provider get picked now?** Section 2's
-   recommendation is "keep it, low confidence" — if Aaron already has cloud credits,
-   familiarity, or an organisational preference from other work, that should probably
-   decide this outright rather than the qualitative comparison above.
-2. **What's the actual budget appetite for M2 batch-tuning (use (b))?** This is the first
-   real spend on the roadmap (Sprint S8) and the order-of-magnitude cost above can't be
-   tightened until H-HEADLESS produces a real per-run timing — worth flagging now so
-   there's no surprise when S8 arrives.
-3. **Is a personal/free-tier account sufficient, or does this want a proper billing
-   account with spend alerts from the start?** Given no existing org cloud estate, this is
-   as much an account-setup decision as a provider decision, and it's worth deciding
-   before the first Blob-sync or Batch experiment rather than after.
+1. ~~**Does Azure stay, or does a different provider get picked now?**~~ **ANSWERED —
+   Azure confirmed, 2026-08-09** (§2). The existing garcia.ltd Azure estate settled it.
+2. **What's the actual budget appetite for M2 batch-tuning (use (b))?** Still OPEN. This
+   is the first real spend on the roadmap (Sprint S8) and the order-of-magnitude cost
+   above can't be tightened until H-HEADLESS produces a real per-run timing — worth
+   flagging now so there's no surprise when S8 arrives. The Azure decision doesn't answer
+   this; it only fixes which provider's Batch pricing to check once a timing number
+   exists.
+3. ~~**Is a personal/free-tier account sufficient, or does this want a proper billing
+   account with spend alerts from the start?**~~ **ANSWERED — 2026-08-09.** Not a
+   personal/free-tier account: the existing garcia.ltd estate is already a proper
+   Pay-As-You-Go billing account with production use (Prix Six), reused rather than
+   started fresh. Metropolis gets its own storage container within it (§2's
+   existing-estate reuse ruling) rather than its own separate account.

@@ -1,24 +1,24 @@
 # Metropolis Team Board
 
 **Maintained by:** Resource Manager (RM), advisory only — Bill executes all dispatches.
-**Last updated:** 2026-08-09 (refresh #2 — Bill amended dev-team-process.md to v1.6 [Tester cap 2, Second Tester independence section]; BA-1 given a dispatch-blocking Task 1 [refresh draft-ahead FEAT-007/FEAT-008 criteria before build]; FEAT-007/FEAT-008 dev dispatch held pending that refresh; Bill deliberately holding dev slots at 2-wide, not filling to cap).
-**Charter:** `docs/planning/dev-team-process.md` v1.6 §"Saturation rule & Resource Manager" / §"Second Tester (v1.6)"
+**Last updated:** 2026-08-09 (refresh #3 — Sprint 1 nearly closed: FEAT-007/FEAT-008 DONE, FEAT-006 Tester-1-PASSED awaiting doc pass; Bill amended `dev-team-process.md` to **v1.7** [assumption-logging + reciprocal rejection duties + mandatory spawn briefing block, committed `27c8c3d`]; six `ASM-` items logged retrospectively; ten follow-up items surfaced [FEAT-030–034, BUG-004–010] and triaged below; dev slots back to 0/4).
+**Charter:** `docs/planning/dev-team-process.md` v1.7 §"Saturation rule & Resource Manager" / §"Second Tester (v1.6)" / §"Assumptions are logged or the work is rejected (v1.7)"
 
 ---
 
 ## Agent status
 
-| Agent | Role | Current assignment | Status | Blocker | Return point / next event |
-|---|---|---|---|---|---|
-| Bill | Lead | Dispatch, freeze-review liaison with Aaron, final review of test-clean work | — | — | — |
-| RM (this agent) | Resource Manager | Rebuilding board + checkpoint post-bounce | busy | — | Delivering this rebuild + ranked dispatch recommendation to Bill now. |
-| Tester-1 | Tester | Verification queue, part 1: **engine.core** (MOD-012, commit `f81e5d7`) → then **ui.screen.map** (FEAT-005, commit `b721740`) | busy | — | PASS/FAIL evidence per item. On PASS: Bill `done`s the item with a provenance note. On FAIL: bounces to J16 (engine.core) or J19 (ui.screen.map) respectively. |
-| Tester-2 | Tester | Verification queue, part 2: **feat.detgate** (FEAT-004, commit `47de5d0`) + **BUG-002** evidence → then **BUG-003** re-verify (commit `f7815b7`) | busy | — | Same PASS/FAIL protocol; FAIL bounces to J18 (feat.detgate/BUG-002) or J15 (BUG-003). |
-| BA-1 | BA | Owns S0-S1. **Task 1 (dispatch-blocking, assigned by Bill):** refresh `ui.screen.debug.md` (FEAT-007) and `feat.debugmode.md` (FEAT-008) — both currently `status: draft-ahead` with escalation notes to verify specific API references against landed code (`errs.Recent()`, the registry API, the widgets sparkline, engine.core's phase names/order, serialize's `Header` methods). Reports to Bill before starting anything else. **Task 2 (queued):** freeze-risk audit of already-written S1-S4 criteria against the two pending freeze questions. | busy | — | Task 1 report to Bill unblocks the FEAT-007/FEAT-008 dev dispatch (see below). Task 2 follows. |
-| BA-2 | BA | Owns S2-S5 in practice (S2-S4 criteria already delivered: data.catalogue, harness.replay, ui.harness, harness.synth, ui.keys, engine.invariant, engine.world, engine.citizens, engine.season, engine.market, engine.finance, engine.consumption, engine.unlocks, engine.services — all present in `docs/planning/acceptance/`). Now finishing Sprint 5: **engine.traffic, engine.roads**. | busy | — | Criteria delivery for engine.traffic/engine.roads. |
-| Documentation | Documentation | Freeze-packet upkeep (`docs/design/README.md`) + acceptance-corpus conventions | busy | — | Next doc pass alongside the verification-queue PASSes. |
-| QA | QA | Trailing audit of the three unverified-but-committed deliveries: `f81e5d7` (engine.core), `47de5d0` (feat.detgate), `b721740` (ui.screen.map) | busy | — | Findings report to Bill only (QA never talks to RM/Tester/BA/Docs/devs). |
-| Devs | Jnr developer | **None currently spawned.** | idle (cap) | — | Bill is deliberately holding dev width at **2** (FEAT-007 + FEAT-008), not filling the 4-cap — both Testers are already loaded, and a 4-wide dev dispatch would just queue behind them without unblocking anything (bottleneck moves, doesn't disappear). Those 2 slots are further gated on BA-1's Task 1 criteria refresh landing first. |
+| Agent | Role | Current assignment | Status | Return point / next event |
+|---|---|---|---|---|
+| Bill | Lead | Dispatch, freeze-review liaison with Aaron, final review, Aaron's demo (will state ASM-001 plainly there) | — | — |
+| RM (this agent) | Resource Manager | Board + checkpoint refresh #3 | busy | Delivering ranked dispatch recommendation for the post-FEAT-006 wave. |
+| Tester-1 | Tester | Just delivered: **feat.skeleton (FEAT-006)** PASS on every hard-gated criterion (AC-1a,2,3,4,5a,7,9-local,10); surfaced ASM-001/ASM-002 under v1.7's hunt-for-assumptions duty | idle — cleared its queue | Awaiting Bill's next dispatch (§ dispatch recommendation below). |
+| Tester-2 | Tester | Cleared its original queue (feat.detgate/BUG-002 PASS, BUG-003 re-verify PASS); also confirmed and sharpened **BUG-007** (protocol Close() race) | idle — cleared its queue | Awaiting Bill's next dispatch, most likely BUG-007's regression once dispatched to a dev. |
+| BA-1 | BA | **Task 1 done** — FEAT-007/FEAT-008 criteria refreshed to `active`, both items shipped and closed off it. **Task 2 still queued**: freeze-risk audit of already-written S1-S4 criteria against the two pending freeze questions. | idle-pending-Task-2 | RM re-proposes Task 2 as BA-1's next assignment — no reason it should sit idle. |
+| BA-2 | BA | Sprint 5 criteria: engine.traffic, engine.roads | busy (status not re-checked this refresh — assume in progress) | Criteria delivery. |
+| Documentation | Documentation | **feat.skeleton's doc pass** — the one thing between FEAT-006's Tester-1 PASS and Bill's commit | busy | Doc pass complete → Bill commits FEAT-006 → Sprint 1 exit gate closes. |
+| QA | QA | Trailing audit; today's wave (BUG-006/007/008/009, ASM-001–006) largely originates from QA/Tester findings | busy | Continues trailing cadence. |
+| Devs | Jnr developer | **None spawned — 0/4.** FEAT-007/FEAT-008 wave landed and closed. | idle (cap) | Next wave per ranked recommendation below — Bill's call on exact slotting. |
 
 ---
 
@@ -26,65 +26,66 @@
 
 | Role | Cap | Current count | Holders | Status |
 |---|---|---|---|---|
-| Jnr developer | 4 | 0 (2 queued, pending BA-1 Task 1) | — | Under cap by design — Bill is holding width at 2 deliberately, not a saturation gap (see Devs row above). |
-| **Tester** | **2** (v1.6, `docs/planning/dev-team-process.md` amended by Bill 2026-08-09 — Tester cap raised to 2 + new "Second Tester (v1.6)" independence section: disjoint items, never communicate, one item never gets two verdicts) | 2 | Tester-1, Tester-2 (disjoint queues, independent, both report only to Bill) | At cap, doc and reality now match — closed, no longer tracked as a divergence. |
-| BA | 2 | 2 | BA-1 (busy, Task 1 dispatch-blocking), BA-2 (busy, S5) | At cap, disjoint sprint ownership holds |
-| Documentation | 1 | 1 | Docs | At cap |
-| QA | 1 | 1 | QA | At cap |
-| Resource Manager | 1 | 1 | RM (this agent) | At cap |
+| Jnr developer | 4 | 0 | — | Under cap, genuinely open — no dispatch blocker outstanding this time (contrast refresh #2, where 2 slots were held on a BA dependency). |
+| Tester | 2 (v1.6) | 2 | Tester-1, Tester-2 — both idle-pending-dispatch, not busy | At cap by headcount, **0 busy right now** — both cleared their queues. This is a live saturation opening, not a breach. |
+| BA | 2 | 2 | BA-1 (idle-pending-Task-2), BA-2 (busy) | At cap; BA-1 has a proposed next task (Task 2), not yet confirmed by Bill this refresh. |
+| Documentation | 1 | 1 | Docs | At cap, on the critical path (feat.skeleton doc pass gates Sprint 1 close). |
+| QA | 1 | 1 | QA | At cap. |
+| Resource Manager | 1 | 1 | RM (this agent) | At cap. |
 
-**No breaches.** BA-1 is no longer idle (Task 1 assigned by Bill, dispatch-blocking). Dev slots sit at 0/4 spawned by Bill's deliberate choice, not an unflagged saturation gap — RM's view, on record: reasonable while both Testers are loaded; RM will re-raise if the Tester queue drains and dev width still isn't following.
-
----
-
-## Sprint 0 gate — narrowed by ruling (2026-08-09)
-
-Cloud provider decision is **RESOLVED**: Azure confirmed as ruling (was: `docs/cloud.md` recommendation, low confidence). Existing garcia.ltd Azure estate (storage account `garcialtdstorage`, RG `garcia`, region `uksouth`) is reusable for Metropolis, in a **new, separate blob container** — never `whatsapp-session`. Full detail on BOW item **MOD-069** (do not duplicate here — `node claude-bow.js show MOD-069`).
-
-Sprint 0 now closes on the **contract freeze review alone**: `docs/design/README.md` (4 contract docs: int.protocol, int.serializer, int.solver, foundation.errors) + 2 cross-cutting questions (OD f32-vs-f64, duplicate correlation-ID generators). Still pending Aaron.
+**No breaches.** Saturation notes: both Testers are idle-pending-dispatch — RM flags this because the next dev wave (BUG-007/BUG-008 recommended) will need Tester capacity almost immediately, so dispatching devs now rather than waiting keeps both Testers fed. BA-1's Task 2 is proposed, not yet confirmed for this refresh — flagging so it doesn't slip.
 
 ---
 
-## At-risk parallel starts (contract-freeze exposure)
+## v1.7 — Assumptions are logged or the work is rejected (Aaron ruling, 2026-08-09, committed `27c8c3d`)
 
-Everything built before the contract freeze lands carries some exposure; severity depends on how directly the item touches `int.protocol`/`int.serializer` shape.
+**Principle:** the standard is that the *criterion holds*, not that the *test passes*. New BOW type `assumption` / `ASM-` codes, `--code-path` + `--codejson` mandatory and tool-enforced. Reciprocal rejection duties: dev rejects asks resting on unlogged BA assumptions; **Tester actively hunts for assumptions and FAILs on any unlogged one even if every criterion passed**; BA logs assumptions made while writing criteria; **lead is bound too** — an unwritten lead ruling is itself an unlogged assumption. Every future agent spawn carries the mandatory briefing block now living in `docs/planning/dev-team-process.md` — read it from there, don't reconstruct it from memory.
 
-| Item | Depends on (unfrozen?) | Exposure |
-|---|---|---|
-| engine.core (MOD-012), feat.detgate (FEAT-004), ui.screen.map (FEAT-005) | INT-001/INT-002, `done` status but not yet Aaron-frozen | Already committed and in the Tester queue — narrowing but not closed; a freeze change could still force a follow-up patch even post-PASS. |
-| harness.replay (MOD-013) — ready to dispatch, S2 | INT-001, INT-002 directly (fixture format IS the save format) | **High** — this item's whole job is serialising the protocol/serializer envelope. A freeze change to either would touch it directly. |
-| ui.keys (MOD-011) — dep-ready, dispatch held (Bill: 2-wide, Tester-bound) | MOD-009 (ui.core, itself built against unfrozen INT-001) | Medium — indirect, inherits ui.core's exposure. |
-| ui.screen.debug (FEAT-007), feat.debugmode (FEAT-008) — dep-ready, dispatch held pending BA-1 Task 1 | MOD-002/005/010, none of which are protocol-shape-sensitive | **Low** — these are registry/error-tail/widget assembly, not protocol consumers. Their real current blocker isn't freeze exposure, it's stale API references in the draft-ahead criteria (BA-1 Task 1). |
+### Assumption log (own tracking row per Bill's instruction — these are live risk, not sprint items)
 
-Sanctioned at-risk starts remain standing policy per Aaron (confirmed prior refresh) — flagged here for fan-out visibility, not as an RM objection. BA-1's Task 2 (freeze-risk audit) will sharpen these exposure calls once delivered — treat the table above as RM's best estimate, not BA-confirmed.
-
----
-
-## Dispatch queue — status per Bill's decision (2026-08-09 refresh #2)
-
-RM's original ranking below is **accepted by Bill as the ranking**, but dispatch of (1)/(2) is now explicitly gated and (3)/(4) explicitly held — not a disagreement, a sequencing call:
-
-1. **ui.screen.debug (FEAT-007), P0, S1** — all deps DONE, but criteria are `draft-ahead` with known-stale API refs. **Status: dispatch pending BA-1 Task 1 refresh.** Will be the first dev dispatched once BA-1 reports.
-2. **feat.debugmode (FEAT-008), P1, S1** — same criteria staleness issue. **Status: dispatch pending BA-1 Task 1 refresh**, dispatched alongside (1) — this is the 2-wide dev dispatch Bill is holding for, not a 4-wide one.
-3. **harness.replay (MOD-013), P1, S2** — dep-ready, highest freeze exposure. **Status: held**, stays queued at-risk-into-S2; not part of the current 2-wide plan.
-4. **ui.keys (MOD-011), P0, S2** — dep-ready, medium freeze exposure. **Status: held**, same as (3).
-
-Bill's stated reasoning for not filling all 4 dev slots now: both Testers are already loaded, so a 4-wide dev dispatch would build a queue behind them rather than remove the bottleneck. RM's saturation-rule view: reasonable while the verification queue is the pacing constraint; RM will re-flag if the Tester queue clears and dev width still sits below 4 with dep-ready, criteria-active work (3)/(4) waiting.
-
-**Explicitly NOT ready** — do not dispatch yet:
-- **feat.skeleton (FEAT-006)** — depends on MOD-012/FEAT-004/FEAT-005, all still `in_progress` pending Tester. This was checkpoint §4's #1 pick; RM's dependency check says it's actually **gated on the verification queue draining first**, not independently dispatchable. Re-rank to top of queue the moment all three PASS.
-- **harness.synth (MOD-016)**, **engine.invariant (MOD-019)** — both depend directly on MOD-012 (`in_progress`).
-- **ui.harness (MOD-014)** — depends on MOD-013 (harness.replay), which isn't built yet even if dispatched today.
-
-**Cloud-ruling reassessment (per Bill's request):** checked MOD-069 (Azure tiers, P3/future) and FEAT-011 (Save/load UX, P1/M3) against the new platform ruling. **Neither moves up.** MOD-069 still gates on MOD-036 (balance harness, open, several sprints out); FEAT-011 still gates on MOD-011 (ui.keys — open, but even once ui.keys lands FEAT-011 is an M3 item, well past the current build horizon). The Azure ruling closes half the Sprint 0 gate and de-risks planning, but does not pull any cloud-adjacent build work into Sprint 1.
-
-**BA-1 — resolved by Bill (refresh #2):** RM had flagged BA-1 idle and offered options (a) freeze-risk audit / (b) S6 criteria. Bill found a third, dispatch-blocking need RM's pass didn't catch: FEAT-007/FEAT-008 criteria are `draft-ahead` with escalation notes calling out specific stale API references (`errs.Recent()`, registry API, widgets sparkline, engine.core phase names/order, serialize `Header` methods) that must be refreshed against landed code before a junior builds to them. That's now BA-1's Task 1, reporting to Bill before anything else. RM's option (a) survives as **Task 2**, sequenced after — Bill agreed with the reasoning (de-risking written criteria beats drafting further ahead) but had to clear the dispatch blocker first.
+| Code | Pri | Claim | Disposition |
+|---|---|---|---|
+| ASM-001 | P1 | Sprint 1 exit gate does **not** prove `engine.core` participates in the live rendered path — render path is via `harness.stub`; `engine.core` determinism proven only in isolation by `feat.detgate`. Satisfies criteria as written. | Bill's own disclosure — stated plainly at Aaron's demo. No dev action, tracked for visibility only. |
+| ASM-002 | P2 | F12's stub/ok registry rendering is proven structurally, not by literal end-to-end execution. | Awaiting Bill's ruling (accept/correct/escalate). |
+| ASM-003 | P2 | AC-12: a failed persist leaves the header flagged in memory while debug stays off (over-flag, never under-flag). | Awaiting Bill's ruling. |
+| ASM-004 | P2 | The F12 phase-name mirror is acceptable duplication because the drift test catches divergence. | Awaiting Bill's ruling. |
+| ASM-005 | P2 | engine.core's pacing constant as a named Go var satisfies GR#15 in the interim. | Superseded once **FEAT-030** ships (pacing constant → config). |
+| **ASM-006** | **P1** | Deferring the F1 overlay cycle assumes the renderer accepts a background-metric layer **additively** later. If wrong, FEAT-031 is a renderer rewrite, not a feature. | **Bill wants a deliberate spike BEFORE FEAT-031 is estimated** — do not let FEAT-031 get dispatched on dependency-readiness alone. See dispatch recommendation. |
 
 ---
 
-## Incident / constraint log (carried forward)
+## Sprint 0 / Sprint 1 gate status
 
-- **VERSION-fixture staging incident (2026-08-09):** a junior's staged `VERSION` test fixture rode along into an unrelated docs commit via a concurrent agent's dirty staging area; caught and reverted within two commits (`a6885e5`). Root cause: the git index is shared mutable state across concurrent agents. Staging-area discipline (v1.5.1) is the standing fix — see `docs/planning/dev-team-process.md`.
-- **BUG-002 (golangci v2 config defect)** — fix bundled into `feat.detgate` (commit `47de5d0`), BOW item stays OPEN pending Tester-2's verdict.
-- **BUG-003 (BOW hooks duplicate lookup SQL)** — fix committed `f7815b7`, BOW item stays OPEN pending Tester-2 re-verdict.
-- **Session bounce (2026-08-09):** previous RM died mid-cycle with no surviving transcript; this board and `checkpoint.md` were rebuilt cold from BOW + git + the prior checkpoint text, per the v1.5 heavy-checkpointing recovery protocol. No work was redone — commits + BOW `done` status were treated as ground truth throughout.
+- **Sprint 0**: cloud half of the gate RESOLVED (Azure confirmed, see incident/ruling log). Contract-freeze half still pending Aaron (`docs/design/README.md`).
+- **Sprint 1**: 9/10 done. **feat.skeleton (FEAT-006) Tester-1-PASSED on every hard-gated criterion — doc pass is the only remaining step before Bill's commit closes the sprint.** AC-1b/AC-5b were split out, not weakened, into FEAT-032/FEAT-033 (blocked on Sprint 2 items MOD-014/MOD-011).
+
+---
+
+## RM's ranked dispatch recommendation for the post-FEAT-006 wave
+
+Ten follow-up items surfaced today; checked each individually rather than assumed — BUG-004 and BUG-005 are already **DONE**.
+
+| Rank | Item | Pri | Why |
+|---|---|---|---|
+| **1** | **BUG-007** — `internal/protocol` transport `Close()` TOCTOU race | P1 | Real shipped-code bug, not a test artifact: `Close()` races an in-flight send, failure mode is a **send-on-closed-channel panic**. Tester-2 confirmed **zero coverage in either direction** — the one test that looks like it covers this completes goroutines before calling `Close()`. `internal/protocol` carries every UI⇄engine command/event/delta — highest blast radius of any open defect. Recommend first, ahead of Sprint 2 features. |
+| **2** | **BUG-008** — error registry incomplete, no mechanical check | P1 | **Answers Bill's direct question: yes, jump the queue.** Already caused a real collision (feat.debugmode junior legitimately claimed `E100-E199` as "free," colliding with detgate's already-shipped `E100-E103` which only existed in source; caught by luck at lead review, not by any mechanism). DoD's mechanical CI check *is* the guardrail Bill is asking about — every day it's open is a live collision risk for the next module that claims a range, and today's near-miss is direct evidence manual review isn't reliable here. |
+| **3** | **BUG-006** — no post-push CI visibility / no branch protection | P1 | Root cause of BUG-004 surviving since commit 1. Interim control (`gh run list --limit 1` after every push) already mitigates the acute risk, so lower urgency than 1/2, but DoD is cheap (branch protection config + `/commit` skill edit) — bundle as a low-cost item, doesn't need its own dev slot. |
+| 4 | **BUG-009** — `handleSetSpeed` ignores the debug gate | P2 | Small, dependency (FEAT-008) now satisfied. Ready-now filler for spare slot capacity. |
+| 5 | **FEAT-030** — pacing constant to config | P2 | Directly resolves ASM-005. Ready, no blockers. |
+| — | **ASM-006 spike** | P1 (gating) | **Hold on FEAT-031** (F1 overlay cycle) until someone deliberately checks whether the renderer accepts an additive background-metric layer. Not a straight dev dispatch — a short investigation reporting to Bill first. FEAT-031 itself must not be estimated before this lands. |
+| — | **FEAT-032 / FEAT-033** | P2 | Blocked — depend on MOD-014 (ui.harness) / MOD-011 (ui.keys), neither built. Resume once Sprint 2 restarts. |
+| — | **FEAT-034** | P3 | Trivial (buildinfo host field). No urgency, park as filler whenever a slot is otherwise idle. |
+
+**Suggested slotting (dev cap 4, currently 0 in flight):** BUG-007 · BUG-008 · (BUG-006 + BUG-009 paired in one slot — both small) · 4th slot to FEAT-030 or reopening Sprint 2 via **harness.replay (MOD-013)** — Bill's call, RM has no strong preference between those two.
+
+**Sprint 2 resumption note:** harness.replay (MOD-013) and ui.keys (MOD-011) were only held last refresh on Bill's dev-width choice, not a dependency block — both are still dep-ready (INT-001/INT-002 done; MOD-009 done) and are the natural Sprint 2 openers once the BUG-007/BUG-008 wave has a slot free. Their freeze-exposure ratings from refresh #2 (harness.replay HIGH, ui.keys MEDIUM) stand unchanged — BA-1's Task 2 freeze-risk audit, still queued, would sharpen these.
+
+---
+
+## Incident / constraint log
+
+- **v1.7 assumption-logging rule (2026-08-09, `27c8c3d`):** see dedicated section above — tracked here as a process-incident-class entry because it changes every agent's reporting obligations going forward, not just this wave's work.
+- **BUG-008 near-miss (2026-08-09):** direct evidence for why BUG-008 is ranked #2 above — a legitimate range-claim process collided with an unregistered code because the registry lagged source. Caught at lead review, not by tooling.
+- **BUG-007 zero-coverage finding (2026-08-09, Tester-2):** `TestInProcTransport_Race` looked like it should cover the Close()-vs-send race and doesn't — it sequences goroutine completion before `Close()`. Worth remembering as a pattern to watch for elsewhere (a test named after a race that doesn't actually race the two operations in question).
+- **VERSION-fixture staging incident (2026-08-09):** a junior's staged `VERSION` test fixture rode along into an unrelated docs commit via a concurrent agent's dirty staging area; caught and reverted within two commits (`a6885e5`). Staging-area discipline (v1.5.1) is the standing fix.
+- **Session bounce (2026-08-09):** previous RM died mid-cycle with no surviving transcript; board and checkpoint were rebuilt cold from BOW + git, per the heavy-checkpointing recovery protocol. No work was redone.
