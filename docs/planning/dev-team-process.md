@@ -126,6 +126,16 @@ Both references are **mandatory and enforced by the tool** — an assumption tha
 
 **What this is not**: it is not a demand to log every keystroke-level choice. If the spec or criteria decided it, it is not an assumption. The test is simple — *could a reasonable person have decided this differently, and would the work still have passed?* If yes, log it.
 
+### Fixing a fix: log against the existing record as you go (v1.7.2 — 2026-08-09, on Tester-2's observation)
+
+Second-order work — changing code that already carries `ASM-` history, usually because a Tester or Destructive agent bounced the first attempt — has produced an **unlogged judgement call on the first pass every single time** it has been done. Same file, two consecutive rounds, two different sets of hands, both times caught only by a Tester.
+
+The likely cause is that the assumptions feel like they belong to the original piece of work, which is already recorded — so the new decisions taken *while repairing* it slip through as mere implementation detail. They are not: a decision that narrows, widens or reverses an earlier one is exactly the decision a future reader most needs explained, because it is the one that looks inconsistent with the record.
+
+**So, for any dispatch that modifies code with existing `ASM-` history:** log against the existing item (or raise a new one) **as you make each call**, not after a verifier finds the gap. The dispatch brief should say so explicitly. This applies to the lead as well — see below.
+
+**The lead is not exempt, and this has already been enforced twice.** A lead ruling delivered verbally in a brief is an assumption with no record. Both times it was a Tester that caught it, correctly, and the lead logged it afterwards. If you are the lead and you steer a decision in a message, log it — or expect to be bounced for it, which is the rule working.
+
 ### Fast path for paperwork-only FAILs (v1.7.1 — 2026-08-09, on Tester-2's proposal)
 
 Within hours of v1.7 landing, two items FAILed on assumption-logging alone: content correct, behaviour correct, one sentence missing. The rule caught real forks both times — but the *enforcement* was uniformly heavy regardless of stakes, spending a full Tester → lead → junior → lead → Tester cycle on "write one BOW comment".
