@@ -2,7 +2,7 @@
 #
 # Module key: foundation.repo (see code.json)
 # Spec ref:   M0-ENG §5; A8; §1.2 point 5 (determinism gate); GR#21;
-#             BUG-002 (lint job arming)
+#             BUG-002 (lint job arming); SEC-028 (race detector gate)
 #
 # main is always green (M0-ENG §5): build, unit tests, gofmt, go vet on
 # every push/PR, plus (as of the feat.detgate/FEAT-004 sprint 1 arming)
@@ -10,6 +10,11 @@
 # suite and perf smoke (M0-ENG §5, §1.2 step 5) land with the modules
 # that make them meaningful — they are not stubbed here, they simply do
 # not exist yet.
+#
+# `go test` runs with -race (SEC-028) in both build-test-vet and
+# determinism-gate — see the inline comments at each step for why. Until
+# SEC-028's first real CI run is watched, treat -race-on-windows-latest as
+# probable but not confirmed (ASM-090).
 
 name: CI
 
@@ -37,8 +42,21 @@ jobs:
       - name: go vet ./...
         run: go vet ./...
 
-      - name: go test ./...
-        run: go test ./...
+      # -race (SEC-028, GR#21): CI's plain `go test ./...` was proven to pass
+      # 10/10 against a reintroduced SEC-003-shape defect (unlocked
+      # concurrent map read) while `-race` failed 5/5 against the same
+      # broken build — the entire SEC-003..SEC-020 concurrency-safety chain
+      # was verified only by a step nobody's automated gate ran. windows-latest
+      # ships a working GCC/MinGW toolchain (confirmed via the runner-images
+      # README: gcc 14.2.0, binutils, gdb — cgo needs no extra setup step),
+      # and -race only ~2.8x's this suite's local runtime (~10s -> ~28s), so
+      # this extends the existing step rather than paying for a second
+      # checkout+setup-go job (ASM-090: windows-latest's cgo toolchain is
+      # confirmed present per actions/runner-images' README, but still
+      # unverified on the actual runner until the first real CI run — see
+      # docs/planning/dev-team-process.md Tester-baseline line).
+      - name: go test ./... -race
+        run: go test ./... -race -count=1
 
       - name: gofmt check
         shell: pwsh
@@ -76,8 +94,11 @@ jobs:
       - name: go build ./...
         run: go build ./...
 
+      # -race here too (SEC-028): this gate is exactly the kind of
+      # concurrency-critical path the finding is about, and the added cost
+      # is a few seconds on a single test.
       - name: Determinism gate (TestDeterminismGate)
-        run: go test ./internal/engine/detgate/ -run TestDeterminismGate -count=1
+        run: go test ./internal/engine/detgate/ -run TestDeterminismGate -count=1 -race
 
   # --- Lint (A8 mechanical enforcement / BUG-002) -----------------------
   # golangci-lint enforces GR#20 (internal/ui must not import
