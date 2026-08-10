@@ -58,6 +58,10 @@
           {
             "type": "command",
             "command": "node claude-codename-guard.js"
+          },
+          {
+            "type": "command",
+            "command": "node claude-author-guard.js"
           }
         ]
       },
@@ -97,6 +101,10 @@
           {
             "type": "command",
             "command": "node claude-codename-guard.js"
+          },
+          {
+            "type": "command",
+            "command": "node claude-author-guard.js"
           }
         ]
       },
