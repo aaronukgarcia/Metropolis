@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // This file covers two related but distinct findings from the SEC-020
@@ -172,76 +173,20 @@ func TestRingBuffer_CoalescesAcrossOtherCodesWithinScanBack(t *testing.T) {
 }
 
 // TestRingBuffer_ScanBackBoundary_ExactlyAtLimitStillCoalesces and
-// TestRingBuffer_ScanBackBoundary_JustBeyondLimitDoesNotCoalesce pin the
-// exact off-by-one at coalesceScanBack's edge (Weakness pattern #3's
-// "get the arithmetic right" — a previous round's summary/arithmetic
-// mismatch in a sibling package was only caught by a Tester re-deriving
-// it, so this pins both sides of the boundary explicitly rather than
-// trusting the constant alone).
-//
-// With one MET-A push, followed by M pushes of M distinct OTHER codes,
-// then a second MET-A push: the first MET-A sits exactly (1+M) slots
-// back from the newest at the moment of the second push. The scan
-// covers slots 1..coalesceScanBack back (inclusive), so coalescing
-// succeeds when 1+M <= coalesceScanBack, i.e. M <= coalesceScanBack-1,
-// and fails once M reaches coalesceScanBack.
-func TestRingBuffer_ScanBackBoundary_ExactlyAtLimitStillCoalesces(t *testing.T) {
-	r := newRingBuffer(200)
-	r.push(Entry{Code: "MET-A"})
-	for i := 0; i < coalesceScanBack-1; i++ {
-		r.push(Entry{Code: fmt.Sprintf("MET-O%d", i)})
-	}
-	r.push(Entry{Code: "MET-A"}) // old MET-A is now exactly coalesceScanBack slots back
-
-	snap := r.snapshot()
-	if len(snap) != coalesceScanBack {
-		t.Fatalf("ring has %d entries, want %d (MET-A coalesced at the exact edge of the scan-back window)", len(snap), coalesceScanBack)
-	}
-	aCount := 0
-	for _, e := range snap {
-		if e.Code == "MET-A" {
-			aCount++
-			if e.Repeat != 1 {
-				t.Errorf("MET-A Repeat = %d, want 1", e.Repeat)
-			}
-		}
-	}
-	if aCount != 1 {
-		t.Fatalf("found %d MET-A entries, want 1 (coalesced at the boundary)", aCount)
-	}
-}
-
-func TestRingBuffer_ScanBackBoundary_JustBeyondLimitDoesNotCoalesce(t *testing.T) {
-	r := newRingBuffer(200)
-
-	// The expected MET-A count is derived from the pushes this test
-	// actually makes, not asserted as a bare literal (GR#15): change the
-	// setup and the assertion follows it instead of silently going stale.
-	aPushes := []Entry{{Code: "MET-A"}, {Code: "MET-A"}}
-
-	r.push(aPushes[0])
-	for i := 0; i < coalesceScanBack; i++ {
-		r.push(Entry{Code: fmt.Sprintf("MET-O%d", i)})
-	}
-	r.push(aPushes[1]) // old MET-A is now coalesceScanBack+1 slots back -- one past the window
-
-	snap := r.snapshot()
-	if len(snap) != coalesceScanBack+len(aPushes) {
-		t.Fatalf("ring has %d entries, want %d (both MET-A occurrences distinct, one slot per MET-O, since the old MET-A fell just outside the scan-back window)", len(snap), coalesceScanBack+len(aPushes))
-	}
-	aCount := 0
-	for _, e := range snap {
-		if e.Code == "MET-A" {
-			aCount++
-			if e.Repeat != 0 {
-				t.Errorf("MET-A entry Repeat = %d, want 0 (must not have coalesced)", e.Repeat)
-			}
-		}
-	}
-	if aCount != len(aPushes) {
-		t.Fatalf("found %d MET-A entries, want %d (distinct, not coalesced — the gap exceeded coalesceScanBack)", aCount, len(aPushes))
-	}
-}
+// TestRingBuffer_ScanBackBoundary_JustBeyondLimitDoesNotCoalesce
+// (formerly here) pinned the exact off-by-one at the OLD bounded
+// scan-back's edge (`coalesceScanBack`, M=15 coalesces / M=16 does not).
+// SEC-033 (Bill's ruling, ASM-116) replaced that bounded scan-back with
+// exact Code-keyed coalescing (see ringBuffer.index / push in log.go),
+// which removed `coalesceScanBack` and every reference to it from the
+// design entirely — there is no longer a scan-back window, so there is
+// no boundary left to pin. These two tests are deliberately REMOVED,
+// not weakened or left to bit-rot against a symbol that no longer
+// exists: see TestRing_ManyDistinctCodes_ExactCoalescing below for the
+// replacement, which proves the new mechanism has no equivalent edge at
+// all (an arbitrarily large number of interleaved distinct Codes still
+// coalesces exactly, where the old design necessarily degraded once the
+// population exceeded whatever K was chosen).
 
 // TestRing_InterleavedFlood_DoesNotEvictGenuineEntry is Tester-2's exact
 // reproduction, now pinned as a permanent regression test regardless of
@@ -288,29 +233,203 @@ func TestRing_InterleavedFlood_DoesNotEvictGenuineEntry(t *testing.T) {
 	}
 }
 
-// TestRing_InterleavedFlood_BeyondScanBack_AcceptedTradeOff documents,
-// with a runnable assertion rather than only a comment, exactly what
-// ASM-107's accepted limit costs: MORE distinct interleaved codes than
-// coalesceScanBack DOES still degrade toward pre-fix behaviour. This is
-// deliberately proven, not hidden — the trade-off Bill asked to see
-// "priced," not merely asserted.
-func TestRing_InterleavedFlood_BeyondScanBack_AcceptedTradeOff(t *testing.T) {
+// TestRing_ManyDistinctCodes_ExactCoalescing is SEC-033's direct proof
+// (AC-3), inverting what TestRing_InterleavedFlood_BeyondScanBack_
+// AcceptedTradeOff (formerly here) demonstrated under the OLD design:
+// where that test proved the ring necessarily filled to capacity once
+// more than `coalesceScanBack` (16) distinct codes interleaved, this
+// proves the new Code-keyed design has no such ceiling at all.
+//
+// 20 distinct codes — comfortably past the old K=16 — round-robin
+// pushed well beyond the ring's capacity (200) must still coalesce each
+// code into exactly one slot with the correct Repeat, and a genuine
+// entry seeded before the flood must survive. This targets the
+// population SEC-033 actually named — every registry-sourced error the
+// ring is a fallback for (84 distinct MET- codes at last count, not the
+// far smaller and unrelated "guarded types" count the old K was
+// mis-justified against) — not guarded types specifically.
+func TestRing_ManyDistinctCodes_ExactCoalescing(t *testing.T) {
 	r := newRingBuffer(200)
 
-	// coalesceScanBack+1 distinct codes, round-robin interleaved: each
-	// code's own previous occurrence is always coalesceScanBack+1 slots
-	// back once the ring is warmed up -- one slot beyond what push scans,
-	// so this pattern never coalesces at all, and the ring grows exactly
-	// like it would with no coalescing.
-	distinctCodes := coalesceScanBack + 1
-	iterations := distinctCodes * 20
-	for i := 0; i < iterations; i++ {
-		r.push(Entry{Code: fmt.Sprintf("MET-WIDE%d", i%distinctCodes)})
+	// Seed a genuine entry the flood must not evict.
+	r.push(Entry{Code: "MET-E006", CorrelationID: "corr-genuine-wide", Msg: "genuine, must survive a wide flood"})
+
+	const distinctCodes = 20 // comfortably past the old coalesceScanBack=16
+	const roundsPerCode = 50
+	for round := 0; round < roundsPerCode; round++ {
+		for c := 0; c < distinctCodes; c++ {
+			r.push(Entry{
+				Code:          fmt.Sprintf("MET-WIDE%d", c),
+				CorrelationID: fmt.Sprintf("corr-wide-%d-%d", c, round),
+			})
+		}
 	}
 
 	snap := r.snapshot()
-	if len(snap) != 200 {
-		t.Fatalf("ring has %d entries after flooding with %d round-robin codes (1 more than coalesceScanBack=%d), want 200 (filled to capacity, the accepted cost of the chosen K) — if this now passes with fewer entries, coalesceScanBack's boundary changed and this comment/ASM-107 need updating together", len(snap), distinctCodes, coalesceScanBack)
+	// One slot per distinct flood code, plus the seeded genuine entry --
+	// NOT capacity (200), which is exactly the gap the old bounded
+	// scan-back could not close for a population this wide.
+	wantSlots := distinctCodes + 1
+	if len(snap) != wantSlots {
+		t.Fatalf("ring has %d entries after a %d-distinct-code round-robin flood, want %d (one slot per code + the seeded genuine entry) — exact Code-keyed coalescing regressed", len(snap), distinctCodes, wantSlots)
+	}
+
+	seenGenuine := false
+	seenCodes := make(map[string]bool, distinctCodes)
+	for _, e := range snap {
+		if e.Code == "MET-E006" {
+			seenGenuine = true
+			continue
+		}
+		if seenCodes[e.Code] {
+			t.Fatalf("Code %q appears more than once in the snapshot -- coalescing failed to stay exact", e.Code)
+		}
+		seenCodes[e.Code] = true
+		if e.Repeat != roundsPerCode-1 {
+			t.Fatalf("entry %q Repeat = %d, want %d (coalesced across %d rounds)", e.Code, e.Repeat, roundsPerCode-1, roundsPerCode)
+		}
+		wantCorr := fmt.Sprintf("corr-wide-%s-%d", e.Code[len("MET-WIDE"):], roundsPerCode-1)
+		if e.CorrelationID != wantCorr {
+			t.Fatalf("entry %q CorrelationID = %q, want %q (most recent occurrence)", e.Code, e.CorrelationID, wantCorr)
+		}
+	}
+	if !seenGenuine {
+		t.Fatal("the seeded genuine entry (MET-E006) was evicted by a 20-distinct-code flood -- exactly the SEC-033 gap this fix closes")
+	}
+	if len(seenCodes) != distinctCodes {
+		t.Fatalf("saw %d distinct flood codes in the snapshot, want %d", len(seenCodes), distinctCodes)
+	}
+}
+
+// TestRingBuffer_EvictionKeepsIndexConsistent is AC-5: pushing well past
+// ringCapacity with a MIX of new (non-coalescing) and repeating codes
+// must keep the Code-keyed index consistent with buf/start/count at
+// every step -- no stale index entry may point at a slot that has since
+// been overwritten by eviction. Proven by checking, after every push,
+// that (a) snapshot() never exceeds capacity and (b) every Code that
+// currently has an index entry is actually found, exactly once, at that
+// index in the live snapshot.
+func TestRingBuffer_EvictionKeepsIndexConsistent(t *testing.T) {
+	const capacity = 200
+	r := newRingBuffer(capacity)
+
+	const totalPushes = capacity * 5
+	for i := 0; i < totalPushes; i++ {
+		// Every push is a NEW code every 7th iteration (never coalesces),
+		// otherwise repeats one of a small rotating set (coalesces) -- a
+		// deliberate mix so both index-update paths (new slot, existing
+		// slot) run interleaved with evictions once the ring is full.
+		var code string
+		if i%7 == 0 {
+			code = fmt.Sprintf("MET-FRESH%d", i)
+		} else {
+			code = fmt.Sprintf("MET-REPEAT%d", i%5)
+		}
+		r.push(Entry{Code: code, CorrelationID: fmt.Sprintf("corr-%d", i)})
+
+		snap := r.snapshot()
+		if len(snap) > capacity {
+			t.Fatalf("push %d: snapshot length = %d, want <= %d (ringCapacity)", i, len(snap), capacity)
+		}
+
+		// Every Code the index currently claims to hold must resolve to
+		// exactly the entry snapshot() independently reports for it --
+		// two views (index-driven lookup, position-driven snapshot) of
+		// the same state must agree, or the index has gone stale.
+		for c, idx := range r.index {
+			if idx < 0 || idx >= len(r.buf) {
+				t.Fatalf("push %d: index[%q] = %d, out of buf bounds [0,%d)", i, c, idx, len(r.buf))
+			}
+			if r.buf[idx].Code != c {
+				t.Fatalf("push %d: index[%q] = %d, but buf[%d].Code = %q -- index is stale", i, c, idx, idx, r.buf[idx].Code)
+			}
+		}
+	}
+}
+
+// TestRingBuffer_SnapshotOrderStableAcrossCalls is AC-10: snapshot()'s
+// returned order must depend only on buf/start/count (ring insertion
+// order), never on ranging the Code-keyed index map -- Go map iteration
+// order is intentionally randomised per-run, so if snapshot ever
+// depended on it, repeated calls with no intervening push would be free
+// to disagree with each other, and in practice very often would.
+func TestRingBuffer_SnapshotOrderStableAcrossCalls(t *testing.T) {
+	r := newRingBuffer(50)
+	for i := 0; i < 30; i++ {
+		r.push(Entry{Code: fmt.Sprintf("MET-ORD%d", i), CorrelationID: fmt.Sprintf("corr-%d", i)})
+	}
+
+	first := r.snapshot()
+	for call := 0; call < 20; call++ {
+		got := r.snapshot()
+		if len(got) != len(first) {
+			t.Fatalf("call %d: snapshot length = %d, want %d (unchanged, no intervening push)", call, len(got), len(first))
+		}
+		for i := range got {
+			if got[i].Code != first[i].Code || got[i].CorrelationID != first[i].CorrelationID {
+				t.Fatalf("call %d: snapshot()[%d] = {%q,%q}, want {%q,%q} (order must not vary between calls)", call, i, got[i].Code, got[i].CorrelationID, first[i].Code, first[i].CorrelationID)
+			}
+		}
+	}
+}
+
+// TestRing_FloodCost_10kEntries_BoundedTime is AC-6: push() sits on
+// every SEC-020 guard's rejection path, so a flood of pushes must not
+// regress into a new denial-of-service shape now that it does a map
+// lookup/insert instead of an O(K) bounded scan. 10,000 entries, mixed
+// repeating and 20+ distinct codes (matching AC-3's population), must
+// complete within a bounded, logged wall-clock budget.
+//
+// floodBudget (ASM- logged separately per the criteria's Escalations
+// section) is deliberately generous -- this is a regression tripwire
+// for an accidental O(n^2) or worse, not a tight performance SLA, and
+// dev-machine scheduling noise under `-race` (which this suite always
+// runs under, see the baseline gate) is real.
+//
+// The map's size is bounded by however many DISTINCT codes are live in
+// the ring at once, which is itself bounded by ringCapacity (200,
+// unchanged) -- see ringBuffer.index's doc comment in log.go, and this
+// test also spot-checks it directly.
+func TestRing_FloodCost_10kEntries_BoundedTime(t *testing.T) {
+	r := newRingBuffer(200)
+
+	const floodCount = 10_000
+	const distinctCodes = 25 // 20+, matching AC-3
+
+	start := time.Now()
+	for i := 0; i < floodCount; i++ {
+		r.push(Entry{Code: fmt.Sprintf("MET-FLOOD%d", i%distinctCodes), CorrelationID: fmt.Sprintf("corr-%d", i)})
+	}
+	elapsed := time.Since(start)
+
+	const floodBudget = 500 * time.Millisecond // ASM-126 -- see its BOW entry for the measured baseline
+	if elapsed > floodBudget {
+		t.Fatalf("pushing %d entries (mixed across %d distinct codes) took %s, want <= %s -- map-keyed push may have regressed into an unbounded-cost shape", floodCount, distinctCodes, elapsed, floodBudget)
+	}
+	t.Logf("flood cost: %d pushes across %d distinct codes in %s", floodCount, distinctCodes, elapsed)
+
+	// The index's size is bounded by the number of distinct LIVE codes,
+	// itself bounded by ringCapacity -- explicit assertion, not just a
+	// comment, that the index cannot itself become the unbounded
+	// resource (the non-negotiable this item was built against).
+	if len(r.index) > 200 {
+		t.Fatalf("index has %d entries after the flood, want <= 200 (ringCapacity) -- the index has become an unbounded resource", len(r.index))
+	}
+	if len(r.index) != distinctCodes {
+		t.Fatalf("index has %d entries, want %d (exactly the distinct codes pushed, all under ringCapacity)", len(r.index), distinctCodes)
+	}
+}
+
+// BenchmarkRingBuffer_Push measures push()'s per-call cost directly
+// (AC-6, `go test -bench`), complementing the wall-clock flood test
+// above with the standard Go benchmarking harness so a future regression
+// shows up in `go test -bench=. -benchmem` allocation counts too.
+func BenchmarkRingBuffer_Push(b *testing.B) {
+	r := newRingBuffer(200)
+	const distinctCodes = 25
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		r.push(Entry{Code: fmt.Sprintf("MET-BENCH%d", i%distinctCodes), CorrelationID: fmt.Sprintf("corr-%d", i)})
 	}
 }
 

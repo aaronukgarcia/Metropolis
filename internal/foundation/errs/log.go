@@ -430,6 +430,17 @@ const copyRejectRingCapacity = 64
 // configured sink's write fails — see the "ring buffer" design note in
 // docs/design/errors.md for why write failures also fall back here.
 //
+// Coalescing (SEC-030/SEC-031 part 2, made exact per SEC-033): push
+// keeps at most one slot per distinct Code, keyed by a Code-indexed map
+// (see ringBuffer.index and push's doc comment) rather than a bounded
+// scan-back, so a repeating Code accumulates a Repeat count on its one
+// slot instead of consuming a new one no matter how many OTHER distinct
+// Codes interleave in between. This coalescing is entirely in-memory: a
+// FILE-backed Logger's NDJSON output (Logger.Log) has no coalescing of
+// its own and is completely unaffected — every Log() call still writes
+// its own line — so the on-disk audit trail this ring is a fallback for
+// never loses an occurrence either way.
+//
 // SEC-031 part 2: this ring holds ONLY genuine entries — a copied
 // Logger's rejected Log()/SetSink misuse never lands here (see
 // copyRejectRing below). Before this fix, rejectCopiedLog pushed
@@ -448,120 +459,75 @@ type ringBuffer struct {
 	buf   []Entry
 	start int
 	count int
+
+	// index maps every Code currently held anywhere in buf to the exact
+	// slot (an absolute index into buf, NOT an offset from start) holding
+	// its one coalesced Entry (SEC-033, replacing the bounded scan-back —
+	// see push's doc comment). Because push coalesces EXACTLY (any
+	// currently-held entry with a matching Code, not just one within a
+	// bounded window), at most one slot ever holds a given Code at a
+	// time, so a single map entry per live Code is sufficient and the
+	// invariant len(index) <= len(buf) <= ringCapacity always holds — the
+	// index cannot itself become the unbounded resource (ASM-116),
+	// because it is evicted in the same operation that evicts the ring
+	// slot it points at, never on a separate schedule.
+	index map[string]int
 }
 
 func newRingBuffer(cap int) *ringBuffer {
-	return &ringBuffer{buf: make([]Entry, cap)}
+	return &ringBuffer{buf: make([]Entry, cap), index: make(map[string]int, cap)}
 }
 
-// coalesceScanBack bounds how many of the most-recently-pushed slots
-// push() will scan looking for a same-Code match before giving up and
-// allocating a new slot (SEC-030 re-attack, Bill/Tester-2, 2026-08-10 —
-// see push's doc comment and ASM-107). O(K) per push, no allocation.
+// push adds e to the ring, UNLESS an entry with the same Code is ALREADY
+// held anywhere in the ring — in which case e is coalesced into that
+// existing slot instead of consuming a new one (SEC-030 / SEC-031 part
+// 2, ASM-106; made exact, replacing the bounded scan-back, per SEC-033
+// / ASM-116).
 //
-// 16 is a pragmatic bound, NOT a proof of sufficiency — the original
-// justification here was wrong twice over and is corrected in place
-// rather than quietly patched (SEC-033, Tester-2, 2026-08-10):
+// Mechanism: a Code-keyed index (map[string]int, see ringBuffer.index)
+// gives push an O(1) lookup for "does this Code already have a slot,"
+// rather than scanning any bounded number of recently-pushed slots. This
+// closes the gap the previous design could not, by construction: the old
+// `coalesceScanBack` scan only found a match within the K
+// most-recently-pushed slots, so more than K distinct Codes interleaved,
+// or the same Code recurring more than K entries apart, silently stopped
+// coalescing and degraded toward pre-fix (no coalescing at all)
+// behaviour — and K's "safe" value depended on a population (every
+// registry-sourced error the ring is a fallback for) that had already
+// been shown to be miscounted twice in one week (SEC-033). Keying
+// coalescing by Code removes that population-vs-bound relationship from
+// the design entirely: there is no K to outgrow, so no re-derivation is
+// ever needed again. See TestRing_ManyDistinctCodes_ExactCoalescing for
+// the direct proof this closes the scan-back gap.
 //
-//   - Its NUMERATOR was stale. It claimed 16 "comfortably exceeds" the
-//     codebase's 9 SEC-020-guarded types; the actual count is 14 and
-//     still rising as the sweep continues. 16-vs-14 is not a comfortable
-//     margin, and three more guarded types would erase it entirely.
-//   - Its DENOMINATOR was the wrong quantity. Guarded types are not the
-//     population that can interleave here: this ring is the fallback for
-//     EVERY registry-sourced error (86 MET- codes), so an ordinary
-//     multi-subsystem incident — a DB outage tripping several modules'
-//     health-checks and retries at once — could interleave more than 16
-//     distinct Codes with no copy attack involved at all.
+// Eviction stays exactly as it was — oldest slot overwritten, start
+// advanced by one, capacity (ringCapacity) unchanged — except that when
+// an occupied slot is about to be overwritten, its Code's index entry is
+// deleted FIRST, in the same critical section, so the index is never
+// left pointing at a slot that no longer holds the Code it claims to
+// (AC-5): a snapshot taken at any point reflects buf/start/count exactly
+// as before this change, and the index is purely an accelerator over
+// that same state, never a second source of truth for it.
 //
-// What is genuinely true, and is the actual reason this is accepted:
-// exceeding K degrades DIAGNOSTIC VISIBILITY, never the audit trail. A
-// file-backed Logger's NDJSON output has no coalescing and is untouched
-// (only ringBuffer coalesces), so the loss is confined to the in-memory
-// Recent()/F12 tail. The one case where that bound does not hold is a
-// session with no sink configured — which is precisely SEC-030's own
-// original scenario, so this residual is real, not hypothetical.
-//
-// If this needs closing rather than bounding, raise K (still O(K) and
-// allocation-free) or key a map by Code to make coalescing exact and
-// remove K from the design altogether; do not re-derive a margin from
-// the guarded-type count, which is neither the right population nor a
-// stable one.
-const coalesceScanBack = 16
-
-// push adds e to the ring, UNLESS one of the coalesceScanBack
-// most-recently-pushed entries already in the ring has the same Code —
-// in which case e is coalesced into THAT existing slot (the nearest
-// match, scanning newest-to-oldest) instead of consuming a new one
-// (SEC-030 / SEC-031 part 2, ASM-106; scan-back widened per ASM-107).
-//
-// Why a bounded scan-back, not just the single most-recent slot: a lone
-// stuck struct-copied guarded type produces the SAME Code back-to-back
-// with nothing interleaved, and checking only the immediately-preceding
-// slot (this fix's first cut) caught that in O(1) — but Tester-2 proved
-// the obvious neighbouring scenario breaks it: TWO stuck emitters with
-// DIFFERENT codes, interleaved (e.g. a stuck F1 MapScreen next to a
-// stuck F12 debug.Screen, both driven by the same render loop — an
-// entirely ordinary co-occurrence, not a contrived one), never find a
-// match against only the newest slot, because their own previous
-// occurrence is never the newest thing pushed — the OTHER emitter's is.
-// 10,000 iterations alternating two codes filled the ring to capacity
-// and evicted a genuine entry, identical to pre-fix behaviour
-// (TestRing_InterleavedFlood_DoesNotEvictGenuineEntry pins this).
-// Scanning back coalesceScanBack slots instead of 1 finds each
-// interleaved emitter's own previous occurrence as long as no more than
-// coalesceScanBack distinct Codes are flooding concurrently — for N
-// round-robin-interleaved codes with N <= coalesceScanBack, the ring
-// stabilises at exactly N slots (one per code), each accumulating
-// Repeat, rather than growing without bound.
-//
-// What this does NOT fix, by design, and why that is accepted rather
-// than chased further: with MORE than coalesceScanBack distinct Codes
-// interleaved, or two occurrences of the same Code separated by more
-// than coalesceScanBack OTHER entries, no match is found and a new slot
-// is allocated — that shape degrades toward pre-fix behaviour again.
-// See coalesceScanBack's own doc comment for why the original "16
-// comfortably exceeds the 9 guarded types" justification for accepting
-// this was wrong (SEC-033) and what the honest reason is; a map keyed
-// by Code would close that residual gap
-// completely, at the cost of allocation and bookkeeping on every push to
-// a diagnostic, non-security-boundary ring — judged over-engineering
-// for the actual threat model here (Bill's explicit steer).
-//
-// This was chosen (ASM-106) over the other options on the table — a
-// separate quota for rejection entries (already applied separately in
-// copyRejectRing for a different reason; doesn't help a genuine
-// duplicate-code flood inside `ring` itself, e.g. SEC-030's render-loop
-// case which never touches copyRejectRing at all) and a first-N-then-
-// silent rate limit (simpler, but throws away the repeat COUNT, which is
-// exactly the signal that lets an operator distinguish "fired once" from
-// "has been on fire for twenty minutes") — because it is a single,
-// bounded, allocation-free change to the one shared choke point every
-// guarded type's checkNotCopied already funnels through, fixing the
-// class rather than requiring each of the nine (and any future) guarded
-// types to solve flooding on its own (Weakness pattern #3).
-//
-// Cost: this is a diagnostic, in-memory buffer, not a security boundary
-// (Bill's framing) — coalescing trades exact per-occurrence timestamps
-// for a bounded, always-populated ring under flood conditions, which is
-// the correct trade for that role. It never touches a FILE-backed
-// Logger's NDJSON output (Logger.Log has no coalescing of its own; only
-// ringBuffer does), so the on-disk audit trail this ring is a fallback
-// for is unaffected either way.
+// Why the prior bounded scan-back was accepted at all, and why a map
+// costs more but is the correct trade here: this is a diagnostic,
+// in-memory buffer, not a security boundary (Bill's framing, carried
+// over unchanged from ASM-106/ASM-107) — coalescing trades exact
+// per-occurrence timestamps for a bounded, always-populated ring under
+// flood conditions. A map lookup/insert on every push is the standard,
+// well-understood cost of exact coalescing (allocation and bookkeeping,
+// no unbounded growth — see ringBuffer.index's doc comment), judged
+// acceptable for this non-security-boundary path now that it closes a
+// real gap rather than merely narrowing it (SEC-033's ruling). It never
+// touches a FILE-backed Logger's NDJSON output (Logger.Log has no
+// coalescing of its own; only ringBuffer does), so the on-disk audit
+// trail this ring is a fallback for is unaffected either way.
 func (r *ringBuffer) push(e Entry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	scanBack := coalesceScanBack
-	if scanBack > r.count {
-		scanBack = r.count
-	}
-	for k := 1; k <= scanBack; k++ {
-		idx := (r.start + r.count - k + len(r.buf)) % len(r.buf)
+	if idx, ok := r.index[e.Code]; ok {
 		last := &r.buf[idx]
-		if last.Code != e.Code {
-			continue
-		}
 		last.Repeat++
 		last.Ts = e.Ts
 		last.Level = e.Level
@@ -573,12 +539,19 @@ func (r *ringBuffer) push(e Entry) {
 	}
 
 	idx := (r.start + r.count) % len(r.buf)
-	r.buf[idx] = e
 	if r.count < len(r.buf) {
 		r.count++
 	} else {
+		// Full: idx == r.start, about to be overwritten. Drop its
+		// Code's index entry FIRST, in this same critical section, so
+		// the index is never left pointing at a slot no longer holding
+		// that Code (AC-5) — no window exists where a lookup could
+		// return a stale idx.
+		delete(r.index, r.buf[idx].Code)
 		r.start = (r.start + 1) % len(r.buf)
 	}
+	r.buf[idx] = e
+	r.index[e.Code] = idx
 }
 
 func (r *ringBuffer) snapshot() []Entry {
