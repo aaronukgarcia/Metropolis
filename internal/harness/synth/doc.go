@@ -117,18 +117,67 @@
 // defence in depth (AC-11's "if generation is single-threaded by design,
 // doc.go states that explicitly" clause, satisfied here).
 //
+// # BUG-034: what this package's baseline currently proves, and does not
+//
+// Read this before trusting any number this package has ever recorded,
+// or will record before Sprint 3:
+//
+//   - PROVES the plumbing is real end to end: a generated 1M-citizen
+//     synthetic city IS consumable by harness.headless with no
+//     translation step, RunPerf DOES drive it through the real
+//     protocol.Command path, results ARE persisted and compared, and a
+//     regression DOES fail the CI job non-zero (AC-2/AC-4/AC-6/AC-10, all
+//     verified against a real, if walking-skeleton, engine — not mocked).
+//   - PROVES Generate's own O(citizenCount) generation cost at real
+//     scale — GenerationTime/GenerationAllocBytes/GenerationAllocCount
+//     (perf.go) are genuine, scale-sensitive measurements today, and a
+//     regression in world-generation cost is a real regression this gate
+//     can already catch once it runs at real 1M scale (see
+//     .github/workflows/ci.yml's perf-1m-probe job).
+//   - DOES NOT prove anything about simulated per-citizen tick cost.
+//     TickTime/PerMonthTick are real wall-clock numbers, but every
+//     PerfResult also carries PhaseHookCount (phasehooks.go), which is 0
+//     for every run this package has ever produced — engine.core has
+//     zero registered PhaseHooks as of this sprint, so PerMonthTick
+//     today measures walking-skeleton dispatch overhead, not simulation.
+//     A "1M-citizen tick cost" quoted from this package's history before
+//     PhaseHookCount is nonzero is exactly the "pure walking-skeleton
+//     overhead wearing a simulation label" BUG-034 named as the risk to
+//     defend against — check PhaseHookCount before trusting any quoted
+//     tick figure, always.
+//   - DOES NOT yet include a CI-runner-measured baseline. Every result
+//     this package has recorded before BUG-034's perf-1m-probe job
+//     (.github/workflows/ci.yml) is FIRST run on windows-latest is either
+//     a smoke-scale (perf-smoke, -citizens override) or a local dev-box
+//     sanity check — never mistake either for "the 1M baseline is
+//     recorded." See perf-1m-probe's own comment block for the mechanism
+//     that will produce the real one, and limits.go's MinMeasurableDuration
+//     doc comment for the noise-floor re-derivation this dispatch did
+//     against local (not yet CI) data, with the CI re-check logged as an
+//     explicit follow-up rather than assumed already done.
+//
 // # Files
 //
 //   - params.go — Params, NetworkShape enum, ValidateParams (AC-7b).
 //   - limits.go — MaxSyntheticCitizens (ASM-083: reuses
 //     solver.LocalCitizenCeilingHigh, GR#15), sprawl domain,
-//     RegressionThreshold, MinMeasurableDuration.
+//     RegressionThreshold, MinMeasurableDuration (BUG-034: re-derived
+//     against sampled local jitter data, see that constant's doc
+//     comment).
 //   - generator.go — Generate, the deterministic citizen-record stream.
 //   - presets.go — Preset1M/Preset10M (AC-3).
 //   - headless_seam.go — runHeadless: this package's single call site
 //     into the real harness.headless.Run, plus parsePhaseTimings, which
 //     reconstructs per-phase timing from headless.Run's -report stream.
-//   - perf.go — RunPerf: per-phase timing + work counters (AC-4).
+//   - perf.go — RunPerf: per-phase timing + work counters (AC-4), plus
+//     BUG-034's PhaseHookCount and generation-side alloc counters
+//     (GenerationAllocBytes/GenerationAllocCount, kept separate from the
+//     tick-side AllocBytes/AllocCount for the same reason
+//     GenerationTime/TickTime are kept separate).
+//   - phasehooks.go — PhaseHookCountInHeadlessPath (BUG-034): the
+//     manually-asserted, grep-guarded "0 registered phase hooks today"
+//     fact every PerfResult carries — read its doc comment for exactly
+//     what it does and does not prove.
 //   - results.go — AppendResult/LoadLatestBaseline: the NDJSON
 //     per-commit results schema (AC-5).
 //   - baseline.go — CompareToBaseline: the BUG-031-hardened regression

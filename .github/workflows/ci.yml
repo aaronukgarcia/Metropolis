@@ -23,6 +23,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # workflow_dispatch (BUG-034): lets a human trigger perf-1m-probe
+  # on demand, from any branch that carries this file, without needing
+  # a push/PR event — see that job's own comment block for why it
+  # exists and is manual-only rather than wired into every push/PR.
+  workflow_dispatch:
 
 jobs:
   build-test-vet:
@@ -189,3 +194,142 @@ jobs:
         with:
           path: perf-results.ndjson
           key: perf-results-1m-smoke-${{ github.run_id }}
+
+  # --- Real-scale 1M probe (BUG-034, P0) ---------------------------------
+  # BUG-034: nobody had measured a real 1M-citizen headless run's wall
+  # time, peak memory, or allocation counts on windows-latest before this
+  # item — perf-smoke above deliberately runs a small -citizens override
+  # (see its own comment) specifically BECAUSE that was true, and using
+  # an unmeasured 1M run as a hard timeout/scale gate untested would risk
+  # discovering a runner limit via a job timeout rather than a
+  # deliberate measurement.
+  #
+  # This job is the measurement. It is workflow_dispatch-only (manual),
+  # NOT wired into push/pull_request, for exactly one reason: it has never
+  # been run on this project's actual GitHub-hosted runner as of this
+  # dispatch (BUG-034's brief: "MEASURE IT"), so it must not become a
+  # merge-blocking gate before a human has watched at least one real run
+  # complete and confirmed it fits comfortably inside a CI job's time and
+  # memory budget — repeating that mistake here (shipping an unverified
+  # gate and calling it done) is the exact failure mode BUG-034 exists to
+  # close.
+  #
+  # # What it measures, separately (BUG-034's "record generation cost and
+  # # tick cost as SEPARATE figures" instruction)
+  #
+  # -preset 1M with NO -citizens override (unlike perf-smoke) — the real
+  # 1,000,000-citizen synthetic. cmd/perfci's own PerfResult already keeps
+  # GenerationTime (world generation, the dominant cost while engine.core
+  # carries zero registered PhaseHooks — see synth/doc.go) and TickTime/
+  # PerMonthTick (the figure that becomes meaningful once Sprint 3 lands
+  # real phase hooks) as genuinely separate fields, plus PhaseHookCount
+  # traveling alongside every result (synth/phasehooks.go) so a reader can
+  # never mistake a walking-skeleton tick figure for a simulated one. This
+  # job additionally wraps the whole perfci invocation in a PowerShell
+  # Stopwatch (wall time) and polls Process.PeakWorkingSet64 (peak
+  # memory) — neither of which cmd/perfci itself measures, both of which
+  # BUG-034 asks for explicitly.
+  #
+  # # Baseline persistence (BUG-034 item 2: "the baseline must be recorded
+  # # from CI, not locally")
+  #
+  # Identical mechanism to perf-smoke above (actions/cache with a
+  # restore-keys prefix — the same "no CI infrastructure invented, reuse
+  # what already works" reasoning), but under its OWN cache key
+  # (perf-results-1m-real-) so the smoke-scale and real-scale histories
+  # never collide or get compared against each other. The FIRST run under
+  # this key has no prior baseline (AC-8 behaviour, LoadLatestBaseline
+  # returns nil) and records itself as the new one; every run after that
+  # compares against the most recent prior real-1M CI measurement — a
+  # baseline that was always taken on windows-latest, never on a
+  # contributor's dev box, closing the exact local-vs-CI divergence
+  # CLAUDE.md's Docker section already names as this project's recurring
+  # failure class.
+  #
+  # timeout-minutes is deliberately generous (20, vs perf-smoke's 10):
+  # this job's whole purpose is to find out whether 1M fits inside a
+  # normal CI budget, not to assume it does — a job that times out here
+  # IS a valid, informative result (see this item's BOW report for what
+  # to do with that outcome), not a mistake to silence by raising the
+  # limit further.
+  perf-1m-probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Restore perf-results-1m-real baseline
+        uses: actions/cache@v4
+        with:
+          path: perf-results-1m-real.ndjson
+          key: perf-results-1m-real-${{ github.run_id }}
+          restore-keys: |
+            perf-results-1m-real-
+
+      - name: Build perfci
+        run: go build -o perfci.exe ./internal/harness/synth/cmd/perfci
+
+      # PowerShell (GR#9) drives perfci.exe as a child process rather than
+      # `go run`/inline `&` so PeakWorkingSet64 can be polled on the
+      # actual measured process, not a `go run` wrapper process — the
+      # same technique used to sanity-check order of magnitude locally
+      # before this job was written (see this item's BOW report).
+      - name: Measure real 1M-citizen run (wall time + peak memory)
+        shell: pwsh
+        run: |
+          $sw = [System.Diagnostics.Stopwatch]::StartNew()
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = ".\perfci.exe"
+          $psi.Arguments = "-preset 1M -months 3 -results perf-results-1m-real.ndjson -commit ${{ github.sha }}"
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $psi.UseShellExecute = $false
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $peak = 0
+          while (-not $p.HasExited) {
+            Start-Sleep -Milliseconds 200
+            try { $p.Refresh(); if ($p.PeakWorkingSet64 -gt $peak) { $peak = $p.PeakWorkingSet64 } } catch {}
+          }
+          $sw.Stop()
+          $stdout = $p.StandardOutput.ReadToEnd()
+          $stderr = $p.StandardError.ReadToEnd()
+          $peakMB = [math]::Round($peak / 1MB, 1)
+
+          Write-Host "perfci exit code: $($p.ExitCode)"
+          Write-Host "Wall time: $($sw.Elapsed)"
+          Write-Host "Peak working set: $peakMB MB"
+          Write-Host "--- perfci stdout ---"
+          Write-Host $stdout
+          if ($stderr) { Write-Host "--- perfci stderr ---"; Write-Host $stderr }
+
+          "## perf-1m-probe results" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "- Wall time: $($sw.Elapsed)" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "- Peak working set: $peakMB MB" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "- perfci message: $stdout" | Out-File -Append $env:GITHUB_STEP_SUMMARY
+          "- Full per-phase timing, alloc counts and PhaseHookCount: see the uploaded perf-results-1m-real.ndjson artifact (one JSON line, human-readable)." | Out-File -Append $env:GITHUB_STEP_SUMMARY
+
+          if ($p.ExitCode -ne 0) {
+            Write-Host "perfci exited non-zero — treat this run's numbers as informative, not a passing gate (this job never fails the build, see its own comment)."
+          }
+
+      - name: Upload measured result (ndjson + summary)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-1m-probe-${{ github.run_id }}
+          path: perf-results-1m-real.ndjson
+          if-no-files-found: warn
+
+      - name: Save perf-results-1m-real baseline
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: perf-results-1m-real.ndjson
+          key: perf-results-1m-real-${{ github.run_id }}
