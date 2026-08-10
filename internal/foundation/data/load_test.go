@@ -102,13 +102,23 @@ func TestLoadModes_HappyPath(t *testing.T) {
 }
 
 func TestLoadBuildings_HappyPath(t *testing.T) {
+	// Fixture updated for FEAT-010/data.catalogue's full BuildingEntry
+	// schema (buildings.go replaced the {"key": ...} skeleton this test
+	// used to exercise, per types.go's own former TODO pointing at this
+	// item). Logged as ASM (see FEAT-010's report): touching this
+	// shared-file test is in scope because the skeleton it tested no
+	// longer exists.
 	dir := t.TempDir()
-	writeFixture(t, dir, FileBuildings, `{"version": 1, "entries": [{"key": "school"}]}`)
+	writeFixture(t, dir, FileBuildings, `{"version": 1, "entries": [{
+		"id": "primary_school", "name": "Primary school", "catalogueSection": "ED",
+		"unlock": {"raw": "M3+DP", "milestone": "M3", "developmentPoint": true},
+		"costRaw": "1.2M", "capacityRaw": "240", "consumptionRef": "school", "blightClass": "none"
+	}]}`)
 	b, err := LoadBuildings(dir, testCorrelationID())
 	if err != nil {
 		t.Fatalf("LoadBuildings: %v", err)
 	}
-	if len(b.Entries) != 1 {
+	if len(b.Entries) != 1 || b.Entries[0].ID != "primary_school" {
 		t.Errorf("entries = %+v", b.Entries)
 	}
 }

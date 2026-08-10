@@ -184,39 +184,15 @@ func (m *Modes) Validate() error {
 	return nil
 }
 
-// --- buildings.json (catalogue) — skeleton -------------------------------
-
-// Buildings is a minimal versioned skeleton for the building catalogue
-// (owned in full by FEAT-010/data.catalogue — this package only
-// guarantees the file loads, validates, and hot-reloads; the real
-// catalogue content is that module's own deliverable).
+// --- buildings.json (catalogue) -------------------------------------------
 //
-// TODO(FEAT-010/data.catalogue): replace Entries with the full
-// building-class schema (tier, cost, footprint, blight class,
-// consumption class key linking back to Consumption.Classes, ...).
-type Buildings struct {
-	Version int             `json:"version"`
-	Entries []BuildingEntry `json:"entries"`
-}
-
-// BuildingEntry is a placeholder row; Key is the only field currently
-// enforced.
-type BuildingEntry struct {
-	Key string `json:"key"`
-}
-
-// Validate implements Validator.
-func (b *Buildings) Validate() error {
-	if err := requireVersion(b.Version); err != nil {
-		return err
-	}
-	for i, e := range b.Entries {
-		if err := requireNonEmptyString("entries["+itoa(i)+"].key", e.Key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// Buildings/BuildingEntry (the full FEAT-010/data.catalogue schema —
+// unlock gate, cost/capacity, consumptionRef, blightClass,
+// appealProfile, sourcePack, supplement tagging) now live in
+// buildings.go, per this file's own former TODO. Kept as a separate
+// file because FEAT-010 owns it exclusively (see that item's file
+// ownership note) while this file remains MOD-006's shared skeleton
+// set for the other seven §24 files.
 
 // --- unlock_trees.json (§22) — skeleton -----------------------------------
 

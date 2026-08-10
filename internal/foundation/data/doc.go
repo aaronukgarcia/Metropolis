@@ -59,6 +59,18 @@
 // feat.debugmode/ui.screen.debug concern); Reload is an explicit,
 // caller-triggered operation only.
 //
+// # Building catalogue (FEAT-010 / data.catalogue)
+//
+// buildings.json's full schema (unlock gate, cost/capacity, blight
+// class, appeal profile, §17 consumption-class reference, §23
+// source-pack tag) lives in buildings.go rather than types.go — see
+// that file's doc comment. [LoadBuildingsCatalogue] cross-checks every
+// consumptionRef against a loaded consumption.json (§17, AC-12);
+// [LoadAll] performs the same cross-check automatically as part of
+// loading the full config set. See docs/design/buildings-schema.md for
+// the field reference and docs/planning/acceptance/data.catalogue.md
+// for the acceptance criteria.
+//
 // Module key: foundation.data (see code.json)
 // Spec ref:   §24; GR#15; M0-ENG §3 (debug as a runtime feature switch)
 package data

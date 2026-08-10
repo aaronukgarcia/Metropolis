@@ -39,4 +39,12 @@ const (
 	// CodeReloadFailed: a reload's read/decode/validate cycle failed;
 	// the previously-loaded config remains live (AC-11).
 	CodeReloadFailed = "MET-F606"
+
+	// CodeBuildingDanglingConsumptionRef: a buildings.json entry's
+	// consumptionRef does not resolve against consumption.json's
+	// Classes map (FEAT-010/data.catalogue AC-12) — a cross-file check
+	// that can't be expressed as a plain schema violation of
+	// buildings.json alone, so it gets its own code distinct from
+	// CodeSchemaInvalid.
+	CodeBuildingDanglingConsumptionRef = "MET-F607"
 )

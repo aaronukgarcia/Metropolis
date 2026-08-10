@@ -28,7 +28,8 @@
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
-      "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)"
+      "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)",
+      "H100-H199": "reserved for ui.harness (internal/harness/uitest, MOD-014: scripted-key-DSL parse errors, fixture-exhausted-before-script-complete, snapshot load/name errors, Harness copy guard — second H-layer sub-range, since H000-H099 already belongs to harness.replay). Checked against both this table AND `grep -rn \"MET-H1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H1xx code existed either place."
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -212,6 +213,12 @@
       "module": "foundation.data",
       "message": "Reload for {path} failed: {cause}",
       "remedy": "Check the underlying cause (malformed JSON, missing version, schema violation — see MET-F601-F604) and fix the file at {path}. The previously-loaded config remains live and unaffected until a Reload succeeds (AC-11)."
+    },
+    "MET-F607": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "buildings.json entry {field} references a consumption class that consumption.json does not define",
+      "remedy": "Either add the missing class to data/consumption.json's \"classes\" map (engine.consumption/MOD-021's own balance data), or fix the offending buildings.json entry's consumptionRef to name an existing class key. See FEAT-010/data.catalogue AC-12."
     },
     "MET-U001": {
       "severity": "fatal",
@@ -536,6 +543,42 @@
       "module": "harness.replay",
       "message": "EnginePlayer method called on a struct-copied value, not the one NewEnginePlayer constructed",
       "remedy": "Always use the *EnginePlayer pointer NewEnginePlayer returned. Do not dereference-and-reassign it ('p2 := *p') or pass it by value -- that produces a second EnginePlayer value with its own mutex but ALIASED results slice and notify channel (SEC-020-class). If you need a second independent EnginePlayer, call NewEnginePlayer again."
+    },
+    "MET-H100": {
+      "severity": "error",
+      "module": "ui.harness",
+      "message": "key script token {token} at position {position} in script {script} could not be resolved to a key event: {cause}",
+      "remedy": "A scripted key sequence token must be either a single rune (e.g. \"b\") or one of the documented <Name> specials (see internal/harness/uitest/doc.go's positively-stated grammar, e.g. <Space>, <Esc>, <Enter>, <Tab>, <F1>..<F12>). Fix the offending token at the reported position — a malformed or unrecognised token is rejected outright, never silently dropped or treated as a literal character (AC-2b), and the same rejection covers a token that names no registered mapping (AC-7)."
+    },
+    "MET-H101": {
+      "severity": "error",
+      "module": "ui.harness",
+      "message": "attached harness.replay fixture's Delta stream was exhausted after {got} of the {want} deltas the scripted sequence expected before it ran dry",
+      "remedy": "The fixture is truncated, corrupt, or was recorded against a different scenario than the script assumes. Regenerate the fixture from a session that actually exercises the scripted sequence's full effects, or lower the expected delta count if the script was over-specified. Never treat this the same as a scenario that completed normally (AC-3b) — a partial buffer must not be snapshotted as if it were the intended final state."
+    },
+    "MET-H102": {
+      "severity": "error",
+      "module": "ui.harness",
+      "message": "no golden snapshot exists at {path}",
+      "remedy": "Run the test with -update to create the golden snapshot from the current output (e.g. `go test ./internal/harness/uitest/... -run <TestName> -update`), then review the generated file before committing it. Distinct from a snapshot mismatch (AC-8) — this fires only when the golden file itself is missing or unreadable."
+    },
+    "MET-H103": {
+      "severity": "error",
+      "module": "ui.harness",
+      "message": "snapshot name {name} (segment {segment}) is not a valid single path component; rejected to prevent path traversal (SEC-001-class)",
+      "remedy": "A snapshot's file name is derived from t.Name(), split on Go's subtest hierarchy separator ('/'), with every resulting segment validated via serialize.ValidateShardName (AC-5b) — the same function harness.replay's fixture names and ShardMeta.Name are checked with, reused rather than reimplemented. A subtest deliberately or accidentally named \"..\" (or containing a separator, drive marker, or trailing dot/space) fails this check; rename the subtest rather than expecting this check to sanitise it."
+    },
+    "MET-H104": {
+      "severity": "error",
+      "module": "ui.harness",
+      "message": "Harness method called on a struct-copied value, not the one NewHarness constructed",
+      "remedy": "Always use the *Harness pointer NewHarness returned. Do not dereference-and-reassign it ('h2 := *h') or pass it by value -- that produces a second Harness value with its own mutex but ALIASED buffers/channels/waitgroup (SEC-020-class, same shape as harness.replay's Recorder/EnginePlayer). If you need a second independent Harness, call NewHarness again."
+    },
+    "MET-H105": {
+      "severity": "error",
+      "module": "ui.harness",
+      "message": "SendCommand rejected: this Transport is a read-only harness.replay fixture playback (AC-3) and never accepts commands",
+      "remedy": "A fixture attached via Harness.AttachFixture feeds canned Results/Events/Deltas into the view-model layer for snapshot testing (replay.UIPlayer, mode a) — it has nothing to send a command TO. If the test needs to send commands, drive a real (or stub) engine directly instead of attaching a fixture."
     }
   }
 }

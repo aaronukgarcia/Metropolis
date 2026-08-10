@@ -95,9 +95,47 @@ func LoadModes(dir, correlationID string) (Modes, error) {
 	return Load[Modes, *Modes](filepath.Join(dir, FileModes), correlationID)
 }
 
-// LoadBuildings loads and validates buildings.json from dir.
+// LoadBuildings loads and schema-validates buildings.json from dir. It
+// does not cross-check consumptionRef against consumption.json — use
+// [LoadBuildingsCatalogue] when that check is wanted (LoadAll performs
+// it itself, see below).
 func LoadBuildings(dir, correlationID string) (Buildings, error) {
 	return Load[Buildings, *Buildings](filepath.Join(dir, FileBuildings), correlationID)
+}
+
+// LoadBuildingsCatalogue loads both buildings.json and consumption.json
+// from dir and cross-checks every buildings.json entry's consumptionRef
+// against consumption.json's Classes map (FEAT-010/data.catalogue
+// AC-12), returning a registry-sourced MET-F607 error naming the
+// offending entry and field if any reference is dangling. This is the
+// canonical way for a caller that only wants the catalogue (rather than
+// the full LoadAll aggregate) to get the same cross-file guarantee
+// LoadAll provides.
+func LoadBuildingsCatalogue(dir, correlationID string) (Buildings, error) {
+	b, err := LoadBuildings(dir, correlationID)
+	if err != nil {
+		return Buildings{}, err
+	}
+	c, err := LoadConsumption(dir, correlationID)
+	if err != nil {
+		return Buildings{}, err
+	}
+	if verr := ValidateConsumptionRefs(&b, &c); verr != nil {
+		var fe *FieldError
+		ctx := map[string]any{"path": filepath.Join(dir, FileBuildings)}
+		if ok := asFieldError(verr, &fe); ok {
+			ctx["field"] = fe.Field
+			ctx["rule"] = fe.Rule
+		}
+		return Buildings{}, errs.Wrap(CodeBuildingDanglingConsumptionRef, correlationID, verr, ctx)
+	}
+	return b, nil
+}
+
+// asFieldError is a tiny errors.As wrapper kept local to this file so
+// load.go's imports stay unchanged (errors.As is already imported here).
+func asFieldError(err error, target **FieldError) bool {
+	return errors.As(err, target)
 }
 
 // LoadUnlockTrees loads and validates unlock_trees.json from dir.
@@ -157,6 +195,15 @@ func LoadAll(dir, correlationID string) (*Config, error) {
 	}
 	if c.Buildings, err = LoadBuildings(dir, correlationID); err != nil {
 		return nil, err
+	}
+	if verr := ValidateConsumptionRefs(&c.Buildings, &c.Consumption); verr != nil {
+		var fe *FieldError
+		ctx := map[string]any{"path": filepath.Join(dir, FileBuildings)}
+		if ok := asFieldError(verr, &fe); ok {
+			ctx["field"] = fe.Field
+			ctx["rule"] = fe.Rule
+		}
+		return nil, errs.Wrap(CodeBuildingDanglingConsumptionRef, correlationID, verr, ctx)
 	}
 	if c.UnlockTrees, err = LoadUnlockTrees(dir, correlationID); err != nil {
 		return nil, err
