@@ -51,6 +51,7 @@ These rules are inherited from Prix Six and apply to every piece of code written
 | #20 | Contract-First, Stub-Forever — modules consume each other ONLY via registered interfaces (GUIDs in code.json); every module keeps a passing stub for life; `internal/ui → internal/engine` imports lint-banned |
 | #21 | Red Determinism Gate Stops the Line — any determinism CI failure is auto-P0; nothing else merges until green; revert first, diagnose after |
 | #22 | Codename Discipline — the reference title is **'Blue'** and only 'Blue'. Its real name and abbreviations never appear in git: not in code, data, docs, plans, comments, commit messages, or branch names |
+| #23 | **Nothing Is Committed Un-Attacked** — every code-bearing commit requires a recorded Destructive verdict on its BOW item(s). Tester PASS proves the criteria hold; only the Destructive proves the code survives someone actively trying to break it. No exceptions for "small", "obvious", "inherited", or "the lead wrote it" |
 
 > **Full implementation patterns, code templates, and compliance checklists:** `docs/golden-rules-detail.md`
 > (Carried over verbatim from Prix Six — Firebase-specific examples apply once Metropolis has its own stack; adapt as the architecture solidifies.)
