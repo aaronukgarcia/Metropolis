@@ -56,11 +56,45 @@ const RegressionThreshold = 0.10
 // against a near-zero absolute duration is dominated by GC/scheduler
 // jitter, not real simulated work, so both the baseline and the current
 // measurement must clear this floor before RegressionThreshold is
-// applied at all. 5ms is chosen as comfortably above typical Go
-// scheduler/timer-resolution noise on Windows (documented default timer
-// tick ~15.6ms historically, ~1ms on modern builds — 5ms sits inside
-// that band without being so large it would mask a real 10% regression
-// at the scale this gate is meant to catch) while remaining far below
-// the multi-second monthly-tick times a real (non-skeleton) engine.core
-// is expected to reach once citizens/finance/etc. modules land.
+// applied at all.
+//
+// # Re-derivation (BUG-034, supersedes ASM-173's "chosen, not spec-
+// # derived" framing — this is now evidence-based, though the evidence
+// # is still local, not CI-runner, pending BUG-034's CI probe job)
+//
+// ASM-173 picked 5ms a priori, against no real measurement, "comfortably
+// above typical Go scheduler/timer-resolution noise" — exactly the kind
+// of number BUG-034's brief warns is indistinguishable from a guess
+// until someone actually samples the thing being gated. This dispatch
+// did that sampling: six real Preset1M (1,000,000-citizen, zero
+// registered PhaseHooks — see PhaseHookCountInHeadlessPath)
+// headless.Run measurements, 12 simulated months each, run locally on
+// 2026-08-10 via cmd/perfci, gave PerMonthTick jitter of:
+//
+//	mean 0.524ms, stddev 0.201ms, min 0.293ms, max 0.884ms
+//
+// 5ms clears the observed maximum by ~5.7x and the mean by ~9.5x — a
+// real, sampled safety margin, not an assumed one. It is being LEFT
+// UNCHANGED at 5ms rather than tightened toward the observed jitter,
+// for two reasons logged here rather than silently decided: (1) this
+// sample is from a dedicated Windows dev box, not the shared/virtualized
+// windows-latest Actions runner the gate actually runs on, and CI
+// tenancy jitter is well documented to run higher than a dedicated
+// machine's — tightening the floor toward locally-observed noise would
+// risk exactly the false-positive BUG-031 shape this constant exists to
+// prevent, the first time CI is simply busier than this box was; (2) a
+// tighter floor buys no real gate coverage yet, because engine.core is
+// still a zero-phase-hook walking skeleton (PhaseHookCount is 0 on
+// every RunPerf/RunGate call today) — there is no real per-tick
+// simulation work for a tighter floor to protect until Sprint 3 lands
+// real PhaseHooks and PerMonthTick stops being dominated by dispatch
+// overhead. 5ms is deliberately kept as a generous, evidence-CONFIRMED
+// (not evidence-CONTRADICTED) floor until that happens.
+//
+// Breaks if: the eventual CI-runner probe job (BUG-034's
+// perf-1m-probe workflow_dispatch job, .github/workflows/ci.yml) shows
+// materially higher runner jitter than this local sample — this
+// constant must be re-checked against THAT data, not just this dev
+// box's, before Sprint 3's real gate goes live; logged as a follow-up
+// against BUG-034 rather than assumed resolved here.
 const MinMeasurableDuration = 5 * time.Millisecond
