@@ -57,4 +57,24 @@ const (
 	// invalid" (this item's brief: "names the offending value and the
 	// limit").
 	codeAdvanceTicksOutOfBounds = "MET-P092"
+
+	// codeStubEngineCopied is requested by checkNotCopied (engine.go)
+	// when a StubEngine method is called on a struct-copied value — not
+	// the *StubEngine NewStubEngine returned (SEC-020 wave 2, mirroring
+	// ErrEngineCopied/ErrSubscriptionServerCopied/ErrTransportCopied in
+	// engine.core and internal/protocol). See self's doc comment on
+	// StubEngine for the full shape of the attack this guards.
+	codeStubEngineCopied = "MET-P093"
+
+	// codePrematureCommandsClose is requested by Run (engine.go) when
+	// s.transport.Commands() reports its channel closed (ok=false)
+	// while ctx has NOT been cancelled — BUG-020: a clean shutdown always
+	// cancels ctx before the transport closes, so a channel closure
+	// observed with ctx still live means something else closed the
+	// transport (or handed Run a struct-copied/already-closed transport)
+	// out from under the intentional shutdown sequence. Run must not
+	// return nil for this — nil is reserved for ctx.Err() on an
+	// intentional quit, and the two are otherwise indistinguishable to
+	// any caller inspecting Run's return value alone.
+	codePrematureCommandsClose = "MET-P094"
 )

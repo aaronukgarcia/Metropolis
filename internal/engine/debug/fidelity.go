@@ -31,7 +31,19 @@ func (s *State) FidelityDial(correlationID string) (FidelityDial, error) {
 	if err := s.requireOn(correlationID, "fidelity-dial"); err != nil {
 		return nil, err
 	}
+	// SEC-020 wave 2: requireOn (above) already checked identity, but
+	// this is a separate s.mu.Lock() site over a separate shared field
+	// (fidelityDial) — re-checked immediately before this lock (Weakness
+	// pattern #3: guard every site, not just an earlier one on the same
+	// call).
+	if err := s.checkNotCopied(correlationID, nil); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
+	if err := s.checkNotCopied(correlationID, nil); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	d := s.fidelityDial
 	s.mu.Unlock()
 	if d == nil {

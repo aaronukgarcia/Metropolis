@@ -80,10 +80,31 @@ func (s *State) InvokeCheat(correlationID string, kind CheatKind, ctx map[string
 }
 
 // recordCheatUsed appends e to the in-memory audit log under lock.
+//
+// SEC-020 wave 2: identity-checked BEFORE mu is touched and again after
+// acquisition. InvokeCheat's own requireOn call already checked identity
+// earlier in the same call, but that check ran before effect() and
+// nowFunc() executed — re-checking here, immediately before the
+// cheatLog mutation itself, is what actually guards THIS mu.Lock() site
+// rather than relying on an earlier caller having checked a different
+// one (Weakness pattern #3: guard the site that does the mutating, not
+// just an upstream call on the same request). On a copy, the append is
+// silently dropped — cheatLog is a slice a copy ALIASES with the
+// original's backing array; a copy appending to its own (post-copy,
+// possibly reallocated) cheatLog would diverge from the original's audit
+// trail rather than corrupt it directly, but it is still not a
+// legitimate operation on a value nothing constructed, so it is refused
+// the same as every other guarded mutation in this package.
 func (s *State) recordCheatUsed(e CheatUsedEvent) {
+	if err := s.checkNotCopied(e.CorrelationID, map[string]any{"kind": string(e.Kind)}); err != nil {
+		return
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkNotCopied(e.CorrelationID, map[string]any{"kind": string(e.Kind)}); err != nil {
+		return
+	}
 	s.cheatLog = append(s.cheatLog, e)
-	s.mu.Unlock()
 }
 
 // CheatLog returns a snapshot (defensive copy) of every successfully
@@ -91,9 +112,23 @@ func (s *State) recordCheatUsed(e CheatUsedEvent) {
 // programmatic audit surface AC-6 asks for, independent of the shared,
 // process-wide errs NDJSON sink (which InvokeCheat also writes to, but
 // which is awkward for a test/consumer to scope to just this State).
+//
+// SEC-020 wave 2: identity-checked BEFORE mu is touched and again after
+// acquisition. On a copy, returns an empty (non-nil) slice rather than
+// reading the aliased original's cheatLog through the copy's own
+// independent lock — a copy reporting the ORIGINAL's audit trail as its
+// own would misrepresent which State's usage actually happened, which is
+// exactly the kind of hygiene-adjacent misrepresentation this package
+// exists to prevent (AC-6).
 func (s *State) CheatLog() []CheatUsedEvent {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "CheatLog"}); err != nil {
+		return []CheatUsedEvent{}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "CheatLog"}); err != nil {
+		return []CheatUsedEvent{}
+	}
 	out := make([]CheatUsedEvent, len(s.cheatLog))
 	copy(out, s.cheatLog)
 	return out

@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -61,6 +62,43 @@ type StubEngine struct {
 	paused  bool
 	subs    map[protocol.SubscriptionID]*subState
 	allocID *protocol.SubscriptionAllocator
+
+	// self holds the address NewStubEngine gave this StubEngine at
+	// construction (self.Store(s), set once, at the end of
+	// NewStubEngine, after every Option has run and before s is
+	// returned to any caller — no goroutine can have a reference to s
+	// to race that Store against).
+	//
+	// SEC-020 wave 2: StubEngine has the exact shape
+	// Engine.self/SubscriptionServer.self/InProcTransport.self were all
+	// fixed for (engine/core/engine.go, engine/core/subscribe.go,
+	// internal/protocol/transport.go — read first, this mirrors them
+	// deliberately rather than inventing a variant). 's2 := *s' is
+	// legal, unsafe-free, reflect-free Go from outside this package
+	// (every field is unexported, but Go does not stop a caller from
+	// dereferencing the *StubEngine NewStubEngine returned and copying
+	// the struct value). mu is a plain sync.Mutex VALUE, so the copy
+	// gets its OWN, independent mu — but subs (a map), transport and
+	// world (pointers), and rng (a pointer to mutable PRNG state) are
+	// all reference types, so a copy ALIASES every one of them. The
+	// copy's mu therefore protects nothing shared: a caller driving the
+	// copy's Run loop concurrently with the original mutates the SAME
+	// subs map and the SAME rng state under two DIFFERENT, uncoordinated
+	// locks — exactly SEC-014/SEC-019's shape, reopened here.
+	//
+	// atomic.Pointer, not a plain *StubEngine field, for the same
+	// SEC-016 reason the three reference types above use it: the
+	// identity check must be race-safe and must run BEFORE mu is ever
+	// touched, because a struct copy taken while the ORIGINAL's mu
+	// happens to be held captures those mutex bytes read as "locked" —
+	// the copy's own next Lock() call on that captured state can then
+	// park forever, since nothing will ever Unlock() that specific
+	// copy's address (SEC-016's pre-lock-ordering rule: a guard placed
+	// after the lock can never run for that attack, because the attack
+	// IS acquiring the lock). A plain field read racing a concurrent
+	// struct copy has no defined result under the Go memory model;
+	// atomic.Pointer's Load/Store do.
+	self atomic.Pointer[StubEngine]
 }
 
 // NewStubEngine constructs a StubEngine bound to t. t's engine-facing
@@ -81,25 +119,134 @@ func NewStubEngine(t *protocol.InProcTransport, opts ...Option) (*StubEngine, er
 			return nil, err
 		}
 	}
+	// Stored exactly once, here, after every Option has run and before
+	// s is returned to any caller — no goroutine can have a reference to
+	// s to race this Store against (SEC-020 wave 2; mirrors NewEngine/
+	// NewSubscriptionServer/NewInProcTransport — see self's doc comment
+	// above).
+	s.self.Store(s)
 	return s, nil
 }
 
+// checkNotCopied reports whether the receiver is a struct copy of some
+// other StubEngine value (SEC-020 wave 2, mirroring
+// Engine.checkNotCopied/SubscriptionServer.checkNotCopied/
+// InProcTransport.checkNotCopied — see self's doc comment on StubEngine
+// for the full attack shape). Deliberately lock-free — a single
+// atomic.Pointer.Load, requiring nothing else, not s.mu — so it is safe
+// and correct to call BEFORE s.mu is ever touched, even for the very
+// first Lock(). That ordering is the whole point (SEC-016): a struct
+// copy's mu can be byte-for-byte "currently locked" if the copy was
+// taken while the original's mu was held, and even attempting to
+// acquire a copy's own mu in that state can block forever, since
+// nothing will ever Unlock() that specific copy's address. Rejecting
+// the copy via this check, before Lock() is ever called, means that
+// hang path is never reached at all.
+//
+// A nil s.self.Load() (a StubEngine constructed as a bare
+// StubEngine{}/new(StubEngine)/a hand-built literal rather than via
+// NewStubEngine, so self was never stored) is treated the same as a
+// mismatch and rejected the same way — every documented construction
+// path is NewStubEngine, so an unset self is itself a misuse this same
+// error correctly names, and rejecting it here also means such a
+// value's nil subs map / nil transport / nil world are never reached
+// either.
+func (s *StubEngine) checkNotCopied(correlationID string, ctx map[string]any) error {
+	if s.self.Load() != s {
+		return errs.New(codeStubEngineCopied, correlationID, ctx)
+	}
+	return nil
+}
+
 // World returns the loaded Folkestone-64 fixture (AC-3).
+//
+// SEC-020 wave 2: deliberately left WITHOUT a checkNotCopied call,
+// unlike InProcTransport's Results/Events/Deltas/Commands accessors —
+// the right analogue here is engine.core's Registry()/WorldSeed()/
+// PoolSize() (engine.go), not InProcTransport's channel accessors.
+// world is a plain *World pointer, set exactly once in NewStubEngine
+// and never reassigned afterwards; the World it points to is built by
+// GenerateFolkestone64 (fixture.go) and never mutated post-construction
+// (StubEngine "computes nothing" — see the package doc). A copy's
+// s.world is byte-identical to the original's: reading it is safe and
+// correct regardless of which StubEngine value the caller is holding,
+// because there is no shared MUTABLE state behind this pointer for a
+// copy's independent mu to fail to protect (contrast subs/rng, which
+// this file's mu.Lock() sites guard because they DO change after
+// construction). Unlike InProcTransport's channels — which are torn
+// down by Close() and where returning the real, aliased channel to a
+// copy would hide a genuine misuse — there is no teardown here to hide;
+// failing this accessor closed would only make an already-safe read
+// return an error for no safety benefit.
 func (s *StubEngine) World() *World { return s.world }
 
 // Tick returns the current fake-tick counter (AC-4).
+//
+// SEC-020 wave 2: identity-checked before AND after s.mu is acquired —
+// see self's doc comment for why the pre-lock check must be lock-free
+// and must run first; the post-lock check is defence in depth against a
+// future refactor adding another s.mu-acquiring path ahead of this one
+// without threading the check through it too (mirrors
+// Engine.RegisterPhaseHook/seal's ordering, engine/core/engine.go).
 func (s *StubEngine) Tick() protocol.Tick {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.self.Load() != s {
+		return 0
+	}
 	return s.tick
 }
 
 // Run drives the engine loop: range over t.Commands(), dispatch and
-// answer each one, until ctx is cancelled or the transport is closed
+// answer each one, until ctx is cancelled or the transport closes
 // (Commands() channel closes). It is the only goroutine that reads
 // commands or mutates tick/speed/paused/subs directly — chaos's delayed
 // sends (chaos.go) run in their own goroutines but only ever call the
 // transport's non-blocking SendDelta, never touch engine state.
+//
+// # Exit contract (SEC-026 — read this before wiring a caller)
+//
+// ctx cancellation and a Commands() closure are NOT two equivalent,
+// interchangeable ways to stop Run. Only ctx cancellation is the clean
+// shutdown signal: Run returns ctx.Err() (nil-shaped from a caller's
+// point of view — a normal, intentional stop). A Commands() closure
+// that Run observes WITHOUT ctx already being cancelled is reported as
+// an error (codePrematureCommandsClose, MET-P094, BUG-020) — it means
+// the transport went away for some reason other than the shutdown Run
+// was told about, and that must not be allowed to look like a clean
+// exit.
+//
+// The caller-side contract this implies: cancel ctx, WAIT for Run's
+// goroutine to actually return (join it — a sync.WaitGroup or an
+// equivalent "done" signal), and only THEN close the transport.
+// cmd/metropolis/boot.go's shutdown sequence — cancel(); wg.Wait();
+// Close() — is the canonical example; follow that ordering, not the
+// two-line version below.
+//
+// Do NOT write "cancel(); Close()" without the join in between, even
+// though it looks obviously equivalent. Calling cancel() only makes
+// ctx.Done() ready — it does not block until Run's select has actually
+// observed and acted on that; the calling goroutine keeps running and
+// can call Close() before Run's select has resolved anything. If that
+// happens, Run's select sees ctx.Done() and Commands() ready at
+// essentially the same moment and the Go runtime is free to pick
+// EITHER one — there is no ordering guarantee that "cancel happened
+// first" translates into "Run's select observes cancellation first".
+// When it picks the Commands() branch, Run correctly reports
+// codePrematureCommandsClose by its own logic (ctx was not yet Done at
+// the instant it looked) even though the caller's intent was a clean
+// stop — a false alarm that trains whoever reads the log to ignore it,
+// which is the one thing BUG-020 exists to prevent. Destructive-2
+// measured this: cancel();Close() with no join reported "premature"
+// on the overwhelming majority of runs, and it stayed a roughly 50/50
+// coin flip even once Run's goroutine was confirmed to already be
+// blocked in its select before cancel() ran — proving the race is
+// inherent to skipping the join, not a scheduling fluke that a "good
+// enough" delay would paper over. Join before you close; there is no
+// safe shortcut.
 func (s *StubEngine) Run(ctx context.Context) error {
 	for {
 		select {
@@ -107,7 +254,34 @@ func (s *StubEngine) Run(ctx context.Context) error {
 			return ctx.Err()
 		case cmd, ok := <-s.transport.Commands():
 			if !ok {
-				return nil
+				// BUG-020/SEC-026: a closed Commands() channel is
+				// ambiguous on its own — see the "Exit contract" section
+				// of Run's doc comment above for the full statement of
+				// what the two triggers mean and why they are NOT
+				// interchangeable. Re-checking ctx.Done() here, AFTER
+				// observing ok==false, is what tells them apart: if ctx is
+				// already Done, this is the clean shutdown path
+				// (nil-shaped, via ctx.Err()); if it is not, something
+				// closed the transport out from under a caller that hadn't
+				// told Run to stop, and that is reported, never silently
+				// swallowed. Today's only caller (cmd/metropolis/boot.go)
+				// follows the required cancel(); wg.Wait(); Close()
+				// ordering, so this branch is latent under current wiring
+				// — but nothing in this package enforces that ordering on
+				// Run's behalf, and a future caller, a copied transport
+				// handed to NewStubEngine, or an early Close() elsewhere
+				// could all close Commands() first. See
+				// codePrematureCommandsClose (codes.go) —
+				// cmd/metropolis/boot.go still discards Run's return value
+				// (`_ = engine.Run(ctx)`), so making that caller OBSERVE
+				// this distinction is a separate, out-of-scope change
+				// (noted in this item's dispatch report for Bill to route).
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+					return errs.New(codePrematureCommandsClose, errs.NewCorrelationID(), nil)
+				}
 			}
 			s.handle(cmd)
 		}
@@ -118,6 +292,18 @@ func (s *StubEngine) Run(ctx context.Context) error {
 // ran inside InProcTransport.SendCommand before it ever reached
 // s.transport.Commands()) and answers it with a CommandResult.
 func (s *StubEngine) handle(cmd protocol.Command) {
+	// SEC-020 wave 2: identity-checked BEFORE dispatch — the single
+	// choke point for every command-based entry into s.mu, mirroring
+	// engine.core's HandleCommand entry check (commands.go). Every
+	// individual handleXxx method below ALSO carries its own pre-lock
+	// check (defence in depth, not the only line — same posture as
+	// SEC-016's RegisterPhaseHook/seal and SEC-018's HandleCommand), but
+	// this stops a copy before the switch, and before handleInspectEntity/
+	// handleDebug's Tick() call, ever run.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}); err != nil {
+		s.transport.SendResult(errRefResult(cmd, err))
+		return
+	}
 	var result protocol.CommandResult
 	switch cmd.Kind {
 	case protocol.KindAdvanceTicks:
@@ -160,7 +346,19 @@ func (s *StubEngine) handleAdvanceTicks(cmd protocol.Command) protocol.CommandRe
 		return s.reject(cmd, codeAdvanceTicksOutOfBounds, map[string]any{"n": p.N, "max": maxAdvanceTicksPerCall})
 	}
 
+	// SEC-020 wave 2: identity-checked BEFORE s.mu — one of this
+	// package's s.mu.Lock() sites (see enumeration in the dispatch
+	// report). Also caught by handle()'s entry-point check (defence in
+	// depth, not the only line), but guarded here directly too so this
+	// method is safe even if ever called by a future non-handle path.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}); err != nil {
+		return errRefResult(cmd, err)
+	}
 	s.mu.Lock()
+	if s.self.Load() != s {
+		s.mu.Unlock()
+		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}))
+	}
 	// SEC-006 (Weakness pattern #1 — guard the arithmetic, not just the
 	// input): bounding N per call does not by itself prove s.tick, which
 	// accumulates across every call for the life of the engine, can
@@ -200,7 +398,16 @@ func (s *StubEngine) handleSetSpeed(cmd protocol.Command) protocol.CommandResult
 	if !validSpeeds[p.Speed] {
 		return s.reject(cmd, codeInvalidPayload, map[string]any{"speed": p.Speed, "cause": "unsupported speed multiplier"})
 	}
+	// SEC-020 wave 2: identity-checked BEFORE s.mu, and again after
+	// acquisition — see handleAdvanceTicks' identical note above.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}); err != nil {
+		return errRefResult(cmd, err)
+	}
 	s.mu.Lock()
+	if s.self.Load() != s {
+		s.mu.Unlock()
+		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}))
+	}
 	s.speed = p.Speed
 	tick := s.tick
 	s.mu.Unlock()
@@ -208,7 +415,16 @@ func (s *StubEngine) handleSetSpeed(cmd protocol.Command) protocol.CommandResult
 }
 
 func (s *StubEngine) handlePause(cmd protocol.Command) protocol.CommandResult {
+	// SEC-020 wave 2: identity-checked BEFORE s.mu, and again after
+	// acquisition — see handleAdvanceTicks' identical note above.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), nil); err != nil {
+		return errRefResult(cmd, err)
+	}
 	s.mu.Lock()
+	if s.self.Load() != s {
+		s.mu.Unlock()
+		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), nil))
+	}
 	s.paused = true
 	tick := s.tick
 	s.mu.Unlock()
@@ -216,7 +432,16 @@ func (s *StubEngine) handlePause(cmd protocol.Command) protocol.CommandResult {
 }
 
 func (s *StubEngine) handleResume(cmd protocol.Command) protocol.CommandResult {
+	// SEC-020 wave 2: identity-checked BEFORE s.mu, and again after
+	// acquisition — see handleAdvanceTicks' identical note above.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), nil); err != nil {
+		return errRefResult(cmd, err)
+	}
 	s.mu.Lock()
+	if s.self.Load() != s {
+		s.mu.Unlock()
+		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), nil))
+	}
 	s.paused = false
 	tick := s.tick
 	s.mu.Unlock()
@@ -240,7 +465,16 @@ func (s *StubEngine) handleSubscribe(cmd protocol.Command) protocol.CommandResul
 		return s.reject(cmd, codeInvalidPayload, map[string]any{"viewName": p.ViewName, "cause": err.Error()})
 	}
 
+	// SEC-020 wave 2: identity-checked BEFORE s.mu, and again after
+	// acquisition — see handleAdvanceTicks' identical note above.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), map[string]any{"viewName": p.ViewName}); err != nil {
+		return errRefResult(cmd, err)
+	}
 	s.mu.Lock()
+	if s.self.Load() != s {
+		s.mu.Unlock()
+		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"viewName": p.ViewName}))
+	}
 	id := s.allocID.Allocate()
 	sub := &subState{id: id, viewName: p.ViewName}
 	s.subs[id] = sub
@@ -264,7 +498,16 @@ func (s *StubEngine) handleUnsubscribe(cmd protocol.Command) protocol.CommandRes
 		return s.reject(cmd, codeInvalidPayload, map[string]any{"kind": string(cmd.Kind)})
 	}
 
+	// SEC-020 wave 2: identity-checked BEFORE s.mu, and again after
+	// acquisition — see handleAdvanceTicks' identical note above.
+	if err := s.checkNotCopied(string(cmd.CorrelationID), map[string]any{"subscriptionId": string(p.SubscriptionID)}); err != nil {
+		return errRefResult(cmd, err)
+	}
 	s.mu.Lock()
+	if s.self.Load() != s {
+		s.mu.Unlock()
+		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"subscriptionId": string(p.SubscriptionID)}))
+	}
 	_, exists := s.subs[p.SubscriptionID]
 	if !exists {
 		s.mu.Unlock()
@@ -396,5 +639,31 @@ func (s *StubEngine) reject(cmd protocol.Command, code string, ctx map[string]an
 		Tick:          tick,
 		Accepted:      false,
 		Error:         &protocol.ErrorRef{Code: e.Code, Display: e.Display()},
+	}
+}
+
+// errRefResult builds a rejected CommandResult directly from an
+// already-constructed registry-sourced error (SEC-020 wave 2's
+// checkNotCopied result), rather than through reject/codes.go's code
+// constants. Used ONLY on the copy-rejection path: Tick(), which
+// reject() would otherwise call to fill in the result's Tick field, is
+// itself guarded and returns 0 on a copy, so passing 0 directly here
+// skips a second, redundant checkNotCopied call for the same rejection.
+// err is expected to be a *errs.E (everything this package's own
+// checkNotCopied constructs is); the fallback keeps GR#1's "never a bare
+// error" promise even if that ever stops being true.
+func errRefResult(cmd protocol.Command, err error) protocol.CommandResult {
+	var ref *protocol.ErrorRef
+	if e, ok := err.(*errs.E); ok {
+		ref = &protocol.ErrorRef{Code: e.Code, Display: e.Display()}
+	} else {
+		wrapped := errs.Wrap(codeStubEngineCopied, string(cmd.CorrelationID), err, nil)
+		ref = &protocol.ErrorRef{Code: wrapped.Code, Display: wrapped.Display()}
+	}
+	return protocol.CommandResult{
+		CorrelationID: cmd.CorrelationID,
+		Tick:          0,
+		Accepted:      false,
+		Error:         ref,
 	}
 }

@@ -44,20 +44,20 @@ func TestEnableTouchesHeaderStickily(t *testing.T) {
 	h := newTestHeader()
 	s := NewState(WithHeader(h))
 
-	if h.DebugTouched {
+	if h.DebugTouched() {
 		t.Fatalf("fresh header DebugTouched = true before Enable, want false")
 	}
 	if err := s.Enable(SourcePalette, "corr-2"); err != nil {
 		t.Fatalf("Enable: %v", err)
 	}
-	if !h.DebugTouched {
+	if !h.DebugTouched() {
 		t.Fatalf("header.DebugTouched = false after Enable, want true")
 	}
 
 	// Disable, then simulate a subsequent save-over of the same header
 	// (nothing should ever be able to clear DebugTouched).
 	s.Disable()
-	if !h.DebugTouched {
+	if !h.DebugTouched() {
 		t.Fatalf("header.DebugTouched = false after Disable, want still true (sticky)")
 	}
 }
@@ -76,7 +76,7 @@ func TestDisableDoesNotClearDebugTouched(t *testing.T) {
 	if s.IsOn() {
 		t.Fatalf("IsOn() = true after Disable, want false")
 	}
-	if !h.DebugTouched {
+	if !h.DebugTouched() {
 		t.Fatalf("header.DebugTouched = false after Disable, want true (AC-4 sticky invariant)")
 	}
 }

@@ -1,6 +1,7 @@
 package serialize
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -47,13 +48,24 @@ type Header struct {
 	// FormatVersion's job.
 	AppVersion string `json:"appVersion"`
 
-	// DebugTouched is STICKY: once true, it must stay true for the
+	// debugTouched is STICKY: once true, it must stay true for the
 	// lifetime of the save, including through every subsequent save-over
 	// and NDJSON export (§14, M0-ENG §3: "debug-touched saves are flagged
-	// forever — balance data hygiene"). Use TouchDebug or
-	// MergeDebugTouched to set it rather than assigning the field
-	// directly, so the sticky invariant can't be accidentally dropped.
-	DebugTouched bool `json:"debugTouched"`
+	// forever — balance data hygiene").
+	//
+	// SEC-024: this field is deliberately UNEXPORTED. It used to be a
+	// plain exported bool with a doc comment asking callers to please use
+	// TouchDebug/MergeDebugTouched instead of assigning it directly — that
+	// was convention, not enforcement, and a Destructive agent proved a
+	// caller holding the same *Header (e.g. via debug.WithHeader) could
+	// clear it with a bare `h.DebugTouched = false`, no error, no log,
+	// entirely outside debug.State and every SEC-020 guard. Making the
+	// field unexported closes that off structurally: TouchDebug and
+	// MergeDebugTouched (below) are now the ONLY way any package other
+	// than this one can mutate it, and DebugTouched() (the read-only
+	// accessor, also below) is the only way to read it. See ASM-076 for
+	// the JSON-marshalling approach this required.
+	debugTouched bool
 
 	// ShardIndex lists every shard in the bundle, in write order, with
 	// the integrity metadata WriteShard produced for each.
@@ -71,9 +83,16 @@ func NewHeader(worldSeed, createdAtTick, gameMonth int64, appVersion string) Hea
 		CreatedAtTick: createdAtTick,
 		GameMonth:     gameMonth,
 		AppVersion:    appVersion,
-		DebugTouched:  false,
+		debugTouched:  false,
 		ShardIndex:    nil,
 	}
+}
+
+// DebugTouched reports whether this header is sticky-flagged debug-touched
+// (§14, M0-ENG §3). This is the ONLY way to read the flag from outside this
+// package — see the field's doc comment (SEC-024) for why it is unexported.
+func (h *Header) DebugTouched() bool {
+	return h.debugTouched
 }
 
 // TouchDebug marks the header debug-touched. It only ever sets the flag to
@@ -81,7 +100,7 @@ func NewHeader(worldSeed, createdAtTick, gameMonth int64, appVersion string) Hea
 // API, enforcing the "once true, forever true" rule at the type level
 // rather than by convention.
 func (h *Header) TouchDebug() {
-	h.DebugTouched = true
+	h.debugTouched = true
 }
 
 // MergeDebugTouched ORs incoming into the header's DebugTouched flag. Use
@@ -89,7 +108,75 @@ func (h *Header) TouchDebug() {
 // re-emitting a bundle, or a save-over reusing an existing header) so a
 // previously debug-touched save can never come back clean.
 func (h *Header) MergeDebugTouched(incoming bool) {
-	h.DebugTouched = h.DebugTouched || incoming
+	h.debugTouched = h.debugTouched || incoming
+}
+
+// headerWire is the JSON wire shape for Header — an exported shadow DTO
+// used only at the marshalling boundary (SEC-024/ASM-076). Header.debugTouched
+// is unexported so no package outside serialize can assign it directly
+// (TouchDebug/MergeDebugTouched are the only mutation path); encoding/json
+// cannot see an unexported field, so MarshalJSON/UnmarshalJSON below copy
+// through this DTO instead of relying on default struct-tag reflection.
+// Field set and json tags are kept in exact 1:1 correspondence with Header
+// — see the two conversions below.
+type headerWire struct {
+	FormatVersion string      `json:"formatVersion"`
+	WorldSeed     int64       `json:"worldSeed"`
+	CreatedAtTick int64       `json:"createdAtTick"`
+	GameMonth     int64       `json:"gameMonth"`
+	AppVersion    string      `json:"appVersion"`
+	DebugTouched  bool        `json:"debugTouched"`
+	ShardIndex    []ShardMeta `json:"shardIndex"`
+}
+
+// MarshalJSON implements json.Marshaler. See headerWire's doc comment for
+// why this exists (Header.debugTouched is unexported, SEC-024).
+func (h Header) MarshalJSON() ([]byte, error) {
+	return json.Marshal(headerWire{
+		FormatVersion: h.FormatVersion,
+		WorldSeed:     h.WorldSeed,
+		CreatedAtTick: h.CreatedAtTick,
+		GameMonth:     h.GameMonth,
+		AppVersion:    h.AppVersion,
+		DebugTouched:  h.debugTouched,
+		ShardIndex:    h.ShardIndex,
+	})
+}
+
+// UnmarshalJSON implements json.Unmarshaler. See headerWire's doc comment
+// for why this exists (Header.debugTouched is unexported, SEC-024).
+// Backward compatible with every existing on-disk header.json: the wire
+// shape (field names and json tags) is unchanged from before this fix, so
+// a save written by an older build decodes exactly as it always did,
+// "debugTouched": true included.
+//
+// SEC-029: debugTouched is OR-merged into h (via MergeDebugTouched), never
+// assigned. A plain assignment here would let json.Unmarshal(data, h) on
+// an ALREADY-populated *h (h.debugTouched already true) silently clear the
+// sticky flag back to false the moment the decoded JSON said "false" —
+// structurally the same real-world defect SEC-024 closed on the bare
+// field, just reached through this type's own required json.Unmarshaler
+// method instead. Not reachable through this package's own API today
+// (ReadHeader and harness/replay's Load both decode into a fresh `var h
+// Header`), but UnmarshalJSON is exported by necessity and this type's
+// own doc comment anticipates exactly the save-over-reusing-an-existing-
+// header pattern MergeDebugTouched exists for — a caller reaching for the
+// idiomatic json.Unmarshal(bytes, existingHeaderPtr) must not lose data.
+// OR-merging is free on the common fresh-target path: OR and assignment
+// agree whenever h starts false.
+func (h *Header) UnmarshalJSON(data []byte) error {
+	var w headerWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	h.FormatVersion = w.FormatVersion
+	h.WorldSeed = w.WorldSeed
+	h.CreatedAtTick = w.CreatedAtTick
+	h.GameMonth = w.GameMonth
+	h.AppVersion = w.AppVersion
+	h.MergeDebugTouched(w.DebugTouched)
+	h.ShardIndex = w.ShardIndex
+	return nil
 }
 
 // Semver is a parsed MAJOR.MINOR.PATCH version, as used by FormatVersion.

@@ -71,4 +71,16 @@ const (
 	// failure any caller branches on; State.CheatLog() is the supported
 	// programmatic audit surface.
 	codeCheatUsed = "MET-E210"
+
+	// ErrStateCopied: a *State method was called on a struct copy of the
+	// value NewState returned (SEC-020 wave 2). State's mu is a
+	// sync.Mutex VALUE (a copy gets its own, independent lock) while
+	// header (*serialize.Header) and cheatLog (slice) are reference types
+	// a copy ALIASES — so an unrejected copy is a second lock domain
+	// racing the original to mutate the SAME save header's sticky
+	// DebugTouched hygiene flag. Every method that touches mu or a shared
+	// field checks for this before doing so (checkNotCopied, copyguard.go)
+	// and rejects rather than proceeding; see that file's doc comment for
+	// the pre-lock ordering requirement (SEC-016).
+	ErrStateCopied = "MET-E211"
 )

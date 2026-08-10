@@ -24,7 +24,20 @@ func (s *State) InspectEntity(correlationID, ref string) ([]byte, error) {
 		return nil, err
 	}
 
+	// SEC-020 wave 2: requireOn (above) already checked identity before
+	// this point, but this is a SEPARATE s.mu.Lock() site reading a
+	// SEPARATE shared field (entityLookup) — re-checked here, immediately
+	// before this specific lock, rather than trusting an earlier check on
+	// the same call to cover every subsequent lock site (Weakness
+	// pattern #3).
+	if err := s.checkNotCopied(correlationID, map[string]any{"ref": ref}); err != nil {
+		return nil, err
+	}
 	s.mu.Lock()
+	if err := s.checkNotCopied(correlationID, map[string]any{"ref": ref}); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	lookup := s.entityLookup
 	s.mu.Unlock()
 

@@ -82,7 +82,7 @@ func runVerify(args []string) error {
 	// restriction, not a permanent one. %q removes the need to keep
 	// re-verifying that argument every time the grammar changes.
 	fmt.Printf("metctl verify: %q OK (formatVersion=%q, worldSeed=%d, createdAtTick=%d, gameMonth=%d, debugTouched=%t, shards=%d)\n",
-		dir, h.FormatVersion, h.WorldSeed, h.CreatedAtTick, h.GameMonth, h.DebugTouched, len(h.ShardIndex))
+		dir, h.FormatVersion, h.WorldSeed, h.CreatedAtTick, h.GameMonth, h.DebugTouched(), len(h.ShardIndex))
 	return nil
 }
 

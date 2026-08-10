@@ -2,6 +2,7 @@ package debug
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -69,6 +70,32 @@ func validEnableSource(s EnableSource) bool {
 // injected seams) that every gated method below handles explicitly
 // rather than panicking on.
 type State struct {
+	// self holds the address NewState gave this State at construction
+	// (self.Store(s), set once, at the end of NewState, before s is
+	// returned to any caller — no goroutine can have a reference to s to
+	// race that Store against).
+	//
+	// SEC-020 wave 2: State carries the exact SEC-020 shape already found
+	// and fixed in Engine.self / SubscriptionServer.self / InProcTransport
+	// .self (internal/engine/core/engine.go, internal/engine/core/
+	// subscribe.go, internal/protocol/transport.go — read those first,
+	// this mirrors them exactly rather than inventing a variant). mu is a
+	// sync.Mutex VALUE: `s2 := *s` gives s2 its OWN, independent lock.
+	// header (*serialize.Header) and cheatLog ([]CheatUsedEvent) are
+	// reference types a copy ALIASES — same underlying header, same
+	// backing array. That combination is a direct threat to this
+	// package's entire reason for existing: header.DebugTouched is a
+	// sticky, forever-true hygiene guarantee (doc.go; AC-3/AC-4/AC-12/
+	// AC-15) that a debug-touched save can never re-enter clean balance
+	// data. A copied State's independent mu mutating the SAME aliased
+	// header is two uncoordinated lock domains racing to touch one
+	// hygiene flag — exactly the shape SEC-016 showed can also silently
+	// hang forever (a copy's mu bytes can read as "locked" if the copy
+	// was taken while the original's mu was held), so the identity check
+	// must be lock-free and must run before mu is ever touched. See
+	// checkNotCopied (copyguard.go) for the mechanism.
+	self atomic.Pointer[State]
+
 	mu sync.Mutex
 
 	on      bool
@@ -130,6 +157,10 @@ func NewState(opts ...Option) *State {
 	for _, opt := range opts {
 		opt(s)
 	}
+	// Stored exactly once, here, before s is returned to any caller — no
+	// goroutine can have a reference to s to race this Store against
+	// (SEC-020 wave 2; see self's doc comment above).
+	s.self.Store(s)
 	return s
 }
 
@@ -141,9 +172,44 @@ func zeroClock() time.Time { return time.Time{} }
 
 // IsOn reports whether debug mode is currently active — the single
 // read every other module should use (AC-1).
+//
+// SEC-020 wave 2 / ASM-002: identity-checked BEFORE mu is touched (pre-
+// lock, load-bearing per SEC-016) and again immediately after mu is
+// acquired (defence in depth) — same ordering as every other guarded
+// method in this file, and BEFORE the copy-attack question below.
+//
+// On a struct-copied State, IsOn FAILS CLOSED — returns false — rather
+// than growing an error return. This is a deliberate, logged design
+// decision (see ASM-002 in the BOW), not an oversight: IsOn is the
+// single most-consulted read in this package (every requireOn-gated
+// capability funnels through it, and it is the concrete method value
+// wired as engine.core's injected Speed8xGate — Speed8xGate's own
+// signature is `func(correlationID string) error` with NO room for a
+// "the gate itself is broken" third outcome, only allow/deny). Changing
+// IsOn's signature to return an error would ripple into that contract
+// and every other call site that treats IsOn as a plain bool today.
+// "false" is also the SAFE reading here: a copy denies every debug
+// capability exactly as if debug had never been enabled on it, which is
+// the correct behaviour given a copy must never be able to grant debug
+// powers or touch the header (this method's whole caller-visible
+// contract). It is not SILENT to the system, only to this one caller: a
+// copy hit is still recorded through the standard registry-sourced
+// logging path (errs.New's side effect, return value deliberately
+// discarded — the same documented pattern cheats.go's codeCheatUsed
+// uses for a non-error audit line), so a copy-attack in production still
+// leaves a trail even though this call site cannot surface it as an
+// error without breaking the gate contract above.
 func (s *State) IsOn() bool {
+	if s.self.Load() != s {
+		_ = errs.New(ErrStateCopied, errs.NewCorrelationID(), map[string]any{"method": "IsOn"})
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.self.Load() != s {
+		_ = errs.New(ErrStateCopied, errs.NewCorrelationID(), map[string]any{"method": "IsOn"})
+		return false
+	}
 	return s.on
 }
 
@@ -165,8 +231,26 @@ func (s *State) Enable(source EnableSource, correlationID string) error {
 		return errs.New(ErrUnknownEnableSource, correlationID, map[string]any{"source": string(source)})
 	}
 
+	// SEC-020 wave 2: identity check BEFORE mu is touched at all — a
+	// struct copy's mu may already read as "locked" (copied mid-Lock from
+	// the original), and calling s.mu.Lock() on such a copy before
+	// rejecting it can block forever (SEC-016). This is also the method
+	// with the highest stakes in the whole package: Enable is the ONLY
+	// place that sticky-flags header.DebugTouched, and header is aliased
+	// (not copied) across a struct copy — an unrejected copy here would
+	// let a second, uncoordinated lock domain race the original to touch
+	// the SAME save header.
+	if err := s.checkNotCopied(correlationID, map[string]any{"source": string(source)}); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Defence-in-depth re-check under the lock (cheap: one more atomic
+	// load) — mirrors Engine.RegisterPhaseHook/seal's post-lock re-check.
+	if err := s.checkNotCopied(correlationID, map[string]any{"source": string(source)}); err != nil {
+		return err
+	}
 
 	if s.header == nil {
 		return errs.New(ErrNoHeaderConfigured, correlationID, map[string]any{"source": string(source)})
@@ -188,10 +272,27 @@ func (s *State) Enable(source EnableSource, correlationID string) error {
 // touching the header's DebugTouched flag — that flag is sticky
 // forever, by design (AC-4, AC-15, and doc.go's package-level warning).
 // Do not add a path here (or anywhere) that clears DebugTouched.
+//
+// SEC-020 wave 2: identity-checked BEFORE mu is touched and again after
+// acquisition — same ordering as Enable/IsOn. Disable has no
+// correlationID parameter (matching its existing signature, which this
+// fix does not change) and no error return to carry a rejection through,
+// so — mirroring SubscriptionServer.PublishEngineStatus's identical
+// no-correlationID/no-return situation — a copy simply has its Disable()
+// call silently dropped rather than mutating its own independent `on`
+// flag: dropping is safe because the real State's on-state (the only one
+// that matters) is left exactly as it was, and a copy's own `on` field
+// was never a channel any other code reads through anyway.
 func (s *State) Disable() {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Disable"}); err != nil {
+		return
+	}
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Disable"}); err != nil {
+		return
+	}
 	s.on = false
-	s.mu.Unlock()
 }
 
 // requireOn is the single gate check every capability below (speed-8x,
@@ -200,6 +301,19 @@ func (s *State) Disable() {
 // (ErrDebugRequired), the capability name carried in ctx, never a
 // silent no-op and never a panic (AC-9, AC-11).
 func (s *State) requireOn(correlationID, capability string) error {
+	// SEC-020 wave 2: checked here too, ahead of (and in addition to)
+	// IsOn's own internal guard below — every gated capability (cheats,
+	// entity inspector, fidelity dial, speed-8x, console, fixture
+	// controls) funnels through requireOn, so rejecting the copy here
+	// with the precise ErrStateCopied is strictly more diagnostic than
+	// falling through to IsOn's fail-closed "false" and reporting the
+	// generic ErrDebugRequired instead — a caller debugging "why is my
+	// gate denied" should not have to rule out a copy-identity bug by
+	// hand. checkNotCopied is lock-free, so this costs nothing before
+	// IsOn's own pre-lock check runs.
+	if err := s.checkNotCopied(correlationID, map[string]any{"capability": capability}); err != nil {
+		return err
+	}
 	if s.IsOn() {
 		return nil
 	}
@@ -210,10 +324,24 @@ func (s *State) requireOn(correlationID, capability string) error {
 // lock only to read the func pointer itself (not to hold it across the
 // call, since a caller-injected Clock could in principle be slow or
 // re-enter this package).
+//
+// SEC-020 wave 2: identity-checked BEFORE mu is touched and again after
+// acquisition — same ordering as every other guarded method here. On a
+// copy, fails closed to zeroClock() (never reads the aliased original's
+// `now` func pointer through the copy's own independent lock) — the same
+// "never fabricate a real timestamp for an event that didn't happen on
+// the real State" reasoning zeroClock's own doc comment already states
+// for the no-WithClock case.
 func (s *State) nowFunc() time.Time {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "nowFunc"}); err != nil {
+		return zeroClock()
+	}
 	s.mu.Lock()
 	now := s.now
 	s.mu.Unlock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "nowFunc"}); err != nil {
+		return zeroClock()
+	}
 	if now == nil {
 		return zeroClock()
 	}

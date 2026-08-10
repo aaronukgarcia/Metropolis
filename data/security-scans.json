@@ -3,7 +3,7 @@
   "scanVersion": "v1",
   "scanVersionMeaning": "v1 = manual adversarial review by a Destructive agent against the v1 checklist: input validation and trust boundaries, integer/slice bounds and conversion safety, type confusion, encapsulation and exported-surface leakage, concurrency safety, resource exhaustion, error-path information disclosure, insecure-call-ability (can a caller use this API wrongly and get an unsafe result?). Bumping this version invalidates every stamp below and requires a fresh sweep.",
   "scans": {
-    "int.serializer": { "scannedAt": "2026-08-09T18:05:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": ["SEC-001", "SEC-022"], "verdict": "findings-raised" },
+    "int.serializer": { "scannedAt": "2026-08-10T09:20:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": ["SEC-001", "SEC-022", "SEC-029"], "verdict": "findings-raised" },
     "int.protocol": { "scannedAt": "2026-08-10T09:00:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": ["SEC-023"], "verdict": "findings-raised" },
     "foundation.data": { "scannedAt": "2026-08-09T17:37:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },
     "foundation.errors": { "scannedAt": "2026-08-09T17:38:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": [], "verdict": "clean" },

@@ -7,7 +7,8 @@
       "P": "protocol — internal/protocol (engine/UI command/event/delta contract)",
       "E": "engine — internal/engine/* (simulation modules)",
       "U": "ui — internal/ui/* (screens, widgets, input, render)",
-      "T": "tooling — build/plan/generate scripts (currently JS, outside the Go registry)"
+      "T": "tooling — build/plan/generate scripts (currently JS, outside the Go registry)",
+      "H": "harness — internal/harness/* (recorded fixtures/replay, and future UI/engine test harnesses)"
     },
     "reserved": {
       "F000-F009": "reserved for foundation.errors (errs package self-errors: registry load/validation, unregistered code — always available even if the registry fails to load)",
@@ -26,7 +27,8 @@
       "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
-      "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)"
+      "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
+      "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -492,6 +494,48 @@
       "module": "engine.stub",
       "message": "StubEngine.Run: transport Commands() channel closed before ctx was cancelled",
       "remedy": "BUG-020: a clean shutdown always cancels Run's ctx before the transport is closed. This error means the transport's command channel closed while ctx was still live -- an unexpected early Close(), a struct-copied transport, or some other bug upstream of Run. Investigate what closed the transport; do not treat this the same as an intentional quit."
+    },
+    "MET-H000": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "fixture name {name} is not a valid single path component; rejected to prevent path traversal (SEC-001-class)",
+      "remedy": "A fixture name is untrusted the moment it could have come from anything other than this build's own record path (a CLI flag, a bug report, a shared directory). It must be a single clean path component, per serialize.ValidateShardName's rule (reused here, not re-derived): no separators, no drive/volume marker, no '.'/'..' segment, no trailing dot or space. Rename the fixture (or fix whatever generated the name) rather than expecting this check to sanitise it."
+    },
+    "MET-H001": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "fixture {name} failed a version check: {cause}",
+      "remedy": "Either the fixture's header.FormatVersion major does not match this build's serialize.CurrentFormatVersion major, or its recorded protocolVersion does not match this build's protocol.ProtocolVersion. Regenerate the fixture against this build, or run this build against the fixture's original protocol/format version."
+    },
+    "MET-H002": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "fixture at {path} is corrupt: {cause}",
+      "remedy": "The fixture's shard bytes failed to decode (bad gzip stream, malformed NDJSON record) or its computed SHA256/size did not match its header's recorded ShardMeta -- treat the fixture as corrupt or tampered rather than trying to load it. Regenerate it from a trusted recording."
+    },
+    "MET-H003": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "fixture at {path} could not be read: {cause}",
+      "remedy": "Check that the fixture's header/shard files exist at the expected path and are readable (permissions, disk state). Distinct from MET-H002: this is an I/O failure, not a decode/integrity failure on bytes that were read successfully."
+    },
+    "MET-H004": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "regression replay stopped before every recorded command received a CommandResult: {cause}",
+      "remedy": "BUG-020-class: ctx was done before EnginePlayer.Replay observed a SendResult callback for every command it sent. Investigate why the target engine's RunCommandLoop stopped consuming/answering mid-sequence rather than treating this the same as a clean, fully-answered replay."
+    },
+    "MET-H005": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "Recorder method called on a struct-copied value, not the one NewRecorder constructed",
+      "remedy": "Always use the *Recorder pointer NewRecorder returned. Do not dereference-and-reassign it ('r2 := *r') or pass it by value -- that produces a second Recorder value with its own mutex but an ALIASED records slice (SEC-020-class). If you need a second independent Recorder, call NewRecorder again."
+    },
+    "MET-H006": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "EnginePlayer method called on a struct-copied value, not the one NewEnginePlayer constructed",
+      "remedy": "Always use the *EnginePlayer pointer NewEnginePlayer returned. Do not dereference-and-reassign it ('p2 := *p') or pass it by value -- that produces a second EnginePlayer value with its own mutex but ALIASED results slice and notify channel (SEC-020-class). If you need a second independent EnginePlayer, call NewEnginePlayer again."
     }
   }
 }
