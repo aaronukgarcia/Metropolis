@@ -149,6 +149,26 @@ This work is **complete and self-verified** by its junior (before/after attack d
 
 **Standing context a fresh session needs**: the dev-team process is at v1.8 (`docs/planning/dev-team-process.md`) — read the three weakness patterns and the assumption rules before dispatching anything. The BOW is the authority on item state (`node claude-bow.js list --by-seq`); this file is the authority on *why*.
 
+### 13. The audit that ended the sweep — and the one line that protected all of it
+
+Two things closed this arc, and neither was more security work.
+
+**QA was asked the question the lead couldn't answer, and answered it.** Given an explicit invitation to say "this went too far", it did — with evidence rather than a feeling: **zero Sprint 2 movement across 38 commits** spanning two days; the pipelined N/N+1 cadence the process itself mandates fully *suspended* rather than slowed; 67 assumptions, 25 findings, four patterns and three process-version bumps produced by a project that had not yet built a second sprint of features; and **no written exit criterion anywhere** — no answer to "how much surface remains, and when does hand-sweeping stop?"
+
+Its sharpest observation was a mirror:
+
+> Weakness pattern #1 preaches *teach the class, don't audit every instance* — and it was never applied to the **audit itself**.
+
+Five rounds of "guard this, then discover the structurally adjacent thing is unguarded" is the manual version of exactly what the pattern forbids. Accepted; the response was **BUG-024** — a mechanical, AST-derived, CI-enforced check for the copyable-mutex shape — and a declared stop to the hand-sweep.
+
+It also caught the log rounding in its author's favour: "main was red for three commits" undercounts the **eight red runs** `gh run list` actually shows, because docs-only pushes inherit a red status. Corrected on the record. QA judged everything else it checked as plainly stated as the evidence supported, including the parts that reflect badly on the lead — but one flattering number is one too many in a document whose whole value is being trusted.
+
+**SEC-028 — the highest-leverage finding of the session — came from auditing the lead's own work.** Destructive-3 was asked to audit the BUG-021 fix precisely because it had been dispatched, self-verified and committed **without a Tester or a Destructive pass**, while every other fix went through both. It confirmed the fix sound on all three counts, then found something bigger: **CI never ran `go test -race`. Anywhere.**
+
+It demonstrated the consequence instead of asserting it: with SEC-003's original defect reintroduced, CI's exact command passed **10/10 on a fully broken engine**; the same command with `-race` failed 5/5. Every copy guard, the entire five-round chain, BUG-007's panic path — all protected by regression tests that only prove anything under a flag CI never passed.
+
+One workflow line now guards all of it, confirmed green on the runner. Two days of hand-auditing were protected by a change that took minutes — which is QA's argument made concrete.
+
 ### 12. `main` went red for three commits — and the cause was the control I'd written that morning
 
 After pushing the engine.core copy-safety chain I ran `gh run list`, saw the run **in progress**, and never went back. Two more commits landed on top before CI's failure was noticed. Both defects were test-only, and the determinism gate stayed green throughout — but `main` was red for three commits.

@@ -157,12 +157,13 @@
         "calls": []
       },
       "securityScan": {
-        "scannedAt": "2026-08-09T18:05:00Z",
+        "scannedAt": "2026-08-10T09:20:00Z",
         "scanVersion": "v1",
         "by": "Destructive-1",
         "findings": [
           "SEC-001",
-          "SEC-022"
+          "SEC-022",
+          "SEC-029"
         ],
         "verdict": "findings-raised"
       }
