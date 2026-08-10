@@ -213,7 +213,7 @@
         "calls": []
       },
       "securityScan": {
-        "scannedAt": "2026-08-09T17:41:00Z",
+        "scannedAt": "2026-08-10T09:40:00Z",
         "scanVersion": "v1",
         "by": "Destructive-1",
         "findings": [],
@@ -249,11 +249,13 @@
         "calls": []
       },
       "securityScan": {
-        "scannedAt": "2026-08-09T17:38:00Z",
+        "scannedAt": "2026-08-10T09:40:00Z",
         "scanVersion": "v1",
         "by": "Destructive-1",
-        "findings": [],
-        "verdict": "clean"
+        "findings": [
+          "SEC-031"
+        ],
+        "verdict": "findings-raised"
       }
     },
     {
@@ -445,7 +447,7 @@
         "calls": []
       },
       "securityScan": {
-        "scannedAt": "2026-08-09T17:39:00Z",
+        "scannedAt": "2026-08-10T09:40:00Z",
         "scanVersion": "v1",
         "by": "Destructive-1",
         "findings": [],

@@ -79,6 +79,25 @@ The very first Destructive sweep produced the same root cause three times, in th
 
 This is what the weakness count is for. Three instances of one class in one sweep is not three bugs — it is one habit, and the response is teaching, which is why it is written here rather than only in three BOW items.
 
+### Weakness pattern #5: a guard must not damage what it protects (2026-08-10)
+
+Three findings in one sweep, all the same shape — **the rejection path harming the thing the guard exists to defend**:
+
+| Finding | The guard | What its own rejection did |
+|---|---|---|
+| SEC-026 | reports a premature engine exit so a silent death is visible | fired on *correct* shutdowns too — and an alarm that cries wolf gets ignored, restoring the silence |
+| SEC-030 | rejects a copied screen and logs it | unthrottled at a 10Hz render tick, it filled the shared 200-entry error ring in ~20s, **drowning F12's error tail** — the instrument built so nothing gets lost |
+| SEC-031(b) | rejects a copied logger and records the attempt | shared the finite ring with genuine audit records, so 500 rejected calls **evicted real evidence** |
+
+Each guard was correct about *what* to reject. Each damaged the diagnostic capability it was protecting, in the act of protecting it.
+
+**The rule:**
+
+- **Ask what the rejection path consumes.** If it writes to a bounded shared resource — a ring buffer, a log, an alert channel, a queue — a caller in a loop will exhaust it. "Only a malicious caller would" is wrong: SEC-030 needed no malice, just a render loop.
+- **A rejection that can fire per-frame must be throttled, coalesced, or quota'd.** Prefer coalescing (`MET-U101 ×4,127` tells an operator *more* than 200 identical lines), because it preserves the signal while bounding the volume.
+- **Fix it centrally.** SEC-030 and SEC-031(b) were the same defect reached through different callers. Nine guards each solving their own flooding gives nine subtly different throttles and leaves the tenth guard with none.
+- **Never let the alarm degrade the evidence.** A guard that fills the audit trail with its own noise has converted a specific failure into general blindness — which is worse than the failure it caught.
+
 ### Weakness pattern #4: a value in a privileged position is input, however inert it looks (2026-08-09)
 
 `input-validation` is the largest class in the ledger — nine findings, across Go and JavaScript, engine and tooling, written by different hands. Grouping them shows it is **not** "the team forgets to validate". Every one of these packages validates its payload carefully. The defect is narrower and much more specific:
