@@ -325,7 +325,7 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "high-street-retail; retail appeal++"
+      "notes": "high-street retail block; retail appeal++"
     },
     {
       "id": "junction_controls_signals_mini_rbt_roundabout_grade_separated",
@@ -2400,7 +2400,7 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "wealth magnet; waterfront-transport"
+      "notes": "wealth magnet; waterfront transport group"
     },
     {
       "id": "city_park_large",
@@ -3350,7 +3350,7 @@
       "consumptionRef": "stationRailMetro",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "through/terminus variants (rail-stations)"
+      "notes": "through/terminus variants (rail stations group)"
     },
     {
       "id": "grand_terminus",
@@ -3900,7 +3900,7 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "coastal-shoreline; premium shore living"
+      "notes": "coastal-shoreline group; premium shore living"
     },
     {
       "id": "mobile_home_park",
@@ -4516,7 +4516,7 @@
       "consumptionRef": "office",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "office-tiers t1"
+      "notes": "office-tiers group t1"
     },
     {
       "id": "office_block",

@@ -46,9 +46,9 @@ var knownBlightClasses = map[string]bool{
 }
 
 // knownSourcePacks is the documented sourcePack enum (AC-9): the six
-// non-cosmetic §23 'Blue'-pack-equivalent groups ("regional-cosmetic" is
-// explicitly cosmetic-only and skipped per §23's own table, so it has
-// no corresponding tag here).
+// non-cosmetic §23 expansion-content-equivalent groups (the seventh,
+// purely cosmetic regional set, is explicitly skipped per §23's own
+// table, so it has no corresponding tag here).
 var knownSourcePacks = map[string]bool{
 	"waterfront-transport": true, "coastal-shoreline": true, "high-rise": true,
 	"high-street-retail": true, "rail-stations": true, "office-tiers": true,

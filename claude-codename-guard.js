@@ -59,6 +59,28 @@ const LINES = 'lines';
 const CITY = 'cit';
 const IES = '(?:y|ies)';
 
+// Fragments for the expansion-content pack names (FEAT-037, follow-on to
+// ASM-150): this combination of pack names, taken together, is as much a
+// fingerprint of the reference title as the title itself — see the ASM
+// logged against foundation.data for the ruling. Same discipline as above:
+// each word is split so no forbidden literal sits whole in this file, and a
+// flexible separator regex absorbs "&" vs "and" and hyphenation variants.
+const SEP = '[\\s:_-]*';
+const AMP = '(?:&|and)';
+const BRIDG = 'bridg';
+const PORT = 'por';
+const BEA = 'bea';
+const PROPERT = 'propert';
+const URB = 'urb';
+const PROMENAD = 'promenad';
+const STAT = 'stat';
+const OFFIC = 'offic';
+const EVOLUT = 'evolut';
+const FRAN = 'franci';
+const SCRAP = 'scrap';
+const MODER = 'moder';
+const ARCHITECT = 'architect';
+
 // Built at runtime. Matches the two-word title with any separator, the
 // single distinctive word on its own, and the numbered abbreviations.
 const PATTERNS = [
@@ -74,7 +96,46 @@ const PATTERNS = [
     re: /\bCS ?[12]\b/,
     what: 'a numbered abbreviation of the reference title',
   },
+  {
+    re: new RegExp(`\\b${BRIDG}es${SEP}(?:${AMP}${SEP})?${PORT}ts\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${BEA}ch${SEP}${PROPERT}ies\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${URB}an${SEP}${PROMENAD}e\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${CITY}y${SEP}${STAT}ions\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${OFFIC}e${SEP}${EVOLUT}ion\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${SAN_FRAN()}${SEP}set\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${SKY}${SCRAP}ers\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
+  {
+    re: new RegExp(`\\b${MODER}n${SEP}${ARCHITECT}ure\\b`, 'i'),
+    what: 'a former expansion-content pack name',
+  },
 ];
+
+// Assembled as a function, not a top-level const, purely to keep the two
+// place-name fragments ("san" + "franci"+"sco") from ever sitting next to
+// each other as a single joined literal anywhere in this file's source.
+function SAN_FRAN() {
+  return `san${SEP}${FRAN}sco`;
+}
 
 function allow() {
   process.exit(0);
