@@ -25,7 +25,7 @@ The player starts with money, a two-kilometre-square tile of real Folkestone top
 
 ## I.3 Fixed decisions (the constitution)
 
-Go; single binary v1 with engine-as-a-service behind a versioned protocol (gRPC-ready, dormant); bit-exact determinism as a CI-gated invariant; JSON everywhere (saves as sharded gzipped NDJSON); 10 m cells; 'Blue' speed model (pause/1×/2×/4×, debug 8×; one day-night cycle = one calendar month; ~8 real minutes per month at 1×; winning run ≈ 80–150 hours); Option B citizen model (persistent individuals, adaptive fidelity, no named-person culls — month-resolution ages and per-person mortality hazards); horizontal expansion over real Kent to ~60×60 km with era/milestone progression to 'Blue''s pattern; static import prices v1 behind a market interface; keyboard-first UI with optional mouse; debug mode as a runtime feature switch; full harness strategy so the front end is built against a stub engine before the simulation exists; Book of Work in local MariaDB; monorepo Git with trunk-based development; Claude Code as the builder under a written working agreement.
+Go; single binary v1 with engine-as-a-service behind a versioned protocol (gRPC-ready, dormant); bit-exact determinism as a CI-gated invariant; JSON everywhere (saves as sharded gzipped NDJSON); 10 m cells; 'Blue' speed model (pause/1×/2×/4×, debug 8×; one day-night cycle = one calendar month; ~8 real minutes per month at 1×; winning run ≈ 80–150 hours); Option B citizen model (persistent individuals, adaptive fidelity, no named-person culls — month-resolution ages and per-person mortality hazards); horizontal expansion over real Kent to ~60×60 km with era/milestone progression modelled on 'Blue's pattern; static import prices v1 behind a market interface; keyboard-first UI with optional mouse; debug mode as a runtime feature switch; full harness strategy so the front end is built against a stub engine before the simulation exists; Book of Work in local MariaDB; monorepo Git with trunk-based development; Claude Code as the builder under a written working agreement.
 
 ## I.4 Document map
 
@@ -122,7 +122,7 @@ Adopted directly from 'Blue', tuned for our scale:
 | 1 | 1× | 1 game month ≈ **8 real minutes** (config: `secondsPerMonthAt1x`, default 480) |
 | 2 | 2× | 4 min/month |
 | 3 | 4× | 2 min/month |
-| Debug | 8× | Dev/debug mode only (mirrors 'Blue''s hard cap) |
+| Debug | 8× | Dev/debug mode only (mirrors 'Blue's hard cap) |
 
 **Two-layer clock, 'Blue'-style:** the displayed clock runs one **day-night cycle per calendar month**. Inside each cycle run **30 logistics day-ticks** (~16 real seconds each at 1×): traffic assignment, deliveries, stock draw-down, queues, service dispatch. At each cycle end, the **monthly tick** resolves in fixed deterministic phases:
 
@@ -154,7 +154,7 @@ Growth is **migration-dominated**: natural increase is realistic (and therefore 
 | 12 | Megalopolis | 50,000,000 | Automated logistics, vertical farming, arterial megastructure roads |
 | 13 | Centopolis | 100,000,000 | **WIN** |
 
-Each milestone grants: unlocks, an expansion-permit allowance, a cash award, and a loan-facility uplift ('Blue' pattern). Cheat/debug mode can force-unlock any tier for testing (per decision: e.g. port testing pre-100k).
+Each milestone grants: unlocks, an expansion-permit allowance, a cash award, and a loan-facility uplift (a pattern taken from 'Blue'). Cheat/debug mode can force-unlock any tier for testing (per decision: e.g. port testing pre-100k).
 
 ---
 
@@ -225,7 +225,7 @@ The beating heart. Daily-tick resolution:
 
 Month index drives: **power demand** (winter peak), **water stress** (summer), **harvest calendar** (local staples arrive in lumps → storage strategy), **construction speed** (winter slowdown), **school year** (September intake gates education transitions), **leisure mix** (beach summer / indoor winter), minor **health wave** (winter). All seasonal curves visible in projections.
 
-## 10. Service & Feature Inventory ('Blue'-mapped)
+## 10. Service & Feature Inventory (mapped to 'Blue')
 
 Full 'Blue' surface, all in v1, gated by tier (§4): roads & road maintenance · electricity · water/sewage · healthcare & deathcare (hearses, cemeteries/crematoria — deaths are continuous, so is deathcare demand) · garbage · education (primary → secondary → further → university) · fire · police & jail · elder care & child benefit analogues · public transport (bus → rail → metro) · parks, recreation & **leisure venues** (personality-patronised, §5.1) · communications/post analogue · districts & policies (tier 7: per-district taxes, ordinances) · city services buildings with upgrade paths · disasters-lite (road closure, storm surge on the shore, aquifer drought) as event pressure on JIT.
 
@@ -331,7 +331,7 @@ Two per-citizen state tracks (0–100), updated monthly (cold) / daily-influence
 
 ## 19. Transport, Routing & Traffic — doing what 'Blue' couldn't
 
-**'Blue''s known routing flaws, and our structural answers:**
+**'Blue's known routing flaws, and our structural answers:**
 1. *Individually-optimal pathing with no congestion anticipation* → herds pile onto the same "cheapest" route. **Ours:** daily **capacity-restrained stochastic user equilibrium**: iterative assignment where link times update via volume-delay functions and flows re-split until stable — routes spread across alternatives exactly as real commuters learn. Deterministic, converges in a few iterations on cached warm starts.
 2. *Lane choice decided at path time* → mile-long single-lane queues beside empty lanes. **Ours:** lanes are link capacity, not routed objects; turn-movements at junctions carry their own capacities. The pathology cannot exist.
 3. *Despawn/teleport masking gridlock.* **Ours:** nothing ever despawns — vehicle-conservation is an invariant-checker assert. Gridlock is real, visible, and yours to fix.
@@ -383,7 +383,7 @@ Three currencies, exactly as 'Blue' structures it plus purchase:
 - **Development Points** — spent in **per-category progression trees** (Roads, Electricity, Water & Gas, Health & Deathcare, Education, Fire, Police, Garbage, Parks & Rec, Transport, Communications, Welfare) to unlock specific buildings/abilities within a tier — so two players at tier 6 own different toolkits.
 - **Buy** — off-map capacity is purchased directly with money regardless of points: grid tranches, gas pipeline tranches, external rail access, port permits, water bulk-supply contracts. Cheat/debug can force any unlock for testing.
 
-## 23. Expansion-Content Mapping ('Blue' DLC → our catalogue, all in v1 data)
+## 23. Expansion-Content Mapping ('Blue' expansion content → our catalogue, all in v1 data)
 
 | 'Blue' pack | What we take |
 |---|---|
@@ -475,9 +475,9 @@ All freight is accounted in **tonnes/day** end-to-end. Port capacity = berths ×
 
 Exports earn; the balance-of-trade screen (F5 extension) shows t/day and £/day by commodity and by artery — watching your port flip the city from importer to exporter is a mid-game arc.
 
-## 34. Zoning — Land Types ('Blue'-mapped)
+## 34. Zoning — Land Types (mapped to 'Blue')
 
-Player zones; firms/households move in per demand: **Dwelling** (low/med/high density — typology mix per §21 within zone class) · **Shop** (local/high-street/large-format) · **Office** (t1–t3 §C/I) · **Entertainment** (leisure venues cluster — the night-time economy zone, noise rules apply) · **Farming** (§31 regimes) · **Manufacturing** (light industrial) · **Heavy Industry** (blight class, buffer rules) · **Mining** (only on revealed geology, §32). Zone demand bars (the classic RCI, now 8-way) driven by the real underlying models — unfillable demand tells you *why* (no labour, no power, no freight capacity) instead of 'Blue''s mute bars.
+Player zones; firms/households move in per demand: **Dwelling** (low/med/high density — typology mix per §21 within zone class) · **Shop** (local/high-street/large-format) · **Office** (t1–t3 §C/I) · **Entertainment** (leisure venues cluster — the night-time economy zone, noise rules apply) · **Farming** (§31 regimes) · **Manufacturing** (light industrial) · **Heavy Industry** (blight class, buffer rules) · **Mining** (only on revealed geology, §32). Zone demand bars (the classic RCI, now 8-way) driven by the real underlying models — unfillable demand tells you *why* (no labour, no power, no freight capacity) instead of 'Blue's mute bars.
 
 ## 35. Communications, Internet & E-commerce
 
@@ -665,7 +665,7 @@ Full 'Blue'-parity ladder (all §R types remain): alley · gravel · residential
 
 ## 52. Policies v2 & Named Districts
 
-'Blue''s policies are rightly criticised as shallow toggles: citywide binaries, opaque effects, negligible feel. Ours are **modelled instruments**: every policy states its mechanism (which coefficients it moves), its projected impact (F7 preview *before* enactment), its cost/enforcement needs, and its scope — citywide, **district**, or road-level.
+'Blue's policies are rightly criticised as shallow toggles: citywide binaries, opaque effects, negligible feel. Ours are **modelled instruments**: every policy states its mechanism (which coefficients it moves), its projected impact (F7 preview *before* enactment), its cost/enforcement needs, and its scope — citywide, **district**, or road-level.
 
 **Named districts are the scope system:** the player draws and *names* districts — "Central Business District", "Cheriton Science Park", "**Tax-Free Harbour**" (freeport: customs exemption inside the wire, §33 boost + §28 smuggling exposure), "Old Town", enterprise zones — each carrying a policy bundle + §39 tax settings + an identity that feeds firm location choice and reputation (a named Science Park with a university link genuinely pulls labs; the *name is a mechanic*).
 
@@ -1293,7 +1293,7 @@ Every requirement raised in planning, traced to its LLD home:
 | Detroit spiral, insolvency, ghost-city ending | §12 |
 | Consumption tables (person/school/etc.; water, gas, wastewater, electric, food, waste) | §17 |
 | Wellbeing, mental & physical health; commute time | §18, §42 |
-| Routing without 'Blue''s flaws; jams, bottleneck learning, lane myth; signals/roundabouts; road names, endpoints, route-taken inspection | §19, §20, §51 |
+| Routing without 'Blue's flaws; jams, bottleneck learning, lane myth; signals/roundabouts; road names, endpoints, route-taken inspection | §19, §20, §51 |
 | Trains, tube, bus, minibus, taxi, bicycle, motorbike, walking; London commuting; housing type variety | §19.1, §21 |
 | Refuse rounds & waste-health; dispatch (fire/police/ambulance/air ambulance); education lifecycle incl. universities | §25–§27 |
 | Crime types, gangs, more-police-less-crime curve, police HQ, MI5-analogue; prison & rehabilitation | §28, §43 |

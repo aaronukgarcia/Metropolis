@@ -50,6 +50,7 @@ These rules are inherited from Prix Six and apply to every piece of code written
 | #19 | Deploy Bundling — every commit changing deployable functions MUST end with the deploy command bundling ALL pending function changes |
 | #20 | Contract-First, Stub-Forever — modules consume each other ONLY via registered interfaces (GUIDs in code.json); every module keeps a passing stub for life; `internal/ui → internal/engine` imports lint-banned |
 | #21 | Red Determinism Gate Stops the Line — any determinism CI failure is auto-P0; nothing else merges until green; revert first, diagnose after |
+| #22 | Codename Discipline — the reference title is **'Blue'** and only 'Blue'. Its real name and abbreviations never appear in git: not in code, data, docs, plans, comments, commit messages, or branch names |
 
 > **Full implementation patterns, code templates, and compliance checklists:** `docs/golden-rules-detail.md`
 > (Carried over verbatim from Prix Six — Firebase-specific examples apply once Metropolis has its own stack; adapt as the architecture solidifies.)

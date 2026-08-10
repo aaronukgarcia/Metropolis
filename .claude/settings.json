@@ -54,6 +54,10 @@
             "type": "command",
             "command": "node claude-pre-push-check.js",
             "timeout": 6
+          },
+          {
+            "type": "command",
+            "command": "node claude-codename-guard.js"
           }
         ]
       },
@@ -89,6 +93,10 @@
             "type": "command",
             "command": "node claude-pre-push-check.js",
             "timeout": 6
+          },
+          {
+            "type": "command",
+            "command": "node claude-codename-guard.js"
           }
         ]
       },

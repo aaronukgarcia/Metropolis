@@ -11,7 +11,7 @@ BOW code: MOD-023
 
 ## User stories
 
-- **US-1.** As the player, I need daily traffic assignment to be a capacity-restrained stochastic user equilibrium — flows re-splitting across alternative routes as link times update via volume-delay functions — so that herds never pile onto a single "cheapest" route the way 'Blue''s individually-optimal pathing does (§19 intro point 1).
+- **US-1.** As the player, I need daily traffic assignment to be a capacity-restrained stochastic user equilibrium — flows re-splitting across alternative routes as link times update via volume-delay functions — so that herds never pile onto a single "cheapest" route the way individually-optimal pathing in 'Blue' does (§19 intro point 1).
 - **US-2.** As `engine.roads`, I need lanes to be modelled purely as link capacity with turn-movement capacities at junctions, never as routed/choosable path segments, so the "mile-long single-lane queue beside an empty lane" pathology is structurally impossible (§19 intro point 2).
 - **US-3.** As the invariant checker (`engine.invariant`), I need vehicle conservation to hold on every tick — nothing despawns or teleports — so gridlock is real, visible, and the player's problem to fix, never masked (§19 intro point 3; §II.5 "nothing despawns").
 - **US-4.** As every junction on the road graph, I need a control type (priority / mini-roundabout / roundabout with an entry-capacity formula / signals with cycle time + green splits) plus queue spillback that blocks the upstream junction once a link's queue exceeds its storage, so one failed roundabout can genuinely lock a district and the map view can show it (§19.2).

@@ -19,7 +19,7 @@ BOW code: MOD-019
 
 - **US-1.** As the engine, I need a hard assert every tick (in dev builds) that people, money, goods, and vehicles conserve, so that a bug that silently creates or destroys state is caught at the moment it happens, not months of game-time later when the discrepancy has compounded (§14).
 - **US-2.** As a release build, I need the same conservation checks to run but produce a registry-sourced logged error instead of a hard crash, so that a live game can surface a real bug to the player/F12 panel without terminating the process (§14; GR#1/#7).
-- **US-3.** As the transport system's design (§19), I need vehicle-conservation enforced structurally, so that despawn-masking gridlock — 'Blue''s known failure mode — is impossible even before `engine.traffic` exists to generate vehicles (§19.3).
+- **US-3.** As the transport system's design (§19), I need vehicle-conservation enforced structurally, so that despawn-masking gridlock — a known failure mode of 'Blue' — is impossible even before `engine.traffic` exists to generate vehicles (§19.3).
 - **US-4.** As `harness.headless` and CI, I need the invariant suite runnable standalone against a scenario/save, so that H-HEADLESS's "per-phase timing + invariant reports every tick" (M0-ENG §2.3) has real checks to report, and so H-SYNTH's perf runs are validated as not just fast but correct.
 - **US-5.** As a future engine module (`engine.market`, `engine.finance`, `engine.traffic`, etc., landing Sprint 4+ per the sprint plan), I need a registration seam for adding new conserved stocks, so that "conservation invariants extended to each new stock" (sprint plan S9 exit gate) is a config/registration change, not a rewrite of this package.
 

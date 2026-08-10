@@ -1052,3 +1052,79 @@ Any determinism CI failure (snapshot-hash mismatch across runs or worker counts,
 *See also: `CLAUDE.md` for the one-line summaries of all 21 rules.*
 *Audit history: `docs/gr-audit-2026-05-06.md` documents the bug-cross-reference that surfaced rules #14-#19.*
 *Metropolis amendments approved 2026-08-08 with sprint plan v1 (commit 78c368f).*
+
+---
+
+## Rule #22 — Codename Discipline (NEW, 2026-08-10)
+
+**The reference title is 'Blue', and only 'Blue'.**
+
+The commercial city-builder this project's design documents compare against —
+on citizen culling, traffic modelling, service coverage — is called **'Blue'**
+in every artefact. Its real name, its abbreviations, and its numbered sequel
+form must never be written into git: not in code, not in data, not in docs or
+plans, not in comments, not in commit messages, not in branch names.
+
+### Why this is a rule and not a preference
+
+The repository is intended to become public. **A name written into git is a
+disclosure that cannot be withdrawn.** Editing the file afterwards does not
+help: history keeps the old blob, and once published, clones, caches and
+indexers outlive any correction. That permanence is why the existing
+occurrences were removed by **rewriting history**, not by editing the working
+tree — a working-tree sweep leaves every historical copy in place.
+
+### How to write it
+
+- Use `'Blue'`, or "the reference title", in every context.
+- Where a sentence only reads sensibly with the real name, **rewrite the
+  sentence**. The reference is being renamed, not deleted — preserve the
+  technical point being made. "Unlike 'Blue', which culls citizens under load"
+  carries the same argument as the original.
+- Watch for **indirect identification**: naming the developer, the publisher,
+  or a distinctive product-specific term identifies it as surely as the title
+  does. The rule is about the reference, not the literal string.
+
+### The trap
+
+**The explanation is the exposure.** The single easiest way to violate this
+rule is to write a comment, a changelog line, or a commit message that
+*explains* the rename by quoting the old name. A commit titled "remove
+<old name> references" defeats the entire exercise, permanently, in the one
+place nobody thinks to re-read.
+
+This is why the rule explicitly covers commit messages and comments, and why
+`claude-codename-guard.js` scans them before it scans code.
+
+The same reasoning shapes the guard itself: it assembles its search patterns
+from fragments at runtime rather than holding them as literals, because a
+guard that stored the forbidden strings in order to find them would be the
+largest violation of the rule in the repository — and would flag itself on
+every commit.
+
+### Enforcement
+
+`claude-codename-guard.js` (PreToolUse, Bash + PowerShell) blocks `git commit`
+and `git push` when it finds a match in staged **added lines**, in the commit
+message, or in the branch name.
+
+Two deliberate calibrations:
+
+- **The bare two-letter abbreviation is not matched.** It occurs innocently in
+  ordinary technical prose, and a guard that fires on false positives gets
+  switched off — a failure mode this project has now catalogued three times
+  (SEC-026 and two since). The numbered forms *are* matched; they are
+  unambiguous.
+- **Fail-closed**, unlike `claude-dispatch-guard.js`. The cost is asymmetric:
+  a false block costs a human a few seconds, a miss is permanent and public.
+
+### Compliance checklist
+
+- [ ] No forbidden string in staged code, data, docs, or plans
+- [ ] No forbidden string in the commit message — **including** a message
+      describing this very kind of removal
+- [ ] Branch name clean
+- [ ] Generated artefacts regenerated from the master plan, not hand-edited
+      (`code.json`, `tools/plan/bow-import.json` — GR#3)
+- [ ] No indirect identification introduced (developer, publisher, distinctive
+      product-specific terminology)
