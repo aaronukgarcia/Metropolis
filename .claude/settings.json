@@ -91,6 +91,15 @@
             "timeout": 6
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-dispatch-guard.js"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
