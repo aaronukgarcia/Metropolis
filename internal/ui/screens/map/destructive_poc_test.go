@@ -71,17 +71,25 @@ func TestSEC039_ApplyPatchRejectsOversizedWirePayloadBeforeDecode(t *testing.T) 
 		t.Fatalf("decodeWirePatch called json.Unmarshal on an oversized patch (unmarshalAttempts %d -> %d) — the SEC-039/AC-10 byte-size gate did not run before decoding", before, after)
 	}
 
-	// Corroborating, human-readable evidence: the Destructive-1 PoC
-	// measured 1.43s to decode+iterate this exact shape unfixed. A
-	// correctly-gated rejection is a single len() comparison and must be
-	// orders of magnitude faster — 100ms is generous headroom on any
-	// machine while still being utterly incompatible with a 198MB
-	// json.Unmarshal having run.
-	const maxPlausibleRejectionTime = 100 * time.Millisecond
-	if elapsed > maxPlausibleRejectionTime {
-		t.Fatalf("ApplyPatch(oversized patch) took %v, want < %v — cost does not look like a cheap byte-size rejection (SEC-039/AC-10)", elapsed, maxPlausibleRejectionTime)
-	}
-	t.Logf("ApplyPatch rejected the %d-byte oversized patch in %v with zero Unmarshal attempts (PoC measured 1.43s unfixed)", len(raw), elapsed)
+	// Elapsed time is REPORTED, never asserted on. The first version of
+	// this test failed it against a 100ms ceiling, on the stated grounds
+	// that 100ms was "generous headroom on any machine" — and CI disproved
+	// that on the first run, taking 707ms for a rejection that costs 3.9ms
+	// locally. A shared runner under -race, moving a 198MB payload and
+	// collecting it, is simply not a stable clock.
+	//
+	// The rule this broke is one this project already had in writing:
+	// concurrency and performance tests must be DETERMINISTIC, not
+	// probable. A wall-clock threshold is a probabilistic assertion about
+	// the machine, and it turns a correct fix into a red gate — which,
+	// under GR#21, stops the line for everyone.
+	//
+	// The deterministic proof is the unmarshalAttempts check above: zero
+	// decode attempts is incompatible with a 198MB json.Unmarshal having
+	// run, and it is true on any machine at any speed. That is the
+	// assertion; this is the human-readable colour beside it (Destructive-1
+	// measured 1.43s to decode+iterate this exact shape unfixed).
+	t.Logf("ApplyPatch rejected the %d-byte oversized patch in %v with zero Unmarshal attempts (PoC measured 1.43s unfixed; timing is informational, the zero-attempt count above is the proof)", len(raw), elapsed)
 
 	// The grid must never have been touched — same "reject, never
 	// clamp, keep last-known-good state" posture as every other

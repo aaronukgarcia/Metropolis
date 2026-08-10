@@ -402,11 +402,25 @@ func TestRing_FloodCost_10kEntries_BoundedTime(t *testing.T) {
 	}
 	elapsed := time.Since(start)
 
-	const floodBudget = 500 * time.Millisecond // ASM-126 -- see its BOW entry for the measured baseline
-	if elapsed > floodBudget {
-		t.Fatalf("pushing %d entries (mixed across %d distinct codes) took %s, want <= %s -- map-keyed push may have regressed into an unbounded-cost shape", floodCount, distinctCodes, elapsed, floodBudget)
-	}
-	t.Logf("flood cost: %d pushes across %d distinct codes in %s", floodCount, distinctCodes, elapsed)
+	// Timing is REPORTED, not asserted. The budget that used to sit here
+	// (500ms against a measured 26.6ms) was the same shape as the SEC-039
+	// timing gate that went red on CI within an hour of landing: a
+	// wall-clock threshold with what looked like ample headroom, on a
+	// shared runner under -race that does not keep a stable clock. A
+	// correct fix failing a machine-dependent assertion stops the line for
+	// everyone under GR#21, which is a far worse outcome than the weak
+	// regression signal it was buying.
+	//
+	// Worth being honest about what is lost rather than pretending the
+	// coverage is unchanged: nothing here now detects a silent regression
+	// from the map lookup back to a bounded scan. The coalescing tests
+	// would NOT catch it — a scan-back with a large enough K coalesces
+	// correctly too, just more slowly. What remains is structural: push()
+	// does one map lookup, and the index-size assertion below pins the
+	// property that actually mattered (the index cannot become the
+	// unbounded resource it replaced). If cost-shape regression detection
+	// is wanted back, it needs an operation counter, not a stopwatch.
+	t.Logf("flood cost: %d pushes across %d distinct codes in %s (informational — see the comment above on why this is not asserted)", floodCount, distinctCodes, elapsed)
 
 	// The index's size is bounded by the number of distinct LIVE codes,
 	// itself bounded by ringCapacity -- explicit assertion, not just a
