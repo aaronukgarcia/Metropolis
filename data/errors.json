@@ -121,6 +121,12 @@
       "message": "module registry: key {key} cannot move to status:real — no real implementation was registered for it",
       "remedy": "Pass a non-nil real Module to Register for {key} (or via a future re-registration path) before requesting StatusReal, either at registration (WithStatus(StatusReal)) or via SetStatus."
     },
+    "MET-F106": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "module registry: method called on a struct copy of the Registry NewRegistry returned",
+      "remedy": "SEC-020: never dereference-and-copy a *Registry ('r2 := *r'). Pass the *Registry pointer NewRegistry gave you (or that a caller received from it); a copy carries its own independent mutex over the SAME aliased modules map and is rejected outright rather than allowed to corrupt shared state."
+    },
     "MET-F200": {
       "severity": "error",
       "module": "foundation.det",
@@ -156,6 +162,12 @@
       "module": "foundation.serialize",
       "message": "shard name {name} is not a valid single path component; rejected to prevent path traversal / zip-slip (SEC-001)",
       "remedy": "A ShardMeta.Name decoded from a bundle's header.json is untrusted input, not a trusted local value — it must be a single clean path component with no separators, drive/volume markers, or '.'/'..' segments. This bundle's header.json claims a shard name that fails that check; treat the bundle as hostile or corrupt rather than trying to sanitise the name into something plausible. If this fires on a bundle you trust, the name itself (not this check) is the bug — fix whatever produced header.json."
+    },
+    "MET-F400": {
+      "severity": "error",
+      "module": "foundation.solver",
+      "message": "solver Registry method called on a struct-copied Registry value (correlation {correlationId})",
+      "remedy": "Registry (internal/foundation/solver) must be constructed via NewRegistry and used through that same pointer for its whole lifetime — never dereferenced-and-copied ('r2 := *r'). A copy gets its own, independent mutex while its registrations slice still aliases the original's, and the copy's own next lock attempt can hang forever if it was taken mid-lock on the original (SEC-020/SEC-016). Fix the call site to hold and pass the original *Registry, not a copied value."
     },
     "MET-F600": {
       "severity": "fatal",
@@ -217,6 +229,12 @@
       "message": "malformed f1.viewport patch could not be applied: {cause}",
       "remedy": "The patch was not valid f1.viewport v1 JSON (bad JSON, unrecognised schemaVersion, or a sparse patch received before any full snapshot) and was dropped; the map screen's grid keeps its last-known-good state. If this persists, check the sending engine module's f1.viewport patch encoding (internal/engine/stub/viewport.go documents the v1 schema)."
     },
+    "MET-U101": {
+      "severity": "error",
+      "module": "ui.screen.map",
+      "message": "MapScreen method called on a struct-copied value (SEC-020): {cause}",
+      "remedy": "A *mapscreen.MapScreen value was copied by assignment/passing instead of being used via the single pointer mapscreen.NewMapScreen returned (mu is a sync.Mutex VALUE and grid is an aliased slice — a copy is a second, independent lock racing the original over the same backing array). The call was rejected rather than risking a lock-order hang or a torn grid read; construct exactly one MapScreen via NewMapScreen and pass its pointer everywhere instead of a dereferenced copy."
+    },
     "MET-U200": {
       "severity": "warn",
       "module": "ui.screen.debug",
@@ -234,6 +252,12 @@
       "module": "ui.screen.debug",
       "message": "F12 BoW pane unavailable: {cause}",
       "remedy": "No BoWSource was configured (WithBoWSource) or the configured source's Summary() call failed. The F12 panel renders an explicit \"unavailable\" state for this pane rather than a blank one; check the metro BOW connection if a source is configured."
+    },
+    "MET-U203": {
+      "severity": "error",
+      "module": "ui.screen.debug",
+      "message": "Screen method called on a struct-copied value (SEC-020): {cause}",
+      "remedy": "A *debug.Screen value was copied by assignment/passing instead of being used via the single pointer debug.NewScreen returned (mu is a sync.Mutex VALUE and reg/events are aliased pointer/slice fields — a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one Screen via NewScreen and pass its pointer everywhere instead of a dereferenced copy."
     },
     "MET-E000": {
       "severity": "error",
@@ -409,6 +433,12 @@
       "message": "cheat used: {kind} (correlation {correlationId})",
       "remedy": "Informational audit entry (balance-data hygiene, M0-ENG §3): a debug cheat was invoked successfully. No action required unless unexpected in a shared/demo save; cross-check against the save header's DebugTouched flag and State.CheatLog()."
     },
+    "MET-E211": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "debug.State method {method} was called on a struct-copied State, not the value NewState returned; the call was rejected before touching any shared field",
+      "remedy": "Never copy a *debug.State value (`s2 := *s` or equivalent) — mu is an independent lock on the copy while header/cheatLog remain aliased with the original, so a copy is a second, uncoordinated lock domain over the SAME save header's sticky DebugTouched hygiene flag (SEC-020 wave 2). Always pass and store the *debug.State pointer NewState gave you."
+    },
     "MET-E900": {
       "severity": "fatal",
       "module": "feat.skeleton",
@@ -420,6 +450,18 @@
       "module": "protocol",
       "message": "SendCommand/Close/SendResult/SendEvent/SendDelta/Commands/Results/Events/Deltas called on a copied InProcTransport value, not the one NewInProcTransport constructed",
       "remedy": "Always use the *InProcTransport pointer NewInProcTransport returned. Do not dereference-and-reassign it ('t2 := *t') or pass it by value -- that produces a second InProcTransport value with its own closeMu but ALIASED cmdCh/resultCh/eventCh/deltaCh and closeOnce, so the copy's Close() can race the original's in-flight sends and reopen BUG-007's send-on-closed-channel panic (SEC-020 wave 1). If you need a second independent transport, call NewInProcTransport again."
+    },
+    "MET-P001": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "Observe/Reset called on a copied SeqTracker value, not the one NewSeqTracker constructed",
+      "remedy": "Always use the *SeqTracker pointer NewSeqTracker returned. Do not dereference-and-reassign it ('t2 := *t') or pass it by value -- that produces a second SeqTracker value with its own mu but an ALIASED last map, which is a fatal concurrent map access under -race and in production (SEC-020 wave 1, same class as SEC-003/SEC-019). If you need a second independent tracker, call NewSeqTracker again."
+    },
+    "MET-P002": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "Allocate called on a copied SubscriptionAllocator value, not the one NewSubscriptionAllocator constructed",
+      "remedy": "Always use the *SubscriptionAllocator pointer NewSubscriptionAllocator returned. Do not dereference-and-reassign it ('a2 := *a') or pass it by value -- that produces a second, independently-incrementing counter seeded from the same point, so the copy and the original hand out COLLIDING SubscriptionIDs rather than crashing or hanging (SEC-023). If you need a second independent allocator, call NewSubscriptionAllocator again."
     },
     "MET-P090": {
       "severity": "error",
@@ -438,6 +480,18 @@
       "module": "engine.stub",
       "message": "StubEngine.AdvanceTicks requested with N={n}, must be > 0 and <= {max}",
       "remedy": "Send AdvanceTicksPayload.N as a positive integer no greater than StubEngine's maxAdvanceTicksPerCall (mirrors engine.core.MaxAdvanceTicksPerCall, SEC-006). The request is rejected outright rather than clamped — split it into multiple calls if you need more ticks. This code is also requested when a well-formed N would overflow the running tick counter (currentTick + n > math.MaxInt64), which the reject leaves unchanged."
+    },
+    "MET-P093": {
+      "severity": "error",
+      "module": "engine.stub",
+      "message": "StubEngine method called on a copied value, not the one NewStubEngine constructed",
+      "remedy": "Always use the *StubEngine pointer NewStubEngine returned. Do not dereference-and-reassign it ('s2 := *s') or pass it by value -- that produces a second StubEngine value with its own mu but ALIASED subs/rng/transport/world, so the copy's mu protects nothing shared and a copy taken while the original's mu was held can hang the copy's own Lock() forever (SEC-020 wave 2). If you need a second independent StubEngine, call NewStubEngine again."
+    },
+    "MET-P094": {
+      "severity": "error",
+      "module": "engine.stub",
+      "message": "StubEngine.Run: transport Commands() channel closed before ctx was cancelled",
+      "remedy": "BUG-020: a clean shutdown always cancels Run's ctx before the transport is closed. This error means the transport's command channel closed while ctx was still live -- an unexpected early Close(), a struct-copied transport, or some other bug upstream of Run. Investigate what closed the transport; do not treat this the same as an intentional quit."
     }
   }
 }
