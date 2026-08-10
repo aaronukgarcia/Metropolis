@@ -115,7 +115,7 @@ The BOW is the **single source of truth for planned/active work**: modules, feat
 
 ## What is Metropolis?
 
-A new software development project. **Architecture, purpose, and module structure are TBD** — update this section as soon as the first design decisions are made.
+A **deterministic city-simulation game in Go** with a tcell TUI: persistent individual citizens (Option B — no culls ever, up to 100M at adaptive fidelity), real OS Terrain 50 Kent geography (Folkestone start tile), a two-layer clock, and contract-first modules (GR#20) behind a protocol-only UI/engine split. The full design is `docs/METROPOLIS-MASTER-v2.1.md` (SSOT: `master-plan-v2.1.json` → `tools/plan/generate.js` → `code.json` + BOW). Build order is sprints S0–S11 (`docs/planning/sprint-plan-v1.md`); as of 2026-08-10 **S0–S2 are closed** (contracts, walking skeleton, test rigs/perf CI) and S3 (world/citizens/season — the scale-risk sprint) is next, gated behind BUG-034's 1M perf-baseline calibration.
 
 **Human developer:** Aaron. All architectural decisions go through Aaron.
 
@@ -171,7 +171,9 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 Commit message format: `[type]: brief description` — types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`.
 **No Co-Authored-By trailers** (enforced by hook).
 
-Remote: private GitHub repository `aaronukgarcia/Metropolis`.
+Remote: **public** GitHub repository `aaronukgarcia/Metropolis` (public since 2026-08-10).
+
+**Merge policy: `gh pr merge --rebase` ONLY — never squash.** GitHub builds squash commits server-side from the account's public email, which leaked the real address onto public main twice on 2026-08-10 (BUG-042); rebase merges preserve the branch commits' noreply authorship verbatim. After every merge, verify: `git log origin/main --format='%ae' | sort -u` → exactly the noreply address. Durable fix pending: Aaron flips GitHub Settings → Emails → "Keep my email addresses private" + "Block command line pushes that expose my email".
 
 ---
 
