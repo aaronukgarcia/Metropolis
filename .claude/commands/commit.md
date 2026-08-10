@@ -9,8 +9,7 @@ allowed-tools: Bash(git status:*), Bash(git diff:*), Bash(git add:*), Bash(git c
 - Staged diff summary: !`git diff --cached --stat`
 - Full diff: !`git diff HEAD`
 - Current branch: !`git branch --show-current`
-- Version in package.json: !`node -e "try{console.log(require('./app/package.json').version)}catch(e){console.log('NOT FOUND')}" 2>/dev/null`
-- Version in version.ts: !`grep -o "APP_VERSION = \"[^\"]*\"" app/src/lib/version.ts`
+- App version (GR#2 Metropolis profile — git describe, no version files): !`git describe --tags --always 2>/dev/null || echo "no tags yet"`
 - Recent commits: !`git log --oneline -5`
 
 ## Your task
