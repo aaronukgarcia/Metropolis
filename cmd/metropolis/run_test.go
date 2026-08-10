@@ -12,21 +12,52 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 )
 
-// --- AC-6 (supplementary): -headless is a flag-dispatch seam, not a
-// working harness --- run() must do zero engine/registry/transport work
-// on this path (nothing to boot, nothing to shut down).
+// --- MOD-015: -headless dispatches into harness.headless for real ---
+// (harness.headless.md AC-1/AC-2). Full behavioural coverage of the
+// headless run itself lives in internal/harness/headless's own tests
+// (GR#20-respecting: this package only owns flag parsing/dispatch); these
+// tests cover run()'s dispatch and required-flag validation.
 
-func TestRun_Headless_ReturnsZeroWithoutBooting(t *testing.T) {
+func TestRun_Headless_MissingRequiredFlags_ReturnsExitCode2(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run([]string{"-headless"}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(-headless) = %d, want 0", code)
+	if code != 2 {
+		t.Fatalf("run(-headless) with no -seed/-months/-out = %d, want 2", code)
 	}
-	if !strings.Contains(stdout.String(), "harness.headless") {
-		t.Errorf("stdout = %q, want it to mention harness.headless (MOD-015)", stdout.String())
+	for _, want := range []string{"-seed", "-months", "-out"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr = %q, want it to name missing flag %q", stderr.String(), want)
+		}
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty on a usage error", stdout.String())
+	}
+}
+
+func TestRun_Headless_RunsToCompletion(t *testing.T) {
+	dir := t.TempDir() + "/snap"
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-headless", "-seed", "1", "-months", "1", "-out", dir}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(-headless ...) = %d, want 0 (stderr=%q)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), dir) {
+		t.Errorf("stdout = %q, want it to mention the -out path %q", stdout.String(), dir)
 	}
 	if stderr.Len() != 0 {
-		t.Errorf("stderr = %q, want empty on the headless seam path", stderr.String())
+		t.Errorf("stderr = %q, want empty on a successful headless run", stderr.String())
+	}
+}
+
+func TestRun_Headless_ZeroMonths_ReturnsExitCode2(t *testing.T) {
+	dir := t.TempDir() + "/snap"
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-headless", "-seed", "1", "-months", "0", "-out", dir}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("run(-headless -months 0) = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "-months") {
+		t.Errorf("stderr = %q, want it to mention -months", stderr.String())
 	}
 }
 

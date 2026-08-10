@@ -88,7 +88,12 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	e.StartSubscriptionPump(ctx, transport)
-	go e.RunCommandLoop(ctx, transport)
+	// RunCommandLoop now returns an error (harness.headless [MOD-015]
+	// AC-4/AC-5) -- this test's own ctx cancels first via the deferred
+	// cancel() above, so a clean (nil) exit is expected here; ignored
+	// because this test's own scope is the subscription pump, not
+	// RunCommandLoop's exit contract (see commands_test.go for that).
+	go func() { _ = e.RunCommandLoop(ctx, transport) }()
 
 	subCorrID := mustCorrID()
 	subCmd := protocol.Command{

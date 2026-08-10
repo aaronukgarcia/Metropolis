@@ -1,0 +1,267 @@
+package headless
+
+import (
+	"context"
+	"io"
+
+	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
+)
+
+// Config specifies one headless run (AC-1, harness.headless.md). Seed
+// and Months carry no defaults of their own — a caller (cmd/metropolis's
+// -headless flag, or a future library caller) is responsible for its own
+// "required" enforcement (AC-2) before calling Run; Run itself only
+// refuses a non-positive Months (see driveTicks).
+type Config struct {
+	// Seed is the deterministic world seed (core.WithWorldSeed).
+	Seed uint64
+
+	// Months is the number of in-game months to advance. Must be
+	// positive; Months <= 0 advances zero ticks and still writes a
+	// tick-0 snapshot (not an error — a caller wanting "months is
+	// required" enforced as a hard failure, per AC-2, does that check
+	// itself before calling Run, the same way cmd/metropolis's -headless
+	// flag does).
+	Months int64
+
+	// OutDir is the bundle directory Run writes the -out snapshot to
+	// (AC-3): int.serializer's StateSerializer/bundle format — header.json
+	// plus shards/ — not a bespoke ad-hoc JSON dump, so the output is
+	// itself a valid fixture readable by `metctl verify`. Must not already
+	// exist (serialize.CreateBundleDir's own "never silently merge into a
+	// stale bundle" rule).
+	OutDir string
+
+	// ScenarioPath, if non-empty, names a JSON scenario script (AC-4) —
+	// see LoadScenario. Every scenario command is sent and awaited BEFORE
+	// tick advancement begins.
+	ScenarioPath string
+
+	// PoolSize overrides POOL-SIM's worker count (core.WithPoolSize). Zero
+	// means "use engine.core's own default sizing."
+	PoolSize int
+
+	// Report, if non-nil, receives one NDJSON line per phase-timing
+	// observation (AC-5) and one per daily-tick invariant check (AC-6).
+	// Nil means neither stream is produced.
+	Report io.Writer
+
+	// CorrelationID roots every registry-sourced error and every
+	// internally-minted command's correlation chain this run produces
+	// (GR#1). Empty mints a fresh one via protocol.NewCorrelationID().
+	CorrelationID string
+}
+
+// Result summarises a completed headless run.
+type Result struct {
+	// Header is the serialize.Header written to OutDir/header.json —
+	// callers that want WorldSeed/CreatedAtTick/GameMonth/ShardIndex
+	// without re-reading the bundle from disk can read it directly here.
+	Header serialize.Header
+
+	// TicksAdvanced is the number of daily ticks actually advanced before
+	// Run returned successfully.
+	TicksAdvanced int64
+
+	// ScenarioCommands is the number of scenario-script commands sent and
+	// accepted before tick advancement began (0 if Config.ScenarioPath
+	// was empty).
+	ScenarioCommands int
+
+	// ReportWriteErr is the first error the -report stream encountered
+	// while encoding, if any (see reportWriter's doc comment for why this
+	// is surfaced rather than either silently dropped or treated as a
+	// run-aborting failure).
+	ReportWriteErr error
+}
+
+// Run drives one headless simulation run to completion: constructs a
+// real *core.Engine over a real *protocol.InProcTransport, executes any
+// scenario script (AC-4), advances Months*DailyTicksPerMonth ticks
+// exclusively through the real protocol.Command path (AC-1/AC-2 of
+// engine.headless.md — never Engine.AdvanceTicks directly), then writes
+// the -out snapshot bundle (AC-3).
+//
+// Run blocks until the run completes, ctx is done, or a step fails. On
+// any failure it still performs the documented engine.core shutdown
+// sequence (cancel, join RunCommandLoop's goroutine, THEN close the
+// transport — see RunCommandLoop's "Exit contract" doc comment,
+// internal/engine/core/commands.go) before returning, so a failed Run
+// never leaks the command-loop goroutine.
+func Run(ctx context.Context, cfg Config) (Result, error) {
+	correlationID := cfg.CorrelationID
+	if correlationID == "" {
+		correlationID = string(protocol.NewCorrelationID())
+	}
+
+	rw := newReportWriter(cfg.Report)
+
+	opts := []core.Option{
+		core.WithWorldSeed(cfg.Seed),
+		core.WithPhaseObserver(rw.phaseObserver()),
+	}
+	if cfg.PoolSize > 0 {
+		opts = append(opts, core.WithPoolSize(cfg.PoolSize))
+	}
+	e := core.NewEngine(opts...)
+
+	transport := protocol.NewInProcTransport(
+		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
+		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
+	)
+
+	loopCtx, cancel := context.WithCancel(ctx)
+	loopDone := make(chan error, 1)
+	go func() { loopDone <- e.RunCommandLoop(loopCtx, transport) }()
+
+	// shutdown implements the documented caller-side contract exactly:
+	// cancel, WAIT for RunCommandLoop's goroutine to return (join), and
+	// only THEN close the transport (AC-5's ordering requirement, and
+	// StubEngine.Run's identical "cancel(); wg.Wait(); Close()" contract).
+	// Called on every exit path below, success or failure, so this
+	// package never leaks the command-loop goroutine.
+	shutdown := func() error {
+		cancel()
+		err := <-loopDone
+		_ = transport.Close()
+		return err
+	}
+
+	scenarioCommands := 0
+	if cfg.ScenarioPath != "" {
+		cmds, err := LoadScenario(correlationID, cfg.ScenarioPath)
+		if err != nil {
+			_ = shutdown()
+			return Result{}, err
+		}
+		for _, cmd := range cmds {
+			if err := sendAndAwait(transport, cmd, correlationID); err != nil {
+				_ = shutdown()
+				return Result{}, err
+			}
+			scenarioCommands++
+		}
+	}
+
+	ticksAdvanced, err := driveTicks(transport, cfg.Months)
+	if err != nil {
+		_ = shutdown()
+		return Result{}, err
+	}
+
+	// AC-4/AC-7 (engine.headless.md): this driver DOES control shutdown
+	// ordering deterministically (cancel-then-join-then-close above), so
+	// in the disciplined case loopErr is expected to be nil — but it is
+	// still observed and surfaced, never discarded, because that is
+	// exactly the "someone must observe this return value" AC-7 requires
+	// of any genuinely unattended caller (the discipline lives in THIS
+	// function; nothing stops a future refactor from breaking it, and a
+	// discarded return would then silently hide that regression).
+	if loopErr := shutdown(); loopErr != nil {
+		return Result{}, errs.Wrap(ErrEngineRunFailed, correlationID, loopErr, nil)
+	}
+
+	header, err := writeBundle(cfg.OutDir, e, correlationID)
+	if err != nil {
+		return Result{}, err
+	}
+
+	return Result{
+		Header:           header,
+		TicksAdvanced:    ticksAdvanced,
+		ScenarioCommands: scenarioCommands,
+		ReportWriteErr:   rw.err,
+	}, nil
+}
+
+// sendAndAwait sends cmd on t and blocks for the matching CommandResult.
+// Safe because this package drives exactly one command at a time,
+// sequentially, from a single goroutine (scenario commands, then
+// AdvanceTicks batches) — there is never more than one in-flight command
+// racing another caller for the next Results() value.
+func sendAndAwait(t *protocol.InProcTransport, cmd protocol.Command, correlationID string) error {
+	if err := t.SendCommand(cmd); err != nil {
+		return errs.Wrap(ErrCommandRejected, correlationID, err, map[string]any{"kind": string(cmd.Kind)})
+	}
+	result := <-t.Results()
+	if !result.Accepted {
+		code := ""
+		if result.Error != nil {
+			code = result.Error.Code
+		}
+		return errs.New(ErrCommandRejected, correlationID, map[string]any{
+			"kind": string(cmd.Kind), "engineErrorCode": code,
+		})
+	}
+	return nil
+}
+
+// driveTicks advances months*core.DailyTicksPerMonth daily ticks
+// entirely through the real protocol.Command path (engine.headless.md
+// AC-1/AC-2 — never core.Engine.AdvanceTicks directly), chunked at
+// core.MaxAdvanceTicksPerCall per command so an arbitrarily large months
+// value still issues a bounded, small number of commands rather than
+// either one over-limit command (rejected by the engine, AC-11 of
+// engine.core.md) or one command per tick (needlessly many round trips).
+// Returns the number of ticks actually advanced before any error.
+func driveTicks(t *protocol.InProcTransport, months int64) (int64, error) {
+	total := months * core.DailyTicksPerMonth
+	remaining := total
+	for remaining > 0 {
+		n := core.MaxAdvanceTicksPerCall
+		if remaining < n {
+			n = remaining
+		}
+		corrID := protocol.NewCorrelationID()
+		cmd := protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   corrID,
+			Kind:            protocol.KindAdvanceTicks,
+			Payload:         protocol.AdvanceTicksPayload{N: n},
+		}
+		if err := sendAndAwait(t, cmd, string(corrID)); err != nil {
+			return total - remaining, err
+		}
+		remaining -= n
+	}
+	return total, nil
+}
+
+// writeBundle writes e's current state as an int.serializer bundle at
+// dir (AC-3): CreateBundleDir, one "meta" shard via Engine.Snapshot
+// (engine.core's own T-PERSIST hook, persist.go), then WriteHeader — the
+// exact three-step pattern serialize_test.go's TestBundleRoundTripAndValidate
+// documents, so the result is a bundle `metctl verify` can validate, not
+// a bespoke ad-hoc JSON dump.
+func writeBundle(dir string, e *core.Engine, correlationID string) (serialize.Header, error) {
+	if err := serialize.CreateBundleDir(dir); err != nil {
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
+	}
+
+	meta := serialize.ShardMeta{Name: "meta", Kind: "meta", Encoding: "ndjson+gzip"}
+	f, err := serialize.CreateShardWriter(dir, meta)
+	if err != nil {
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
+	}
+
+	header, snapErr := e.Snapshot(f, correlationID)
+	closeErr := f.Close()
+	if snapErr != nil {
+		// Already a registry-sourced *errs.E (engine.core's ErrSnapshotFailed,
+		// MET-E006) — propagate unchanged rather than re-wrapping it under
+		// this package's own code, per Engine.Snapshot's own doc comment
+		// convention.
+		return serialize.Header{}, snapErr
+	}
+	if closeErr != nil {
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, closeErr, map[string]any{"path": dir})
+	}
+
+	if err := serialize.WriteHeader(dir, header); err != nil {
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
+	}
+	return header, nil
+}

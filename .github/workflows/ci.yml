@@ -127,3 +127,65 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.5.0
+
+  # --- Perf smoke (H-SYNTH / MOD-016, M0-ENG §6 point 5) -----------------
+  # cmd/perfci (internal/harness/synth/cmd/perfci) is the CI-runnable perf
+  # gate AC-6 asks for: generate a synthetic city, run it N months through
+  # the real harness.headless path, compare monthly-tick time against a
+  # stored baseline, exit non-zero on a >10% regression (AC-10). This job
+  # proves that PLUMBING is real and wired into CI — baseline persistence
+  # across runs via actions/cache (restore-keys falls back to the most
+  # recent prior cache under the same key prefix, so perf-results.ndjson
+  # accumulates one record per run rather than starting fresh every time,
+  # AC-5), the command actually running, and a non-zero exit actually
+  # failing this job (AC-10 verified end to end, not just unit-tested).
+  #
+  # Deliberately -citizens-overridden to a small count (see cmd/perfci's
+  # -citizens flag doc comment), NOT the real 1M-citizen preset AC-6 names
+  # for the eventual production gate. Two reasons, both logged as an
+  # assumption against this item's BOW record rather than silently
+  # decided: (1) this repo has not yet measured how long a real 1M-citizen
+  # headless run takes on a windows-latest Actions runner — CLAUDE.md's
+  # own -race-on-windows-latest note ("treat as probable but not
+  # confirmed" until watched) is the same caution applied here, and a perf
+  # job is exactly the wrong place to discover a runner is too slow via a
+  # timeout; (2) at this sprint, engine.core is a walking skeleton with
+  # zero registered phase hooks (see internal/harness/synth/doc.go's
+  # "Generated content is a Sprint-1-skeleton stand-in" note), so a
+  # smoke-scale run already exercises the exact same near-zero tick-time
+  # path a full 1M-citizen run would today — the citizen count changes
+  # Generate's cost, not engine.core's, until Sprint 3 lands real phase
+  # hooks. Wiring the FULL 1M/10M-scale, merge-blocking gate is follow-up
+  # work once both of those are resolved, consistent with this item's
+  # acceptance doc's own "Out of scope" carve-out ("wiring the perf CI job
+  # into an actual CI runner configuration ... may be a follow-up BOW item
+  # if the repo's CI infrastructure isn't ready").
+  perf-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Restore perf-results baseline
+        uses: actions/cache@v4
+        with:
+          path: perf-results.ndjson
+          key: perf-results-1m-smoke-${{ github.run_id }}
+          restore-keys: |
+            perf-results-1m-smoke-
+
+      - name: perfci (1M preset, -citizens smoke override)
+        run: go run ./internal/harness/synth/cmd/perfci -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
+
+      - name: Save perf-results baseline
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: perf-results.ndjson
+          key: perf-results-1m-smoke-${{ github.run_id }}

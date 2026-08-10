@@ -63,7 +63,14 @@
 // [EnginePlayer] implements the exact CommandSource-shaped surface
 // engine.core.RunCommandLoop consumes from any Transport (Commands() +
 // SendResult()) — a caller drives replay with
-// `go targetEngine.RunCommandLoop(ctx, enginePlayer)`. Unlike
+// `go targetEngine.RunCommandLoop(ctx, enginePlayer)`. As of MOD-015
+// (harness.headless / engine.headless.md AC-4), RunCommandLoop returns an
+// error distinguishing a clean ctx-cancelled stop from its
+// CommandSource's Commands() channel closing prematurely — irrelevant to
+// EnginePlayer itself (it never closes cmdCh early; see below), but
+// worth noting here since this file's own "premature-close ambiguity"
+// section predates and is the direct model for that engine.core fix.
+// Unlike
 // StubEngine.Run's scenario (where SOMETHING ELSE can close the
 // Commands() channel out from under it), EnginePlayer owns and is the
 // only closer of its own Commands() channel, so the literal "who closed
