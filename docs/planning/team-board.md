@@ -1,8 +1,8 @@
 # Metropolis Team Board
 
 **Maintained by:** Resource Manager (RM), advisory only — Bill executes all dispatches.
-**Last updated:** 2026-08-09 (refresh #3 — Sprint 1 nearly closed: FEAT-007/FEAT-008 DONE, FEAT-006 Tester-1-PASSED awaiting doc pass; Bill amended `dev-team-process.md` to **v1.7** [assumption-logging + reciprocal rejection duties + mandatory spawn briefing block, committed `27c8c3d`]; six `ASM-` items logged retrospectively; ten follow-up items surfaced [FEAT-030–034, BUG-004–010] and triaged below; dev slots back to 0/4).
-**Charter:** `docs/planning/dev-team-process.md` v1.7 §"Saturation rule & Resource Manager" / §"Second Tester (v1.6)" / §"Assumptions are logged or the work is rejected (v1.7)"
+**Last updated:** 2026-08-10 (refresh #4 — Bill's own callout: the board had gone badly stale under a narrow serial queue while RM/BAs/Docs/QA sat idle; full rebuild from `docs/build-log.md` + live BOW + Bill's status. Sprint 1 closed, CI fixed twice (BUG-004/005, then BUG-021 self-raised), a security sweep ran to 25 findings, dev-team-process is now **v1.8** [Destructive agent stage, v1.7 assumption rule + fast path, "fixing a fix" logs as it goes, four weakness patterns, `git stash` banned for non-leads, golangci-lint in the Tester baseline]).
+**Charter:** `docs/planning/dev-team-process.md` v1.8 — see §"The Destructive agent (v1.8)", §"Second Tester (v1.6)", §"Assumptions are logged or the work is rejected (v1.7)", §"Saturation rule & Resource Manager (v1.5)".
 
 ---
 
@@ -10,82 +10,92 @@
 
 | Agent | Role | Current assignment | Status | Return point / next event |
 |---|---|---|---|---|
-| Bill | Lead | Dispatch, freeze-review liaison with Aaron, final review, Aaron's demo (will state ASM-001 plainly there) | — | — |
-| RM (this agent) | Resource Manager | Board + checkpoint refresh #3 | busy | Delivering ranked dispatch recommendation for the post-FEAT-006 wave. |
-| Tester-1 | Tester | Just delivered: **feat.skeleton (FEAT-006)** PASS on every hard-gated criterion (AC-1a,2,3,4,5a,7,9-local,10); surfaced ASM-001/ASM-002 under v1.7's hunt-for-assumptions duty | idle — cleared its queue | Awaiting Bill's next dispatch (§ dispatch recommendation below). |
-| Tester-2 | Tester | Cleared its original queue (feat.detgate/BUG-002 PASS, BUG-003 re-verify PASS); also confirmed and sharpened **BUG-007** (protocol Close() race) | idle — cleared its queue | Awaiting Bill's next dispatch, most likely BUG-007's regression once dispatched to a dev. |
-| BA-1 | BA | **Task 1 done** — FEAT-007/FEAT-008 criteria refreshed to `active`, both items shipped and closed off it. **Task 2 still queued**: freeze-risk audit of already-written S1-S4 criteria against the two pending freeze questions. | idle-pending-Task-2 | RM re-proposes Task 2 as BA-1's next assignment — no reason it should sit idle. |
-| BA-2 | BA | Sprint 5 criteria: engine.traffic, engine.roads | busy (status not re-checked this refresh — assume in progress) | Criteria delivery. |
-| Documentation | Documentation | **feat.skeleton's doc pass** — the one thing between FEAT-006's Tester-1 PASS and Bill's commit | busy | Doc pass complete → Bill commits FEAT-006 → Sprint 1 exit gate closes. |
-| QA | QA | Trailing audit; today's wave (BUG-006/007/008/009, ASM-001–006) largely originates from QA/Tester findings | busy | Continues trailing cadence. |
-| Devs | Jnr developer | **None spawned — 0/4.** FEAT-007/FEAT-008 wave landed and closed. | idle (cap) | Next wave per ranked recommendation below — Bill's call on exact slotting. |
+| Bill | Lead | Dispatch, review, Aaron liaison; raised BUG-021 against himself and fixed it same day | — | — |
+| RM (this agent) | Resource Manager | Board + checkpoint refresh #4 | busy | Delivering ranked recommendation + saturation flags now. |
+| Dev-1 | Jnr developer | `foundation/registry` — SEC-020 wave 3 (one of the "two Registries") | busy | Tester, then Destructive re-attack, on completion. |
+| Dev-2 | Jnr developer | `foundation/solver` + `foundation/errs` — SEC-020 wave 3 (`Logger` type) + likely BUG-012 (solver payload cap) | busy | Tester, then Destructive re-attack. |
+| Dev-3 | Jnr developer | `internal/protocol` — SeqTracker (SEC-020 wave 3) + **SEC-023** (SubscriptionAllocator, same copyable-mutex class) | busy | Tester, then Destructive re-attack. |
+| Dev-4 | Jnr developer | `internal/ui/screens` — both screens (SEC-020 wave 3) + **SEC-009** (MapScreen unbounded-Extent OOM, P1) | busy | Tester, then Destructive re-attack. |
+| Tester-1 | Tester | **Idle**, cleared its queue | idle | Awaiting the first Dev-1..4 item to land — don't batch all four, feed Tester-1 the first one that's ready. |
+| Tester-2 | Tester | **Idle**, cleared its queue | idle | Same — feed the second-ready item straight to Tester-2, independent of Tester-1's. |
+| Destructive-1 | Destructive | **Idle** | idle | See saturation recommendations below — proposed: repo-wide sibling-hunt for SEC-024's pattern (exported mutable field, invariant-by-doc-comment-only) and/or the SEC-022 `%s`-vs-`%q` sibling-hunt ASM-060 flagged as scoped too narrowly. |
+| Destructive-2 | Destructive | Re-attacking `debug.State` (SEC-020 wave 2 re-check), `StubEngine` queued behind it | busy | Continues to StubEngine on completion; both feed into wave 3's closure of the nine-type ruling. |
+| Destructive-3 | Destructive | **Idle** | idle | Proposed: independent re-verification of BUG-021's self-fix (`8833e52`) — Bill fixed and verified it locally, but it hasn't had an independent adversarial or Tester pass, and it's literally about "can we trust what we think is true." |
+| BA-1 | BA | Writing criteria for the security backlog (SEC-011, SEC-025, and the remaining BUG-* items) — closes a real gap: every security fix to date was dispatched off Bill's ad-hoc briefs, not BA criteria | busy | Criteria delivery, item by item. |
+| BA-2 | BA | Refreshing Sprint 2 criteria to `active` (Sprint 2 has not started) | busy | Criteria ready the moment Sprint 2 opens. |
+| Documentation | Documentation | **Idle** | idle | Proposed: doc pass on the four weakness-pattern write-ups' cross-links (already in `dev-team-process.md`) and on `data/security-scans.json`'s currency now that wave-3 modules are mid-flight — cheap, real, keeps it fed. |
+| QA | QA | **Idle** — Bill dispatching next | idle → about to be busy | Proposed target: independently re-check the SEC-020 chain's closure claim (the "13 attack shapes, clean" re-attack) — the highest-stakes closed claim of the session, worth a second independent look before it's treated as settled. |
 
 ---
 
 ## Cap compliance
 
-| Role | Cap | Current count | Holders | Status |
+| Role | Cap (v1.8) | Current count | Holders | Status |
 |---|---|---|---|---|
-| Jnr developer | 4 | 0 | — | Under cap, genuinely open — no dispatch blocker outstanding this time (contrast refresh #2, where 2 slots were held on a BA dependency). |
-| Tester | 2 (v1.6) | 2 | Tester-1, Tester-2 — both idle-pending-dispatch, not busy | At cap by headcount, **0 busy right now** — both cleared their queues. This is a live saturation opening, not a breach. |
-| BA | 2 | 2 | BA-1 (idle-pending-Task-2), BA-2 (busy) | At cap; BA-1 has a proposed next task (Task 2), not yet confirmed by Bill this refresh. |
-| Documentation | 1 | 1 | Docs | At cap, on the critical path (feat.skeleton doc pass gates Sprint 1 close). |
-| QA | 1 | 1 | QA | At cap. |
+| Jnr developer | 4 | 4 | Dev-1..4 | **At cap.** |
+| Tester | 2 | 2 | Tester-1, Tester-2 | At cap by headcount, **0 busy** — both idle. Live saturation opening, see below. |
+| BA | uncapped (lifted 2026-08-09, disjoint ownership absolute) | 2 | BA-1 (security backlog), BA-2 (Sprint 2) | Fine — disjoint ownership holds. |
+| Documentation | 1 | 1 | Docs | At cap, **idle**. |
+| QA | 1 | 1 | QA | At cap, **idle → about to be dispatched**. |
 | Resource Manager | 1 | 1 | RM (this agent) | At cap. |
+| **Destructive** | **not documented in `dev-team-process.md` v1.8** | 3 | Destructive-1 (idle), Destructive-2 (busy), Destructive-3 (idle) | **Doc gap, flagged below** — every other role has an explicit cap in the Saturation-rule section; Destructive doesn't. Not a breach (nothing to breach), but worth writing down now that 3 are precedent. |
 
-**No breaches.** Saturation notes: both Testers are idle-pending-dispatch — RM flags this because the next dev wave (BUG-007/BUG-008 recommended) will need Tester capacity almost immediately, so dispatching devs now rather than waiting keeps both Testers fed. BA-1's Task 2 is proposed, not yet confirmed for this refresh — flagging so it doesn't slip.
+### Saturation gaps — flagged, including on Bill
+
+This is the direct answer to "flag any breach or gap, including on me": **six of eleven active-role agents are idle right now** (Tester-1, Tester-2, Destructive-1, Destructive-3, Documentation, QA-until-dispatched) while four juniors work and one Destructive agent works. None of these are blocked by a genuine dependency — they're idle because the wave was dispatched as a narrow batch (4 devs) without lining up the next stage's work in parallel, which is exactly the pattern Bill named as the problem. Concretely, right now, before wave 3 even lands:
+- **Both Testers** could be pre-briefed to take the first two wave-3 items the instant they're dev-complete, rather than waiting for a batch of four to finish together (this was the v1.6 rationale for a second Tester in the first place — don't let it revert to serial-by-default).
+- **Destructive-1 and Destructive-3** have no dependency reason to be idle — see their proposed assignments above. Both are useful, independent, and don't touch the four packages Dev-1..4 are actively editing (avoiding the "never two agents in the same package concurrently" rule from the build log's resume order).
+- **Documentation** has real, low-risk work available (scan-stamp currency, pattern write-up cross-links) that doesn't need to wait for wave 3.
+- **QA** — Bill is already correcting this one.
 
 ---
 
-## v1.7 — Assumptions are logged or the work is rejected (Aaron ruling, 2026-08-09, committed `27c8c3d`)
+## Security backlog — live findings
 
-**Principle:** the standard is that the *criterion holds*, not that the *test passes*. New BOW type `assumption` / `ASM-` codes, `--code-path` + `--codejson` mandatory and tool-enforced. Reciprocal rejection duties: dev rejects asks resting on unlogged BA assumptions; **Tester actively hunts for assumptions and FAILs on any unlogged one even if every criterion passed**; BA logs assumptions made while writing criteria; **lead is bound too** — an unwritten lead ruling is itself an unlogged assumption. Every future agent spawn carries the mandatory briefing block now living in `docs/planning/dev-team-process.md` — read it from there, don't reconstruct it from memory.
+25 findings total, 8 open (per `node claude-bow.js weakness`). Two weakness classes are flagged RECURRING (≥3): **input-validation ×10**, **concurrency-safety ×8** — both training signals per the process, not just defect counts.
 
-### Assumption log (own tracking row per Bill's instruction — these are live risk, not sprint items)
-
-| Code | Pri | Claim | Disposition |
+| Code | Pri | What | Status |
 |---|---|---|---|
-| ASM-001 | P1 | Sprint 1 exit gate does **not** prove `engine.core` participates in the live rendered path — render path is via `harness.stub`; `engine.core` determinism proven only in isolation by `feat.detgate`. Satisfies criteria as written. | Bill's own disclosure — stated plainly at Aaron's demo. No dev action, tracked for visibility only. |
-| ASM-002 | P2 | F12's stub/ok registry rendering is proven structurally, not by literal end-to-end execution. | Awaiting Bill's ruling (accept/correct/escalate). |
-| ASM-003 | P2 | AC-12: a failed persist leaves the header flagged in memory while debug stays off (over-flag, never under-flag). | Awaiting Bill's ruling. |
-| ASM-004 | P2 | The F12 phase-name mirror is acceptable duplication because the drift test catches divergence. | Awaiting Bill's ruling. |
-| ASM-005 | P2 | engine.core's pacing constant as a named Go var satisfies GR#15 in the interim. | Superseded once **FEAT-030** ships (pacing constant → config). |
-| **ASM-006** | **P1** | Deferring the F1 overlay cycle assumes the renderer accepts a background-metric layer **additively** later. If wrong, FEAT-031 is a renderer rewrite, not a feature. | **Bill wants a deliberate spike BEFORE FEAT-031 is estimated** — do not let FEAT-031 get dispatched on dependency-readiness alone. See dispatch recommendation. |
+| **SEC-024** | **P0** | `serialize.Header.DebugTouched` is a plain exported bool — any `*Header` holder can clear it directly, bypassing `debug.State` and every SEC-020 guard entirely. Found this morning re-attacking SEC-020 wave 2. Fix belongs to `int.serializer` (unexport the field, `TouchDebug`/`MergeDebugTouched` as the only mutation path). | **OPEN, UNASSIGNED.** Not part of any of Dev-1..4's current work. See ranked recommendation — this is the single most urgent item on the whole board. |
+| SEC-020 | P1 | The class itself: nine copyable mutex-bearing structs repo-wide. Aaron ruled full pipeline on all nine, no tiering. Wave 1 (`InProcTransport`) and wave 2 (`StubEngine` + `debug.State`, latter under re-attack now) done; wave 3 (two Registries, `Logger`, `SeqTracker`, two UI screens) is Dev-1..4's current work — this is the **last wave** for the nine-type scope. | 6 of 9 types in flight or re-attacked now; 3 already closed. |
+| SEC-023 | P2 | `SubscriptionAllocator` — same copyable-mutex-plus-aliased-reference shape as `InProcTransport` pre-fix, no `checkNotCopied` guard. | Bundled into Dev-3's protocol work. |
+| SEC-011 | P1 | No render path in `ui.core`/`ui.widgets`/`ui.screen.debug` filters control/escape characters before writing to the terminal — terminal-escape injection via any untrusted string (e.g. F12's error tail). Linked to SEC-022 (already fixed, same root cause, different surface) — this is weakness pattern #3 in the flesh: "fix the class, not the demonstrated instance." | **OPEN, unassigned** — broader scope than Dev-4's `ui.screens` work (spans `ui.core`/`ui.widgets` too). BA-1 is writing its criteria now. |
+| SEC-009 | P1 | `MapScreen.applyFullLocked` allocates a grid sized directly from an unbounded wire-supplied `Extent` — a crafted patch can OOM/crash the UI process. | Bundled into Dev-4's UI-screens work. |
+| SEC-025 | P2 | `IsOn()` fails closed to `false` on a copy with no error surfaced — a plausible `IsOn()`-only save-carry-forward helper could misreport a debug-touched session as clean. | Open, BA-1's backlog. |
+| SEC-021 | P3 | Secret guard's high-entropy detector flags descriptive hyphenated correlation IDs — a real project convention, false-positive class. | Open, low urgency. |
+
+**BUG-021 (P1, Bill raised against himself)** — `main` red for 3 commits because a CI run was watched *starting*, not confirmed *finished*. Fix committed `8833e52`; **both DoD items are only half-closed**: golangci-lint is now in the Tester baseline (`f12c8ac`, done), but **branch protection on `main` is still not configured** — the mechanical half of BUG-006's original interim-control fix.
+
+Remaining lower-priority BOW backlog (none P0/P1, none currently blocking): BUG-011 (P3, error-code conflation), BUG-012 (P2, solver payload cap — Dev-2), BUG-013 (P3, buildinfo registry key), BUG-014 (P2, BOW schema missing ASM/SEC enum values on fresh DB), BUG-015 (P3, plan-guard NUL byte), BUG-016 (P3, seal() perf), BUG-017 (P2, BOW description shell-expansion corruption), BUG-018 (P2, `RenderLoop` atomic.Bool copy defeat), BUG-019 (P3, `StartSubscriptionPump` no copy guard), BUG-020 (P2, `StubEngine.Run` silent-exit ambiguity).
 
 ---
 
-## Sprint 0 / Sprint 1 gate status
+## RM's honest read on the security/Sprint-2 balance (Bill's direct question)
 
-- **Sprint 0**: cloud half of the gate RESOLVED (Azure confirmed, see incident/ruling log). Contract-freeze half still pending Aaron (`docs/design/README.md`).
-- **Sprint 1**: 9/10 done. **feat.skeleton (FEAT-006) Tester-1-PASSED on every hard-gated criterion — doc pass is the only remaining step before Bill's commit closes the sprint.** AC-1b/AC-5b were split out, not weakened, into FEAT-032/FEAT-033 (blocked on Sprint 2 items MOD-014/MOD-011).
+**The spend to date was justified.** SEC-001 was a real path-traversal with both read and write impact; the SEC-003→014→016→018→019 chain was a genuine fatal-crash class that passed every test in the suite; BUG-007 was a live panic path; five hook bypasses defeated guards meant to be fail-closed. None of that was theoretical, and Aaron's "all nine, full pipeline" ruling on SEC-020 was correct to overrule the tiered option — this session demonstrated twice that `go vet copylocks` doesn't catch every copy form that matters.
 
----
+**But the balance is now due to shift, and the fresh P0 (SEC-024) is the reason to say "one more wave," not "keep going indefinitely."** Sprint 2 has had zero movement across a very long session. Once SEC-024 is fixed and wave 3 lands (closing the nine-type SEC-020 scope) and SEC-011 (the one other live P1) is fixed, **there is no remaining P0/P1 justification for holding Sprint 2 fully paused.** Everything left after that point (SEC-021/025, BUG-011/012/013/014/016/017/018/019/020) is P2/P3 — real, worth doing, but not gate-severity. Recommend running the remaining backlog and Sprint 2 as **two parallel tracks** from that point rather than fully sequencing them — that's what the 4-dev-cap and 2-BA structure exist for.
 
-## RM's ranked dispatch recommendation for the post-FEAT-006 wave
+## RM's ranked dispatch recommendation
 
-Ten follow-up items surfaced today; checked each individually rather than assumed — BUG-004 and BUG-005 are already **DONE**.
+| Rank | Item | Action |
+|---|---|---|
+| 1 | **SEC-024 (P0)** | Assign now — doesn't need to wait for wave 3 to fully clear. It's a live bypass of the exact guarantee `feat.debugmode` exists for (AC-3/4/12/15), found *this morning*, currently touching nobody's queue. If dev cap is genuinely full, this is the textbook case for a P0 preempting a P2 in the current wave rather than queuing behind it. |
+| 2 | **Let wave 3 land** (Dev-1..4) | Already in flight — closes the SEC-020 nine-type scope. Feed Tester-1/Tester-2 incrementally as each of the four completes, not as a batch (see saturation section). |
+| 3 | **SEC-011 (P1)** | Next dev slot freed by wave 3. Cross-cutting, same root cause as SEC-022 (already fixed) — a single shared sanitiser fix per weakness pattern #3's own lesson, not four separate patches. BA-1 is already writing its criteria, so this should be dispatch-ready the moment a slot opens. |
+| 4 | **Branch protection on `main`** (BUG-021's second DoD item) | Cheap, config-only, not a dev-slot item — can run in parallel with anything above, recommend Bill or a fast tooling task does it directly. |
+| 5 | **Declare the P0/P1 security scope closed and open Sprint 2 in parallel** — `MOD-013 harness.replay` (dep-ready: `INT-001`/`INT-002` both done) is the keystone Bill named. Don't wait for SEC-021/025 or the P2/P3 BUG-* backlog — run those alongside Sprint 2, not ahead of it. |
 
-| Rank | Item | Pri | Why |
-|---|---|---|---|
-| **1** | **BUG-007** — `internal/protocol` transport `Close()` TOCTOU race | P1 | Real shipped-code bug, not a test artifact: `Close()` races an in-flight send, failure mode is a **send-on-closed-channel panic**. Tester-2 confirmed **zero coverage in either direction** — the one test that looks like it covers this completes goroutines before calling `Close()`. `internal/protocol` carries every UI⇄engine command/event/delta — highest blast radius of any open defect. Recommend first, ahead of Sprint 2 features. |
-| **2** | **BUG-008** — error registry incomplete, no mechanical check | P1 | **Answers Bill's direct question: yes, jump the queue.** Already caused a real collision (feat.debugmode junior legitimately claimed `E100-E199` as "free," colliding with detgate's already-shipped `E100-E103` which only existed in source; caught by luck at lead review, not by any mechanism). DoD's mechanical CI check *is* the guardrail Bill is asking about — every day it's open is a live collision risk for the next module that claims a range, and today's near-miss is direct evidence manual review isn't reliable here. |
-| **3** | **BUG-006** — no post-push CI visibility / no branch protection | P1 | Root cause of BUG-004 surviving since commit 1. Interim control (`gh run list --limit 1` after every push) already mitigates the acute risk, so lower urgency than 1/2, but DoD is cheap (branch protection config + `/commit` skill edit) — bundle as a low-cost item, doesn't need its own dev slot. |
-| 4 | **BUG-009** — `handleSetSpeed` ignores the debug gate | P2 | Small, dependency (FEAT-008) now satisfied. Ready-now filler for spare slot capacity. |
-| 5 | **FEAT-030** — pacing constant to config | P2 | Directly resolves ASM-005. Ready, no blockers. |
-| — | **ASM-006 spike** | P1 (gating) | **Hold on FEAT-031** (F1 overlay cycle) until someone deliberately checks whether the renderer accepts an additive background-metric layer. Not a straight dev dispatch — a short investigation reporting to Bill first. FEAT-031 itself must not be estimated before this lands. |
-| — | **FEAT-032 / FEAT-033** | P2 | Blocked — depend on MOD-014 (ui.harness) / MOD-011 (ui.keys), neither built. Resume once Sprint 2 restarts. |
-| — | **FEAT-034** | P3 | Trivial (buildinfo host field). No urgency, park as filler whenever a slot is otherwise idle. |
-
-**Suggested slotting (dev cap 4, currently 0 in flight):** BUG-007 · BUG-008 · (BUG-006 + BUG-009 paired in one slot — both small) · 4th slot to FEAT-030 or reopening Sprint 2 via **harness.replay (MOD-013)** — Bill's call, RM has no strong preference between those two.
-
-**Sprint 2 resumption note:** harness.replay (MOD-013) and ui.keys (MOD-011) were only held last refresh on Bill's dev-width choice, not a dependency block — both are still dep-ready (INT-001/INT-002 done; MOD-009 done) and are the natural Sprint 2 openers once the BUG-007/BUG-008 wave has a slot free. Their freeze-exposure ratings from refresh #2 (harness.replay HIGH, ui.keys MEDIUM) stand unchanged — BA-1's Task 2 freeze-risk audit, still queued, would sharpen these.
+**On today's idle capacity specifically** (don't wait for rank 1-4 to create work): dispatch Destructive-1/Destructive-3 and both Testers per the saturation section above, immediately, in parallel with the SEC-024 assignment — there's no dependency reason any of them should still be idle five minutes from now.
 
 ---
 
-## Incident / constraint log
+## Incident / process log (v1.8 additions this refresh)
 
-- **v1.7 assumption-logging rule (2026-08-09, `27c8c3d`):** see dedicated section above — tracked here as a process-incident-class entry because it changes every agent's reporting obligations going forward, not just this wave's work.
-- **BUG-008 near-miss (2026-08-09):** direct evidence for why BUG-008 is ranked #2 above — a legitimate range-claim process collided with an unregistered code because the registry lagged source. Caught at lead review, not by tooling.
-- **BUG-007 zero-coverage finding (2026-08-09, Tester-2):** `TestInProcTransport_Race` looked like it should cover the Close()-vs-send race and doesn't — it sequences goroutine completion before `Close()`. Worth remembering as a pattern to watch for elsewhere (a test named after a race that doesn't actually race the two operations in question).
-- **VERSION-fixture staging incident (2026-08-09):** a junior's staged `VERSION` test fixture rode along into an unrelated docs commit via a concurrent agent's dirty staging area; caught and reverted within two commits (`a6885e5`). Staging-area discipline (v1.5.1) is the standing fix.
-- **Session bounce (2026-08-09):** previous RM died mid-cycle with no surviving transcript; board and checkpoint were rebuilt cold from BOW + git, per the heavy-checkpointing recovery protocol. No work was redone.
+- **CI had never been green, project history** — BUG-004 (CRLF vs `gofmt` on Windows runners, invisible locally) + BUG-005 (scheduling-dependent test) both fixed (`d5c9c19`, `76e1961`). First green run `31314318798`.
+- **BUG-021 — Bill raised against himself.** Watching a CI run *start* is not the control that was promised; confirming it *finished* is. Fixed (`8833e52`); the branch-protection half of its DoD is the one open item above. `golangci-lint` now in the Tester baseline (`f12c8ac`) because CI's blocking lint job was stricter than anything any human tool ran locally — a lint error walked past a junior, a Tester, a Destructive agent, and the lead because everyone ran a different tool and called it the same thing.
+- **The Destructive agent stage (v1.8)** — sits after Tester, before Docs; may reject work back to the same junior exactly as a Tester FAIL does; findings are `SEC-` BOW items with a mandatory weakness class; never edits, never fixes.
+- **Four weakness patterns documented** in `dev-team-process.md`: (1) an invariant stated in prose is not enforced — SEC-024 is a fresh instance of exactly this; (2) a value duplicated across a module boundary needs a provably-failing drift test; (3) fix the class, not the demonstrated instance — SEC-011/SEC-022 is the live example; (4) a value in a privileged position is input, however inert it looks (`input-validation` ×10, the largest recurring class, is mostly metadata — names-as-paths, sizes-as-allocations — not payload).
+- **`git stash` banned for non-lead agents** (v1.5.1 addendum, 2026-08-09) — it sweeps the whole shared tree; a junior self-reported a near-miss.
+- **v1.7 assumption rule** caught the lead three times on unwritten verbal steers; produced two structurally interesting finds (ASM-047 predicted its own failure mode before it happened; ASM-041 identified a test-mechanism gap only visible from the choice-maker's side). v1.7.1 rejected the Tester authoring assumptions on a FAIL's behalf (rationale must come from whoever made the trade-off). v1.7.2: fixing a fix logs as it goes.
+- **Session bounce (2026-08-09, carried forward for history):** previous RM died mid-cycle with no surviving transcript; board and checkpoint were rebuilt cold from BOW + git. No work was redone.
