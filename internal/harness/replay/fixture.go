@@ -1,0 +1,300 @@
+package replay
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
+)
+
+// shardKind is the nominal ShardMeta.Kind every fixture's single shard is
+// written with. Informational only — see serialize.ShardMeta.Kind's doc
+// comment ("metadata for humans and tooling, not a constraint checked
+// per-record").
+const shardKind = "harness.replay.stream"
+
+// fixtureHeader is the on-disk shape of a fixture's <name>.header.json.
+// Header is int.serializer's own serialize.Header, reused verbatim
+// (FormatVersion/WorldSeed/AppVersion/ShardIndex — AC-4/AC-14, no
+// parallel fields invented). ProtocolVersion is the one AC-4 field
+// Header has no slot for (protocol versioning is int.protocol's concern,
+// not int.serializer's) — carried as a sibling field, NOT via anonymous
+// embedding: Header defines its own MarshalJSON/UnmarshalJSON (SEC-024,
+// to keep its debugTouched field unexported), and Go promotes an
+// embedded type's custom marshaller to the outer type UNCHANGED — it
+// would never see ProtocolVersion. A named field avoids that trap while
+// still invoking Header's own (un)marshaller correctly for its own
+// nested JSON object.
+type fixtureHeader struct {
+	Header          serialize.Header `json:"header"`
+	ProtocolVersion string           `json:"protocolVersion"`
+}
+
+// FixtureMeta is the caller-supplied identity for a fixture being saved
+// (AC-4): the world seed it was recorded from and the engine identity/
+// build string that recorded it (reusing serialize.Header.WorldSeed and
+// .AppVersion — see fixtureHeader's doc comment). ProtocolVersion is
+// always protocol.ProtocolVersion — the running build's own version, not
+// caller-supplied, since a fixture can only ever be recorded against
+// whatever protocol version this build speaks.
+type FixtureMeta struct {
+	WorldSeed  int64
+	AppVersion string
+}
+
+// fixtureShardPath and fixtureHeaderPath resolve name into the two flat
+// file paths a fixture lives at under dir (doc.go's "On-disk layout").
+// Both validate name via serialize.ValidateShardName FIRST (AC-2b) — the
+// exact same function ShardMeta.Name is checked with, reused rather than
+// reimplemented (Out of scope's explicit instruction). A hostile name
+// (path separators, "..", a drive marker, a trailing dot/space) is
+// rejected outright, wrapped in a registry-sourced error naming the
+// fixture name and the reason — never filepath.Clean'd, trimmed, or
+// substituted with a fallback.
+func fixtureShardPath(dir, name string) (string, error) {
+	if err := serialize.ValidateShardName(name); err != nil {
+		return "", errs.Wrap(codeInvalidFixtureName, errs.NewCorrelationID(), err, map[string]any{"name": name})
+	}
+	return filepath.Join(dir, name+".ndjson.gz"), nil
+}
+
+func fixtureHeaderPath(dir, name string) (string, error) {
+	if err := serialize.ValidateShardName(name); err != nil {
+		return "", errs.Wrap(codeInvalidFixtureName, errs.NewCorrelationID(), err, map[string]any{"name": name})
+	}
+	return filepath.Join(dir, name+".header.json"), nil
+}
+
+// Save writes every record rec has captured to dir/<name>.ndjson.gz (one
+// NDJSON+gzip shard, via serialize.NDJSONSerializer.WriteShard — AC-2)
+// plus dir/<name>.header.json (AC-4). dir is created if it does not
+// already exist. name is validated per fixtureShardPath's doc comment
+// (AC-2b) before anything is written.
+func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
+	shardPath, err := fixtureShardPath(dir, name)
+	if err != nil {
+		return err
+	}
+	headerPath, err := fixtureHeaderPath(dir, name)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"dir": dir, "cause": "creating fixtures directory"})
+	}
+
+	f, err := os.Create(shardPath)
+	if err != nil {
+		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "creating fixture shard file"})
+	}
+	defer func() { _ = f.Close() }()
+
+	records := rec.Records()
+	idx := 0
+	next := func() (serialize.Record, bool, error) {
+		if idx >= len(records) {
+			return serialize.Record{}, false, nil
+		}
+		r := records[idx]
+		idx++
+		return r, true, nil
+	}
+
+	shardMeta, err := (serialize.NDJSONSerializer{}).WriteShard(f, serialize.ShardMeta{Name: name, Kind: shardKind}, next)
+	if err != nil {
+		return errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "writing fixture shard"})
+	}
+
+	h := serialize.NewHeader(meta.WorldSeed, 0, 0, meta.AppVersion)
+	h.ShardIndex = []serialize.ShardMeta{shardMeta}
+	fh := fixtureHeader{Header: h, ProtocolVersion: protocol.ProtocolVersion}
+
+	encoded, err := json.MarshalIndent(fh, "", "  ")
+	if err != nil {
+		return errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"path": headerPath, "cause": "encoding fixture header"})
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(headerPath, encoded, 0o644); err != nil {
+		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": headerPath, "cause": "writing fixture header"})
+	}
+	return nil
+}
+
+// Fixture is a fully loaded, integrity-checked fixture: its header plus
+// every record it carries, in the order Save/the original Recorder wrote
+// them (AC-1's ordering guarantee, preserved through the round trip).
+type Fixture struct {
+	Header  fixtureHeader
+	Records []serialize.Record
+}
+
+// Load reads and integrity-checks dir/<name>.header.json and
+// dir/<name>.ndjson.gz (AC-9), and version-checks the result (AC-8)
+// before returning it. A hostile name (AC-2b), a missing/unreadable
+// file, a bad gzip stream, a SHA256/size mismatch against the header's
+// recorded ShardMeta, or a FormatVersion/ProtocolVersion mismatch all
+// fail loudly with a registry-sourced error naming the fixture and the
+// cause — never a partial or best-effort result, never a panic.
+func Load(dir, name string) (Fixture, error) {
+	headerPath, err := fixtureHeaderPath(dir, name)
+	if err != nil {
+		return Fixture{}, err
+	}
+	shardPath, err := fixtureShardPath(dir, name)
+	if err != nil {
+		return Fixture{}, err
+	}
+
+	raw, err := os.ReadFile(headerPath)
+	if err != nil {
+		return Fixture{}, errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": headerPath, "cause": "reading fixture header"})
+	}
+	var fh fixtureHeader
+	if err := json.Unmarshal(raw, &fh); err != nil {
+		return Fixture{}, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"path": headerPath, "cause": "decoding fixture header"})
+	}
+
+	if err := serialize.CheckFormatVersion(fh.Header.FormatVersion); err != nil {
+		return Fixture{}, errs.Wrap(codeFixtureVersionMismatch, errs.NewCorrelationID(), err, map[string]any{
+			"name": name, "cause": "fixture FormatVersion is not compatible with this build",
+		})
+	}
+	if fh.ProtocolVersion != protocol.ProtocolVersion {
+		return Fixture{}, errs.New(codeFixtureVersionMismatch, errs.NewCorrelationID(), map[string]any{
+			"name": name, "got": fh.ProtocolVersion, "want": protocol.ProtocolVersion,
+			"cause": "fixture was recorded against a different protocol.ProtocolVersion",
+		})
+	}
+	if len(fh.Header.ShardIndex) != 1 {
+		return Fixture{}, errs.New(codeFixtureCorrupt, errs.NewCorrelationID(), map[string]any{
+			"name": name, "shardCount": len(fh.Header.ShardIndex),
+			"cause": "fixture header does not describe exactly one shard",
+		})
+	}
+	meta := fh.Header.ShardIndex[0]
+
+	f, err := os.Open(shardPath)
+	if err != nil {
+		return Fixture{}, errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "opening fixture shard"})
+	}
+	defer func() { _ = f.Close() }()
+
+	// Single streaming pass: the shard's raw bytes are hashed AND
+	// gzip-decoded/decoded simultaneously via io.TeeReader, so integrity
+	// checking never requires buffering the whole shard or reading it
+	// twice (mirrors serialize.validateShardFile's technique, adapted to
+	// a single-pass reader rather than a separate hash-only pass since
+	// this package does not go through serialize.ValidateBundle's
+	// directory-shaped API — see doc.go's "On-disk layout").
+	hasher := sha256.New()
+	counted := &countingReader{r: io.TeeReader(f, hasher)}
+
+	var records []serialize.Record
+	decodeErr := (serialize.NDJSONSerializer{}).ReadShard(counted, func(rec serialize.Record) error {
+		records = append(records, rec)
+		return nil
+	})
+	if decodeErr != nil {
+		return Fixture{}, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), decodeErr, map[string]any{"path": shardPath, "cause": "decoding fixture shard (bad gzip stream or malformed record)"})
+	}
+	if counted.n != meta.ByteSize {
+		return Fixture{}, errs.New(codeFixtureCorrupt, errs.NewCorrelationID(), map[string]any{
+			"path": shardPath, "headerByteSize": meta.ByteSize, "actualByteSize": counted.n,
+			"cause": "fixture shard size does not match header",
+		})
+	}
+	gotHash := hex.EncodeToString(hasher.Sum(nil))
+	if gotHash != meta.SHA256 {
+		return Fixture{}, errs.New(codeFixtureCorrupt, errs.NewCorrelationID(), map[string]any{
+			"path": shardPath, "headerSHA256": meta.SHA256, "actualSHA256": gotHash,
+			"cause": "fixture shard SHA256 does not match header (corrupt or tampered fixture)",
+		})
+	}
+
+	return Fixture{Header: fh, Records: records}, nil
+}
+
+// countingReader counts bytes read through it, so Load can verify the
+// shard's on-disk size against ShardMeta.ByteSize without a second pass.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// Commands returns every KindCommand record in f, decoded in order via
+// protocol.DecodeCommand. A malformed command record fails the whole
+// call rather than silently skipping it.
+func (f Fixture) Commands() ([]protocol.Command, error) {
+	var out []protocol.Command
+	for i, rec := range f.Records {
+		if RecordKind(rec.Kind) != KindCommand {
+			continue
+		}
+		cmd, err := protocol.DecodeCommand(rec.Data)
+		if err != nil {
+			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded Command"})
+		}
+		out = append(out, cmd)
+	}
+	return out, nil
+}
+
+// Results returns every KindResult record in f, decoded in order.
+func (f Fixture) Results() ([]protocol.CommandResult, error) {
+	var out []protocol.CommandResult
+	for i, rec := range f.Records {
+		if RecordKind(rec.Kind) != KindResult {
+			continue
+		}
+		var r protocol.CommandResult
+		if err := json.Unmarshal(rec.Data, &r); err != nil {
+			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded CommandResult"})
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// Events returns every KindEvent record in f, decoded in order.
+func (f Fixture) Events() ([]protocol.Event, error) {
+	var out []protocol.Event
+	for i, rec := range f.Records {
+		if RecordKind(rec.Kind) != KindEvent {
+			continue
+		}
+		var e protocol.Event
+		if err := json.Unmarshal(rec.Data, &e); err != nil {
+			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded Event"})
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// Deltas returns every KindDelta record in f, decoded in order.
+func (f Fixture) Deltas() ([]protocol.Delta, error) {
+	var out []protocol.Delta
+	for i, rec := range f.Records {
+		if RecordKind(rec.Kind) != KindDelta {
+			continue
+		}
+		var d protocol.Delta
+		if err := json.Unmarshal(rec.Data, &d); err != nil {
+			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded Delta"})
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}

@@ -1,0 +1,21 @@
+{
+  "header": {
+    "formatVersion": "1.0.0",
+    "worldSeed": 5075394513589204078,
+    "createdAtTick": 0,
+    "gameMonth": 0,
+    "appVersion": "gen/main.go (H-STUB, chaos disabled)",
+    "debugTouched": false,
+    "shardIndex": [
+      {
+        "Name": "folkestone64-sample",
+        "Kind": "harness.replay.stream",
+        "RecordCount": 16,
+        "ByteSize": 13132,
+        "SHA256": "90ed9d0ea50796c2b8debe7e37c1eab2b2e41139054da6f6a46e39f4f9805167",
+        "Encoding": "ndjson+gzip"
+      }
+    ]
+  },
+  "protocolVersion": "1.0"
+}
