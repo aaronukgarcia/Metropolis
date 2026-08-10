@@ -1,64 +1,122 @@
 # HEAVY CHECKPOINT — session bounce point
 
-**Rebuilt by RM, refresh #4, 2026-08-10, at Bill's direction after he flagged the board as badly stale (a narrow serial queue ran while RM/BAs/Docs/QA sat idle — his own callout, Aaron backed it). Full detail and reasoning for everything below lives in `docs/build-log.md` — read that first, this file is the state summary + resume procedure. HEAD is `f12c8ac`, pushed, working tree has active uncommitted work from the current dev wave (see §2). A fresh session recovers from THIS + `docs/build-log.md` + `node claude-bow.js list --by-seq` + `git log -15`.**
+**Rebuilt by Bill, refresh #5, 2026-08-10 evening, ahead of a deliberate session bounce.**
+**HEAD is `c81a4ce` on `main` (pushed, CI green). Working branch is `feature/pre-s3-gates`, pointed at the same commit, carrying uncommitted work from two finished agents plus Aaron's own in-progress files (§2).**
+
+A fresh session recovers from **this file + `docs/build-log.md` + `node claude-bow.js list --by-seq` + `git log -15`**. This file is written to be self-sufficient: the agent transcripts from this session are gone.
+
+---
 
 ## 1. Where we are
 
-- **Sprint 0**: contract-freeze review still pending Aaron (`docs/design/README.md`); cloud half resolved (Azure confirmed, see §6).
-- **Sprint 1: CLOSED.** All ten items shipped, including the walking skeleton (FEAT-006, `ad1c308`) as the exit gate. Full commit list in `docs/build-log.md` §1.
-- **CI: fixed twice.** First, BUG-004 (CRLF vs `gofmt` on Windows runners — invisible locally, failed *every* CI run since commit #1) + BUG-005 (scheduling-dependent test) — `d5c9c19`, `76e1961`, first green run `31314318798`. Then **BUG-021**, Bill raised against himself: watched a run *start*, never confirmed it *finished*, two more commits landed on top, `main` was red for three commits. Fixed `8833e52`. `golangci-lint` now in the Tester baseline (`f12c8ac`) — it's a CI-blocking job nothing local matched, so a lint error walked past everyone. **Branch protection on `main` is still not configured** — the one open half of BUG-021/BUG-006's DoD.
-- **A full security sweep**: three Destructive agents (a new v1.8 pipeline stage), 19/19 built modules scanned initially, now **25 findings total, 8 open** (`node claude-bow.js weakness`). A five-round concurrency chain (SEC-003→014→016→018→019) found the same root cause five times, each round by a verifier, never the fixer; Aaron ruled **all nine** copyable-mutex-bearing structs repo-wide get runtime guards (SEC-020), no tiering. Waves 1-2 done (`InProcTransport`, `StubEngine`, `debug.State` under re-attack); **wave 3 in flight now** (last of the nine types).
-- **Fresh finding this morning: SEC-024 (P0), unassigned.** `serialize.Header.DebugTouched` is a plain exported bool — any `*Header` holder can clear it directly, bypassing every SEC-020 guard. Found re-attacking wave 2. Not part of the current dev wave. **Top priority, see §4.**
-- **Sprint 2: has not started.** Zero movement across the whole security-focused session. BA-2 is keeping its criteria refreshed to `active` so it's ready the instant it opens. `MOD-013 harness.replay` is dep-ready (`INT-001`/`INT-002` both done) and is the keystone item.
-- **Process is now v1.8**: Destructive agent stage, v1.7 assumption-logging rule (+ v1.7.1 fast path, v1.7.2 fixing-a-fix), four weakness patterns, `git stash` banned for non-leads, golangci-lint in the Tester baseline. Full text: `docs/planning/dev-team-process.md`.
+**Sprints 0, 1 and 2 are all CLOSED.** Sprint 3 (citizens — the plan's riskiest model) is next and is deliberately blocked; see §4.
 
-## 2. Working tree state (uncommitted, live dev wave)
+| Sprint | State |
+|---|---|
+| S0 contracts | 15/15 ✅ |
+| S1 walking skeleton | 10/10 ✅ — closed by MOD-015 `harness.headless` |
+| S2 test rigs & perf CI | 6/6 ✅ — MOD-011, MOD-013, MOD-014, MOD-016, MOD-019 |
+| S3–S11 | 0 of 62. Not started. |
 
-`git status` shows modified: `data/errors.json`, `internal/engine/debug/{cheats,errors,fidelity,inspector,state}.go`, `internal/engine/stub/{codes,engine}.go`, `internal/foundation/registry/registry.go`, `internal/protocol/subscription.go`; untracked: `internal/engine/debug/copyguard.go` (+`_test.go`), `internal/engine/stub/bug020_test.go`, `internal/engine/stub/sec020_test.go`. This is the **current 4-junior wave's in-progress work** (registry / solver+errs / protocol SeqTracker+SEC-023 / ui.screens+SEC-009) plus Destructive-2's `debug.State`/`StubEngine` re-attack material — **do not `git stash`, `git checkout --`, `git reset --hard`, or `git clean`** (banned for non-leads since the VERSION-fixture incident; leads commit by explicit pathspec only). If this session bounces, treat these as in-progress deliveries to verify against their briefs, not to redo from scratch — check BOW comments on the four wave-3 items first.
+Roughly 12 of 69 modules built. 107 commits. 239 Go files, 110 of them tests.
 
-## 3. Team (live now, refresh #4)
+**The repo is PUBLIC** (`github.com/aaronukgarcia/Metropolis`) and `main` is **branch-protected**: required checks `build-test-vet` + `determinism-gate` + `lint` (strict/up-to-date), PR required at 0 approvals, linear history, no force pushes, no deletions. `enforce_admins` is deliberately **false** so GR#21's revert-first path survives a broken CI — with one human, an unfixable red gate is worse than a bypassable one.
 
-Per `docs/planning/dev-team-process.md` v1.8 (caps: 4 dev / 2 tester / BA uncapped-disjoint / 1 docs / 1 QA / 1 RM; **Destructive has no documented cap** — 3 running today, flagged to Bill as a doc gap, not a breach):
+**Direct pushes to `main` no longer work.** Branch + PR for everything, including the lead.
 
-- **Dev-1..4** (cap 4/4): `foundation/registry`; `foundation/solver`+`foundation/errs`; `internal/protocol` (SeqTracker+SEC-023); `internal/ui/screens` (both screens+SEC-009). All SEC-020 wave 3 — the last wave for the nine-type scope.
-- **Tester-1, Tester-2** — both idle, cleared their queues. Should be fed wave-3 items incrementally as each completes, not batched.
-- **Destructive-1, Destructive-3** — idle. **Destructive-2** — busy, re-attacking `debug.State` then `StubEngine` next.
-- **BA-1** — writing criteria for the security backlog (first time security fixes get BA criteria instead of ad-hoc briefs).
-- **BA-2** — refreshing Sprint 2 criteria to `active`; Sprint 2 not started.
-- **Documentation, QA** — idle; Bill dispatching QA next.
-- **RM** — this file + team-board.md, refresh #4.
+---
 
-**RM flagged to Bill this refresh: 6 of 11 active-role agents were idle with no dependency reason** (both Testers, 2 of 3 Destructives, Docs, QA-pre-dispatch) while 4 devs + 1 Destructive worked. Full proposed assignments for each idle agent are on `team-board.md`.
+## 2. Uncommitted work — READ THIS FIRST
 
-## 4. RM's ranked recommendation for after wave 3 (full detail + rationale: `team-board.md`)
+`feature/pre-s3-gates` at `c81a4ce`. Twelve files. **Three of them are Aaron's, not the team's.**
 
-1. **SEC-024 (P0)** — assign immediately, does not need to wait for wave 3. Highest-priority open item on the board, currently touching nobody's queue.
-2. **Let wave 3 land** — closes the SEC-020 nine-type scope, Aaron's ruling satisfied.
-3. **SEC-011 (P1)** — terminal-escape injection, cross-cutting (`ui.core`/`ui.widgets`/`ui.screen.debug`), same root cause as the already-fixed SEC-022. BA-1 already drafting its criteria.
-4. **Branch protection on `main`** — BUG-021's remaining DoD item, config-only, parallel-friendly.
-5. **Open Sprint 2 in parallel** (`MOD-013 harness.replay`) once 1-3 land — don't wait for the remaining P2/P3 backlog (SEC-021/025, BUG-011/012/013/014/016/017/018/019/020); run those alongside Sprint 2, not ahead of it.
+**Aaron's — DO NOT TOUCH, DO NOT COMMIT WITHOUT ASKING:**
+- `docs/planning/acceptance/engine.citizens.md`
+- `docs/planning/acceptance/engine.season.md`
+- `docs/planning/acceptance/engine.world.md`
 
-**RM's honest read on the security/Sprint-2 balance** (Bill asked directly): the spend to date was justified — SEC-001 (path traversal), the SEC-003→019 chain (fatal crash class, invisible to every test), BUG-007 (live panic path), and five hook bypasses were all real, not theoretical. But the balance is now due to shift: once SEC-024 + wave 3 + SEC-011 land, there is no remaining P0/P1 justification for holding Sprint 2 fully paused. That's "one more focused wave," not "keep going indefinitely."
+These are his S3 criteria. He held this commit deliberately so the BUG-036 author amend stayed a clean single-commit operation (§3). He will commit them himself, via branch + PR, on the corrected tip.
 
-## 5. Standing orders & rulings from Aaron (STILL IN FORCE)
+**Junior-F, BUG-034 perf gate — built, verified, NOT committed:**
+- `internal/harness/synth/{doc,limits,perf}.go` (modified), `phasehooks.go` + `phasehooks_test.go` (new)
+- `.github/workflows/ci.yml` — adds a `workflow_dispatch`-only `perf-1m-probe` job
 
-- Dev-team pipeline **v1.8** mandatory: BA criteria → Sonnet junior → Tester pass/fail-never-fixes → **Destructive attacks it, may reject → Docs (.md-only) → Bill final review → commit**. Saturation rule; heavy checkpointing; staging-area discipline; `git stash` banned for non-leads (v1.5.1 addendum); v1.6 Second-Tester independence; **v1.7 assumption-logging + reciprocal rejection duties + mandatory spawn briefing block** (read from `dev-team-process.md`, don't reconstruct from memory); **v1.8 Destructive agent stage + four weakness patterns**.
-- **v1.7 in one line:** log an `ASM-` item (with `--code-path`/`--codejson`) for anything you decided that the spec/criteria/brief didn't decide for you; devs reject asks resting on unlogged BA assumptions; Testers FAIL work carrying unlogged assumptions even on all-criteria-PASS; the lead's own rulings count too.
-- **v1.8 in one line:** after the Tester PASSes, a Destructive agent attacks the work (input validation, bounds, type confusion, encapsulation, insecure call-ability, concurrency, resource exhaustion, error-path disclosure) and may reject it back to the same junior; findings are `SEC-` BOW items with a mandatory weakness class; `node claude-bow.js weakness` flags any class recurring 3+ times as a teaching signal, not just a ticket count.
-- **SEC-020, Aaron's ruling:** all nine copyable-mutex-bearing structs get the full pipeline — the tiered "guard the severe ones, document the rest" option was recommended and explicitly overruled.
-- **SECOND TESTER, v1.6** (still in force): 2 independent Testers, disjoint items, never communicate, one item never gets two verdicts.
-- **CLOUD DECISION, 2026-08-09: Azure, confirmed, until otherwise agreed.** Existing garcia.ltd Azure estate reusable (storage account `garcialtdstorage`, RG `garcia`, region `uksouth`; ACR `prixsixacr`; Container Apps env `prixsix-env`, scale-to-zero) — full detail on BOW item **MOD-069**, cite via `node claude-bow.js show MOD-069`. **Key ruling: Metropolis Blob saves get their OWN container — never reuse `whatsapp-session`.**
-- **Interim CI control, superseded by BUG-021's lesson:** "after any push, run `gh run list` and eyeball it" was written after BUG-006 and failed within hours because *watching a run start* was mistaken for *confirming it finished*. The control now means: wait for and read the completed result, not the launch. Branch protection (mechanical enforcement) is still pending — see §4 rank 4.
-- **Docker/WSL reality (2026-08-09, `docs/build-log.md` §11):** Docker Desktop works (Linux containers, x86_64) but its CLI isn't on PATH — invoke by full path. WSL's only distro is `docker-desktop` (Docker's internal VM) — not a route to general Linux tooling. Docker is now the way to get a genuine Linux CI-equivalent run locally, directly relevant after BUG-004 proved "passes locally" was never evidence about CI.
-- "update" (bare word) = run /update skill. Tile decision: option (a) artistic compression (in data/georef.json). Go confirmed over C#. MOD-001 cancelled; metro BOW is the project BOW.
-- OPEN question to Aaron: the contract freeze (OD f32-vs-f64, duplicate correlation-ID generators — `docs/build-log.md` §9). Nothing else outstanding.
+**Junior-G, BUG-035 author guard — built, verified, NOT committed:**
+- `claude-author-guard.js`, `claude-author-guard.test.js` (new), `.claude/settings.json` (wires it into the Bash + PowerShell PreToolUse chains)
 
-## 6. Cold-resume procedure
+Both packages pass `gofmt`/`vet`/`golangci-lint`/`go test -race`. Neither has been committed because the S2 merge and the BUG-036 amend took precedence.
 
-1. `metro` launch → checkin prints BOW summary (metro DB health).
-2. **Read `docs/build-log.md` first** — it carries the reasoning, this file carries the state. Then this file + `node claude-bow.js list --by-seq` + `git log -15 --oneline`.
-3. `git status` — expect the uncommitted wave-3 work described in §2. Do NOT stash/reset/clean it. If it's gone, the four wave-3 items bounce back to fresh devs against their original briefs (check BOW comments for exact scope).
-4. Re-spawn Tester-1/Tester-2, Destructive-1/2/3, BA-1/BA-2, Docs, QA per §3. **Every spawn uses the v1.7 mandatory briefing block from `dev-team-process.md`** — do not paraphrase it from memory.
-5. Do NOT redo committed work (git log + BOW `done` status = truth). Hooks are LIVE on both Bash and PowerShell — every commit needs a valid `[mkey]` tag when touching cmd/internal/data.
-6. Dispatch SEC-024 (P0, unassigned) before anything else new — see §4.
-7. Do not dispatch or estimate FEAT-031 (F1 overlay cycle) before ASM-006's renderer-additive-layer spike has actually happened, even though it looks dependency-ready — this was flagged in a prior refresh and remains true.
+---
+
+## 3. What happened this session, and the checkpoints that were verified
+
+Chronologically, with what was actually confirmed rather than assumed.
+
+**Security backlog closed out.** SEC-030/031/032/033/034/037/038/039/041 all landed. Highlights worth carrying:
+- **SEC-033** — the error ring's coalescing bound was justified by a stale number (9 guarded types when there were 14) *and* the wrong population entirely (the ring serves all 84 registry codes, not just guarded types). Ruled: **delete the bound, not raise it.** `push()` now coalesces through a `Code`-keyed map, exact and O(1). The index evicts in step with the ring so it cannot become the unbounded resource it replaced — verified at exactly 25 entries after a 10,000-push flood.
+- **SEC-034** — the SEC-032 regression test **could not fail**. It called `runtime.Gosched()` to park the waiter, which structurally *closed* the race window it claimed to open. Replaced with a differential test carrying its own pre-fix loop and a two-way handshake: **241/500 pre-fix, 0/500 fixed.** Three drafts were inert at 0/500 before one bit.
+- **SEC-037** — `Save()` wrote a valid gzip+SHA256 fixture containing **zero records** and returned `nil`, because `Records()` returns nil on a copied Recorder and `Save` never checked. Silent data loss reported as success, in code committed the same morning. Fixed at source (the ambiguity), not in `Save`.
+- **SEC-036** — `RunCommandLoop` returned nothing, so a clean shutdown and a dying transport were indistinguishable. **Fourth instance of that pattern** (BUG-020, SEC-026, SEC-032, this).
+
+**GR#22 enacted — codename discipline.** The reference title is `'Blue'` and only 'Blue'. 41 direct occurrences swept, then the expansion-pack identifiers renamed as indirect identification. `claude-codename-guard.js` enforces it, assembling its patterns from fragments so the guard never holds a forbidden literal.
+
+**History rewritten and the repo published.** `git-filter-repo` scrubbed the reference terms and the real committer email across all history; verified by walking **every commit**, not just HEAD. 115 of 116 BOW git refs remapped; the one that didn't (`f9a460c` on INT-002) never resolved before the rewrite either — an auto-ref hook recorded a hash it never verified.
+
+**BUG-036 — the correction that mattered.** The rewrite scrubbed history but **not the local git config**, so the very next commit republished `aaron@garcia.ltd` onto the now-public tip. Found by Junior-G deriving the sanctioned identity from repo data rather than trusting the brief. Fixed this evening, on Aaron's direction: protection relaxed → author *and* committer amended → `--force-with-lease` → protection restored.
+
+**Verified after the fact, not assumed:** `git log --format='%ae'` and `'%ce'` across all 107 commits each return exactly one address. Tree diff `77a59f4..c81a4ce` empty (metadata-only amend). Protection confirmed back to the approved configuration.
+
+**S2 shipped as PR #1** — first PR through the protected branch, all four checks green including the new `perf-smoke` job.
+
+---
+
+## 4. What is left, in priority order
+
+**BUG-034 (P0) — blocks S3.** The perf gate runs at 2,000 citizens, not the 1M preset. A gate calibrated at smoke scale will not catch a regression that only appears at a million, which is the entire reason MOD-016 exists.
+
+The round-trip still to run:
+1. Commit + PR + merge the `feature/pre-s3-gates` work (§2)
+2. `gh workflow run` the `perf-1m-probe` job — it is `workflow_dispatch`-only and the workflow must be on the default branch before it can be dispatched
+3. Record the **runner-measured** numbers as the baseline. A locally-measured baseline is worthless for a gate running on GitHub's hardware — that mismatch is the same local-vs-CI divergence that kept CI red for this project's entire early history
+4. Re-derive the noise floor against real CI jitter
+
+Junior-F built the whole mechanism and **correctly refused to fabricate CI numbers** — it cannot dispatch a workflow without a commit, and juniors do not commit. Local sanity check only (explicitly *not* the baseline): 1M citizens / 3 months on the dev box ≈ 8.3s generation, ~13ms tick, ~50MB peak.
+
+**Carry this caveat forward:** `engine.core` has **zero phase hooks**, so a 1M run today measures world *generation*, not simulation. Generation and tick costs are recorded separately and every result carries the phase-hook count, precisely so nobody quotes a "1M-citizen tick cost" that is walking-skeleton overhead wearing a simulation label.
+
+**Then:** BUG-035's author guard commits with the same PR. Aaron's S3 criteria land on the corrected tip.
+
+**Open and unstarted, roughly by value:**
+- **BUG-024** — the mechanical AST gate replacing the hand-sweep. Criteria written (`docs/planning/acceptance/tool.astgate.md`, 15 ACs). Must enumerate **package-level functions taking a guarded type as an argument**, not just receiver methods — that blind spot cost nine manual enumerations by four agents.
+- **BUG-029 (P2)** — the secret guard's entropy check flags word-segmented identifiers on length. **Four allowlist exceptions now exist solely to work around it.** The false positives are cheap; the permanent exceptions they leave behind are not. Fix: measure entropy per *segment*, never raise the threshold.
+- **engine.invariant.md** carries ~13 ACs whose only check is that a test with a matching *name* exists — satisfiable while asserting nothing. Reported by BA-7, not rewritten, because its AC numbers are cited in landed code.
+- **BUG-032** — file ownership cannot be disjoint across a breaking signature change. Best fix: give breaking changes their own dispatch, ahead of the work that needs them.
+- P0s: FEAT-013, MOD-017, MOD-018 (dep-blocked on BUG-034), MOD-020.
+
+---
+
+## 5. Standing orders and hard-won rules
+
+- **Prove every regression test can fail against the unfixed code.** On this project an inert test is the *default* outcome, not the exception. Three drafts of one test scored 0/500 against known-buggy code.
+- **Never assert an upper bound on wall-clock in a CI-gating test** (BUG-031). A 100ms ceiling blew at 707ms on a shared runner and turned `main` red on a correct fix. Count work, not time.
+- **Concurrency tests are deterministic, not probable.** Construct the state; do not race for the timing.
+- **An acceptance criterion's CHECK must be able to fail** (dev-team-process v1.9). Three criteria files in one wave had checks that drifted from their rules; one let a security control be satisfied while not existing.
+- **Assumptions are logged or the work is rejected** (v1.7). Every ruling in §3 came from an agent escalating rather than guessing.
+- **File ownership is transferred, never duplicated** (v1.6.1). Now partly mechanical via `claude-dispatch-guard.js`.
+- **Never `git add` a shared file by path during a multi-agent wave** (BUG-030). Review the diff; `data/errors.json` routinely carries three agents' additive ranges at once.
+- **Banned for all non-lead agents:** `git stash`, `git reset --hard`, `git checkout --`, `git clean`, branch switches, commits, pushes.
+- **An agent verifying git behaviour must state the exact revision it expects the repo to be at when it finishes** (BUG-035). A cleanup claim should name the end state, not list the steps taken.
+
+---
+
+## 6. Tooling built this session
+
+| Tool | Purpose |
+|---|---|
+| `claude-dispatch-guard.js` | PreToolUse on the **Agent** tool. Denies unknown BOW codes, mkey mismatches, criteria that already exist, and file-ownership overlaps against live `sync_file_claims`. Fail-**open**. |
+| `claude-codename-guard.js` | GR#22. Blocks staged content, commit messages and branch names. Fail-**closed**. Patterns assembled from fragments. |
+| `claude-author-guard.js` | BUG-035. Rejects unsanctioned author/committer, including `--author=` and `GIT_AUTHOR_*`. Fail-**closed**. **Built, not yet committed.** |
+| `/brief` skill | Compose dispatches from looked-up facts, not memory. |
+| `tools/health/check.js` | Determinism gate, `-race` presence, CI conclusion vs HEAD sha, BOW queue, git sync, **branch-protection still on**. |
+
+**The author guard is not a control over the operator's own identity** — it unions the configured identity into the sanctioned set by design. It stops fabricated authors. The durable control for BUG-036's class is the **gitconfig**, now set to the noreply address.

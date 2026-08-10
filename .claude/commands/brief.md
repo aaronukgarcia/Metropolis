@@ -111,3 +111,29 @@ prevent — in a fix for a finding about bounding the wrong thing.
   correction went to the wrong agent today; the recipient correctly declined.
 - **Do not** thin the mandatory blocks to save space. They are the parts that
   drift.
+
+## Added from the 2026-08-10 waves
+
+- **A breaking signature change gets its OWN dispatch, ahead of the work that
+  needs it.** File ownership cannot be disjoint across one: every caller must
+  compile against the new signature, and those callers live in files owned by
+  someone else. A `RunCommandLoop` change forced edits to two files nobody had
+  been given, and the brief had anticipated only one of them (BUG-032). Land
+  the blast radius first, then parallelise.
+- **Require the agent to state the exact revision it expects the repo to be at
+  when it finishes.** An agent verifying git behaviour cleaned up its worktree,
+  its temp config and its refs — and left the commit, on local `main`, authored
+  as a fabricated identity. It surfaced only when a PR merge refused to
+  fast-forward (BUG-035). A cleanup claim should name the **end state**, not
+  list the steps taken.
+- **Anything destructive happens in a throwaway repo under the scratchpad**,
+  never in this one.
+- **Tell the agent which numbers in the brief are derived and which are
+  asserted.** A brief claimed "after the rewrite every commit carries the same
+  address". It did not, and an agent that had trusted it would have built a
+  guard around the wrong identity and blocked every future commit (BUG-036).
+  Where you state a fact the agent will build on, say how you know it — or say
+  that you have not checked.
+- **Warn about in-flight neighbours by name.** When several agents share a
+  build, tell each one which packages may break underneath it and that the
+  correct response is to report, not to fix someone else's file.

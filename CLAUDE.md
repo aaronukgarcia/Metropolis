@@ -164,9 +164,14 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 
 | Branch | Purpose |
 |--------|---------|
-| `main` | Production-ready code only — never commit directly once CI/CD exists |
-| `develop` | Integration branch for features |
-| `feature/*` | Individual feature work |
+| `main` | Production-ready. **Protected since 2026-08-10 — direct pushes are REFUSED, including for the lead** |
+| `feature/*` | Individual feature work; lands on `main` by PR |
+
+**The repository is PUBLIC** (`github.com/aaronukgarcia/Metropolis`) as of 2026-08-10. Assume anything committed is world-readable and permanent — see GR#22.
+
+**`main`'s protection:** required checks `build-test-vet` + `determinism-gate` + `lint` (strict/up-to-date), PR required at 0 approvals, linear history, no force pushes, no deletions. `enforce_admins` is deliberately **false** so GR#21's revert-first path still works when CI itself is broken — with one human, an unfixable red gate is worse than a bypassable one.
+
+**Committer identity is the GitHub noreply address**, set in local git config. History was rewritten to remove the real address; the config change is the durable half of that fix, and `claude-author-guard.js` blocks *fabricated* authors but cannot police a legitimately-configured one.
 
 Commit message format: `[type]: brief description` — types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`.
 **No Co-Authored-By trailers** (enforced by hook).
