@@ -23,10 +23,24 @@ func (f *fixedSolver) Solve(Request) (Response, error) {
 	return f.resp, nil
 }
 
+// mustRegister is a test helper that fails the test immediately if
+// Register returns an error (SEC-020 wave 2 made Register fallible — a
+// struct-copied Registry rejects Register with ErrRegistryCopied — so
+// every test call site must check the return rather than discard it,
+// both to satisfy errcheck and so a regressed copy-guard fails loudly
+// here instead of silently no-op'ing a registration the rest of the test
+// assumes happened).
+func mustRegister(t *testing.T, r *Registry, name string, s Solver, priority int) {
+	t.Helper()
+	if err := r.Register(name, s, priority); err != nil {
+		t.Fatalf("Register(%q): %v", name, err)
+	}
+}
+
 func TestGetPrefersHigherPriorityBackend(t *testing.T) {
 	r := NewRegistry()
-	r.Register("cpu.v1", NewCPUBackend(), 0)
-	r.Register("gpu.fake", &fixedSolver{
+	mustRegister(t, r, "cpu.v1", NewCPUBackend(), 0)
+	mustRegister(t, r, "gpu.fake", &fixedSolver{
 		problem: EchoProblem,
 		resp:    Response{Payload: []byte("gpu-answer"), Backend: "gpu.fake"},
 	}, 100)
@@ -46,19 +60,21 @@ func TestGetPrefersHigherPriorityBackend(t *testing.T) {
 
 func TestGetFallsBackToCPUOnHigherPriorityFailure(t *testing.T) {
 	r := NewRegistry()
-	r.Register("cpu.v1", NewCPUBackend(), 0)
-	r.Register("gpu.flaky", &fixedSolver{
+	mustRegister(t, r, "cpu.v1", NewCPUBackend(), 0)
+	mustRegister(t, r, "gpu.flaky", &fixedSolver{
 		problem: EchoProblem,
 		err:     errors.New("cuda: device lost"),
 	}, 100)
 
 	var mu sync.Mutex
 	var events []FailoverEvent
-	r.SetFailoverHook(func(e FailoverEvent) {
+	if err := r.SetFailoverHook(func(e FailoverEvent) {
 		mu.Lock()
 		defer mu.Unlock()
 		events = append(events, e)
-	})
+	}); err != nil {
+		t.Fatalf("SetFailoverHook: %v", err)
+	}
 
 	s, err := r.Get(EchoProblem)
 	if err != nil {
@@ -96,7 +112,7 @@ func TestGetNoFallbackFailsLoudly(t *testing.T) {
 
 	// A backend registered for a *different* problem kind still leaves
 	// TrafficAssignment with no fallback.
-	r.Register("cpu.echo-only", &fixedSolver{problem: EchoProblem}, 0)
+	mustRegister(t, r, "cpu.echo-only", &fixedSolver{problem: EchoProblem}, 0)
 	if _, err := r.Get(TrafficAssignment); !errors.Is(err, ErrNoFallback) {
 		t.Fatalf("expected ErrNoFallback for a problem kind with no registered backend, got %v", err)
 	}
@@ -106,8 +122,8 @@ func TestSolveAllBackendsFailReturnsJoinedError(t *testing.T) {
 	r := NewRegistry()
 	errA := errors.New("backend A exploded")
 	errB := errors.New("backend B exploded")
-	r.Register("a", &fixedSolver{problem: EchoProblem, err: errA}, 10)
-	r.Register("b", &fixedSolver{problem: EchoProblem, err: errB}, 5)
+	mustRegister(t, r, "a", &fixedSolver{problem: EchoProblem, err: errA}, 10)
+	mustRegister(t, r, "b", &fixedSolver{problem: EchoProblem, err: errB}, 5)
 
 	s, err := r.Get(EchoProblem)
 	if err != nil {
@@ -186,7 +202,9 @@ func TestDefaultRegistryRegisterAndGet(t *testing.T) {
 	// using a ProblemKind unlikely to collide with other tests in this
 	// package (Default is process-global and shared across tests run in
 	// the same binary).
-	Register("cpu.default-test", NewCPUBackend(), 0)
+	if err := Register("cpu.default-test", NewCPUBackend(), 0); err != nil {
+		t.Fatalf("Register against Default: %v", err)
+	}
 	s, err := Get(ColdPassBatch)
 	if err != nil {
 		t.Fatalf("Get(ColdPassBatch) against Default: %v", err)
@@ -277,7 +295,7 @@ func TestProblemKindString(t *testing.T) {
 // and every Get/Solve either succeeds or returns a well-formed error.
 func TestRegistryConcurrentUse(t *testing.T) {
 	r := NewRegistry()
-	r.Register("cpu.v1", NewCPUBackend(), 0)
+	mustRegister(t, r, "cpu.v1", NewCPUBackend(), 0)
 
 	var wg sync.WaitGroup
 	const goroutines = 16
@@ -286,7 +304,12 @@ func TestRegistryConcurrentUse(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(i int) {
 			defer wg.Done()
-			r.Register("extra", &fixedSolver{problem: EchoProblem}, i)
+			// t.Errorf (never t.Fatalf) from a non-test goroutine: Fatalf
+			// calls runtime.Goexit, which is only safe on the goroutine
+			// running the test function itself.
+			if err := r.Register("extra", &fixedSolver{problem: EchoProblem}, i); err != nil {
+				t.Errorf("Register: %v", err)
+			}
 		}(i)
 		go func() {
 			defer wg.Done()

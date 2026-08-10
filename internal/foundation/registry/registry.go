@@ -3,6 +3,7 @@ package registry
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
@@ -30,6 +31,10 @@ const (
 	// codeNoRealImpl: SetStatus asked to move an entry to status:real but
 	// no real implementation was registered for that key.
 	codeNoRealImpl = "MET-F105"
+	// codeRegistryCopied: a *Registry method was called on a struct copy
+	// of the value NewRegistry returned (SEC-020) — see checkNotCopied's
+	// doc comment.
+	codeRegistryCopied = "MET-F106"
 )
 
 // Status is a module's boot/runtime mode.
@@ -161,6 +166,43 @@ type Registry struct {
 	modules map[string]*moduleRecord
 	order   []string // registration order, for BootOrder (AC-16)
 	hook    ToggleHook
+
+	// self holds the address NewRegistry gave this Registry at
+	// construction (self.Store(r), set once, at the end of NewRegistry,
+	// before r is returned to any caller — no goroutine can have a
+	// reference to r to race that Store against).
+	//
+	// SEC-020: Registry is exported with an exported constructor, and
+	// every field here is unexported — but Go does not stop a caller
+	// that holds the *Registry NewRegistry returned from dereferencing
+	// it and copying the struct value ('r2 := *r' is legal, unsafe-free,
+	// reflect-free Go from outside this package; go vet's copylocks
+	// check flags only a directly-visible literal like that one, never a
+	// copy built by other means — see
+	// internal/engine/core/sec014_poc_test.go's e2Copy for the
+	// unsafe.Pointer byte-copy precedent this package's own tests use to
+	// keep exercising the regression without a vet-caught literal). mu
+	// is a plain sync.RWMutex VALUE, so the copy gets its OWN,
+	// independent lock — but modules (a map) and order (a slice
+	// backing array) are reference types, so the copy ALIASES both. Two
+	// independent locks, one shared map and one shared backing array:
+	// exactly the SEC-003/014/016/018/019 shape, on the module system's
+	// own bookkeeping this time.
+	//
+	// atomic.Pointer, not a plain *Registry field, for the SEC-016
+	// reason every other guarded type in this codebase uses one (see
+	// Engine.self, engine/core/engine.go; SubscriptionServer.self,
+	// engine/core/subscribe.go; InProcTransport.self, protocol/
+	// transport.go; State.self, engine/debug/copyguard.go): the identity
+	// check must be race-safe AND must run before mu is ever touched,
+	// because a struct copy taken while the ORIGINAL's mu happened to be
+	// held (Lock'd or RLock'd) captures those mutex bytes read as
+	// "locked" — the copy's own next Lock()/RLock() call on that
+	// captured state can then park forever, since nothing will ever
+	// Unlock() that specific copy's address. A plain field read racing a
+	// concurrent struct copy has no defined result under the Go memory
+	// model; atomic.Pointer's Load/Store do.
+	self atomic.Pointer[Registry]
 }
 
 // NewRegistry constructs an empty Registry.
@@ -169,14 +211,70 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	for _, opt := range opts {
 		opt(r)
 	}
+	// Stored exactly once, here, at the end of construction, before r is
+	// returned to any caller — no goroutine can have a reference to r to
+	// race this Store against (SEC-020; mirrors NewEngine/
+	// NewSubscriptionServer/NewInProcTransport/NewState — see self's doc
+	// comment above).
+	r.self.Store(r)
 	return r
+}
+
+// checkNotCopied reports whether the receiver is a struct copy of some
+// other Registry value (SEC-020, mirroring Engine.checkNotCopied/
+// SubscriptionServer.checkNotCopied/InProcTransport.checkNotCopied/
+// State.checkNotCopied). Deliberately lock-free — a single
+// atomic.Pointer.Load, requiring nothing else, not r.mu — so it is safe
+// and correct to call BEFORE r.mu is EVER touched, including for
+// RLock().
+//
+// That ordering is not optional (SEC-016): a struct copy's mu can be
+// byte-for-byte "currently locked" if the copy was taken while the
+// original's mu was held (r.mu.RLock()'d by a concurrent reader, or
+// Lock()'d by a concurrent writer — RWMutex's internal state encodes
+// both), and acquiring — even just attempting — a copy's own mu in that
+// state can block forever, since nothing will ever Unlock()/RUnlock()
+// that specific copy's address. A guard placed AFTER the lock can never
+// run for that attack, because the attack IS acquiring the lock;
+// rejecting the copy here, before Lock()/RLock() is ever called, means
+// that hang path is never reached at all. Every one of this package's
+// nine r.mu.Lock()/r.mu.RLock() call sites (see the enumeration in this
+// file's package-level SEC-020 note below the imports, and
+// registry_test.go) is guarded this way, RLock sites included — a
+// reader on a copy is exactly as broken as a writer on one.
+//
+// A nil r.self.Load() (a Registry constructed as a bare `Registry{}`,
+// `new(Registry)`, or a hand-built literal rather than via NewRegistry,
+// so self was never stored) is treated the same as a mismatch and
+// rejected the same way — every documented construction path is
+// NewRegistry, so an unset self is itself a misuse this same error
+// correctly names, and rejecting it here also means such a value's
+// nil modules map is never reached either.
+func (r *Registry) checkNotCopied(correlationID string, ctx map[string]any) error {
+	if r.self.Load() != r {
+		return errs.New(codeRegistryCopied, correlationID, ctx)
+	}
+	return nil
 }
 
 // SetToggleHook installs (or replaces) the callback fired on every
 // successful SetStatus call. Safe to call at any time, including after
 // modules are registered.
 func (r *Registry) SetToggleHook(hook ToggleHook) {
+	// SEC-020: identity check BEFORE r.mu is touched at all — see
+	// checkNotCopied's doc comment for why a copy must never acquire its
+	// own mu.
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetToggleHook"}); err != nil {
+		return
+	}
 	r.mu.Lock()
+	// Defence-in-depth re-check under the lock (cheap: one more atomic
+	// load) — mirrors Engine.RegisterPhaseHook/seal's post-lock re-check
+	// (engine/core/engine.go).
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetToggleHook"}); err != nil {
+		r.mu.Unlock()
+		return
+	}
 	r.hook = hook
 	r.mu.Unlock()
 }
@@ -191,6 +289,11 @@ func (r *Registry) SetToggleHook(hook ToggleHook) {
 // Duplicate keys are rejected with a registry-sourced error rather than
 // silently overwriting the earlier registration (AC-11).
 func (r *Registry) Register(key string, real, stub Module, opts ...Option) error {
+	// SEC-020: identity check BEFORE r.mu is touched at all (well ahead
+	// of the r.mu.Lock() below) — see checkNotCopied's doc comment.
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "Register"}); err != nil {
+		return err
+	}
 	if stub == nil {
 		return errs.New(codeNilStub, errs.NewCorrelationID(), map[string]any{
 			"key": key,
@@ -220,6 +323,11 @@ func (r *Registry) Register(key string, real, stub Module, opts ...Option) error
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Defence-in-depth re-check under the lock (cheap: one more atomic
+	// load) — mirrors Engine.RegisterPhaseHook/seal's post-lock re-check.
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "Register"}); err != nil {
+		return err
+	}
 
 	if _, exists := r.modules[key]; exists {
 		return errs.New(codeDuplicateKey, errs.NewCorrelationID(), map[string]any{
@@ -253,8 +361,17 @@ func healthWasSet(opts []Option) bool {
 // Get returns a copy of the entry registered under key, and false if key
 // was never registered (the standard ok-idiom — never a panic, AC-12).
 func (r *Registry) Get(key string) (ModuleEntry, bool) {
+	// SEC-020: identity check BEFORE r.mu.RLock() — a reader on a copy
+	// is exactly as broken as a writer (see checkNotCopied's doc
+	// comment).
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "Get"}); err != nil {
+		return ModuleEntry{}, false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "Get"}); err != nil {
+		return ModuleEntry{}, false
+	}
 
 	rec, ok := r.modules[key]
 	if !ok {
@@ -267,8 +384,19 @@ func (r *Registry) Get(key string) (ModuleEntry, bool) {
 // and deterministic across repeated calls (AC-10), never Go map iteration
 // order (GR#21).
 func (r *Registry) List() []ModuleEntry {
+	// SEC-020 / ASM-REG-001 (see this file's accessor-guarding note near
+	// TickCostHistory): guarded even though List already returns a
+	// defensive copy — the danger is r.mu.RLock() itself hanging on a
+	// copy's captured-locked mutex bytes, not merely the data List would
+	// hand back. See checkNotCopied's doc comment.
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "List"}); err != nil {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "List"}); err != nil {
+		return nil
+	}
 	return r.sortedEntriesLocked()
 }
 
@@ -276,8 +404,14 @@ func (r *Registry) List() []ModuleEntry {
 // order — the sequence engine.core's boot loop sees, deterministic given
 // the same sequence of Register calls (AC-16).
 func (r *Registry) BootOrder() []ModuleEntry {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BootOrder"}); err != nil {
+		return nil
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BootOrder"}); err != nil {
+		return nil
+	}
 
 	out := make([]ModuleEntry, 0, len(r.order))
 	for _, key := range r.order {
@@ -302,8 +436,14 @@ func (r *Registry) sortedEntriesLocked() []ModuleEntry {
 // UpdateHealth sets a module's health independently of its status (AC-6).
 // Returns a registry-sourced error if key was never registered.
 func (r *Registry) UpdateHealth(key string, health Health) error {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "UpdateHealth"}); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "UpdateHealth"}); err != nil {
+		return err
+	}
 
 	rec, ok := r.modules[key]
 	if !ok {
@@ -323,8 +463,14 @@ func (r *Registry) UpdateHealth(key string, health Health) error {
 // are additionally retained for TickCostHistory, the F12 sparkline
 // source.
 func (r *Registry) RecordTickCost(key string, micros uint64) error {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "RecordTickCost"}); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "RecordTickCost"}); err != nil {
+		return err
+	}
 
 	rec, ok := r.modules[key]
 	if !ok {
@@ -345,8 +491,14 @@ func (r *Registry) RecordTickCost(key string, micros uint64) error {
 // key, oldest first — the F12 per-phase sparkline source. Returns false
 // if key was never registered.
 func (r *Registry) TickCostHistory(key string) ([]uint64, bool) {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "TickCostHistory"}); err != nil {
+		return nil, false
+	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "TickCostHistory"}); err != nil {
+		return nil, false
+	}
 
 	rec, ok := r.modules[key]
 	if !ok {
@@ -389,8 +541,17 @@ func (r *Registry) SetStatus(key string, target Status, confirmToken string) err
 // lock, so it can never race with a concurrent SetToggleHook) alongside
 // the event. The caller invokes the hook after the lock is released.
 func (r *Registry) setStatusLocked(key string, target Status, confirmToken string) (ToggleEvent, ToggleHook, error) {
+	// SEC-020: identity check BEFORE r.mu is touched — SetStatus itself
+	// never touches r.mu directly, this method (its sole caller) is the
+	// actual lock site, so the guard lives here.
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "SetStatus"}); err != nil {
+		return ToggleEvent{}, nil, err
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"key": key, "method": "SetStatus"}); err != nil {
+		return ToggleEvent{}, nil, err
+	}
 
 	rec, ok := r.modules[key]
 	if !ok {

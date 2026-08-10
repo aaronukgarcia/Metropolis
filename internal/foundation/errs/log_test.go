@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -122,24 +123,37 @@ func TestFileLogger_RotationKeepsAtMostNBackups(t *testing.T) {
 	}
 }
 
+// TestRingBuffer_FallbackWhenNoSink uses a DISTINCT Code per iteration
+// (SEC-030/ASM-106: ringBuffer.push now coalesces consecutive
+// same-Code pushes into one slot with a Repeat count — see
+// TestRingBuffer_CoalescesConsecutiveSameCode below for that behaviour
+// specifically) so this test still exercises what it always did: N
+// genuinely different entries land as N separate ring slots.
 func TestRingBuffer_FallbackWhenNoSink(t *testing.T) {
 	resetSinkForTest()
 	t.Cleanup(resetSinkForTest)
 
 	for i := 0; i < 5; i++ {
-		logEntry(Entry{Code: "MET-F900", Msg: "m"})
+		logEntry(Entry{Code: fmt.Sprintf("MET-F9%02d", i), Msg: "m"})
 	}
 	if got := len(Recent()); got != 5 {
 		t.Errorf("Recent() len = %d, want 5", got)
 	}
 }
 
+// TestRingBuffer_CapsAt200 uses a DISTINCT Code per iteration for the
+// same reason as TestRingBuffer_FallbackWhenNoSink above — this test's
+// entire point is proving the ring evicts its OLDEST entry once full,
+// which only 250 genuinely different entries exercises; 250 pushes of
+// the SAME Code would now correctly coalesce to a single entry (see
+// TestRingBuffer_CoalescesConsecutiveSameCode) and never reach the cap
+// at all.
 func TestRingBuffer_CapsAt200(t *testing.T) {
 	resetSinkForTest()
 	t.Cleanup(resetSinkForTest)
 
 	for i := 0; i < 250; i++ {
-		logEntry(Entry{Code: "MET-F900", Msg: "m"})
+		logEntry(Entry{Code: fmt.Sprintf("MET-F%d", i), Msg: "m"})
 	}
 	if got := len(Recent()); got != 200 {
 		t.Errorf("Recent() len = %d, want 200", got)
@@ -156,7 +170,9 @@ func TestLogEntry_FallsBackToRingOnSinkWriteFailure(t *testing.T) {
 		t.Fatalf("NewFileLogger: %v", err)
 	}
 	_ = l.Close() // closed file -> subsequent writes fail
-	SetSink(l)
+	if err := SetSink(l); err != nil {
+		t.Fatalf("SetSink: %v", err)
+	}
 
 	logEntry(Entry{Code: "MET-F900", Msg: "write should fail"})
 
