@@ -25,11 +25,15 @@
       "E000-E099": "reserved for engine.core (internal/engine/core: tick/command handling, phase hooks, subscriptions, snapshotting — MOD-012)",
       "E100-E199": "reserved for engine.detgate (internal/engine/detgate: the multi-run determinism gate — FEAT-004. NOTE: this range collided with a mistaken E100-E199 registration by feat.debugmode on 2026-08-09 [BUG-008] because detgate's claim existed only in source comments, not here; feat.debugmode was renumbered to E200-E299. This entry is the fix — always check this table AND `grep -rn MET-E internal/ cmd/` before claiming a new sub-range.)",
       "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
+      "E300-E399": "reserved for engine.invariant (internal/engine/invariant: the conservation invariant checker — MOD-019. Checked against this table AND `grep -rn \"MET-E3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
       "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)",
-      "H100-H199": "reserved for ui.harness (internal/harness/uitest, MOD-014: scripted-key-DSL parse errors, fixture-exhausted-before-script-complete, snapshot load/name errors, Harness copy guard — second H-layer sub-range, since H000-H099 already belongs to harness.replay). Checked against both this table AND `grep -rn \"MET-H1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H1xx code existed either place."
+      "H100-H199": "reserved for ui.harness (internal/harness/uitest, MOD-014: scripted-key-DSL parse errors, fixture-exhausted-before-script-complete, snapshot load/name errors, Harness copy guard — second H-layer sub-range, since H000-H099 already belongs to harness.replay). Checked against both this table AND `grep -rn \"MET-H1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H1xx code existed either place.",
+      "H200-H299": "reserved for harness.headless (internal/harness/headless, MOD-015: CLI flag validation, scenario-script parse/read errors, -out write failures — third H-layer sub-range, since H000-H099/H100-H199 already belong to harness.replay/ui.harness). Checked against both this table AND `grep -rn \"MET-H2\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H2xx code existed either place.",
+      "U300-U399": "reserved for ui.keys (internal/ui/keys, MOD-011: mnemonic-path Register conflicts (duplicate/prefix ambiguity), malformed keymap-profile fallback, keymap entries binding to an unregistered mnemonic path, palette parameterised-argument rejection, invalid mark-slot identifiers — third U-layer sub-range, since U000-U099/U100-U199/U200-U299 already belong to ui.core/ui.screen.map/ui.screen.debug). Checked against both this table AND `grep -rn \"MET-U3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U3xx code existed either place.",
+      "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place."
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -268,6 +272,60 @@
       "message": "Screen method called on a struct-copied value (SEC-020): {cause}",
       "remedy": "A *debug.Screen value was copied by assignment/passing instead of being used via the single pointer debug.NewScreen returned (mu is a sync.Mutex VALUE and reg/events are aliased pointer/slice fields — a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one Screen via NewScreen and pass its pointer everywhere instead of a dereferenced copy."
     },
+    "MET-U300": {
+      "severity": "error",
+      "module": "ui.keys",
+      "message": "Register rejected: mnemonic path {path} duplicates an already-registered action at the same path",
+      "remedy": "Two actions were registered at the identical mnemonic path (AC-14) — key grammar order must never decide which action wins. Pick a distinct mnemonic path for the new action, or remove the earlier Register call for the same path."
+    },
+    "MET-U301": {
+      "severity": "error",
+      "module": "ui.keys",
+      "message": "Register rejected: mnemonic path {path} conflicts with {conflictsWith} — a path cannot be both a complete action and a prefix of another registered path",
+      "remedy": "ASM-118: the grammar cannot tell, on feeding the shorter path, whether to dispatch immediately or wait for a longer continuation, so this shape is rejected at Register time rather than resolved by a runtime tiebreak. Choose non-overlapping mnemonic paths (e.g. register the leaf under a different top-level token) so no registered path is a strict prefix of another."
+    },
+    "MET-U302": {
+      "severity": "warn",
+      "module": "ui.keys",
+      "message": "keymap profile at {path} is malformed or schema-invalid: {cause} — falling back to the shipped default profile",
+      "remedy": "The profile file was not valid keymap JSON (bad JSON, unrecognised schema version, or the wrong shape). The grammar continues operating on the shipped default profile so the game stays playable; fix the profile file's JSON and reload."
+    },
+    "MET-U303": {
+      "severity": "warn",
+      "module": "ui.keys",
+      "message": "keymap entry rejected: physical key {key} maps to mnemonic path {path}, which names no registered action",
+      "remedy": "A remapped or imported keymap profile bound a physical key to a mnemonic path that this KeyGrammar has no Register()ed action for. That one binding is dropped (AC-11b); the rest of the profile still loads. Register the target action before loading the profile, or fix the profile's path to match a real registered action."
+    },
+    "MET-U304": {
+      "severity": "warn",
+      "module": "ui.keys",
+      "message": "command palette argument {name} in {command!q} does not match the expected {kind} form: {value!q}",
+      "remedy": "The palette's free-text command string is validated per positively-stated argument grammar (AC-9b) before it can influence dispatch; a value outside that grammar is rejected, never silently coerced to zero or truncated. Re-enter the command using the documented form for that argument kind (see doc.go's palette argument grammar table)."
+    },
+    "MET-U305": {
+      "severity": "warn",
+      "module": "ui.keys",
+      "message": "mark slot {id!q} is not a valid 12-slot mark identifier (a-l)",
+      "remedy": "Only the 12 mark slots a through l are addressable (AC-7); a 13th distinct identifier is rejected rather than silently overwriting an existing slot. Use one of the 12 documented slots, or clear/reuse an existing one explicitly."
+    },
+    "MET-U306": {
+      "severity": "error",
+      "module": "ui.keys",
+      "message": "Register/RegisterGlobal rejected: token {token!q} is reserved for a built-in binding (Esc/./u/U) and can never be reached through the leader tree or global lookup",
+      "remedy": "Esc, '.', 'u', and 'U' are unconditionally intercepted by Feed before the leader tree or the global-binding map is ever consulted (see doc.go/grammar.go), so registering an action under one of them would be permanently unreachable dead code. Choose a different mnemonic token or global key."
+    },
+    "MET-U307": {
+      "severity": "warn",
+      "module": "ui.keys",
+      "message": "command palette input names unknown command {name!q}",
+      "remedy": "No RegisterCommand call has registered a palette command with this name. Check the spelling, or register the command before parsing input that references it."
+    },
+    "MET-U308": {
+      "severity": "error",
+      "module": "ui.keys",
+      "message": "KeyGrammar method called on a struct-copied value (SEC-020): {cause}",
+      "remedy": "A *keys.KeyGrammar value was copied by assignment/passing instead of being used via the single pointer NewKeyGrammar returned (mu is a sync.Mutex VALUE and the trie/usage/marks maps are aliased reference fields — a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one KeyGrammar via NewKeyGrammar and pass its pointer everywhere instead of a dereferenced copy."
+    },
     "MET-E000": {
       "severity": "error",
       "module": "engine.core",
@@ -351,6 +409,36 @@
       "module": "engine.core",
       "message": "Subscribe/Unsubscribe/PublishEngineStatus called on a copied SubscriptionServer value, not the one NewSubscriptionServer constructed",
       "remedy": "Always use the *SubscriptionServer pointer NewSubscriptionServer returned. Do not dereference-and-reassign it ('s2 := *s') or pass it by value -- that produces a second SubscriptionServer value with its own mutex but an aliased subs map, defeating this package's concurrency-safety invariant (SEC-019, same class as SEC-014/016 on Engine). If you need a second independent SubscriptionServer, call NewSubscriptionServer again."
+    },
+    "MET-E014": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RunCommandLoop's CommandSource closed its Commands() channel before ctx was done",
+      "remedy": "This means the transport went away for some reason other than the shutdown you told RunCommandLoop about (e.g. Close() was called without first cancelling ctx and joining the loop's goroutine). Follow the documented shutdown order: cancel ctx, wait for RunCommandLoop to return, THEN close the transport -- see RunCommandLoop's 'Exit contract' doc comment (internal/engine/core/commands.go) and StubEngine.Run's identical contract (internal/engine/stub/engine.go) for the full ordering argument. A headless run treating this as a silent success would hash a truncated world (engine.headless.md AC-4)."
+    },
+    "MET-H200": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "-scenario file {path} could not be read or parsed: {cause}",
+      "remedy": "Check the -scenario path exists, is readable, and contains a well-formed JSON command list. This is checked before the engine boots or any tick advances, so a bad scenario file never produces a partial run."
+    },
+    "MET-H201": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "writing -out snapshot bundle to {path} failed: {cause}",
+      "remedy": "Check the -out directory's parent is writable and does not already exist as a stale bundle (CreateBundleDir refuses to overwrite). A write failure here always exits non-zero -- it never silently reports success with no file written."
+    },
+    "MET-H202": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "command {kind} rejected by the engine during a headless run: {engineErrorCode}",
+      "remedy": "The engine rejected a command issued by the headless driver (a scenario-script command, or an internal AdvanceTicks batch) -- see engineErrorCode for the underlying engine.core rejection. This aborts the run rather than silently skipping the rejected command."
+    },
+    "MET-H203": {
+      "severity": "fatal",
+      "module": "harness.headless",
+      "message": "engine.core.RunCommandLoop exited abnormally during a headless run: {cause}",
+      "remedy": "A headless run has no operator watching a screen, so a premature engine-loop exit (the transport closing before shutdown was requested -- see engine.core's MET-E014) must never be mistaken for a clean, complete run. Investigate why the transport closed early; do not trust a snapshot file this run may have already written."
     },
     "MET-E100": {
       "severity": "error",
@@ -447,6 +535,36 @@
       "module": "feat.debugmode",
       "message": "debug.State method {method} was called on a struct-copied State, not the value NewState returned; the call was rejected before touching any shared field",
       "remedy": "Never copy a *debug.State value (`s2 := *s` or equivalent) — mu is an independent lock on the copy while header/cheatLog remain aliased with the original, so a copy is a second, uncoordinated lock domain over the SAME save header's sticky DebugTouched hygiene flag (SEC-020 wave 2). Always pass and store the *debug.State pointer NewState gave you."
+    },
+    "MET-E300": {
+      "severity": "error",
+      "module": "engine.invariant",
+      "message": "conservation violated: {invariant} at tick {tick}, expected delta {expected}, actual delta {actual}",
+      "remedy": "A registered conserved stock's tracked flows (births/deaths/migration, income/expenditure, production/consumption, spawn/despawn) do not explain its actual change for the tick — trace the invariant named here and the tick number to find which module let state drift untracked. In a dev build this is also a hard assert (panic); in a release build this logged error is the only signal, so treat it as P0 (GR#21)."
+    },
+    "MET-E301": {
+      "severity": "error",
+      "module": "engine.invariant",
+      "message": "invariant.Wire/WireDaily called against phase {phase} after the target engine.core.Engine already sealed",
+      "remedy": "Wire/WireDaily must be called before the target Engine's first AdvanceTicks call — RegisterPhaseHook rejects late registration (core.ErrEngineSealed, MET-E011) once sealed, and this wrapper surfaces that cause rather than swallowing it. Fix the boot sequence so invariant wiring runs before the first AdvanceTicks call."
+    },
+    "MET-E302": {
+      "severity": "error",
+      "module": "engine.invariant",
+      "message": "Registry method called on a copied value, not the one NewRegistry constructed",
+      "remedy": "Always use the *invariant.Registry pointer NewRegistry returned. Do not dereference-and-reassign it ('r2 := *r') or pass it by value -- that produces a second Registry value with its own mu but ALIASED invariants/names, so the copy's mu protects nothing shared and a copy taken while the original's mu was held can hang the copy's own Lock() forever (SEC-014/SEC-016/SEC-020-class). If you need a second independent Registry, call NewRegistry again."
+    },
+    "MET-E303": {
+      "severity": "error",
+      "module": "engine.invariant",
+      "message": "Registry.Register called with a nil Invariant",
+      "remedy": "Pass a non-nil value implementing the Invariant interface (Name/Check) to Registry.Register."
+    },
+    "MET-E304": {
+      "severity": "error",
+      "module": "engine.invariant",
+      "message": "Registry.Register called twice with invariant name {name}",
+      "remedy": "Every registered Invariant's Name() must be unique within a Registry — this mirrors foundation.registry.Register's duplicate-key rejection. Give the second invariant a distinct name, or confirm it is not an accidental double-registration."
     },
     "MET-E900": {
       "severity": "fatal",
@@ -585,6 +703,54 @@
       "module": "ui.harness",
       "message": "SendCommand rejected: this Transport is a read-only harness.replay fixture playback (AC-3) and never accepts commands",
       "remedy": "A fixture attached via Harness.AttachFixture feeds canned Results/Events/Deltas into the view-model layer for snapshot testing (replay.UIPlayer, mode a) — it has nothing to send a command TO. If the test needs to send commands, drive a real (or stub) engine directly instead of attaching a fixture."
+    },
+    "MET-H300": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "synthetic citizenCount {citizenCount} is out of range: must be {min}..{max}",
+      "remedy": "AC-1b: citizenCount sizes real allocation and generation work, so it is validated BEFORE any generation begins and rejected outright rather than clamped. Choose a value between MinSyntheticCitizens and MaxSyntheticCitizens (internal/harness/synth/limits.go) -- the latter reuses foundation.solver's A9 local-CPU ceiling (LocalCitizenCeilingHigh, 30M) rather than an arbitrary number."
+    },
+    "MET-H301": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "synthetic sprawl parameter {sprawl} is out of range: must be {min}..{max}",
+      "remedy": "AC-7b: Sprawl must fall within MinSprawl..MaxSprawl (internal/harness/synth/limits.go, currently 0.0..1.0 inclusive). Rejected outright, never clamped to the nearest legal value."
+    },
+    "MET-H302": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "synthetic network shape {networkShape} is not a recognised shape",
+      "remedy": "AC-7b: NetworkShape must be exactly one of the closed enum values NetworkGrid (\"grid\"), NetworkRadial (\"radial\"), or NetworkOrganic (\"organic\") -- never an arbitrary free string."
+    },
+    "MET-H303": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "generating a {citizenCount}-citizen synthetic world failed: {cause}",
+      "remedy": "Params passed validation but the underlying write to the caller's io.Writer failed (disk full, closed pipe, permission denied, ...). Check the destination and retry -- this is an I/O failure on a legal request, not a domain-validation rejection (see MET-H300/H301/H302 for those)."
+    },
+    "MET-H304": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf run requested with months={months}, must be > 0",
+      "remedy": "Call RunPerf (or perfci's -months flag) with a positive months value. A run driving zero or negative simulated months cannot produce a monthly-tick-time measurement."
+    },
+    "MET-H305": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf run's AdvanceTicks command (n={n}) was rejected by the engine: {engineErrorCode}",
+      "remedy": "The engine rejected a command issued by RunPerf's tick-driving loop -- see engineErrorCode for the underlying engine.core rejection. The perf run aborts rather than reporting a partial measurement as if it were complete."
+    },
+    "MET-H306": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf results file {path} is corrupt at line {line}: {cause}",
+      "remedy": "An existing perf-results NDJSON file failed to parse as the expected PerfRecord schema. This is distinct from AC-8's 'no baseline yet' case (a missing file is never an error) -- a file that exists but will not parse means the results file itself needs investigating (truncated write, manual edit, format drift) before this preset's baseline can be trusted again."
+    },
+    "MET-H307": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf CI regression detected: {message}",
+      "remedy": "M0-ENG §6 point 5: a commit that regresses monthly-tick time more than {threshold} (as a fraction) at the 1M-citizen synthetic fails the build. Investigate what the commit changed on the tick path (or, if this is a false positive from a genuinely noisy runner, re-run before concluding the code is at fault -- MinMeasurableDuration's noise floor already screens out near-zero-duration measurements, but does not eliminate all runner variance)."
     }
   }
 }

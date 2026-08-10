@@ -317,18 +317,63 @@ type CommandSource interface {
 // RunCommandLoop consumes commands from t, one at a time, calling
 // HandleCommand for each and pushing the resulting CommandResult back
 // via t.SendResult — the command loop deliverable (M0-ENG §1.1's
-// T-ENGINE). It returns when ctx is done or t's Commands channel is
-// closed (protocol.InProcTransport.Close was called). Blocks the
-// calling goroutine, so callers run it as `go
-// engine.RunCommandLoop(ctx, transport)`.
-func (e *Engine) RunCommandLoop(ctx context.Context, t CommandSource) {
+// T-ENGINE). Blocks the calling goroutine, so callers run it as `go
+// engine.RunCommandLoop(ctx, transport)` and observe the returned error
+// once the goroutine exits (AC-7, engine.headless.md).
+//
+// # Exit contract (harness.headless AC-4/AC-5/AC-6 — read this before
+// wiring a caller; mirrors StubEngine.Run's "Exit contract" doc comment,
+// internal/engine/stub/engine.go)
+//
+// ctx cancellation and t.Commands() closing are NOT two equivalent,
+// interchangeable ways to stop this loop. Only ctx cancellation is the
+// clean shutdown signal: RunCommandLoop returns nil. A Commands()
+// closure observed WITHOUT ctx already being done is reported as a
+// distinct, registry-sourced error (ErrPrematureCommandsClose,
+// MET-E014) — it means the transport went away for some reason other
+// than the shutdown the caller told this loop about, and for a headless
+// run (no operator watching a screen — engine.headless.md's whole
+// premise) that must never be allowed to look like a clean exit, the
+// same way BUG-020 (harness.stub) and MET-H004
+// (harness.replay.EnginePlayer) were fixed for their own callers. This
+// is the third instance of that shape, now fixed in engine.core itself.
+//
+// The caller-side contract this implies: cancel ctx, WAIT for this
+// goroutine to actually return (join it), and only THEN close the
+// transport — see StubEngine.Run's doc comment for the full "cancel();
+// Close()" without a join is NOT safe" argument, which applies here
+// unchanged. internal/engine/detgate's RunGate is the one documented
+// exception: it already controls cancel()/Close() ordering
+// deterministically with no other goroutine able to close Commands()
+// first, so it does not need to observe this return value (see
+// gate.go's runOnce and engine.headless.md's AC-7 "Out of scope" note).
+//
+// AC-6: this implementation is the plain two-branch select mirroring
+// StubEngine.Run directly (re-checking ctx.Done() AFTER observing
+// ok==false on the Commands() receive, never before) — not a
+// wait/notify loop — so it needs no additional "re-check at the alarm"
+// pattern beyond that single re-check; see AC-6's text for why a
+// wait/notify shape would need one and this shape does not.
+func (e *Engine) RunCommandLoop(ctx context.Context, t CommandSource) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return nil
 		case cmd, ok := <-t.Commands():
 			if !ok {
-				return
+				// AC-4/AC-5: re-check ctx.Done() here, AFTER observing
+				// ok==false, is what tells the two triggers apart — see the
+				// "Exit contract" section above. If ctx is already done,
+				// this is the clean shutdown path (nil); if it is not,
+				// something closed the transport out from under a caller
+				// that never told this loop to stop, and that is reported,
+				// never silently swallowed.
+				select {
+				case <-ctx.Done():
+					return nil
+				default:
+					return errs.New(ErrPrematureCommandsClose, errs.NewCorrelationID(), nil)
+				}
 			}
 			t.SendResult(e.HandleCommand(cmd))
 		}

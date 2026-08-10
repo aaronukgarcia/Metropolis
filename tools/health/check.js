@@ -15,7 +15,23 @@
  *   - "did it finish, and is it
  *      for THIS commit"           <- run.status + run.headSha vs HEAD
  *   - BOW ready queue / P0s       <- `node claude-bow.js ready` / `list`
- *   - git sync state              <- `git status` / `git rev-list`
+ *   - git sync state              <- `git status` / `git rev-list` /
+ *                                    `git rev-parse @{u}`, compared
+ *                                    against BOTH the upstream (if any)
+ *                                    and origin/<default branch> — a
+ *                                    feature branch with no upstream is
+ *                                    reported as NORMAL, not a warning
+ *                                    (BUG-031 precedent: an alarm firing
+ *                                    on every routine state trains the
+ *                                    reader to skim past real ones)
+ *   - default branch identity     <- `gh api repos/:owner/:repo
+ *                                    --jq .default_branch`, falling back
+ *                                    to `git symbolic-ref
+ *                                    refs/remotes/origin/HEAD` — never
+ *                                    the literal "main"
+ *   - branch protection state     <- `gh api
+ *                                    repos/:owner/:repo/branches/<default>/protection`
+ *                                    (404 = protection OFF = FAIL, not WARN)
  *
  * This tool is read-only. It never mutates the repo, the BOW, or CI.
  * It prints a report and exits 1 if any FAILURE-class condition was
@@ -201,7 +217,44 @@ if (!fs.existsSync(CI_YML_PATH)) {
 
 // ---------------------------------------------------------------------
 // 2. Git sync state
+//
+// GR#15 (validators derive from data): the "default branch" is never a
+// hardcoded literal ("main") — it is asked of GitHub itself (gh api),
+// falling back to the git remote's own HEAD pointer. This matters
+// because BUG-031-class drift previously reported "NOT SYNCED: no
+// upstream tracking branch" on every freshly cut feature branch, which
+// is not a problem — it is the required workflow once the default
+// branch is protected and all work lands by PR. A warning that fires on
+// every normal working state trains people to skim it (SEC-026's
+// pattern), so this section now distinguishes:
+//   - default branch, no upstream           -> unexpected, flagged
+//   - default branch, ahead of origin       -> WARN: cannot be pushed
+//     directly (protection refuses it), needs a PR
+//   - feature branch, no upstream           -> NORMAL, not a warning;
+//     report divergence from origin/<default> instead
+//   - feature branch, with upstream         -> report both: vs upstream
+//     (my own branch) and vs origin/<default> (will a merge hurt)
 // ---------------------------------------------------------------------
+function resolveDefaultBranch() {
+  const ghDefault = run('gh', ['api', 'repos/:owner/:repo', '--jq', '.default_branch']);
+  if (ghDefault.ok && ghDefault.out) return { branch: ghDefault.out.trim(), source: 'gh api repos/:owner/:repo' };
+  // Fallback: ask git which branch origin/HEAD points at — still not a
+  // hardcoded name, just a different live source when gh is unavailable.
+  const symRes = run('git', ['symbolic-ref', 'refs/remotes/origin/HEAD']);
+  if (symRes.ok) {
+    const m = symRes.out.match(/refs\/remotes\/origin\/(.+)$/);
+    if (m) return { branch: m[1], source: 'git symbolic-ref refs/remotes/origin/HEAD' };
+  }
+  const showRes = run('git', ['remote', 'show', 'origin']);
+  if (showRes.ok) {
+    const m2 = showRes.out.match(/HEAD branch:\s*(\S+)/);
+    if (m2) return { branch: m2[1], source: 'git remote show origin' };
+  }
+  return { branch: null, source: null };
+}
+const defaultBranchInfo = resolveDefaultBranch();
+const defaultBranch = defaultBranchInfo.branch;
+
 const branchRes = run('git', ['branch', '--show-current']);
 const branch = branchRes.ok ? branchRes.out : '(unknown)';
 const headRes = run('git', ['rev-parse', 'HEAD']);
@@ -209,28 +262,72 @@ const headSha = headRes.ok ? headRes.out : null;
 const statusRes = run('git', ['status', '--short']);
 const dirtyLines = statusRes.ok ? statusRes.out.split(/\r?\n/).filter(Boolean) : [];
 
-let aheadBehindLine = '(no upstream tracking info)';
+const isDefaultBranch = defaultBranch !== null && branch === defaultBranch;
+
 const upstreamRes = run('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-if (upstreamRes.ok) {
-  const upstream = upstreamRes.out;
-  const counts = run('git', ['rev-list', '--left-right', '--count', `${upstream}...HEAD`]);
-  if (counts.ok) {
-    const [behind, ahead] = counts.out.split(/\s+/);
-    aheadBehindLine = `${upstream}: ahead ${ahead}, behind ${behind}`;
+const hasUpstream = upstreamRes.ok;
+const upstream = hasUpstream ? upstreamRes.out : null;
+
+// ahead/behind of HEAD vs `ref`, or null if `ref` doesn't resolve
+// locally (e.g. origin/<default> not fetched yet).
+function aheadBehind(ref) {
+  const verify = run('git', ['rev-parse', '--verify', '--quiet', ref]);
+  if (!verify.ok) return null;
+  const counts = run('git', ['rev-list', '--left-right', '--count', `${ref}...HEAD`]);
+  if (!counts.ok) return null;
+  const [behind, ahead] = counts.out.split(/\s+/);
+  return { behind, ahead };
+}
+
+const gitLines = [`Branch: ${branch}`, `HEAD: ${headSha || '(unknown)'}`];
+let gitStatus = 'ok';
+
+gitLines.push(
+  defaultBranch === null
+    ? 'Default branch: could not be determined (gh api and git remote origin/HEAD both failed) — cannot compare against it.'
+    : `Default branch: ${defaultBranch} (source: ${defaultBranchInfo.source})`
+);
+
+if (hasUpstream) {
+  const vsUpstream = aheadBehind(upstream);
+  gitLines.push(
+    vsUpstream
+      ? `Vs upstream (${upstream}): ahead ${vsUpstream.ahead}, behind ${vsUpstream.behind}`
+      : `Vs upstream (${upstream}): could not compute ahead/behind counts`
+  );
+} else if (isDefaultBranch) {
+  gitLines.push(`No upstream tracking branch set for '${branch}' — unexpected for the default branch.`);
+  gitStatus = 'warn';
+} else {
+  gitLines.push(`No upstream tracking branch for '${branch}' — NORMAL for a freshly cut feature branch (default branch is protected; work lands via PR).`);
+}
+
+if (defaultBranch !== null) {
+  const originDefaultRef = `origin/${defaultBranch}`;
+  const vsOriginDefault = aheadBehind(originDefaultRef);
+  if (!vsOriginDefault) {
+    gitLines.push(`Vs ${originDefaultRef}: could not compute (ref not found locally — try 'git fetch origin')`);
+  } else if (isDefaultBranch) {
+    gitLines.push(`Vs ${originDefaultRef}: ahead ${vsOriginDefault.ahead}, behind ${vsOriginDefault.behind}`);
+    if (Number(vsOriginDefault.ahead) > 0) {
+      gitLines.push(
+        `${vsOriginDefault.ahead} local commit(s) on '${defaultBranch}' not on ${originDefaultRef} — direct pushes to ${defaultBranch} are refused (branch protection); these need a PR.`
+      );
+      gitStatus = 'warn';
+    }
+  } else {
+    gitLines.push(`Vs ${originDefaultRef} (divergence from default branch): ahead ${vsOriginDefault.ahead}, behind ${vsOriginDefault.behind}`);
+    if (Number(vsOriginDefault.ahead) > 0) {
+      gitLines.push(`${vsOriginDefault.ahead} commit(s) on '${branch}' not yet on ${originDefaultRef} — expected while this feature branch is in progress; will land via PR.`);
+    }
   }
 }
 
-section(
-  'Git sync state',
-  [
-    `Branch: ${branch}`,
-    `HEAD: ${headSha || '(unknown)'}`,
-    aheadBehindLine,
-    dirtyLines.length ? `Uncommitted: ${dirtyLines.length} file(s):` : 'Uncommitted: clean',
-    ...dirtyLines.map((l) => '  ' + l),
-  ],
-  dirtyLines.length ? 'warn' : 'ok'
-);
+gitLines.push(dirtyLines.length ? `Uncommitted: ${dirtyLines.length} file(s):` : 'Uncommitted: clean');
+gitLines.push(...dirtyLines.map((l) => '  ' + l));
+if (dirtyLines.length) gitStatus = 'warn';
+
+section('Git sync state', gitLines, gitStatus);
 
 // ---------------------------------------------------------------------
 // 3. Latest CI run for this branch — did it complete, is it for HEAD?
@@ -314,6 +411,52 @@ if (!ghVersion.ok) {
         }
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------
+// 3b. Branch protection on the default branch. This is a control the
+// project relies on (direct pushes to the default branch are refused,
+// forcing PR-based landing) — a silently-removed protection is exactly
+// the kind of drift nobody notices until it's too late, so a 404 here
+// is a FAIL, not a WARN. Repo is resolved by gh itself via the
+// ":owner/:repo" magic string (which reads the git remote) — never a
+// hardcoded "owner/repo" literal (GR#15).
+// ---------------------------------------------------------------------
+if (!ghVersion.ok) {
+  section('Branch protection (default branch)', ['gh CLI not found/working — cannot check branch protection live. UNCONFIRMED.'], 'unconfirmed');
+} else if (defaultBranch === null) {
+  section('Branch protection (default branch)', ['Default branch could not be determined — cannot check its protection.'], 'unconfirmed');
+} else {
+  const protRes = run('gh', ['api', `repos/:owner/:repo/branches/${defaultBranch}/protection`]);
+  if (protRes.ok) {
+    let prot = null;
+    try { prot = JSON.parse(protRes.out); } catch (e) { /* ignore — still a 2xx, protection is on regardless of shape */ }
+    section(
+      `Branch protection on '${defaultBranch}'`,
+      [
+        `Protection is ON for '${defaultBranch}' (gh api returned the protection object).`,
+        prot && prot.required_pull_request_reviews
+          ? 'Required PR reviews: configured.'
+          : 'Required PR reviews: not reported in this response (may still be enforced by other rules — see gh api output for detail).',
+      ],
+      'ok'
+    );
+  } else if (/HTTP 404/i.test(protRes.err) || /404/.test(protRes.err) || /Not Found/i.test(protRes.err)) {
+    section(
+      `Branch protection on '${defaultBranch}'`,
+      [
+        `gh api returned 404 for repos/:owner/:repo/branches/${defaultBranch}/protection — protection is OFF.`,
+        'A relied-upon control being silently absent is a FAIL, not a WARN — direct pushes to the default branch would currently succeed.',
+      ],
+      'fail'
+    );
+  } else {
+    section(
+      `Branch protection on '${defaultBranch}'`,
+      [`gh api call failed for a reason other than a clean 404 — cannot confirm protection state: ${protRes.err || protRes.out}`],
+      'unconfirmed'
+    );
   }
 }
 

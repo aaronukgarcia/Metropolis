@@ -253,6 +253,47 @@ Agent transcripts do not survive a session, so a rule that lives only in the lea
 >
 > **Your rejection duty**: *(developer)* if the acceptance criteria rest on an assumption the BA did not log, **reject the ask** and bounce it to the lead — do not build it and do not quietly resolve the ambiguity yourself; if you resolve it, it is your assumption and you log it. *(Tester)* actively hunt for assumptions in the delivered code and tests, not just verify criteria — an assumption with no `ASM-` item is an automatic **FAIL** even if every criterion passed. *(BA)* log every assumption made while writing criteria; criteria resting on an unlogged assumption are incomplete work.
 
+## An acceptance criterion's CHECK must be able to fail (v1.9 — 2026-08-10, from BUG-033)
+
+Three criteria files in a single wave carried the same defect, and none of them
+was catchable by reading. In each case an AC's **check** — written as a grep, a
+type sketch, or an example filename — had drifted from the **rule** the AC
+stated, and the drift only surfaced when a developer tried to satisfy both
+halves at once.
+
+| File | The rule says | The check says | What a violating build could do |
+|---|---|---|---|
+| `ui.keys` | a mapped key must resolve to a path **naming a registered action**, rejected per-entry if not | assert the top-level verbs `b z p s d i g t` are present | ship a token-substitution cipher that passes the grep while making the rule **unenforceable** — a token is not an action, so it cannot be checked against the registry |
+| `harness.headless` | output is an `int.serializer` bundle (a **directory**) | example shows `-out snap.json` (a **file**) | build either, and be wrong against the other AC |
+| `engine.invariant` | per-invariant ran/skipped, so "unregistered" is distinct from "conserved at zero" | sketches `Check(state) Violation` as an "e.g." | return a bare `Violation` that cannot carry the distinction |
+
+The `ui.keys` row is the dangerous shape: **the check passed, the rule died.**
+AC-11b was a weakness-pattern-#4 control over user-editable data reaching a
+dispatch decision, and the delivered implementation satisfied its check while
+leaving that control non-existent.
+
+**The rule, and it is the same standard already applied to regression tests:**
+
+- **Every AC's check must be capable of FAILING an implementation that
+  satisfies the AC's prose but violates its rule.** Before writing a check,
+  ask what a lazy-but-plausible implementation looks like, and confirm the
+  check rejects it. A check that any reasonable build passes is documentation,
+  not verification.
+- **Where a check is a grep, state what a false pass looks like.** A grep finds
+  a string; it cannot tell whether the string means what the rule needs.
+- **Where a check is a type sketch, say which part is binding and which is
+  illustrative.** "e.g." on a signature is fine; "e.g." on the information the
+  signature must carry is not.
+- **Where a check names an artifact, name its shape, not an example.**
+  `snap.json` implied a file and cost a build.
+
+**Why this is a BA rule and not a dev rule.** All three defects were found by
+developers who escalated rather than guessing, which is the v1.7 duty working
+exactly as intended. But each cost a bounce, and the `ui.keys` one would have
+shipped a missing security control had the developer been slightly less
+careful. The reciprocal duty is that criteria arrive verifiable — a dev cannot
+be the only line of defence against criteria that contradict themselves.
+
 ## File ownership is transferred, never duplicated (v1.6.1 — from the feat.skeleton incident, 2026-08-09)
 
 Acceptance files are owned by exactly one BA. That rule already existed; what it lacked was a **handover procedure**, and the gap cost real work.

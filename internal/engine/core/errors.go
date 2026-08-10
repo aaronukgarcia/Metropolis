@@ -89,4 +89,13 @@ const (
 	// default (rather than a silent no-op) is cheap insurance against a
 	// future protocol Kind landing here unhandled.
 	ErrUnhandledCommandKind = "MET-E009"
+
+	// ErrPrematureCommandsClose: RunCommandLoop observed its
+	// CommandSource's Commands() channel close WITHOUT ctx already being
+	// done — the transport went away for some reason other than the
+	// shutdown the caller told the loop about (engine.headless.md AC-4,
+	// the third instance of the BUG-020/MET-H004 premature-close shape,
+	// now fixed in engine.core itself). Never returned on a clean
+	// ctx-cancelled shutdown (RunCommandLoop returns nil for that case).
+	ErrPrematureCommandsClose = "MET-E014"
 )

@@ -46,9 +46,29 @@ clean or only determined `[WARN]`s. Read its report top to bottom; it already co
    section ever flips to reporting a job found, or you independently learn `harness.synth`/MOD-016
    has landed while the job is still absent, treat that as new information worth a BOW check
    (`node claude-bow.js show MOD-016`).
-6. **Git sync state** — branch, uncommitted files (staged/unstaged/untracked), ahead/behind
-   upstream.
-7. **BOW ready queue** — P0 items with no open dependencies, and total ready count, via
+6. **Git sync state** — branch, uncommitted files (staged/unstaged/untracked), and ahead/behind
+   counts. The default branch is never assumed to be `main` — it's read live via
+   `gh api repos/:owner/:repo --jq .default_branch` (falling back to the git remote's
+   `origin/HEAD` if `gh` is unavailable). Reporting now distinguishes states that used to be
+   collapsed into one misleading "NOT SYNCED" warning (BUG-031's pattern — the same tool bounced
+   once already for training the reader to skim a warning that fired on every normal state):
+   - **Feature branch, no upstream** — this is the required workflow once the default branch is
+     protected (all work lands via PR). Reported plainly as normal, alongside how far the branch
+     has diverged from `origin/<default>` (unpushed/divergent commit counts) so a *genuine* problem
+     (e.g. way behind main) is still visible.
+   - **Feature branch, with upstream** — reports ahead/behind against the upstream itself AND
+     separately against `origin/<default>`, since "in sync with my own branch" and "in sync with
+     main" are different questions and only the second tells you whether a merge will hurt.
+   - **Default branch** — unchanged expectation of having an upstream; being ahead of
+     `origin/<default>` is flagged `[WARN]` because direct pushes to a protected default branch are
+     refused — those commits need a PR.
+   - Uncommitted files are reported as before (`[WARN]` if any).
+7. **Branch protection on the default branch** — confirms it's actually still ON via
+   `gh api repos/:owner/:repo/branches/<default>/protection`. A 404 means protection is OFF and is
+   reported `[FAIL]`, not `[WARN]` — a silently-removed control that direct pushes now succeed
+   against is exactly the kind of drift nobody notices (GR#17-adjacent). Repo/owner comes from
+   `gh`'s own `:owner/:repo` resolution (reads the git remote), never a hardcoded repo name.
+8. **BOW ready queue** — P0 items with no open dependencies, and total ready count, via
    `node claude-bow.js ready`. Also checks `node claude-bow.js list --status blocked` for anything
    stuck.
 
@@ -101,7 +121,8 @@ bill> Metropolis Health Check — [date]
      build-test-vet:     ✅ / ❌
      lint:                ✅ / ❌
      perf-CI:             📋 not yet wired (expected pre-harness.synth) / ✅ present & green / ❌ present & red
-     Git sync:            ✅ clean, in sync / ⚠ N uncommitted / ⚠ ahead/behind origin
+     Git sync:            ✅ clean, in sync / 📋 feature branch, no upstream (normal) / ⚠ N uncommitted / ⚠ ahead of origin/<default>
+     Branch protection:   ✅ ON for <default> / ❌ OFF (404) / ❓ unconfirmed
      BOW P0 ready:        N items — [list] / ✅ none
      BOW blocked:         ✅ none / ⚠ N items
      Vestige:              ✅ live / ❌ down

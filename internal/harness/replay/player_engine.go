@@ -23,6 +23,13 @@ import (
 // `go targetEngine.RunCommandLoop(ctx, enginePlayer)` and reads the
 // result back from Replay, which BLOCKS the calling goroutine until
 // either every command has a matching result or ctx is done.
+// RunCommandLoop's own return value (MOD-015, engine.headless.md AC-4 —
+// nil on a clean ctx-cancelled stop, a distinct error if its
+// CommandSource's Commands() channel closed first) is a separate signal
+// from Replay's: EnginePlayer owns and is the only closer of cmdCh (see
+// Replay below), so that error is not expected to fire for a
+// RunCommandLoop driven by an EnginePlayer specifically, but a caller
+// wiring both together is still free to observe it independently.
 //
 // EnginePlayer never calls RegisterPhaseHook or any other boot-only
 // registration method on anything (AC-3b) — its entire surface is

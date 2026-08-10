@@ -14,17 +14,6 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 )
 
-// headlessSeamMessage is what -headless prints today (AC-6, supplementary
-// — not Sprint-1-gate-blocking per this item's acceptance doc). It exists
-// as a distinct constant, checked in run_test.go, so the "seam, not a
-// harness" framing has one authoritative source of truth (GR#3) rather
-// than a string duplicated between the flag help text and the printed
-// message.
-const headlessSeamMessage = "metropolis: -headless requested; harness.headless (MOD-015) is not built yet " +
-	"(its dependency MOD-012 is done, so it is buildable, just not yet built) " +
-	"— this is a flag-dispatch seam only (AC-6), not a working headless harness. " +
-	"Run without -headless for the interactive walking skeleton."
-
 // run is main's testable body: parse args, boot, dispatch to the
 // interactive or headless-seam path, and return a process exit code
 // (0 success, 1 a registry-sourced boot failure per AC-7, 2 a flag-parse
@@ -34,8 +23,9 @@ const headlessSeamMessage = "metropolis: -headless requested; harness.headless (
 func run(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("metropolis", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	headless := fs.Bool("headless", false, "flag-dispatch seam for harness.headless (MOD-015, not yet built); prints a message and exits 0 (AC-6)")
+	headlessMode := fs.Bool("headless", false, "run engine.core headlessly (harness.headless, MOD-015): no UI attached, requires -seed/-months/-out")
 	version := fs.Bool("version", false, "print build identity and exit")
+	hf := registerHeadlessFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -45,15 +35,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	// AC-6's flag-dispatch seam: checked before any wiring boots, so a
-	// -headless run today does no engine/transport/registry work at all
-	// (nothing to shut down) — exactly what "seam, not a harness" means.
-	// Once harness.headless (MOD-015) lands, this becomes
-	// `if *headless { return runHeadless(...) }`, calling into that
-	// module rather than printing a message.
-	if *headless {
-		_, _ = fmt.Fprintln(stdout, headlessSeamMessage)
-		return 0
+	// AC-6 (feat.skeleton): -headless dispatches into harness.headless
+	// (MOD-015) directly — this binary does no engine/transport/registry
+	// boot work of its own beyond what runHeadless does via that package.
+	if *headlessMode {
+		return runHeadless(fs, hf, stdout, stderr)
 	}
 
 	correlationID := errs.NewCorrelationID()

@@ -142,7 +142,17 @@ func runOnce(rootCorrelationID string, seed uint64, months int, spec RunSpec) (s
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go e.RunCommandLoop(ctx, transport)
+	// RunCommandLoop now returns an error (engine.headless.md AC-4/AC-7,
+	// [MOD-015]) distinguishing a clean ctx-cancelled shutdown from a
+	// transport that closed prematurely. RunGate is the one documented
+	// exception to "observe this return" (AC-7's "Out of scope" note): it
+	// already controls cancel()/transport.Close() ordering deterministically
+	// below (cancel(); transport.Close(), no other goroutine can close
+	// Commands() first), so the premature-close case this return value
+	// exists to catch is structurally unreachable here — see
+	// engine.headless.md AC-7 and RunCommandLoop's own "Exit contract" doc
+	// comment (internal/engine/core/commands.go) for the full argument.
+	go func() { _ = e.RunCommandLoop(ctx, transport) }()
 
 	totalTicks := int64(months) * core.DailyTicksPerMonth
 	remaining := totalTicks
