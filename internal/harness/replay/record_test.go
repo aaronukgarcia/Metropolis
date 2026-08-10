@@ -26,7 +26,10 @@ func TestRecorderObserveStrictArrivalOrder(t *testing.T) {
 			t.Fatalf("ObserveCommand: %v", err)
 		}
 	}
-	recs := r.Records()
+	recs, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 	if len(recs) != 5 {
 		t.Fatalf("got %d records, want 5", len(recs))
 	}
@@ -61,14 +64,20 @@ func TestRecorderOrderEnforcedCannotReorderCapturedRecords(t *testing.T) {
 			t.Fatalf("ObserveCommand: %v", err)
 		}
 	}
-	before := r.Records()
+	before, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 
 	// Attempt to "reorder" via the only exported handle a caller has —
 	// mutating the returned copy — then re-fetch and confirm the
 	// Recorder's own sequence is untouched.
 	before[0], before[2] = before[2], before[0]
 
-	after := r.Records()
+	after, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 	orig, err := protocol.DecodeCommand(after[0].Data)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
@@ -85,10 +94,16 @@ func TestRecorderRecordsIsDefensiveCopy(t *testing.T) {
 	if err := r.ObserveCommand(cmdFixture("only")); err != nil {
 		t.Fatalf("ObserveCommand: %v", err)
 	}
-	recs := r.Records()
+	recs, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 	recs[0].Kind = "tampered"
 
-	fresh := r.Records()
+	fresh, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 	if len(fresh) != 1 {
 		t.Fatalf("Recorder state changed by mutating a returned copy: got %d records, want 1", len(fresh))
 	}
@@ -125,7 +140,10 @@ func TestRecorderConcurrentObserveNeverCorruptsOrDuplicates(t *testing.T) {
 	}()
 	wg.Wait()
 
-	recs := r.Records()
+	recs, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 	if len(recs) != 2*perGoroutine {
 		t.Fatalf("got %d records, want %d — a concurrent Observe was lost or duplicated", len(recs), 2*perGoroutine)
 	}
@@ -158,7 +176,10 @@ func TestRecorderCorrelationIDPreservedVerbatim(t *testing.T) {
 	if err := r.ObserveResult(res); err != nil {
 		t.Fatalf("ObserveResult: %v", err)
 	}
-	recs := r.Records()
+	recs, err := r.Records()
+	if err != nil {
+		t.Fatalf("Records: %v", err)
+	}
 	var got protocol.CommandResult
 	if err := json.Unmarshal(recs[0].Data, &got); err != nil {
 		t.Fatalf("decode: %v", err)

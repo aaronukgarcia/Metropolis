@@ -51,3 +51,54 @@ var maxGridCells = maxGridBudgetBytes / int(unsafe.Sizeof(cellData{}))
 // to spare, while remaining many orders of magnitude below anything an
 // attacker-supplied Extent could use to OOM this process.
 var maxGridSide = int(math.Sqrt(float64(maxGridCells)))
+
+// maxPatchWireBytes (SEC-039 AC-10/AC-12) bounds the raw, on-the-wire
+// byte size of a single "f1.viewport" patch's JSON payload — checked in
+// decodeWirePatch BEFORE json.Unmarshal ever runs, so an oversized
+// patch is rejected at the cheapest possible point (a len(raw)
+// comparison on bytes already fully in memory by the time ApplyPatch
+// receives them) rather than after paying the full parse/allocation
+// cost: the Destructive-1 PoC measured 1.43s and a 198,300,096-byte
+// wire payload to decode+iterate a 300,000-entry Cells array hidden
+// behind a declared 1x1 Extent, and that cost is dominated by
+// json.Unmarshal itself, which completes and returns a fully-populated
+// wirePatch BEFORE len(p.Cells) is ever available to check against
+// anything — so a check placed after decode (maxGridCells below, AC-11)
+// is necessary but not sufficient; this gate is what actually stops the
+// expensive step from running at all.
+//
+// Population (distinct from maxGridBudgetBytes, GR#15 / the SEC-033
+// lesson named explicitly in this wave's acceptance criteria):
+// maxGridBudgetBytes/maxGridCells above bound the DECODED, packed
+// cellData grid slab (~64 bytes/cell via unsafe.Sizeof, computed at
+// package init). This constant bounds a DIFFERENT population — the
+// WIRE, JSON-encoded form of the same logical patch data, which for the
+// same logical cell count is necessarily larger: a wireCell entry's
+// JSON shape (`{"x":...,"y":...,"terrain":"...","elevation":...,
+// "road":"...","building":"..."}`) carries field-name/quoting overhead
+// and human-readable string content that cellData's packed struct never
+// does. Reusing maxGridBudgetBytes's number verbatim under a new name
+// would repeat SEC-033's mistake one level up (a bound derived from the
+// wrong population); this is a distinct, separately-derived number.
+//
+// Derivation: set to 2x maxGridBudgetBytes (150,000,000 bytes / ~143
+// MiB). The multiplier is a documented, generous allowance for the
+// wire-vs-packed size gap above, not an independent guess: a full patch
+// describing the ENTIRE maxGridCells-sized grid (this file's own
+// ceiling) would need to average under 2x cellData's packed per-cell
+// size in wire bytes to fit within this budget — comfortably true for
+// this project's real terrain/building name lengths today
+// (internal/engine/stub/viewport.go's real fixture data includes
+// "Folkestone Harbour Arm", 22 characters; data/georef.json's longest
+// cited real feature name, "M20 Junction 13 / Castle Hill Interchange",
+// is 42) — while still landing meaningfully BELOW the SEC-039 PoC's
+// demonstrated 198,300,096-byte attack payload (which used artificially
+// inflated 200-byte junk strings per field, specifically to maximise
+// wire size while staying under a tiny declared Extent, so it would
+// slip past maxGridCells' output-side check), so the exact attack shape
+// measured is rejected here, before json.Unmarshal ever runs on it. Not
+// a spec-cited figure (no §-numbered wire-payload budget exists in the
+// master plan) — logged as an ASM- per v1.7; re-derive if this
+// project's real terrain/road/building name content ever grows enough
+// to approach this ceiling for a legitimately large full-grid patch.
+const maxPatchWireBytes = 2 * maxGridBudgetBytes

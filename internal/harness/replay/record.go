@@ -135,30 +135,46 @@ func (r *Recorder) ObserveDelta(d protocol.Delta) error {
 // strict arrival order (AC-1/AC-1b). Mutating the returned slice never
 // affects the Recorder's own state — mirrors
 // foundation.registry.Registry.List()'s copy-return pattern.
-func (r *Recorder) Records() []serialize.Record {
+//
+// SEC-037: this used to collapse two entirely different situations —
+// "the receiver is a struct-copied Recorder, rejected" and "the receiver
+// is genuinely empty" — into the SAME return value (nil). A caller
+// checking `if records == nil` could never tell which one it got, and
+// Save (fixture.go) did not check at all, so a copied Recorder produced
+// a syntactically valid, zero-record fixture reported as a SUCCESS
+// (Destructive-1, 2026-08-10). The fix is at the source, not at Save:
+// checkNotCopied's rejection is now surfaced as its own error return, so
+// "rejected" and "legitimately empty" are no longer the same bit
+// pattern — every caller (Save included) MUST look at it explicitly
+// instead of being able to guess.
+func (r *Recorder) Records() ([]serialize.Record, error) {
 	if err := r.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
-		return nil
+		return nil, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]serialize.Record, len(r.records))
 	copy(out, r.records)
-	return out
+	return out, nil
 }
 
 // Len returns the number of records captured so far. Equivalent to
-// len(r.Records()) but without the copy.
-func (r *Recorder) Len() int {
+// len(records) from Records() but without the copy.
+//
+// SEC-037: same fix as Records() and for the same reason — a
+// struct-copied receiver used to report 0, indistinguishable from a
+// genuinely empty Recorder. See Records' doc comment.
+func (r *Recorder) Len() (int, error) {
 	if err := r.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
-		return 0
+		return 0, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
-		return 0
+		return 0, err
 	}
-	return len(r.records)
+	return len(r.records), nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -76,6 +77,14 @@ func fixtureHeaderPath(dir, name string) (string, error) {
 // plus dir/<name>.header.json (AC-4). dir is created if it does not
 // already exist. name is validated per fixtureShardPath's doc comment
 // (AC-2b) before anything is written.
+//
+// SEC-037 (AC-2): rec.Records() is resolved, and any error it returns
+// (a struct-copied rec — see record.go's Records doc comment) is
+// propagated BEFORE any file is created, and if anything below fails
+// partway through, the deferred cleanup removes whatever was already
+// written. Save either succeeds completely (a valid shard AND header
+// both on disk) or leaves NOTHING on disk — never a half-written
+// fixture that looks valid to a later Load.
 func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	shardPath, err := fixtureShardPath(dir, name)
 	if err != nil {
@@ -85,6 +94,14 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	if err != nil {
 		return err
 	}
+
+	// Resolved first, before any I/O: a rejected (struct-copied) rec
+	// must never reach os.Create — see this function's doc comment.
+	records, err := rec.Records()
+	if err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"dir": dir, "cause": "creating fixtures directory"})
 	}
@@ -93,9 +110,20 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	if err != nil {
 		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "creating fixture shard file"})
 	}
-	defer func() { _ = f.Close() }()
+	// ok becomes true only once both files are fully and successfully
+	// written. Any earlier return leaves ok false, and the cleanup below
+	// removes both paths (os.Remove on a file that was never created is
+	// a harmless ENOENT, ignored) — AC-2's "no partial artifact"
+	// requirement.
+	ok := false
+	defer func() {
+		_ = f.Close()
+		if !ok {
+			_ = os.Remove(shardPath)
+			_ = os.Remove(headerPath)
+		}
+	}()
 
-	records := rec.Records()
 	idx := 0
 	next := func() (serialize.Record, bool, error) {
 		if idx >= len(records) {
@@ -123,6 +151,7 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	if err := os.WriteFile(headerPath, encoded, 0o644); err != nil {
 		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": headerPath, "cause": "writing fixture header"})
 	}
+	ok = true
 	return nil
 }
 
@@ -195,12 +224,23 @@ func Load(dir, name string) (Fixture, error) {
 	hasher := sha256.New()
 	counted := &countingReader{r: io.TeeReader(f, hasher)}
 
+	// SEC-038: maxFixtureDecodedBytes bounds the DECOMPRESSED stream
+	// during decompression itself (see limits.go for the derivation and
+	// why this package supplies its own bound rather than relying on a
+	// shared constant inside foundation.serialize). A shard that would
+	// decompress past that bound is rejected loudly (MET-H007) instead
+	// of being allowed to finish decompressing first.
 	var records []serialize.Record
-	decodeErr := (serialize.NDJSONSerializer{}).ReadShard(counted, func(rec serialize.Record) error {
+	decodeErr := (serialize.NDJSONSerializer{}).ReadShard(counted, maxFixtureDecodedBytes, func(rec serialize.Record) error {
 		records = append(records, rec)
 		return nil
 	})
 	if decodeErr != nil {
+		if errors.Is(decodeErr, serialize.ErrDecodedBytesExceeded) {
+			return Fixture{}, errs.Wrap(codeFixtureDecodedTooLarge, errs.NewCorrelationID(), decodeErr, map[string]any{
+				"path": shardPath, "maxDecodedBytes": maxFixtureDecodedBytes,
+			})
+		}
 		return Fixture{}, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), decodeErr, map[string]any{"path": shardPath, "cause": "decoding fixture shard (bad gzip stream or malformed record)"})
 	}
 	if counted.n != meta.ByteSize {

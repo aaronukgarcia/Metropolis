@@ -55,4 +55,10 @@ const (
 	// struct copy of the value NewEnginePlayer returned (AC-13b,
 	// SEC-020-style guard).
 	codeEnginePlayerCopied = "MET-H006"
+
+	// codeFixtureDecodedTooLarge: a fixture's shard exceeded
+	// maxFixtureDecodedBytes (limits.go) while being decompressed
+	// (SEC-038) — distinct from codeFixtureCorrupt, which covers a bad
+	// gzip stream or a digest mismatch on bytes that WERE fully read.
+	codeFixtureDecodedTooLarge = "MET-H007"
 )

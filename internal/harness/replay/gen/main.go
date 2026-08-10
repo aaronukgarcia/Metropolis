@@ -168,6 +168,10 @@ func run() error {
 		return fmt.Errorf("Save: %w", err)
 	}
 
-	fmt.Printf("wrote %s (%d records) to %s\n", fixtureName, rec.Len(), fixturesDir)
+	n, err := rec.Len()
+	if err != nil {
+		return fmt.Errorf("Len: %w", err)
+	}
+	fmt.Printf("wrote %s (%d records) to %s\n", fixtureName, n, fixturesDir)
 	return nil
 }

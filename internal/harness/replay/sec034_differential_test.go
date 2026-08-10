@@ -3,8 +3,8 @@ package replay
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
+	"go/parser"
+	"go/token"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -256,27 +256,32 @@ func TestSEC034_FixedLoopReportsNoFalseAlarms(t *testing.T) {
 // Replay's ctx.Done() branch still re-checks the completion condition
 // before raising the alarm. Read from source, so it cannot silently
 // diverge from what actually ships.
+//
+// SEC-041 (Tester-1, 2026-08-10): this used to be a strings.Index
+// SUBSTRING-ORDER check ("len(p.results)" appears before
+// "codeReplayTargetClosedEarly" somewhere in the branch's text), which
+// a mutation that deletes the gating `if` while leaving `len(p.results)`
+// textually present (e.g. as a now-dead assignment) still satisfies —
+// Tester-1 built exactly that probe and it passed the old check. Fixed
+// by parsing player_engine.go with go/ast (sec041_ast_guard_test.go)
+// and requiring an actual `if` statement, linked by variable identity
+// to a len(...results...) assignment, whose body unconditionally exits,
+// positioned before the raise — not just two substrings in the right
+// order. TestSEC041_ASTGateCatchesGateRemovedMutant proves the
+// replacement actually fails against that exact mutation; this test is
+// the "and it still accepts the real thing" half.
 func TestSEC034_RealReplayLoopMatchesTheFixedCopy(t *testing.T) {
-	src, err := os.ReadFile("player_engine.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "player_engine.go", nil, parser.AllErrors)
 	if err != nil {
-		t.Fatalf("read player_engine.go: %v", err)
+		t.Fatalf("parse player_engine.go: %v", err)
 	}
-	body := string(src)
-	idx := strings.Index(body, "case <-ctx.Done():")
-	if idx < 0 {
-		t.Fatalf("could not find Replay's ctx.Done() branch — the loop this file mirrors has been restructured, so the differential above no longer describes production code")
+	fn := findMethodDecl(file, "EnginePlayer", "Replay")
+	if fn == nil {
+		t.Fatalf("could not find func (*EnginePlayer) Replay — the loop this file mirrors has been restructured, so the differential above no longer describes production code")
 	}
-	// The re-check must appear between the ctx.Done() case and the
-	// errs.New that raises MET-H004. If the alarm comes first, the
-	// SEC-032 fix has been removed or reordered out of effect.
-	rest := body[idx:]
-	alarm := strings.Index(rest, "codeReplayTargetClosedEarly")
-	recheck := strings.Index(rest, "len(p.results)")
-	if alarm < 0 {
-		t.Fatalf("Replay's ctx.Done() branch no longer raises codeReplayTargetClosedEarly")
-	}
-	if recheck < 0 || recheck > alarm {
-		t.Fatalf("SEC-032 fix missing from production Replay: the ctx.Done() branch raises codeReplayTargetClosedEarly without first re-checking len(p.results)")
+	if err := checkReplayCtxDoneGuard(fn); err != nil {
+		t.Fatalf("%v", err)
 	}
 }
 

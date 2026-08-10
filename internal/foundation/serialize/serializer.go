@@ -92,6 +92,11 @@ type StateSerializer interface {
 	// ReadShard streams records from r, invoking handle once per record in
 	// the order they were written. It returns the first error encountered
 	// (from decoding or from handle itself), or nil after r is fully
-	// consumed.
-	ReadShard(r io.Reader, handle RecordHandler) error
+	// consumed. maxDecodedBytes (SEC-038) bounds the total number of
+	// bytes an implementation may read out of its DECODED/decompressed
+	// form before failing loudly (ErrDecodedBytesExceeded for
+	// NDJSONSerializer) — every caller supplies a limit appropriate to
+	// its own population (a small fixture vs. a multi-GB save); pass 0
+	// for "no limit".
+	ReadShard(r io.Reader, maxDecodedBytes int64, handle RecordHandler) error
 }

@@ -64,6 +64,6 @@ func (BinarySerializer) WriteShard(_ io.Writer, meta ShardMeta, _ RecordSource) 
 // ReadShard is not implemented. See the BinarySerializer doc comment for
 // the intended design and data/errors.json's F300-F399 range for where its
 // error codes will live once foundation/errs is available.
-func (BinarySerializer) ReadShard(_ io.Reader, _ RecordHandler) error {
+func (BinarySerializer) ReadShard(_ io.Reader, _ int64, _ RecordHandler) error {
 	return fmt.Errorf("%s: BinarySerializer.ReadShard not implemented (reserved for A3, arrives when profiling demands it)", errNotImplementedCode)
 }

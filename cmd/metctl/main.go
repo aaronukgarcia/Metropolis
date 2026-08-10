@@ -162,10 +162,18 @@ func exportShard(srcDir, destDir string, meta serialize.ShardMeta) error {
 		return enc.Encode(exportLine{Kind: rec.Kind, Data: json.RawMessage(rec.Data)})
 	}
 
+	// SEC-038: ReadShard's maxDecodedBytes is 0 (no limit) here
+	// deliberately — this is metctl's SAVE-export path, a different,
+	// legitimately much larger population than harness.replay's small
+	// fixtures (which supply their own bound — see replay/limits.go's
+	// maxFixtureDecodedBytes and its derivation comment). Saves are
+	// architected for up to 100 M-citizen scale (§5.3); a single shared
+	// byte ceiling picked to fit a fixture would wrongly reject a
+	// legitimate save export.
 	switch meta.Encoding {
 	case "ndjson+gzip":
-		return (serialize.NDJSONSerializer{}).ReadShard(src, handle)
+		return (serialize.NDJSONSerializer{}).ReadShard(src, 0, handle)
 	default:
-		return (serialize.BinarySerializer{}).ReadShard(src, handle)
+		return (serialize.BinarySerializer{}).ReadShard(src, 0, handle)
 	}
 }

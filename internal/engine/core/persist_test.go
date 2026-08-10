@@ -33,7 +33,7 @@ func TestSnapshot_RoundTripsThroughSerialize(t *testing.T) {
 	}
 
 	var records []serialize.Record
-	err = (serialize.NDJSONSerializer{}).ReadShard(&buf, func(r serialize.Record) error {
+	err = (serialize.NDJSONSerializer{}).ReadShard(&buf, 0, func(r serialize.Record) error {
 		records = append(records, r)
 		return nil
 	})

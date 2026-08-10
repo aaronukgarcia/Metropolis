@@ -56,7 +56,7 @@ func TestNDJSONRoundTrip(t *testing.T) {
 	}
 
 	var got []Record
-	err = ser.ReadShard(bytes.NewReader(buf.Bytes()), func(r Record) error {
+	err = ser.ReadShard(bytes.NewReader(buf.Bytes()), 0, func(r Record) error {
 		got = append(got, r)
 		return nil
 	})
@@ -88,7 +88,7 @@ func TestNDJSONRoundTripEmptyShard(t *testing.T) {
 	}
 
 	var count int
-	err = ser.ReadShard(bytes.NewReader(buf.Bytes()), func(Record) error {
+	err = ser.ReadShard(bytes.NewReader(buf.Bytes()), 0, func(Record) error {
 		count++
 		return nil
 	})
@@ -172,7 +172,7 @@ func TestBundleRoundTripAndValidate(t *testing.T) {
 	}
 	defer func() { _ = r.Close() }()
 	var readBack int
-	if err := (NDJSONSerializer{}).ReadShard(r, func(Record) error { readBack++; return nil }); err != nil {
+	if err := (NDJSONSerializer{}).ReadShard(r, 0, func(Record) error { readBack++; return nil }); err != nil {
 		t.Fatalf("ReadShard: %v", err)
 	}
 	if readBack != len(recs) {
@@ -584,7 +584,7 @@ func TestBinarySerializerNotImplemented(t *testing.T) {
 	if _, err := bs.WriteShard(&bytes.Buffer{}, ShardMeta{Name: "x"}, recordSourceFromSlice(nil)); err == nil {
 		t.Fatal("expected BinarySerializer.WriteShard to return an error")
 	}
-	if err := bs.ReadShard(bytes.NewReader(nil), func(Record) error { return nil }); err == nil {
+	if err := bs.ReadShard(bytes.NewReader(nil), 0, func(Record) error { return nil }); err == nil {
 		t.Fatal("expected BinarySerializer.ReadShard to return an error")
 	}
 }

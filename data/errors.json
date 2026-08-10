@@ -544,6 +544,12 @@
       "message": "EnginePlayer method called on a struct-copied value, not the one NewEnginePlayer constructed",
       "remedy": "Always use the *EnginePlayer pointer NewEnginePlayer returned. Do not dereference-and-reassign it ('p2 := *p') or pass it by value -- that produces a second EnginePlayer value with its own mutex but ALIASED results slice and notify channel (SEC-020-class). If you need a second independent EnginePlayer, call NewEnginePlayer again."
     },
+    "MET-H007": {
+      "severity": "error",
+      "module": "harness.replay",
+      "message": "fixture shard at {path} exceeded the decompressed-size bound ({maxDecodedBytes} bytes) while reading",
+      "remedy": "SEC-038: a fixture's decompressed size is bounded during gzip decompression itself (not merely checked after decoding), because a maliciously or accidentally huge compressed shard can decompress to orders of magnitude more memory than its on-disk size suggests. Regenerate a legitimate fixture (which should be small -- a short, deliberately-triggered recording session, not a full save) rather than raising the bound; if a legitimate fixture genuinely needs to be this large, the bound itself (harness/replay's maxFixtureDecodedBytes) needs re-deriving against the new population, not bypassing."
+    },
     "MET-H100": {
       "severity": "error",
       "module": "ui.harness",
