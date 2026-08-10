@@ -3,6 +3,7 @@ package mapscreen
 import (
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
@@ -81,14 +82,47 @@ const minimapHeight = 1
 // samples the wall clock. Render also records rect's viewport sub-area
 // as the screen's current viewport size (SetViewportSize) so subsequent
 // Pan/MoveCursor calls clamp against what was actually last drawn.
+//
+// SEC-020 / render-path rejection (ASM-015): this Render is a
+// *MapScreen method and touches mu/grid directly (unlike ui.screen.
+// debug's package-level Render func, which takes a Snapshot value and
+// never touches *Screen at all — see that package's Collect for the
+// equivalent decision). On a struct-copied receiver it draws NOTHING
+// and returns — buf is left exactly as the caller passed it in, same as
+// the `buf == nil || rect empty` early-out just above. That is a
+// deliberate choice among the three a 60Hz render loop could be handed
+// (an error it ignores / a blank-this-frame no-op / a panic):
+//   - an error return would change this method's signature, forcing
+//     every caller (today and future) to add handling for a case that,
+//     on the documented construction path (NewMapScreen, one owner), is
+//     not supposed to be reachable in production at all;
+//   - a panic would take the whole UI process down for what a render
+//     loop calls 60 times a second — for a render path specifically,
+//     "this frame is unchanged" is a strictly better failure mode than
+//     "the process is gone";
+//   - so: log (checkNotCopied's errs.New already leaves a
+//     registry-sourced MET-U101 trail, GR#7) and draw nothing — the
+//     screen freezes on its last real frame rather than corrupting or
+//     crashing, and the trail is there for the Destructive agent or an
+//     operator to find even though this signature has nothing to return
+//     it through (same posture as debug.Screen.LastToggleError's sibling
+//     case, IsOn in internal/engine/debug/state.go, and this package's
+//     own Collect-equivalent above).
 func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Render"}); err != nil {
 		return
 	}
 
 	viewportRect, minimapRect := splitRect(rect)
 
 	m.mu.Lock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Render"}); err != nil {
+		m.mu.Unlock()
+		return
+	}
 	m.viewportW, m.viewportH = viewportRect.W, viewportRect.H
 	m.clampOffsetLocked()
 	m.clampCursorLocked()

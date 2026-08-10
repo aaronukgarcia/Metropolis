@@ -3,6 +3,7 @@ package mapscreen
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -71,6 +72,15 @@ type InspectResult struct {
 type MapScreen struct {
 	mu sync.Mutex
 
+	// self is set once, at the end of NewMapScreen, to the pointer
+	// NewMapScreen itself returns — never reassigned after that.
+	// checkNotCopied (copyguard.go) compares a receiver against self to
+	// detect a struct copy (SEC-020). Lock-free (atomic.Pointer), so
+	// checkNotCopied can run BEFORE mu is ever touched (SEC-016's
+	// pre-lock-ordering requirement — see copyguard.go for the full
+	// rationale).
+	self atomic.Pointer[MapScreen]
+
 	correlationID string
 	palette       widgets.Palette
 
@@ -94,10 +104,15 @@ type MapScreen struct {
 // thread through. palette supplies the terrain/overlay colours (AC-4's
 // two-layer contract, reusing ui.widgets rather than hardcoding colour).
 func NewMapScreen(correlationID string, palette widgets.Palette) *MapScreen {
-	return &MapScreen{
+	m := &MapScreen{
 		correlationID: correlationID,
 		palette:       palette,
 	}
+	// Stored once, last, before m ever escapes to a caller — see the
+	// self field's doc comment and copyguard.go for why this is what
+	// makes checkNotCopied work.
+	m.self.Store(m)
+	return m
 }
 
 // Subscribe sends the "f1.viewport" Subscribe command via send (AC-1).
@@ -105,6 +120,13 @@ func NewMapScreen(correlationID string, palette widgets.Palette) *MapScreen {
 // caller's transport-owning responsibility, per SendCommandFunc's doc
 // comment.
 func (m *MapScreen) Subscribe(send SendCommandFunc) error {
+	// SEC-020: no mu.Lock() below (correlationID never changes after
+	// construction), but Subscribe still reads a receiver field, so it
+	// still gets the guard — see the enumeration in sec020_test.go for
+	// the one exported method deliberately excluded and why.
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Subscribe"}); err != nil {
+		return err
+	}
 	cmd := protocol.Command{
 		ProtocolVersion: protocol.ProtocolVersion,
 		CorrelationID:   protocol.CorrelationID(m.correlationID),
@@ -126,6 +148,15 @@ func (m *MapScreen) Subscribe(send SendCommandFunc) error {
 // panics and never partially applies a bad patch (mirrors ui.core
 // views.go's AC-9 posture for malformed Deltas).
 func (m *MapScreen) ApplyPatch(raw json.RawMessage) {
+	// SEC-020: checked before decodeWirePatch even runs — decodeWirePatch
+	// touches no receiver state, so there is nothing to protect there,
+	// but doing the identity check first (rather than after a wasted
+	// decode) means a copy is rejected as cheaply as every other guarded
+	// method, not just eventually.
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyPatch"}); err != nil {
+		return
+	}
+
 	p, err := decodeWirePatch(raw)
 	if err != nil {
 		m.logMalformed(err)
@@ -134,6 +165,9 @@ func (m *MapScreen) ApplyPatch(raw json.RawMessage) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyPatch"}); err != nil {
+		return
+	}
 
 	if p.Full {
 		m.applyFullLocked(p)
@@ -157,7 +191,27 @@ func (m *MapScreen) applyFullLocked(p wirePatch) {
 	if h < 0 {
 		h = 0
 	}
-	grid := make([]cellData, w*h)
+	// SEC-009: bound the factors BEFORE they are ever multiplied
+	// together — see limits.go's maxGridSide doc comment for why
+	// checking w*h against maxGridCells directly, without this
+	// per-dimension check first, would let the multiplication itself
+	// overflow before the comparison ever ran. Rejected, never clamped
+	// (clamping would silently render a truncated grid and hide the
+	// attack, same posture ApplyPatch's other malformed-patch paths
+	// already take) — this function returns before touching
+	// m.width/m.height/m.grid/m.haveSnapshot at all, so the grid keeps
+	// its last-known-good state exactly as decodeWirePatch's malformed-
+	// patch contract promises.
+	if w > maxGridSide || h > maxGridSide {
+		m.logMalformed(errExtentTooLarge(w, h, maxGridSide, maxGridCells))
+		return
+	}
+	cells := w * h // safe: both factors are bounded by maxGridSide above
+	if cells > maxGridCells {
+		m.logMalformed(errExtentTooLarge(w, h, maxGridSide, maxGridCells))
+		return
+	}
+	grid := make([]cellData, cells)
 	for _, c := range p.Cells {
 		if c.X < 0 || c.X >= w || c.Y < 0 || c.Y >= h {
 			continue
@@ -204,7 +258,14 @@ func (m *MapScreen) logMalformed(cause error) {
 // is expected to call this once per render tick with
 // vm.Stale[thisScreensSubscriptionID].
 func (m *MapScreen) SetStale(stale bool) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetStale"}); err != nil {
+		return
+	}
 	m.mu.Lock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetStale"}); err != nil {
+		m.mu.Unlock()
+		return
+	}
 	m.stale = stale
 	m.mu.Unlock()
 }
@@ -221,7 +282,14 @@ func (m *MapScreen) SetViewportSize(w, h int) {
 	if h < 0 {
 		h = 0
 	}
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetViewportSize"}); err != nil {
+		return
+	}
 	m.mu.Lock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetViewportSize"}); err != nil {
+		m.mu.Unlock()
+		return
+	}
 	m.viewportW, m.viewportH = w, h
 	m.clampOffsetLocked()
 	m.clampCursorLocked()
@@ -234,7 +302,14 @@ func (m *MapScreen) SetViewportSize(w, h int) {
 // Panning before any snapshot or viewport size is known is a no-op
 // (offset stays clamped to 0,0 by clampOffsetLocked).
 func (m *MapScreen) Pan(dx, dy int) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Pan"}); err != nil {
+		return
+	}
 	m.mu.Lock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Pan"}); err != nil {
+		m.mu.Unlock()
+		return
+	}
 	m.offsetX += dx
 	m.offsetY += dy
 	m.clampOffsetLocked()
@@ -242,9 +317,18 @@ func (m *MapScreen) Pan(dx, dy int) {
 }
 
 // Offset returns the current viewport pan origin, in grid coordinates.
+// On a struct-copied receiver, fails closed to (0, 0) — the same value
+// an un-panned, freshly constructed MapScreen would report — rather than
+// reading the copy's own (aliased-construction-time) fields.
 func (m *MapScreen) Offset() (int, int) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Offset"}); err != nil {
+		return 0, 0
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Offset"}); err != nil {
+		return 0, 0
+	}
 	return m.offsetX, m.offsetY
 }
 
@@ -271,7 +355,14 @@ func clampOffset(offset, extent, viewport int) int {
 // viewport window (the cursor only ever points at a currently visible
 // cell — the "enter to inspect" seam inspects what's on screen).
 func (m *MapScreen) MoveCursor(dx, dy int) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "MoveCursor"}); err != nil {
+		return
+	}
 	m.mu.Lock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "MoveCursor"}); err != nil {
+		m.mu.Unlock()
+		return
+	}
 	m.cursorX += dx
 	m.cursorY += dy
 	m.clampCursorLocked()
@@ -297,26 +388,52 @@ func clampCursor(v, viewport int) int {
 }
 
 // CursorPos returns the cursor's current position, in grid coordinates
-// (viewport offset + the cursor's viewport-relative position).
+// (viewport offset + the cursor's viewport-relative position). Fails
+// closed to (0, 0) on a struct-copied receiver, same posture as Offset.
 func (m *MapScreen) CursorPos() (int, int) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "CursorPos"}); err != nil {
+		return 0, 0
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "CursorPos"}); err != nil {
+		return 0, 0
+	}
 	return m.offsetX + m.cursorX, m.offsetY + m.cursorY
 }
 
 // InspectCursor is Inspect at the cursor's current grid position — the
 // convenience form a future Enter-key binding calls.
+//
+// SEC-020: guarded here too even though it delegates entirely to
+// CursorPos and Inspect, both already guarded — checking first means a
+// copy is rejected without even calling into either, and keeps this
+// method's own entry consistent with every other exported method on
+// this type (sec020_test.go's enumeration checks it by name, not just
+// via its callees).
 func (m *MapScreen) InspectCursor() InspectResult {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "InspectCursor"}); err != nil {
+		return InspectResult{Found: false}
+	}
 	x, y := m.CursorPos()
 	return m.Inspect(x, y)
 }
 
 // Inspect returns the data known for grid cell (x, y) (AC-5). x and y
 // are absolute grid coordinates (the same coordinate space as the
-// "f1.viewport" wire schema's cells[].x/y), not viewport-relative.
+// "f1.viewport" wire schema's cells[].x/y), not viewport-relative. On a
+// struct-copied receiver, fails closed to InspectResult{Found: false} —
+// reusing the existing "cell not known" result shape (AC-9) rather than
+// inventing a second not-found meaning.
 func (m *MapScreen) Inspect(x, y int) InspectResult {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Inspect"}); err != nil {
+		return InspectResult{Found: false, X: x, Y: y}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Inspect"}); err != nil {
+		return InspectResult{Found: false, X: x, Y: y}
+	}
 
 	if x < 0 || x >= m.width || y < 0 || y >= m.height {
 		return InspectResult{Found: false, X: x, Y: y}

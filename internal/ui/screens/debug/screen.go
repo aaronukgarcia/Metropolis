@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -27,6 +28,17 @@ const eventLogLimit = 100
 // path) may safely run concurrently (AC-14's "-race clean" requirement).
 type Screen struct {
 	mu sync.Mutex
+
+	// self is set once, at the end of NewScreen, to the pointer NewScreen
+	// itself returns — never reassigned after that. checkNotCopied
+	// (copyguard.go) compares a receiver against self to detect a struct
+	// copy (SEC-020): a copy's own self field is copied unchanged, so it
+	// still points at the ORIGINAL, and self.Load() != <the receiver
+	// actually called through> is exactly the mismatch that identifies a
+	// copy. Lock-free (atomic.Pointer), so checkNotCopied can run BEFORE
+	// mu is ever touched (SEC-016's pre-lock-ordering requirement — see
+	// copyguard.go for the full rationale).
+	self atomic.Pointer[Screen]
 
 	correlationID string
 
@@ -95,6 +107,11 @@ func NewScreen(reg *registry.Registry, correlationID string, opts ...Option) *Sc
 	for _, opt := range opts {
 		opt(s)
 	}
+	// Stored once, last, after every field (including anything an Option
+	// might set) is in its final construction state, and BEFORE s ever
+	// escapes to a caller — see the self field's doc comment and
+	// copyguard.go for why this is what makes checkNotCopied work.
+	s.self.Store(s)
 	return s
 }
 
@@ -131,8 +148,30 @@ type Snapshot struct {
 // the one place in this package's request path that reads live/external
 // state (registry, error tail, runtime provider, BoW source) — Render
 // itself is then a pure function of the result (AC-13).
+//
+// SEC-020 / render-path rejection (ASM-014): Collect is the one call in
+// F12's render loop that touches Screen state (Render itself, render.go,
+// takes only the Snapshot Collect already produced — it never touches
+// *Screen at all). On a struct-copied receiver this returns a ZERO
+// Snapshot rather than an error or a panic: Render's existing AC-10
+// contract already treats Snapshot.DebugOn == false as "draw nothing,"
+// so a copy-hit degrades to exactly that — one blank frame — through
+// logic that already existed for an unrelated reason, rather than a new
+// failure path a render loop running 60 times/second would have to
+// learn to handle. checkNotCopied's own errs.New call still leaves a
+// registry-sourced MET-U203 trail (GR#7) even though this signature has
+// no error to return it through — see State.IsOn's identical posture
+// (internal/engine/debug/state.go) and its
+// TestSEC020_IsOnCopyHit_IsLoggedNotSilent proof.
 func (s *Screen) Collect() Snapshot {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Collect"}); err != nil {
+		return Snapshot{}
+	}
 	s.mu.Lock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Collect"}); err != nil {
+		s.mu.Unlock()
+		return Snapshot{}
+	}
 	reg := s.reg
 	errorTailFunc := s.errorTailFunc
 	runtimeFunc := s.runtimeFunc
@@ -245,7 +284,15 @@ func (s *Screen) logUnavailable(code, cause string) {
 // the ticker, and the registry's state is provably unchanged (SetStatus
 // never mutates on any error path) — AC-12.
 func (s *Screen) RequestToggle(key string, target registry.Status, confirmInput string) error {
+	ctx := map[string]any{"method": "RequestToggle", "key": key}
+	if err := s.checkNotCopied(errs.NewCorrelationID(), ctx); err != nil {
+		return err
+	}
 	s.mu.Lock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), ctx); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	reg := s.reg
 	s.mu.Unlock()
 
@@ -260,24 +307,67 @@ func (s *Screen) RequestToggle(key string, target registry.Status, confirmInput 
 		return err
 	}
 
+	// Second, independent mu.Lock() site in this same method (the first
+	// only read s.reg; this one writes lastToggleErr/events) — SEC-016's
+	// pre-lock check is required at EACH acquisition, not once per
+	// method: nothing prevents time passing (reg.SetStatus can block on
+	// the registry's own lock) between the two, during which a concurrent
+	// misuse could still only ever hand this call the same *s it started
+	// with, but the check is re-run here anyway rather than trusted from
+	// above, matching RegisterPhaseHook's defence-in-depth posture
+	// (internal/engine/core/engine.go).
+	if err := s.checkNotCopied(errs.NewCorrelationID(), ctx); err != nil {
+		return err
+	}
 	s.mu.Lock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), ctx); err != nil {
+		s.mu.Unlock()
+		return err
+	}
 	s.lastToggleErr = nil
 	s.events = appendCapped(s.events, toggleEventText(key, target), eventLogLimit)
 	s.mu.Unlock()
 	return nil
 }
 
+// recordToggleFailure is RequestToggle's own failure-path lock site
+// (its own mu.Lock() call, independent of RequestToggle's two above) —
+// guarded the same way even though every current caller already checked
+// upstream, so a future caller added ahead of a check does not silently
+// inherit an unguarded path to mu (same "grep for the shape, not the
+// instance" reasoning as RegisterPhaseHook's defence-in-depth re-check).
+// On a copy, this silently drops the write — recordToggleFailure has no
+// error return to carry a rejection through, and RequestToggle's own
+// caller-facing return already carries the real error via the checks
+// above.
 func (s *Screen) recordToggleFailure(err error) {
+	if chkErr := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "recordToggleFailure"}); chkErr != nil {
+		return
+	}
 	s.mu.Lock()
+	if chkErr := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "recordToggleFailure"}); chkErr != nil {
+		s.mu.Unlock()
+		return
+	}
 	s.lastToggleErr = err
 	s.mu.Unlock()
 }
 
 // LastToggleError returns the most recent RequestToggle failure, or nil
-// if the last attempt (if any) succeeded. AC-12's "surfaces why."
+// if the last attempt (if any) succeeded. AC-12's "surfaces why." On a
+// struct-copied receiver, returns the checkNotCopied error itself rather
+// than nil — nil here would read as "last toggle succeeded," which is
+// not a safe default to fabricate for a caller holding a copy it should
+// never have.
 func (s *Screen) LastToggleError() error {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "LastToggleError"}); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "LastToggleError"}); err != nil {
+		return err
+	}
 	return s.lastToggleErr
 }
 
@@ -305,6 +395,16 @@ func appendCapped(events []string, next string, limit int) []string {
 // shows a truncated summary (render.go), but every field was present in
 // the Entry all along, so "opening" it is purely returning the same
 // struct in full rather than re-fetching anything.
+//
+// SEC-020 enumeration note: deliberately NOT checkNotCopied-guarded.
+// Every other exported method on Screen is (see copyguard.go /
+// screen_sec020_test.go's enumeration), but TailEntry reads zero fields
+// of its *Screen receiver — snap and index are both caller-supplied
+// values, s is never dereferenced. There is no aliased state here for a
+// struct copy to corrupt or leak, so a guard would reject a call that is
+// already 100% safe on a copy, purely for uniformity. Left unguarded on
+// purpose rather than silently — if this method ever starts reading an s
+// field, it must gain the guard at that point.
 func (s *Screen) TailEntry(snap Snapshot, index int) (errs.Entry, bool) {
 	if index < 0 || index >= len(snap.ErrorTail) {
 		return errs.Entry{}, false
