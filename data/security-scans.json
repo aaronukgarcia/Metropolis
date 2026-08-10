@@ -2,6 +2,10 @@
   "$comment": "Security-scan ledger — the SSOT for adversarial ('Destructive agent') review state, keyed by code.json module key. code.json is GENERATED from the master plan and must never be hand-edited (GR#3, GR#6), so scan stamps live HERE and tools/plan/generate.js merges them into each module's `securityScan` field at generation time. That way `code.json` shows the stamp, as required, without the stamp being destroyed by the next regeneration. Written by Destructive agents; read by the lead and /health-check.",
   "scanVersion": "v1",
   "scanVersionMeaning": "v1 = manual adversarial review by a Destructive agent against the v1 checklist: input validation and trust boundaries, integer/slice bounds and conversion safety, type confusion, encapsulation and exported-surface leakage, concurrency safety, resource exhaustion, error-path information disclosure, insecure-call-ability (can a caller use this API wrongly and get an unsafe result?). Bumping this version invalidates every stamp below and requires a fresh sweep.",
+  "knownOrphanedKeys": {
+    "$comment": "BUG-023: tools/plan/generate.js warns (non-fatal) whenever a key in `scans` below matches no code.json module, naming the key, so a typo is never silently dropped. legacy.versionguard is the one DELIBERATE case: it is root tooling (claude-version-guard.js) that predates the master-plan module registry and is explicitly out of scope for it (CLAUDE.md 'root tooling exempt', GR#2). It still gets a real scan stamp above because it was genuinely swept and found SEC-002 — that finding must not be lost — it simply has no code.json entry to merge into, so the generator's warning for this one key is expected and does not indicate a bug. Any OTHER key that trips the warning is not covered by this exemption and should be treated as a probable typo.",
+    "legacy.versionguard": "root tooling, predates code.json module registry, exempt per CLAUDE.md (GR#2 'root tooling exempt') — see comment above."
+  },
   "scans": {
     "int.serializer": { "scannedAt": "2026-08-10T09:20:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": ["SEC-001", "SEC-022", "SEC-029"], "verdict": "findings-raised" },
     "int.protocol": { "scannedAt": "2026-08-10T09:00:00Z", "scanVersion": "v1", "by": "Destructive-1", "findings": ["SEC-023"], "verdict": "findings-raised" },
@@ -22,6 +26,7 @@
     "feat.skeleton": { "scannedAt": "2026-08-09T17:49:30Z", "scanVersion": "v1", "by": "Destructive-3", "findings": [], "verdict": "clean" },
     "tool.bow": { "scannedAt": "2026-08-09T17:50:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-004", "SEC-007", "SEC-012"], "verdict": "findings-raised" },
     "tool.planguard": { "scannedAt": "2026-08-09T17:50:15Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-008"], "verdict": "findings-raised" },
-    "legacy.versionguard": { "scannedAt": "2026-08-09T17:50:30Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-002"], "verdict": "findings-raised" }
+    "legacy.versionguard": { "scannedAt": "2026-08-09T17:50:30Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-002"], "verdict": "findings-raised" },
+    "tool.secretguard": { "scannedAt": "2026-08-09T19:56:00Z", "scanVersion": "v1", "by": "Destructive-3", "findings": ["SEC-015", "SEC-021"], "verdict": "findings-raised" }
   }
 }

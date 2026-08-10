@@ -99,6 +99,27 @@ Each guard was correct about *what* to reject. Each damaged the diagnostic capab
 - **Fix it centrally.** SEC-030 and SEC-031(b) were the same defect reached through different callers. Nine guards each solving their own flooding gives nine subtly different throttles and leaves the tenth guard with none.
 - **Never let the alarm degrade the evidence.** A guard that fills the audit trail with its own noise has converted a specific failure into general blindness — which is worse than the failure it caught.
 
+### Weakness pattern #6: a guard must be judged on cost-to-reach, not just correctness-once-reached (2026-08-10)
+
+Destructive-1's sweep of the three commits landed that day found three P1s that all read as different bugs and are in fact one habit. Each guard is **correct about the thing it checks**. Each is silent about what it costs to arrive at the check, or about what a caller does with the answer.
+
+| Finding | The guard is right about | What it never asked |
+|---|---|---|
+| SEC-037 | `Recorder.Records()` correctly refuses a struct copy and returns `nil` | what a *caller* does with that `nil` — `Save` wrote a valid gzip+SHA256 fixture containing **zero records** and returned `nil` error |
+| SEC-038 | `Load`'s SHA256/ByteSize digest check is real, enforced, and survived every tampering attempt | what decompression costs *before* integrity is checkable — 65KB expanded to 67MB, ~1028x, unbounded |
+| SEC-039 | SEC-009's clamp correctly bounds the derived grid | what it costs to *reach* the clamp — a 1x1 extent satisfying the clamp perfectly, carrying 300,000 cells, 198MB of wire JSON, 1.43s of decode |
+
+This is pattern #5 one level up. #5 says the rejection path must not damage what it protects. #6 says the **approach** to the guard is part of the guard's attack surface, and so is **what happens after it returns**.
+
+**The rule:**
+
+- **Bound the input, not just the output.** A clamp on a derived value is not a bound on the data used to derive it. If an attacker controls the size of what you parse before you validate it, the parse is the vulnerability.
+- **A guard that returns a sentinel has not finished the job.** `nil`, zero values and `false` collapse "rejected" into "legitimately empty", and then every caller must remember which it got. One caller will forget — SEC-037 is that caller, and it reported success while discarding the user's data. Make the rejection **impossible to confuse with a normal result**; an error return is usually the honest shape.
+- **When a guard is bypassed by a call site rather than defeated, the guard is not the fix.** Adding a second check in `Save` leaves the class alive. Fix the ambiguity at source and audit every sibling caller in the same commit (GR#18).
+- **Argument position is the blind spot.** `Save(rec *Recorder)` and `SetSink(l *Logger)` both take a guarded type as an argument rather than a receiver. Nine manual enumerations by four agents missed `SetSink` because they all enumerated *methods*. This is why BUG-024's gate must enumerate functions by parameter type too — a 15th guarded type reopens the gap otherwise.
+
+**Negative results are part of the pattern and must be recorded.** `ValidateShardName` held against traversal, absolute paths, UNC, trailing dot/space and Windows device names; `limits.go`'s `maxGridSide` boundary was verified to have no off-by-one and no overflow; the `Load` digest check could not be defeated. Recording what resisted is what stops the next sweep re-attacking solved ground — and stops a later "fix" quietly removing a control that was working.
+
 ### Weakness pattern #4: a value in a privileged position is input, however inert it looks (2026-08-09)
 
 `input-validation` is the largest class in the ledger — nine findings, across Go and JavaScript, engine and tooling, written by different hands. Grouping them shows it is **not** "the team forgets to validate". Every one of these packages validates its payload carefully. The defect is narrower and much more specific:

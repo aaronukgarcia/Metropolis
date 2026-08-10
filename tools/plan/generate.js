@@ -181,14 +181,36 @@ const modules = [...items].sort((a, b) => a.seq - b.seq).map(it => {
 // which a hand-edit would not. Absent file or absent module key = never
 // scanned, which is the correct default: unscanned must never look scanned.
 let securityScans = {};
+let knownOrphanedKeys = {};
 try {
   const raw = fs.readFileSync(path.join(__dirname, '..', '..', 'data', 'security-scans.json'), 'utf8');
-  securityScans = JSON.parse(raw).scans || {};
+  const parsed = JSON.parse(raw);
+  securityScans = parsed.scans || {};
+  knownOrphanedKeys = parsed.knownOrphanedKeys || {};
 } catch {
   // Ledger missing or unreadable — every module simply reports unscanned.
 }
 for (const m of modules) {
   m.securityScan = securityScans[m.key] || null;
+}
+// BUG-023: a ledger key with no matching code.json module used to be merged
+// with `|| null` and silently discarded — indistinguishable from a typo that
+// vanishes with no trace. Warn loudly (non-fatal) so a real typo is caught by
+// a human/agent reading generator output, not silently eaten. Keys explicitly
+// documented in data/security-scans.json's `knownOrphanedKeys` (e.g.
+// legacy.versionguard — root tooling, exempt per CLAUDE.md/GR#2) still warn,
+// but with a pointer to that documented reason instead of reading as a fresh
+// typo.
+{
+  const moduleKeys = new Set(modules.map(m => m.key));
+  const orphanedScanKeys = Object.keys(securityScans).filter(k => !moduleKeys.has(k));
+  for (const k of orphanedScanKeys) {
+    if (Object.prototype.hasOwnProperty.call(knownOrphanedKeys, k)) {
+      console.warn(`[MET-T031] WARNING: data/security-scans.json has a scan entry for "${k}", which matches no code.json module key — this entry is being DROPPED from code.json (documented exemption: ${knownOrphanedKeys[k]}).`);
+    } else {
+      console.warn(`[MET-T031] WARNING: data/security-scans.json has a scan entry for "${k}", which matches no code.json module key — this entry is being DROPPED. If this is a typo, fix the key. If it is deliberate (e.g. root tooling exempt per CLAUDE.md), add it to "knownOrphanedKeys" in data/security-scans.json explaining why.`);
+    }
+  }
 }
 
 const codeJson = {

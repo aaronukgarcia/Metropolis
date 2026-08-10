@@ -347,7 +347,16 @@
         "guid": "ee1eb6df-d942-474c-8c6b-f92372a56748",
         "calls": []
       },
-      "securityScan": null
+      "securityScan": {
+        "scannedAt": "2026-08-09T19:56:00Z",
+        "scanVersion": "v1",
+        "by": "Destructive-3",
+        "findings": [
+          "SEC-015",
+          "SEC-021"
+        ],
+        "verdict": "findings-raised"
+      }
     },
     {
       "guid": "d64c7a08-e51a-433d-9f54-4199e350b3c6",

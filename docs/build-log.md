@@ -53,7 +53,7 @@ Built and enforced, not merely described:
 
 **One deliberate deviation from the instruction, and why.** Aaron asked for the stamp in `code.json`. But `code.json` is *generated* from the master plan and carries a do-not-hand-edit banner — a stamp written there would be silently wiped on the next regeneration, producing the worst possible outcome: something that **looks** scanned and is not. So the ledger is the SSOT and the generator merges it in. The stamp appears exactly where asked, and survives.
 
-Three agents swept the codebase in parallel (foundation+protocol, engine, UI+cmd+tooling). **19 of 19 built modules scanned.** Absent stamp = never scanned; unscanned must never be mistaken for clean.
+Three agents swept the codebase in parallel (foundation+protocol, engine, UI+cmd+tooling). **20 of 20 built modules scanned** (BUG-022, 2026-08-10: backfilled `tool.secretguard`, which had real adversarial attention — SEC-015, SEC-021 — but no ledger stamp, so it read as never-reviewed under the ledger's own absent-means-unscanned rule). Absent stamp = never scanned; unscanned must never be mistaken for clean.
 
 ### 4. What the sweep found
 

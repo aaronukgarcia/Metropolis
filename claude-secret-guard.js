@@ -254,6 +254,155 @@ function looksHighEntropy(candidate) {
 }
 
 // ---------------------------------------------------------------------------
+// BUG-026: Go package-identifier suppression for the high-entropy check
+// ---------------------------------------------------------------------------
+//
+// A long camelCase Go identifier (codeReplayTargetClosedEarly, 27 chars) can
+// legitimately clear the entropy bar when it appears as a QUOTED STRING
+// LITERAL — e.g. a test that greps production source for the identifier's
+// text, as sec034_differential_test.go does for MET-H004. Bare identifiers
+// are never scanned (only quoted candidates are), so the guard is not wrong
+// to look at the literal; but a quoted string that exactly matches an
+// identifier DECLARED in the same Go package is by construction not a
+// credential, and one-off exact allowlist entries per identifier do not
+// scale (each new call site needs its own entry, forever).
+//
+// CRITICAL CONSTRAINT (learned from the SEC-015 regression on this same
+// file): do NOT touch ENTROPY_THRESHOLD or ENTROPY_MIN_LENGTH to fix this —
+// widening either would blind the guard to real secrets of similar length.
+// This suppression is scoped as narrowly as possible instead: it only
+// applies to candidates found in .go files, and only when the EXACT literal
+// text matches an identifier declared at package scope (func/type/const/var)
+// somewhere in the same directory (a Go package is exactly the set of .go
+// files in one directory — no cross-package or recursive lookup). A real
+// secret would have to coincidentally be spelled as the exact text of a name
+// already declared in that same package's source, which is not a
+// realistic collision for genuine credential material.
+//
+// Package-scope only (not function-body locals): the extractor tracks
+// top-level const(...)/var(...) blocks by paren depth so it does not walk
+// into function bodies and start treating local variable names as
+// "declared in the package" — that would widen the suppression surface
+// well past what the fix is meant to cover.
+
+// Removes `//` and `/* */` comments and the CONTENTS of "...", '...', and
+// `...` literals (replacing them with a single space, preserving line
+// structure) so a naive line/regex scan below never mistakes text inside a
+// string or comment for a declaration.
+function stripGoCommentsAndStrings(src) {
+  let out = '';
+  let i = 0;
+  const n = src.length;
+  while (i < n) {
+    const c = src[i];
+    const c2 = i + 1 < n ? src[i + 1] : '';
+    if (c === '/' && c2 === '/') {
+      while (i < n && src[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && c2 === '*') {
+      i += 2;
+      // Preserve embedded newlines so a block comment spanning multiple
+      // lines does not shift every subsequent line's line-based scan below.
+      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
+        if (src[i] === '\n') out += '\n';
+        i++;
+      }
+      i = Math.min(n, i + 2);
+      continue;
+    }
+    if (c === '"' || c === "'" || c === '`') {
+      const quote = c;
+      out += ' ';
+      i++;
+      while (i < n && src[i] !== quote) {
+        if (quote !== '`' && src[i] === '\\') i++; // skip escaped char
+        else if (src[i] === '\n') out += '\n'; // preserve line structure (raw strings can span lines)
+        i++;
+      }
+      i++; // consume closing quote (or run off the end on malformed input)
+      out += ' ';
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+// Collects every func/type/const/var identifier declared at package scope
+// across the .go files directly inside dirAbsPath (Go packages are
+// per-directory, not recursive). Best-effort regex/line scan, not a real Go
+// parser — sufficient for a suppression heuristic that only needs an exact
+// name match, never a semantic one.
+function collectGoPackageIdentifiers(dirAbsPath) {
+  const identifiers = new Set();
+  let entries;
+  try {
+    entries = fs.readdirSync(dirAbsPath).filter(f => f.endsWith('.go'));
+  } catch {
+    return identifiers; // directory unreadable/missing — nothing to suppress
+  }
+  for (const fname of entries) {
+    let src;
+    try {
+      src = fs.readFileSync(path.join(dirAbsPath, fname), 'utf8');
+    } catch {
+      continue;
+    }
+    const cleaned = stripGoCommentsAndStrings(src);
+
+    let m;
+    const funcRe = /\bfunc\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(/g;
+    while ((m = funcRe.exec(cleaned))) identifiers.add(m[1]);
+    const typeRe = /\btype\s+([A-Za-z_]\w*)\b/g;
+    while ((m = typeRe.exec(cleaned))) identifiers.add(m[1]);
+
+    // Top-level const/var: single-line ("const Name = ..."), comma lists
+    // ("const A, B = ..."), and grouped blocks ("const (\n  Name = ...\n)").
+    // parenDepth tracks only the current const/var block's own parens, so a
+    // value expression like `= time.Duration(5 * time.Second)` doesn't
+    // confuse the scanner into leaving the block early.
+    let parenDepth = 0;
+    for (const rawLine of cleaned.split('\n')) {
+      const trimmed = rawLine.trim();
+      if (parenDepth === 0) {
+        if (/^(?:const|var)\s*\($/.test(trimmed)) {
+          parenDepth = 1;
+          continue;
+        }
+        const single = trimmed.match(/^(?:const|var)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b/);
+        if (single) for (const name of single[1].split(',')) identifiers.add(name.trim());
+        continue;
+      }
+      // Inside a top-level const(...)/var(...) block.
+      const blockLine = trimmed.match(/^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b/);
+      if (blockLine) for (const name of blockLine[1].split(',')) identifiers.add(name.trim());
+      for (const ch of trimmed) {
+        if (ch === '(') parenDepth++;
+        else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+      }
+    }
+  }
+  return identifiers;
+}
+
+const goPackageIdentifierCache = new Map();
+
+// fileRelPath is repo-root-relative (forward or back slashes as staged by
+// git). Cached per directory so a commit touching many files in one Go
+// package only reads that package's source once.
+function isGoPackageIdentifier(candidate, fileRelPath) {
+  const dirAbs = path.dirname(path.join(ROOT, fileRelPath));
+  let identifiers = goPackageIdentifierCache.get(dirAbs);
+  if (!identifiers) {
+    identifiers = collectGoPackageIdentifiers(dirAbs);
+    goPackageIdentifierCache.set(dirAbs, identifiers);
+  }
+  return identifiers.has(candidate);
+}
+
+// ---------------------------------------------------------------------------
 // Redaction
 // ---------------------------------------------------------------------------
 
@@ -506,6 +655,21 @@ function runScan() {
     const lineFindings = scanLine(rec.text);
     for (const f of lineFindings) {
       if (f.candidate && isAllowlistedValue(f.candidate, allowedPatterns)) continue;
+      // BUG-026: a high-entropy quoted literal in a .go file that exactly
+      // matches an identifier declared in the same package is a source
+      // reference, not a credential (see comment above
+      // collectGoPackageIdentifiers). Scoped to 'high-entropy' only —
+      // never applied to the actual secret-shaped detectors (AWS/GitHub/
+      // Slack/OpenAI/private-key/connection-string), which is why this
+      // check does not sit inside scanLine() itself.
+      if (
+        f.category === 'high-entropy' &&
+        f.candidate &&
+        rec.file.toLowerCase().endsWith('.go') &&
+        isGoPackageIdentifier(f.candidate, rec.file)
+      ) {
+        continue;
+      }
       findings.push({ file: rec.file, line: rec.line, category: f.category, evidence: f.evidence, detail: f.detail });
     }
   }
@@ -621,6 +785,9 @@ if (require.main === module) {
     looksHighEntropy,
     shannonEntropy,
     redact,
+    stripGoCommentsAndStrings,
+    collectGoPackageIdentifiers,
+    isGoPackageIdentifier,
     isAllowlistedValue,
     isAllowlistedPath,
     globMatch,
