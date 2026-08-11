@@ -1,17 +1,46 @@
 {
   "version": 1,
+  "meta": {
+    "comment": "engine.season (MOD-027, §9/§17) month-index convention and curve inventory. This file is the sole source for every seasonal multiplier/weight engine.season's SeasonAPI exposes — GR#15: no seasonal figure lives as a Go literal in internal/engine/season/*.go outside doc-comment prose transcribing this file's own values.",
+    "monthIndexConvention": "Every curve's \"multipliers\" array has exactly 12 entries, index 0 = January ... index 11 = December (matches foundation/data.MonthlyCurve's own doc comment). engine.season's SeasonAPI takes an absolute month index matching engine.core's Clock.Month() (§3: int64, 0 = world genesis month, monotonically increasing, never resets) and maps it to a calendar-month position via monthIndex mod 12 — i.e. genesis month (index 0) is treated as January. This mapping is an engine.season assumption (ASM-, see BOW MOD-027) since §3/engine.core do not themselves pin which real calendar month world genesis falls in; it is recorded here, in one place, rather than left implicit in code.",
+    "curveShapeConvention": "electricityWinterPeak/waterSummerPeak/gasSeasonal step at month boundaries (flat between the §17.1-stated anchor months) rather than interpolating smoothly — a deliberate v1 choice (AC-4), not an oversight; smooth interpolation is a candidate M2 Batch tuning improvement, not a Sprint-3 requirement. The five curves without a spec-stated number (harvestCalendar, constructionSpeedMultiplier, schoolIntakeGate, leisureBeachWeight/leisureIndoorWeight, healthWaveModifier) are plausible v1 defaults establishing the right shape and direction only — exact magnitudes are pending M2 Batch tuning per the sprint-plan roadmap (see docs/planning/acceptance/engine.season.md's Out of scope section)."
+  },
   "curves": {
     "electricityWinterPeak": {
-      "comment": "§17.1: electricity 'winter +15%' — flat baseline with a December-February bump; TODO(engine.season/engine.consumption): replace the flat non-winter months with a real smooth seasonal curve once engine.season lands.",
+      "comment": "§17.1: electricity 'winter +15%' — flat baseline with a December-February bump. Deliberately stepped, not smoothly interpolated (see meta.curveShapeConvention) — an M2 Batch tuning candidate, not a Sprint-3 gap.",
       "multipliers": [1.15, 1.15, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.15]
     },
     "waterSummerPeak": {
-      "comment": "§17.1: water '+25% summer peak' — flat baseline with a June-August bump; TODO(engine.season/engine.consumption): replace the flat non-summer months with a real smooth seasonal curve once engine.season lands.",
+      "comment": "§17.1: water '+25% summer peak' — flat baseline with a June-August bump. Deliberately stepped, not smoothly interpolated (see meta.curveShapeConvention) — an M2 Batch tuning candidate, not a Sprint-3 gap.",
       "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.25, 1.25, 1.25, 1.0, 1.0, 1.0, 1.0]
     },
     "gasSeasonal": {
-      "comment": "§17.1: gas 'strongly seasonal: x2.2 Jan, x0.2 Jul' — only the two spec-stated anchor months are set; TODO(engine.season/engine.consumption): the remaining ten months are flat placeholders (1.0) pending a real interpolated curve.",
+      "comment": "§17.1: gas 'strongly seasonal: x2.2 Jan, x0.2 Jul' — only the two spec-stated anchor months are non-baseline. Deliberately stepped, not smoothly interpolated (see meta.curveShapeConvention) — an M2 Batch tuning candidate, not a Sprint-3 gap.",
       "multipliers": [2.2, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 1.0, 1.0, 1.0, 1.0, 1.0]
+    },
+    "harvestCalendar": {
+      "comment": "§9: 'harvest calendar (local staples arrive in lumps -> storage strategy)'. No spec-stated magnitude (see engine.season.md's Escalations/For Bill note) — a plausible v1 UK-harvest-season lump (Aug/Sep peak, low the rest of the year), pending M2 Batch tuning. Per-crop-category detail belongs to engine.farming (out of scope here); this is a generic staples-arrival weighting.",
+      "multipliers": [0.1, 0.1, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 1.0, 0.8, 0.2, 0.1]
+    },
+    "constructionSpeedMultiplier": {
+      "comment": "§9: 'construction speed (winter slowdown)'. No spec-stated magnitude — a plausible v1 winter slowdown (Dec/Jan/Feb below 1.0x, ramping back up through spring), pending M2 Batch tuning.",
+      "multipliers": [0.8, 0.8, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.95, 0.8]
+    },
+    "schoolIntakeGate": {
+      "comment": "§9: 'school year (September intake gates)'. A gate curve, not a multiplier: 1.0 at exactly the calendar month that is September under this file's monthIndexConvention (index 8, 0=Jan), 0.0 every other month. engine.season.IsSchoolIntakeMonth reads which month is 'on' from this data rather than hardcoding month 8/September in Go (GR#15) — moving the intake month is a data edit here, not a code change. The 'exactly one month >= threshold' shape is enforced at Load time (MET-E504, BUG-059) — a curve with zero or two-or-more qualifying months fails to load rather than silently never firing or double-firing the intake gate.",
+      "multipliers": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    },
+    "leisureBeachWeight": {
+      "comment": "§9/§41: 'leisure mix (beach summer / indoor winter)', outdoor/beach half of the pair. No spec-stated magnitude — a plausible v1 summer-weighted curve (peak Jun-Aug), pending M2 Batch tuning. Paired with leisureIndoorWeight below; consumed together via SeasonAPI.LeisureMix.",
+      "multipliers": [0.1, 0.1, 0.15, 0.2, 0.3, 0.6, 0.8, 0.8, 0.5, 0.2, 0.1, 0.1]
+    },
+    "leisureIndoorWeight": {
+      "comment": "§9/§41: 'leisure mix (beach summer / indoor winter)', indoor half of the pair. No spec-stated magnitude — a plausible v1 winter-weighted curve (peak Nov-Jan), pending M2 Batch tuning. Not required to sum to 1.0 with leisureBeachWeight (both are independent weights, not a normalised distribution) — a v1 design choice left for engine.cafe/leisure-venue demand to combine as that module sees fit.",
+      "multipliers": [0.8, 0.8, 0.7, 0.6, 0.4, 0.2, 0.15, 0.15, 0.3, 0.6, 0.8, 0.85]
+    },
+    "healthWaveModifier": {
+      "comment": "§9/§18: 'minor health wave (winter)'. Stored as a non-negative severity (foundation/data.Seasonal.Validate rejects negative multipliers for every curve, by schema design — not a curve-specific choice this file can override): 0.0 = no wave, higher = worse. No spec-stated magnitude — a plausible v1 winter severity (Dec/Jan/Feb strongest, Mar/Nov a lesser shoulder, 0.0 the rest of the year), pending M2 Batch tuning. engine.season.HealthWaveModifier negates this value before returning it, so callers see the '(minor) negative adjustment to physical-health drift' the spec describes — see season.go's doc comment on that method.",
+      "multipliers": [0.05, 0.05, 0.02, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.02, 0.05]
     }
   }
 }

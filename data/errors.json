@@ -26,6 +26,8 @@
       "E100-E199": "reserved for engine.detgate (internal/engine/detgate: the multi-run determinism gate — FEAT-004. NOTE: this range collided with a mistaken E100-E199 registration by feat.debugmode on 2026-08-09 [BUG-008] because detgate's claim existed only in source comments, not here; feat.debugmode was renumbered to E200-E299. This entry is the fix — always check this table AND `grep -rn MET-E internal/ cmd/` before claiming a new sub-range.)",
       "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
       "E300-E399": "reserved for engine.invariant (internal/engine/invariant: the conservation invariant checker — MOD-019. Checked against this table AND `grep -rn \"MET-E3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
+      "E400-E499": "reserved for engine.world (internal/engine/world: OS Terrain 50 import, per-cell/tile queries and ownership commands, geology/hydrology derivation, tile purchase — MOD-017. Checked against this table AND `grep -rn \"MET-E4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E4xx code existed either place.)",
+      "E500-E599": "reserved for engine.season (internal/engine/season: month-index seasonal curve lookups (power, water, gas, harvest, construction, school intake, leisure mix, health wave) loaded from data/seasonal.json — MOD-027. Checked against this table AND `grep -rn \"MET-E5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior real MET-E5xx code existed either place (source_scan_test.go's own MET-E500/E100 literals are synthetic test fixtures, not raised codes, and do not count).)",
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
@@ -566,6 +568,72 @@
       "message": "Registry.Register called twice with invariant name {name}",
       "remedy": "Every registered Invariant's Name() must be unique within a Registry — this mirrors foundation.registry.Register's duplicate-key rejection. Give the second invariant a distinct name, or confirm it is not an accidental double-registration."
     },
+    "MET-E400": {
+      "severity": "fatal",
+      "module": "engine.world",
+      "message": "OS Terrain 50 import of tile {tile} failed checksum/format validation: {cause}",
+      "remedy": "The source ASCII-grid/GML tile at {tile} did not pass the importer's header/post-count/checksum check (data/georef.json's source.formats). Re-download the tile from https://osdatahub.os.uk/downloads/open/Terrain50 and re-run the build-time import — the importer never falls back to a silent best-effort partial grid (GR#7)."
+      },
+    "MET-E401": {
+      "severity": "fatal",
+      "module": "engine.world",
+      "message": "georef.json anchor {anchor} at (E={easting}, N={northing}) resolves outside the downloaded Terrain 50 tile {tile}'s extent [{minE}-{maxE}, {minN}-{maxN}]",
+      "remedy": "data/georef.json's anchor coordinates must fall inside the actual downloaded tile they claim to sit in. Either the anchor is wrong (re-verify against real OSTN15-transformed data, see georef.json's openQuestions) or the wrong tile was downloaded for this anchor. This is a data-integrity stop, not a best-effort clamp."
+    },
+    "MET-E402": {
+      "severity": "error",
+      "module": "engine.world",
+      "message": "mutation command against cell/tile {tile} rejected: caller does not own it",
+      "remedy": "ApplyOwnershipCommand/other mutation commands only succeed against a tile the caller already owns. Purchase the tile first via PurchaseTile, or check TileAt's Owned flag before issuing the command."
+    },
+    "MET-E403": {
+      "severity": "error",
+      "module": "engine.world",
+      "message": "mutation command against tile {tile} rejected: tile does not exist (outside the {sizeKm}km expansion extent)",
+      "remedy": "The referenced TileCoord falls outside data/georef.json's expansion box (30x30 tiles at 2km each). Check the coordinate against WorldAPI's extent before issuing the command."
+    },
+    "MET-E404": {
+      "severity": "error",
+      "module": "engine.world",
+      "message": "PurchaseTile rejected for tile {tile}: {cause}",
+      "remedy": "Either the tile is already owned (re-purchase is a no-op error, not silently accepted twice) or the tile coordinate is out of the expansion extent. See {cause} for which."
+    },
+    "MET-E405": {
+      "severity": "error",
+      "module": "engine.world",
+      "message": "geology query for tile {tile} rejected: tile has not been prospected",
+      "remedy": "Mining-relevant geology (clay/gravel/deep-coal presence) is only queryable after Prospect(tile) has run — chalk baseline is always visible, but the fine-grained layer is deliberately gated (§32) so mining siting requires the survey action, not omniscience. Call Prospect first."
+    },
+    "MET-E500": {
+      "severity": "error",
+      "module": "engine.season",
+      "message": "data/seasonal.json could not be loaded/validated: {cause}",
+      "remedy": "Check the underlying foundation.data error (wrapped, see {cause}) — usually a missing data/ directory, malformed JSON, a curve with other than 12 month points, or a negative multiplier. Fix data/seasonal.json (or its resolution path) and reload; engine.season never falls back to a silent default-to-1.0 curve (GR#15/GR#7)."
+    },
+    "MET-E501": {
+      "severity": "error",
+      "module": "engine.season",
+      "message": "data/seasonal.json is missing required curve \"{curve}\"",
+      "remedy": "engine.season requires all eight §9/§17 curves (electricityWinterPeak, waterSummerPeak, gasSeasonal, harvestCalendar, constructionSpeedMultiplier, schoolIntakeGate, leisureBeachWeight, leisureIndoorWeight, healthWaveModifier) to be present in data/seasonal.json's \"curves\" map. Add the named curve — foundation.data's schema validation does not catch this because it has no notion of which curve names a particular consumer requires."
+    },
+    "MET-E502": {
+      "severity": "error",
+      "module": "engine.season",
+      "message": "seasonal curve query rejected: month index {monthIndex} is negative (before the world's epoch)",
+      "remedy": "Pass a month index >= 0 (engine.core's Clock.Month(), 0 = world genesis). engine.season's curve functions have no defined value before genesis and return this error rather than a negative-modulo wraparound or a panic."
+    },
+    "MET-E503": {
+      "severity": "fatal",
+      "module": "engine.season",
+      "message": "internal error: curve \"{curve}\" not found in a loaded SeasonAPI (Load's completeness check should have caught this)",
+      "remedy": "This should be unreachable — Load verifies every required curve is present before returning a usable *SeasonAPI, and the curve map is never mutated afterward. If this fires, it's an engine.season bug (a query method referencing a curve name Load's requiredCurves list doesn't cover); file a BUG item, do not treat the returned value as trustworthy."
+    },
+    "MET-E504": {
+      "severity": "error",
+      "module": "engine.season",
+      "message": "data/seasonal.json's \"{curve}\" curve has {qualifying} month(s) >= threshold {threshold}, want exactly 1",
+      "remedy": "The school-intake gate (BUG-059) must have exactly one calendar month at or above schoolIntakeGateThreshold — it is consumed as a once-per-year boolean trigger (engine.education's stage-transition gate), not a continuous multiplier. Fix data/seasonal.json's schoolIntakeGate curve so exactly one month qualifies (typically the single month meant to be September under the file's meta.monthIndexConvention); zero qualifying months means intake silently never fires, two or more means it silently double-fires."
+    },
     "MET-E900": {
       "severity": "fatal",
       "module": "feat.skeleton",
@@ -751,6 +819,12 @@
       "module": "harness.synth",
       "message": "perf CI regression detected: {message}",
       "remedy": "M0-ENG §6 point 5: a commit that regresses monthly-tick time more than {threshold} (as a fraction) at the 1M-citizen synthetic fails the build. Investigate what the commit changed on the tick path (or, if this is a false positive from a genuinely noisy runner, re-run before concluding the code is at fault -- MinMeasurableDuration's noise floor already screens out near-zero-duration measurements, but does not eliminate all runner variance)."
+    },
+    "MET-H308": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf record rejected: PhaseHookCount/PerfResult provenance not marked as measured",
+      "remedy": "AppendResult only persists PerfResult values RunPerf itself produced (Measured=true) -- a hand-built PerfResult (e.g. a bare struct literal from a second writer, a hand-edited re-upload) cannot be distinguished from a real measurement once written, so it is rejected before it reaches the results file rather than silently accepted as if RunPerf had produced it (BUG-055). If this is a legitimate new caller, route it through RunPerf, or construct the record via a helper that explicitly sets Measured=true after confirming the figures really came from a real run."
     }
   }
 }
