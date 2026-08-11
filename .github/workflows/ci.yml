@@ -27,7 +27,21 @@ on:
   # on demand, from any branch that carries this file, without needing
   # a push/PR event — see that job's own comment block for why it
   # exists and is manual-only rather than wired into every push/PR.
-  workflow_dispatch:
+  #
+  # BUG-095: this used to also carry accept_perf_regression/
+  # accept_perf_regression_reason workflow_dispatch inputs, forwarded
+  # into cmd/perfci's now-removed -accept-regression/-accept-reason
+  # flags. Destructive-9 live-verified that mechanism was a full bypass
+  # of BUG-083's fix: those two flags just set two fields on the SAME
+  # results-file record any second writer (a corrupted-cache restore, a
+  # hand edit, a re-uploaded artifact) can already forge, so "a human
+  # typed this into a workflow_dispatch form" was never actually
+  # provable from the persisted record alone. Accepting a regression is
+  # now done by committing an entry to perf-accepted-regressions.json
+  # (see internal/harness/synth/accepted.go and cmd/perfci's package
+  # doc comment) — an ordinary, reviewed PR, not a workflow input — so
+  # there is nothing left for workflow_dispatch to carry for this.
+  workflow_dispatch: {}
 
 jobs:
   build-test-vet:
@@ -145,6 +159,24 @@ jobs:
   # AC-5), the command actually running, and a non-zero exit actually
   # failing this job (AC-10 verified end to end, not just unit-tested).
   #
+  # BUG-083: the "Save perf-results baseline" step below is `if: always()`
+  # — a genuine regression that reddens THIS job still gets its
+  # measurement written to perf-results.ndjson before AppendResult
+  # returns, and that file is cached regardless of the job's own
+  # pass/fail result. Before BUG-083's fix this meant a caught, red-CI
+  # regression still silently became the next run's comparison point.
+  # It no longer does: cmd/perfci's synth.LoadLatestBaseline
+  # reconstructs the baseline by REPLAYING history and freezing at the
+  # last record that did not regress, rather than trusting whatever was
+  # appended last — so this job can keep unconditionally saving its
+  # cache (needed so a REGRESSED run's number is still visible in
+  # history/graphing, AC-5) without that number ever becoming a future
+  # baseline candidate on its own. See internal/harness/synth/results.go's
+  # LoadLatestBaseline doc comment for the full mechanism, including the
+  # live-verified 30-commit, 13.27x, zero-signal drift this closes and
+  # why the fix needed a SECOND, anchor-based check
+  # (CumulativeRegressionThreshold) alongside the freeze itself.
+  #
   # Deliberately -citizens-overridden to a small count (see cmd/perfci's
   # -citizens flag doc comment), NOT the real 1M-citizen preset AC-6 names
   # for the eventual production gate. Two reasons, both logged as an
@@ -168,6 +200,12 @@ jobs:
   perf-smoke:
     runs-on: windows-latest
     timeout-minutes: 10
+    # BUG-097: actions: write is needed ONLY by the cache-pruning step
+    # below (gh cache delete) -- everything else this job does needs no
+    # more than the default read access.
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -177,23 +215,98 @@ jobs:
         with:
           go-version: "1.25"
 
+      # BUG-034 FIX-LANDING REQUIREMENT (2026-08-11): the cache key
+      # carries a generation segment (v2) precisely so THIS commit
+      # discards the poisoned pre-fix smoke history. Live production
+      # trace (BUG-071/BUG-083 BOW comments): a docs-only commit's run
+      # went red on 283.6% runner jitter, the failing run's 44ms number
+      # was laundered into the baseline (AppendResult-before-exit +
+      # if:always() cache save), and the next run then skipped its
+      # comparison against that garbage and reported GREEN. Every v1
+      # cache entry descends from that history; none of it is a
+      # trustworthy comparison point. Bumping the generation orphans the
+      # v1 entries (restore-keys below can no longer match them), so the
+      # first post-fix run starts a fresh, honestly-measured history
+      # (AC-8 first-run behaviour) instead of being judged against
+      # noise. Bump the generation again ONLY with a recorded reason of
+      # this kind — an unexplained bump silently discards real history,
+      # which is its own way of un-gating the gate.
       - name: Restore perf-results baseline
         uses: actions/cache@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-${{ github.run_id }}
+          key: perf-results-1m-smoke-v2-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-smoke-
+            perf-results-1m-smoke-v2-
 
+      # BUG-071: cmd/perfci now exits a DISTINCT code (3) when the gate
+      # could not evaluate a regression (ScaleMismatch or, live-verified
+      # in this item's Destructive attack, BelowNoiseFloor — the common
+      # case at this job's deliberate -citizens smoke override, see the
+      # comment block above this job). That is expected and NOT a code
+      # problem at smoke scale, so this step does not let exit 3 fail the
+      # job — but it also does not silently swallow it: it prints an
+      # explicit, loud "::warning::" annotation so the distinction stays
+      # visible in the Actions UI rather than folding back into an
+      # indistinguishable green check, which is the exact failure this
+      # item exists to close. Any OTHER non-zero exit (1 = genuine
+      # regression, 2 = usage/system error) still fails the job normally.
       - name: perfci (1M preset, -citizens smoke override)
-        run: go run ./internal/harness/synth/cmd/perfci -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
+        shell: pwsh
+        run: |
+          go run ./internal/harness/synth/cmd/perfci -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
+          $code = $LASTEXITCODE
+          if ($code -eq 3) {
+            Write-Host "::warning title=perf gate could not evaluate::cmd/perfci exited 3 (BUG-071 could-not-evaluate) -- expected at this job's smoke scale (below MinMeasurableDuration or a CitizenCount mismatch against the stored smoke baseline). This is NOT a pass and NOT a regression verdict; the real merge-blocking gate is perf-1m-probe's 1M scale. See internal/harness/synth/cmd/perfci's run() doc comment for the three-outcome exit-code design."
+            exit 0
+          }
+          exit $code
 
       - name: Save perf-results baseline
         if: always()
         uses: actions/cache/save@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-${{ github.run_id }}
+          key: perf-results-1m-smoke-v2-${{ github.run_id }}
+
+      # BUG-097: this job's save key above is unique per run (github.run_id)
+      # because actions/cache/save cannot overwrite an existing key -- but
+      # left unmanaged, that means one NEW cache entry accumulates under
+      # the perf-results-1m-smoke- prefix on every single run, forever,
+      # with nothing in this repo ever deleting an old one. GitHub enforces
+      # a per-repo cache storage cap with LRU eviction, so this pattern
+      # eventually manufactures the exact condition BUG-097 is about: a
+      # restore-keys prefix match coming up empty not because this preset
+      # was never measured, but because our own accumulation strategy
+      # pushed the real history out. Pruning down to a small number of the
+      # newest entries under this prefix removes that self-inflicted risk
+      # (a fresh, real cache entry is always available at that point) --
+      # it does not fix cmd/perfci's inability to tell "genuinely first
+      # run" from "lost cache" at read time (see run()'s BUG-097 stderr
+      # note for that half), but it makes the loss this specific mechanism
+      # would otherwise cause far less likely to occur at all.
+      #
+      # Best-effort housekeeping, not a correctness gate: continue-on-error
+      # so a `gh cache` permission/API hiccup (e.g. a fork PR running with
+      # reduced GITHUB_TOKEN scope) never fails this job over a cleanup
+      # step that has nothing to do with the perf gate itself.
+      - name: Prune old perf-results-1m-smoke caches (BUG-097)
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prefix = "perf-results-1m-smoke-v2-"
+          $keepNewest = 3
+          $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
+          if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
+          $entries = $raw | ConvertFrom-Json
+          $stale = $entries | Sort-Object -Property createdAt -Descending | Select-Object -Skip $keepNewest
+          foreach ($e in $stale) {
+            Write-Host "deleting stale cache entry $($e.key) (id $($e.id), created $($e.createdAt))"
+            gh cache delete $e.id --repo ${{ github.repository }}
+          }
 
   # --- Real-scale 1M probe (BUG-034, P0) ---------------------------------
   # BUG-034: nobody had measured a real 1M-citizen headless run's wall
@@ -252,10 +365,35 @@ jobs:
   # IS a valid, informative result (see this item's BOW report for what
   # to do with that outcome), not a mistake to silence by raising the
   # limit further.
+  # BUG-057: no concurrency guard meant two workflow_dispatch runs
+  # triggered close together could both restore the SAME prior baseline
+  # (actions/cache's restore-keys prefix match), both append their own
+  # measurement in isolation, and both save under distinct
+  # ${{ github.run_id }}-keyed cache entries — no file corruption, but
+  # whichever run's cache entry the NEXT run's prefix match happens to
+  # pick becomes the sole ancestor baseline, silently discarding the
+  # other run's measurement with no log, warning, or tie-break policy.
+  # Harmless today only because this job is manual and never fails the
+  # build (if: always()); it stops being harmless the moment this job
+  # becomes the real merge-blocking gate. group: with
+  # cancel-in-progress: false queues a second dispatch behind the first
+  # rather than racing them or cancelling either — losing an in-flight
+  # measurement to a cancel would be its own silent-discard problem, and
+  # this job's whole point is to produce a trustworthy measurement, not
+  # merely the fastest one.
   perf-1m-probe:
     runs-on: windows-latest
     timeout-minutes: 20
     if: github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: perf-1m-probe
+      cancel-in-progress: false
+    # BUG-097: actions: write is needed ONLY by the cache-pruning step
+    # below (gh cache delete) -- see perf-smoke's identical block for the
+    # full rationale.
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -281,13 +419,29 @@ jobs:
       # actual measured process, not a `go run` wrapper process — the
       # same technique used to sanity-check order of magnitude locally
       # before this job was written (see this item's BOW report).
+      #
+      # BUG-095: this step used to also forward accept_perf_regression/
+      # accept_perf_regression_reason workflow_dispatch inputs into
+      # cmd/perfci's -accept-regression/-accept-reason flags -- both are
+      # gone now (see the workflow_dispatch trigger's own comment above
+      # for why). If perfci reports a regression or a could-not-evaluate
+      # verdict for a commit a human has genuinely reviewed and wants to
+      # accept, that acceptance is recorded by committing an entry to
+      # perf-accepted-regressions.json (checked out into this job's
+      # working directory along with the rest of the repo, and read from
+      # cmd/perfci's default -accepted-regressions path with no extra
+      # flag needed here) BEFORE re-dispatching this job for that commit
+      # -- an ordinary, reviewed PR, not a value typed into this form.
       - name: Measure real 1M-citizen run (wall time + peak memory)
         shell: pwsh
         run: |
           $sw = [System.Diagnostics.Stopwatch]::StartNew()
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = ".\perfci.exe"
-          $psi.Arguments = "-preset 1M -months 3 -results perf-results-1m-real.ndjson -commit ${{ github.sha }}"
+          $psi.ArgumentList.Add("-preset"); $psi.ArgumentList.Add("1M")
+          $psi.ArgumentList.Add("-months"); $psi.ArgumentList.Add("3")
+          $psi.ArgumentList.Add("-results"); $psi.ArgumentList.Add("perf-results-1m-real.ndjson")
+          $psi.ArgumentList.Add("-commit"); $psi.ArgumentList.Add("${{ github.sha }}")
           $psi.RedirectStandardOutput = $true
           $psi.RedirectStandardError = $true
           $psi.UseShellExecute = $false
@@ -333,3 +487,26 @@ jobs:
         with:
           path: perf-results-1m-real.ndjson
           key: perf-results-1m-real-${{ github.run_id }}
+
+      # BUG-097: identical rationale to perf-smoke's own pruning step —
+      # this job's cache key is also unique-per-run and would otherwise
+      # accumulate one entry per manual dispatch forever. This job is
+      # rarer (workflow_dispatch-only) than perf-smoke, so the accumulation
+      # is slower, but the mechanism and the fix are the same.
+      - name: Prune old perf-results-1m-real caches (BUG-097)
+        if: always()
+        shell: pwsh
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $prefix = "perf-results-1m-real-"
+          $keepNewest = 3
+          $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
+          if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
+          $entries = $raw | ConvertFrom-Json
+          $stale = $entries | Sort-Object -Property createdAt -Descending | Select-Object -Skip $keepNewest
+          foreach ($e in $stale) {
+            Write-Host "deleting stale cache entry $($e.key) (id $($e.id), created $($e.createdAt))"
+            gh cache delete $e.id --repo ${{ github.repository }}
+          }

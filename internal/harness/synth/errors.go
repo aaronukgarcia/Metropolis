@@ -57,4 +57,42 @@ const (
 	// >RegressionThreshold monthly-tick-time regression against the
 	// stored baseline (AC-6, AC-10; M0-ENG §6 point 5).
 	codeRegressionDetected = "MET-H307"
+
+	// codeUnmeasuredResult: AppendResult was asked to persist a
+	// PerfResult whose Measured flag is false — i.e. a value that was
+	// never actually produced by RunPerf (BUG-055: a hand-built
+	// PerfResult{} zero-value literal is byte-for-byte indistinguishable
+	// in the ndjson from a legitimate "RunPerf really measured 0 hooks"
+	// record unless provenance is checked explicitly at the write
+	// boundary).
+	codeUnmeasuredResult = "MET-H308"
+
+	// codeGateCouldNotEvaluate: cmd/perfci's regression comparison was
+	// SKIPPED — ScaleMismatch or BelowNoiseFloor — rather than genuinely
+	// passing or failing (BUG-071). Distinct from codeRegressionDetected
+	// (MET-H307, a real failure) and from a plain pass (no error at all):
+	// this is the registry-sourced signal for the gate's third outcome,
+	// "could not evaluate", so it can never be silently indistinguishable
+	// from "satisfied" in either the exit code or the human-readable
+	// message a human/CI log reads.
+	codeGateCouldNotEvaluate = "MET-H309"
+
+	// codeImplausibleResult: a syntactically-valid, Measured=true
+	// PerfRecord carries a value a genuine RunPerf call can never
+	// structurally produce (negative CitizenCount/Months/PerMonthTick —
+	// see PerfResult.ImplausibleReason, perf.go). BUG-085: closes the
+	// gap left by only checking the Measured flag, which is a
+	// self-reported bool with no structural backing.
+	codeImplausibleResult = "MET-H310"
+
+	// codeUnjustifiedAcceptedRegression: a PerfRecord sets
+	// AcceptedRegression=true (BUG-083's deliberate, visible baseline
+	// override, now gated on a git-committed AcceptedRegistry entry —
+	// BUG-095, accepted.go) with no AcceptedReason. An override with no
+	// recorded justification is
+	// exactly as untrustworthy as an unmeasured record with no
+	// provenance — refused at both the write boundary (AppendResult)
+	// and the read boundary (LoadLatestBaseline), the same two-boundary
+	// enforcement shape as codeUnmeasuredResult/BUG-073.
+	codeUnjustifiedAcceptedRegression = "MET-H311"
 )

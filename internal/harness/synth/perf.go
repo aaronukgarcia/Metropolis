@@ -2,6 +2,7 @@ package synth
 
 import (
 	"bytes"
+	"fmt"
 	"runtime"
 	"time"
 
@@ -66,6 +67,102 @@ type PerfResult struct {
 
 	GenerationAllocBytes uint64 // runtime.MemStats.TotalAlloc delta across the Generate call
 	GenerationAllocCount uint64 // runtime.MemStats.Mallocs delta across the Generate call
+
+	// Measured is BUG-055's provenance flag: true ONLY on a PerfResult
+	// that RunPerf itself produced. A hand-built PerfResult{} zero-value
+	// literal — as several of this package's own tests legitimately
+	// construct to exercise storage/comparison logic in isolation — is
+	// byte-for-byte indistinguishable from a genuine "RunPerf measured
+	// PhaseHookCount=0" record UNLESS something checks provenance
+	// explicitly; a plain exported int field cannot carry that
+	// distinction on its own (Go's zero value for "not measured" and the
+	// legitimate value for "measured and got zero" are the same bit
+	// pattern). AppendResult (results.go) enforces this flag before
+	// persisting a record (MET-H308) precisely so a future second writer
+	// — another cmd, a hand-edited re-upload of a downloaded artifact, a
+	// bugfix that calls AppendResult directly — cannot inject a
+	// false-provenance record with zero friction. This does not, by
+	// itself, prove every FIELD on a Measured=true result is accurate
+	// (nothing stops a caller from constructing PerfResult{Measured:
+	// true, ...} directly) — it proves only that AppendResult's write
+	// boundary requires an explicit, positive assertion of provenance
+	// rather than accepting silence (a zero-value bool) as consent.
+	Measured bool
+}
+
+// ImplausibleReason is BUG-085's provenance check: unlike Measured
+// (this struct's self-reported bool, enforced at both the write and
+// read boundaries by AppendResult/LoadLatestBaseline in results.go),
+// this checks the VALUES a Measured=true record actually carries
+// against what a real RunPerf call can structurally produce, so a
+// hand-crafted or hand-edited record cannot simply set Measured:true
+// and lie about everything else — live-verified: a hand-appended
+// PerfResult{CitizenCount: -1, Months: -5, PerMonthTick: -1h,
+// Measured: true} was accepted verbatim as the trusted baseline with
+// zero error before this check existed. Returns "" when current is
+// plausible, else a human-readable reason naming exactly which field
+// failed and why a genuine measurement can never produce it:
+//
+//   - CitizenCount < 0: ValidateParams (params.go) rejects any
+//     Params.CitizenCount below MinSyntheticCitizens (1) BEFORE
+//     Generate allocates anything, so RunPerf can never return a
+//     negative CitizenCount.
+//   - Months < 0: RunPerf itself rejects months <= 0 with
+//     codeInvalidMonths before any measurement begins.
+//   - PerMonthTick < 0: derived as TickTime / time.Duration(months),
+//     the quotient of two non-negative measured quantities (a
+//     wall-clock duration and a positive month count), which cannot be
+//     negative.
+//
+// Deliberately checks < 0 only, not <= 0 or some positive floor: this
+// package's own tests legitimately construct zero-valued PerfResult{}
+// literals (results_test.go, baseline_test.go) to exercise storage/
+// comparison logic in isolation without a full realistic measurement —
+// a zero CitizenCount/Months is a degenerate, uninteresting input, not
+// a structurally IMPOSSIBLE one the way a negative value is. Widening
+// this to reject zero would create false positives against that
+// established, legitimate test convention; BUG-085 itself named
+// negative values specifically as "not merely implausible, it is
+// IMPOSSIBLE" — the zero-false-positive property this check exists to
+// keep.
+//
+// # BUG-096: the negative-only check has no UPPER bound
+//
+// ASM-374's reasoning (above) is sound for the LOWER bound but was never
+// extended to the upper one. Live-verified: an implausibly LARGE but
+// non-negative PerMonthTick (e.g. 10s — a plausible shape for a
+// unit-mismatch bug, a corrupted field, or a hand-crafted plant using the
+// same second-writer route BUG-095 names) on the FIRST record for a
+// preset is accepted verbatim by AppendResult and then seeded as BOTH
+// baseline and anchor by LoadLatestBaseline's seeding branch, because it
+// is positive. Every future run — including a genuine, severe (25x
+// live-verified) regression — then compares as an IMPROVEMENT
+// (DeltaFraction around -95%), silently and permanently, because a
+// relative-percentage gate reads "much smaller than baseline" as good no
+// matter how implausible the baseline itself was. Unlike BUG-094's
+// fail-CLOSED sibling (a locked gate that gets noticed immediately), this
+// is fail-OPEN: the gate stays green through every subsequent regression
+// with no signal anything is wrong.
+//
+// MaxPlausiblePerMonthTick is a deliberately GENEROUS sanity ceiling, not
+// a performance target — it exists only to catch gigantic, structurally-
+// implausible values (a nanoseconds-recorded-as-a-Duration-of-seconds
+// bug would land here in hours, not minutes), not to constrain what a
+// slow-but-real measurement may legitimately be. See limits.go for the
+// constant and the ASM logged against choosing it.
+func (r PerfResult) ImplausibleReason() string {
+	switch {
+	case r.CitizenCount < 0:
+		return fmt.Sprintf("CitizenCount=%d is negative -- ValidateParams rejects any CitizenCount below %d before Generate ever runs, so RunPerf cannot produce this", r.CitizenCount, MinSyntheticCitizens)
+	case r.Months < 0:
+		return fmt.Sprintf("Months=%d is negative -- RunPerf rejects months<=0 with codeInvalidMonths before any measurement begins", r.Months)
+	case r.PerMonthTick < 0:
+		return fmt.Sprintf("PerMonthTick=%s is negative -- it is TickTime/Months, the quotient of two non-negative measured quantities", r.PerMonthTick)
+	case r.PerMonthTick > MaxPlausiblePerMonthTick:
+		return fmt.Sprintf("PerMonthTick=%s exceeds the sanity ceiling of %s (BUG-096) -- a value this large is far more likely to be a corrupted field, a unit-mismatch bug, or a hand-crafted plant than a genuine measurement; a real RunPerf call has never produced anything close to this", r.PerMonthTick, MaxPlausiblePerMonthTick)
+	default:
+		return ""
+	}
 }
 
 // RunPerf generates params' synthetic city, then drives it through the
@@ -118,5 +215,6 @@ func RunPerf(correlationID string, p Params, preset string, months int) (PerfRes
 		AllocCount:           memAfter.Mallocs - memBefore.Mallocs,
 		GenerationAllocBytes: genMemAfter.TotalAlloc - genMemBefore.TotalAlloc,
 		GenerationAllocCount: genMemAfter.Mallocs - genMemBefore.Mallocs,
+		Measured:             true,
 	}, nil
 }

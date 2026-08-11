@@ -43,22 +43,38 @@ package synth
 // The moment any module starts registering a real PhaseHook against the
 // engine harness.headless.Run constructs (the whole point of Sprint 3's
 // citizens work landing), this hardcoded 0 becomes a lie unless someone
-// remembers to update it by hand — there is no compiler or test that can
-// catch the drift from inside this package, because this package cannot
-// see into headless.Run's engine construction. Logged as an assumption
+// remembers to update it by hand — there is no compiler that can catch
+// the drift from inside this package, because this package cannot see
+// into headless.Run's engine construction. Logged as an assumption
 // against this item's BOW record (see the ASM this dispatch adds/
 // supersedes) with an explicit "breaks if" clause and a recommended real
 // fix once someone can touch internal/engine/core or
 // internal/harness/headless: an exported accessor (e.g.
 // core.Engine.HookCount() or headless.Result.PhaseHookCount) that this
-// package reads instead of asserting by hand. Until that lands,
-// TestPhaseHookCountAssertionStillTrue (phasehooks_test.go) re-runs the
-// same grep this comment describes on every `go test` invocation, so a
-// new RegisterPhaseHook call site anywhere in the repo fails the build
-// loudly rather than letting this constant drift unnoticed — it cannot
-// prove headless.Run's OWN construction is still hook-free (that would
-// require touching engine.core/harness.headless), but it does prove no
-// NEW call site has appeared anywhere for a human to have missed.
+// package reads instead of asserting by hand — see phasehooks_test.go's
+// TestPhaseHookCountAssertionStillTrue doc comment for the full verdict
+// on why that runtime accessor, not any source-level scan, is the only
+// thing that can ever fully close this gap.
+//
+// Until that lands, TestPhaseHookCountAssertionStillTrue
+// (phasehooks_test.go) re-runs an AST-level scan for the identifier
+// RegisterPhaseHook on every `go test` invocation (BUG-053 upgraded this
+// from a plain text/regexp grep after a live-verified attack — a
+// one-line Go method value, `register := e.RegisterPhaseHook;
+// register(kind, hook)` — defeated the grep entirely by never containing
+// the literal substring "RegisterPhaseHook(" with an immediately
+// following open paren, even though the real call site landed inside
+// internal/harness/headless itself). The AST scan closes that specific
+// bypass and the wider class of ordinary syntactic indirection (method
+// values, wrapper functions, field assignment) because it matches on
+// what an identifier IS in the parsed syntax tree, not on how it is laid
+// out as text — but it still cannot catch a call built through
+// reflect.MethodByName using a runtime-constructed (not literal) string,
+// and it still cannot prove headless.Run's OWN construction is hook-free
+// today (that requires touching engine.core/harness.headless). It does
+// prove no NEW identifier reference to RegisterPhaseHook, in any
+// syntactic shape, has appeared anywhere in the scanned tree for a human
+// to have missed.
 func PhaseHookCountInHeadlessPath() int {
 	return 0
 }

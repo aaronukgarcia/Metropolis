@@ -50,6 +50,72 @@ const (
 // these words.
 const RegressionThreshold = 0.10
 
+// CumulativeRegressionThreshold is BUG-083's second, independent
+// tolerance: how far the current measurement may drift from the
+// ANCHOR (results.go's LoadLatestBaseline reconstructs this as the
+// earliest-recorded, or most recently explicitly human-accepted,
+// measurement for a preset — see PerfRecord.AcceptedRegression) before
+// the gate fails, REGARDLESS of what the step-to-step RegressionThreshold
+// check against the immediately-prior baseline says.
+//
+// # Why this exists (live-verified, not hypothetical)
+//
+// RegressionThreshold alone gates each commit against the STORED
+// baseline, which — before this fix — was simply whatever the last run
+// appended. Destructive-7 live-verified that a purely relative gate
+// built this way is structurally blind to sustained drift: 30
+// successive commits, each exactly 9% over the immediately prior
+// stored baseline (under RegressionThreshold), never once tripped
+// Regressed, while the stored figure compounded from 100ms to 1.327s
+// (13.27x) with zero CI signal at any point. A relative gate anchored
+// to a MOVING reference point cannot see cumulative drift, by
+// construction — freezing the step-to-step baseline at the last
+// non-regressed measurement (BUG-083's headline fix) does not change
+// this on its own, because each 9% step individually IS a genuine,
+// non-regressed pass against its own immediate predecessor. Catching
+// the sum requires comparing against a reference point that does NOT
+// move with every passing commit — the anchor.
+//
+// # Why this is not BUG-031's mistake
+//
+// BUG-031 hardcoded an absolute WALL-CLOCK DURATION (100ms) picked
+// once with no relationship to the machine the test happened to run
+// on — a correct, unregressed build blew past it (707ms) simply
+// because a shared/busy runner is slower than whatever box the number
+// was chosen against. This constant is not a duration: it is a
+// PERCENTAGE, computed against a REAL measurement this package itself
+// recorded on the same CI infrastructure (never a number invented in
+// source), and — critically — it does not silently ratchet forward
+// the way the pre-fix baseline did: the anchor only ever advances on a
+// deliberate, visible human decision — a git-committed entry in
+// accepted.go's AcceptedRegistry naming the exact accepted commit
+// (BUG-095), PerfRecord.AcceptedReason persisted alongside it as an
+// informational echo — never on an ordinary passing commit. It inherits
+// RegressionThreshold's
+// "adapts to the machine" property (same ratio math, same stored-
+// history basis, CompareToBaseline's doc comment point 1) while adding
+// the one property a moving-reference relative gate cannot have: a
+// fixed point sustained drift cannot silently walk away from.
+//
+// # Why 2x RegressionThreshold (ASM, judgment call — not spec-mandated)
+//
+// M0-ENG §6 point 5 mandates RegressionThreshold (10%) verbatim; it
+// says nothing about a cumulative figure, so this multiplier is a
+// judgment call, logged as an assumption against BUG-083's BOW record
+// rather than silently picked. 2x keeps it strictly looser than the
+// step check (so an ordinary single passing commit, or two, never
+// trips it — it would be redundant with, and stricter than,
+// RegressionThreshold otherwise) while still being tight enough that a
+// sustained 9%-per-commit drift pattern (BUG-083's exact live-verified
+// attack) cannot survive more than 3-4 commits before the anchor
+// comparison catches it, rather than the 30 it took to reach 13.27x
+// with no second check at all. (Destructive-verified against this very
+// code: 9% compounding sits at 18.81% after step 3 and 29.5% at step 4,
+// so the 20% ceiling irreducibly trips on the 4th evaluated commit —
+// an earlier draft of this comment claimed "2-3", which the attack run
+// corrected.)
+const CumulativeRegressionThreshold = 2 * RegressionThreshold
+
 // MinMeasurableDuration is the perf gate's noise floor (see baseline.go's
 // CompareToBaseline doc comment for the full BUG-031 rationale this
 // constant exists to avoid repeating): a percentage regression computed
@@ -98,3 +164,40 @@ const RegressionThreshold = 0.10
 // box's, before Sprint 3's real gate goes live; logged as a follow-up
 // against BUG-034 rather than assumed resolved here.
 const MinMeasurableDuration = 5 * time.Millisecond
+
+// MaxPlausiblePerMonthTick is BUG-096's upper sanity ceiling on
+// PerfResult.PerMonthTick (see perf.go's ImplausibleReason doc comment
+// for the live-verified failure it closes: a gigantic-but-positive first
+// record for a preset silently seeds a permanently-wrong baseline/anchor,
+// after which a genuine, severe regression reads as a large IMPROVEMENT).
+//
+// # Basis (ASM, judgment call — not spec-derived)
+//
+// Like CumulativeRegressionThreshold's 2x multiplier, M0-ENG names no
+// upper bound for this figure, so this is logged as an assumption rather
+// than silently picked. 2 seconds is chosen to be DELIBERATELY generous
+// relative to any plausible real measurement — every real measurement
+// this package has ever produced or is documented to expect is in the
+// low-hundreds-of-milliseconds range at most (MinMeasurableDuration's doc
+// comment: observed jitter under 1ms; BUG-096's own live-verified
+// regression scenario: healthy ~20ms jumping to a severe 500ms) — while
+// still sitting comfortably BELOW BUG-096's own live-verified attack
+// figure (a hand-planted 10s PerMonthTick, chosen as a round,
+// unremarkable-looking number an attacker or a unit-mismatch bug would
+// plausibly produce). A ceiling that let 10s through would not close the
+// hole it exists to close; 2s is roughly 4x the worst genuine figure this
+// package has ever measured and 5x below the live-verified attack value,
+// leaving real headroom on both sides. Not tied to MinMeasurableDuration
+// by a fixed ratio (unlike CumulativeRegressionThreshold's relationship
+// to RegressionThreshold) because the two floors answer different
+// questions — one guards against noise dominating a percentage, this one
+// guards against a value no real run could produce becoming trusted
+// ground truth at all.
+//
+// Breaks if: engine.core ever legitimately needs multiple real seconds of
+// PerMonthTick at full 1M/10M scale (e.g. a future phase hook doing
+// genuinely heavy per-tick work) — re-derive from a real measurement at
+// that point rather than assuming this ceiling still has headroom,
+// exactly as MinMeasurableDuration's own doc comment already asks for
+// itself.
+const MaxPlausiblePerMonthTick = 2 * time.Second

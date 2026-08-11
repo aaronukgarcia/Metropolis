@@ -161,8 +161,10 @@
 //   - params.go — Params, NetworkShape enum, ValidateParams (AC-7b).
 //   - limits.go — MaxSyntheticCitizens (ASM-083: reuses
 //     solver.LocalCitizenCeilingHigh, GR#15), sprawl domain,
-//     RegressionThreshold, MinMeasurableDuration (BUG-034: re-derived
-//     against sampled local jitter data, see that constant's doc
+//     RegressionThreshold, CumulativeRegressionThreshold (BUG-083: the
+//     second, anchor-based drift check), MinMeasurableDuration
+//     (BUG-034: re-derived against sampled local jitter data, see that
+//     constant's doc
 //     comment).
 //   - generator.go — Generate, the deterministic citizen-record stream.
 //   - presets.go — Preset1M/Preset10M (AC-3).
@@ -173,15 +175,45 @@
 //     BUG-034's PhaseHookCount and generation-side alloc counters
 //     (GenerationAllocBytes/GenerationAllocCount, kept separate from the
 //     tick-side AllocBytes/AllocCount for the same reason
-//     GenerationTime/TickTime are kept separate).
+//     GenerationTime/TickTime are kept separate), and BUG-055's Measured
+//     provenance flag (true only on a PerfResult RunPerf itself
+//     produced).
 //   - phasehooks.go — PhaseHookCountInHeadlessPath (BUG-034): the
-//     manually-asserted, grep-guarded "0 registered phase hooks today"
-//     fact every PerfResult carries — read its doc comment for exactly
-//     what it does and does not prove.
+//     manually-asserted fact every PerfResult carries, guarded by an
+//     AST-level scan (upgraded from a plain-text grep by BUG-053 after a
+//     live-verified method-value bypass) — read its doc comment for
+//     exactly what it does and does not prove, and phasehooks_test.go's
+//     doc comment for the honest verdict on what a source-level scan can
+//     never fully guarantee.
 //   - results.go — AppendResult/LoadLatestBaseline: the NDJSON
-//     per-commit results schema (AC-5).
+//     per-commit results schema (AC-5). AppendResult rejects a record
+//     whose Result.Measured is false (BUG-055, MET-H308), whose values
+//     are structurally implausible (BUG-085, MET-H310, negative
+//     CitizenCount/Months/PerMonthTick, or — BUG-096 — an implausibly
+//     GIGANTIC PerMonthTick), or whose AcceptedRegression override
+//     carries no reason (BUG-083, MET-H311). LoadLatestBaseline skips
+//     and reports (never silently swallows, GR#17), rather than
+//     aborting on, a malformed/torn line, so a good later baseline still
+//     recovers (BUG-054); it now also RECONSTRUCTS the baseline by
+//     replaying CompareToBaseline forward through history rather than
+//     trusting whatever was appended last (BUG-083) — see its own doc
+//     comment for the live-verified 30-commit, 13.27x, zero-signal
+//     ratchet this closes. AcceptedRegression is honoured ONLY when
+//     corroborated by accepted.go's git-committed AcceptedRegistry
+//     (BUG-095) — the record's own fields are no longer sufficient on
+//     their own, because a hand-injected "accepted" record was
+//     live-verified to fully bypass BUG-083's fix otherwise.
+//   - accepted.go — AcceptedRegistry/LoadAcceptedRegistry (BUG-095): the
+//     git-committed {preset, commitHash, reason} acceptance evidence
+//     that lives OUTSIDE the results file and its cache-persisted,
+//     forgeable-by-a-second-writer channel — see its own doc comment for
+//     why this is the control rather than one more check on the record.
 //   - baseline.go — CompareToBaseline: the BUG-031-hardened regression
-//     gate (AC-6, AC-8, AC-10).
+//     gate (AC-6, AC-8, AC-10), now with a second, independent check
+//     (CumulativeRegressionThreshold, limits.go) against a FIXED anchor
+//     reference point — BUG-083: a relative gate compared only against
+//     a moving reference point cannot see sustained drift, no matter
+//     how the moving point is advanced.
 //   - errors.go — MET-H3xx registry codes (GR#7).
 //   - cmd/perfci — the CI-runnable perf gate command (AC-6).
 //

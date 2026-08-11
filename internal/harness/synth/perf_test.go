@@ -1,6 +1,10 @@
 package synth
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+	"time"
+)
 
 // TestRunPerf_InvalidMonthsRejected covers RunPerf's own months<=0 guard
 // (MET-H304), distinct from ValidateParams' domain checks.
@@ -77,4 +81,52 @@ func TestRunPerf_MultipleMonthsAccumulatesTicks(t *testing.T) {
 	if want := monthsMultiple * r1.TotalTicks; r3.TotalTicks != want {
 		t.Fatalf("TotalTicks(months=%d) = %d, want %dx TotalTicks(months=1) = %d", monthsMultiple, r3.TotalTicks, monthsMultiple, want)
 	}
+}
+
+// TestImplausibleReason_RejectsGiganticPerMonthTick is BUG-096's core
+// regression test: ImplausibleReason previously checked PerMonthTick < 0
+// only, so a gigantic-but-positive value (live-verified reproduction:
+// 10s, the exact figure Destructive-9 used to seed a permanently-wrong
+// baseline that made a real 25x regression report as a 95% improvement)
+// was accepted as plausible. RED against the pre-fix ImplausibleReason
+// (would return "" for a 10s PerMonthTick); GREEN against the fix, which
+// rejects anything over MaxPlausiblePerMonthTick (limits.go).
+func TestImplausibleReason_RejectsGiganticPerMonthTick(t *testing.T) {
+	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 10 * time.Second, Measured: true}
+	if reason := r.ImplausibleReason(); reason == "" {
+		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for a 10s PerMonthTick (BUG-096: no upper sanity ceiling)")
+	}
+}
+
+// TestImplausibleReason_AllowsRealisticPerMonthTick is the companion
+// zero-false-positive check: a PerMonthTick comfortably inside any
+// plausible real measurement (including this package's own live-verified
+// severe-regression figure, 500ms) must NOT be rejected by the new
+// ceiling — BUG-096's fix must not become BUG-031's mistake in reverse
+// (an absolute ceiling picked too tight for a real, if slow, measurement).
+func TestImplausibleReason_AllowsRealisticPerMonthTick(t *testing.T) {
+	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 500 * time.Millisecond, Measured: true}
+	if reason := r.ImplausibleReason(); reason != "" {
+		t.Fatalf("ImplausibleReason() = %q, want \"\" for a realistic (if slow) 500ms PerMonthTick", reason)
+	}
+}
+
+// TestLoadLatestBaseline_GiganticFirstRecordNoLongerSilentlySeeds is
+// BUG-096's end-to-end regression test, reproducing Destructive-9's exact
+// live-verified attack shape: a fresh results file whose FIRST record for
+// a preset carries a gigantic-but-positive PerMonthTick (10s) must not be
+// accepted by AppendResult at all (closing the hole at the write
+// boundary, the same two-boundary shape BUG-073/085/095 already use) —
+// so a genuine, severe regression measured afterward has nothing poisoned
+// to silently compare against as an "improvement".
+func TestLoadLatestBaseline_GiganticFirstRecordNoLongerSilentlySeeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+
+	gigantic := PerfRecord{
+		CommitHash: "corrupted-or-planted",
+		Preset:     "1M",
+		Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 10 * time.Second, Measured: true},
+	}
+	err := AppendResult(path, gigantic)
+	wantCode(t, err, codeImplausibleResult)
 }

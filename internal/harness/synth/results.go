@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
@@ -21,13 +23,112 @@ type PerfRecord struct {
 	CommitHash string     `json:"commitHash"`
 	Preset     string     `json:"preset"`
 	Result     PerfResult `json:"result"`
+
+	// AcceptedRegression and AcceptedReason are BUG-083's deliberate,
+	// visible way for a legitimate slowdown to become the new baseline.
+	//
+	// # The problem this solves
+	//
+	// results.go's LoadLatestBaseline (see its doc comment) now freezes
+	// the reconstructed baseline at the last record that did NOT
+	// regress — replayed from history, not trusted as a stored flag —
+	// so an ordinary regressed commit can no longer silently ratchet
+	// the comparison point forward. But a gate that can only ever
+	// advance on a pass will block FOREVER the moment a change makes
+	// the simulation genuinely, intentionally slower (a new phase hook
+	// doing real work, a deliberate correctness-over-speed trade-off,
+	// …) — there must be a way out, and it must not be a silent env
+	// var or a quiet code change (that would just relocate the ratchet
+	// risk into "whoever remembers to flip it back").
+	//
+	// # The mechanism
+	//
+	// cmd/perfci sets these fields ONLY when the current commit is
+	// listed in accepted.go's git-committed AcceptedRegistry — see
+	// LoadAcceptedRegistry and cmd/perfci's package doc comment for the
+	// full BUG-095 mechanism (this package USED TO set them from a bare
+	// -accept-regression/-accept-reason CLI flag pair; that was live-
+	// verified as a full bypass of BUG-083's fix and has been removed).
+	// Never automatically, never by an ordinary push/PR run. When set
+	// AND corroborated by that registry (LoadLatestBaseline re-checks
+	// this at the read boundary — see below), AppendResult and
+	// LoadLatestBaseline treat this record as
+	// deliberately overriding both of BUG-083's reference points at
+	// once: the step-to-step "last known good" baseline AND the
+	// cumulative-drift anchor (baseline.go's CompareToBaseline) both
+	// reset to this record, resetting the drift clock along with the
+	// step gate — a human already looked at the regression this run
+	// reported and chose to accept it as the new normal.
+	//
+	// AppendResult rejects AcceptedRegression=true with an empty
+	// AcceptedReason (BUG-085's provenance-not-just-a-flag principle
+	// applied here too, MET-H311) — an unjustified override is exactly
+	// as untrustworthy as an unmeasured record with no provenance.
+	//
+	// # BUG-095: these two fields are a DECLARATION, not the evidence
+	//
+	// Live-verified: a hand-crafted PerfRecord with these two fields set
+	// to any chosen value, written directly via AppendResult (bypassing
+	// cmd/perfci entirely), was accepted verbatim and reset BOTH the
+	// baseline and the cumulative-drift anchor to an attacker-chosen
+	// figure — a real, unregressed 19ms run was then reported as a 216%
+	// regression against the forged anchor. The record's own non-empty-
+	// reason check (AppendResult, and previously LoadLatestBaseline too)
+	// cannot fix this, because it only asks the record to vouch for
+	// itself, and whoever can write the record can write the vouching.
+	//
+	// LoadLatestBaseline therefore no longer honours AcceptedRegression on
+	// its own: it only resets baseline/anchor for a record whose
+	// (Preset, CommitHash) is ALSO present in the git-committed
+	// AcceptedRegistry (accepted.go) — a file that lives outside the
+	// results file entirely (never cache-persisted, never writable by the
+	// same second-writer routes BUG-073/085/094/095 all name) and can
+	// only gain an entry via a real, reviewed commit. AcceptedReason
+	// remains persisted here purely as an informational echo of the
+	// registry's reason at the time cmd/perfci wrote this record — it is
+	// no longer, on its own, load-bearing evidence of anything. See
+	// accepted.go's AcceptedRegistry doc comment for the full mechanism
+	// and accepted.AcceptedRegistry.Reason for the corroboration check.
+	AcceptedRegression bool   `json:"acceptedRegression,omitempty"`
+	AcceptedReason     string `json:"acceptedReason,omitempty"`
 }
 
 // AppendResult appends rec as one JSON line to path, creating the file
 // (and any missing parent directory) if it does not already exist
 // (AC-5). Never truncates or rewrites existing lines — this is the only
 // way this package's results file is ever mutated.
+//
+// BUG-055: rejects rec if rec.Result.Measured is false, BEFORE any
+// write happens. See PerfResult.Measured's doc comment (perf.go) for
+// the full provenance rationale — this is the enforcement half of that
+// flag; without it, a hand-built PerfResult{} literal was persisted
+// exactly as if RunPerf had produced it, with nothing distinguishing a
+// real measurement from a fabricated one once it reached the results
+// file a CI gate trusts.
 func AppendResult(path string, rec PerfRecord) error {
+	if !rec.Result.Measured {
+		return errs.New(codeUnmeasuredResult, errs.NewCorrelationID(), map[string]any{
+			"path": path, "preset": rec.Preset, "commitHash": rec.CommitHash,
+		})
+	}
+	// BUG-085: Measured alone is a self-reported bool with no
+	// structural backing — also reject values a genuine RunPerf
+	// measurement can never structurally produce (see
+	// PerfResult.ImplausibleReason's doc comment, perf.go).
+	if reason := rec.Result.ImplausibleReason(); reason != "" {
+		return errs.New(codeImplausibleResult, errs.NewCorrelationID(), map[string]any{
+			"path": path, "preset": rec.Preset, "commitHash": rec.CommitHash, "reason": reason,
+		})
+	}
+	// BUG-083: an accepted-regression override with no recorded
+	// justification is exactly as untrustworthy as an unmeasured
+	// record — see PerfRecord.AcceptedRegression's doc comment.
+	if rec.AcceptedRegression && strings.TrimSpace(rec.AcceptedReason) == "" {
+		return errs.New(codeUnjustifiedAcceptedRegression, errs.NewCorrelationID(), map[string]any{
+			"path": path, "preset": rec.Preset, "commitHash": rec.CommitHash,
+		})
+	}
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("synth: opening results file %q: %w", path, err)
@@ -44,58 +145,278 @@ func AppendResult(path string, rec PerfRecord) error {
 	return nil
 }
 
+// CorruptLine reports one NDJSON line LoadLatestBaseline could not parse
+// as a PerfRecord (BUG-054). A torn/partial line is an EXPECTED failure
+// mode of an append-only results file — CI jobs get cancelled mid-write
+// — so LoadLatestBaseline's recovery contract is: skip the bad line and
+// keep looking for a good, later record, rather than aborting the whole
+// read (that old behaviour permanently hid every good baseline sitting
+// after the first bad line, the exact BUG-031 "infra fragility breaks a
+// good build" shape relocated into this file format). A skipped line is
+// still REPORTED here, never silently dropped (Golden Rule #1/#17) — the
+// caller decides how loudly to surface it (cmd/perfci logs a non-fatal
+// warning naming every skipped line when at least one good record was
+// still recovered; see LoadLatestBaseline's doc comment for when it
+// instead returns a hard codeBaselineCorrupt error).
+type CorruptLine struct {
+	LineNo int
+	Err    error
+}
+
 // LoadLatestBaseline reads path (an AppendResult-written NDJSON file)
-// and returns the most recently appended PerfRecord's Result for the
-// given preset — the "stored baseline for the current branch's parent
-// commit" AC-6 asks for, under the simplifying assumption that the last
-// line written for a preset IS that preset's most recent measurement
-// (true as long as every CI run appends via AppendResult in commit
-// order, which is this package's only writer).
+// and reconstructs TWO reference points for preset — baseline (the
+// step-to-step "last known good") and anchor (BUG-083's fixed
+// cumulative-drift reference) — that together are the "stored baseline
+// for the current branch's parent commit" AC-6 asks for, hardened
+// against the exact ratchet Destructive-7 live-verified: 30 successive
+// commits, each individually under RegressionThreshold against the
+// immediately prior stored figure, compounding 100ms to 1.327s
+// (13.27x) with zero CI signal, because the pre-fix version of this
+// function simply returned whatever was LAST APPENDED — which, since
+// AppendResult ran unconditionally on every evaluated run, was
+// identical to "last measured" regardless of whether that measurement
+// passed.
+//
+// # BUG-083: reconstructed by REPLAY, not trusted as a stored flag
+//
+// baseline is not read off a stored "this record passed" bit (which
+// would itself be exactly as spoofable as the Measured flag was before
+// BUG-055/BUG-073 — see PerfRecord.AcceptedRegression's doc comment for
+// the ONE flag this function does trust, and why). Instead, every
+// usable record for preset is replayed forward in commit order through
+// baseline.go's own CompareToBaseline: baseline only advances to a
+// record when that record, compared against the CURRENT reconstructed
+// baseline and anchor, is NOT regressed by either check. A record that
+// WOULD have regressed still appears in the file (AC-5's graphing
+// schema is unaffected — every evaluated run is still appended by
+// cmd/perfci) but is simply skipped when reconstructing what the next
+// run should compare against — baseline freezes at the last record that
+// actually passed, rather than sliding forward on a regression that
+// slipped through (fixing, for free, the .github/workflows/ci.yml
+// `if: always()` interaction: even a genuinely regressed run that reds
+// out CI still gets appended to the cache, but no longer becomes a
+// future baseline candidate, because THIS function decides that at read
+// time by re-evaluating the value, not by trusting whatever was written
+// last).
+//
+// anchor is seeded from the FIRST usable record found for preset, and
+// otherwise never moves except when a record explicitly sets
+// AcceptedRegression=true AND the record's (preset, CommitHash) is
+// corroborated by accepted — the git-committed AcceptedRegistry loaded
+// via LoadAcceptedRegistry (accepted.go) — the one deliberate, visible
+// way a legitimate, intended slowdown becomes the new baseline; see
+// PerfRecord.AcceptedRegression's doc comment and accepted.go's BUG-095
+// rationale for why the record's own fields are no longer sufficient on
+// their own. Both baseline and anchor reset together on such a record,
+// so accepting a regression also resets the cumulative-drift clock, not
+// just the step-to-step one. A record whose AcceptedRegression is true
+// but is NOT corroborated by accepted is not trusted as an override —
+// it is reported (CorruptLine) and then replayed exactly as an ordinary,
+// non-accepted measurement instead (see the loop body below), which is
+// what stops a forged "accepted" record from moving either reference
+// point at all.
 //
 // A missing file is NOT an error (AC-8: "a missing perf baseline ...
-// does not fail the build") — it returns (nil, nil), the caller's signal
-// to record a new baseline rather than compare against one. A file that
-// exists but contains no record for preset returns the same (nil, nil)
-// for the identical reason: a fresh scale preset has no prior baseline
-// either. Only a file that exists AND fails to parse as the expected
-// schema is an error (codeBaselineCorrupt) — distinct from "no baseline
-// yet".
-func LoadLatestBaseline(path, preset string) (*PerfResult, error) {
+// does not fail the build") — it returns (nil, nil, nil, nil), the
+// caller's signal to record a new baseline rather than compare against
+// one. A file that exists but contains no record for preset returns the
+// same (nil, nil, nil, nil) for the identical reason: a fresh scale
+// preset has no prior baseline either.
+//
+// Malformed, unmeasured (BUG-073), or implausible (BUG-085) lines are
+// collected as CorruptLine entries and skipped, NOT treated as fatal,
+// as long as a good record for preset is still found somewhere in the
+// file (BUG-054's recovery contract) — the returned error is nil in
+// that case, but the corrupt-line list is never empty, so a caller that
+// cares can still log/report it (GR#17: recoverable does not mean
+// silent). Only when NO usable record for preset can be recovered AT
+// ALL does this function return a hard error (codeBaselineCorrupt),
+// because at that point "corrupt" and "no baseline yet" are genuinely
+// indistinguishable from the caller's perspective otherwise.
+func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baseline, anchor *PerfResult, corrupt []CorruptLine, err error) {
 	correlationID := errs.NewCorrelationID()
 
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	f, openErr := os.Open(path)
+	if openErr != nil {
+		if os.IsNotExist(openErr) {
+			return nil, nil, nil, nil
 		}
-		return nil, fmt.Errorf("synth: opening results file %q: %w", path, err)
+		return nil, nil, nil, fmt.Errorf("synth: opening results file %q: %w", path, openErr)
 	}
 	defer func() { _ = f.Close() }()
 
-	var latest *PerfResult
-	scanner := bufio.NewScanner(f)
-	// A results file grows one line per CI run over a project's
-	// lifetime, never one enormous unbounded record — the stdlib
-	// default token-size cap is appropriate here (unlike
-	// foundation/serialize's shard reader, which handles hostile/
-	// arbitrarily large payloads and deliberately does NOT use
-	// bufio.Scanner for that reason).
+	// BUG-074: this used to be bufio.Scanner, on the stated assumption
+	// that "a results file grows one line per CI run, never one
+	// enormous unbounded record" made the stdlib default 64KiB
+	// per-token cap safe. That assumption was never enforced anywhere —
+	// PerfResult.PhaseTimings is an unbounded slice — and Destructive-5
+	// live-verified the consequence: bufio.Scanner's token-size cap
+	// sits UNDERNEATH the per-line recovery loop below, so one
+	// oversized line makes Scan() return false PERMANENTLY with
+	// bufio.ErrTooLong, never becomes a CorruptLine entry, and silently
+	// terminates the scan before it ever reaches a good, later record —
+	// reproducing BUG-054's exact "hide a later good baseline" failure
+	// for a cause BUG-054's own fix comment dismissed rather than
+	// enforced. bufio.Reader.ReadString('\n') has no fixed token cap —
+	// any single line, however large, is read in full — which removes
+	// the hidden ceiling entirely rather than merely raising it to a
+	// still-crossable number.
+	reader := bufio.NewReader(f)
 	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		var rec PerfRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			return nil, errs.Wrap(codeBaselineCorrupt, correlationID, err, map[string]any{
-				"path": path, "line": lineNo,
-			})
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && readErr != io.EOF {
+			return nil, nil, corrupt, fmt.Errorf("synth: reading results file %q: %w", path, readErr)
 		}
-		if rec.Preset == preset {
-			result := rec.Result
-			latest = &result
+		// line == "" only when ReadString read nothing at all before
+		// hitting EOF (i.e. the file ended cleanly on the previous
+		// line's newline) — that phantom final read is not a line and
+		// must not be counted or parsed. Anything else read, even a
+		// final line with no trailing newline, is real content.
+		if line != "" {
+			lineNo++
+			trimmed := strings.TrimRight(line, "\r\n")
+			var rec PerfRecord
+			if unmarshalErr := json.Unmarshal([]byte(trimmed), &rec); unmarshalErr != nil {
+				// BUG-054: do NOT abort the whole read on the first
+				// bad line — record it and keep scanning, so a good,
+				// later record (the common "torn final line from a
+				// cancelled job, followed by nothing" case, or the
+				// rarer "one bad line buried in history" case) is
+				// still found.
+				corrupt = append(corrupt, CorruptLine{LineNo: lineNo, Err: unmarshalErr})
+			} else if rec.Preset == preset {
+				switch {
+				// BUG-073: AppendResult enforces Measured==true BEFORE
+				// a record is ever written (MET-H308) — but that
+				// enforcement lived only at the write boundary. Any
+				// syntactically-valid PerfRecord JSON line reaching
+				// this file by any OTHER route (a hand edit, a
+				// corrupted-cache restore resurrecting a foreign/old
+				// file, a manual merge-conflict resolution, a
+				// re-uploaded and edited artifact) was accepted
+				// verbatim as the latest measurement with zero error
+				// and zero CorruptLine flag. Re-check provenance HERE,
+				// at the boundary that actually matters — the moment
+				// this data becomes a decision input — not only at
+				// the write boundary that a second, non-AppendResult
+				// writer can simply bypass.
+				case !rec.Result.Measured:
+					corrupt = append(corrupt, CorruptLine{
+						LineNo: lineNo,
+						Err:    fmt.Errorf("record at line %d for preset %q has Measured=false — refusing to trust an unmeasured/hand-injected record as a baseline (BUG-073)", lineNo, preset),
+					})
+				// BUG-085: Measured is a self-reported bool with no
+				// structural backing — also re-check plausibility HERE,
+				// at the read boundary, for the identical "a second
+				// writer can bypass AppendResult" reason BUG-073's fix
+				// re-checks Measured here rather than trusting the
+				// write-boundary check alone.
+				case rec.Result.ImplausibleReason() != "":
+					corrupt = append(corrupt, CorruptLine{
+						LineNo: lineNo,
+						Err:    fmt.Errorf("record at line %d for preset %q is not a plausible genuine measurement: %s (BUG-085)", lineNo, preset, rec.Result.ImplausibleReason()),
+					})
+				// BUG-083: an override with no recorded justification
+				// is exactly as untrustworthy as an unmeasured record —
+				// see PerfRecord.AcceptedRegression's doc comment.
+				case rec.AcceptedRegression && strings.TrimSpace(rec.AcceptedReason) == "":
+					corrupt = append(corrupt, CorruptLine{
+						LineNo: lineNo,
+						Err:    fmt.Errorf("record at line %d for preset %q sets AcceptedRegression=true with no AcceptedReason — refusing to trust an unjustified baseline override (BUG-083)", lineNo, preset),
+					})
+				// BUG-095: AcceptedRegression=true with a non-empty reason
+				// (the only two checks that existed before this fix) is
+				// still not sufficient on its own — that is exactly the
+				// self-vouching flag a second, non-cmd/perfci writer can
+				// forge with zero friction (live-verified: a hand-injected
+				// accepted record with a plausible-sounding reason reset
+				// both reference points and turned a genuine unregressed
+				// 19ms run into a reported 216% regression). It is
+				// honoured only when this record's (preset, CommitHash) is
+				// ALSO present in accepted, the git-committed registry
+				// loaded from OUTSIDE this results file (see accepted.go
+				// for why a second writer of THIS file has no route to
+				// that one).
+				//
+				// A record failing this check is skipped ENTIRELY, the
+				// same as every other case in this switch — it must NOT
+				// fall through to the ordinary replay logic below, because
+				// a forged record whose value happens to look like an
+				// "improvement" (a smaller PerMonthTick, exactly the shape
+				// Destructive-9's own reproduction used) would otherwise
+				// sail through the ordinary non-regressed path and become
+				// the ordinary baseline anyway — a forged record must not
+				// gain influence through EITHER door.
+				case rec.AcceptedRegression && !acceptedIsCorroborated(accepted, preset, rec.CommitHash):
+					corrupt = append(corrupt, CorruptLine{
+						LineNo: lineNo,
+						Err: fmt.Errorf(
+							"record at line %d for preset %q sets AcceptedRegression=true (reason %q) but commit %q has no matching entry in the accepted-regressions registry — refusing to trust a self-declared acceptance with no corroborating evidence outside the results file, and refusing to treat it as an ordinary measurement either (BUG-095)",
+							lineNo, preset, rec.AcceptedReason, rec.CommitHash,
+						),
+					})
+				default:
+					result := rec.Result
+					switch {
+					case rec.AcceptedRegression:
+						// Reached only when acceptedIsCorroborated returned
+						// true above (the outer switch's cases are
+						// evaluated in order, and any AcceptedRegression
+						// record that fails corroboration was already
+						// claimed by the case above and skipped entirely)
+						// — a deliberate, visible, GIT-CORROBORATED human
+						// override: reset BOTH reference points to this
+						// record.
+						baseline = &result
+						anchor = &result
+					case anchor == nil:
+						// First usable record ever seen for preset:
+						// establishes both reference points (AC-8's
+						// "no prior baseline" case, extended to also
+						// seed the cumulative anchor).
+						baseline = &result
+						anchor = &result
+					default:
+						cmp := CompareToBaseline(baseline, anchor, result)
+						if !cmp.CouldNotEvaluate() && !cmp.Regressed {
+							baseline = &result
+						}
+						// else: BUG-083's freeze. This record stays in
+						// the file (AC-5 history/graphing) but does not
+						// become the reconstructed baseline — anchor is
+						// untouched either way, it only ever moves on a
+						// registry-corroborated AcceptedRegression record
+						// above.
+					}
+				}
+			}
+		}
+		if readErr == io.EOF {
+			break
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, errs.Wrap(codeBaselineCorrupt, correlationID, err, map[string]any{"path": path})
+
+	if baseline == nil && len(corrupt) > 0 {
+		// Nothing usable recovered for preset, and the file is not
+		// merely absent/unwritten — this is genuine corruption, and
+		// GR#17 forbids treating it as indistinguishable from "no
+		// baseline yet". Report it as a hard failure rather than
+		// silently returning (nil, nil, nil, nil), which a caller would
+		// read as "first run, record a new baseline" and thereby mask a
+		// corrupted history under a fresh one.
+		// The registry template for codeBaselineCorrupt (MET-H306,
+		// data/errors.json) renders "{path} ... {line}: {cause}" — the
+		// ctx keys MUST match those placeholders or the one-line GR#1
+		// display prints the literal braces instead of the facts
+		// (live-verified by this chain's Destructive). The first corrupt
+		// line is the one named: with zero usable records recovered, it
+		// is where any human investigation starts; corruptLines carries
+		// the full count alongside it.
+		return nil, nil, corrupt, errs.Wrap(codeBaselineCorrupt, correlationID, corrupt[0].Err, map[string]any{
+			"path": path, "line": corrupt[0].LineNo, "cause": corrupt[0].Err.Error(), "corruptLines": len(corrupt),
+		})
 	}
-	return latest, nil
+
+	return baseline, anchor, corrupt, nil
 }
