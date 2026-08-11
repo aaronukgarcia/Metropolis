@@ -1,5 +1,35 @@
 # HEAVY CHECKPOINT — session bounce point
 
+## REFRESH #7 — Ben, 2026-08-11 (read this section first; §1–§7 below are refresh #6 and are older)
+
+**HEAD `4c01266`, pushed, CI green (run 31473977195, confirmed COMPLETED not merely started).** Running as **Ben**, not Bill — the Bill slot was occupied and all three slots were live in different windows at once, which is a real cross-session file-ownership risk.
+
+### Shipped since refresh #6
+- **`engine.season` (MOD-027)** and **`engine.world` (MOD-017)** are committed — the first two Sprint 3 modules through the full pipeline including a Destructive verdict.
+- **46 acceptance files committed, covering S6 through S11 COMPLETE**, plus S4/S5 finalised and `tool.destructiveguard`, `feat.protocolv2`, `tool.committhook`. The criteria estate now runs far ahead of the build queue, by Aaron's direction.
+- **BUG-058's 18 registry edges** plus a `collaborations` drift gate in `generate.js`.
+- **`quote-mask-drift.test.js`** — the control watching five copies of `buildQuoteMask`.
+
+### The three things that matter most on resume
+1. **BUG-071/083/095 — the perf gate is NOT a gate and this blocks all of Sprint 3.** It reported success while never gating (every smoke run measured below its own noise floor). The ratchet then proved live: 30 commits at 9% each drifted **13×** with zero signal. The two-threshold fix was then defeated because **`AcceptedRegression` is two struct fields anyone who can write the file can forge** — a forged record made a genuine unregressed run report a 216% regression. BUG-034, MOD-016 open; MOD-018 blocked.
+2. **The commit-identity guard is architecturally dead and Aaron has ruled** (FEAT-045): **fifteen live bypasses across four rounds**, ending with `sudo git commit` — any ordinary leading word. Enforcement moves to a **`commit-msg` git hook** (a BA proved empirically that `pre-commit` never fires on `git merge`); the PreToolUse guard is demoted to advisory and must **fail OPEN**. **BUG-088: all four sibling guards share the same flaw** — one finding, four files — so the secret guard, version guard and plan guard are all silently disengaged by the same shapes.
+3. **THE CROSS-CUTTING LESSON, worth more than any single fix: a control must be enforced where the fact is CREATED, not where it is RECORDED.** Three controls fell today to the same shape — a parsed command *string*, a self-declared `Measured` bool, a self-declared `AcceptedRegression` bool. Each asks the data to vouch for itself, and whoever writes the data writes the vouching.
+
+### Process findings that changed how we work
+- **BUG-075** — a report cited three ASM codes that were never filed, and the lead relayed one into two downstream briefs as fact. A citation that *resolves* passes a naive check while pointing elsewhere. **Verify cited codes resolve to what the sentence claims.**
+- **BUG-090** — a Destructive's example commands were executed for real by the shell submitting them (backticks in a `--desc`), landing stray commits; its `git reset --soft` cleanup then discarded a lead commit that had landed on top. Recovered from the reflog. **The recovery rule is now in every brief: if you make a mess, report and stop — do not repair.**
+- **Five caveats this session were wider than declared.** Verifying a declared limitation's *width* is now a standing Tester duty.
+- **A regression corpus built from fixed defects proves you won't repeat yourself, not that you're safe** (BUG-091).
+
+### Blocked on Aaron
+**BUG-061** (GR#22 text in the BOW database — no sanctioned way to redact), **FEAT-041** (traffic numerics deep dive; MOD-023 dependency-blocked), and the crisis-taxonomy proposal's row-by-row verdict.
+
+### In flight at this point
+`engine.market` (MOD-020) at Destructive after two Tester passes; BUG-095/096/097 with a junior; the four sibling guards blocked on BUG-088. **BOW is 425 open / 645 total — the ASM backlog is the lead's ruling debt, not the BAs' fault.**
+
+---
+
+
 **Refresh #6, written by Bill 2026-08-10 late evening, immediately after EVERY running agent was killed simultaneously by a session limit (resets 23:50 Europe/London). HEAD is `1331ddb`, pushed, CI green. The working tree carries a large amount of uncommitted, mostly-verified agent work — see §2, and read it before touching anything.** A fresh session recovers from THIS file + `node claude-bow.js list --by-seq` + the BOW comments on the items named below + `git log -10`. Agent transcripts are gone; this file is written to be self-sufficient without them.
 
 ---
