@@ -251,16 +251,27 @@ jobs:
       # indistinguishable green check, which is the exact failure this
       # item exists to close. Any OTHER non-zero exit (1 = genuine
       # regression, 2 = usage/system error) still fails the job normally.
+      # BUG-110: this step was shell:pwsh and its exit-3 mapping NEVER ran
+      # in production -- on the runner's pwsh wrapper, perfci exiting
+      # non-zero terminated the script before the if-branch executed
+      # (live failure, run 31539027958: no ::warning::, step exit 1, dead
+      # code after go run's stderr). The mapping's first live test was
+      # production because the push run took the exit-0 fresh-baseline
+      # path -- the test-that-never-ran class. bash's exit-code semantics
+      # (set +e, capture $?) are deterministic and identical everywhere,
+      # so the mapping no longer depends on pwsh wrapper behaviour at all.
       - name: perfci (1M preset, -citizens smoke override)
-        shell: pwsh
+        shell: bash
         run: |
+          set +e
           go run ./internal/harness/synth/cmd/perfci -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
-          $code = $LASTEXITCODE
-          if ($code -eq 3) {
-            Write-Host "::warning title=perf gate could not evaluate::cmd/perfci exited 3 (BUG-071 could-not-evaluate) -- expected at this job's smoke scale (below MinMeasurableDuration or a CitizenCount mismatch against the stored smoke baseline). This is NOT a pass and NOT a regression verdict; the real merge-blocking gate is perf-1m-probe's 1M scale. See internal/harness/synth/cmd/perfci's run() doc comment for the three-outcome exit-code design."
+          code=$?
+          set -e
+          if [ "$code" -eq 3 ]; then
+            echo "::warning title=perf gate could not evaluate::cmd/perfci exited 3 (BUG-071 could-not-evaluate) -- expected at this job's smoke scale (below MinMeasurableDuration or a CitizenCount mismatch against the stored smoke baseline). This is NOT a pass and NOT a regression verdict; the real merge-blocking gate is perf-1m-probe's 1M scale. See internal/harness/synth/cmd/perfci's run() doc comment for the three-outcome exit-code design."
             exit 0
-          }
-          exit $code
+          fi
+          exit "$code"
 
       - name: Save perf-results baseline
         if: always()
@@ -403,13 +414,23 @@ jobs:
         with:
           go-version: "1.25"
 
+      # BUG-110/BUG-073 (same generation-bump rationale as perf-smoke's
+      # v2 key above): the pre-fix 1m-real cache holds a record written
+      # before PerfResult.Measured existed -- it unmarshals with
+      # Measured=false, BUG-073's read-boundary check quarantines it,
+      # and with zero usable records left LoadLatestBaseline hard-errors
+      # (correctly: a corrupt history must not silently become a fresh
+      # one). Live-caught on run 31539027958: the probe measured 1M
+      # citizens fine and then could not record it. The v2 generation
+      # orphans that unreadable history so the next dispatch records the
+      # first REAL post-fix baseline.
       - name: Restore perf-results-1m-real baseline
         uses: actions/cache@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-${{ github.run_id }}
+          key: perf-results-1m-real-v2-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-real-
+            perf-results-1m-real-v2-
 
       - name: Build perfci
         run: go build -o perfci.exe ./internal/harness/synth/cmd/perfci
@@ -481,12 +502,12 @@ jobs:
           path: perf-results-1m-real.ndjson
           if-no-files-found: warn
 
-      - name: Save perf-results-1m-real baseline
+      - name: Save perf-results-1m-real baseline (v2 generation, see restore step)
         if: always()
         uses: actions/cache/save@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-${{ github.run_id }}
+          key: perf-results-1m-real-v2-${{ github.run_id }}
 
       # BUG-097: identical rationale to perf-smoke's own pruning step —
       # this job's cache key is also unique-per-run and would otherwise
@@ -500,7 +521,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-real-"
+          $prefix = "perf-results-1m-real-v2-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
