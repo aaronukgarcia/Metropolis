@@ -144,6 +144,8 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 | PreToolUse (Bash) | `claude-version-guard.js` | Blocks commits without a version bump (docs/tooling-only commits exempt) |
 | PreToolUse (Bash) | `claude-pre-commit-check.js` | Blocks Co-Authored-By trailers in commits |
 | PreToolUse (Bash) | `claude-pre-push-check.js` | Blocks pushes with unbundled function deploys (GR#19) |
+| PreToolUse (Bash+PS) | `claude-codename-guard.js` | GR#22 — blocks the reference title's real name reaching git |
+| PreToolUse (Bash+PS) | `claude-author-guard.js` | BUG-035 — blocks a commit whose author/committer is not a sanctioned identity (derived at runtime from git config ∪ trunk history ∪ operator env list, never hardcoded) |
 | UserPromptSubmit | `claude-memory-prefetch.js` | GR#14 Vestige recall reminder |
 | SessionStart | `claude-startup.js` | Auto checkin + identity assignment |
 | PreCompact | (inline echo) | Preserves identity + Golden Rules context across compaction |

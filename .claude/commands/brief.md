@@ -39,6 +39,22 @@ about to type:
 - `git log --oneline -5 -- <path>` — what already landed there.
 - Recall Vestige for the area (GR#14).
 
+### File ownership: enumerate EVERY path the criteria require, not just the module directory
+
+Learned from ASM-203 on 2026-08-10 and repeated by MOD-017 the same day. A brief
+said "you own `internal/engine/season/` — and nothing else", while the criteria
+it dispatched against (AC-10, AC-18) **required** edits to `data/seasonal.json`.
+The junior did the right thing — flagged the contradiction instead of resolving
+it silently — but the defect was in the dispatch, not the delivery. The lead's
+ruling: **the criteria win, because they are the contract.**
+
+So before writing the ownership line, read the criteria and list every file they
+oblige the dev to touch: the module directory, `data/*.json` for GR#15 values,
+`data/errors.json` for the GR#7 error range it will claim. Then check that list
+against what other agents currently own — `data/errors.json` in particular is
+claimed by nearly every module that registers error codes, and two juniors
+editing it concurrently is the BUG-032 shape.
+
 Check for related open findings (`SEC-`) and assumptions (`ASM-`) on the same
 code path — an agent that rediscovers a logged finding has wasted its run.
 
