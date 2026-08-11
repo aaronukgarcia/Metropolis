@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "pricingMode": "static",
+  "meta": {
+    "comment": "engine.market (MOD-020, §6/I.3) commodity registry: the nine tradable commodities' static v1 import price, logistics-capacity ceiling, and import/local-production/hybrid supply-mode tag. This file is the sole source for every price/capacity/supply-mode figure engine.market's MarketAPI exposes — GR#15: no commodity figure lives as a Go literal in internal/engine/market/*.go outside doc-comment prose transcribing this file's own values.",
+    "pricingModeConvention": "\"pricingMode\" is I.3's config-flip seam: v1 supports only \"static\" (engine.market.Load rejects any other value). A future dynamic-pricing mode is a new value here plus a new code path behind MarketAPI's SAME Price method signature, per this item's Out of scope section — implementing that second mode is future work, not this item's.",
+    "unitsAndMoneyConvention": "Every commodity's \"unit\" field states the measure its \"importPriceMicropounds\"/\"exportPriceMicropounds\" and \"capacityCeiling\" figures are PER (kg, L, kWh, or tonne — matching §17's units where the commodity overlaps a utility), so a downstream consumer never has to guess whether a figure is £/kg, £/L, or £/tonne. Every price figure is expressed in int64 MICRO-POUNDS per that unit (1 GBP = 1,000,000 micro-pounds, M0-ENG §1.2 — the same fixed-point representation engine.finance carries), never a float. \"capacityCeiling\" is a plain integer count in the same unit, the v1 logistics-capacity bound §8's junction/port/rail throughput imposes on how much of a commodity can be imported (or, for waste, exported) per the modelled period — the live JIT queue/day-tick resolution of that capacity belongs to engine.logistics (MOD-025, out of scope here).",
+    "perCommodityUnits": {
+      "water": "L (litres) — §17.1 residential baseline is stated per-litre",
+      "power": "kWh — §17.1 residential baseline is stated per-kWh",
+      "gas": "kWh — §17.1 residential baseline is stated per-kWh; gas is the ninth commodity per ASM-189 (§17.1/§2.2's fourth, separately-networked utility with its own off-map pipeline/LNG channel — not itself a §6 table row, which folds gas CCGT under Power's local-production options only)",
+      "foodStaples": "kg — §17.1 residential baseline is stated per-kg",
+      "foodFresh": "kg — §17.1 residential baseline is stated per-kg",
+      "fuel": "L (litres) — powers logistics itself; import-only v1 (§6: 'None early; synthetic late')",
+      "constructionMaterials": "tonne — every build order consumes materials by weight",
+      "consumerGoods": "kg — demand shaped by wealth & personality mix",
+      "waste": "kg — §17.1 residential household-waste baseline is stated per-kg; priced as an EXPORT cost (exportPriceMicropounds), never an import price (§6's negative-commodity distinction, US-6/AC-6)"
+    }
+  },
+  "commodities": {
+    "water": {
+      "supplyMode": "hybrid",
+      "unit": "L",
+      "importPriceMicropounds": 2000,
+      "capacityCeiling": 5000000,
+      "comment": "§6: import channel road (bowser)/off-map pipe (later); local options boreholes (chalk aquifer, from turn 1), reservoir, desalination (tier 10). Plausible v1 static price, pending M2 Batch tuning — no spec-stated £ figure exists for this commodity."
+    },
+    "power": {
+      "supplyMode": "hybrid",
+      "unit": "kWh",
+      "importPriceMicropounds": 150000,
+      "capacityCeiling": 2000000,
+      "comment": "§6/§2.2: import channel the Sellindge grid tranche (standing charge + per-MWh price in prose, simplified here to a flat per-kWh v1 static price); local options diesel gensets, wind, solar, gas CCGT, nuclear (late). Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "gas": {
+      "supplyMode": "hybrid",
+      "unit": "kWh",
+      "importPriceMicropounds": 70000,
+      "capacityCeiling": 1500000,
+      "comment": "§17.1/§2.2, ASM-189: the ninth commodity — a fourth, separately-networked utility with its own off-map pipeline tranche / LNG-via-port import channel, structurally identical to Power's Sellindge connection. Local option: none at v1 beyond what Power's gas-CCGT local-production entry already covers (gas itself, as a delivered commodity, is import-only in practice at v1, but is tagged hybrid here because an all-electric city can substitute Power for Gas demand per §17.1 — the supply-mode tag describes the commodity's own import/local-production options, not downstream substitutability). Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "foodStaples": {
+      "supplyMode": "hybrid",
+      "unit": "kg",
+      "importPriceMicropounds": 400000,
+      "capacityCeiling": 200000,
+      "comment": "§6: import channel road/port; local options farm plots (harvest calendar, §9), vertical farms (tier 12). Storable — harvest lumps supply. Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "foodFresh": {
+      "supplyMode": "hybrid",
+      "unit": "kg",
+      "importPriceMicropounds": 900000,
+      "capacityCeiling": 100000,
+      "comment": "§6: import channel road/port; local options market gardens, fishing (post-port). Short shelf life — the JIT poster child. Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "fuel": {
+      "supplyMode": "importOnly",
+      "unit": "L",
+      "importPriceMicropounds": 1500000,
+      "capacityCeiling": 300000,
+      "comment": "§6: import channel road/port; local production 'None early; synthetic late' — the only commodity with no v1 local-production option, hence importOnly rather than hybrid (AC-3). Powers logistics itself — a fuel shortage compounds. Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "constructionMaterials": {
+      "supplyMode": "hybrid",
+      "unit": "tonne",
+      "importPriceMicropounds": 45000000,
+      "capacityCeiling": 50000,
+      "comment": "§6: import channel road/port; local options quarry (chalk/aggregate), timber, cement plant. Every build order consumes them — construction competes for the junction. Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "consumerGoods": {
+      "supplyMode": "hybrid",
+      "unit": "kg",
+      "importPriceMicropounds": 3000000,
+      "capacityCeiling": 80000,
+      "comment": "§6: import channel road/port; local options light-to-heavy industry chains. Demand shaped by wealth & personality mix. Plausible v1 static price, pending M2 Batch tuning."
+    },
+    "waste": {
+      "supplyMode": "hybrid",
+      "unit": "kg",
+      "exportPriceMicropounds": 50000,
+      "capacityCeiling": 120000,
+      "comment": "§6: the negative commodity — export channel road (dear), never an import; local options landfill, incinerator (power co-product), recycling reduce the volume that must be exported. Accumulates if unhandled -> health & land value damage. Priced only via exportPriceMicropounds (US-6/AC-6) — this entry deliberately carries no importPriceMicropounds field. Plausible v1 static export price, pending M2 Batch tuning."
+    }
+  }
+}

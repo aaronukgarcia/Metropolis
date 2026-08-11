@@ -28,6 +28,7 @@
       "E300-E399": "reserved for engine.invariant (internal/engine/invariant: the conservation invariant checker — MOD-019. Checked against this table AND `grep -rn \"MET-E3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
       "E400-E499": "reserved for engine.world (internal/engine/world: OS Terrain 50 import, per-cell/tile queries and ownership commands, geology/hydrology derivation, tile purchase — MOD-017. Checked against this table AND `grep -rn \"MET-E4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E4xx code existed either place.)",
       "E500-E599": "reserved for engine.season (internal/engine/season: month-index seasonal curve lookups (power, water, gas, harvest, construction, school intake, leisure mix, health wave) loaded from data/seasonal.json — MOD-027. Checked against this table AND `grep -rn \"MET-E5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior real MET-E5xx code existed either place (source_scan_test.go's own MET-E500/E100 literals are synthetic test fixtures, not raised codes, and do not count).)",
+      "E600-E699": "reserved for engine.market (internal/engine/market: nine-commodity price/availability/supply-mode registry loaded from data/market.json — MOD-020. Checked against this table AND `grep -rn \"MET-E6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E6xx code existed either place.)",
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
@@ -634,6 +635,42 @@
       "message": "data/seasonal.json's \"{curve}\" curve has {qualifying} month(s) >= threshold {threshold}, want exactly 1",
       "remedy": "The school-intake gate (BUG-059) must have exactly one calendar month at or above schoolIntakeGateThreshold — it is consumed as a once-per-year boolean trigger (engine.education's stage-transition gate), not a continuous multiplier. Fix data/seasonal.json's schoolIntakeGate curve so exactly one month qualifies (typically the single month meant to be September under the file's meta.monthIndexConvention); zero qualifying months means intake silently never fires, two or more means it silently double-fires."
     },
+    "MET-E600": {
+      "severity": "error",
+      "module": "engine.market",
+      "message": "data/market.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "Check data/market.json exists, is valid JSON, has a positive \"version\", a \"pricingMode\" of exactly \"static\" (v1 supports no other mode), and every commodity entry has a recognised supplyMode, a non-empty unit, a non-negative capacityCeiling, and exactly one of importPriceMicropounds (every commodity except waste) or exportPriceMicropounds (waste only) — never both, never neither. engine.market never falls back to a silent default-to-zero or default-to-hybrid substitution (GR#15/GR#7)."
+    },
+    "MET-E601": {
+      "severity": "error",
+      "module": "engine.market",
+      "message": "data/market.json is missing required commodity \"{commodity}\"",
+      "remedy": "engine.market requires all nine §6/§17/§2.2 commodities (water, power, gas, foodStaples, foodFresh, fuel, constructionMaterials, consumerGoods, waste) to be present in data/market.json's \"commodities\" map. Add the named commodity — this package's per-entry schema validation does not catch this because it has no notion of which commodity keys this consumer needs."
+    },
+    "MET-E602": {
+      "severity": "error",
+      "module": "engine.market",
+      "message": "unknown commodity \"{commodity}\" requested from MarketAPI",
+      "remedy": "Query MarketAPI only with one of the nine registered CommodityType constants (Water, Power, Gas, FoodStaples, FoodFresh, Fuel, ConstructionMaterials, ConsumerGoods, Waste). §10 non-tradable services (education, healthcare, elder care, fire, police, deathcare, leisure, transport) are never registered commodities — this is the expected not-found result for a service name, not a bug."
+    },
+    "MET-E603": {
+      "severity": "error",
+      "module": "engine.market",
+      "message": "Price() rejected commodity \"{commodity}\": waste is priced only via ExportPrice",
+      "remedy": "Waste is §6's negative commodity — the city pays to export it, never pays a supplier to receive it. Call MarketAPI.ExportPrice(Waste) instead of Price(Waste)."
+    },
+    "MET-E604": {
+      "severity": "error",
+      "module": "engine.market",
+      "message": "ExportPrice() rejected commodity \"{commodity}\": only waste is exported",
+      "remedy": "ExportPrice exists only for Waste (§6's negative commodity). Call MarketAPI.Price for any other commodity's import price."
+    },
+    "MET-E605": {
+      "severity": "fatal",
+      "module": "engine.market",
+      "message": "internal error: commodity \"{commodity}\" record is missing required field \"{field}\" despite passing Load validation",
+      "remedy": "This should be unreachable — Load's foundation/data.MarketFile.Validate and validateCommodityPricingXOR both enforce this field's presence before a *MarketAPI is ever returned, and the commodity map is never mutated afterward. If this fires, either that validation was weakened by a later edit, or a *MarketAPI was constructed by a path that bypasses Load (e.g. a hand-built test fixture); file a BUG item, do not treat the returned MarketAPI as trustworthy."
+    },
     "MET-E900": {
       "severity": "fatal",
       "module": "feat.skeleton",
@@ -825,6 +862,24 @@
       "module": "harness.synth",
       "message": "perf record rejected: PhaseHookCount/PerfResult provenance not marked as measured",
       "remedy": "AppendResult only persists PerfResult values RunPerf itself produced (Measured=true) -- a hand-built PerfResult (e.g. a bare struct literal from a second writer, a hand-edited re-upload) cannot be distinguished from a real measurement once written, so it is rejected before it reaches the results file rather than silently accepted as if RunPerf had produced it (BUG-055). If this is a legitimate new caller, route it through RunPerf, or construct the record via a helper that explicitly sets Measured=true after confirming the figures really came from a real run."
+    },
+    "MET-H309": {
+      "severity": "warn",
+      "module": "harness.synth",
+      "message": "perf CI gate could not evaluate this run: {message}",
+      "remedy": "BUG-071: CompareToBaseline skipped the percentage regression check (ScaleMismatch or BelowNoiseFloor) rather than genuinely passing or failing -- this is NOT a pass. cmd/perfci exits its distinct could-not-evaluate code and does not record this run's measurement as the new baseline. Re-run at a scale/noise level the gate can actually judge (matching CitizenCount/Months against the stored baseline, and comfortably above MinMeasurableDuration) before trusting this commit's perf status either way."
+    },
+    "MET-H310": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf record for preset {preset} at line {line} is not a plausible genuine measurement: {reason}",
+      "remedy": "BUG-085: a value like a negative CitizenCount, Months, or PerMonthTick can never be produced by a real RunPerf call (ValidateParams/RunPerf reject these before any measurement begins) -- this record was rejected as untrustworthy provenance even though its Measured flag was set, and LoadLatestBaseline fell back to the last genuinely plausible record. Investigate how this line reached the results file (hand edit, corrupted-cache restore, manual merge-conflict resolution, re-uploaded/edited artifact) -- do not simply re-flip Measured or edit the value to a positive number without understanding how it got there."
+    },
+    "MET-H311": {
+      "severity": "error",
+      "module": "harness.synth",
+      "message": "perf record for preset {preset} sets AcceptedRegression=true with no AcceptedReason",
+      "remedy": "BUG-083: cmd/perfci's -accept-regression flag (the deliberate, visible way to accept a legitimate slowdown as the new baseline) requires -accept-reason -- a human-readable justification persisted verbatim alongside the accepted measurement. A record claiming an override with no recorded reason is refused as untrustworthy at both the write boundary (AppendResult) and the read boundary (LoadLatestBaseline); re-run cmd/perfci with both flags set to actually accept a regression."
     }
   }
 }

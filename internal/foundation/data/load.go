@@ -163,6 +163,14 @@ func LoadPolicies(dir, correlationID string) (Policies, error) {
 	return Load[Policies, *Policies](filepath.Join(dir, FilePolicies), correlationID)
 }
 
+// LoadMarketFile loads and validates market.json from dir (MOD-020
+// ruling 1 — see market.go's package-level doc comment). Not part of
+// the eight-file §24 set LoadAll aggregates; engine.market.Load calls
+// this directly.
+func LoadMarketFile(dir, correlationID string) (MarketFile, error) {
+	return Load[MarketFile, *MarketFile](filepath.Join(dir, FileMarket), correlationID)
+}
+
 // Config aggregates all eight §24 files loaded by LoadAll. errors.json
 // is deliberately excluded (see the package doc and
 // foundation.data.md's Out of scope section) — foundation.errors owns
