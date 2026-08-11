@@ -84,3 +84,52 @@ test('generate.js gives the documented-exemption pointer for a key listed in kno
     `expected a documented-exemption warning for legacy.versionguard; stderr was:\n${result.stderr}`
   );
 });
+
+const PLAN_PATH = path.join(ROOT, 'docs', 'planning', 'master-plan-v2.1.json');
+
+test('generate.js FAILS validation when a declared collaboration has no matching call edge (BUG-058 part 2 drift check)', () => {
+  const originalRaw = fs.readFileSync(PLAN_PATH, 'utf8');
+  try {
+    const plan = JSON.parse(originalRaw);
+    // engine.core is depended on by nearly everything but is not in
+    // engine.season's calls[] — a safe, real pair to assert a fake
+    // requirement between, proving the check actually inspects calls[]
+    // rather than passing unconditionally.
+    const season = plan.items.find(it => it.key === 'engine.season');
+    assert.ok(season, 'fixture assumption broke: engine.season no longer exists in the master plan');
+    assert.ok(!(season.calls || []).includes('engine.core'), 'fixture assumption broke: engine.season already calls engine.core');
+    season.collaborations = { consumesFrom: ['engine.core'] };
+    fs.writeFileSync(PLAN_PATH, JSON.stringify(plan, null, 2) + '\n', 'utf8');
+
+    const result = spawnSync(process.execPath, [GENERATE_PATH, '--check'], { cwd: ROOT, encoding: 'utf8' });
+
+    assert.notEqual(result.status, 0, `generate.js --check should fail on an unregistered declared collaboration, got exit ${result.status}. stderr:\n${result.stderr}`);
+    assert.match(result.stderr, /MET-T025/, `expected a MET-T025 collaborations-drift error; stderr was:\n${result.stderr}`);
+    assert.ok(
+      result.stderr.includes('engine.season') && result.stderr.includes('engine.core'),
+      `expected the error to name both engine.season and engine.core; stderr was:\n${result.stderr}`
+    );
+  } finally {
+    // Restore byte-for-byte regardless of outcome — this test must never
+    // leave the real master plan mutated.
+    fs.writeFileSync(PLAN_PATH, originalRaw, 'utf8');
+  }
+});
+
+test('generate.js passes validation when a declared collaboration DOES have a matching call edge', () => {
+  const originalRaw = fs.readFileSync(PLAN_PATH, 'utf8');
+  try {
+    const plan = JSON.parse(originalRaw);
+    const build = plan.items.find(it => it.key === 'engine.build');
+    assert.ok(build, 'fixture assumption broke: engine.build no longer exists in the master plan');
+    assert.ok((build.calls || []).includes('engine.season'), 'fixture assumption broke: engine.build no longer calls engine.season — has BUG-058\'s edge regressed?');
+    build.collaborations = { consumesFrom: ['engine.season'] };
+    fs.writeFileSync(PLAN_PATH, JSON.stringify(plan, null, 2) + '\n', 'utf8');
+
+    const result = spawnSync(process.execPath, [GENERATE_PATH, '--check'], { cwd: ROOT, encoding: 'utf8' });
+
+    assert.equal(result.status, 0, `generate.js --check should pass when the declared collaboration is already realized as a call edge. stderr:\n${result.stderr}`);
+  } finally {
+    fs.writeFileSync(PLAN_PATH, originalRaw, 'utf8');
+  }
+});

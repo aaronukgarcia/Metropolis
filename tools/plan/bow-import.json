@@ -153,6 +153,24 @@
       ]
     },
     {
+      "mkey": "tool.codenameguard",
+      "type": "feature",
+      "title": "Codename discipline guard hook: commits/pushes blocked when the reference title's real name reaches git",
+      "desc": "claude-codename-guard.js (PreToolUse on git commit/push): enforces GR#22 — the reference title is 'Blue' and only 'Blue'; its real name, abbreviations and numbered form must never enter git (code, data, docs, comments, commit messages, branch names). Scans staged added lines (git diff --cached), the commit message/command text, and the current branch name; patterns are assembled from fragments at runtime so the guard's own source never carries the forbidden literal. Fail-closed (a miss is permanent and public once the repo is public); CLAUDE_DISABLE_CODENAME_GUARD=1 escape hatch for genuine false positives only. [spec: GR#22; M0-ENG §5 (hooks)] [path: claude-codename-guard.js]",
+      "seq": 69,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "GR#22; M0-ENG §5 (hooks)",
+      "guid": "7ece8624-f4d5-4883-b359-f39ec5a86a1c",
+      "guidIn": "c7cc677e-7b4c-42e4-a6fc-6dc8b310237e",
+      "guidOut": "23fb4037-5bac-4dcb-aaa0-ba8cd61313e5",
+      "deps": [
+        "plan.pipeline"
+      ]
+    },
+    {
       "mkey": "foundation.det",
       "type": "module",
       "title": "Determinism core: 256 shards, phase barriers, counter RNG, fixed-point money",
@@ -222,6 +240,60 @@
       "guidOut": "43ad10cc-454d-47df-a707-918c9425cd4e",
       "deps": [
         "foundation.repo"
+      ]
+    },
+    {
+      "mkey": "tool.dispatchguard",
+      "type": "feature",
+      "title": "Dispatch guard hook: agent briefs checked against the BOW before send",
+      "desc": "claude-dispatch-guard.js (PreToolUse on the Agent tool): checks look-up-able facts in a dispatch brief before it is sent — cited BOW codes exist, a brief's stated module key agrees with that item's real BOW mkey, acceptance criteria the brief asks for don't already exist at docs/planning/acceptance/<mkey>.md, and declared file ownership doesn't overlap another live session's claim (via sync_file_claims) — with non-existent paths warned, not blocked. Fail-open (its own bug must not halt the team); CLAUDE_DISABLE_DISPATCH_GUARD=1 escape hatch. Born from an eight-error dispatch wave on 2026-08-10 where seven of eight errors were mechanically checkable facts asserted from memory. [spec: GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG §5 (hooks)] [path: claude-dispatch-guard.js]",
+      "seq": 96,
+      "sprint": 0,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG §5 (hooks)",
+      "guid": "3432a4da-1784-4a37-9273-45a0af4c075a",
+      "guidIn": "4ba93212-cf29-4d6d-8b12-c4c1c5ea8285",
+      "guidOut": "e642f1eb-26c9-4556-9e0a-0eda9f0af0c8",
+      "deps": [
+        "plan.pipeline"
+      ]
+    },
+    {
+      "mkey": "tool.authorguard",
+      "type": "feature",
+      "title": "Commit-identity guard hook: commits blocked when author/committer email isn't a sanctioned identity",
+      "desc": "claude-author-guard.js (PreToolUse on git commit): derives a sanctioned email set at runtime — the configured `git config user.email` (unconditional), emails appearing >=3 times as author or committer in trunk history, and an operator-set CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES extension list (GR#15: no hardcoded identities) — and denies a commit whose resolved author or committer email (explicit --author, GIT_AUTHOR_*/GIT_COMMITTER_* env overrides, or config fallback) isn't in that set. Matches by email only, not name+email. Fail-closed; CLAUDE_DISABLE_AUTHOR_GUARD=1 escape hatch. Born from BUG-035 (a stray test-identity commit created locally on main the same day the repo went public and its history was rewritten to control identity). [spec: BUG-035; GR#2; M0-ENG §5 (hooks)] [path: claude-author-guard.js]",
+      "seq": 97,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "BUG-035; GR#2; M0-ENG §5 (hooks)",
+      "guid": "16fe87f3-5d1e-4784-9c27-d34e71f77407",
+      "guidIn": "11ab3a4a-e69e-469e-8d99-5c3af26775c4",
+      "guidOut": "e96b4be2-f266-46a7-922a-40ed4a296385",
+      "deps": [
+        "plan.pipeline"
+      ]
+    },
+    {
+      "mkey": "tool.astgate",
+      "type": "feature",
+      "title": "AST-derived copy-guard CI gate: mechanically replaces the hand copyable-struct sweep",
+      "desc": "internal/foundation/astgate/ (a real Go package, not a root Node hook — mirrors internal/foundation/errs/source_scan_test.go's AST-scan approach): walks cmd/ and internal/ source (excluding _test.go) to enumerate every candidate type (a struct mixing a sync.Mutex/RWMutex value field with an aliasable reference field) and every function that can receive one, by receiver METHOD OR by PACKAGE-LEVEL PARAMETER (the blind spot — errs.SetSink(l *Logger) — that let SEC-031 escape nine hand enumerations by four agents); flags any such function with no checkNotCopied-shaped identity guard as a hard CI violation, and separately flags (advisory-only) a guarded rejection path that writes into a shared bounded resource. No hardcoded type list or count (GR#15). Wired into the existing build-test-vet CI job per Bill's 2026-08-10 ruling (ASM-111). Filed under tool.* rather than foundation.errors deliberately (Bill's ruling on ASM-112): it is a cross-cutting repo-wide gate, not a package the code it audits belongs to. [spec: BUG-024; GR#15; GR#20; GR#21; docs/planning/acceptance/tool.astgate.md] [path: internal/foundation/astgate/]",
+      "seq": 98,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "BUG-024; GR#15; GR#20; GR#21; docs/planning/acceptance/tool.astgate.md",
+      "guid": "2e729a3d-8bd4-499d-9051-61af3ac23b13",
+      "guidIn": "a43c9652-cf4c-4624-9e22-f431ee850374",
+      "guidOut": "e46ebfdd-bb93-47b4-a2a8-d393da496b88",
+      "deps": [
+        "foundation.errors"
       ]
     },
     {

@@ -16,9 +16,12 @@
  * GUID stability: on regeneration, GUIDs are carried over from the existing
  * code.json (keyed by module key), so references never churn (GR#6).
  * Validation before any output (GR#1): unique keys/seqs, known deps/calls,
- * acyclic dependency graph. Errors are collected and reported together with
- * tool error codes MET-T0xx; the script writes nothing unless everything
- * validates.
+ * acyclic dependency graph, and (BUG-058) collaborations drift — an item's
+ * optional `collaborations: { consumesFrom, suppliesTo }` field records a
+ * spec-derived requirement that a call edge must exist; validation fails if
+ * a declared collaboration has no matching entry in calls[]/consumers[].
+ * Errors are collected and reported together with tool error codes MET-T0xx;
+ * the script writes nothing unless everything validates.
  *
  * Usage: node tools/plan/generate.js [--check]   (--check validates only)
  */
@@ -90,6 +93,42 @@ for (const it of items) {
   for (const call of it.calls || []) {
     if (call === it.key) errors.push(`MET-T022 "${it.key}": calls itself`);
     else if (!byKey.has(call)) errors.push(`MET-T023 "${it.key}": unknown call target "${call}"`);
+  }
+}
+// Collaborations drift check (BUG-058 part 2): an optional per-item
+// `collaborations: { consumesFrom: [...], suppliesTo: [...] }` field records
+// a spec-derived requirement — "the GDD says these two modules must
+// collaborate" — captured as data at the moment a BA/dev reads the spec,
+// instead of staying implicit in a specRef citation string or a BOW comment.
+// It is deliberately NOT a duplicate of `calls`/`consumers`: `calls` is the
+// realized wiring (and `consumers` is mechanically derived FROM `calls`, so
+// those two can never drift apart from each other — see the BA-Registry
+// symmetry sweep on BUG-058). `collaborations` is the separate claim "the
+// spec requires this edge to exist", authored independently of whether the
+// edge has been wired yet. The check below is one-directional on purpose: a
+// declared collaboration with no realized edge is an error (the exact class
+// of defect BUG-058 catalogued — a spec-mandated call path a GR#20-compliant
+// developer has no legal way to make); a realized `calls` edge with no
+// matching collaboration entry is NOT an error, since most edges are
+// legitimate architecture that nobody needs to have footnoted from a spec
+// citation, and demanding 100% collaboration coverage would just recreate
+// the "two places to keep in sync" duplication risk this field exists to
+// avoid.
+for (const it of items) {
+  const collab = it.collaborations;
+  if (!collab) continue;
+  for (const target of collab.consumesFrom || []) {
+    if (!byKey.has(target)) { errors.push(`MET-T025 "${it.key}": collaborations.consumesFrom references unknown module "${target}"`); continue; }
+    if (!(it.calls || []).includes(target)) {
+      errors.push(`MET-T025 "${it.key}": declares collaborations.consumesFrom "${target}" but has no "${target}" in its own calls[] — spec-mandated edge is not registered`);
+    }
+  }
+  for (const target of collab.suppliesTo || []) {
+    if (!byKey.has(target)) { errors.push(`MET-T025 "${it.key}": collaborations.suppliesTo references unknown module "${target}"`); continue; }
+    const supplier = byKey.get(target);
+    if (!(supplier.calls || []).includes(it.key)) {
+      errors.push(`MET-T025 "${it.key}": declares collaborations.suppliesTo "${target}" but "${target}".calls[] does not include "${it.key}" — spec-mandated edge is not registered`);
+    }
   }
 }
 // Acyclicity of the dependency graph (Kahn).

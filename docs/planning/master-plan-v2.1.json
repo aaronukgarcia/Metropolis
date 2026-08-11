@@ -596,9 +596,15 @@
       ],
       "calls": [
         "engine.core",
-        "int.serializer"
+        "int.serializer",
+        "engine.invariant"
       ],
-      "sprint": 3
+      "sprint": 3,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.invariant"
+        ]
+      }
     },
     {
       "key": "engine.invariant",
@@ -617,7 +623,12 @@
       "calls": [
         "engine.core"
       ],
-      "sprint": 2
+      "sprint": 2,
+      "inbound": {
+        "name": "InvariantAPI",
+        "format": "Go package API: RegisterStock(name string, snapshot func() int64) called once per conserved stock at module init",
+        "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, §14, §19.3); violation is a hard assert in dev builds, a registry error in release"
+      }
     },
     {
       "key": "engine.market",
@@ -670,9 +681,15 @@
         "engine.world",
         "foundation.data",
         "engine.market",
-        "engine.season"
+        "engine.season",
+        "engine.finance"
       ],
-      "sprint": 4
+      "sprint": 4,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.finance"
+        ]
+      }
     },
     {
       "key": "engine.finance",
@@ -697,9 +714,19 @@
       "calls": [
         "engine.core",
         "engine.market",
-        "engine.world"
+        "engine.world",
+        "engine.consumption",
+        "engine.invariant",
+        "engine.projections"
       ],
-      "sprint": 4
+      "sprint": 4,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.consumption",
+          "engine.invariant",
+          "engine.projections"
+        ]
+      }
     },
     {
       "key": "engine.traffic",
@@ -726,9 +753,15 @@
         "engine.world",
         "int.solver",
         "engine.citizens",
-        "engine.roads"
+        "engine.roads",
+        "engine.invariant"
       ],
-      "sprint": 5
+      "sprint": 5,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.invariant"
+        ]
+      }
     },
     {
       "key": "engine.roads",
@@ -810,9 +843,15 @@
         "engine.world",
         "engine.finance",
         "engine.logistics",
-        "foundation.data"
+        "foundation.data",
+        "engine.season"
       ],
-      "sprint": 6
+      "sprint": 6,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.season"
+        ]
+      }
     },
     {
       "key": "engine.season",
@@ -917,9 +956,15 @@
       "calls": [
         "engine.attract",
         "engine.build",
-        "engine.world"
+        "engine.world",
+        "engine.finance"
       ],
-      "sprint": 7
+      "sprint": 7,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.finance"
+        ]
+      }
     },
     {
       "key": "engine.projections",
@@ -1029,9 +1074,19 @@
         "engine.citizens",
         "engine.traffic",
         "engine.services",
-        "engine.consumption"
+        "engine.consumption",
+        "engine.season",
+        "engine.shopping",
+        "engine.world"
       ],
-      "sprint": 7
+      "sprint": 7,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.season",
+          "engine.shopping",
+          "engine.world"
+        ]
+      }
     },
     {
       "key": "engine.extcommute",
@@ -1421,9 +1476,15 @@
       "calls": [
         "engine.logistics",
         "engine.services",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "engine.farming"
       ],
-      "sprint": 9
+      "sprint": 9,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.farming"
+        ]
+      }
     },
     {
       "key": "engine.dispatch",
@@ -1448,9 +1509,15 @@
       "calls": [
         "engine.traffic",
         "engine.services",
-        "engine.world"
+        "engine.world",
+        "engine.projections"
       ],
-      "sprint": 9
+      "sprint": 9,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.projections"
+        ]
+      }
     },
     {
       "key": "engine.education",
@@ -1477,9 +1544,15 @@
         "engine.citizens",
         "engine.services",
         "engine.season",
-        "engine.traffic"
+        "engine.traffic",
+        "engine.projections"
       ],
-      "sprint": 9
+      "sprint": 9,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.projections"
+        ]
+      }
     },
     {
       "key": "engine.crime",
@@ -1588,9 +1661,15 @@
         "engine.world",
         "engine.market",
         "engine.season",
-        "engine.consumption"
+        "engine.consumption",
+        "engine.refuse"
       ],
-      "sprint": 11
+      "sprint": 11,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.refuse"
+        ]
+      }
     },
     {
       "key": "engine.mining",
@@ -1698,9 +1777,15 @@
       "calls": [
         "engine.services",
         "engine.finance",
-        "engine.projections"
+        "engine.projections",
+        "engine.prison"
       ],
-      "sprint": 10
+      "sprint": 10,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.prison"
+        ]
+      }
     },
     {
       "key": "engine.shopping",
@@ -1803,9 +1888,15 @@
       "calls": [
         "engine.services",
         "engine.citizens",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "engine.projections"
       ],
-      "sprint": 9
+      "sprint": 9,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.projections"
+        ]
+      }
     },
     {
       "key": "engine.cafe",
@@ -1882,9 +1973,15 @@
       ],
       "calls": [
         "engine.crime",
-        "engine.services"
+        "engine.services",
+        "engine.capexport"
       ],
-      "sprint": 11
+      "sprint": 11,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.capexport"
+        ]
+      }
     },
     {
       "key": "engine.tourism",
@@ -2103,9 +2200,15 @@
       "calls": [
         "engine.projections",
         "engine.tax",
-        "foundation.data"
+        "foundation.data",
+        "engine.finance"
       ],
-      "sprint": 9
+      "sprint": 9,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.finance"
+        ]
+      }
     },
     {
       "key": "engine.tunnels",
@@ -2321,6 +2424,74 @@
       "path": "claude-bow.js + .claude/commands/sprint.md",
       "deps": [
         "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.codenameguard",
+      "type": "feature",
+      "seq": 69,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Codename discipline guard hook: commits/pushes blocked when the reference title's real name reaches git",
+      "desc": "claude-codename-guard.js (PreToolUse on git commit/push): enforces GR#22 — the reference title is 'Blue' and only 'Blue'; its real name, abbreviations and numbered form must never enter git (code, data, docs, comments, commit messages, branch names). Scans staged added lines (git diff --cached), the commit message/command text, and the current branch name; patterns are assembled from fragments at runtime so the guard's own source never carries the forbidden literal. Fail-closed (a miss is permanent and public once the repo is public); CLAUDE_DISABLE_CODENAME_GUARD=1 escape hatch for genuine false positives only.",
+      "specRef": "GR#22; M0-ENG §5 (hooks)",
+      "path": "claude-codename-guard.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.dispatchguard",
+      "type": "feature",
+      "seq": 96,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Dispatch guard hook: agent briefs checked against the BOW before send",
+      "desc": "claude-dispatch-guard.js (PreToolUse on the Agent tool): checks look-up-able facts in a dispatch brief before it is sent — cited BOW codes exist, a brief's stated module key agrees with that item's real BOW mkey, acceptance criteria the brief asks for don't already exist at docs/planning/acceptance/<mkey>.md, and declared file ownership doesn't overlap another live session's claim (via sync_file_claims) — with non-existent paths warned, not blocked. Fail-open (its own bug must not halt the team); CLAUDE_DISABLE_DISPATCH_GUARD=1 escape hatch. Born from an eight-error dispatch wave on 2026-08-10 where seven of eight errors were mechanically checkable facts asserted from memory.",
+      "specRef": "GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG §5 (hooks)",
+      "path": "claude-dispatch-guard.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.authorguard",
+      "type": "feature",
+      "seq": 97,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Commit-identity guard hook: commits blocked when author/committer email isn't a sanctioned identity",
+      "desc": "claude-author-guard.js (PreToolUse on git commit): derives a sanctioned email set at runtime — the configured `git config user.email` (unconditional), emails appearing >=3 times as author or committer in trunk history, and an operator-set CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES extension list (GR#15: no hardcoded identities) — and denies a commit whose resolved author or committer email (explicit --author, GIT_AUTHOR_*/GIT_COMMITTER_* env overrides, or config fallback) isn't in that set. Matches by email only, not name+email. Fail-closed; CLAUDE_DISABLE_AUTHOR_GUARD=1 escape hatch. Born from BUG-035 (a stray test-identity commit created locally on main the same day the repo went public and its history was rewritten to control identity).",
+      "specRef": "BUG-035; GR#2; M0-ENG §5 (hooks)",
+      "path": "claude-author-guard.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.astgate",
+      "type": "feature",
+      "seq": 98,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "AST-derived copy-guard CI gate: mechanically replaces the hand copyable-struct sweep",
+      "desc": "internal/foundation/astgate/ (a real Go package, not a root Node hook — mirrors internal/foundation/errs/source_scan_test.go's AST-scan approach): walks cmd/ and internal/ source (excluding _test.go) to enumerate every candidate type (a struct mixing a sync.Mutex/RWMutex value field with an aliasable reference field) and every function that can receive one, by receiver METHOD OR by PACKAGE-LEVEL PARAMETER (the blind spot — errs.SetSink(l *Logger) — that let SEC-031 escape nine hand enumerations by four agents); flags any such function with no checkNotCopied-shaped identity guard as a hard CI violation, and separately flags (advisory-only) a guarded rejection path that writes into a shared bounded resource. No hardcoded type list or count (GR#15). Wired into the existing build-test-vet CI job per Bill's 2026-08-10 ruling (ASM-111). Filed under tool.* rather than foundation.errors deliberately (Bill's ruling on ASM-112): it is a cross-cutting repo-wide gate, not a package the code it audits belongs to.",
+      "specRef": "BUG-024; GR#15; GR#20; GR#21; docs/planning/acceptance/tool.astgate.md",
+      "path": "internal/foundation/astgate/",
+      "deps": [
+        "foundation.errors"
       ],
       "calls": [],
       "sprint": 0
