@@ -43,8 +43,8 @@ func TestImportAndPlaceStartTilePreservesOwnershipAndProspecting(t *testing.T) {
 	if err != nil || !before.Owned {
 		t.Fatalf("setup check failed: expected start tile owned before reimport, got %+v err=%v", before, err)
 	}
-	if !api.IsProspected(startCoord) {
-		t.Fatal("setup check failed: expected start tile prospected before reimport")
+	if prospected, err := api.IsProspected(startCoord); err != nil || !prospected {
+		t.Fatalf("setup check failed: expected start tile prospected before reimport, got prospected=%v err=%v", prospected, err)
 	}
 	cellBefore, err := api.CellAt(startCoord, CellLocal{Row: 0, Col: 0}, "test-corr")
 	if err != nil || cellBefore.Owner != 42 || cellBefore.Zoning != ZoningResidential {
@@ -66,8 +66,8 @@ func TestImportAndPlaceStartTilePreservesOwnershipAndProspecting(t *testing.T) {
 	if after.OwnerID != 42 {
 		t.Fatalf("BUG-062 regression: expected OwnerID to survive reimport as 42, got %d", after.OwnerID)
 	}
-	if !api.IsProspected(startCoord) {
-		t.Fatal("BUG-062 regression: expected start tile still IsProspected after reimport")
+	if prospected, err := api.IsProspected(startCoord); err != nil || !prospected {
+		t.Fatalf("BUG-062 regression: expected start tile still IsProspected after reimport, got prospected=%v err=%v", prospected, err)
 	}
 	cellAfter, err := api.CellAt(startCoord, CellLocal{Row: 0, Col: 0}, "test-corr")
 	if err != nil {

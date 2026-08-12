@@ -1,6 +1,11 @@
 package world
 
-import "sync"
+import (
+	"sync"
+	"sync/atomic"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+)
 
 // This file is engine.world's storage layer: the §2.3 2x2km tile grid
 // over the ~60x60km expansion extent, and each tile's per-cell state
@@ -120,6 +125,32 @@ type World struct {
 	startCoord    TileCoord
 	startHeight   [][]float32 // the imported, compressed start-tile heightmap (200x200), or nil pre-import
 	milestoneTier int
+
+	// self holds the address NewWorld gave this World at construction
+	// (self.Store(w), set once, at the end of NewWorld, never stored to
+	// again). It is BUG-064's fix, mirroring engine.core's
+	// Engine.self/checkNotCopied (SEC-014/SEC-016) EXACTLY (ASM-427; GR#3
+	// — don't invent a new pattern): `w2 := *w` is legal, unsafe-free,
+	// reflect-free Go — every field of World is unexported, but that
+	// does not stop a caller from dereferencing the *World NewWorld
+	// returned and copying the struct value. mu is a plain value, so the
+	// copy w2 gets its OWN, independently-zeroed mu — but w2.tiles (a
+	// map, a reference type) still ALIASES w.tiles, and w2.self still
+	// points at the ORIGINAL w (copied by value, unchanged). That is
+	// exactly the signal a copy cannot erase: checkNotCopied compares
+	// the receiver's own address against self, and a copy's address can
+	// never equal the original's.
+	//
+	// atomic.Pointer[World], not a plain *World, for the same reason
+	// SEC-016 forced Engine.self's type: a plain, unsynchronized field
+	// read done lock-free, concurrently with a struct copy that touches
+	// the whole struct's memory as one operation, has no defined result
+	// in the Go memory model unless the read itself is a properly
+	// synchronized operation. Store happens exactly once, in NewWorld,
+	// before any goroutine can have a reference to w to race against;
+	// every subsequent Load is a single lock-free atomic read requiring
+	// nothing else — not mu, nothing a copy could have captured mid-lock.
+	self atomic.Pointer[World]
 }
 
 // NewWorld constructs an empty World. startCoord is the tile that will
@@ -127,11 +158,34 @@ type World struct {
 // runs; every other tile falls back to the deterministic synthetic
 // terrain model until a real importer run replaces it.
 func NewWorld(startCoord TileCoord) *World {
-	return &World{
+	w := &World{
 		tiles:         make(map[TileCoord]*tile),
 		startCoord:    startCoord,
 		milestoneTier: 1,
 	}
+	// Stored exactly once, here, before w is returned to any caller — no
+	// goroutine can have a reference to w to race this Store against
+	// (BUG-064, mirroring engine.core's NewEngine; see self's doc
+	// comment above).
+	w.self.Store(w)
+	return w
+}
+
+// checkNotCopied reports whether the receiver is a struct copy of some
+// other World value (BUG-064, mirroring engine.core's
+// Engine.checkNotCopied exactly — SEC-014/SEC-016 family). Deliberately
+// lock-free — a single atomic.Pointer.Load, requiring nothing else, not
+// w.mu, not any other field — so it is safe and correct to call BEFORE
+// w.mu is ever touched. A nil w.self.Load() (a World constructed as a
+// bare `World{}`/`new(World)` rather than via NewWorld, so self was
+// never stored) is treated the same as a mismatch and rejected the same
+// way — every documented construction path is NewWorld, so an unset
+// self is itself a misuse this same error correctly names.
+func (w *World) checkNotCopied(correlationID string, ctx map[string]any) error {
+	if w.self.Load() != w {
+		return errs.New(ErrWorldCopied, correlationID, ctx)
+	}
+	return nil
 }
 
 // ensureTile returns the tile at c, generating its terrain on first
@@ -145,9 +199,21 @@ func NewWorld(startCoord TileCoord) *World {
 // that nested pattern is a self-deadlock, not a correctness nuance
 // (caught by concurrency_test.go's -race run during dispatch; see the
 // dispatch report).
-func (w *World) ensureTile(c TileCoord) *tile {
+//
+// BUG-064 (AC-27): astgate's live-tree scan names this exact function as
+// an unguarded reachable function for the World candidate type — it
+// calls checkNotCopied itself, defence-in-depth on top of every
+// *WorldAPI caller's own pre-lock check, exactly mirroring engine.core's
+// RegisterPhaseHook/seal double-check pattern (once before mu, once
+// again after — see Engine.self's doc comment). Returns an error rather
+// than panicking (GR#1: match engine.core's established failure mode,
+// never invent a new one).
+func (w *World) ensureTile(c TileCoord) (*tile, error) {
+	if err := w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": c}); err != nil {
+		return nil, err
+	}
 	if t := w.tiles[c]; t != nil {
-		return t
+		return t, nil
 	}
 	t := &tile{coord: c}
 	if c == w.startCoord && w.startHeight != nil {
@@ -158,5 +224,5 @@ func (w *World) ensureTile(c TileCoord) *tile {
 	t.geology = deriveGeology(c)
 	t.onLand = classifyLandSea(c)
 	w.tiles[c] = t
-	return t
+	return t, nil
 }

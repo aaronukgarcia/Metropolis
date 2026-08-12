@@ -1,5 +1,7 @@
 package world
 
+import "github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+
 // This file is §2.3's tile pricing model (AC-11): "Tile price scales with
 // terrain quality, adjacency to your city, and milestone tier" — a
 // function of all three, never a flat per-tile constant.
@@ -54,7 +56,16 @@ func milestoneTierFactor(tier int) float64 {
 // lock on w (or be inside a write-locked section already, e.g.
 // PurchaseTile) since it reads neighbour ownership state directly off
 // w.tiles without its own locking.
-func (w *World) tilePrice(t *tile) float64 {
+//
+// BUG-064 (AC-27): astgate's live-tree scan names this exact function as
+// an unguarded reachable function for the World candidate type — see
+// ensureTile's doc comment (grid.go) for why this defence-in-depth call
+// is correct even though every *WorldAPI caller already checks before
+// taking the lock.
+func (w *World) tilePrice(t *tile) (float64, error) {
+	if err := w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": t.coord}); err != nil {
+		return 0, err
+	}
 	ownedNeighbors := 0
 	for _, off := range [4][2]int{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
 		nc := TileCoord{X: t.coord.X + off[0], Y: t.coord.Y + off[1]}
@@ -65,5 +76,5 @@ func (w *World) tilePrice(t *tile) float64 {
 			ownedNeighbors++
 		}
 	}
-	return basePricePerTile * terrainQualityFactor(t) * adjacencyFactor(ownedNeighbors) * milestoneTierFactor(w.milestoneTier)
+	return basePricePerTile * terrainQualityFactor(t) * adjacencyFactor(ownedNeighbors) * milestoneTierFactor(w.milestoneTier), nil
 }

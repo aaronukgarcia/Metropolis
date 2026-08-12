@@ -187,6 +187,127 @@ func TestCompressVIsNonLinear_ProvenFail(t *testing.T) {
 	}
 }
 
+// TestCompressVControlPoints is BUG-065's regression test: pins the
+// SPECIFIC piecewise-linear compression curve compressBreakpoints
+// defines, not merely "some monotonic non-linear function whose
+// downstream elevation-band sample happens to land in a plausible
+// range" (SEC-043's own fix, AC-30, is exactly that weaker property —
+// see this test's ProvenFail-style companions below for why it is not
+// enough on its own).
+//
+// Exact expected values, derived from compressBreakpoints' REAL current
+// control points (compression.go: {0,0}, {0.75,0.55}, {1,1} — self-
+// checked below per GR#15, so this test fails loudly rather than
+// silently degrading if those constants ever change):
+//
+//   - compressV(0.75): 0.75 is exactly the second breakpoint's outputV,
+//     so the piecewise-linear interpolation returns its realV
+//     UNCHANGED: 0.55 exactly (t=(0.75-0)/(0.75-0)=1.0 on the first
+//     segment). BUG-065's own suggested tolerance: [0.53, 0.57].
+//   - compressV(0.375): the midpoint of the first segment [0, 0.75].
+//     t=(0.375-0)/(0.75-0)=0.5, so realV = 0 + 0.5*(0.55-0) = 0.275
+//     exactly. Tight tolerance: [0.271, 0.279] (+-0.004) — chosen
+//     tight enough that BOTH of BUG-065's own live-verified
+//     counterexamples fail it (see the two companion tests below),
+//     which is the concrete bar AC-32b sets rather than a subjective
+//     "tight enough".
+//
+// Live-verified (disposable `git worktree add --detach HEAD`, real repo
+// untouched, worktree removed after use): with the REAL compressV body
+// replaced in-place by (1) the power-law v^1.5 substitution and (2) the
+// alt-breakpoint (0.70,0.50) curve, THIS test fails both times —
+// `compressV(0.75) = 0.6495 / 0.5833, want in [0.53,0.57]` — and passes
+// again once the mutation is reverted. The two companion tests below
+// reproduce both curves as disposable LOCAL functions (compressV itself
+// is never mutated in the real tree) purely so the discrimination proof
+// runs as part of the normal `go test` suite without needing a worktree
+// every time.
+func TestCompressVControlPoints(t *testing.T) {
+	// GR#15 self-check: this test's expected values are only valid
+	// while compressBreakpoints' middle control point is (0.75, 0.55).
+	// If it ever changes, this test must fail loudly rather than keep
+	// silently asserting stale numbers against a moved curve.
+	if len(compressBreakpoints) != 3 ||
+		compressBreakpoints[1][0] != 0.75 || compressBreakpoints[1][1] != 0.55 {
+		t.Fatalf("test assumption broken: compressBreakpoints' middle control point changed from (0.75,0.55) to %v — recompute this test's expected control-point values from the new breakpoints before trusting it", compressBreakpoints)
+	}
+
+	if got := compressV(0.75); got < 0.53 || got > 0.57 {
+		t.Fatalf("compressV(0.75) = %.4f, want in [0.53,0.57] (exact value under the real curve: 0.55)", got)
+	}
+	if got := compressV(0.375); got < 0.271 || got > 0.279 {
+		t.Fatalf("compressV(0.375) = %.4f, want in [0.271,0.279] (exact value under the real curve: 0.275)", got)
+	}
+}
+
+// TestCompressVControlPoints_RejectsPowerLawCounterexample is BUG-065's
+// own live-verified counterexample #1: a power-law curve
+// compressV(v)=v^1.5 — a genuinely different, wrong non-linear mapping,
+// NOT the spec's piecewise-linear breakpoints and NOT identity — that
+// Destructive-3 proved passes SEC-043's own corridorBandElev assertion
+// AND TestCompressVIsNonLinear unchanged. Reproduces the curve here as a
+// disposable local function (compressV itself is never mutated — the
+// real repo stays untouched) and confirms TestCompressVControlPoints'
+// own two assertions correctly reject it, closing the exact gap BUG-065
+// named.
+func TestCompressVControlPoints_RejectsPowerLawCounterexample(t *testing.T) {
+	powerLawV15 := func(v float64) float64 {
+		// v^1.5 = v * sqrt(v), computed without importing math (mirrors
+		// the BA's own scratch-repro technique) via a few Newton
+		// iterations — precision to several decimal places is more
+		// than enough to clear or miss a +-0.004/+-0.02 band.
+		if v <= 0 {
+			return 0
+		}
+		x := v
+		for i := 0; i < 30; i++ {
+			x = 0.5 * (x + v/x)
+		}
+		return v * x
+	}
+
+	got75 := powerLawV15(0.75)
+	got375 := powerLawV15(0.375)
+	fail75 := got75 < 0.53 || got75 > 0.57
+	fail375 := got375 < 0.271 || got375 > 0.279
+	if !fail75 && !fail375 {
+		t.Fatalf("sanity check failed: expected the power-law substitution (v^1.5) to fail at LEAST one of TestCompressVControlPoints' two bands — got compressV(0.75)=%.4f (band [0.53,0.57]), compressV(0.375)=%.4f (band [0.271,0.279]); if both are now inside band, TestCompressVControlPoints is no longer discriminating this counterexample", got75, got375)
+	}
+	t.Logf("power-law v^1.5 counterexample: compressV(0.75)=%.4f (want [0.53,0.57], fail=%v), compressV(0.375)=%.4f (want [0.271,0.279], fail=%v) — correctly rejected", got75, fail75, got375, fail375)
+}
+
+// TestCompressVControlPoints_RejectsAltBreakpointCounterexample is
+// BUG-065's own live-verified counterexample #2: the same piecewise-
+// linear SHAPE as the real curve, but with the wrong breakpoint —
+// (0.70, 0.50) instead of the real (0.75, 0.55) — which Destructive-3
+// also proved passes every existing test unchanged. Reproduces the
+// alternative curve locally (real compressBreakpoints untouched) and
+// confirms TestCompressVControlPoints' assertions reject it too.
+func TestCompressVControlPoints_RejectsAltBreakpointCounterexample(t *testing.T) {
+	altBreakpoints := [][2]float64{{0.0, 0.0}, {0.70, 0.50}, {1.0, 1.0}}
+	altCompressV := func(outputV float64) float64 {
+		last := len(altBreakpoints) - 1
+		for i := 0; i < last; i++ {
+			x0, y0 := altBreakpoints[i][0], altBreakpoints[i][1]
+			x1, y1 := altBreakpoints[i+1][0], altBreakpoints[i+1][1]
+			if outputV >= x0 && outputV <= x1 {
+				t := (outputV - x0) / (x1 - x0)
+				return y0 + t*(y1-y0)
+			}
+		}
+		return altBreakpoints[last][1]
+	}
+
+	got75 := altCompressV(0.75)
+	got375 := altCompressV(0.375)
+	fail75 := got75 < 0.53 || got75 > 0.57
+	fail375 := got375 < 0.271 || got375 > 0.279
+	if !fail75 && !fail375 {
+		t.Fatalf("sanity check failed: expected the alt-breakpoint (0.70,0.50) substitution to fail at LEAST one of TestCompressVControlPoints' two bands — got compressV(0.75)=%.4f (band [0.53,0.57]), compressV(0.375)=%.4f (band [0.271,0.279])", got75, got375)
+	}
+	t.Logf("alt-breakpoint (0.70,0.50) counterexample: compressV(0.75)=%.4f (want [0.53,0.57], fail=%v), compressV(0.375)=%.4f (want [0.271,0.279], fail=%v) — correctly rejected", got75, fail75, got375, fail375)
+}
+
 func TestCompressVMonotonicAndBounded(t *testing.T) {
 	prev := -1.0
 	for i := 0; i <= 100; i++ {

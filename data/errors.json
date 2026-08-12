@@ -19,6 +19,7 @@
       "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
       "F500-F599": "reserved for foundation.repo (build info, CI)",
       "F600-F699": "reserved for foundation.data (internal/foundation/data: the §24 typed config loaders, data-dir resolution, and hot-reload path — F400-F499 is already claimed by foundation.solver, so this module's delivery report picked the first free F-sub-range instead)",
+      "F700-F799": "reserved for tool.astgate (internal/foundation/astgate: the BUG-024 mechanical copy-guard gate — SEC-048's conversion of loadPackages'/resolveRepoRoot's bare fmt.Errorf sites to registry-sourced errors, since astgate physically lives inside the F/foundation layer's own path scope and, unlike SEC-040's dev-only gen/main.go, is a real compiled/CI-gated tool run inside go test ./...'s build-test-vet job. Checked against this table AND `grep -rn \"MET-F7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-F7xx code existed either place.)",
       "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
       "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)",
       "U200-U299": "reserved for ui.screen.debug (F12 info panel: pane-unavailable states)",
@@ -226,6 +227,24 @@
       "module": "foundation.data",
       "message": "buildings.json entry {field} references a consumption class that consumption.json does not define",
       "remedy": "Either add the missing class to data/consumption.json's \"classes\" map (engine.consumption/MOD-021's own balance data), or fix the offending buildings.json entry's consumptionRef to name an existing class key. See FEAT-010/data.catalogue AC-12."
+    },
+    "MET-F700": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate failed to parse source file {path}: {cause}",
+      "remedy": "Fix the syntax error in {path} (a go/parser error surfaced while astgate's AST walk, BUG-024, was scanning cmd/ or internal/ for copy-guard candidates) — the file must be valid Go for go build/go vet/astgate to all succeed. If {path} is intentionally malformed (a fixture), it belongs under a _test.go-adjacent tree astgate excludes, not a scanned production path."
+    },
+    "MET-F701": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate failed to walk directory {root}: {cause}",
+      "remedy": "Check that {root} exists and is readable — this wraps a filepath.WalkDir failure (missing directory, permission error) astgate hit while scanning for BUG-024's copy-guard candidates. astgate cannot produce a trustworthy result from a partial walk."
+    },
+    "MET-F702": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate could not find go.mod walking upward from {dir}",
+      "remedy": "Run astgate (directly, or via go test ./... in the build-test-vet CI job) from within the repository, or below its root, so resolveRepoRoot's upward search can find go.mod. If this fires in CI, check the working directory the job invoked the gate from."
     },
     "MET-U001": {
       "severity": "fatal",
@@ -604,6 +623,12 @@
       "module": "engine.world",
       "message": "geology query for tile {tile} rejected: tile has not been prospected",
       "remedy": "Mining-relevant geology (clay/gravel/deep-coal presence) is only queryable after Prospect(tile) has run — chalk baseline is always visible, but the fine-grained layer is deliberately gated (§32) so mining siting requires the survey action, not omniscience. Call Prospect first."
+    },
+    "MET-E406": {
+      "severity": "error",
+      "module": "engine.world",
+      "message": "operation on World value that is not the one NewWorld constructed (a struct copy)",
+      "remedy": "BUG-064: World embeds its mutex-guarded state by value, mirroring engine.core's Engine. A struct copy (`cp := *w`) gets its OWN, independently-zeroed mu but ALIASES the original's tiles map, defeating mutual exclusion. Every WorldAPI method and every mu-guarded internal helper (ensureTile, tilePrice) rejects a copy with this code, before its own mu is ever touched, exactly as engine.core.Engine's checkNotCopied/ErrEngineCopied does for the analogous SEC-014/SEC-016 hazard. Always call methods on the original *World/*WorldAPI NewWorld/NewWorldAPI returned, never on a dereferenced copy."
     },
     "MET-E500": {
       "severity": "error",

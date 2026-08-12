@@ -62,8 +62,8 @@ func TestProspectGate(t *testing.T) {
 	api := NewWorldAPI(TileCoord{15, 13})
 	tc := TileCoord{25, 10} // eastern tile, likely to have a pocket
 
-	if api.IsProspected(tc) {
-		t.Fatal("expected a fresh tile to be unprospected")
+	if prospected, err := api.IsProspected(tc); err != nil || prospected {
+		t.Fatalf("expected a fresh tile to be unprospected, got prospected=%v err=%v", prospected, err)
 	}
 	_, err := api.PocketGeology(tc, "test-corr")
 	if err == nil {
@@ -73,8 +73,8 @@ func TestProspectGate(t *testing.T) {
 	if err := api.Prospect(tc, "test-corr"); err != nil {
 		t.Fatalf("Prospect: %v", err)
 	}
-	if !api.IsProspected(tc) {
-		t.Fatal("expected tile to report prospected after Prospect")
+	if prospected, err := api.IsProspected(tc); err != nil || !prospected {
+		t.Fatalf("expected tile to report prospected after Prospect, got prospected=%v err=%v", prospected, err)
 	}
 	pocket, err := api.PocketGeology(tc, "test-corr")
 	if err != nil {

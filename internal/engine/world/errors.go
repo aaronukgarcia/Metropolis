@@ -33,4 +33,15 @@ const (
 	// ErrGeologyNotProspected: a mining-relevant geology query ran
 	// against a tile that has not been prospected yet (AC-7, §32).
 	ErrGeologyNotProspected = "MET-E405"
+
+	// ErrWorldCopied: a WorldAPI method, or an internal mu-guarded helper
+	// (ensureTile, tilePrice), was called on a World value that is not
+	// the one NewWorld constructed — i.e. a struct copy (BUG-064: `cp :=
+	// *w` is legal, unsafe-free, reflect-free Go, and defeats mu's
+	// per-instance safety because the copy gets its OWN mu but ALIASES
+	// the original's tiles map, a reference type). Mirrors
+	// engine.core's Engine.checkNotCopied/ErrEngineCopied exactly
+	// (SEC-014/SEC-016 family) — see World.self's doc comment
+	// (grid.go).
+	ErrWorldCopied = "MET-E406"
 )
