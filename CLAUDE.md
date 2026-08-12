@@ -1,6 +1,6 @@
 # CLAUDE.md - Metropolis Project Brief
 
-> **Last updated:** 2026-08-08 (master plan v2.1 loaded: sprints S0–S11 in BOW, code.json module registry, GR#2 amended + GR#20/#21 added, Prix-Six Firebase skills retired — see docs/planning/sprint-plan-v1.md)
+> **Last updated:** 2026-08-12 (GR#23 now MECHANICAL: claude-destructive-guard.js blocks code-bearing commits without an accepted verdict in bow_destructive_verdicts — record via `node claude-bow.js destructive <code> --verdict accept|reject ...`. Perf gate live+required per-push. Commit-ready-list protocol + oversight/worker loops in force — see Dev-Team Process below)
 > **Read this entire file at the start of every session.**
 
 ---
@@ -101,6 +101,8 @@ Bill brief → BA acceptance criteria (docs/planning/acceptance/<mkey>.md, BEFOR
           → Bill final architectural review → commit "[type]: ... [mkey]" → BOW ref + done
 ```
 
+**Commit-ready-list protocol + loops (Aaron, 2026-08-12, IN FORCE):** the lead is NEVER a blocker. Pipeline-complete work posts its Destructive verdict + evidence **on the BOW item** (`node claude-bow.js destructive ...` — feed prose is NOT a recorded verdict), then the team moves to the next queue item — the answer to "load up more or hold?" is **always load up, never hold**. The lead sweeps and commits in batches on a self-paced `/loop` (oversight sweep every ~25min); worker windows run their own `/loop 15m` so no session ever idles between waves waiting for a human prompt.
+
 The cadence is **pipelined across sprints** (v1.4): coders build sprint N while BAs (plural allowed, disjoint sprint ownership) write user stories + acceptance criteria for N+1…N+3, the Tester clears N as it lands, and Bill reviews/commits N and freezes sprint gates. BA / Tester / Documentation are **persistent agents** — reuse them via follow-up messages, don't respawn per item. Basic errors must never reach Bill. Additionally an **independent QA agent** (never talks to the other agents, reports ONLY to Bill) audits the pipeline itself: re-verifies samples of Tester evidence, checks code.json/BOW/plan for drift, Golden Rules compliance, and spot-checks code quality (error trapping, inline docs, naming, data types, capitalisation) — advisory, at least once per wave. Full role mandates: `docs/planning/dev-team-process.md`.
 
 ## 📋 Book of Work (BOW)
@@ -141,11 +143,12 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 
 | Hook | Script | Purpose |
 |------|--------|---------|
-| PreToolUse (Bash) | `claude-version-guard.js` | Blocks commits without a version bump (docs/tooling-only commits exempt) |
+| PreToolUse (Bash) | `claude-version-guard.js` | GR#2 Metropolis profile (FEAT-002): denies rogue hand-maintained version files, warns on engine commits; fail-open hygiene guard |
 | PreToolUse (Bash) | `claude-pre-commit-check.js` | Blocks Co-Authored-By trailers in commits |
 | PreToolUse (Bash) | `claude-pre-push-check.js` | Blocks pushes with unbundled function deploys (GR#19) |
 | PreToolUse (Bash+PS) | `claude-codename-guard.js` | GR#22 — blocks the reference title's real name reaching git |
 | PreToolUse (Bash+PS) | `claude-author-guard.js` | BUG-035 — blocks a commit whose author/committer is not a sanctioned identity (derived at runtime from git config ∪ trunk history ∪ operator env list, never hardcoded) |
+| PreToolUse (Bash+PS) | `claude-destructive-guard.js` | GR#23/FEAT-040 — fail-closed: blocks a code-bearing commit whose `[mkey]`-resolved BOW item(s) lack an accepted verdict in `bow_destructive_verdicts`; record verdicts with `node claude-bow.js destructive <code> --verdict ...` |
 | UserPromptSubmit | `claude-memory-prefetch.js` | GR#14 Vestige recall reminder |
 | SessionStart | `claude-startup.js` | Auto checkin + identity assignment |
 | PreCompact | (inline echo) | Preserves identity + Golden Rules context across compaction |
@@ -153,7 +156,7 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 | PostToolUse (Bash) | `claude-reflection.js` | Post-action Golden Rules reflection |
 | statusLine | `claude-statusline.js` | Identity/status display |
 
-> **Note:** `claude-version-guard.js` currently expects `app/package.json` + `app/src/lib/version.ts` (the Prix Six layout). When Metropolis gets its app skeleton, either follow that layout or update the guard's paths. Until then, docs/tooling commits pass through the exemption.
+> **Note:** `claude-version-guard.js` was retargeted from the Prix Six two-file layout to the Metropolis Go profile on 2026-08-09 (FEAT-002): app version comes from `git describe` via ldflags (M0-ENG §3), so the guard now denies commits introducing rogue hand-maintained version files and warns on engine commits. `[mkey]` enforcement is MOD-007's scope.
 
 ---
 
@@ -172,6 +175,7 @@ Configured in `.claude/settings.json`; scripts live in the project root:
 | `feature/*` | Individual feature work |
 
 Commit message format: `[type]: brief description` — types: `feat`, `fix`, `refactor`, `docs`, `chore`, `test`.
+**`[mkey]` tag convention (Aaron, 2026-08-11):** always tag the most specific key — the feature key when one exists (e.g. `[data.catalogue]`), the module key only when no feature key applies.
 **No Co-Authored-By trailers** (enforced by hook).
 
 Remote: **public** GitHub repository `aaronukgarcia/Metropolis` (public since 2026-08-10).
@@ -182,7 +186,7 @@ Remote: **public** GitHub repository `aaronukgarcia/Metropolis` (public since 20
 
 ## Versioning
 
-MAJOR.MINOR.PATCH. When the app skeleton exists, the version must live in BOTH `app/package.json` and `app/src/lib/version.ts` (enforced by `claude-version-guard.js`). Root `package.json` exists only for hook-script dependencies (`mysql2` for claude-sync) and is version-guard-exempt.
+App version = `git describe` via ldflags + milestone tags (GR#2 Metropolis profile, M0-ENG §3) — never hand-maintained version files; `claude-version-guard.js` denies any commit introducing one (FEAT-002; MOD-001's app skeleton was cancelled 2026-08-08). Root `package.json` exists only for hook-script dependencies (`mysql2` for claude-sync) and is version-guard-exempt.
 
 ---
 
