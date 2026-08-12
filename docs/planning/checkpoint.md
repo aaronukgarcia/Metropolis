@@ -1,6 +1,38 @@
 # HEAVY CHECKPOINT — session bounce point
 
-## REFRESH #7 — Ben, 2026-08-11 (read this section first; §1–§7 below are refresh #6 and are older)
+## REFRESH #8 — Bill, 2026-08-12 morning (read this section first; refresh #7 and older below)
+
+**HEAD `b819c53`, pushed, CI green (run 31583407877, all 5 jobs, watched to completion).** The perf gate is LIVE, REQUIRED, and HONEST — the defining change since refresh #7.
+
+### Landed since refresh #7 (commits 5d7b130 → b819c53)
+- **`5d7b130`** — the whole perf-gate chain: BUG-071 (3 exit codes), BUG-083 (replay-frozen baseline + cumulative anchor), BUG-073/085/096 (read-boundary provenance), BUG-074 (no scanner cap), BUG-095 (git-committed acceptance registry `perf-accepted-regressions.json`), BUG-097/057/102, BUG-101 interim. Destructive-10 ACCEPT recorded on BUG-034. Poisoned 44ms baseline discarded (v2 cache generation + v1 entries deleted).
+- **`303d3ac` + `5756db7`** — BUG-110: perfci's exit codes never survived `go run` (**go run exits 1 for ANY nonzero child — run built binaries when the exit code is a contract**). First diagnosis (pwsh) was wrong, disproved live, corrected on record.
+- **`5bfc381`** — **perf-1m-probe is a required per-push merge check (4 of 4)**. Exit 1/2 block merges NOW; exit 3 warns until MOD-018's first real tick work flips it to hard-fail (mandatory recorded condition: ci.yml header, BUG-034, ASM-352). First real 1M baselines: ~6.7s wall, ~44MB peak, PerMonthTick 488–926µs (sub-floor, walking skeleton).
+- **`b819c53`** — BUG-064/065: World gets the Engine-pattern copy-guard (MET-E406); compressV tests proven able to fail. ±0.8pp residual named + accepted by lead ruling.
+
+### Rulings and state (2026-08-11/12)
+- **Lead ASM sweep done:** ~55 P0/P1 assumptions ruled; only the dep-held remain (215/223/274/283/287 close via FEAT-047/056; 214 waits on Aaron's terrain licence file).
+- **Aaron's interview rulings:** two-layer identity (commit-msg + pre-push backstop — ASM-386; sequencer verbs don't fire hooks); BUG-061 = redact command; BUG-034 = gate immediately (done); FEAT-041 deep-dive dispatched; ASM-267 hard = failure-risk floor; email-privacy flags confirmed ON (BUG-042).
+- **Crisis taxonomy FULLY adjudicated (FEAT-013):** explicit Event.Crisis tag; include insolvency+ghost-city (with FEAT-068 mandatory pre-warnings) + water stockout; exclude terror attacks + all 12 exclusion rows incl. every intermediate spiral stage; data-file taxonomy never player-editable per-condition; one Pause/Notify/Off master switch. **ui.alerts is dispatchable.**
+- **Six Aaron feature anchors filed with rulings attached:** FEAT-063 Helper (ask-driven panel v1; **standing constraint: every player-action feature registers advisor metadata NOW**), FEAT-064 checkpoints (bounded fork tree), FEAT-065 dev-mode console + feedback→BOW, FEAT-066 metrics dashboard, FEAT-067 weather-mode seed switch, FEAT-068 doom warnings.
+- **SEC-021 ruled after a 4-round loop hit an architectural wall** (order-0 entropy can't separate the classes — two independent impossibility proofs on record): ship interim after the hostile-sha256-bundle allowlist fix; BUG-029 becomes the structural second-layer item.
+- **BUG-088 escalations ruled:** checker wiring folds into FEAT-045; secret checker extends to pre-push first.
+
+### Process changes IN FORCE
+- **Commit-ready-list protocol (Aaron, 2026-08-12): Bill is never a blocker.** Pipeline-complete work posts its verdict+evidence ON THE BOW ITEM, team moves on, Bill sweeps and commits in batches. Feed prose is NOT a recorded verdict.
+- **QA audit findings:** `bow_destructive_verdicts` has ZERO rows — GR#23 is prose-only until FEAT-040 (top of Bob's queue). FEAT-060 (BOW prose-dep lint), FEAT-061 (sprint entry gate), FEAT-069 (claude-sync unread-message delivery — filed after Bob's wake missed three standing-order messages).
+- **FEAT-062's code.json audit RAN:** findings BUG-103..109 (P0: cmd/metctl + detgate unregistered). Remediation = one coherent registry-correction batch on Bob's queue.
+
+### In flight / awaiting
+- **Bob's commit-ready backlog** (FEAT-045, FEAT-059, BUG-088, BUG-090, SEC-048): blocked ONLY on verdicts being posted to the items. Bob's standing orders (3 feed messages, 2026-08-12 09:27–09:33 + URGENT-READ-FIRST) carry the full deep queue A–K.
+- **Blocked on Aaron:** terrain50 licence file (he confirmed OS OpenData provenance), FEAT-047/056 proposal approvals when they arrive, crisis-taxonomy data file review at build time.
+- **BUG-034 remaining scope:** noise-floor re-derivation from accumulating real-scale runs + the exit-3 hard-fail flip at MOD-018's first real tick work. Then S3 unblocks.
+
+### Recovery procedure (unchanged in shape)
+`metro` → checkin → **read the FEED (`node claude-sync.js read`) — step 3 is where Bob's wake failed today** → this file → `node claude-bow.js list --by-seq` + comments on in-flight items → `git log -10`. Never redo committed work; never stash/reset/clean the tree — it carries Bob's team's uncommitted pipeline output.
+
+---
+
 
 **HEAD `4c01266`, pushed, CI green (run 31473977195, confirmed COMPLETED not merely started).** Running as **Ben**, not Bill — the Bill slot was occupied and all three slots were live in different windows at once, which is a real cross-session file-ownership risk.
 
