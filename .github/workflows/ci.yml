@@ -251,20 +251,23 @@ jobs:
       # indistinguishable green check, which is the exact failure this
       # item exists to close. Any OTHER non-zero exit (1 = genuine
       # regression, 2 = usage/system error) still fails the job normally.
-      # BUG-110: this step was shell:pwsh and its exit-3 mapping NEVER ran
-      # in production -- on the runner's pwsh wrapper, perfci exiting
-      # non-zero terminated the script before the if-branch executed
-      # (live failure, run 31539027958: no ::warning::, step exit 1, dead
-      # code after go run's stderr). The mapping's first live test was
-      # production because the push run took the exit-0 fresh-baseline
-      # path -- the test-that-never-ran class. bash's exit-code semantics
-      # (set +e, capture $?) are deterministic and identical everywhere,
-      # so the mapping no longer depends on pwsh wrapper behaviour at all.
+      # BUG-110, ROOT CAUSE (corrected after two live failures, runs
+      # 31539027958 and 31539765424): `go run` LAUNDERS the child's exit
+      # code -- it prints "exit status N" to stderr and then itself
+      # exits 1 for ANY nonzero child status. So perfci's three-outcome
+      # exit-code contract (0/1/2/3, BUG-071) never survived `go run` on
+      # any shell: the step always saw 1, the exit-3 mapping below could
+      # never match, and the first diagnosis (pwsh wrapper semantics)
+      # was a plausible-but-wrong story the bash migration disproved.
+      # The fix is the same thing perf-1m-probe already does: BUILD the
+      # binary and run it directly, so $? is perfci's own exit code.
       - name: perfci (1M preset, -citizens smoke override)
         shell: bash
         run: |
+          set -e
+          go build -o perfci-smoke.exe ./internal/harness/synth/cmd/perfci
           set +e
-          go run ./internal/harness/synth/cmd/perfci -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
+          ./perfci-smoke.exe -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
           code=$?
           set -e
           if [ "$code" -eq 3 ]; then
