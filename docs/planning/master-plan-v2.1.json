@@ -139,6 +139,28 @@
       "sprint": 0
     },
     {
+      "key": "foundation.buildinfo",
+      "type": "module",
+      "seq": 65,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "title": "Build identity: version/commit/branch/timestamp injected via -ldflags",
+      "desc": "internal/foundation/buildinfo/ — link-time-only string vars (Version/Commit/Branch/BuildTime) plus String() for --version output and the F12 debug info panel's build & code row; never hand-maintained (M0-ENG §3). BUG-013: registered as its own module key rather than folded under foundation.repo's catch-all — buildinfo.go's own doc comment self-declares \"Module key: foundation.repo\", but engine.core (persist.go), ui.screen.debug (build.go), harness.synth (generator.go) and cmd/metctl (main.go) all call it directly as a real, distinct package, which needs its own callable key under GR#20. Same open question as BUG-108's tool.metctl entry below re: foundation.repo's catch-all scope — escalated to Bill, ASM logged.",
+      "specRef": "M0-ENG §3 (build info); BUG-013",
+      "path": "internal/foundation/buildinfo/",
+      "inbound": {
+        "name": "BuildInfoAPI",
+        "format": "Go package API (package vars + String())",
+        "pattern": "link-time -ldflags injection; read-only at runtime"
+      },
+      "deps": [
+        "foundation.repo"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
       "key": "foundation.det",
       "type": "module",
       "seq": 70,
@@ -190,9 +212,9 @@
       "milestone": "M0",
       "layer": "foundation",
       "title": "Config data files + loader + debug hot-reload",
-      "desc": "data/consumption.json, modes.json, buildings.json, unlock_trees.json, naming_corpus.json, seasonal.json, external_world.json, policies.json, errors.json — all JSON, hot-reloadable in debug, the entire balance surface for M2 Batch tuning. Validators derive expected values from these files, never hardcoded (GR#15).",
+      "desc": "data/consumption.json, modes.json, buildings.json, unlock_trees.json, naming_corpus.json, seasonal.json, external_world.json, policies.json, errors.json — all JSON, hot-reloadable in debug, the entire balance surface for M2 Batch tuning. Validators derive expected values from these files, never hardcoded (GR#15). BUG-103: registered at the Go package implementing the declared DataAPI contract (internal/foundation/data/, self-declared \"Module key: foundation.data\" in its own doc.go), not at data/ — the JSON files it loads are inputs, not a code module in their own right, and carry no separate registry entry (ASM logged).",
       "specRef": "§24; GR#15",
-      "path": "data/",
+      "path": "internal/foundation/data/",
       "inbound": {
         "name": "DataAPI",
         "format": "Go package API over JSON files",
@@ -212,9 +234,9 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "BOW git integration on the metro BOW (decision: no separate metropolis_bow DB)",
-      "desc": "DECIDED (Aaron, 2026-08-08): the metro BOW (claude-bow.js) IS the project Book of Work — it now carries the spec's fields (seq/sprint/milestone/spec_ref/GUIDs/deps) so building the separate metropolis_bow schema of M0-ENG §4 would duplicate SSOT (GR#3). Remaining work from that section: commit-msg validation that [mkey] refs exist in the BOW, auto-comment of commit hashes onto items (extend claude-pre-commit-check.js or a commit hook), and the F12 read-only BoW tab (already in ui.screen.debug).",
+      "desc": "DECIDED (Aaron, 2026-08-08): the metro BOW (claude-bow.js) IS the project Book of Work — it now carries the spec's fields (seq/sprint/milestone/spec_ref/GUIDs/deps) so building the separate metropolis_bow schema of M0-ENG §4 would duplicate SSOT (GR#3). Remaining work from that section: commit-msg validation that [mkey] refs exist in the BOW, auto-comment of commit hashes onto items (extend claude-pre-commit-check.js or a commit hook), and the F12 read-only BoW tab (already in ui.screen.debug). BUG-103: registered path corrected to the real tool (claude-bow.js at repo root) — tools/bow/ and cmd/bow/ never existed; the metropolis_bow-schema idea they implied was explicitly decided against above.",
       "specRef": "M0-ENG §4; V.2.3",
-      "path": "tools/bow/ + cmd/bow/",
+      "path": "claude-bow.js",
       "deps": [
         "foundation.repo"
       ],
@@ -343,7 +365,8 @@
         "foundation.det",
         "foundation.registry",
         "int.protocol",
-        "int.serializer"
+        "int.serializer",
+        "foundation.buildinfo"
       ],
       "sprint": 1
     },
@@ -355,9 +378,9 @@
       "milestone": "M1",
       "layer": "foundation",
       "title": "Determinism CI gate — the first test written",
-      "desc": "Same seed, 120 months, twice: sha256(worldSnapshot) must match; again with POOL-SIM=1 vs =14; mismatch fails the build. Built and passing on the stub engine BEFORE any simulation logic (TDD order explicit per A8). Determinism bugs are always P0.",
+      "desc": "Same seed, 120 months, twice: sha256(worldSnapshot) must match; again with POOL-SIM=1 vs =14; mismatch fails the build. Built and passing on the stub engine BEFORE any simulation logic (TDD order explicit per A8). Determinism bugs are always P0. BUG-103/BUG-108: registered at its real, fully-built location internal/engine/detgate/ (doc.go+gate.go+gate_test.go+errors.go) — the prior \"internal/engine/core/ (tests) + CI\" path predated the package's own directory and left this GR#21-critical gate with no registry presence at its real home.",
       "specRef": "§1.2.5; A8; M0-ENG §6.4",
-      "path": "internal/engine/core/ (tests) + CI",
+      "path": "internal/engine/detgate/",
       "deps": [
         "engine.core",
         "foundation.repo"
@@ -385,7 +408,8 @@
         "ui.core",
         "ui.widgets",
         "engine.world",
-        "engine.citizens"
+        "engine.citizens",
+        "int.protocol"
       ],
       "sprint": 1
     },
@@ -428,7 +452,9 @@
       "calls": [
         "foundation.registry",
         "foundation.errors",
-        "ui.widgets"
+        "ui.widgets",
+        "foundation.buildinfo",
+        "ui.core"
       ],
       "sprint": 1
     },
@@ -531,7 +557,10 @@
       ],
       "calls": [
         "engine.core",
-        "harness.headless"
+        "harness.headless",
+        "foundation.buildinfo",
+        "foundation.det",
+        "int.solver"
       ],
       "sprint": 2
     },
@@ -2300,9 +2329,9 @@
       "milestone": "future",
       "layer": "cloud",
       "title": "Remote-call policy: retries, rate limiting, authn/z — secure & resilient by design",
-      "desc": "The contract every remote call (solver offload, Blob saves, LLM soft layer) must follow BEFORE any remote backend ships: authn via short-lived tokens/managed identity (never long-lived keys in config — repo side enforced by tool.secretguard); TLS everywhere; least-privilege authz; correlation IDs extended over the wire; retries with exponential backoff + jitter, budget-bounded, safe because requests are stateless/idempotent with request IDs; client-side token-bucket rate limiting + server throttle-signal respect; mandatory timeouts; failure degrades to local compute per the solver contract's fallback rule, never to a broken game. Design doc section lives in docs/cloud.md; this item turns it into enforced contract language when cloud items build.",
+      "desc": "The contract every remote call (solver offload, Blob saves, LLM soft layer) must follow BEFORE any remote backend ships: authn via short-lived tokens/managed identity (never long-lived keys in config — repo side enforced by tool.secretguard); TLS everywhere; least-privilege authz; correlation IDs extended over the wire; retries with exponential backoff + jitter, budget-bounded, safe because requests are stateless/idempotent with request IDs; client-side token-bucket rate limiting + server throttle-signal respect; mandatory timeouts; failure degrades to local compute per the solver contract's fallback rule, never to a broken game. Design doc section lives in docs/cloud.md; this item turns it into enforced contract language when cloud items build. BUG-109: path corrected to its own real (future) location — it was double-booked at int.solver's internal/foundation/solver/, but cloud/ is unbuilt and cloud.netpolicy is not the same package as int.solver; it consumes int.solver (see calls[]) rather than living inside it. Path stays a documented placeholder until cloud/ exists (ASM logged).",
       "specRef": "GR#11; §15 (cloud path); A9; docs/cloud.md",
-      "path": "internal/foundation/solver/ + cloud/",
+      "path": "cloud/ (planned — unbuilt)",
       "deps": [
         "int.solver"
       ],
@@ -2494,6 +2523,28 @@
         "foundation.errors"
       ],
       "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.metctl",
+      "type": "module",
+      "seq": 99,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "metctl: operator/CLI counterpart to metropolis (export/verify, headless control)",
+      "desc": "cmd/metctl/ — real, tested CLI (main.go+main_test.go): with no args prints the build identity (M0 skeleton behaviour); `metctl export <save-dir> [-out dir]` and `metctl verify <save-dir>` operate on int.serializer bundles (M0-ENG §5; A8). BUG-108: registered under its own tool.* key rather than folded into foundation.repo's repo-wide catch-all — main.go's own doc comment self-declares \"Module key: foundation.repo\", but per Aaron's register-don't-exempt ruling (the same precedent applied to tool.astgate/tool.bow/etc.) a real, built, tested package gets its own registry entry at its own path rather than disappearing into the monorepo-skeleton entry. This is a judgment call, not a confirmed Bill ruling — BUG-108's comment thread flags the foundation.repo catch-all scope question as still open; escalated, ASM logged.",
+      "specRef": "M0-ENG §5; A8; int.serializer; BUG-108",
+      "path": "cmd/metctl/",
+      "deps": [
+        "foundation.repo",
+        "foundation.buildinfo",
+        "int.serializer"
+      ],
+      "calls": [
+        "foundation.buildinfo",
+        "int.serializer"
+      ],
       "sprint": 0
     }
   ]

@@ -27,7 +27,7 @@
     },
     "determinism": "Same seed + same command log => bit-identical world at any worker count (§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG §6.4)."
   },
-  "moduleCount": 100,
+  "moduleCount": 102,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -87,6 +87,10 @@
           {
             "key": "ui.core",
             "outboundGuid": "b0b339f9-0052-469e-9138-0eb930798f69"
+          },
+          {
+            "key": "ui.screen.map",
+            "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           }
         ]
       },
@@ -149,6 +153,10 @@
           {
             "key": "harness.replay",
             "outboundGuid": "f0bdf83e-4e69-451e-a33c-6a96a8cdd31a"
+          },
+          {
+            "key": "tool.metctl",
+            "outboundGuid": "50957ad9-e962-4a04-8346-eb8b091adaf0"
           }
         ]
       },
@@ -205,6 +213,10 @@
           {
             "key": "engine.traffic",
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
+          },
+          {
+            "key": "harness.synth",
+            "outboundGuid": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4"
           }
         ]
       },
@@ -290,6 +302,48 @@
         ],
         "verdict": "findings-raised"
       }
+    },
+    {
+      "guid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+      "key": "foundation.buildinfo",
+      "bowType": "module",
+      "seq": 65,
+      "sprint": 0,
+      "title": "Build identity: version/commit/branch/timestamp injected via -ldflags",
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "specRef": "M0-ENG §3 (build info); BUG-013",
+      "path": "internal/foundation/buildinfo/",
+      "inbound": {
+        "guid": "7f744a93-4823-440d-a2de-551ba87a70e5",
+        "name": "BuildInfoAPI",
+        "format": "Go package API (package vars + String())",
+        "pattern": "link-time -ldflags injection; read-only at runtime",
+        "consumers": [
+          {
+            "key": "engine.core",
+            "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
+          {
+            "key": "harness.synth",
+            "outboundGuid": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4"
+          },
+          {
+            "key": "tool.metctl",
+            "outboundGuid": "50957ad9-e962-4a04-8346-eb8b091adaf0"
+          },
+          {
+            "key": "ui.screen.debug",
+            "outboundGuid": "5a703ff2-c659-4add-a6ed-7c01a2eeb2d2"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "ed6c0f3d-f920-495f-adf8-056fb661ea09",
+        "calls": []
+      },
+      "securityScan": null
     },
     {
       "guid": "5f71974a-a612-4113-ba75-8e91546b8977",
@@ -429,6 +483,10 @@
           {
             "key": "engine.core",
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
+          {
+            "key": "harness.synth",
+            "outboundGuid": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4"
           }
         ]
       },
@@ -499,7 +557,7 @@
       "milestone": "M0",
       "layer": "foundation",
       "specRef": "§24; GR#15",
-      "path": "data/",
+      "path": "internal/foundation/data/",
       "inbound": {
         "guid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41",
         "name": "DataAPI",
@@ -579,7 +637,7 @@
       "milestone": "M0",
       "layer": "tooling",
       "specRef": "M0-ENG §4; V.2.3",
-      "path": "tools/bow/ + cmd/bow/",
+      "path": "claude-bow.js",
       "inbound": {
         "guid": "ed4c94ec-08b8-4adc-8871-0b5251f8dcf3",
         "name": null,
@@ -679,6 +737,42 @@
       "securityScan": null
     },
     {
+      "guid": "abb3d403-7e6b-41f4-adc9-97c34d000bc7",
+      "key": "tool.metctl",
+      "bowType": "module",
+      "seq": 99,
+      "sprint": 0,
+      "title": "metctl: operator/CLI counterpart to metropolis (export/verify, headless control)",
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "M0-ENG §5; A8; int.serializer; BUG-108",
+      "path": "cmd/metctl/",
+      "inbound": {
+        "guid": "16a37700-d472-4e35-bbe2-22a3f8000544",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "50957ad9-e962-4a04-8346-eb8b091adaf0",
+        "calls": [
+          {
+            "key": "foundation.buildinfo",
+            "moduleGuid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+            "inboundGuid": "7f744a93-4823-440d-a2de-551ba87a70e5"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
       "guid": "c254728b-4a1c-490f-a1a7-42e08f8605ff",
       "key": "harness.stub",
       "bowType": "module",
@@ -746,6 +840,10 @@
           {
             "key": "ui.keys",
             "outboundGuid": "c92533bc-bf4f-4b3d-a2bd-0528afdc6c1c"
+          },
+          {
+            "key": "ui.screen.debug",
+            "outboundGuid": "5a703ff2-c659-4add-a6ed-7c01a2eeb2d2"
           },
           {
             "key": "ui.screen.map",
@@ -950,6 +1048,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "foundation.buildinfo",
+            "moduleGuid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+            "inboundGuid": "7f744a93-4823-440d-a2de-551ba87a70e5"
           }
         ]
       },
@@ -975,7 +1078,7 @@
       "milestone": "M1",
       "layer": "foundation",
       "specRef": "§1.2.5; A8; M0-ENG §6.4",
-      "path": "internal/engine/core/ (tests) + CI",
+      "path": "internal/engine/detgate/",
       "inbound": {
         "guid": "ec44f4a6-2b55-4508-a456-32804e425019",
         "name": null,
@@ -1042,6 +1145,11 @@
             "key": "engine.citizens",
             "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
             "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -1122,6 +1230,16 @@
             "key": "ui.widgets",
             "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
             "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
+          },
+          {
+            "key": "foundation.buildinfo",
+            "moduleGuid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+            "inboundGuid": "7f744a93-4823-440d-a2de-551ba87a70e5"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
           }
         ]
       },
@@ -1335,6 +1453,21 @@
             "key": "harness.headless",
             "moduleGuid": "94fcac3b-a76c-40a8-8bb6-6add9ebc9496",
             "inboundGuid": "19f100f8-a43d-4571-a940-304eec18235f"
+          },
+          {
+            "key": "foundation.buildinfo",
+            "moduleGuid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+            "inboundGuid": "7f744a93-4823-440d-a2de-551ba87a70e5"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "int.solver",
+            "moduleGuid": "783c1559-4a3c-4502-91f7-834e6a5fb2c7",
+            "inboundGuid": "d20c26e9-5a1a-4628-9c93-f95938547f19"
           }
         ]
       },
@@ -4669,7 +4802,7 @@
       "milestone": "future",
       "layer": "cloud",
       "specRef": "GR#11; §15 (cloud path); A9; docs/cloud.md",
-      "path": "internal/foundation/solver/ + cloud/",
+      "path": "cloud/ (planned — unbuilt)",
       "inbound": {
         "guid": "5c8071d9-c119-4822-ab9c-be633e5e1613",
         "name": null,
