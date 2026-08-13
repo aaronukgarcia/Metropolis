@@ -147,6 +147,97 @@ jobs:
         with:
           version: v2.5.0
 
+  # --- Node test suite (BUG-200, P1, mkey foundation.repo) ---------------
+  # Before this job, ci.yml ran zero `node --test` — every claude-*.js
+  # guard/tooling script and tools/plan's tests (731 tests as of this
+  # fix, confirmed by a local `node --test` run at the repo root) were
+  # enforced only by local discipline, not CI. Live consequence: a
+  # committed self-falsifying test (BUG-199) reached main and nothing
+  # would ever have flagged it.
+  #
+  # runs-on: ubuntu-latest, NOT windows-latest like every other job in
+  # this file. Two reasons, both deliberate:
+  #   1. GitHub Actions' `services:` (Docker service containers, used
+  #      below for MariaDB) are only supported on Linux runners — not
+  #      Windows or macOS. There is no windows-latest equivalent.
+  #   2. A local audit of this job (grep across every *.test.js) found
+  #      no dependency on a real Windows shell (PowerShell/pwsh) being
+  #      invoked by the scripts under test, nor any hardcoded
+  #      Windows-only path outside of comments and platform-conditional
+  #      test fixtures (e.g. claude-bow.test.js's win.ini path-traversal
+  #      fixture is itself process.platform-gated). The suite already
+  #      runs clean on this Linux-capable subset locally.
+  # If a genuinely Windows-only node test surfaces later, the fix is a
+  # SEPARATE windows-latest job for that subset, not moving this whole
+  # job off Linux and losing the standard `services:` mechanism.
+  #
+  # DB-dependent tests (claude-bow.test.js, claude-sync.test.js, and
+  # others) connect to a real MariaDB over METRO_DB_* env vars and
+  # create/drop their OWN scratch databases per test file (e.g.
+  # metro_test_bowlint, metro_test_syncmsg) — they do not touch a
+  # shared `metro` DB. That maps directly onto a `services: mariadb`
+  # container: no skip-and-hope-nobody-notices mechanism, no
+  # silently-green skip (GR#17 / this project's verification
+  # standards: "a gate that can't evaluate must not report success") —
+  # the service container is genuinely there, so these tests run for
+  # real in CI for the first time.
+  node-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: ""
+          MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mariadb-admin ping -h 127.0.0.1 -uroot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      METRO_DB_HOST: 127.0.0.1
+      METRO_DB_PORT: 3306
+      METRO_DB_USER: root
+      METRO_DB_PASSWORD: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: npm ci
+        run: npm ci
+
+      # claude-bow.js/claude-sync.js connect with `database: metro` set
+      # (or METRO_DB_NAME's override) already selected — mysql2 does NOT
+      # auto-create a missing database, it errors (ER_BAD_DB_ERROR). The
+      # mariadb service above starts with only the server up, no
+      # database of any name. Create `metro` here (matching this
+      # project's own default/local-dev DB name, since a handful of
+      # tests — e.g. claude-destructive-guard.test.js — deliberately
+      # connect to whatever METRO_DB_NAME resolves to, defaulting to
+      # 'metro', rather than a private scratch DB), then run each
+      # script's own `init` command so ensureSchema() creates every
+      # bow_*/sync_*/project_meta table for real — not a hand-copied
+      # schema dump that could drift from the source of truth.
+      - name: Create metro database
+        run: |
+          mysql -h 127.0.0.1 -P 3306 -u root -e "CREATE DATABASE IF NOT EXISTS metro CHARACTER SET utf8mb4;"
+
+      - name: Initialize metro schema (bow_* + sync_* tables)
+        run: |
+          node claude-bow.js init
+          node claude-sync.js init
+
+      - name: node --test
+        run: node --test
+
   # --- Perf smoke (H-SYNTH / MOD-016, M0-ENG §6 point 5) -----------------
   # cmd/perfci (internal/harness/synth/cmd/perfci) is the CI-runnable perf
   # gate AC-6 asks for: generate a synthetic city, run it N months through
