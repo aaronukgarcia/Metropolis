@@ -59,6 +59,23 @@ func NewWorldAPI(startCoord TileCoord) *WorldAPI {
 // caller needs the OTHER contract (wipe ownership deliberately), that
 // must be its own explicit, named, registry-erroring operation — never
 // a side effect of re-importing terrain.
+//
+// BUG-066 (Destructive-3, logged at fix time): "everything else is
+// untouched" has ONE deliberate exception — per-cell landValue (inside
+// sim). landValue is not independent player-facing state; it is
+// terrain-derived (PurchaseTile seeds it from terrainQualityFactor(tl),
+// itself a pure function of the tile's onLand flag and terrain.slope).
+// Leaving it at its pre-reimport value would silently strand it against
+// the OLD terrain the moment terrain.slope is refreshed below — a
+// permanent, silent mismatch between a cell's stored economic value and
+// its actual terrain (repro: 1500.00 stale vs 1346.00 fresh against
+// genuinely different fixture terrain), with nothing that looks wrong
+// (a plausible non-zero landValue, just the wrong one). So for an
+// already-owned tile, landValue is recomputed from the NEW terrain in
+// the same call that refreshes it, matching "terrain refreshes,
+// everything ABOUT terrain refreshes with it" — geology and onLand need
+// no such recompute because they are coord-derived, not heightmap-
+// derived, so re-import never changes their inputs.
 func (a *WorldAPI) ImportAndPlaceStartTile(src *SourceGrid, correlationID string) error {
 	// BUG-064 (AC-28): identity check BEFORE a.w.mu is touched at all —
 	// see World.checkNotCopied's doc comment (grid.go) for why a copy's
@@ -83,6 +100,15 @@ func (a *WorldAPI) ImportAndPlaceStartTile(src *SourceGrid, correlationID string
 		// import): refresh terrain in place, preserving sim/owned/
 		// ownerID/geology/prospected on the SAME *tile struct.
 		populateTerrainFromHeightmap(t, heights)
+		// BUG-066: landValue is derived FROM the terrain just refreshed
+		// above, not independent state — recompute it for an
+		// already-owned tile so it never strands against stale terrain.
+		if t.owned && t.sim != nil {
+			q := terrainQualityFactor(t)
+			for i := range t.sim.landValue {
+				t.sim.landValue[i] = float32(q * 1000)
+			}
+		}
 	}
 	// If the tile has never been generated yet, leave it absent —
 	// ensureTile's next call will build it correctly from

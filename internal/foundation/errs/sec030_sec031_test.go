@@ -391,7 +391,7 @@ func TestRingBuffer_SnapshotOrderStableAcrossCalls(t *testing.T) {
 // unchanged) -- see ringBuffer.index's doc comment in log.go, and this
 // test also spot-checks it directly.
 func TestRing_FloodCost_10kEntries_BoundedTime(t *testing.T) {
-	r := newRingBuffer(200)
+	r := newRingBuffer(ringCapacity)
 
 	const floodCount = 10_000
 	const distinctCodes = 25 // 20+, matching AC-3
@@ -426,8 +426,8 @@ func TestRing_FloodCost_10kEntries_BoundedTime(t *testing.T) {
 	// itself bounded by ringCapacity -- explicit assertion, not just a
 	// comment, that the index cannot itself become the unbounded
 	// resource (the non-negotiable this item was built against).
-	if len(r.index) > 200 {
-		t.Fatalf("index has %d entries after the flood, want <= 200 (ringCapacity) -- the index has become an unbounded resource", len(r.index))
+	if len(r.index) > ringCapacity {
+		t.Fatalf("index has %d entries after the flood, want <= %d (ringCapacity) -- the index has become an unbounded resource", len(r.index), ringCapacity)
 	}
 	if len(r.index) != distinctCodes {
 		t.Fatalf("index has %d entries, want %d (exactly the distinct codes pushed, all under ringCapacity)", len(r.index), distinctCodes)
