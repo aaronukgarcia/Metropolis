@@ -1,4 +1,4 @@
-# Metropolis Dev-Team Process v1.6
+# Metropolis Dev-Team Process v1.11
 
 **2026-08-08/09 · directed by Aaron (v1.1: Tester + Documentation; v1.2: BA; v1.3: independent QA; v1.4: pipelined cadence; v1.5: Resource Manager, saturation rule, team caps, heavy checkpointing; v1.6: second Tester) · supersedes the wave-1 "lead reviews everything directly" flow**
 
@@ -395,3 +395,11 @@ Six rules, binding from the next dispatch:
 4. **Attack-first for known threat models.** Guard/security items (and any item whose criteria state a threat model) get their adversarial test suite written by a Destructive agent BEFORE dev dispatch; the junior builds until that suite passes; the post-build attack round then hunts only novel classes. Converts serial find-fix-reattack rounds into one parallel round.
 5. **Design-first for repeat offenders and P0 security.** Any item at 3+ rounds, and every P0 security item, gets a lead-authored mechanism spec in the brief (the shape, the invariants, what to reuse — ten lines suffice) before re-dispatch. Juniors implement designs; they do not discover architecture by bounce.
 6. **Model tier is a tool, not a fixed cost.** Worker default stays Sonnet; the dispatching window may escalate a security-critical or thrice-bounced item to a stronger model on its own judgement, recording the choice on the item. Six extra rounds cost more than one stronger first pass — spend where the loop history says the cheap tier is churning.
+
+## Proportionality + game-first priority (v1.11 - Aaron, 2026-08-13)
+
+**Origin:** Bob's utilisation deep-dive measured the 2026-08-13 wave at ~3 game-code commits out of 81 (the rest astgate/guards/bowcli/docs), with S3 untouched since S2 closed, and measured GR#23's overhead at one BOW item + one destructive agent + a recorded verdict for a one-line lint fix. Aaron's ruling, verbatim spirit: "we are not building NASA code to get men on the moon."
+
+1. **GR#23 proportionality tier (FEAT-077):** commits whose staged diff is docs-only (`*.md`) or test-only (`*.test.js`/`*_test.go`) need Tester-level verification only - no Destructive verdict. Engine/UI/data code, guards/hooks, sync/bow CLIs, and anything in the commit/push path stay full-tier. Enforced mechanically by claude-destructive-guard.js's diff classifier, never by judgment. (Recorded trade-off: BUG-199 was a test-only time bomb; Aaron accepts that risk for throughput.)
+2. **Game code beats framework.** Dispatch priority is S3/engine/UI/data items first; `tool.*`/harness-meta work is capped at background-lane levels (1-2 lanes) whenever game work is dispatchable. The `util` report's per-dispatch BOW codes make the mix auditable per hour.
+3. **Perfection is not the bar.** Acceptance criteria ahead of the build queue stop at N+3 sprints (v1.4 cadence already says this - re-affirmed against the 128-doc estate reaching S11). Attack rounds beyond round 3 need the v1.8 rule-5 lead design ruling, not another bounce.
