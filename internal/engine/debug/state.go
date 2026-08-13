@@ -107,6 +107,12 @@ type State struct {
 	fidelityDial FidelityDial
 
 	cheatLog []CheatUsedEvent
+
+	// feedbackInbox is the directory SubmitFeedback (feedback.go, FEAT-065
+	// AC-DM8) writes one JSON record per submission to. Empty (the
+	// default) means SubmitFeedback refuses every request — see
+	// WithFeedbackInbox.
+	feedbackInbox string
 }
 
 // Option customizes a new State. Unset options take the defaults
