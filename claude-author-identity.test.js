@@ -249,6 +249,98 @@ test('BUG-052: historyEmails() bounds its git log scan (source carries a --max-c
   assert.ok(identity.THRESHOLDS.HISTORY_SCAN_LIMIT > 0 && Number.isFinite(identity.THRESHOLDS.HISTORY_SCAN_LIMIT));
 });
 
+// BUG-052 (behavioural + args-level regression, not just source-grep):
+// proves TWO things a source grep cannot: (1) the ACTUAL argv this module
+// hands to `execFileSync('git', ...)` at runtime carries the
+// `--max-count=<N>` bound (not merely present as dead text somewhere in the
+// file), and (2) a real, currently active identity is still correctly
+// corroborated through the bounded scan even when the bound is small enough
+// to matter — i.e. the fix did not save time by breaking the security
+// property it exists to serve (trunk-history corroboration).
+//
+// Interception is at the `child_process.execFileSync` boundary rather than a
+// PATH-level `git` shim: this module destructures `execFileSync` out of
+// `require('child_process')` ONCE at module load (`const { execFileSync } =
+// require('child_process')`), and — separately, empirically confirmed while
+// writing this test — Node's Windows spawn path for a bare `git` command
+// silently skips a `.cmd` shim placed earlier on PATH when invoked without
+// `shell: true` (as this module does), making a PATH-shim approach both
+// unreliable AND platform-fragile here. Patching `child_process.execFileSync`
+// on the shared, cached module object BEFORE re-requiring
+// claude-author-identity.js (via a fresh require.cache entry) means the
+// module's own top-level destructuring picks up the spy, so the captured
+// args are exactly what the module handed to the real execFileSync (which
+// the spy still calls through to) — the real OS-level invocation, observed
+// at the one seam this module actually exposes.
+test('BUG-052: the real execFileSync("git", ...) call carries --max-count, and a small bound still correctly corroborates a recent real identity', () => {
+  withTempRepo((dir) => {
+    // Build a repo where the sanctioned identity commits only in the most
+    // recent commits, preceded by a DIFFERENT, older identity — so a scan
+    // that were still unbounded (or bounded too loosely) would trivially
+    // "work" by seeing everything, while a correctly-bounded-but-broken scan
+    // (e.g. an off-by-one that excludes the newest commits) would miss it.
+    // Recent-only placement is what actually exercises the bound.
+    git(dir, ['init', '-b', 'main']);
+    git(dir, ['config', 'user.name', 'Old Contributor']);
+    git(dir, ['config', 'user.email', 'old-contributor@example.invalid']);
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(dir, `old${i}.txt`), `old ${i}\n`, 'utf8');
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '-m', `old commit ${i}`]);
+    }
+    git(dir, ['config', 'user.name', SANCTIONED_NAME]);
+    git(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
+    for (let i = 0; i < 3; i++) {
+      fs.writeFileSync(path.join(dir, `new${i}.txt`), `new ${i}\n`, 'utf8');
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '-m', `recent commit ${i}`]);
+    }
+
+    const cp = require('child_process');
+    const realExecFileSync = cp.execFileSync;
+    const captured = [];
+    const modulePath = require.resolve('./claude-author-identity.js');
+
+    cp.execFileSync = function spyExecFileSync(file, args, options) {
+      captured.push({ file, args: [...args] });
+      return realExecFileSync.call(this, file, args, options);
+    };
+    delete require.cache[modulePath];
+
+    let freshIdentity;
+    try {
+      freshIdentity = require('./claude-author-identity.js');
+
+      // Small, deliberate bound: 4 most-recent commits only, out of the 6
+      // total. The 3 recent SANCTIONED_EMAIL commits fall inside that
+      // window (>= HISTORY_THRESHOLD=3), the 3 old-contributor commits fall
+      // (mostly) outside it — a real, meaningful cap, not a no-op equal to
+      // the repo's whole history.
+      freshIdentity.THRESHOLDS.HISTORY_SCAN_LIMIT = 4;
+      freshIdentity.THRESHOLDS.HISTORY_THRESHOLD = 3;
+
+      withCwd(dir, () => {
+        const emails = freshIdentity.historyEmails();
+        assert.ok(
+          emails.has(SANCTIONED_EMAIL),
+          'a real identity active within the bounded (recent) window must still be corroborated'
+        );
+      });
+    } finally {
+      cp.execFileSync = realExecFileSync;
+      delete require.cache[modulePath];
+      require('./claude-author-identity.js'); // restore a clean cached instance for later tests
+    }
+
+    const logCall = captured.find((c) => c.file === 'git' && c.args[0] === 'log');
+    assert.ok(logCall, `expected an execFileSync('git', ['log', ...]) call; captured: ${JSON.stringify(captured)}`);
+    assert.ok(
+      logCall.args.includes('--max-count=4'),
+      `the actual argv handed to execFileSync must carry the bound: ${JSON.stringify(logCall.args)}`
+    );
+  });
+});
+
 // ---------------------------------------------------------------------------
 // SEC-052: configuredEmail() must not resolve THROUGH a `-c`/env-var config
 // override belonging to the very `git commit`/`git merge` invocation whose
