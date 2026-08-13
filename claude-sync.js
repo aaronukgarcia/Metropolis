@@ -16,7 +16,12 @@
  *   checkin [--name N] [--any]  - Acquire a permit slot (5-min TTL). On success also
  *                                 prints the METROPOLIS STARTUP SUMMARY (BOW state from
  *                                 the metro DB, Vestige check, git sync check) via
- *                                 claude-bow.js printStartupSummary.
+ *                                 claude-bow.js printStartupSummary. A successful checkin
+ *                                 also delivers any unread directed/broadcast messages
+ *                                 (see `message`, below) for the resolved identity and
+ *                                 advances that identity's read cursor (FEAT-069) — this
+ *                                 does NOT happen on `renew --auto`'s heartbeat, only on
+ *                                 a genuine checkin.
  *           [--force --human-ok]  Force-evict a live holder (HUMAN AUTHORISATION ONLY)
  *   renew [--auto] [--session ID] - Extend permit; --auto only renews when < 3.5 min left
  *   ping [--session ID]         - Renew + heartbeat + status line
@@ -25,9 +30,25 @@
  *   status [--session ID]       - Show all slots, marking this window's
  *   read                        - Full coordination state: slots, activity log, NO-TOUCH zones
  *   write "message"             - Log a milestone to the activity log
+ *   message "<text>" [--to <Name>] [--body-file <path>]
+ *                                - Send a directed (--to) or broadcast (no --to) message,
+ *                                  delivered to the resolved-name recipient's next checkin
+ *                                  (FEAT-069). Requires an active permit.
  *   claim <path> [--session ID] - Claim a NO-TOUCH zone before modifying files
  *   release <path>              - Release a claimed path
  *   gc                          - Clean up permits expired beyond the reserve window
+ *   loop-set --session <id> "<spec>"  - FEAT-070: configure the caller's standing /loop spec
+ *                                 (e.g. "15m /oversight-sweep"), re-armed at every
+ *                                 checkin (see claude-startup.js) so it survives reboot
+ *                                 without persisting the running loop process itself.
+ *                                 `--session <id>` is MANDATORY (the id YOUR OWN checkin
+ *                                 printed as "Session: <uuid>") — round 2 Destructive REJECT
+ *                                 finding A: WINDOW_ID (the env var) is not proof of identity,
+ *                                 only the DB-issued session secret is; see findMineBySessionSecret.
+ *   loop-clear --session <id>   - FEAT-070: clear the caller's own standing loop (self-only)
+ *   loop-show --session <id>    - FEAT-070: show the caller's own standing loop state
+ *                                 spec text is printable-ASCII-only (allowlist, not blocklist —
+ *                                 round 2 finding B).
  *
  * Identity resolution (same as prix6 v2.2): the Claude window's session UUID
  * arrives via the CLAUDE_CODE_SESSION_ID env var (hooks set it from the hook
@@ -58,6 +79,20 @@ const TTL_MS = 5 * 60 * 1000;             // permit lifetime
 const RENEW_THRESHOLD_MS = 3.5 * 60 * 1000; // --auto renews only below this remaining
 const RESERVE_MS = 30 * 60 * 1000;        // expired slot stays reserved for its window
 
+// FEAT-070 (tool.looparm): a standing /loop spec is "stale" — and withheld from
+// auto-arm — when neither it nor its last successful arm has happened within
+// this window. Measured from MAX(set_ms, last_armed_ms), per AC-8, NOT from
+// set_ms alone (see docs/planning/acceptance/tool.looparm.md Design section).
+// Env-overridable, mirroring TTL_MS/RESERVE_MS's existing precedent.
+const LOOP_STALE_MS = Number(process.env.METRO_LOOP_STALE_MS) || 72 * 60 * 60 * 1000;
+
+// FEAT-070: marker that brackets the standing-loop status block printed at the
+// end of a successful checkin's stdout, mirroring claude-bow.js's SUMMARY_MARKER
+// contract — claude-startup.js's printSessionSummary looks for this exact string
+// to lift the block out of raw checkin output and place it inside the mandatory
+// startup sequence. Keep this literal string identical in both files.
+const LOOP_MARKER = '── STANDING LOOP ──';
+
 // Boot id: boot time rounded to 10 s. Survives across processes in one boot,
 // changes on reboot — that mismatch is how dead holders are proven dead.
 const BOOT_ID = String(Math.round((Date.now() - os.uptime() * 1000) / 10000));
@@ -68,9 +103,36 @@ const argv = process.argv.slice(2);
 const command = argv[0] || 'read';
 const positional = [];
 const flags = {};
+// Value-consuming flags — every other `--flag` is treated as a bare boolean.
+// AC-5 (FEAT-069): `--to`/`--body-file` MUST be listed here, or `--to Bob`
+// silently corrupts the message (`--to` becomes `true`, "Bob" lands in
+// `positional` and is mistaken for message text).
+const VALUE_FLAGS = new Set(['name', 'session', 'to', 'body-file']);
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
-  if (a === '--name' || a === '--session') { flags[a.slice(2)] = argv[++i]; }
+  if (a.startsWith('--') && VALUE_FLAGS.has(a.slice(2))) {
+    const flagName = a.slice(2);
+    const next = argv[i + 1];
+    // BUG (Culvert, FEAT-069 Destructive REJECT): a value-flag with no following
+    // token used to fall through to `argv[++i]` running off the array end,
+    // silently storing JS `undefined` as the flag's value. Downstream guards
+    // like `if (flags.to !== undefined)` are then FALSE for this exact case
+    // (the value literally IS undefined), so an explicitly-supplied `--to`
+    // with a missing value was silently discarded and the message fell
+    // through to a broadcast instead of erroring. A flag immediately followed
+    // by another flag (`--to --body-file x`) is equally ambiguous — the next
+    // token is clearly not this flag's value. Both are now a hard parse error.
+    if (next === undefined || next.startsWith('--')) {
+      console.error(
+        `claude-sync: --${flagName} requires a value` +
+        (next === undefined ? ', but none was given (end of arguments).'
+          : `, but the next token "${next}" looks like another flag.`)
+      );
+      process.exit(1);
+    }
+    flags[flagName] = next;
+    i++;
+  }
   else if (a.startsWith('--')) { flags[a.slice(2)] = true; }
   else { positional.push(a); }
 }
@@ -126,8 +188,36 @@ async function ensureSchema(db) {
     name       VARCHAR(16) NOT NULL,
     updated_ms BIGINT NOT NULL
   ) ENGINE=InnoDB`);
+  // FEAT-069 (tool.syncmsg): directed/broadcast messages + per-identity read
+  // cursor. Name-keyed (matching sync_permits' own keying), NOT window-keyed
+  // (matching sync_window_map would deliver to the wrong entity — see
+  // docs/planning/acceptance/tool.syncmsg.md "What 'directed message' means").
+  await db.query(`CREATE TABLE IF NOT EXISTS sync_messages (
+    id        INT AUTO_INCREMENT PRIMARY KEY,
+    ts        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    from_name VARCHAR(16) NULL,
+    to_name   VARCHAR(16) NULL,
+    body      TEXT NOT NULL
+  ) ENGINE=InnoDB`);
+  await db.query(`CREATE TABLE IF NOT EXISTS sync_read_cursor (
+    name         VARCHAR(16) PRIMARY KEY,
+    last_read_id INT NOT NULL DEFAULT 0
+  ) ENGINE=InnoDB`);
+  // FEAT-070 (tool.looparm): standing /loop configuration, one row per identity.
+  // Deliberately NO boot_id column — unlike sync_permits, this table's entire
+  // purpose is to survive a reboot (see tool.looparm.md Design section); gating
+  // it on BOOT_ID would defeat the item's own title.
+  await db.query(`CREATE TABLE IF NOT EXISTS sync_loop_config (
+    name           VARCHAR(16) PRIMARY KEY,
+    spec           TEXT NOT NULL,
+    set_ms         BIGINT NOT NULL,
+    set_by_session CHAR(36) NULL,
+    last_armed_ms  BIGINT NULL,
+    armed_count    INT NOT NULL DEFAULT 0
+  ) ENGINE=InnoDB`);
   for (const n of NAMES) {
     await db.query('INSERT IGNORE INTO sync_permits (name) VALUES (?)', [n]);
+    await db.query('INSERT IGNORE INTO sync_read_cursor (name, last_read_id) VALUES (?, 0)', [n]);
   }
 }
 
@@ -195,9 +285,116 @@ async function printSuccess(name, sessionId, db) {
   } catch (err) {
     console.log(`(startup summary unavailable: ${err.message})`);
   }
+  // FEAT-070 (AC-6/AC-7/AC-8/AC-9): standing-loop auto-arm. Only prints
+  // anything at all when `name` has a sync_loop_config row (AC-7: silent,
+  // byte-identical no-op otherwise). Runs once per printSuccess call, which
+  // is itself only reached once per successful checkin resolution — so this
+  // is naturally the "exactly once, only for the identity that actually
+  // resolved" behaviour AC-9 requires, with no extra bookkeeping needed.
+  try {
+    await printLoopArmStatus(db, name);
+  } catch (err) {
+    console.log(`(standing loop check unavailable: ${err.message})`);
+  }
 }
 
-/** Resolve the permit row held by this window (active only unless allowStale). */
+/**
+ * FEAT-070 (AC-6/AC-8/AC-9): look up `name`'s standing /loop config (if any)
+ * and either arm it (updating last_armed_ms/armed_count) or, if stale, report
+ * it without arming. Prints nothing when no row exists (AC-7). The printed
+ * block is bracketed by LOOP_MARKER so claude-startup.js can lift it out of
+ * raw checkin stdout and place it inside the mandatory startup sequence.
+ */
+async function printLoopArmStatus(db, name) {
+  // FEAT-070 Destructive REJECT, finding #3 (AC-9 "exactly once" race): the
+  // original code ran an unlocked SELECT-then-UPDATE outside cmdCheckin's own
+  // transaction, so N concurrent checkins for the same identity could all
+  // read the same pre-update row and each print the MANDATORY instruction,
+  // with armed_count incrementing racily instead of exactly once. Mirror the
+  // file's existing `lockedPermits`/`FOR UPDATE` pattern: open a dedicated
+  // transaction here, lock the identity's row with SELECT ... FOR UPDATE, and
+  // do the read + conditional update inside it, so concurrent callers
+  // serialize on this row and each sees a consistent, up-to-date state.
+  await db.beginTransaction();
+  let rows;
+  try {
+    [rows] = await db.query('SELECT * FROM sync_loop_config WHERE name=? FOR UPDATE', [name]);
+    if (!rows.length) {
+      await db.commit();
+      return; // AC-7: nothing configured -> print nothing at all
+    }
+    const row = rows[0];
+    const now = Date.now();
+    const lastActivityMs = Math.max(Number(row.set_ms), row.last_armed_ms != null ? Number(row.last_armed_ms) : 0);
+    const ageMs = now - lastActivityMs;
+
+    if (ageMs > LOOP_STALE_MS) {
+      // AC-8: stale — withhold the arm instruction, report instead. NOT armed:
+      // last_armed_ms/armed_count are untouched.
+      await db.commit();
+      console.log('');
+      console.log(LOOP_MARKER);
+      console.log(`STALE STANDING LOOP — NOT auto-armed`);
+      console.log(`Identity: ${name}`);
+      console.log(`Stored spec: ${row.spec}`);
+      console.log(`Age: ${fmtMs(ageMs)} since last set/arm (stale threshold: ${fmtMs(LOOP_STALE_MS)}).`);
+      console.log(`Resolve: node claude-sync.js loop-clear   (cancel it)`);
+      console.log(`      or: node claude-sync.js loop-set "${row.spec}"   (explicitly refresh it)`);
+      return;
+    }
+    await db.query('UPDATE sync_loop_config SET last_armed_ms=?, armed_count=armed_count+1 WHERE name=?', [now, name]);
+    await db.commit();
+    console.log('');
+    console.log(LOOP_MARKER);
+    console.log(`MANDATORY: invoke \`/loop ${row.spec}\` as one of your first actions this session (standing loop, FEAT-070).`);
+  } catch (err) {
+    try { await db.rollback(); } catch { /* connection may already be dead */ }
+    throw err;
+  }
+}
+
+/**
+ * FEAT-069 (AC-7/AC-8/AC-9/AC-10/AC-11): deliver unread messages for `name`
+ * (directed to them, or broadcast) and advance their read cursor to the
+ * highest delivered id — all inside the caller's already-open transaction,
+ * so a message is never lost silently (commit-then-cursor-advances-together,
+ * at-least-once never at-most-once). Cursor rows are always pre-seeded by
+ * ensureSchema, so a plain UPDATE (never an upsert) is correct here.
+ */
+async function deliverUnread(db, name) {
+  const [cursorRows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name=?', [name]);
+  const lastReadId = cursorRows.length ? Number(cursorRows[0].last_read_id) : 0;
+  const [msgs] = await db.query(
+    'SELECT id, ts, from_name, body FROM sync_messages WHERE (to_name = ? OR to_name IS NULL) AND id > ? ORDER BY id ASC',
+    [name, lastReadId]
+  );
+  if (msgs.length) {
+    const maxId = msgs[msgs.length - 1].id;
+    await db.query('UPDATE sync_read_cursor SET last_read_id=? WHERE name=?', [maxId, name]);
+  }
+  return msgs;
+}
+
+/** Plain-text rendering of delivered messages — terminal tool output, no UI richness. */
+function printUnread(msgs) {
+  if (!msgs.length) return;
+  console.log('');
+  console.log('UNREAD MESSAGES:');
+  for (const m of msgs) {
+    const ts = m.ts instanceof Date ? m.ts.toISOString().replace('T', ' ').slice(0, 19) : String(m.ts);
+    console.log(`  [${ts}] ${m.from_name || 'unknown'}: ${m.body}`);
+  }
+}
+
+/**
+ * Resolve the permit row held by this window (active only unless allowStale).
+ *
+ * `--session <uuid>` fallback below exists for legitimate plain-terminal /
+ * wake-recovery usage where CLAUDE_CODE_SESSION_ID isn't set, matching by
+ * the permit's own DB-issued session id (plain-terminal usage). Used by
+ * read/renew/status paths. NOT used by loop-set/loop-clear/loop-show — see
+ * `findMineBySessionSecret` below, which those three commands use instead.
+ */
 function findMine(byName, now, { allowStale = false } = {}) {
   for (const n of NAMES) {
     const row = byName[n];
@@ -218,6 +415,55 @@ function findMine(byName, now, { allowStale = false } = {}) {
   return null;
 }
 
+/**
+ * Resolve a permit strictly by its own DB-issued session SECRET — WINDOW_ID
+ * is not consulted at all. FEAT-070 Destructive REJECT round 2, finding A
+ * (Marrow): round 1's fix (`noSessionFallback`) only closed the `--session`
+ * FLAG path while leaving the exact same trust placed in the ENV VAR form of
+ * the identical idea — `WINDOW_ID` (`CLAUDE_CODE_SESSION_ID`/
+ * `CLAUDE_SESSION_ID`) is populated straight from an environment variable
+ * that ANY process fully controls, including a hostile one holding no
+ * permit at all. Per this file's own header comment, that value "arrives via
+ * env var (hooks set it from the hook stdin payload)" — i.e. it is ambient
+ * to every hook invocation and visible output within a session, not a
+ * secret an attacker needs privileged access to learn. Matching `row.
+ * window_id === WINDOW_ID` therefore proves nothing: an attacker who merely
+ * learns another identity's session UUID (from logs, transcripts, error
+ * text) can set that exact value in their OWN process's env and pass every
+ * WINDOW_ID-based check with zero flags, zero permit of their own.
+ *
+ * The one value in this system that genuinely is unpredictable and is
+ * disclosed to exactly one process — the one that actually performed the
+ * checkin — is the permit's own `session_id`: a `crypto.randomUUID()` minted
+ * SERVER-SIDE inside `acquire()` (line ~244) and printed exactly once, in
+ * that checkin call's own stdout ("Session: <uuid>", see `printSuccess`).
+ * It is never copied into the shared hook env, never derivable from
+ * WINDOW_ID, and never disclosed to any process that didn't either perform
+ * the checkin itself or have that output deliberately relayed to it.
+ *
+ * `loop-set`/`loop-clear`/`loop-show` — the three commands that let the
+ * resolved identity WRITE or read another identity's standing-loop row —
+ * now authenticate ONLY against this secret, via a MANDATORY `--session
+ * <id>` flag (the id printed at your own checkin). There is no WINDOW_ID
+ * branch for these three commands at all — matching on WINDOW_ID string
+ * equality, flag or env, was exactly the hole this closes. This does change
+ * the zero-flag ergonomics for these three commands specifically (a
+ * deliberate, security-motivated contract change, not an oversight): a
+ * caller must capture and pass forward the session id its own checkin
+ * printed, the same way it would handle any other credential a command
+ * prints once and expects reused.
+ */
+function findMineBySessionSecret(byName, now) {
+  if (!flags.session) return null;
+  for (const n of NAMES) {
+    const row = byName[n];
+    if (row.session_id && row.session_id === flags.session && slotState(row, now) === 'ACTIVE') {
+      return { row, state: 'ACTIVE' };
+    }
+  }
+  return null;
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function cmdCheckin(db) {
@@ -230,8 +476,10 @@ async function cmdCheckin(db) {
   if (mine) {
     await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
       [now + TTL_MS, now, mine.row.name]);
+    const unread = await deliverUnread(db, mine.row.name);
     await db.commit();
     await printSuccess(mine.row.name, mine.row.session_id, db);
+    printUnread(unread);
     return;
   }
 
@@ -253,9 +501,11 @@ async function cmdCheckin(db) {
       if (flags.force && flags['human-ok']) {
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} FORCE-EVICTED previous holder (human-authorised) and checked in`);
+        const unread = await deliverUnread(db, name);
         await db.commit();
         console.log(`Evicted previous ${name} holder (human-authorised).`);
         await printSuccess(name, sessionId, db);
+        printUnread(unread);
         return;
       }
       if (flags.force) {
@@ -274,8 +524,10 @@ async function cmdCheckin(db) {
       if (flags.force && flags['human-ok']) {
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} reservation overridden (human-authorised)`);
+        const unread = await deliverUnread(db, name);
         await db.commit();
         await printSuccess(name, sessionId, db);
+        printUnread(unread);
         return;
       }
       await db.rollback();
@@ -287,8 +539,10 @@ async function cmdCheckin(db) {
     // FREE, or RESERVED for this very window — take it.
     const sessionId = await acquire(db, name);
     await log(db, name, `${name} checked in`);
+    const unread = await deliverUnread(db, name);
     await db.commit();
     await printSuccess(name, sessionId, db);
+    printUnread(unread);
     return;
   }
 
@@ -308,8 +562,10 @@ async function cmdCheckin(db) {
   }
   const sessionId = await acquire(db, free);
   await log(db, free, `${free} checked in`);
+  const unread = await deliverUnread(db, free);
   await db.commit();
   await printSuccess(free, sessionId, db);
+  printUnread(unread);
 }
 
 async function cmdRenew(db) {
@@ -433,6 +689,19 @@ async function cmdStatus(db, { full = false } = {}) {
         console.log(`  [${a.ts.toISOString().replace('T', ' ').slice(0, 19)}] ${a.name ? a.name + ': ' : ''}${a.message}`);
       }
     }
+
+    // FEAT-070 (AC-11): oversight visibility — every identity's standing loop,
+    // configured or not, so the lead's sweep sees all three without holding them.
+    const [loopRows] = await db.query('SELECT * FROM sync_loop_config');
+    const loopByName = {}; for (const r of loopRows) loopByName[r.name] = r;
+    console.log('\nSTANDING LOOPS:');
+    for (const n of NAMES) {
+      const row = loopByName[n];
+      if (!row) { console.log(`  ${n.padEnd(4)} none`); continue; }
+      const setAge = fmtMs(now - Number(row.set_ms));
+      const armedAge = row.last_armed_ms != null ? fmtMs(now - Number(row.last_armed_ms)) : 'never armed';
+      console.log(`  ${n.padEnd(4)} "${row.spec}"  (set ${setAge} ago, last armed: ${armedAge}, armed_count=${row.armed_count})`);
+    }
   }
 }
 
@@ -445,6 +714,78 @@ async function cmdWrite(db) {
   const mine = findMine(byName, now, { allowStale: true });
   await log(db, mine ? mine.row.name : null, message);
   console.log(`Logged${mine ? ` as ${mine.row.name}` : ''}: ${message}`);
+}
+
+/**
+ * FEAT-069 (tool.syncmsg) — send a directed (--to <Name>) or broadcast
+ * (no --to) message. Mirrors claude-bow.js's `--desc-file`/`--note-file`
+ * pattern (BUG-090) for getting free text off the command line safely via
+ * --body-file, for the identical shell-injection reason (AC-6).
+ */
+async function cmdMessage(db) {
+  const inlineText = positional.join(' ');
+  const bodyFile = flags['body-file'];
+
+  // AC-6: inline text and --body-file are mutually exclusive — no partial write.
+  if (inlineText && bodyFile !== undefined) {
+    console.error('claude-sync: message text and --body-file may not both be supplied — pick one (mirrors BUG-090\'s --desc/--desc-file rule).');
+    process.exit(1);
+  }
+
+  let body;
+  if (bodyFile !== undefined) {
+    try {
+      body = fs.readFileSync(bodyFile, 'utf8');
+    } catch (err) {
+      console.error(`claude-sync: cannot read --body-file: ${err.message}`);
+      process.exit(1);
+    }
+  } else {
+    body = inlineText;
+  }
+  if (!body) {
+    console.error('Usage: node claude-sync.js message "<text>" [--to <Name>] [--body-file <path>]');
+    process.exit(1);
+  }
+
+  // AC-4: unknown --to target rejected before any write, exact reused string
+  // from checkin's own validation (claude-sync.js's Unknown slot name error).
+  let toName = null;
+  if (flags.to !== undefined) {
+    const name = NAMES.find(n => n.toLowerCase() === String(flags.to).toLowerCase());
+    if (!name) {
+      console.error(`Unknown slot name "${flags.to}". Valid: ${NAMES.join(', ')}`);
+      process.exit(1);
+    }
+    toName = name;
+  }
+
+  // AC-2: requires an active permit; sender identity is mandatory, never
+  // trusted from an argv flag — resolved the same way cmdClaim resolves it.
+  const now = Date.now();
+  const [rows] = await db.query('SELECT * FROM sync_permits');
+  const byName = {}; for (const r of rows) byName[r.name] = r;
+  const mine = findMine(byName, now);
+  if (!mine) { console.error('No active permit — checkin before sending messages.'); process.exit(1); }
+
+  await db.beginTransaction();
+  try {
+    const [result] = await db.query(
+      'INSERT INTO sync_messages (from_name, to_name, body) VALUES (?, ?, ?)',
+      [mine.row.name, toName, body]
+    );
+    // AC-9: sender never sees their own just-sent message flagged unread —
+    // advance the sender's own cursor past it, within this same transaction.
+    await db.query(
+      'UPDATE sync_read_cursor SET last_read_id = GREATEST(last_read_id, ?) WHERE name=?',
+      [result.insertId, mine.row.name]
+    );
+    await db.commit();
+  } catch (err) {
+    await db.rollback();
+    throw err;
+  }
+  console.log(`Message sent${toName ? ` to ${toName}` : ' (broadcast)'}.`);
 }
 
 async function cmdClaim(db) {
@@ -484,9 +825,103 @@ async function cmdGc(db) {
   console.log(`gc: released ${res.affectedRows} stale permit(s), removed ${claims.affectedRows} orphaned claim(s).`);
 }
 
-// ── Entry ─────────────────────────────────────────────────────────────────────
+// FEAT-070 (AC-2/AC-3): configure the caller's own standing /loop spec.
+// Positional text (like `write`'s message), not a --spec value-flag.
+async function cmdLoopSet(db) {
+  const spec = positional.join(' ').trim();
+  if (!spec) {
+    console.error('Usage: node claude-sync.js loop-set "<interval> <command>"');
+    process.exit(1);
+  }
+  // FEAT-070 Destructive REJECT, finding #2 (round 1, extended round 2 —
+  // Marrow): `spec` is displayed verbatim inside the "MANDATORY" startup
+  // block (printLoopArmStatus / printSessionSummary). A multi-line or
+  // control-character spec can visually merge with that numbered-list
+  // startup formatting and masquerade as a genuine instruction (prompt
+  // injection against whoever reads the startup output next). Round 1's
+  // blocklist (`/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]|[\r\n]/`) was pure ASCII
+  // C0/DEL and missed TAB, the Unicode line/paragraph separators U+2028/
+  // U+2029 (real JS line terminators, NOT matched by \r\n), the bidi/RTL-
+  // override characters U+202A-U+202E and U+2066-U+2069, and zero-width
+  // characters U+200B-U+200D/U+FEFF — all of which reach the same "visually
+  // merge with startup text" vector via Unicode instead of ASCII. Blocklists
+  // of "dangerous" characters have now proven incomplete TWICE in this exact
+  // file (round 1 -> round 2), so this switches to an ALLOWLIST: a standing
+  // loop spec is always a single short command line, so only printable
+  // ASCII (U+0020 space through U+007E tilde) is accepted at all. Anything
+  // outside that range — control chars, line/paragraph separators, bidi
+  // overrides, zero-width characters, or any other Unicode codepoint,
+  // known or not-yet-discovered — is rejected by construction, not by name.
+  if (!/^[\x20-\x7E]*$/.test(spec)) {
+    console.error('loop-set: spec must be printable ASCII only (space through ~) — no control characters, Unicode line/paragraph separators, bidi overrides, zero-width characters, or other non-ASCII codepoints. A standing loop spec is always a single short plain command line.');
+    process.exit(1);
+  }
+  const now = Date.now();
+  const [rows] = await db.query('SELECT * FROM sync_permits');
+  const byName = {}; for (const r of rows) byName[r.name] = r;
+  // FEAT-070 Destructive REJECT round 2, finding A: authenticate via the
+  // server-issued session secret only — see findMineBySessionSecret's doc
+  // comment for why WINDOW_ID (env-var-sourced) is not proof of identity.
+  const mine = findMineBySessionSecret(byName, now);
+  if (!mine) {
+    console.error('No active permit — checkin, then pass --session <id printed by YOUR OWN checkin> before setting a standing loop.');
+    process.exit(1);
+  }
+  // AC-2: a re-set is a fresh commitment — armed_count/last_armed_ms reset.
+  await db.query(
+    `REPLACE INTO sync_loop_config (name, spec, set_ms, set_by_session, last_armed_ms, armed_count)
+     VALUES (?, ?, ?, ?, NULL, 0)`,
+    [mine.row.name, spec, now, mine.row.session_id]
+  );
+  await log(db, mine.row.name, `standing loop set: ${spec}`);
+  console.log(`${mine.row.name} standing loop set: ${spec}`);
+}
 
-(async () => {
+// FEAT-070 (AC-4): clear the caller's OWN row only — never any other identity's.
+async function cmdLoopClear(db) {
+  const now = Date.now();
+  const [rows] = await db.query('SELECT * FROM sync_permits');
+  const byName = {}; for (const r of rows) byName[r.name] = r;
+  // FEAT-070 Destructive REJECT round 2, finding A: see findMineBySessionSecret's doc comment.
+  const mine = findMineBySessionSecret(byName, now);
+  if (!mine) {
+    console.error('No active permit — checkin, then pass --session <id printed by YOUR OWN checkin> before clearing a standing loop.');
+    process.exit(1);
+  }
+  const [res] = await db.query('DELETE FROM sync_loop_config WHERE name=?', [mine.row.name]);
+  if (!res.affectedRows) {
+    console.log(`${mine.row.name}: nothing to clear — no standing loop configured.`);
+    return;
+  }
+  await log(db, mine.row.name, 'standing loop cleared');
+  console.log(`${mine.row.name} standing loop cleared.`);
+}
+
+// FEAT-070 (AC-5): show the caller's own standing loop state, never crashing
+// on absence.
+async function cmdLoopShow(db) {
+  const now = Date.now();
+  const [rows] = await db.query('SELECT * FROM sync_permits');
+  const byName = {}; for (const r of rows) byName[r.name] = r;
+  // FEAT-070 Destructive REJECT round 2, finding A: see findMineBySessionSecret's doc comment.
+  const mine = findMineBySessionSecret(byName, now);
+  if (!mine) {
+    console.error('No active permit — checkin, then pass --session <id printed by YOUR OWN checkin> before checking your standing loop.');
+    process.exit(1);
+  }
+  const [loopRows] = await db.query('SELECT * FROM sync_loop_config WHERE name=?', [mine.row.name]);
+  if (!loopRows.length) {
+    console.log('no standing loop configured');
+    return;
+  }
+  const row = loopRows[0];
+  const setAge = fmtMs(now - Number(row.set_ms));
+  const armedAge = row.last_armed_ms != null ? fmtMs(now - Number(row.last_armed_ms)) : 'never armed';
+  console.log(`${mine.row.name} standing loop: "${row.spec}"`);
+  console.log(`  set ${setAge} ago, last armed: ${armedAge}, armed_count=${row.armed_count}`);
+}
+
+async function runCli() {
   const db = await connect();
   try {
     await ensureSchema(db);
@@ -499,12 +934,16 @@ async function cmdGc(db) {
       case 'status': await cmdStatus(db); break;
       case 'read': await cmdStatus(db, { full: true }); break;
       case 'write': await cmdWrite(db); break;
+      case 'message': await cmdMessage(db); break;
       case 'claim': await cmdClaim(db); break;
       case 'release': await cmdRelease(db); break;
       case 'gc': await cmdGc(db); break;
+      case 'loop-set': await cmdLoopSet(db); break;
+      case 'loop-clear': await cmdLoopClear(db); break;
+      case 'loop-show': await cmdLoopShow(db); break;
       default:
         console.error(`Unknown command: ${command}`);
-        console.error('Commands: init, checkin, renew, ping, checkout, status, read, write, claim, release, gc');
+        console.error('Commands: init, checkin, renew, ping, checkout, status, read, write, message, claim, release, gc, loop-set, loop-clear, loop-show');
         process.exit(1);
     }
   } catch (err) {
@@ -514,4 +953,17 @@ async function cmdGc(db) {
   } finally {
     await db.end().catch(() => {});
   }
-})();
+}
+
+module.exports = {
+  NAMES, connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
+  cmdCheckin, cmdRenew, cmdMessage, cmdCheckout, cmdStatus, cmdWrite, cmdClaim,
+  cmdRelease, cmdGc,
+  cmdLoopSet, cmdLoopClear, cmdLoopShow, printLoopArmStatus,
+  LOOP_MARKER, LOOP_STALE_MS,
+};
+
+// ── Entry ─────────────────────────────────────────────────────────────────────
+if (require.main === module) {
+  runCli();
+}

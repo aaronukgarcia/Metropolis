@@ -4,11 +4,13 @@ import (
 	"context"
 	"sync"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/stub"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
 	mapscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/map"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
@@ -96,6 +98,34 @@ type skeletonWiring struct {
 	viewsLoop     *core.ViewsLoop
 	mapScreen     *mapscreen.MapScreen
 
+	// debugState is feat.debugmode's (FEAT-008) single source of truth
+	// for whether debug mode is on, and devConsole is feat.devmode's
+	// (FEAT-065) pause-anywhere console wired against it (BUG-122). Both
+	// are constructed unconditionally so devConsole.Open exists as a real,
+	// reachable object in this binary's own composition root rather than
+	// only inside devmode's own test files — closing the specific gap
+	// BUG-122 found (`grep -rn "devmode.New|screens/devmode" internal/
+	// cmd/`, excluding _test.go, previously returned zero matches).
+	//
+	// debugState is deliberately constructed with NO header wired
+	// (debug.WithHeader) — this Sprint 1 walking skeleton has no save
+	// header anywhere in its object graph yet (no serialize.Header is
+	// ever constructed in this package), and fabricating one here purely
+	// to unblock Enable would be duplicating FEAT-035's own scope ("Wire
+	// feat.debugmode into cmd/metropolis so the DebugTouched hygiene
+	// guarantee actually operates," still open). The practical
+	// consequence, and the honest state of this binary today: debug is
+	// permanently off (RequireConsole always denies, AC-DM1 holds
+	// trivially and correctly), and even a caller who forced debug on
+	// some other way could never successfully Enable it here, because
+	// Enable refuses outright with ErrNoHeaderConfigured rather than
+	// silently skipping the sticky DebugTouched flag (state.go's own
+	// AC-3/AC-12 contract). Full end-to-end "the console can actually be
+	// opened in a real build" reachability is FEAT-035's remaining work,
+	// not invented here as a side effect of BUG-122.
+	debugState *debug.State
+	devConsole *devmode.Console
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -154,6 +184,25 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	}
 	w.viewsLoop = core.NewViewsLoop(transport, w.viewStore, correlationID)
 
+	// BUG-122: construct feat.debugmode's State and wire feat.devmode's
+	// Console against it, following the exact seam-injection pattern
+	// console.go documents (each Option closes over one *debug.State
+	// method, never a devmode-local reimplementation) — see the
+	// debugState/devConsole field doc comment above for why no header is
+	// wired and what that means for Enable today.
+	w.debugState = debug.NewState()
+	w.devConsole = devmode.New(
+		devmode.WithRequireConsole(w.debugState.RequireConsole),
+		devmode.WithEnable(func(cid string) error {
+			return w.debugState.Enable(debug.SourcePalette, cid)
+		}),
+		devmode.WithInspect(w.debugState.InspectEntity),
+		devmode.WithSubmitFeedback(w.debugState.SubmitFeedback),
+		devmode.WithPause(func(cid string) error {
+			return sendPauseCommand(transport, cid)
+		}),
+	)
+
 	w.wg.Add(2)
 	go func() { defer w.wg.Done(); _ = engine.Run(ctx) }()
 	go func() { defer w.wg.Done(); w.viewsLoop.Run(ctx.Done()) }()
@@ -170,6 +219,27 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	}
 
 	return w, nil
+}
+
+// sendPauseCommand sends a real protocol.KindPause Command through
+// transport (feat.devmode AC-DM2: opening the console pauses the sim) —
+// mirrors MapScreen.Subscribe's exact command-construction pattern
+// (internal/ui/screens/map/screen.go's Subscribe method) rather than a
+// hand-rolled bypass of int.protocol's envelope. It does not wait for or
+// interpret the returned CommandResult: devmode.PauseFunc's contract
+// (console.go) is "report an error if the pause request itself could not
+// be issued," and StubEngine.handlePause (internal/engine/stub/engine.go)
+// has no rejection branch for a well-formed Pause — the same
+// fire-and-let-Validate-be-the-only-failure-mode posture bootCore's own
+// mapScreen.Subscribe call above already uses.
+func sendPauseCommand(transport protocol.Transport, correlationID string) error {
+	cmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID(correlationID),
+		Kind:            protocol.KindPause,
+		Payload:         protocol.PausePayload{},
+	}
+	return transport.SendCommand(cmd)
 }
 
 // shutdown cancels the background goroutines bootCore started, waits for

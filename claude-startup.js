@@ -6,9 +6,13 @@
 // (per-window identity — no manual $env:CLAUDE_SESSION_ID needed). Fallback checkins
 // use --any: the launcher sets CLAUDE_IDENTITY=Bill in every window, and without
 // --any a "plain" checkin silently re-requests Bill and loops into the same rejection.
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+// FEAT-045 AC-14: the commit-msg hook's install/survival state must reach a
+// human without them having to remember to check for it — wired into the
+// unconditional session-start summary below, in emitSuccess().
+const committhook = require('./claude-committhook-install.js');
 
 const projectRoot = __dirname;
 const identityPath = path.join(projectRoot, '.claude', '.identity');
@@ -17,10 +21,15 @@ const VALID_NAMES = ['bob', 'bill', 'ben'];
 /** Claude window UUID — resolved from hook stdin JSON before main logic runs. */
 let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
 
-/** Run a checkin command, returning { output, error, stderr } */
-function tryCheckin(cmd) {
+/** Run a checkin command, returning { output, error, stderr }.
+ *  BUG-124: args is an argv array (e.g. ['claude-sync.js', 'checkin', '--name', requestedIdentity])
+ *  passed to execFileSync with no shell, so no value reaching this function --
+ *  including an operator-controlled CLAUDE_IDENTITY -- can break out into shell
+ *  metacharacters ( &, |, ;, `, $(), etc.). Never rebuild this as a template
+ *  string handed to execSync/exec — that reintroduces the injection. */
+function tryCheckin(args) {
   try {
-    const output = execSync(cmd, {
+    const output = execFileSync('node', args, {
       cwd: projectRoot,
       encoding: 'utf-8',
       timeout: 15000,
@@ -75,20 +84,50 @@ function fmtMs(ms) {
 
 const SUMMARY_MARKER = '── METROPOLIS STARTUP SUMMARY ──';
 
-/** Emit the mandatory startup instructions for a successfully-claimed identity.
- *  checkinOutput is the raw claude-sync checkin stdout — it carries the startup
- *  summary block (BOW state from the metro DB, Vestige check, git sync check),
- *  which is relayed verbatim so it reaches Claude's context every session. */
-function emitSuccess(name, checkinOutput) {
-  fs.writeFileSync(identityPath, name, 'utf-8');
+// FEAT-070 (tool.looparm): must be byte-identical to claude-sync.js's own
+// LOOP_MARKER constant — this file never invokes claude-sync directly for
+// loop state, it only lifts the already-printed block out of checkin's
+// stdout (same technique as SUMMARY_MARKER above), because this hook cannot
+// invoke the Claude Code `/loop` slash command itself (that is an agent-level
+// tool call, not a shell-reachable action) — it can only print a mandatory
+// instruction for the agent to act on, same trust boundary as step 1 below.
+const LOOP_MARKER = '── STANDING LOOP ──';
+
+/** Prints the block of console output emitSuccess() shows on every
+ *  successful checkin, EXCLUDING the identity-file write (split out so
+ *  FEAT-045 AC-14's test can capture this exact output — including the
+ *  commit-msg hook's install/survival state — against a throwaway repo,
+ *  without touching this machine's real .claude/.identity file, which is
+ *  shared, session-coordination state other concurrent agents rely on). */
+function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
   console.log(`IDENTITY: ${name}>`);
   console.log(`PREFIX EVERY RESPONSE with "${name}>". No exceptions.`);
   console.log(`HOOKS: ACTIVE.`);
+  // FEAT-045 AC-14: printed unconditionally on every successful checkin, not
+  // behind a skill/slash-command a human has to remember to run. The third
+  // arg is test-only (lets a test point this at a throwaway repo instead of
+  // the real one) — production call sites never pass it, so this always
+  // checks the real installed hook in normal operation.
+  console.log(committhook.summaryLine(committhookRepoRoot || projectRoot));
 
-  const idx = (checkinOutput || '').indexOf(SUMMARY_MARKER);
+  // FEAT-070 (AC-6/AC-7/AC-8): split the standing-loop status block (if any)
+  // out of raw checkin stdout BEFORE the SUMMARY_MARKER slice-to-end below —
+  // otherwise it would get swept into that block instead of landing inside
+  // the numbered MANDATORY STARTUP SEQUENCE list where AC-6 requires it.
+  // Absent entirely (loopContent === null) when the identity has no
+  // sync_loop_config row — AC-7 requires zero output change in that case.
+  let remaining = checkinOutput || '';
+  let loopContent = null;
+  const loopIdx = remaining.indexOf(LOOP_MARKER);
+  if (loopIdx !== -1) {
+    loopContent = remaining.slice(loopIdx + LOOP_MARKER.length).trim();
+    remaining = remaining.slice(0, loopIdx).trimEnd();
+  }
+
+  const idx = remaining.indexOf(SUMMARY_MARKER);
   if (idx !== -1) {
     console.log(``);
-    console.log(checkinOutput.slice(idx).trim());
+    console.log(remaining.slice(idx).trim());
   } else {
     console.log(``);
     console.log(`WARNING: checkin returned no startup summary (BOW/Vestige/git state unknown).`);
@@ -101,8 +140,37 @@ function emitSuccess(name, checkinOutput) {
   console.log(`2. Read CLAUDE.md for full Golden Rules.`);
   console.log(`3. Run 'node claude-sync.js read' to check coordination state.`);
   console.log(`4. Your first response to the user must confirm: identity, hooks status, the BOW summary above (metro DB health), Vestige status (live search worked), and git sync state.`);
+  // FEAT-070 (AC-6): a fresh, non-stale standing /loop spec becomes step 5 of
+  // the SAME mandatory numbered block — not a separate, skippable aside. The
+  // exact spec text is relayed verbatim from claude-sync.js's own arm check
+  // (claude-sync.js:printLoopArmStatus), never re-derived here.
+  if (loopContent && loopContent.startsWith('MANDATORY: invoke')) {
+    console.log(`5. ${loopContent}`);
+  }
   console.log(`If the summary above shows git NOT SYNCED or a Vestige problem, surface that to the user immediately.`);
   console.log(`DO NOT skip step 1. Memory recall is not optional. If Vestige tools are unavailable, state that explicitly.`);
+
+  // FEAT-070 (AC-8): a STALE standing loop is withheld from the mandatory
+  // block above and instead reported here, immediately alongside it, with
+  // identity/spec/age/resolve-commands (all sourced verbatim from
+  // claude-sync.js — this hook never re-derives staleness itself).
+  if (loopContent && loopContent.startsWith('STALE STANDING LOOP')) {
+    console.log(``);
+    console.log(loopContent);
+  }
+}
+
+/** Emit the mandatory startup instructions for a successfully-claimed identity.
+ *  checkinOutput is the raw claude-sync checkin stdout — it carries the startup
+ *  summary block (BOW state from the metro DB, Vestige check, git sync check),
+ *  which is relayed verbatim so it reaches Claude's context every session.
+ *  Writes the real identity file (this machine's actual session-coordination
+ *  state) and then prints the SAME summary printSessionSummary() prints —
+ *  see that function for FEAT-045 AC-14's test-only committhookRepoRoot
+ *  override. */
+function emitSuccess(name, checkinOutput, committhookRepoRoot) {
+  fs.writeFileSync(identityPath, name, 'utf-8');
+  printSessionSummary(name, checkinOutput, committhookRepoRoot);
 }
 
 /**
@@ -171,7 +239,7 @@ const requestedIdentity = process.env.CLAUDE_IDENTITY || null;
 
 if (requestedIdentity) {
   // Step 1: Try to claim the specifically-requested identity
-  const first = tryCheckin(`node claude-sync.js checkin --name ${requestedIdentity}`);
+  const first = tryCheckin(['claude-sync.js', 'checkin', '--name', requestedIdentity]);
 
   if (first.output && parseName(first.output)) {
     // Got the requested slot — perfect
@@ -183,7 +251,7 @@ if (requestedIdentity) {
     console.log(`WARNING: ${requestedIdentity} slot is OCCUPIED or RESERVED by another session.`);
     console.log(`Falling back to next available slot (Bob or Ben)...`);
 
-    const second = tryCheckin('node claude-sync.js checkin --any');
+    const second = tryCheckin(['claude-sync.js', 'checkin', '--any']);
 
     if (second.output && parseName(second.output)) {
       const assigned = parseName(second.output);
@@ -214,7 +282,7 @@ if (requestedIdentity) {
 
 } else {
   // No identity preference — first-come, first-served
-  const result = tryCheckin('node claude-sync.js checkin');
+  const result = tryCheckin(['claude-sync.js', 'checkin']);
 
   if (result.output && parseName(result.output)) {
     emitSuccess(parseName(result.output), result.output);
@@ -230,22 +298,33 @@ if (requestedIdentity) {
 }
 
 // ─── Entry: resolve this window's ID from the hook stdin JSON, then run ───────
+//
+// FEAT-045 AC-14: gated behind require.main === module so this file can be
+// require()'d by claude-committhook-install.test.js (to exercise
+// emitSuccess()'s captured output directly, against a throwaway repo) with
+// zero production side effects — requiring it no longer starts a real
+// checkin. Running it as a script (`node claude-startup.js`, or as the
+// actual SessionStart hook) is completely unchanged.
 
-if (process.stdin.isTTY) {
-  runStartup();  // manual run — no hook payload
+if (require.main === module) {
+  if (process.stdin.isTTY) {
+    runStartup();  // manual run — no hook payload
+  } else {
+    let input = '';
+    let started = false;
+    const start = () => { if (!started) { started = true; runStartup(); } };
+    process.stdin.setEncoding('utf-8');
+    process.stdin.on('data', chunk => { input += chunk; });
+    process.stdin.on('end', () => {
+      try {
+        const data = JSON.parse(input);
+        if (data.session_id) windowId = data.session_id;
+      } catch { /* env fallback stands */ }
+      start();
+    });
+    // Never let a stuck pipe block the session from starting
+    setTimeout(start, 3000).unref();
+  }
 } else {
-  let input = '';
-  let started = false;
-  const start = () => { if (!started) { started = true; runStartup(); } };
-  process.stdin.setEncoding('utf-8');
-  process.stdin.on('data', chunk => { input += chunk; });
-  process.stdin.on('end', () => {
-    try {
-      const data = JSON.parse(input);
-      if (data.session_id) windowId = data.session_id;
-    } catch { /* env fallback stands */ }
-    start();
-  });
-  // Never let a stuck pipe block the session from starting
-  setTimeout(start, 3000).unref();
+  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES };
 }

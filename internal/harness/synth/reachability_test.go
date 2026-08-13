@@ -68,26 +68,33 @@ package synth
 //     value passed as an ARGUMENT and later invoked under a different
 //     local name. TestReachability_FunctionValuePassedAsParameterEvades
 //     proves this is a real, demonstrated gap, not a hedge.
-//   - Package-level FUNCTION-TYPED VARS (the wire-table/handler-registry
-//     idiom: `var DefaultWire = wireDefaultHook` declared inside an
+//   - Package-level FUNCTION-TYPED VARS, bare-identifier or FuncLit
+//     initializer only (the wire-table/handler-registry idiom:
+//     `var DefaultWire = wireDefaultHook` or
+//     `var DefaultWire = func(e *engine) {...}`, declared inside an
 //     already-whitelisted file, called elsewhere as `DefaultWire(e)`):
-//     NOT resolved — and NOT in this list's original draft. Found by
-//     this chain's own Destructive (BUG-101), which is worth recording
-//     plainly: the declared-gap list was narrower than reality, the
-//     exact recurring failure this project's process doc names, on the
-//     very file whose job is declaring gaps honestly.
-//     buildReachabilityGraph only visits *ast.FuncDecl bodies, so an
-//     *ast.GenDecl var initializer contributes no node and no alias
-//     edge, and reachableFromEntry's byName map — keyed only by
-//     DECLARATION names — gives the call through the var's name nothing
-//     to resolve to; the BFS stops dead there. Materially worse than
-//     the parameter gap above in KIND, not just instance: it also
-//     evades scanForCallSites (the identifier's only textual appearance
-//     is inside the whitelisted file), so it defeats both defence
-//     layers at once. TestReachability_PackageLevelFuncVarEvades proves
-//     it. The real fix — walking GenDecl var initializers and treating
-//     a func-valued var as an alias edge — is BUG-101's scope, not a
-//     comment's.
+//     YES, fixed by BUG-101. buildReachabilityGraph now also walks each
+//     file's package-level *ast.GenDecl (token.VAR) declarations: a
+//     *ast.ValueSpec initializer that is a bare *ast.Ident naming a
+//     function becomes a synthetic reachFuncNode whose only "call" is
+//     that identifier (an alias edge, resolved by reachableFromEntry's
+//     existing byName lookup exactly like an ordinary call — no name is
+//     special-cased, GR#15); a *ast.FuncLit initializer has its body
+//     inspected exactly as an *ast.FuncDecl's body is (inspectFuncBody).
+//     TestReachability_PackageLevelFuncVarEvades (renamed in spirit, not
+//     in name — see its own doc comment) now proves the CATCH, not the
+//     gap. NOT covered by this fix, and explicitly out of scope
+//     (ASM-419): a var populated by a map/slice literal of func values
+//     (`var handlers = map[string]func(){...}`, the idiom this BOW
+//     item's own title names), a reassignment inside init() or any
+//     initializer more complex than a bare identifier/FuncLit (e.g. a
+//     conditional call `var Wire = cond()`), and dataflow of a
+//     func-typed var read back out of a struct field or slice element.
+//     These remain real, live, undeclared-no-longer gaps in the SAME
+//     kind as the fixed case (both are alias-edge problems the graph
+//     builder does not chase past a var's own initializer expression)
+//     — filed as a follow-up, not silently absent from this list
+//     (tracked as BUG-116).
 //   - reflect.MethodByName with a runtime-built string: NOT resolved,
 //     same as scanForCallSites — no *ast.Ident named RegisterPhaseHook
 //     exists anywhere in that call's syntax at all, so there is nothing
@@ -288,38 +295,78 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 		rel = filepath.ToSlash(rel)
 
 		for _, decl := range file.Decls {
-			fd, ok := decl.(*ast.FuncDecl)
-			if !ok || fd.Body == nil {
-				continue
-			}
-			node := &reachFuncNode{
-				file: rel,
-				recv: receiverTypeName(fd.Recv),
-				name: fd.Name.Name,
-			}
+			switch d := decl.(type) {
+			case *ast.FuncDecl:
+				if d.Body == nil {
+					continue
+				}
+				hasIdent, calls := inspectFuncBody(d.Body)
+				nodes = append(nodes, &reachFuncNode{
+					file:     rel,
+					recv:     receiverTypeName(d.Recv),
+					name:     d.Name.Name,
+					hasIdent: hasIdent,
+					calls:    calls,
+				})
 
-			ast.Inspect(fd.Body, func(n ast.Node) bool {
-				switch x := n.(type) {
-				case *ast.Ident:
-					if x.Name == registerPhaseHookIdent {
-						node.hasIdent = true
+			case *ast.GenDecl:
+				// BUG-101: a package-level `var` whose initializer is a
+				// function-valued expression (the wire-table idiom —
+				// `var DefaultWire = wireDefaultHook`, or a FuncLit
+				// assigned directly) is a real alias edge in the call
+				// graph: a call through the var's name is, at runtime,
+				// exactly a call to whatever it was initialized with.
+				// Scoped to a BARE identifier or FuncLit initializer only
+				// (ASM-419) — see this file's doc comment "What this
+				// resolves, and what it does not" for the map/slice-of-
+				// funcs shape this deliberately does not cover.
+				if d.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range d.Specs {
+					vs, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
 					}
-				case *ast.BasicLit:
-					if x.Kind == token.STRING && strings.Contains(x.Value, registerPhaseHookIdent) {
-						node.hasIdent = true
-					}
-				case *ast.CallExpr:
-					switch fn := x.Fun.(type) {
-					case *ast.Ident:
-						node.calls = append(node.calls, fn.Name)
-					case *ast.SelectorExpr:
-						node.calls = append(node.calls, fn.Sel.Name)
+					for i, name := range vs.Names {
+						if i >= len(vs.Values) {
+							continue
+						}
+						switch val := vs.Values[i].(type) {
+						case *ast.Ident:
+							// `var DefaultWire = wireDefaultHook` — an
+							// alias edge: DefaultWire "calls"
+							// wireDefaultHook. Purely AST-shape driven
+							// (GR#15): ANY bare identifier initializer is
+							// recorded as an alias edge here; whether it
+							// actually names a known package-level function
+							// is resolved later, exactly as an ordinary
+							// call's Fun *ast.Ident is, by
+							// reachableFromEntry's byName lookup — no name
+							// is special-cased.
+							nodes = append(nodes, &reachFuncNode{
+								file:  rel,
+								name:  name.Name,
+								calls: []string{val.Name},
+							})
+						case *ast.FuncLit:
+							// `var DefaultWire = func(e *engine) {...}` —
+							// treat the literal's own body exactly as a
+							// FuncDecl's body: its hasIdent/calls belong to
+							// the var's synthetic node directly, so a call
+							// through the var's name resolves straight to
+							// this node.
+							hasIdent, calls := inspectFuncBody(val.Body)
+							nodes = append(nodes, &reachFuncNode{
+								file:     rel,
+								name:     name.Name,
+								hasIdent: hasIdent,
+								calls:    calls,
+							})
+						}
 					}
 				}
-				return true
-			})
-
-			nodes = append(nodes, node)
+			}
 		}
 		return nil
 	})
@@ -327,6 +374,38 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 		return nil, walkErr
 	}
 	return nodes, nil
+}
+
+// inspectFuncBody walks a function body (an *ast.FuncDecl's Body, or an
+// *ast.FuncLit's Body — the two shapes this scan builds a reachFuncNode
+// from) and returns whether the target identifier appears directly inside
+// it and the simple names of every call it makes, exactly as the
+// per-FuncDecl walk originally did inline. Factored out so a package-level
+// func-typed var initialized from a FuncLit (BUG-101's second alias shape)
+// gets identical treatment to an ordinary function declaration's body,
+// rather than a second, divergent copy of the same walk.
+func inspectFuncBody(body *ast.BlockStmt) (hasIdent bool, calls []string) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			if x.Name == registerPhaseHookIdent {
+				hasIdent = true
+			}
+		case *ast.BasicLit:
+			if x.Kind == token.STRING && strings.Contains(x.Value, registerPhaseHookIdent) {
+				hasIdent = true
+			}
+		case *ast.CallExpr:
+			switch fn := x.Fun.(type) {
+			case *ast.Ident:
+				calls = append(calls, fn.Name)
+			case *ast.SelectorExpr:
+				calls = append(calls, fn.Sel.Name)
+			}
+		}
+		return true
+	})
+	return hasIdent, calls
 }
 
 // receiverTypeName extracts a method's receiver type name (e.g. "engine"
@@ -685,16 +764,22 @@ func Run(e *engine) {
 	}
 }
 
-// TestReachability_PackageLevelFuncVarEvades proves BUG-101's gap — a
-// package-level function-typed var forwarding to the real registrar —
-// EVADES both this scan and (by construction of the fixture: the
-// identifier RegisterPhaseHook appears only in the file that would be
-// whitelisted) the identifier scan. Found by the fix chain's own
-// Destructive, live-verified, and recorded here the moment it was found
-// so the declared-gap list stays as wide as reality (the original list
-// shipped without it). If this test ever FAILS with a hit, BUG-101's
-// real fix (GenDecl alias edges) has landed and both this test's
-// expectation and the doc list above must flip to "resolved".
+// TestReachability_PackageLevelFuncVarEvades proves BUG-101's FIX — a
+// package-level function-typed var forwarding to the real registrar (the
+// wire-table idiom, bare-identifier initializer shape) is now CAUGHT by
+// this scan, closing the gap this test originally demonstrated (name kept
+// unchanged so history/grep/BOW references to it still resolve; its own
+// polarity is what flipped, exactly as this file's doc comment above
+// requires when the fix lands). Before AC-A1's GenDecl/ValueSpec alias-edge
+// walk landed, this fixture evaded BOTH this scan (buildReachabilityGraph
+// visited only *ast.FuncDecl bodies, so the `var DefaultWire =
+// wireDefaultHook` GenDecl contributed no node) AND the identifier scan (by
+// construction: RegisterPhaseHook's only textual appearance is inside the
+// file that would be whitelisted) — reverting the GenDecl/ValueSpec case in
+// buildReachabilityGraph reproduces that evasion and makes this test fail,
+// which is how the before/after was confirmed for this change (see the BA
+// report for the exact revert-and-rerun evidence, not asserted here as
+// self-proving prose).
 func TestReachability_PackageLevelFuncVarEvades(t *testing.T) {
 	engineSrc := `package headless
 
@@ -730,10 +815,115 @@ func Run(e *engine) {
 	if err != nil {
 		t.Fatalf("reachableFromEntry: %v", err)
 	}
+	if hit == nil {
+		t.Fatal("expected the package-level func-typed var (bare-identifier initializer) to be CAUGHT by " +
+			"this scan now that BUG-101's GenDecl/ValueSpec alias-edge walk has landed — if this is nil, " +
+			"the fix has regressed and the doc list at the top of this file is once again wrong about what " +
+			"this scan resolves")
+	}
+	if hit.file != "engine.go" || hit.name != "wireDefaultHook" {
+		t.Errorf("expected the hit to be engine.go's wireDefaultHook (reached via the DefaultWire alias "+
+			"edge), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_PackageLevelFuncLitVarIsCaught proves the second alias
+// shape AC-A1 requires: a package-level var initialized directly from a
+// FuncLit (`var DefaultWire = func(e *engine) {...}`), not a bare
+// identifier forwarding to a separately-declared function. The literal's
+// own body is inspected exactly as an *ast.FuncDecl's body is
+// (inspectFuncBody), so a call through the var's name resolves straight to
+// a hit on the var's own synthetic node, not a separate named function.
+func TestReachability_PackageLevelFuncLitVarIsCaught(t *testing.T) {
+	engineSrc := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+var DefaultWire = func(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+`
+	runSrc := `package headless
+
+func Run(e *engine) {
+	DefaultWire(e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "engine.go"), []byte(engineSrc), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(runSrc), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the package-level FuncLit-initialized var to be CAUGHT by this scan")
+	}
+	if hit.file != "engine.go" || hit.name != "DefaultWire" {
+		t.Errorf("expected the hit to be engine.go's DefaultWire synthetic node itself (the FuncLit body "+
+			"is inspected in place, not forwarded to a separately-named function), got %s#%s.%s",
+			hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_MapLiteralWireTableStillEvades is a declared-limitation
+// regression test (AC-A5(b)): a map literal of func values — the wire-table
+// idiom this BOW item's own title names — is explicitly OUT of AC-A1's
+// scope (ASM-419: bare-identifier/FuncLit var initializers only; the
+// residual gap is tracked as BUG-116). This
+// fixture proves that scope boundary honestly, the same discipline
+// TestReachability_FunctionValuePassedAsParameterEvades and
+// TestReachability_ReflectionStillEvades already apply to their own
+// declared gaps, so a future reader does not have to take the doc comment's
+// word for it.
+func TestReachability_MapLiteralWireTableStillEvades(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func wireDefaultHook(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+var handlers = map[string]func(*engine){
+	"default": wireDefaultHook,
+}
+
+func Run(e *engine) {
+	handlers["default"](e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
 	if hit != nil {
-		t.Fatalf("expected the package-level func-typed var to EVADE this scan (BUG-101's demonstrated, "+
-			"now-declared gap) — got a hit at %s#%s.%s; if this now catches it, BUG-101's fix has landed and "+
-			"this test plus the doc list at the top of this file must flip to 'resolved'", hit.file, hit.recv, hit.name)
+		t.Fatalf("expected the map-literal wire-table idiom to EVADE this scan (ASM-419's declared, "+
+			"out-of-scope gap — a *ast.CompositeLit map value, not a bare identifier/FuncLit var "+
+			"initializer) — got a hit at %s#%s.%s; if this now catches it, AC-A1's scope has grown beyond "+
+			"ASM-419 and the doc comment at the top of this file needs revisiting", hit.file, hit.recv, hit.name)
 	}
 }
 
