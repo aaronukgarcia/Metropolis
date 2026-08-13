@@ -46,6 +46,14 @@
  * genuine false positive, never to push a real one.
  *
  * Receives JSON on stdin: { tool: "Bash", tool_input: { command: "..." } }
+ *
+ * FEAT-046 (GR#3): this guard's PATTERNS/isLowerLetter/scan() mechanism now
+ * lives in claude-codename-patterns.js, required below UNCHANGED — the same
+ * shared module also backs the new enforcing `commit-msg` content scan
+ * (claude-codename-content-scan.js). This file remains the PreToolUse
+ * ADVISORY layer (fires earlier, on command text/branch name/staged diff,
+ * before a commit is even attempted) — retained exactly as before, not
+ * replaced or demoted by the new git-level enforcement layer.
  */
 
 'use strict';
@@ -53,6 +61,8 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const { buildBareGitVerbTriggerRegex } = require('./claude-git-commit-trigger.js');
+const { PATTERNS, isLowerLetter, lineMatches, lineMatchesWithBoundary, scan } = require('./claude-codename-patterns.js');
+const { splitDiffSections } = require('./claude-codename-diff.js');
 
 // BUG-123 (2026-08-12): this guard's trigger used to be the bare
 // `/\bgit\s+(commit|push)\b/`, which does not tolerate ANY global option
@@ -64,123 +74,6 @@ const { buildBareGitVerbTriggerRegex } = require('./claude-git-commit-trigger.js
 // word-boundary shape (no shell-boundary anchoring), unchanged in every other
 // respect.
 const GIT_COMMIT_OR_PUSH_RE = buildBareGitVerbTriggerRegex('commit|push');
-
-// Fragments, never joined in source. See the header for why.
-const SKY = 'sky';
-const LINES = 'lines';
-const CITY = 'cit';
-const IES = '(?:y|ies)';
-
-// Fragments for the expansion-content pack names (FEAT-037, follow-on to
-// ASM-150): this combination of pack names, taken together, is as much a
-// fingerprint of the reference title as the title itself — see the ASM
-// logged against foundation.data for the ruling. Same discipline as above:
-// each word is split so no forbidden literal sits whole in this file, and a
-// flexible separator regex absorbs "&" vs "and" and hyphenation variants.
-const SEP = '[\\s:_-]*';
-const AMP = '(?:&|and)';
-const BRIDG = 'bridg';
-const PORT = 'por';
-const BEA = 'bea';
-const PROPERT = 'propert';
-const URB = 'urb';
-const PROMENAD = 'promenad';
-const STAT = 'stat';
-const OFFIC = 'offic';
-const EVOLUT = 'evolut';
-const FRAN = 'franci';
-const SCRAP = 'scrap';
-const MODER = 'moder';
-const ARCHITECT = 'architect';
-
-// BUG-140: ordinary regex \b is a \w/non-\w transition, and underscore is a
-// \w character — so \bword\b silently fails to match "word_export" (snake_
-// case). A lookaround anchor built from a plain [a-zA-Z] class has a second
-// problem: these patterns carry the 'i' (case-insensitive) flag, which folds
-// case for the WHOLE regex including lookarounds — so [a-zA-Z] can't tell
-// "still lowercase" from "just turned uppercase", which is exactly the signal
-// needed to also catch camelCase (word immediately followed by a capital,
-// e.g. "wordConfig" — no separator at all). JS has no scoped/inline
-// case-insensitivity modifier, so the boundary check below is done in plain
-// JS instead of regex: `boundary: true` patterns are matched WITHOUT anchors
-// (via a global exec loop in scan()), and a match only counts as a real hit
-// if the character immediately before/after it is not a literal lowercase
-// letter — i.e. an adjacent digit, underscore, uppercase letter (camelCase
-// transition), punctuation, whitespace, or string edge all count as a
-// boundary; only continuing directly into another lowercase letter (embedded
-// inside one longer all-lowercase run) does not. This still declines to fire
-// in the middle of an ordinary lowercase word, matching \b's original
-// false-positive-avoidance intent, just letter-case-aware instead of
-// \w-based.
-function isLowerLetter(ch) {
-  return ch !== undefined && ch >= 'a' && ch <= 'z';
-}
-
-// Built at runtime. Matches the two-word title with any separator, the
-// single distinctive word on its own, and the numbered abbreviations.
-const PATTERNS = [
-  {
-    re: new RegExp(`${CITY}${IES}[\\s:_-]*${SKY}${LINES}`, 'gi'),
-    what: 'the full reference title',
-  },
-  {
-    re: new RegExp(`${SKY}${LINES}`, 'gi'),
-    what: 'the distinctive single word from the reference title',
-    boundary: true,
-  },
-  {
-    re: /CS ?[12]/g,
-    what: 'a numbered abbreviation of the reference title',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${BRIDG}es${SEP}(?:${AMP}${SEP})?${PORT}ts`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${BEA}ch${SEP}${PROPERT}ies`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${URB}an${SEP}${PROMENAD}e`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${CITY}y${SEP}${STAT}ions`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${OFFIC}e${SEP}${EVOLUT}ion`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${SAN_FRAN()}${SEP}set`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${SKY}${SCRAP}ers`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-  {
-    re: new RegExp(`${MODER}n${SEP}${ARCHITECT}ure`, 'gi'),
-    what: 'a former expansion-content pack name',
-    boundary: true,
-  },
-];
-
-// Assembled as a function, not a top-level const, purely to keep the two
-// place-name fragments ("san" + "franci"+"sco") from ever sitting next to
-// each other as a single joined literal anywhere in this file's source.
-function SAN_FRAN() {
-  return `san${SEP}${FRAN}sco`;
-}
 
 function allow() {
   process.exit(0);
@@ -199,56 +92,10 @@ function deny(reason) {
   process.exit(0);
 }
 
-// BUG-140/BUG-144: patterns marked `boundary: true` carry no regex anchor at
-// all — every candidate match is found via a global exec loop, then accepted
-// if EITHER neighbour is a real boundary (case transition, digit, underscore,
-// punctuation, or string edge — i.e. NOT a plain lowercase letter). Only a
-// match embedded on BOTH sides in a continuing all-lowercase run is rejected,
-// since that's the one case genuinely indistinguishable from ordinary prose.
-// BUG-140's original fix used AND semantics (require BOTH sides boundary),
-// which missed the camelCase middle-segment case (a forbidden word appearing
-// mid-identifier, e.g. prefixWordEngine-shaped): the
-// lowercase-adjacent left side was enough to reject it even though the right
-// side had an unambiguous uppercase transition. See the PATTERNS comment
-// above for why this can't be done as a regex lookaround once the 'i' flag
-// is in play.
-function lineMatches(re, line) {
-  re.lastIndex = 0;
-  let m;
-  while ((m = re.exec(line))) {
-    return true; // caller already filtered to boundary:false patterns here
-  }
-  return false;
-}
-
-function lineMatchesWithBoundary(re, line) {
-  re.lastIndex = 0;
-  let m;
-  while ((m = re.exec(line))) {
-    const before = m.index > 0 ? line[m.index - 1] : undefined;
-    const after = m.index + m[0].length < line.length ? line[m.index + m[0].length] : undefined;
-    if (!isLowerLetter(before) || !isLowerLetter(after)) return true;
-    if (re.lastIndex === m.index) re.lastIndex += 1; // guard against zero-length matches
-  }
-  return false;
-}
-
-function scan(text, where, hits) {
-  if (!text) return;
-  const lines = String(text).split(/\r?\n/);
-  for (const p of PATTERNS) {
-    for (let i = 0; i < lines.length; i++) {
-      const hit = p.boundary
-        ? lineMatchesWithBoundary(p.re, lines[i])
-        : lineMatches(p.re, lines[i]);
-      if (!hit) continue;
-      hits.push(
-        `${where}${lines.length > 1 ? ` (line ${i + 1})` : ''}: contains ${p.what}.`
-      );
-      break; // One report per pattern per location is enough to act on.
-    }
-  }
-}
+// lineMatches/lineMatchesWithBoundary/scan now live in
+// claude-codename-patterns.js (FEAT-046, GR#3) — required at the top of this
+// file, unchanged. See that module for the BUG-140/BUG-144 boundary-logic
+// rationale previously documented inline here.
 
 function main() {
   if (process.env.CLAUDE_DISABLE_CODENAME_GUARD === '1') allow();
@@ -283,16 +130,27 @@ function main() {
   // 1: staged ADDED lines only. Scanning whole files would block an unrelated
   // fix in a file that still carries an occurrence somewhere else.
   try {
-    const diff = execSync('git diff --cached --unified=0', {
+    // BUG-185: `--no-color` makes this invocation immune to color.ui /
+    // color.diff forced to 'always' in any applicable git config — without
+    // it, ANSI escape sequences prepended to the 'diff --git '/'@@ ' marker
+    // lines defeat splitDiffSections()'s raw-text-at-start-of-line match,
+    // silently blinding both this guard and the commit-msg hook at once.
+    const diff = execSync('git diff --cached --unified=0 --no-color', {
       encoding: 'utf8',
       maxBuffer: 64 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const diffLines = diff.split(/\r?\n/);
-    const added = diffLines
-      .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
-      .join('\n');
-    scan(added, 'staged content (added lines)', hits);
+    // BUG-182: added-line content is classified by POSITION (inside a '@@'
+    // hunk body or not — claude-codename-diff.js's splitDiffSections), never
+    // by re-testing a line's own text against the '+++ b/<path>' header
+    // shape. The old `l.startsWith('+') && !l.startsWith('+++')` filter here
+    // silently dropped a genuine added line whose own content began with two
+    // literal '+' characters — textually identical to the header line — and
+    // this exact same trap independently existed in
+    // claude-codename-content-scan.js, so BUG-182 fixes both call sites by
+    // routing them through this one shared function (GR#3).
+    const { addedLines, pathHeaderLines } = splitDiffSections(diff);
+    scan(addedLines, 'staged content (added lines)', hits);
 
     // BUG-137: a forbidden word appearing ONLY in a new/renamed/copied file's
     // PATH — never in file content or the commit message — bypassed the
@@ -300,12 +158,7 @@ function main() {
     // ('+++ b/<path>', '--- a/<path>', 'rename to/from <path>', 'copy
     // to/from <path>') all start with something other than a plain '+' and
     // were excluded outright rather than stripped and scanned.
-    const PATH_HEADER_RE = /^(\+\+\+ |--- |rename to |rename from |copy to |copy from )/;
-    const paths = diffLines
-      .filter((l) => PATH_HEADER_RE.test(l))
-      .map((l) => l.replace(PATH_HEADER_RE, ''))
-      .join('\n');
-    scan(paths, 'staged file path (new, renamed, or copied file)', hits);
+    scan(pathHeaderLines, 'staged file path (new, renamed, or copied file)', hits);
   } catch (err) {
     deny(
       `🛑 CODENAME GUARD (GR#22): could not read the staged diff to check it ` +

@@ -302,6 +302,197 @@ test('BUG-137: guard DENIES a renamed file whose NEW name carries a forbidden pa
 });
 
 // ---------------------------------------------------------------------------
+// BUG-182 regression: the added-line filter used to be
+// `l.startsWith('+') && !l.startsWith('+++')`, meant to exclude the
+// one-per-file '+++ b/<path>' diff header line by TEXT shape, not position.
+// If a genuine added line's own content began with two literal '+'
+// characters, git emits it as its own single '+' marker followed by a
+// payload beginning '++' — textually identical to the header line — so the
+// old filter silently dropped it before the pattern scanner ever saw it.
+// Live-found and reproduced by this session's Destructive attacker against
+// FEAT-046 in an isolated scratch repo, through the real installed
+// commit-msg hook (not just this guard). Fixed by classifying header vs.
+// hunk-body lines by POSITION (claude-codename-diff.js's splitDiffSections:
+// inside a '@@' hunk body or not), never by re-matching a line's own text.
+// Uses the runtime-synthesized ABBR fragment as the fixture literal, same
+// discipline as every other fixture in this file.
+// ---------------------------------------------------------------------------
+
+test('BUG-182: guard DENIES an added line whose own content starts with "++" (textually identical to the +++ diff header the old filter excluded by text, not position)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug182__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      // The added line's own content begins with two literal '+' characters,
+      // so `git diff --unified=0` emits it as "+++<ABBR> trick" — textually
+      // indistinguishable from a '+++ b/<path>' header line to a text-prefix
+      // filter, but structurally hunk-body content (it appears after the
+      // '@@' marker, not in the file-header region).
+      fs.writeFileSync(path.join(fixtureDir, 'trick.txt'), `++${ABBR} trick\n`, 'utf8');
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      const outcome = runGuardAsHook(
+        'git commit -m "test: bug-182 e2e fixture (should be blocked, ++-prefixed content line)"',
+        gitEnv
+      );
+      assert.equal(
+        outcome.denied,
+        true,
+        `expected the guard to deny an added line whose own content starts with "++". raw stdout: ${outcome.raw.stdout}`
+      );
+      assert.match(outcome.reason, /CODENAME GUARD/);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUG-182: sanity — the pre-fix text-prefix filter genuinely drops a "++"-prefixed added line', () => {
+  const diff = [
+    'diff --git a/trick.txt b/trick.txt',
+    'new file mode 100644',
+    'index 0000000..1111111',
+    '--- /dev/null',
+    '+++ b/trick.txt',
+    '@@ -0,0 +1 @@',
+    `+++${ABBR} trick`,
+    '',
+  ].join('\n');
+  const preFixAdded = diff
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
+    .join('\n');
+  assert.equal(preFixAdded, '', 'expected the pre-fix filter to drop the "++"-prefixed content line entirely');
+
+  const { splitDiffSections } = require('./claude-codename-diff.js');
+  const fixedAdded = splitDiffSections(diff).addedLines;
+  assert.equal(fixedAdded, `++${ABBR} trick`, 'expected the position-based fix to recover the content line');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-185 regression: a purely local `git config color.ui always` (or
+// color.diff=always) — no push, no special permission, settable by any
+// developer or malicious local config — makes `git diff --cached` prepend
+// ANSI escape sequences to every diff line, including the 'diff --git '
+// file-start line and '@@ ' hunk markers. FILE_START_RE/HUNK_RE in
+// claude-codename-diff.js's splitDiffSections() are anchored at the true
+// start of the line, so a leading escape sequence defeats both: inHunk never
+// flips true, and genuinely forbidden added content is silently dropped from
+// BOTH addedLines and pathHeaderLines. Fixed by invoking `git diff` with
+// `--no-color` at both call sites (claude-codename-content-scan.js,
+// claude-codename-guard.js) — immune to any applicable git config regardless
+// of what's set — plus defense-in-depth leading-CSI stripping inside
+// splitDiffSections() itself in case a future call site omits the flag.
+// ---------------------------------------------------------------------------
+
+test('BUG-185: guard DENIES a genuine violation staged under a forced-color git config (color.ui=always)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug185__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      const forcedColorEnv = { ...gitEnv };
+      const cfg = spawnSync('git', ['config', 'color.ui', 'always'], { cwd: ROOT, env: forcedColorEnv, encoding: 'utf8' });
+      assert.equal(cfg.status, 0, `git config color.ui always failed: ${cfg.stderr}`);
+
+      fs.writeFileSync(path.join(fixtureDir, 'notes.txt'), `flag: ${ABBR} module\n`, 'utf8');
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: forcedColorEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      // Sanity: prove the local config genuinely forces color on this diff,
+      // so a pass below is a real fix and not a fixture that never exercised
+      // the attack in the first place.
+      const rawDiff = spawnSync('git', ['diff', '--cached', '--unified=0'], { cwd: ROOT, env: forcedColorEnv, encoding: 'utf8' });
+      assert.match(rawDiff.stdout, /\x1b\[/, 'expected the forced-color config to actually inject ANSI escapes into the raw diff (fixture sanity)');
+
+      const outcome = runGuardAsHook(
+        'git commit -m "test: bug-185 e2e fixture (should be blocked, forced-color diff)"',
+        forcedColorEnv
+      );
+      assert.equal(
+        outcome.denied,
+        true,
+        `expected the guard to deny a genuine violation even with color.ui=always forced locally. raw stdout: ${outcome.raw.stdout}`
+      );
+      assert.match(outcome.reason, /CODENAME GUARD/);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUG-185: guard still ALLOWS a clean commit under a forced-color git config (no over-correction)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug185_clean__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      const forcedColorEnv = { ...gitEnv };
+      const cfg = spawnSync('git', ['config', 'color.ui', 'always'], { cwd: ROOT, env: forcedColorEnv, encoding: 'utf8' });
+      assert.equal(cfg.status, 0, `git config color.ui always failed: ${cfg.stderr}`);
+
+      fs.writeFileSync(path.join(fixtureDir, 'notes.txt'), 'perfectly ordinary content\n', 'utf8');
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: forcedColorEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      const outcome = runGuardAsHook(
+        'git commit -m "test: bug-185 e2e clean fixture (should be allowed)"',
+        forcedColorEnv
+      );
+      assert.equal(
+        outcome.denied,
+        false,
+        `expected the guard to allow a clean commit even with color.ui=always forced locally. raw stdout: ${outcome.raw.stdout}`
+      );
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUG-185: splitDiffSections() unit — a forced-color diff (ANSI escapes on header/hunk lines) is still classified correctly', () => {
+  const { splitDiffSections } = require('./claude-codename-diff.js');
+  // Real `git diff --cached --unified=0` output shape under color.ui=always:
+  // ESC[1m before 'diff --git'/'index'/'---'/'+++' header lines, ESC[36m
+  // before the '@@' hunk marker, ESC[32m before the '+' added-line marker —
+  // reset with ESC[m at line end.
+  const coloredDiff = [
+    '\x1b[1mdiff --git a/notes.txt b/notes.txt\x1b[m',
+    '\x1b[1mnew file mode 100644\x1b[m',
+    '\x1b[1mindex 0000000..1111111\x1b[m',
+    '\x1b[1m--- /dev/null\x1b[m',
+    '\x1b[1m+++ b/notes.txt\x1b[m',
+    '\x1b[36m@@ -0,0 +1 @@\x1b[m',
+    `\x1b[32m+\x1b[m\x1b[32m${ABBR} module\x1b[m`,
+    '',
+  ].join('\n');
+  const { addedLines, pathHeaderLines } = splitDiffSections(coloredDiff);
+  assert.match(addedLines, new RegExp(`${ABBR} module`), 'expected the added content to survive a forced-color diff');
+  assert.match(pathHeaderLines, /notes\.txt/, 'expected the path header to survive a forced-color diff');
+});
+
+test('BUG-185: sanity — without the defensive strip, a forced-color diff genuinely drops the added line (pre-fix reproduction)', () => {
+  const HUNK_RE = /^@@ /;
+  const FILE_START_RE = /^diff --git /;
+  const coloredDiff = [
+    '\x1b[1mdiff --git a/notes.txt b/notes.txt\x1b[m',
+    '\x1b[36m@@ -0,0 +1 @@\x1b[m',
+    `\x1b[32m+\x1b[m\x1b[32m${ABBR} module\x1b[m`,
+    '',
+  ].join('\n');
+  let inHunk = false;
+  const added = [];
+  for (const line of coloredDiff.split(/\r?\n/)) {
+    if (FILE_START_RE.test(line)) { inHunk = false; continue; }
+    if (HUNK_RE.test(line)) { inHunk = true; continue; }
+    if (inHunk && line.startsWith('+')) added.push(line.slice(1));
+  }
+  assert.equal(added.join('\n'), '', 'expected the pre-fix raw-text-match approach to drop the added line entirely under forced color');
+});
+
+// ---------------------------------------------------------------------------
 // BUG-140 regression: ordinary \b is a \w/non-\w transition, and underscore
 // counts as \w, so a forbidden pattern immediately followed by an underscore
 // (snake_case) or by another letter with zero separator (camelCase) never

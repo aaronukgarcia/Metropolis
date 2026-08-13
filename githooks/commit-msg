@@ -122,6 +122,51 @@
  * here, so there is nothing for this hook's own logic to get right or
  * wrong for those three; the gap is upstream of this file, in git's own
  * hook dispatch on this machine.
+ *
+ * ============================================================================
+ * FEAT-046: a SECOND check, added to this SAME hook slot — GR#22 codename
+ * content scan, coexisting with the identity check above.
+ * ============================================================================
+ *
+ * `commit-msg` is a single named hook — git invokes at most one script
+ * there. FEAT-045 (identity checking, above) already occupies this slot, and
+ * FEAT-046 (Codename Discipline, GR#22 — the reference title must never
+ * enter git as file content) needs the same hook point for the same reason:
+ * merge-commit coverage that `pre-commit` structurally cannot provide (see
+ * claude-codename-content-scan.js's own header for that item's independent
+ * live confirmation of the same AC-1 finding, for the content-scan case
+ * specifically). Rather than installing a second, competing `commit-msg`
+ * script (which git cannot run — only one script occupies the slot — so
+ * doing that would SILENTLY DROP one of the two controls), this file calls
+ * BOTH checks in sequence: identity first (above), then the codename content
+ * scan (below). Either check denying the commit denies the commit.
+ *
+ * The codename content scan itself — pattern set, fragment-assembly
+ * technique, and boundary logic — lives ENTIRELY in claude-codename-
+ * patterns.js and claude-codename-content-scan.js (GR#3: this file defines
+ * no pattern of its own, and is not the PreToolUse `claude-codename-
+ * guard.js`'s replacement — that advisory layer is retained unchanged,
+ * firing earlier and also covering command text and branch names that this
+ * git-level hook does not see).
+ *
+ * FAIL-CLOSED (same posture as the identity check above, OPPOSITE of the
+ * demoted claude-author-guard.js): a `git diff --cached` failure or the
+ * shared pattern module throwing denies the commit — see
+ * claude-codename-content-scan.js's header for the full reasoning (a
+ * codename leak into a public repo cannot be withdrawn, unlike an identity
+ * mismatch which costs a human seconds to correct).
+ *
+ * DISCLOSED LIMITATIONS, not solved here (see claude-codename-content-
+ * scan.js's header for the full text):
+ *   (1) AC-10 — `cherry-pick`/`revert`/`am` are structurally uncovered, same
+ *       as the identity check's own ASM-386 gap above.
+ *   (2) AC-11 — an interactively-composed commit MESSAGE BODY (not passed
+ *       via `-m`) is scanned by NEITHER this hook (which inspects the
+ *       staged diff, not `$1`) NOR the PreToolUse guard (which has no
+ *       command-string content to scan for an editor-composed message).
+ *       Flagged as an Escalation in the acceptance file
+ *       (docs/planning/acceptance/tool.codenamehook.md) for Bill/Aaron,
+ *       not resolved unilaterally here.
  */
 
 'use strict';
@@ -159,7 +204,27 @@ function resolveIdentityModulePath() {
   );
 }
 
+/** Same two-candidate resolution shape as resolveIdentityModulePath() above
+ * (FEAT-046), for the codename content-scan module — this hook's installed
+ * location differs from its tracked-source location the same way, so the
+ * same existence-checked, no-path-shape-assumption approach applies
+ * unchanged. */
+function resolveCodenameScanModulePath() {
+  const candidates = [
+    path.join(__dirname, '..', '..', 'claude-codename-content-scan.js'), // installed
+    path.join(__dirname, '..', 'claude-codename-content-scan.js'), // tracked source, required directly
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `claude-codename-content-scan.js not found relative to ${__dirname} ` +
+      `(tried: ${candidates.join(', ')})`
+  );
+}
+
 const identity = require(resolveIdentityModulePath());
+const codenameScan = require(resolveCodenameScanModulePath());
 
 /** Denies the commit: non-zero exit, message to stderr. commit-msg running
  * before the commit object is written means a non-zero exit here writes
@@ -171,6 +236,24 @@ function fail(reason) {
       `This check cannot be bypassed except by git's own native ` +
       `\`git commit --no-verify\` escape hatch — see this file's header, ` +
       `AC-15 (out of scope by construction, not by choice).\n`
+  );
+  process.exitCode = 1;
+}
+
+/** Same shape as fail() above, but for the FEAT-046 codename content-scan
+ * check — a distinct message so a denied operator immediately knows WHICH
+ * of the two checks in this hook slot fired, rather than a generic "commit
+ * rejected" that leaves them guessing between an identity problem and a
+ * GR#22 content problem. */
+function failCodename(reason) {
+  process.stderr.write(
+    `\n🛑 COMMIT-MSG CODENAME CONTENT SCAN (FEAT-046, GR#22) — commit REJECTED:\n\n${reason}\n\n` +
+      `The reference title is 'Blue', and only 'Blue'. Its real name, its ` +
+      `abbreviations and its numbered form must never enter git as staged ` +
+      `content. Rewrite to say 'Blue' or "the reference title" and re-stage.\n\n` +
+      `This check cannot be bypassed except by git's own native ` +
+      `\`git commit --no-verify\` escape hatch — see this file's header, ` +
+      `AC-10/AC-11 (disclosed, uncovered gaps — not this escape hatch).\n`
   );
   process.exitCode = 1;
 }
@@ -255,6 +338,29 @@ function main() {
     return;
   }
 
+  // FEAT-046, AC-8: the second check occupying this same hook slot. Runs
+  // only once the identity check above has already passed — either check
+  // failing denies the commit; this hook does not need both checks to run
+  // to reach a correct final decision, but running the codename scan only
+  // after identity passes keeps the two checks' failure messages from ever
+  // being conflated (a denied commit always names exactly one reason).
+  let hits;
+  try {
+    hits = codenameScan.scanStagedDiff();
+  } catch (err) {
+    // AC-7: fail-closed on the codename scan's own internal error — a
+    // `git diff --cached` failure or the shared pattern module throwing.
+    // Same "no fallback, no silent substitute" reasoning as the identity
+    // check's own AC-4 trap above, applied to GR#22 content instead of
+    // identity.
+    failCodename(`could not scan the staged diff: ${err.message}\n\nFailing closed.`);
+    return;
+  }
+  if (hits.length) {
+    failCodename(hits.map((h) => `  - ${h}`).join('\n'));
+    return;
+  }
+
   process.exitCode = 0;
 }
 
@@ -277,5 +383,10 @@ if (require.main === module) {
     checkAgainstSanctioned,
     main,
     deriveSanctioned: identity.deriveSanctioned,
+    // FEAT-046: exported so tests can exercise the codename-scan wiring
+    // directly (e.g. monkeypatching scanStagedDiff to throw for AC-7,
+    // asserting the same require target as claude-codename-guard.js for
+    // AC-4/AC-5) without needing a fresh subprocess for every case.
+    scanStagedDiff: codenameScan.scanStagedDiff,
   };
 }

@@ -73,6 +73,28 @@ function initRepo(dir) {
     path.join(__dirname, 'claude-author-identity.js'),
     path.join(dir, 'claude-author-identity.js')
   );
+  // FEAT-046: githooks/commit-msg now also requires the codename content-
+  // scan module (and its shared pattern module) at the same relative
+  // location as claude-author-identity.js above — mirror the real
+  // production repo-root layout here too, so this fixture keeps exercising
+  // the actual installed hook's real require graph rather than a stale
+  // pre-FEAT-046 shape.
+  fs.copyFileSync(
+    path.join(__dirname, 'claude-codename-content-scan.js'),
+    path.join(dir, 'claude-codename-content-scan.js')
+  );
+  fs.copyFileSync(
+    path.join(__dirname, 'claude-codename-patterns.js'),
+    path.join(dir, 'claude-codename-patterns.js')
+  );
+  // BUG-182: claude-codename-content-scan.js now also requires
+  // claude-codename-diff.js (the shared header-vs-content diff classifier) —
+  // copy it alongside the other two so this fixture's require graph matches
+  // the real installed layout.
+  fs.copyFileSync(
+    path.join(__dirname, 'claude-codename-diff.js'),
+    path.join(dir, 'claude-codename-diff.js')
+  );
   install.install(dir);
 }
 
