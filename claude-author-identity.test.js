@@ -44,6 +44,27 @@ function git(cwd, args) {
   return r.stdout.trim();
 }
 
+/** BUG-190: githooks/commit-msg requires claude-codename-content-scan.js
+ * (and its own dependencies, claude-codename-patterns.js and
+ * claude-codename-diff.js) via the same two-candidate resolution shape as
+ * claude-author-identity.js (see resolveCodenameScanModulePath()'s header
+ * comment in githooks/commit-msg). Every fixture in this file that installs
+ * the real hook must therefore copy all four sibling modules into the
+ * throwaway repo root, not just claude-author-identity.js — mirroring
+ * claude-committhook.test.js's initRepo(), which already does this
+ * correctly. Centralised here so every call site stays in sync with the
+ * hook's actual require graph. */
+function copyHookSiblingModules(dir) {
+  for (const name of [
+    'claude-author-identity.js',
+    'claude-codename-content-scan.js',
+    'claude-codename-patterns.js',
+    'claude-codename-diff.js',
+  ]) {
+    fs.copyFileSync(path.join(__dirname, name), path.join(dir, name));
+  }
+}
+
 function initRepoWithHistory(dir, commitCount = 3) {
   git(dir, ['init', '-b', 'main']);
   git(dir, ['config', 'user.name', SANCTIONED_NAME]);
@@ -320,10 +341,7 @@ test('SEC-052(c): legitimate --author=/GIT_AUTHOR_IDENT identity detection is un
     git(dir, ['init', '-b', 'main']);
     git(dir, ['config', 'user.name', SANCTIONED_NAME]);
     git(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(dir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(dir);
     install.install(dir);
     fs.writeFileSync(path.join(dir, 'a.txt'), '1', 'utf8');
     git(dir, ['add', '-A']);
@@ -342,10 +360,7 @@ test('SEC-052: a real `git -c user.email=X commit` bypass attempt is rejected en
     git(dir, ['init', '-b', 'main']);
     git(dir, ['config', 'user.name', SANCTIONED_NAME]);
     git(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(dir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(dir);
     install.install(dir);
     fs.writeFileSync(path.join(dir, 'a.txt'), '1', 'utf8');
     git(dir, ['add', '-A']);
@@ -374,10 +389,7 @@ test('SEC-052: a real `git -c user.email=X merge --no-ff` bypass attempt is reje
     git(dir, ['init', '-b', 'main']);
     git(dir, ['config', 'user.name', SANCTIONED_NAME]);
     git(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(dir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(dir);
     install.install(dir);
 
     fs.writeFileSync(path.join(dir, 'a.txt'), '1', 'utf8');
@@ -499,10 +511,7 @@ test('SEC-052 ROUND 2(b): HOME=<evil-home> (with a real .gitconfig planted there
 test('SEC-052 ROUND 2(c): a real installed-hook `GIT_CONFIG_GLOBAL=<evil> git commit` bypass attempt is rejected end-to-end (no local identity set)', () => {
   withTempRepo((repoDir) => {
     initRepoNoLocalIdentity(repoDir);
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(repoDir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(repoDir);
     install.install(repoDir);
     fs.writeFileSync(path.join(repoDir, 'a.txt'), '1', 'utf8');
     git(repoDir, ['add', '-A']);
@@ -527,10 +536,7 @@ test('SEC-052 ROUND 2(c): a real installed-hook `GIT_CONFIG_GLOBAL=<evil> git co
 test('SEC-052 ROUND 2(d): a real installed-hook `HOME=<evil-home> git commit` bypass attempt is rejected end-to-end (no local identity set)', () => {
   withTempRepo((repoDir) => {
     initRepoNoLocalIdentity(repoDir);
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(repoDir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(repoDir);
     install.install(repoDir);
     fs.writeFileSync(path.join(repoDir, 'a.txt'), '1', 'utf8');
     git(repoDir, ['add', '-A']);
@@ -554,10 +560,7 @@ test('SEC-052 ROUND 2(d): a real installed-hook `HOME=<evil-home> git commit` by
 test('SEC-052 ROUND 2 control(a): legitimate LOCAL-only identity (round 1 case) still succeeds end-to-end', () => {
   withTempRepo((dir) => {
     initRepoWithHistory(dir, 1); // sets LOCAL user.name/email via initRepoWithHistory
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(dir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(dir);
     install.install(dir);
     fs.writeFileSync(path.join(dir, 'b.txt'), '2', 'utf8');
     git(dir, ['add', '-A']);
@@ -570,10 +573,7 @@ test('SEC-052 ROUND 2 control(b): legitimate GLOBAL-only identity, no local set,
   const expected = realMachineGlobalEmail();
   withTempRepo((dir) => {
     initRepoNoLocalIdentity(dir);
-    fs.copyFileSync(
-      path.join(__dirname, 'claude-author-identity.js'),
-      path.join(dir, 'claude-author-identity.js')
-    );
+    copyHookSiblingModules(dir);
     install.install(dir);
 
     withCwd(dir, () => {
