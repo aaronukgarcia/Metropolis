@@ -314,7 +314,7 @@ func (s *Screen) applyLeisure(raw json.RawMessage) {
 	}
 	taste := make([]TasteBucket, len(p.LeisureTaste))
 	for i, t := range p.LeisureTaste {
-		taste[i] = TasteBucket{Taste: t.Taste, Weight: t.Weight}
+		taste[i] = TasteBucket(t)
 	}
 
 	s.mu.Lock()
