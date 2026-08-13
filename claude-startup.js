@@ -13,6 +13,14 @@ const path = require('path');
 // human without them having to remember to check for it — wired into the
 // unconditional session-start summary below, in emitSuccess().
 const committhook = require('./claude-committhook-install.js');
+// FEAT-038: the startup summary already reports git SYNC state (branch,
+// ahead/behind, uncommitted count) via claude-sync.js's own checkin output
+// (relayed verbatim below) -- it never reported WHO the repo is configured
+// to commit as. BUG-036 sat undetected because nothing checked that. Reuses
+// claude-author-identity.js's shared sanctioned-identity derivation (GR#3 --
+// one derivation, already consumed by the commit-msg hook and the demoted
+// PreToolUse guard) rather than a third, independent identity check.
+const identity = require('./claude-author-identity.js');
 
 const projectRoot = __dirname;
 const identityPath = path.join(projectRoot, '.claude', '.identity');
@@ -82,6 +90,64 @@ function fmtMs(ms) {
   return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
+/**
+ * FEAT-038: checks whether the CURRENTLY CONFIGURED git identity (`git
+ * config user.email`, local then global -- identity.configuredEmail()) is
+ * SANCTIONED, in the sense that matters for a startup check: corroborated by
+ * something other than itself (this repo's trunk history, or the operator's
+ * CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES env var).
+ *
+ * Deliberately NOT `identity.deriveSanctioned().has(configuredEmail())` --
+ * deriveSanctioned() always adds configuredEmail() to its own returned set
+ * (see that module's header, source 1: "trusted unconditionally"), so that
+ * membership test would be true BY CONSTRUCTION regardless of what the
+ * config value actually is. That is the right behaviour for the commit-time
+ * guard/hook (config is the one source immune to a history rewrite -- see
+ * BUG-036 in claude-author-identity.js's header) but it is exactly WRONG for
+ * this check, whose entire job is to ask "does anything OTHER than the
+ * config value itself corroborate this config value?" -- the same question
+ * BUG-036 needed asked and nothing was asking.
+ *
+ * Returns:
+ *   { ok: true,  email }                  -- configured, and corroborated
+ *   { ok: false, email: null }            -- no git identity configured at all
+ *   { ok: false, email }                  -- configured, but NOT corroborated
+ *   { ok: false, email: null, error: true, message } -- internal error (no
+ *     repo, git not on PATH, etc.) -- reported, not swallowed silently: a
+ *     human is reading this output live at session start, so an unknown
+ *     identity state is surfaced the same as a genuinely bad one rather than
+ *     going quiet.
+ */
+function checkGitIdentity() {
+  try {
+    const email = identity.configuredEmail();
+    if (!email) return { ok: false, email: null };
+    const key = email.trim().toLowerCase();
+    const corroborated = identity.historyEmails().has(key) || identity.extraIdentities().has(key);
+    return { ok: corroborated, email };
+  } catch (err) {
+    return { ok: false, email: null, error: true, message: (err && err.message) || 'unknown error' };
+  }
+}
+
+/** Formats checkGitIdentity()'s result as one printable line -- a clear,
+ * loud warning when the identity is missing/unverified/unsanctioned
+ * (mirroring how the summary already surfaces "git NOT SYNCED"), or a plain
+ * positive confirmation when it checks out. */
+function gitIdentityLine() {
+  const result = checkGitIdentity();
+  if (result.error) {
+    return `⚠️ GIT IDENTITY: could not be verified (${result.message}). Run 'git config user.email' manually and check it yourself.`;
+  }
+  if (!result.email) {
+    return `⚠️ GIT IDENTITY: NOT CONFIGURED — no 'git config user.email' found (local or global). Set one before committing.`;
+  }
+  if (!result.ok) {
+    return `⚠️ GIT IDENTITY: configured as "${result.email}", which this repo's trunk history and CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES do NOT corroborate. This may be a misconfigured identity (see BUG-036) — verify before committing anything.`;
+  }
+  return `GIT IDENTITY: ${result.email} — sanctioned (corroborated by trunk history or CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES).`;
+}
+
 const SUMMARY_MARKER = '── METROPOLIS STARTUP SUMMARY ──';
 
 // FEAT-070 (tool.looparm): must be byte-identical to claude-sync.js's own
@@ -134,12 +200,19 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
     console.log(`Run it manually as your first action: node claude-bow.js startup-summary`);
   }
 
+  // FEAT-038: printed unconditionally, same place/shape as the committhook
+  // status line above -- git SYNC state (branch/ahead-behind/dirty count)
+  // was already relayed verbatim from checkin output; this is the git
+  // IDENTITY companion check that was missing (BUG-036).
+  console.log(``);
+  console.log(gitIdentityLine());
+
   console.log(``);
   console.log(`MANDATORY STARTUP SEQUENCE — DO ALL OF THESE BEFORE YOUR FIRST RESPONSE:`);
   console.log(`1. Use the mcp__vestige__search tool NOW with query "who am I, identity, session startup" to load memory.`);
   console.log(`2. Read CLAUDE.md for full Golden Rules.`);
   console.log(`3. Run 'node claude-sync.js read' to check coordination state.`);
-  console.log(`4. Your first response to the user must confirm: identity, hooks status, the BOW summary above (metro DB health), Vestige status (live search worked), and git sync state.`);
+  console.log(`4. Your first response to the user must confirm: identity, hooks status, the BOW summary above (metro DB health), Vestige status (live search worked), git sync state, and git identity status.`);
   // FEAT-070 (AC-6): a fresh, non-stale standing /loop spec becomes step 5 of
   // the SAME mandatory numbered block — not a separate, skippable aside. The
   // exact spec text is relayed verbatim from claude-sync.js's own arm check
@@ -147,7 +220,7 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
   if (loopContent && loopContent.startsWith('MANDATORY: invoke')) {
     console.log(`5. ${loopContent}`);
   }
-  console.log(`If the summary above shows git NOT SYNCED or a Vestige problem, surface that to the user immediately.`);
+  console.log(`If the summary above shows git NOT SYNCED, a Vestige problem, or a GIT IDENTITY warning, surface that to the user immediately.`);
   console.log(`DO NOT skip step 1. Memory recall is not optional. If Vestige tools are unavailable, state that explicitly.`);
 
   // FEAT-070 (AC-8): a STALE standing loop is withheld from the mandatory
@@ -326,5 +399,5 @@ if (require.main === module) {
     setTimeout(start, 3000).unref();
   }
 } else {
-  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES };
+  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES, checkGitIdentity, gitIdentityLine };
 }
