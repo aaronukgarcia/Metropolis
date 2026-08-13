@@ -342,6 +342,34 @@ func TestLoad_MalformedJSON(t *testing.T) {
 	assertCode(t, err, ErrSeasonalDataInvalid)
 }
 
+// TestLoad_MET_E500_CauseSubstituted is BUG-191's regression test —
+// the same weakness class BUG-099 fixed for engine.market's MET-E600.
+// MET-E500's registered template ("...could not be loaded/validated:
+// {cause}") must have its {cause} placeholder actually substituted
+// with the real underlying failure text, not left as the literal,
+// unhelpful string "{cause}" in the GR#1-visible message.
+func TestLoad_MET_E500_CauseSubstituted(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, data.FileSeasonal, `{ not valid json`)
+
+	_, err := Load(dir, testCorrelationID())
+	e, ok := err.(*errs.E)
+	if !ok {
+		t.Fatalf("expected *errs.E, got %T: %v", err, err)
+	}
+	if e.Code != ErrSeasonalDataInvalid {
+		t.Fatalf("e.Code = %s, want %s", e.Code, ErrSeasonalDataInvalid)
+	}
+	if strings.Contains(e.Msg, "{cause}") {
+		t.Errorf("e.Msg = %q contains the literal unsubstituted placeholder %q", e.Msg, "{cause}")
+	}
+	// The underlying encoding/json syntax error text always mentions
+	// "invalid character" for this fixture.
+	if !strings.Contains(e.Msg, "invalid character") {
+		t.Errorf("e.Msg = %q, want it to contain the real cause text %q", e.Msg, "invalid character")
+	}
+}
+
 func TestLoad_MissingCurve(t *testing.T) {
 	dir := t.TempDir()
 	// Valid schema, but missing "healthWaveModifier" entirely.

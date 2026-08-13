@@ -71,8 +71,14 @@ type SeasonAPI struct {
 func Load(dir, correlationID string) (*SeasonAPI, error) {
 	seasonal, err := data.LoadSeasonal(dir, correlationID)
 	if err != nil {
+		// MET-E500's registered template has a "{cause}" placeholder
+		// (BUG-191, same weakness class as BUG-099's engine.market fix) —
+		// populate it from the wrapped error's own text so the rendered
+		// message actually names the failure instead of leaving the
+		// literal "{cause}" in the operator/log-visible text.
 		return nil, errs.Wrap(ErrSeasonalDataInvalid, correlationID, err, map[string]any{
-			"dir": dir,
+			"dir":   dir,
+			"cause": err.Error(),
 		})
 	}
 
