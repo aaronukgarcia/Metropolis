@@ -56,7 +56,15 @@
 //     method whose OWN receiver type is not a candidate must still be
 //     checked for candidate-typed parameters (func (r *Attacher)
 //     Attach(g *Guarded)) — both are enumerated via the parameter path
-//     regardless of fd.Recv.
+//     regardless of fd.Recv. Function literals (closures) are scanned
+//     too, at any nesting depth — assigned to a var, returned from
+//     another closure, a struct-literal field value, inside a slice
+//     literal, or passed inline as an argument — via scanFuncLits
+//     (BUG-138), which walks every *ast.FuncLit in the file and runs
+//     the identical candidate-parameter check (appendParamFuncs) used
+//     for an ordinary *ast.FuncDecl. A closure has no receiver, so
+//     only its parameter list is relevant here, not the receiver-
+//     method path above.
 //
 //  3. For each reachable function, determines whether it GUARDS: its body
 //     contains a call recognisable as an identity/copy check — a call to
