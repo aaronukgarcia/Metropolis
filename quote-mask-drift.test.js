@@ -362,6 +362,29 @@ const GOLDEN_CASES = [
     ),
   },
   {
+    // BUG-089: `$'...'` is bash's ANSI-C quoting, a DISTINCT form from a bare
+    // `'...'` POSIX single-quote -- inside it, unlike a real single-quote,
+    // backslash DOES escape the following character (same rule as double
+    // quotes), so `\'` is a literal escaped quote, not the terminator. Real
+    // bash decodes `$'it\'s about git commit'` to the single string value
+    // `it's about git commit` -- an ANSI-C literal being passed to `echo`,
+    // never a real invocation. A scanner that treats `$'` as opening a plain
+    // `'...'` region (missing the `$`, or seeing it but applying no-escape
+    // POSIX single-quote rules anyway) closes the region one character early
+    // at the `\'` (index 9-10 of the segment below), leaving the rest of the
+    // literal -- including the substring "git commit" -- sitting unmasked as
+    // if it were bare, live command text. That is this bug's exact false
+    // positive: a harmless `echo` gets over-blocked because prose INSIDE a
+    // `$'...'` string is misread as a real `git commit` invocation (verified
+    // against a throwaway simulation of the pre-BUG-080 scanner, never
+    // committed: it produces mask ...00111110000000000000000001, leaving
+    // "git commit" and everything after the escaped quote unmasked --
+    // diverging from this golden expectation, which is exactly what makes
+    // this case catch that regression).
+    name: "BUG-089: ANSI-C-quoted string ($'...') with an escaped quote keeps trailing prose (including the words \"git commit\") masked",
+    ...build(seg('echo ', false), seg("$'it\\'s about git commit'", true)),
+  },
+  {
     name: 'BUG-078: a stray unbalanced quote inside a heredoc body does not leak past the terminator',
     ...build(
       seg('cat ', false),
