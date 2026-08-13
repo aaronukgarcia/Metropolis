@@ -21,6 +21,39 @@ package errs
 // numeric range the code falls in. (b) is what would have caught the
 // BUG-008 collision: MET-E100 raised in internal/engine/detgate but
 // registered under a different module than the range's declared owner.
+//
+// BUG-037 and BUG-038 closed two blind spots the original mechanical
+// scan documented but left open (see scanSourceCodes' doc comment for
+// the full shape of each):
+//
+//   - BUG-037 (comment-only codes): a code that is NEVER constructed in
+//     real code, only narrated in a comment, used to be invisible. The
+//     scanner now also collects codes mentioned in comments and fails
+//     the gate for any comment-only code (never a real string literal
+//     anywhere) that is not registered — closing exactly the
+//     "detgate's claim lived only in a source comment" shape from the
+//     BUG-008 postmortem. A comment-only code that IS registered is not
+//     a violation: it carries no collision risk because the registry
+//     already knows about it.
+//   - BUG-038 (dynamically-built codes): fmt.Sprintf/Sprint/Errorf-style
+//     format strings and string concatenation that build a MET- code at
+//     runtime used to be invisible because each Go string literal is
+//     inspected independently. The scanner now recognises the two
+//     textual shapes such construction leaves in source (a bare/partial
+//     "MET-<layer><digits>" fragment used as a concatenation operand, or
+//     a "MET-<layer>%<verb>" format string) and fails the gate
+//     unconditionally for any match — this scanner has no way to
+//     resolve the constructed value, so (per the BOW item) it bans the
+//     pattern rather than silently trusting it.
+//   - BUG-192 (split-prefix concatenation, round 2 of BUG-038): the
+//     Destructive attacker on BUG-038 found that splitting the "MET-"
+//     prefix ITSELF across two adjacent string literals — e.g.
+//     `"MET" + "-E" + fmt.Sprintf("%03d", n)` — evaded both BUG-038
+//     patterns entirely, because neither "MET" nor "-E" alone looks like
+//     a MET- fragment. The scanner now also flattens each "+"
+//     concatenation chain (flattenAddChain) and checks every run of
+//     consecutive string-literal operands' CONCATENATED value
+//     (checkConcatenatedFragments), not just each literal in isolation.
 
 import (
 	"encoding/json"
@@ -45,6 +78,98 @@ import (
 // // comment or a doc string is not treated as "raised" — see the
 // "known blind spots" note on scanSourceCodes.
 var metCodeInStringPattern = regexp.MustCompile(`MET-[A-Z][0-9]{3}`)
+
+// dynamicFragmentPattern matches a Go string literal whose ENTIRE
+// (trimmed) content is nothing but a partial MET- code fragment — e.g.
+// "MET-", "MET-E", or "MET-E1" — the shape a concatenation operand like
+// `"MET-" + "E" + strconv.Itoa(n)` leaves behind (BUG-038). Anchored at
+// both ends deliberately: a literal that merely MENTIONS "MET-" as part
+// of a longer sentence (e.g. an error-format string like "want
+// MET-<layer><NNN>") must NOT match, or every descriptive message about
+// the code format would falsely trip the gate.
+var dynamicFragmentPattern = regexp.MustCompile(`^MET-[A-Z]?[0-9]{0,2}$`)
+
+// dynamicSprintfPattern matches a MET- prefix immediately followed by an
+// optional single layer letter and then a fmt verb ('%'), the shape a
+// Sprintf-built code's format string leaves behind (e.g. "MET-E%03d" or
+// "MET-%s%03d") — BUG-038. It is NOT anchored, so it can find this shape
+// inside a longer format string, but it still requires the '%' to sit
+// immediately after "MET-" (or "MET-<letter>"), so prose like "want
+// MET-<layer><NNN>" (no '%' there at all) does not match.
+var dynamicSprintfPattern = regexp.MustCompile(`MET-[A-Z]?%`)
+
+// flattenAddChain recursively flattens a chain of "+" (token.ADD)
+// *ast.BinaryExpr nodes into its leaf operands, left to right — e.g.
+// `"MET" + "-E" + fmt.Sprintf("%03d", n)` flattens to
+// [BasicLit("MET"), BasicLit("-E"), CallExpr(Sprintf(...))]. Every
+// BinaryExpr node visited along the way is recorded in handled so the
+// caller's ast.Inspect walk (which will independently visit the same
+// nested BinaryExpr nodes as it descends) does not re-flatten and
+// re-report the same chain once per sub-expression (BUG-192).
+func flattenAddChain(expr ast.Expr, handled map[*ast.BinaryExpr]bool) []ast.Expr {
+	bin, ok := expr.(*ast.BinaryExpr)
+	if !ok || bin.Op != token.ADD {
+		return []ast.Expr{expr}
+	}
+	handled[bin] = true
+	var out []ast.Expr
+	out = append(out, flattenAddChain(bin.X, handled)...)
+	out = append(out, flattenAddChain(bin.Y, handled)...)
+	return out
+}
+
+// checkConcatenatedFragments closes the BUG-192 gap in BUG-038's
+// detection: dynamicFragmentPattern/dynamicSprintfPattern only ever
+// looked at ONE string literal at a time, so splitting the "MET-" prefix
+// itself across two adjacent literals in a "+" chain — e.g.
+// `"MET" + "-E" + fmt.Sprintf("%03d", n)` — evaded both patterns
+// entirely (neither "MET" nor "-E" alone looks like a MET- fragment).
+// This walks the flattened leaves of one "+" chain (see
+// flattenAddChain) and, for every run of two-or-more CONSECUTIVE string
+// literals within it, concatenates their values and runs the same
+// complete/partial checks against that concatenation that a single
+// literal would get. A run of length 1 is skipped: a lone literal is
+// already checked individually where it is visited as a *ast.BasicLit,
+// so re-checking it here would only duplicate that result.
+//
+// This still cannot see a fragment carried through an intermediate
+// variable (e.g. `p := "MET"; return p + "-E" + ...`) or split across a
+// function call boundary — closing that would need real dataflow
+// analysis, not a syntactic walk of one expression tree. See this
+// file's "Remaining known blind spots" note.
+func checkConcatenatedFragments(leaves []ast.Expr, rel string, fset *token.FileSet, res *scanResult) {
+	i := 0
+	for i < len(leaves) {
+		if lit, ok := leaves[i].(*ast.BasicLit); !ok || lit.Kind != token.STRING {
+			i++
+			continue
+		}
+		start := i
+		var parts []string
+		for i < len(leaves) {
+			lit, ok := leaves[i].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				break
+			}
+			val, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				break
+			}
+			parts = append(parts, val)
+			i++
+		}
+		if len(parts) < 2 {
+			continue
+		}
+		concat := strings.Join(parts, "")
+		if metCodeInStringPattern.MatchString(concat) ||
+			dynamicFragmentPattern.MatchString(strings.TrimSpace(concat)) ||
+			dynamicSprintfPattern.MatchString(concat) {
+			pos := fset.Position(leaves[start].Pos())
+			res.Dynamic = append(res.Dynamic, sourceCode{Code: concat, File: rel, Line: pos.Line})
+		}
+	}
+}
 
 // reservedOwnerPattern extracts the owning module key from one
 // data/errors.json ranges.reserved description. Every entry in that
@@ -150,50 +275,71 @@ func ownerFor(code string, ranges []reservedRange) (owner string, ok bool) {
 	return "", false
 }
 
+// scanResult is everything scanSourceCodes finds in one pass, split by
+// how the code text was found — each list feeds a different check.
+type scanResult struct {
+	Literals []sourceCode // complete MET-<layer><NNN> codes inside real string literals — "raised" in the BUG-008 sense
+	Comments []sourceCode // complete MET-<layer><NNN> codes found in // or /* */ comment text (BUG-037)
+	Dynamic  []sourceCode // literals that look like a partially-built MET- code fragment or Sprintf format string (BUG-038)
+}
+
 // scanSourceCodes walks every non-test .go file under repoRoot/<dir>
-// for each dir in dirs and collects every MET-<layer><NNN> code found
-// inside a Go string literal (regular "..." or raw `...`).
+// for each dir in dirs and collects, per scanResult:
 //
-// Known blind spots (documented rather than silently unhandled — a
-// scanner with unadvertised false negatives is worse than no scanner):
+//   - Literals: every complete MET-<layer><NNN> code found inside a Go
+//     string literal (regular "..." or raw `...`).
+//   - Comments: every complete MET-<layer><NNN> code found inside
+//     comment text — collected so the caller can flag a code that is
+//     NEVER a real literal anywhere, only ever narrated in a comment
+//     (BUG-037). A code that appears in both Literals and Comments is
+//     not comment-only, so it carries no extra risk; the caller is
+//     expected to diff the two lists rather than treat every comment
+//     hit as a violation (several packages' doc comments legitimately
+//     narrate a range using its own boundary codes in prose alongside
+//     the real, registered, literal-raised code).
+//   - Dynamic: string literals that look like a MET- code under
+//     construction rather than a complete code — a bare/partial
+//     concatenation fragment ("MET-", "MET-E") or a Sprintf-style
+//     format string ("MET-E%03d") — see dynamicFragmentPattern /
+//     dynamicSprintfPattern. This scanner has no way to resolve what
+//     value such code produces at runtime (that needs go/types constant
+//     folding, out of scope here), so every match is reported for the
+//     caller to fail on unconditionally (BUG-038).
 //
-//   - Comments are never scanned. A code mentioned only in a // or /*
-//     */ comment (e.g. a range explanation like "claims MET-E000-
-//     MET-E099") is NOT treated as raised. This is deliberate, not an
-//     oversight: several packages' doc comments narrate a range using
-//     its own boundary codes in prose, which are not actually
-//     constructed anywhere — scanning comments would demand a
-//     registry entry for text that is not a real error path. The
-//     trade-off is that a code ONLY ever written in a comment (never
-//     actually used in real code) is invisible to this check either
-//     way — logged as ASM-* per the dispatch brief.
-//   - String CONCATENATION defeats this scanner: `"MET-" + "E" +
-//     "000"` or fmt.Sprintf-built codes are invisible, because each
-//     Go string literal is inspected independently, exactly as the Go
-//     parser tokenizes it. Every error code in this codebase today is
-//     a single literal (checked by hand during this item), but this
-//     is a real, permanent blind spot for whatever comes next.
+// Remaining known blind spots (documented rather than silently
+// unhandled — a scanner with unadvertised false negatives is worse than
+// no scanner):
+//
 //   - _test.go files are excluded outright. Several existing tests
 //     (e.g. registry_test.go, log_test.go) deliberately use
 //     unregistered fixture codes like MET-F900/F901/F999 to exercise
 //     the unregistered-code fallback path; scanning them would demand
-//     those fixtures be registered, defeating their purpose.
+//     those fixtures be registered, defeating their purpose. This also
+//     means a dynamically-built or comment-only code that appears only
+//     in a _test.go file is not seen — acceptable, since _test.go is
+//     never part of a shipped binary's error surface.
 //   - Non-.go MEDIA are architecturally invisible: the WalkDir callback
 //     below rejects any path not ending in ".go" before anything is
 //     ever parsed, so a MET- code embedded via go:embed in a
 //     template/config/i18n resource file and referenced dynamically at
 //     runtime is never seen, no matter how it's written inside that
-//     file. Distinct from the concatenation blind spot above (that one
-//     is about how a Go string is built; this one is about a whole
-//     other file type the walk never opens at all). Not live today
-//     (zero go:embed directives and zero MET- codes in non-.go files
-//     under cmd/ and internal/, checked by hand — ASM-019), but a real,
-//     permanent gap for whatever comes next, same posture as
-//     concatenation.
-func scanSourceCodes(t testing.TB, repoRoot string, dirs ...string) []sourceCode {
+//     file. Not live today (zero go:embed directives and zero MET-
+//     codes in non-.go files under cmd/ and internal/, checked by hand
+//     — ASM-019), but a real, permanent gap for whatever comes next.
+//   - Multi-hop / dataflow concatenation is still invisible after
+//     BUG-192's fix. checkConcatenatedFragments only sees literals that
+//     are DIRECT, syntactically-adjacent operands of the same "+" chain
+//     in one expression. A fragment carried through an intermediate
+//     variable (`p := "MET"; return p + "-E" + fmt.Sprintf(...)`), built
+//     across multiple statements, or assembled via strings.Builder /
+//     strings.Join, still evades detection — that needs real dataflow
+//     analysis (tracking values across assignments and calls), which is
+//     disproportionate to this bug's risk per the BOW item's own
+//     assessment; accepted as a residual gap rather than attempted here.
+func scanSourceCodes(t testing.TB, repoRoot string, dirs ...string) scanResult {
 	t.Helper()
 	fset := token.NewFileSet()
-	var out []sourceCode
+	var res scanResult
 
 	for _, d := range dirs {
 		root := filepath.Join(repoRoot, d)
@@ -219,7 +365,16 @@ func scanSourceCodes(t testing.TB, repoRoot string, dirs ...string) []sourceCode
 			}
 			rel = filepath.ToSlash(rel)
 
+			handledBin := map[*ast.BinaryExpr]bool{}
 			ast.Inspect(file, func(n ast.Node) bool {
+				if bin, ok := n.(*ast.BinaryExpr); ok && bin.Op == token.ADD {
+					if !handledBin[bin] {
+						leaves := flattenAddChain(bin, handledBin)
+						checkConcatenatedFragments(leaves, rel, fset, &res)
+					}
+					return true
+				}
+
 				lit, ok := n.(*ast.BasicLit)
 				if !ok || lit.Kind != token.STRING {
 					return true
@@ -228,12 +383,36 @@ func scanSourceCodes(t testing.TB, repoRoot string, dirs ...string) []sourceCode
 				if uqerr != nil {
 					return true
 				}
-				for _, code := range metCodeInStringPattern.FindAllString(val, -1) {
-					pos := fset.Position(lit.Pos())
-					out = append(out, sourceCode{Code: code, File: rel, Line: pos.Line})
+				pos := fset.Position(lit.Pos())
+
+				complete := metCodeInStringPattern.FindAllString(val, -1)
+				if len(complete) > 0 {
+					for _, code := range complete {
+						res.Literals = append(res.Literals, sourceCode{Code: code, File: rel, Line: pos.Line})
+					}
+					return true
+				}
+
+				// Only consider a literal "dynamic" when it holds no
+				// complete code of its own (checked above) — a literal
+				// like "MET-E100 (see MET-E%03d family)" should be
+				// reported as the raised MET-E100 it plainly is, not
+				// flagged as an unresolved dynamic fragment on top.
+				if dynamicFragmentPattern.MatchString(strings.TrimSpace(val)) || dynamicSprintfPattern.MatchString(val) {
+					res.Dynamic = append(res.Dynamic, sourceCode{Code: val, File: rel, Line: pos.Line})
 				}
 				return true
 			})
+
+			for _, cg := range file.Comments {
+				for _, c := range cg.List {
+					for _, code := range metCodeInStringPattern.FindAllString(c.Text, -1) {
+						pos := fset.Position(c.Pos())
+						res.Comments = append(res.Comments, sourceCode{Code: code, File: rel, Line: pos.Line})
+					}
+				}
+			}
+
 			return nil
 		})
 		if err != nil {
@@ -241,13 +420,22 @@ func scanSourceCodes(t testing.TB, repoRoot string, dirs ...string) []sourceCode
 		}
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].File != out[j].File {
-			return out[i].File < out[j].File
+	sortSourceCodes(res.Literals)
+	sortSourceCodes(res.Comments)
+	sortSourceCodes(res.Dynamic)
+	return res
+}
+
+// sortSourceCodes orders a []sourceCode by file then line, in place, so
+// scan results and the failure messages built from them are
+// deterministic across runs.
+func sortSourceCodes(codes []sourceCode) {
+	sort.Slice(codes, func(i, j int) bool {
+		if codes[i].File != codes[j].File {
+			return codes[i].File < codes[j].File
 		}
-		return out[i].Line < out[j].Line
+		return codes[i].Line < codes[j].Line
 	})
-	return out
 }
 
 // verifySourceCodes is the pure check at the heart of this file: given
@@ -287,6 +475,60 @@ func verifySourceCodes(found []sourceCode, registry map[string]registryEntry, ra
 	return violations
 }
 
+// verifyDynamicSites turns every scanResult.Dynamic entry into a
+// violation. There is nothing to weigh here (unlike the comment-only
+// check below): this scanner cannot resolve what code a dynamically
+// built literal actually produces, so it cannot verify registration or
+// range ownership for it — per BUG-038, every match is banned
+// unconditionally rather than silently trusted.
+func verifyDynamicSites(dynamic []sourceCode) []string {
+	var violations []string
+	for _, d := range dynamic {
+		violations = append(violations, fmt.Sprintf(
+			"%s:%d: %q looks like a dynamically-constructed MET- code (string concatenation or a Sprintf-style format string) — "+
+				"this scanner (BUG-008/BUG-038) cannot resolve the value such code produces at runtime, so it cannot verify "+
+				"registration or range ownership for it; use a literal MET-<layer><NNN> string instead",
+			d.File, d.Line, d.Code))
+	}
+	return violations
+}
+
+// verifyCommentOnlyCodes flags every code that appears ONLY in comment
+// text — never in a real string literal anywhere in the scanned tree —
+// and is not registered in data/errors.json. This is exactly the
+// BUG-008 postmortem shape (BUG-037): a range claimed only in a doc
+// comment, invisible to a registry-only search, later silently
+// collided with a real registration elsewhere. A comment-only code that
+// IS already registered is not flagged: the registry already knows
+// about it, so there is no collision risk left to close.
+func verifyCommentOnlyCodes(comments, literals []sourceCode, registry map[string]registryEntry) []string {
+	raised := make(map[string]bool, len(literals))
+	for _, l := range literals {
+		raised[l.Code] = true
+	}
+
+	var violations []string
+	reported := map[string]bool{}
+	for _, c := range comments {
+		if raised[c.Code] {
+			continue // also raised in real code elsewhere — not comment-only
+		}
+		if _, registered := registry[c.Code]; registered {
+			continue // already registered — no collision risk left
+		}
+		key := c.Code + "@" + c.File + ":" + strconv.Itoa(c.Line)
+		if reported[key] {
+			continue
+		}
+		reported[key] = true
+		violations = append(violations, fmt.Sprintf(
+			"%s:%d: %s appears only in a comment (never in a real code path) and is not registered in data/errors.json (BUG-008/BUG-037) — "+
+				"register it if it names a real claimed/planned code, or reword the comment if it does not",
+			c.File, c.Line, c.Code))
+	}
+	return violations
+}
+
 // TestSourceCodesAreRegisteredAndInRange is the mechanical gate BUG-008
 // asked for: every MET- code actually raised anywhere in cmd/ or
 // internal/ (excluding _test.go — see scanSourceCodes) must be
@@ -316,12 +558,15 @@ func TestSourceCodesAreRegisteredAndInRange(t *testing.T) {
 		t.Fatalf("loadReservedRanges: %v", err)
 	}
 
-	found := scanSourceCodes(t, repoRoot, "cmd", "internal")
-	if len(found) == 0 {
+	result := scanSourceCodes(t, repoRoot, "cmd", "internal")
+	if len(result.Literals) == 0 {
 		t.Fatal("scanSourceCodes found zero MET- codes in cmd/ or internal/ — the scanner is almost certainly broken (repoRoot resolution, walk paths, or the literal pattern), not that the codebase stopped raising errors")
 	}
 
-	violations := verifySourceCodes(found, registry, ranges)
+	var violations []string
+	violations = append(violations, verifySourceCodes(result.Literals, registry, ranges)...)
+	violations = append(violations, verifyDynamicSites(result.Dynamic)...)
+	violations = append(violations, verifyCommentOnlyCodes(result.Comments, result.Literals, registry)...)
 	if len(violations) > 0 {
 		t.Errorf("%d error-registry violation(s) found (BUG-008 class — see this file's package doc comment):\n%s",
 			len(violations), strings.Join(violations, "\n"))
@@ -432,19 +677,202 @@ const testOnlyCode = "MET-Z200"
 		t.Fatalf("write fixture_test.go: %v", err)
 	}
 
-	found := scanSourceCodes(t, dir, "internal")
+	result := scanSourceCodes(t, dir, "internal")
 
 	seen := map[string]bool{}
-	for _, sc := range found {
+	for _, sc := range result.Literals {
 		seen[sc.Code] = true
 	}
 	if !seen["MET-Z100"] {
 		t.Error("expected MET-Z100 (string literal in non-test file) to be found")
 	}
 	if seen["MET-Z999"] {
-		t.Error("MET-Z999 only ever appears in a comment — it must NOT be reported as raised")
+		t.Error("MET-Z999 only ever appears in a comment — it must NOT be reported as a raised (Literals) code")
 	}
 	if seen["MET-Z200"] {
 		t.Error("MET-Z200 only appears in a _test.go file — it must NOT be reported as raised")
+	}
+
+	seenComments := map[string]bool{}
+	for _, sc := range result.Comments {
+		seenComments[sc.Code] = true
+	}
+	if !seenComments["MET-Z999"] {
+		t.Error("expected MET-Z999 (comment-only mention) to be captured in Comments for the BUG-037 check")
+	}
+	if seenComments["MET-Z200"] {
+		t.Error("MET-Z200 lives in a _test.go file, which is excluded entirely — it must not appear in Comments either")
+	}
+}
+
+// TestScanSourceCodes_DetectsDynamicConstruction is BUG-038's regression
+// fixture: a string-concatenation fragment and a Sprintf-style format
+// string must both surface in scanResult.Dynamic (not Literals, since
+// neither is a complete code), while an ordinary complete literal code
+// stays out of Dynamic entirely.
+func TestScanSourceCodes_DetectsDynamicConstruction(t *testing.T) {
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "internal", "fixture")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	src := `package fixture
+
+import "fmt"
+
+const realCode = "MET-Z100"
+
+func concatCode(n int) string {
+	return "MET-" + fmt.Sprintf("%d", n)
+}
+
+func sprintfCode(n int) string {
+	return fmt.Sprintf("MET-Z%03d", n)
+}
+
+func descriptiveMessage() string {
+	// This must NOT be treated as dynamic construction: it is prose
+	// describing the format, with no '%' verb sitting right after the
+	// MET- prefix or layer letter.
+	return fmt.Sprintf("invalid code %q (want MET-<layer><NNN>)", "x")
+}
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture.go: %v", err)
+	}
+
+	result := scanSourceCodes(t, dir, "internal")
+
+	if len(result.Dynamic) != 2 {
+		t.Fatalf("expected exactly 2 dynamic-construction sites (concat fragment + Sprintf format string), got %d: %+v", len(result.Dynamic), result.Dynamic)
+	}
+
+	literalCodes := map[string]bool{}
+	for _, sc := range result.Literals {
+		literalCodes[sc.Code] = true
+	}
+	if !literalCodes["MET-Z100"] {
+		t.Error("expected MET-Z100 (complete literal) to still be found in Literals")
+	}
+
+	for _, d := range result.Dynamic {
+		if d.Code == "MET-Z100" {
+			t.Error("MET-Z100 is a complete literal and must not also appear in Dynamic")
+		}
+	}
+}
+
+// TestScanSourceCodes_DetectsSplitPrefixConcatenation is BUG-192's
+// regression fixture: the Destructive attacker's exact repro on BUG-038
+// (`"MET" + "-E" + fmt.Sprintf("%03d", n)`) splits the "MET-" prefix
+// itself across two literals, which used to defeat dynamicFragmentPattern
+// and dynamicSprintfPattern entirely (neither operand alone looks like a
+// MET- fragment). It must now surface in scanResult.Dynamic via
+// checkConcatenatedFragments. Also reconfirms the registry.go-shaped
+// false positive BUG-038's anchoring exists to avoid — a single
+// non-concatenated literal like "invalid code %q (want MET-<layer><NNN>)"
+// — still does not trip, now that concatenation chains are inspected too.
+func TestScanSourceCodes_DetectsSplitPrefixConcatenation(t *testing.T) {
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "internal", "fixture")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	src := `package fixture
+
+import "fmt"
+
+func splitPrefixCode(n int) string {
+	return "MET" + "-E" + fmt.Sprintf("%03d", n)
+}
+
+func descriptiveMessage() string {
+	// A single literal, not a "+" concatenation of two MET- fragments —
+	// must NOT be treated as dynamic construction (BUG-038's
+	// anchoring reason).
+	return fmt.Sprintf("invalid code %q (want MET-<layer><NNN>)", "x")
+}
+
+func unrelatedConcatenation() string {
+	// Ordinary string-building unrelated to MET- codes must not trip
+	// the new concatenation check either.
+	return "hello" + " " + "world"
+}
+`
+	if err := os.WriteFile(filepath.Join(pkgDir, "fixture.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("write fixture.go: %v", err)
+	}
+
+	result := scanSourceCodes(t, dir, "internal")
+
+	if len(result.Dynamic) != 1 {
+		t.Fatalf("expected exactly 1 dynamic-construction site (the split \"MET\"+\"-E\" prefix), got %d: %+v", len(result.Dynamic), result.Dynamic)
+	}
+	if got := result.Dynamic[0].Code; got != "MET-E" {
+		t.Errorf("expected the flagged concatenation to be %q, got %q", "MET-E", got)
+	}
+	if len(result.Literals) != 0 {
+		t.Errorf("expected no complete Literals hits from this fixture, got %+v", result.Literals)
+	}
+}
+
+// TestVerifyDynamicSites_AlwaysFlags proves verifyDynamicSites bans
+// every dynamic-construction site unconditionally — there is no
+// registry state that makes a dynamically-built code acceptable to this
+// scanner, since it cannot resolve what value the code actually is.
+func TestVerifyDynamicSites_AlwaysFlags(t *testing.T) {
+	dynamic := []sourceCode{{Code: `MET-E%03d`, File: "internal/fixture/pkg/file.go", Line: 9}}
+
+	violations := verifyDynamicSites(dynamic)
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly 1 violation, got %d: %v", len(violations), violations)
+	}
+	for _, want := range []string{"internal/fixture/pkg/file.go:9", "dynamically-constructed", "BUG-038"} {
+		if !strings.Contains(violations[0], want) {
+			t.Errorf("violation message %q missing expected substring %q", violations[0], want)
+		}
+	}
+}
+
+// TestVerifyCommentOnlyCodes_FlagsUnregisteredCommentOnly proves the
+// BUG-037 gap is now caught: a code that appears only in a comment and
+// has no registry entry must fail.
+func TestVerifyCommentOnlyCodes_FlagsUnregisteredCommentOnly(t *testing.T) {
+	comments := []sourceCode{{Code: "MET-Z999", File: "internal/fixture/pkg/file.go", Line: 3}}
+	var literals []sourceCode
+	registry := map[string]registryEntry{}
+
+	violations := verifyCommentOnlyCodes(comments, literals, registry)
+	if len(violations) != 1 {
+		t.Fatalf("expected exactly 1 violation, got %d: %v", len(violations), violations)
+	}
+	for _, want := range []string{"MET-Z999", "internal/fixture/pkg/file.go:3", "only in a comment", "BUG-037"} {
+		if !strings.Contains(violations[0], want) {
+			t.Errorf("violation message %q missing expected substring %q", violations[0], want)
+		}
+	}
+}
+
+// TestVerifyCommentOnlyCodes_DoesNotFlagRegisteredOrAlsoLiteral proves
+// the check does not over-fire: a comment-only code that IS registered
+// is safe (no collision risk left), and a code that appears in both
+// comments and literals is not "comment-only" at all.
+func TestVerifyCommentOnlyCodes_DoesNotFlagRegisteredOrAlsoLiteral(t *testing.T) {
+	comments := []sourceCode{
+		{Code: "MET-Z998", File: "internal/fixture/pkg/registered.go", Line: 3},
+		{Code: "MET-Z997", File: "internal/fixture/pkg/alsoliteral.go", Line: 5},
+	}
+	literals := []sourceCode{
+		{Code: "MET-Z997", File: "internal/fixture/pkg/alsoliteral.go", Line: 12},
+	}
+	registry := map[string]registryEntry{
+		"MET-Z998": {Severity: "error", Module: "fixture.pkg", Message: "m", Remedy: "r"},
+	}
+
+	violations := verifyCommentOnlyCodes(comments, literals, registry)
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations, got %d: %v", len(violations), violations)
 	}
 }
