@@ -109,4 +109,12 @@ const (
 	// BUG-008 (the registry rewrite this stopgap was deliberately
 	// avoiding colliding with) landed and stabilised data/errors.json.
 	ErrSpeed8xGateNotConfigured = "MET-E015"
+
+	// ErrPacingDataInvalid: LoadSecondsPerMonthAt1x/LoadDefaultSecondsPerMonthAt1x
+	// could not read or schema-validate data/pacing.json (FEAT-030 —
+	// closes MOD-012's interim ruling that secondsPerMonthAt1x had
+	// nowhere to be sourced from as a data file). Wraps the underlying
+	// foundation/data error unchanged, mirroring engine.season's
+	// ErrSeasonalDataInvalid (MET-E500).
+	ErrPacingDataInvalid = "MET-E016"
 )

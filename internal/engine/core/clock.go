@@ -17,13 +17,23 @@ const DailyTicksPerMonth int64 = 30
 // 480)". AC-1 requires this be a single named, non-hardcoded value
 // rather than a magic number sprinkled through the codebase.
 //
-// Decision (open question, see the dispatch report): foundation.data's
-// eight §24 config files (internal/foundation/data/types.go) do not yet
-// include a pacing/timing file, so there is nowhere to load this from
-// per GR#15's letter today. This package therefore keeps it as the one
-// named var below plus an Option (WithSecondsPerMonthAt1x) any caller
-// can override with a real config-sourced value once foundation.data
-// grows a pacing file — no other line in this package repeats 480.
+// FEAT-030 (2026-08-13) closes MOD-012's interim ruling below: the
+// pacing constant is now genuinely sourced from data/pacing.json at
+// boot via [LoadSecondsPerMonthAt1x] / [LoadDefaultSecondsPerMonthAt1x]
+// (pacing.go), matching engine.season's data.LoadSeasonal precedent.
+// This var is kept ONLY as the fallback default a caller gets from a
+// bare NewEngine()/NewClock(DefaultSecondsPerMonthAt1x) that has not
+// (or cannot, e.g. an isolated unit test with no data/ directory)
+// loaded data/pacing.json — it is no longer the sole source of the
+// value, and no other line in this package repeats 480 regardless.
+//
+// Former decision record (MOD-012, 2026-08-09, superseded by the
+// above): foundation.data's original eight §24 config files
+// (internal/foundation/data/types.go) had no pacing/timing file, so
+// there was genuinely nowhere to load this from per GR#15's letter at
+// the time. pacing.json (foundation/data/pacing.go) is that home now,
+// added the same way market.json was (MOD-020 ruling 1) rather than
+// growing the eight-file set's own doc comment.
 var DefaultSecondsPerMonthAt1x int64 = 480
 
 // Speed is the simulation pacing multiplier control (§3's speed table).

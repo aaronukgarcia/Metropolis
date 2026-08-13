@@ -239,6 +239,12 @@
       "message": "Get/OnChange/Reload for {path} called on a copied Store value, not the one NewStore constructed",
       "remedy": "Always use the *Store[T, PT] pointer NewStore returned. Do not dereference-and-reassign it ('s2 := *s1') or pass it by value -- that produces a second Store value with its own reloadMu/cbMu but an aliased cbs backing array, defeating this package's concurrency-safety invariant (BUG-125/SEC-020). If you need a second independent Store, call NewStore again."
     },
+    "MET-F609": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "config file at {path} contains a duplicate JSON key {field}",
+      "remedy": "Remove or rename the duplicate key at {path}. Standard JSON decoding silently keeps only the last occurrence and discards the rest, which can mask a real data-authoring mistake (BUG-060) -- check which body was intended and delete the other."
+    },
     "MET-F700": {
       "severity": "error",
       "module": "tool.astgate",
@@ -490,6 +496,12 @@
       "module": "engine.core",
       "message": "SetSpeed(8x) rejected: no Speed8xGate configured on this Engine",
       "remedy": "Speed8xDebug is only a valid multiplier once a caller wires an authorising gate via WithSpeed8xGate (normally feat.debugmode.State.AllowSpeed8x) -- an Engine built without one denies Speed8xDebug by default rather than silently permitting it. Wire WithSpeed8xGate(...) when constructing the Engine, or use 1x/2x/4x if debug mode is not intended for this run. Distinct from MET-E002 (ErrInvalidSpeed): that code means the requested speed value itself is out of range, not that a valid 8x request has nowhere to be authorised."
+    },
+    "MET-E016": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "Could not load secondsPerMonthAt1x from data/pacing.json: {cause}",
+      "remedy": "Check that data/pacing.json exists at the resolved data directory, is well-formed JSON, has a positive 'version', and has a positive 'secondsPerMonthAt1x' value. This closes FEAT-030 / MOD-012's interim ruling: the pacing constant is sourced from this data file at boot, with internal/engine/core/clock.go's DefaultSecondsPerMonthAt1x kept only as a fallback default for callers that construct an Engine without loading data (e.g. isolated unit tests)."
     },
     "MET-H200": {
       "severity": "error",

@@ -1,0 +1,5 @@
+{
+  "$comment": "FEAT-030 (engine.core AC-1 interim-ruling debt closure): master doc §3's real-time pacing knob -- '1 game month ~= 8 real minutes (config: secondsPerMonthAt1x, default 480)'. Previously a single named Go var (internal/engine/core/clock.go's DefaultSecondsPerMonthAt1x) with no data-file backing because foundation.data's original eight section-24 config files had nowhere for a pacing value to live (MOD-012's interim ruling, 2026-08-09). This is that ninth file, added the same way market.json was (MOD-020 ruling 1) rather than growing the original eight-file set's own doc comment. Placeholder per the balance-number regime: secondsPerMonthAt1x's VALUE (480) is an unchanged directional placeholder carried over verbatim from the Go var it replaces -- this file's job is sourcing (data-driven, not hardcoded), never re-picking the number.",
+  "version": 1,
+  "secondsPerMonthAt1x": 480
+}
