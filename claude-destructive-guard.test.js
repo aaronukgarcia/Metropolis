@@ -38,6 +38,7 @@ const authorGuard = require('./claude-author-guard.js');
 const {
   extractMessage,
   extractTags,
+  looksLikeRealTag,
   isEnforcedDirPath,
   isRootLevel,
   deriveRootGuardScripts,
@@ -65,7 +66,15 @@ function connectDb() {
 async function createFixtureItem(db, label) {
   const suffix = crypto.randomBytes(4).toString('hex');
   const guid = crypto.randomUUID();
-  const code = `FEAT-T${suffix}`.slice(0, 16).toUpperCase();
+  // BUG-152: the code must be shaped like a REAL production BOW code
+  // (TYPE_PREFIX + "-" + a purely-numeric id, exactly what claude-bow.js's
+  // nextCode() generates) so it survives claude-destructive-guard.js's new
+  // looksLikeRealTag() shape filter and actually reaches BOW resolution —
+  // the old "FEAT-T<hex>" shape mixed letters into the suffix and would now
+  // be silently dropped as prose before ever hitting the DB. A large random
+  // 32-bit number keeps this collision-free against the slowly-incrementing
+  // sequential codes nextCode() produces, without needing letters at all.
+  const code = `FEAT-${crypto.randomBytes(4).readUInt32BE(0)}`;
   const mkey = `test.destructiveguard.${label}.${suffix}`;
   await db.query(
     'INSERT INTO bow_items (guid, code, mkey, item_type, title, priority) VALUES (?, ?, ?, ?, ?, ?)',
@@ -151,11 +160,99 @@ function runGuard(cwd, command, envOverrides = {}) {
 // Unit: extractMessage / extractTags (AC-13)
 // ---------------------------------------------------------------------------
 
+// BUG-164: the real TYPE_PREFIX set, sourced from claude-bow.js itself
+// (GR#15 — never a second, independently-typed prefix list in this test
+// file either) — every unit test below threads this through exactly as
+// production main() does via loadDependencies()'s typePrefixes.
+const REAL_TYPE_PREFIXES = new Set(Object.values(bow.TYPE_PREFIX));
+
 test('extractMessage / extractTags — single and multi-tag messages', () => {
   assert.equal(extractMessage('git commit -m "[FEAT-040] hello"'), '[FEAT-040] hello');
-  assert.deepEqual(extractTags('[FEAT-040] hello'), ['FEAT-040']);
-  assert.deepEqual(extractTags('[tool.destructiveguard] and [FEAT-040] both'), ['tool.destructiveguard', 'FEAT-040']);
+  assert.deepEqual(extractTags('[FEAT-040] hello', REAL_TYPE_PREFIXES), ['FEAT-040']);
+  assert.deepEqual(extractTags('[tool.destructiveguard] and [FEAT-040] both', REAL_TYPE_PREFIXES), ['tool.destructiveguard', 'FEAT-040']);
   assert.equal(extractMessage('git commit -F msgfile.txt'), null);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-152: bracketed prose (Go generics, quoted literals) must not be
+// mistaken for a claimed [mkey]/[CODE] tag.
+// ---------------------------------------------------------------------------
+
+test('BUG-152: looksLikeRealTag accepts real mkey/CODE shapes, rejects the three reported false positives', () => {
+  // Real shapes must still be recognised — no regression to the guard's
+  // actual purpose.
+  assert.ok(looksLikeRealTag('tool.destructiveguard', REAL_TYPE_PREFIXES));
+  assert.ok(looksLikeRealTag('engine.core', REAL_TYPE_PREFIXES));
+  assert.ok(looksLikeRealTag('data.modes-naming', REAL_TYPE_PREFIXES)); // hyphenated segment, real mkey on disk
+  assert.ok(looksLikeRealTag('ui.screen.build', REAL_TYPE_PREFIXES));   // three segments, real mkey on disk
+  assert.ok(looksLikeRealTag('FEAT-040', REAL_TYPE_PREFIXES));
+  assert.ok(looksLikeRealTag('BUG-152', REAL_TYPE_PREFIXES));
+  assert.ok(looksLikeRealTag('MOD-001', REAL_TYPE_PREFIXES));
+
+  // The three reported false positives must NOT be treated as tags.
+  assert.ok(!looksLikeRealTag('T,PT', REAL_TYPE_PREFIXES));          // from `Store[T,PT]`
+  assert.ok(!looksLikeRealTag('Screen', REAL_TYPE_PREFIXES));         // from `atomic.Pointer[Screen]`
+  assert.ok(!looksLikeRealTag('REDACTED-GR22', REAL_TYPE_PREFIXES));  // literal marker string in prose
+});
+
+test('BUG-152: extractTags drops bracketed prose that only looks like a tag, in isolation', () => {
+  assert.deepEqual(extractTags('fix Store[T,PT] generic constraint handling', REAL_TYPE_PREFIXES), []);
+  assert.deepEqual(extractTags('switch atomic.Pointer[Screen] to the new API', REAL_TYPE_PREFIXES), []);
+  assert.deepEqual(extractTags('redact the literal [REDACTED-GR22] marker in logs', REAL_TYPE_PREFIXES), []);
+});
+
+test('BUG-152: extractTags extracts only the real tag when mixed in the same message as false-positive-shaped brackets', () => {
+  assert.deepEqual(
+    extractTags('[engine.core] fix Store[T,PT] generic constraint handling', REAL_TYPE_PREFIXES),
+    ['engine.core']
+  );
+  assert.deepEqual(
+    extractTags('switch atomic.Pointer[Screen] to the new API [FEAT-040]', REAL_TYPE_PREFIXES),
+    ['FEAT-040']
+  );
+  assert.deepEqual(
+    extractTags('[tool.destructiveguard] redact the literal [REDACTED-GR22] marker, also touches Store[T,PT]', REAL_TYPE_PREFIXES),
+    ['tool.destructiveguard']
+  );
+});
+
+// ---------------------------------------------------------------------------
+// BUG-164: WORD-digit technical abbreviations in prose ([UTF-8], [RFC-2119],
+// [SHA-256], [ISO-8601]) satisfy CODE_SHAPE_RE by accident and must not be
+// treated as claimed BOW tags — only a CODE-shaped span whose prefix is a
+// REAL claude-bow.js TYPE_PREFIX value is a genuine claim.
+// ---------------------------------------------------------------------------
+
+test('BUG-164: looksLikeRealTag rejects CODE-shaped prose abbreviations whose prefix is not a real TYPE_PREFIX', () => {
+  assert.ok(!looksLikeRealTag('UTF-8', REAL_TYPE_PREFIXES));
+  assert.ok(!looksLikeRealTag('RFC-2119', REAL_TYPE_PREFIXES));
+  assert.ok(!looksLikeRealTag('SHA-256', REAL_TYPE_PREFIXES));
+  assert.ok(!looksLikeRealTag('ISO-8601', REAL_TYPE_PREFIXES));
+
+  // A genuine-shaped but nonexistent-item code must still be treated as a
+  // CLAIMED tag (real prefix, purely-numeric id) — BOW resolution, not the
+  // shape filter, is what must reject FEAT-999 as unresolvable. The fix
+  // must not swing so far that it starts ignoring genuine-looking-but-
+  // nonexistent BOW codes.
+  assert.ok(looksLikeRealTag('FEAT-999', REAL_TYPE_PREFIXES));
+});
+
+test('BUG-164: extractTags drops prose abbreviations shaped like BOW codes, in isolation', () => {
+  assert.deepEqual(extractTags('normalize [UTF-8] BOM handling before parsing', REAL_TYPE_PREFIXES), []);
+  assert.deepEqual(extractTags('cite [RFC-2119] keyword semantics in the doc', REAL_TYPE_PREFIXES), []);
+  assert.deepEqual(extractTags('verify the [SHA-256] checksum matches', REAL_TYPE_PREFIXES), []);
+  assert.deepEqual(extractTags('dates now follow [ISO-8601] formatting', REAL_TYPE_PREFIXES), []);
+});
+
+test('BUG-164: extractTags extracts only the real tag when a prose abbreviation appears alongside it in the same message', () => {
+  assert.deepEqual(
+    extractTags('[FEAT-040] normalize [UTF-8] BOM handling before parsing', REAL_TYPE_PREFIXES),
+    ['FEAT-040']
+  );
+  assert.deepEqual(
+    extractTags('cite [RFC-2119] keyword semantics [FEAT-040], also touches [SHA-256] hashing and [ISO-8601] dates', REAL_TYPE_PREFIXES),
+    ['FEAT-040']
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -258,7 +355,11 @@ test('AC-10/AC-11: a staged internal/ file activates the gate (deny with no verd
     // never-inserted code reproduces the intended "cannot resolve -> still
     // denied" path (the comment's original intent) without needing DB
     // fixture setup/teardown, and can never collide with a real item.
-    const unresolvableCode = `FEAT-NOSUCH${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+    // BUG-152: the code must still be CODE-shaped (prefix + "-" + purely
+    // numeric id) — a fake suffix like "NOSUCH1234" would now be filtered
+    // out by looksLikeRealTag() as prose, never reaching resolution at all,
+    // which would test the wrong path entirely.
+    const unresolvableCode = `FEAT-${crypto.randomBytes(4).readUInt32BE(0)}`;
     const r = runGuard(dir, `git commit -m "[${unresolvableCode}] change"`);
     assert.equal(r.denied, true); // tag does not resolve to any live BOW item -> still a deny path
   });
@@ -376,9 +477,35 @@ test('REGRESSION: git.exe / git.cmd / a shell-wrapped commit still go through th
 
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
-      const rBad = runGuard(dir, `bash -c "git commit -m '[ZZZ-DOES-NOT-EXIST-999] change'"`);
+      // BUG-152: CODE-shaped (prefix + "-" + purely numeric id) so it still
+      // reaches BOW resolution instead of being filtered out as prose.
+      // BUG-164: the prefix must be a REAL TYPE_PREFIX value (FEAT, not the
+      // made-up "ZZZ") or looksLikeRealTag() now drops it as prose before it
+      // ever reaches resolution — the id itself stays absurdly large so no
+      // real item can ever collide with it.
+      const rBad = runGuard(dir, `bash -c "git commit -m '[FEAT-999999999] change'"`);
       assert.equal(rBad.denied, true);
-      assert.match(rBad.reason, /ZZZ-DOES-NOT-EXIST-999/, 'the unresolvable tag must still be named even when the invocation was wrapped');
+      assert.match(rBad.reason, /FEAT-999999999/, 'the unresolvable tag must still be named even when the invocation was wrapped');
+    });
+  } finally {
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-164 end-to-end: a commit citing a REAL, accepted-verdict tag whose message also mentions [UTF-8]/[RFC-2119]/[SHA-256]/[ISO-8601] prose is ALLOWED, not denied over the incidental match', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug164-prose-abbrev');
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/foo.go', 'package foo\n');
+      const r = runGuard(
+        dir,
+        `git commit -m "[${item.code}] normalize [UTF-8] BOM handling per [RFC-2119], verify [SHA-256] checksum and [ISO-8601] dates"`
+      );
+      assert.equal(r.denied, false, 'a fully clean, already-attacked commit must not be blocked by incidental WORD-digit prose');
     });
   } finally {
     await deleteFixtureItem(db, item.guid);
@@ -658,9 +785,14 @@ test('ROUND-4 recognition corpus: isCommitInvocation() matches expected truth fo
 test('AC-17: an unresolvable tag is denied and named individually', () => {
   withTempRepo((dir) => {
     stageFile(dir, 'internal/foo.go', 'package foo\n');
-    const r = runGuard(dir, 'git commit -m "[ZZZ-DOES-NOT-EXIST-999] change"');
+    // BUG-152: CODE-shaped (prefix + "-" + purely numeric id) so it still
+    // reaches BOW resolution instead of being filtered out as prose.
+    // BUG-164: real TYPE_PREFIX ("FEAT", not the made-up "ZZZ") with an
+    // absurdly large, never-real id, so the shape filter still lets it
+    // through to be correctly named as unresolvable.
+    const r = runGuard(dir, 'git commit -m "[FEAT-999999999] change"');
     assert.equal(r.denied, true);
-    assert.match(r.reason, /ZZZ-DOES-NOT-EXIST-999/);
+    assert.match(r.reason, /FEAT-999999999/);
   });
 });
 
@@ -699,6 +831,34 @@ test('AC-14/AC-15: an item with an accepted verdict passes; a second item with o
   } finally {
     await deleteFixtureItem(db, ok.guid);
     await deleteFixtureItem(db, bad.guid);
+    await db.end();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// End-to-end: BUG-152 — bracketed prose vs. a genuine tag, full pipeline
+// ---------------------------------------------------------------------------
+
+test('BUG-152 end-to-end: a real, accepted tag passes even when the SAME message also contains false-positive-shaped brackets (Go generics, a quoted literal)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug152-mixed');
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/foo.go', 'package foo\n');
+      const message =
+        `[${item.code}] switch atomic.Pointer[Screen] to the new API, ` +
+        `add Store[T,PT] generic constraint, redact literal [REDACTED-GR22] from logs`;
+      const r = runGuard(dir, `git commit -m "${message}"`);
+      assert.equal(
+        r.denied,
+        false,
+        'the genuine, accepted tag must pass even though the same message is full of bracket prose that used to false-match'
+      );
+    });
+  } finally {
+    await deleteFixtureItem(db, item.guid);
     await db.end();
   }
 });

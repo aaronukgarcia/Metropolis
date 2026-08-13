@@ -231,10 +231,26 @@ function loadDependencies() {
     );
   }
 
+  // BUG-164: TYPE_PREFIX is the same wrong-shape hazard as the functions
+  // above — a broken/mid-refactor export here must fail the same way
+  // (denied, named reason) rather than surface later as looksLikeRealTag()
+  // silently treating every CODE-shaped span as prose (typePrefixes falsy
+  // -> `.has` never called -> everything rejected -> AC-13's real-tag cases
+  // would wrongly deny). Checked as a plain object with at least one value,
+  // not a specific key set, so a future TYPE_PREFIX addition/rename in
+  // claude-bow.js needs no matching edit here (GR#15).
+  if (!bowMod.TYPE_PREFIX || typeof bowMod.TYPE_PREFIX !== 'object' || !Object.values(bowMod.TYPE_PREFIX).length) {
+    throw new Error(
+      'claude-bow.js loaded but did not export a usable TYPE_PREFIX ' +
+        '(wrong module shape — cannot tell a real BOW code prefix from prose without it)'
+    );
+  }
+
   return {
     authorGuard: authorGuardMod,
     findItemByRef: bowMod.findItemByRef,
     latestDestructiveVerdict: bowMod.latestDestructiveVerdict,
+    typePrefixes: new Set(Object.values(bowMod.TYPE_PREFIX)),
   };
 }
 
@@ -397,6 +413,66 @@ const ENFORCED_DIR_RE = /^(cmd|internal|data|tools)\//;
 // the BOW-lookup step as "unresolvable", not silently skipped).
 const TAG_RE = /\[([^\[\]\n]+)\]/g;
 
+// BUG-152: a bracketed span in ordinary commit-message prose is NOT
+// automatically a claimed mkey/CODE tag just because it matches TAG_RE's
+// bracket shape above. Observed false positives (same session, three times):
+// Go generics `Store[T,PT]` / `atomic.Pointer[Screen]`, and a literal marker
+// string quoted in prose, `[REDACTED-GR22]`. Each was extracted as a
+// "claimed tag", failed BOW resolution (naturally — it isn't a BOW ref at
+// all), and demanded a Destructive verdict for text that was never meant to
+// be a tag. Fix direction is the lead's ("only treat a bracketed span as a
+// tag if its content matches the SHAPE of a real mkey/CODE") rather than
+// positional anchoring — simpler, and it doesn't assume the tag always
+// trails the summary line (multiple tags, or a tag on a later paragraph
+// line, are both legitimate today, see the multi-tag test above).
+//
+// Two real reference shapes exist in this project (verified against
+// docs/planning/acceptance/*.md filenames AND bow_items.mkey/.code — never
+// hand-typed from memory, GR#15):
+//   - mkey:  lowercase dotted identifier, each segment [a-z][a-z0-9]*, with
+//            optional internal hyphens (e.g. "tool.destructiveguard",
+//            "data.modes-naming", "ui.screen.build" — 2 or 3 segments seen).
+//   - CODE:  a short BOW type prefix (MOD/FEAT/BUG/INT/ASM/SEC today, per
+//            TYPE_PREFIX in claude-bow.js — deliberately matched by SHAPE
+//            here, not a hardcoded prefix list, so a future prefix needs no
+//            edit here) followed by "-" and a purely-numeric id, e.g.
+//            "FEAT-040", "BUG-152".
+//
+// Checking against these two shapes excludes all three reported fixtures
+// without any positional logic: "T,PT" and "Screen" fail both (uppercase,
+// no dot, no trailing all-digit suffix); "REDACTED-GR22" fails the CODE
+// shape too — its suffix "GR22" is letters+digits mixed, not purely numeric.
+// A tag that fails BOTH shapes is simply not a claimed reference and is
+// dropped silently here, same as prose was always meant to be treated —
+// it is NOT surfaced as "unresolved" (AC-16's zero-tag bypass trap is about
+// a message with NO real tags at all, not about prose that happens to
+// contain brackets; see the mixed-message regression test).
+const MKEY_SHAPE_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)+$/;
+const CODE_SHAPE_RE = /^[A-Z][A-Z0-9]*-\d+$/;
+
+// BUG-164: CODE_SHAPE_RE alone over-matches ordinary technical abbreviations
+// shaped like "WORD-digits" — [UTF-8], [RFC-2119], [SHA-256], [ISO-8601] all
+// satisfy it, so a commit message that merely mentions one of these in prose
+// (alongside a real, already-verdicted tag) was wrongly denied as carrying
+// an "unresolvable" claimed tag. Shape alone can only prove "looks like a
+// mkey" (MKEY_SHAPE_RE, which stays shape-only — no dotted-lowercase prefix
+// list exists to check against) or "looks like a CODE"; a CODE-shaped span
+// is only a genuine claimed BOW reference if its prefix is one of
+// claude-bow.js's own real TYPE_PREFIX values (MOD/FEAT/BUG/INT/ASM/SEC
+// today). `typePrefixes` is a Set of those values, threaded in by the
+// caller (built once in loadDependencies() from claude-bow.js's own
+// TYPE_PREFIX export — GR#15, never a second hand-typed prefix list here).
+// UTF/RFC/SHA/ISO are not real BOW type prefixes, so this closes BUG-164
+// without reopening BUG-152: a genuine-shaped but nonexistent code like
+// FEAT-999 still passes this filter (real prefix, purely-numeric id) and is
+// correctly left for BOW resolution to reject as unresolvable.
+function looksLikeRealTag(tag, typePrefixes) {
+  if (MKEY_SHAPE_RE.test(tag)) return true;
+  if (!CODE_SHAPE_RE.test(tag)) return false;
+  const prefix = tag.slice(0, tag.indexOf('-'));
+  return !!typePrefixes && typePrefixes.has(prefix);
+}
+
 // Matches -m "..." / -m '...' / --message="..." / --message '...', allowing
 // escaped quotes inside the body. Multiple matches = multiple -m flags
 // (git's own paragraph-joining behaviour). Reused verbatim from
@@ -438,13 +514,20 @@ function extractMessage(command) {
   return parts.join('\n');
 }
 
-function extractTags(message) {
+function extractTags(message, typePrefixes) {
   const tags = [];
   TAG_RE.lastIndex = 0;
   let m;
   while ((m = TAG_RE.exec(message))) {
     const tag = m[1].trim();
-    if (tag) tags.push(tag);
+    // BUG-152: only a bracketed span shaped like a real mkey or CODE is a
+    // claimed tag — see looksLikeRealTag()'s comment above for why this is
+    // the fix (not positional anchoring) and which three false positives it
+    // closes. BUG-164: for the CODE shape, `typePrefixes` (the real
+    // claude-bow.js TYPE_PREFIX values) additionally filters out prose
+    // abbreviations like [UTF-8]/[RFC-2119] that only coincidentally match
+    // the shape — see looksLikeRealTag()'s comment.
+    if (tag && looksLikeRealTag(tag, typePrefixes)) tags.push(tag);
   }
   return tags;
 }
@@ -642,7 +725,7 @@ async function main() {
     allowSilently();
     return;
   }
-  const { authorGuard, findItemByRef, latestDestructiveVerdict } = deps;
+  const { authorGuard, findItemByRef, latestDestructiveVerdict, typePrefixes } = deps;
 
   if (!isCommitInvocation(command, authorGuard)) {
     allowSilently();
@@ -693,7 +776,7 @@ async function main() {
     return;
   }
 
-  const tags = extractTags(message);
+  const tags = extractTags(message, typePrefixes);
   if (tags.length === 0) {
     deny(noTagDenyMessage());
     return;
@@ -760,6 +843,7 @@ if (require.main === module) {
     ENFORCED_DIR_RE,
     extractMessage,
     extractTags,
+    looksLikeRealTag,
     deriveRootGuardScripts,
     isEnforcedDirPath,
     isRootLevel,
