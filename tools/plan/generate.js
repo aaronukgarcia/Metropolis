@@ -50,6 +50,33 @@ function fail(code, msg) {
   process.exit(1);
 }
 
+// BUG-111: concurrent invocations of this script (two dev-team sessions, or
+// a CI job overlapping an interactive run) used to race on a plain
+// fs.writeFileSync of code.json/bow-import.json — two processes writing the
+// same path at once can interleave their bytes, producing a torn file (the
+// "Unterminated string in JSON" failure mode BUG-111 was filed from). Fix:
+// the standard atomic-write pattern — write the full content to a temp file
+// in the SAME directory as the target (same filesystem, so the rename below
+// is atomic), then fs.renameSync it over the target. A rename is a single
+// filesystem metadata operation; a concurrent reader/writer can only ever
+// observe the old complete file or the new complete file, never a partial
+// one. The temp filename includes pid + a random suffix so two concurrent
+// invocations never collide on their OWN temp file either.
+function writeFileAtomic(targetPath, content) {
+  const dir = path.dirname(targetPath);
+  const tmpPath = path.join(dir, `.${path.basename(targetPath)}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`);
+  fs.writeFileSync(tmpPath, content, 'utf8');
+  try {
+    fs.renameSync(tmpPath, targetPath);
+  } catch (err) {
+    // Best-effort cleanup of the temp file if the rename itself failed, so
+    // a failed write doesn't leave litter behind — but don't let a cleanup
+    // failure mask the real error.
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    throw err;
+  }
+}
+
 // ── Load ──────────────────────────────────────────────────────────────────────
 
 let plan;
@@ -307,8 +334,8 @@ const bowImport = {
 // ── Write ─────────────────────────────────────────────────────────────────────
 
 try {
-  fs.writeFileSync(CODE_JSON_PATH, JSON.stringify(codeJson, null, 2) + '\n', 'utf8');
-  fs.writeFileSync(BOW_IMPORT_PATH, JSON.stringify(bowImport, null, 2) + '\n', 'utf8');
+  writeFileAtomic(CODE_JSON_PATH, JSON.stringify(codeJson, null, 2) + '\n');
+  writeFileAtomic(BOW_IMPORT_PATH, JSON.stringify(bowImport, null, 2) + '\n');
 } catch (err) {
   fail('MET-T030', `failed writing outputs: ${err.message}`);
 }

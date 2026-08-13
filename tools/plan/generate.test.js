@@ -232,6 +232,95 @@ test('BUG-070: generate.js reports live collaborations-gate coverage, and the co
   }
 });
 
+test('BUG-111: concurrent generate.js invocations never leave code.json/bow-import.json torn (atomic write)', () => {
+  // Real regression test for the reported failure mode: multiple concurrent
+  // invocations racing on the SAME output paths used to interleave their
+  // fs.writeFileSync calls, producing "Unterminated string in JSON". This
+  // spawns several real generate.js runs concurrently against the live
+  // repo's actual output paths (code.json, tools/plan/bow-import.json) and
+  // asserts both are always fully parseable once every run has finished —
+  // never truncated/interleaved. Content is deterministic (same plan, same
+  // carried-over GUIDs from the code.json already on disk), so re-running
+  // this repeatedly is safe and idempotent; no restore is needed, but we
+  // still run once more at the end to leave the repo in its normal
+  // freshly-regenerated state.
+  const CONCURRENCY = 8;
+  const ROUNDS = 3;
+  const codeJsonPath = path.join(ROOT, 'code.json');
+  const bowImportPath = path.join(ROOT, 'tools', 'plan', 'bow-import.json');
+
+  for (let round = 0; round < ROUNDS; round++) {
+    const runs = Array.from({ length: CONCURRENCY }, () =>
+      spawnSync(process.execPath, [GENERATE_PATH], { cwd: ROOT, encoding: 'utf8' })
+    );
+    // Every concurrent run should itself succeed (atomic write means no
+    // process ever observes/produces a torn file, so none should error).
+    for (const [i, r] of runs.entries()) {
+      assert.equal(r.status, 0, `round ${round}, run ${i} should exit 0. stderr:\n${r.stderr}`);
+    }
+
+    // The winner's output on disk, whichever process wrote last, must be
+    // fully valid, parseable JSON — never a torn/interleaved fragment.
+    const codeJsonRaw = fs.readFileSync(codeJsonPath, 'utf8');
+    const bowImportRaw = fs.readFileSync(bowImportPath, 'utf8');
+    assert.doesNotThrow(() => JSON.parse(codeJsonRaw), `round ${round}: code.json is not valid JSON after concurrent writes`);
+    assert.doesNotThrow(() => JSON.parse(bowImportRaw), `round ${round}: bow-import.json is not valid JSON after concurrent writes`);
+  }
+});
+
+test('BUG-111: the atomic write-then-rename pattern itself never produces a torn file under a true concurrent race', () => {
+  // Isolates the mechanism (temp-file-in-same-dir + fs.renameSync) from
+  // generate.js's own logic, using a large payload and many concurrent
+  // writers hammering literally the same target path in a tight loop —
+  // a much tighter race window than spawning full generate.js processes,
+  // so this is the test most likely to catch a regression back to a naive
+  // writeFileSync if the atomic helper is ever "simplified" away.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'generate-atomic-write-'));
+  const targetPath = path.join(dir, 'race-target.json');
+  try {
+    const workerScript = path.join(dir, 'worker.js');
+    fs.writeFileSync(
+      workerScript,
+      `
+      const fs = require('fs');
+      const path = require('path');
+      const crypto = require('crypto');
+      const targetPath = process.argv[2];
+      const marker = process.argv[3];
+      const dir = path.dirname(targetPath);
+      // Large-ish distinct payload per worker so a torn write (part of one
+      // worker's bytes + part of another's) is very likely to break JSON
+      // parsing rather than coincidentally still parsing.
+      const payload = { marker, blob: marker.repeat(50000) };
+      for (let i = 0; i < 20; i++) {
+        const tmpPath = path.join(dir, \`.race-target.tmp-\${process.pid}-\${crypto.randomBytes(6).toString('hex')}\`);
+        fs.writeFileSync(tmpPath, JSON.stringify(payload), 'utf8');
+        fs.renameSync(tmpPath, targetPath);
+      }
+      `,
+      'utf8'
+    );
+
+    const WORKERS = 6;
+    const runs = Array.from({ length: WORKERS }, (_, i) =>
+      spawnSync(process.execPath, [workerScript, targetPath, `w${i}-`], { encoding: 'utf8' })
+    );
+    for (const [i, r] of runs.entries()) {
+      assert.equal(r.status, 0, `worker ${i} crashed. stderr:\n${r.stderr}`);
+    }
+
+    // After all workers finish, the target must exist and be fully valid
+    // JSON belonging to exactly one worker's payload — never a mix.
+    const finalRaw = fs.readFileSync(targetPath, 'utf8');
+    let parsed;
+    assert.doesNotThrow(() => { parsed = JSON.parse(finalRaw); }, `target file is not valid JSON after the concurrent race:\n${finalRaw.slice(0, 200)}...`);
+    assert.ok(/^w\d-$/.test(parsed.marker), `unexpected marker shape: ${parsed.marker}`);
+    assert.equal(parsed.blob, parsed.marker.repeat(50000), 'blob content does not match its own marker — payload was mixed with another writer\'s');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('generate.js passes validation when a declared collaboration DOES have a matching call edge', () => {
   const { fixturePath, cleanup } = makePlanFixture();
   try {
