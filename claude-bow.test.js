@@ -2314,6 +2314,76 @@ test("BUG-171 AC-3: an ordinary --desc value with no leading -- still parses cor
   assert.equal(rows[0].priority, 'P1', '--priority (the following flag) must also be applied correctly');
 });
 
+// =============================================================================
+// BUG-196: `set --desc`/`--desc-file` got NO dangling-flag guard when
+// BUG-017 wired --desc into `set` — unlike mkey/seq/sprint above, which each
+// got the BUG-168/171 guard. A dangling --desc fell through resolveTextFlag's
+// `direct || null` fallback and silently wiped description to NULL, exit 0.
+// Reproduces the Destructive attacker's exact three repros from BUG-196.
+// Empty-string decision (documented in claude-bow.js at the danglingFlags.
+// has('desc') guard): unlike --mkey '' (a legitimate, documented explicit
+// clear for a short categorical column per BUG-132), --desc '' is REJECTED
+// outright — description is free-form prose (the record itself), so an
+// intentional clear-to-empty is not a normal use case and is
+// indistinguishable in behaviour from the BUG-171 dangling-flag shape.
+// =============================================================================
+
+test("BUG-196 AC-1: `set <CODE> --desc` with no following value (last token) errors and does NOT touch the column", async () => {
+  const guid = await insertItem({ code: 'FEAT-9230', description: 'original description' });
+
+  const r = bowCli(['set', 'FEAT-9230', '--desc']);
+  assert.notEqual(r.status, 0, 'a dangling --desc (no value) must exit non-zero, not silently succeed');
+  assert.match(r.stderr, /--desc requires a value/i, 'error must explicitly name the missing-value problem');
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'original description', 'description must be UNCHANGED — the exact silent-NULL regression BUG-196 reported');
+});
+
+test("BUG-196 AC-2: `set <CODE> --desc \"\"` (explicit empty string) is rejected, NOT treated as a silent clear", async () => {
+  const guid = await insertItem({ code: 'FEAT-9231', description: 'original description' });
+
+  const r = bowCli(['set', 'FEAT-9231', '--desc', '']);
+  assert.notEqual(r.status, 0, "--desc '' must be rejected -- description is free-form prose, not a short key like mkey, so an implicit clear-to-empty is not supported");
+  assert.match(r.stderr, /--desc.*empty.*rejected|rejected.*--desc/i, 'error must explain the empty-string rejection');
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'original description', 'description must be UNCHANGED — must not silently collapse to NULL');
+});
+
+test("BUG-196 AC-3: `set <CODE> --desc --priority P1` (BUG-171 shape) — --desc is rejected as dangling AND nothing (not even --priority) is applied, since cmdSet aborts before any write", async () => {
+  const guid = await insertItem({ code: 'FEAT-9232', description: 'original description' });
+  await db.query("UPDATE bow_items SET priority = 'P3' WHERE guid = ?", [guid]);
+
+  const r = bowCli(['set', 'FEAT-9232', '--desc', '--priority', 'P1']);
+  assert.notEqual(r.status, 0, 'a dangling --desc followed by another --flag must exit non-zero, not silently succeed');
+  assert.match(r.stderr, /--desc requires a value/i, 'error must name --desc as the dangling flag');
+
+  const [rows] = await db.query('SELECT description, priority FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'original description', 'description must be UNCHANGED — the exact BUG-196 corruption');
+  assert.equal(rows[0].priority, 'P3', 'priority must also be UNCHANGED — cmdSet rejects the whole command before any write, matching BUG-171 AC-1b for mkey/sprint');
+});
+
+test("BUG-196 AC-4: the same dangling-flag protection applies to --desc-file", async () => {
+  const guid = await insertItem({ code: 'FEAT-9233', description: 'original description' });
+
+  const r = bowCli(['set', 'FEAT-9233', '--desc-file']);
+  assert.notEqual(r.status, 0, 'a dangling --desc-file (no path) must exit non-zero');
+  assert.match(r.stderr, /--desc-file requires a (value|path)/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'original description', 'description must be UNCHANGED after a dangling --desc-file is rejected');
+});
+
+test("BUG-196 AC-5: ordinary `set <CODE> --desc <text>` (a real value, not dangling, not empty) still works after the fix", async () => {
+  const guid = await insertItem({ code: 'FEAT-9234', description: 'original description' });
+
+  const r = bowCli(['set', 'FEAT-9234', '--desc', 'a real updated description']);
+  assert.equal(r.status, 0, `ordinary set --desc <text> must still succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'a real updated description', 'description must be set to the supplied value');
+});
+
 // ---------------------------------------------------------------------------
 // BUG-115: ensureSchema() (ALTER TABLE / CREATE TABLE / MODIFY COLUMN — all
 // MDL-locking DDL) must NOT run for read-only commands, but MUST still run
@@ -2581,4 +2651,196 @@ test('BUG-075: `exists` is case-insensitive on short codes (matches findItem()/r
   const lines = r.stdout.split('\n').filter((l) => /EXISTS|NOT FOUND/.test(l));
   assert.equal(lines.length, 1, 'a code repeated three times (any case) must produce exactly one output line');
   assert.match(r.stdout, /1\/1 exist\./);
+});
+
+// =============================================================================
+// BUG-193 — splitAcBlocks's heading-boundary regex (`#{1,6}\s`, added by
+// BUG-162) has no concept of markdown code-fence context. A flush-left
+// hash-comment line INSIDE an unindented fenced code block (e.g. a shell
+// `# comment` at column 0) was being misread as a section heading, cutting
+// the AC block off mid-fence and losing everything after it — including a
+// Tripwire line further down the same block, misreporting a genuinely
+// armed AC as unarmed.
+// =============================================================================
+
+test('BUG-193: an unindented fenced code block containing a flush-left "# comment" line does NOT truncate the AC block — the Tripwire after the fence survives', () => {
+  const text = [
+    '- **AC-1 (deferred check with a fenced example).** Check (once unblocked): run the setup script.',
+    '```bash',
+    '# this is a comment, flush-left, inside the fence',
+    'echo hello',
+    '```',
+    '  Tripwire (mechanical): `true` must exit 0.',
+  ].join('\n');
+
+  const blocks = splitAcBlocks(text);
+  assert.equal(blocks.length, 1, 'the fenced comment line must NOT be treated as a heading boundary — only one AC block exists here');
+  assert.ok(blocks[0].includes('Tripwire (mechanical)'), 'the Tripwire line after the fence must still be part of AC-1\'s block, not discarded by a false split inside the fence');
+
+  const tripwireResults = findTripwireChecks(text);
+  assert.equal(tripwireResults.length, 1, 'AC-1 must be found as exactly one deferred-check AC');
+  assert.equal(tripwireResults[0].acNum, '1');
+  assert.equal(tripwireResults[0].armed, true, 'AC-1 must be reported ARMED — the pre-fix bug lost the Tripwire and reported it unarmed');
+});
+
+test('BUG-193: a real markdown heading AFTER a closed fence still correctly terminates the AC block (fence-tracking must not disable heading detection permanently)', () => {
+  const text = [
+    '- **AC-1 (fenced example, no tripwire needed here).** Some body text.',
+    '```bash',
+    '# a flush-left comment inside the fence',
+    'echo hi',
+    '```',
+    '',
+    '## A later real section heading',
+    '',
+    'Some prose that must not be folded into AC-1\'s block.',
+    '',
+    '- **AC-2 (second, real deferred-check AC).** Check (once unblocked): do the thing.',
+    '  Tripwire (mechanical): `true` must exit 0.',
+  ].join('\n');
+
+  const blocks = splitAcBlocks(text);
+  assert.equal(blocks.length, 2, 'exactly two AC blocks — the fence must not eat the boundary, and the post-fence heading must still split');
+  assert.ok(!blocks[0].includes('A later real section heading'), 'AC-1\'s block must not have absorbed the later heading (fence-tracking must reset once the fence closes)');
+  assert.ok(blocks[1].includes('Check (once unblocked)'));
+});
+
+// =============================================================================
+// BUG-195 — splitAcBlocks's BUG-193 fence toggle was a bare boolean with no
+// concept of marker TYPE or matching close, so (1) a mixed-marker fence
+// (``` opener with a literal flush-left `~~~` line in its body) got its
+// state flipped by the wrong marker and stuck open, and (2) a genuinely
+// unclosed fence stuck the toggle open permanently — both silently
+// absorbed a later real AC block and its Tripwire, which then vanished
+// entirely from findTripwireChecks() results (not even a false FAIL).
+// =============================================================================
+
+test('BUG-195: a ``` fence whose body contains a literal flush-left "~~~" line does not falsely close/reopen the fence — a later AC-2 block is not absorbed', () => {
+  const text = [
+    '- **AC-1 (fence with a mixed marker in its body).** Some body text.',
+    '```diff',
+    '~~~',
+    'some diff-ish content that happens to start with tildes',
+    '```',
+    '',
+    '- **AC-2 (second, real deferred-check AC).** Check (once unblocked): do the thing.',
+    '  Tripwire (mechanical): `true` must exit 0.',
+  ].join('\n');
+
+  const blocks = splitAcBlocks(text);
+  assert.equal(blocks.length, 2, 'the flush-left "~~~" inside the ``` fence body must not falsely toggle fence state — AC-1 and AC-2 must split into two blocks');
+  assert.ok(!blocks[0].includes('AC-2'), 'AC-1\'s block must not have absorbed AC-2');
+  assert.ok(blocks[1].includes('Check (once unblocked)'), 'AC-2\'s block must be intact');
+
+  const tripwireResults = findTripwireChecks(text);
+  const ac2Result = tripwireResults.find((r) => r.acNum === '2');
+  assert.ok(ac2Result, 'AC-2 must be present in findTripwireChecks results — the pre-fix bug made it vanish entirely');
+  assert.equal(ac2Result.armed, true, 'AC-2 must be reported ARMED — its Tripwire line was intact in the source');
+});
+
+test('BUG-195: a genuinely unclosed fence in AC-1 absorbs the rest of the document (CommonMark-correct) and logs a warning rather than silently vanishing', () => {
+  const text = [
+    '- **AC-1 (unclosed fence, a doc typo).** Check (once unblocked): run the setup script.',
+    '```bash',
+    'echo "this fence is never closed"',
+    '',
+    '- **AC-2 (second, real deferred-check AC).** Check (once unblocked): do the thing.',
+    '  Tripwire (mechanical): `true` must exit 0.',
+  ].join('\n');
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (msg) => warnings.push(msg);
+  let blocks;
+  try {
+    blocks = splitAcBlocks(text);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(blocks.length, 1, 'per CommonMark, an unclosed fence absorbs the rest of the document into the same block — AC-2\'s bullet is content, not a new block');
+  assert.ok(blocks[0].includes('AC-2'), 'AC-2\'s text must be present (as fence content) inside AC-1\'s single block');
+  assert.ok(warnings.length > 0, 'an unclosed fence reaching EOF must be logged via console.warn, not purely silent');
+  assert.match(warnings[0], /unclosed.*fence/i, 'the warning must mention the unclosed fence condition');
+
+  const tripwireResults = findTripwireChecks(text);
+  const ac2Result = tripwireResults.find((r) => r.acNum === '2');
+  assert.equal(ac2Result, undefined, 'AC-2 is legitimately unreachable as a separate AC here (it is inside the unclosed fence) — but the warning above makes that visible instead of silent');
+});
+
+// =============================================================================
+// BUG-017 — `set` gains --desc/--desc-file so a description corrupted by
+// outer-shell expansion (the same BUG-090 class, applied to `set` for the
+// first time) can be REPAIRED after the fact, following the exact same
+// resolveTextFlag mutual-exclusion / path-scope / advisory-warning pattern
+// `add --desc-file` already established.
+// =============================================================================
+
+test('BUG-017: `set --desc "<text>"` repairs a corrupted description via the direct form', async () => {
+  const guid = await insertItem({ code: 'FEAT-9300', description: 'corrupted: Author: someone <x@y> commit abcdef' });
+
+  const r = bowCli(['set', 'FEAT-9300', '--desc', 'a clean, repaired description']);
+  assert.equal(r.status, 0, `set --desc failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'a clean, repaired description');
+});
+
+test('BUG-017: `set --desc-file <path>` repairs a description byte-identical from file content, surviving a backtick/$(.../embedded quote', async () => {
+  const guid = await insertItem({ code: 'FEAT-9301', description: 'corrupted description' });
+  const risky = 'repaired text with a `backtick`, a $(command substitution), and an "embedded quote"\nsecond line.';
+  const tmp = mkTempDir('bug017-desc-');
+  const descFile = path.join(tmp, 'desc.txt');
+  fs.writeFileSync(descFile, risky, 'utf8');
+
+  const r = bowCli(['set', 'FEAT-9301', '--desc-file', descFile]);
+  assert.equal(r.status, 0, `set --desc-file failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, risky, 'stored description must equal the file content exactly, byte-identical');
+});
+
+test('BUG-017: `set` rejects when both --desc and --desc-file are supplied — non-zero exit, clear message, and the description is left UNCHANGED', async () => {
+  const guid = await insertItem({ code: 'FEAT-9302', description: 'original, must survive' });
+  const tmp = mkTempDir('bug017-mutex-');
+  const descFile = path.join(tmp, 'desc.txt');
+  fs.writeFileSync(descFile, 'file content', 'utf8');
+
+  const r = bowCli(['set', 'FEAT-9302', '--desc', 'inline text', '--desc-file', descFile]);
+  assert.notEqual(r.status, 0, 'both --desc and --desc-file together must exit non-zero');
+  assert.match(r.stderr, /--desc/);
+  assert.match(r.stderr, /--desc-file/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'original, must survive', 'the mutual-exclusion rejection must happen before any UPDATE');
+});
+
+test('BUG-017: `set --desc-file` pointed at a system file well outside the repo/temp roots is refused (SEC-050 path-scope guard applies to `set` too)', async () => {
+  const guid = await insertItem({ code: 'FEAT-9303', description: 'must not change' });
+  const winIni = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/passwd';
+
+  const r = bowCli(['set', 'FEAT-9303', '--desc-file', winIni]);
+  assert.notEqual(r.status, 0, 'reading a system file via --desc-file must be refused, not succeed');
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change');
+});
+
+test('BUG-017: a direct `set --desc` value containing a backtick produces a non-fatal advisory warning, and the update still applies', async () => {
+  await insertItem({ code: 'FEAT-9304', description: 'old' });
+
+  const r = bowCli(['set', 'FEAT-9304', '--desc', 'contains a `backtick` right in it']);
+  assert.equal(r.status, 0, 'the advisory warning must never fail the command');
+  assert.match(r.stderr, /WARNING/i);
+  assert.match(r.stderr, /desc-file/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE code = ?', ['FEAT-9304']);
+  assert.equal(rows[0].description, 'contains a `backtick` right in it', 'the update must still apply despite the advisory warning firing');
+});
+
+test('BUG-017: `set` with neither --priority/--status/etc. nor --desc/--desc-file still hits the usage error (no accidental no-op success)', async () => {
+  await insertItem({ code: 'FEAT-9305' });
+  const r = bowCli(['set', 'FEAT-9305']);
+  assert.notEqual(r.status, 0, 'set with no update flags at all must still be a usage error');
+  assert.match(r.stderr, /Usage: node claude-bow\.js set/);
 });

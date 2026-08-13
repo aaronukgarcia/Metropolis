@@ -1874,9 +1874,100 @@ function runCheck2CallEdges(resolvedAcFiles, opts = {}) {
  * ahead of any markdown heading line (`#` through `######`), so a heading
  * always terminates the previous AC's block; headings are then dropped by
  * the same `startsWith('- **')` filter that already excludes anything
- * that isn't a real AC bullet. */
+ * that isn't a real AC bullet.
+ *
+ * BUG-193: that heading regex (`#{1,6}\s`) has no concept of markdown code
+ * fences. An AC block containing an unindented fenced code sample
+ * (``` or ~~~ starting at column 0) can itself contain a flush-left
+ * hash-comment line, e.g. a shell/python comment `# some comment` at
+ * column 0. That line also matches `#{1,6}\s` and was being misread as a
+ * section-heading boundary, truncating the AC block mid-fence and
+ * discarding everything after it (including a Tripwire line further down
+ * the same block) — a false "unarmed" report on an AC that really is
+ * armed. Fixed by walking the text line-by-line and tracking fence-open
+ * state (toggled by a line that, once trimmed, starts with ``` or ~~~):
+ * heading/bullet boundaries are only honoured while NOT inside an open
+ * fence, so a flush-left `#` line inside a fence can never split the
+ * block. This project's own acceptance docs never trigger the bug (BUG-162
+ * verified every real fence in the corpus is indented under its bullet),
+ * so this is a latent-gap fix, not a live-corpus regression fix.
+ *
+ * BUG-195: the BUG-193 fix tracked fence state as a bare boolean toggled by
+ * ANY line starting with ``` or ~~~, with no notion of WHICH marker opened
+ * the fence or how long it was. Two live repros followed: (1) a fence
+ * opened with ``` whose BODY contains a literal flush-left `~~~` line
+ * (valid content in that context, not a delimiter) flipped the toggle
+ * closed early, and the real closing ``` then flipped it back open,
+ * leaving it stuck true for the rest of the document; (2) an AC block with
+ * a genuinely unclosed fence (opened, never closed) left the toggle stuck
+ * true permanently. Both cases silently absorbed every following line —
+ * including a whole subsequent real `- **AC-N` block and its Tripwire —
+ * into the current block, so the later AC vanished from
+ * findTripwireChecks() results entirely (not even a false "unarmed" FAIL).
+ *
+ * Fixed by tracking real fence state — {char, length} of the SPECIFIC
+ * marker that opened the fence — and only closing on a line whose marker
+ * is the SAME character and AT LEAST as long, per CommonMark's actual
+ * fence-closing rule (a fence closes on a line of the same character with
+ * a run at least as long as the opener; a different character, or a
+ * shorter run of the same character, does not close it). This fixes mixed
+ * markers outright (a `~~~` line inside a ``` fence never matches the
+ * open fence's marker, so it can't close it).
+ *
+ * For the unclosed-fence case: CommonMark itself treats an unclosed fence
+ * as implicitly closed at end-of-document, with everything after the
+ * opener as fence content — so a scanner absorbing the rest of the
+ * document is spec-correct, not a bug in isolation. But this scanner isn't
+ * a renderer; it drives findTripwireChecks(), where that absorption
+ * silently deletes a later AC/Tripwire from the results with no signal at
+ * all. So the fix keeps the spec-correct absorption (an unclosed fence in
+ * a malformed AC doc legitimately makes everything after it "inside" that
+ * block) but now logs a console.warn when EOF is reached with a fence
+ * still open, naming the block, so the condition is at least visible
+ * instead of purely silent. */
 function splitAcBlocks(acText) {
-  return (acText || '').split(/\n(?=- \*\*|#{1,6}\s)/).map((s) => s.trim()).filter((s) => s.startsWith('- **'));
+  const text = acText || '';
+  const lines = text.split('\n');
+  const blocks = [];
+  let current = [];
+  let fence = null; // { char: '`'|'~', length: N } while inside an open fence, else null
+  const parseFenceMarker = (line) => {
+    const m = line.trim().match(/^(`{3,}|~{3,})/);
+    return m ? { char: m[1][0], length: m[1].length } : null;
+  };
+  const isBoundary = (line) => /^(- \*\*|#{1,6}\s)/.test(line);
+
+  for (const line of lines) {
+    const startsNewBlock = !fence && isBoundary(line) && current.length > 0;
+    if (startsNewBlock) {
+      blocks.push(current.join('\n'));
+      current = [];
+    }
+    current.push(line);
+
+    const marker = parseFenceMarker(line);
+    if (fence) {
+      // Only the SAME character, with a run at least as long as the opener,
+      // closes the fence (CommonMark fence-closing rule). A different
+      // character (mixed markers) or a shorter run never closes it.
+      if (marker && marker.char === fence.char && marker.length >= fence.length) {
+        fence = null;
+      }
+    } else if (marker) {
+      fence = marker;
+    }
+  }
+  if (current.length > 0) blocks.push(current.join('\n'));
+
+  if (fence) {
+    console.warn(
+      `splitAcBlocks: reached end of document with an unclosed ${fence.char.repeat(fence.length)} fence still open — ` +
+      'the remainder of the document was treated as fence content (CommonMark-correct), which may hide a later AC block. ' +
+      'Check the source acceptance doc for a missing closing fence.'
+    );
+  }
+
+  return blocks.map((s) => s.trim()).filter((s) => s.startsWith('- **'));
 }
 
 /** AC-13/AC-14: for every "Check (once unblocked)" AC block, find its
@@ -2584,6 +2675,26 @@ async function cmdSet(db) {
   if (danglingFlags.has('mkey')) { console.error('claude-bow: --mkey requires a value (use --mkey \'\' to clear, or omit --mkey entirely to leave it unchanged).'); process.exit(1); }
   if (danglingFlags.has('seq')) { console.error('claude-bow: --seq requires a value (use --seq \'\' to clear, or omit --seq entirely to leave it unchanged).'); process.exit(1); }
   if (danglingFlags.has('sprint')) { console.error('claude-bow: --sprint requires a value (use --sprint \'\' to clear, or omit --sprint entirely to leave it unchanged).'); process.exit(1); }
+  // BUG-196: `desc`/`desc-file` got NO dangling-flag guard when BUG-017
+  // wired --desc into `set`, unlike mkey/seq/sprint above (BUG-168/171).
+  // A dangling `--desc` (nothing after it, or the next token is itself a
+  // recognized `--flag`) fell straight through resolveTextFlag's `direct ||
+  // null` fallback and silently wiped the description to NULL with exit 0.
+  // Same pattern, same fix: reject before ever reaching resolveTextFlag.
+  if (danglingFlags.has('desc')) { console.error('claude-bow: --desc requires a value (a dangling --desc was not applied). Description is free-form prose, not a short categorical field like --mkey, so an explicit empty clear is NOT supported here -- see the --desc \'\' rejection below if you meant that.'); process.exit(1); }
+  if (danglingFlags.has('desc-file')) { console.error('claude-bow: --desc-file requires a path (a dangling --desc-file was not applied).'); process.exit(1); }
+  // BUG-196 (empty-string decision): BUG-132 made `--mkey ''` a legitimate,
+  // documented "explicit clear" for short categorical columns. Description
+  // is different -- it IS the record (the substantive prose content), not a
+  // lookup key, so a genuinely-intentional "clear the description to
+  // nothing" is not a normal editing action, and indistinguishable in
+  // behaviour from the BUG-171 dangling-flag shape (`--desc --priority P1`)
+  // where '' was never typed at all. Unlike mkey/seq/sprint, `--desc ''` is
+  // therefore REJECTED outright rather than treated as a supported clear —
+  // safer default for a free-text field where accidental data loss is far
+  // more costly than for a short key. (If a deliberate clear is ever truly
+  // needed, that should be a separate explicit affordance, not silent `''`.)
+  if (flags.desc === '') { console.error('claude-bow: --desc \'\' (empty) is rejected -- description is free-form prose, not a short key, so clearing it to nothing is not supported as an implicit side effect of an empty value (this is almost always a mistake, e.g. a dangling flag or an accidentally-empty quoted string). Nothing was written.'); process.exit(1); }
   if ('mkey' in flags) {
     if (flags.mkey === '') { updates.push('mkey = NULL'); }
     else { updates.push('mkey = ?'); params.push(flags.mkey); }
@@ -2604,7 +2715,23 @@ async function cmdSet(db) {
   if (flags.estimate != null) { updates.push('estimate_days = ?'); params.push(Number(flags.estimate)); }
   if (flags['code-path']) { updates.push('code_path = ?'); params.push(String(flags['code-path'])); }
   if (flags.codejson) { updates.push('codejson_ref = ?'); params.push(String(flags.codejson)); }
-  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D] [--code-path P] [--codejson K]'); process.exit(1); }
+  // BUG-017: `set` previously had NO repair path for a corrupted
+  // description (BUG-090's own class -- an unescaped `$(...)`/backtick in
+  // an inline --desc value gets expanded by the OUTER shell before this
+  // process ever sees the argument, splicing unrelated shell output into
+  // the stored description). Ports the exact `--desc "..." | --desc-file
+  // <path>` safe-input pattern `add` already uses (resolveTextFlag,
+  // BUG-090/SEC-050): mutual-exclusion check, path-scope guard on
+  // --desc-file, and the same advisory (non-blocking) shell-injection
+  // warning on a risky direct --desc value. `description` is TEXT (no
+  // VARCHAR limit -- see BOW_COLUMN_MAX_LEN's comment above), so no
+  // rejectIfOverColumnLimit call is needed here, matching `add`'s existing
+  // behaviour for the same column.
+  if ('desc' in flags || 'desc-file' in flags) {
+    const desc = resolveTextFlag('desc');
+    updates.push('description = ?'); params.push(desc);
+  }
+  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]'); process.exit(1); }
   params.push(item.guid);
   await db.query(`UPDATE bow_items SET ${updates.join(', ')} WHERE guid = ?`, params);
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);
