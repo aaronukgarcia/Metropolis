@@ -38,8 +38,10 @@
  *   1. BOW codes (MOD-/FEAT-/BUG-/SEC-/INT-/ASM-nnn) referenced in the brief
  *      exist. An unknown code is a DENY — dispatching an agent to work an
  *      item that does not exist wastes the whole dispatch.
- *   2. mkey agreement. If the brief names a module key for a cited item and
- *      it disagrees with that item's BOW mkey, DENY and print the real one.
+ *   2. mkey agreement. If the brief attaches a module key directly to a cited
+ *      item (a parenthetical, colon/dash, or possessive assertion — not
+ *      merely nearby in the same sentence, see ATTACH_GAP_RE/BUG-142) and it
+ *      disagrees with that item's BOW mkey, DENY and print the real one.
  *   3. Criteria that already exist. If the brief asks for acceptance criteria
  *      and docs/planning/acceptance/<mkey>.md is already present, DENY with
  *      the path. This is BUG-028 made mechanical, keyed off the BOW's mkey
@@ -82,7 +84,118 @@ const ACCEPTANCE_DIR = path.join(ROOT, 'docs', 'planning', 'acceptance');
 // before anyone notices.
 const CLAIM_TTL_MS = 5 * 60 * 1000;
 
-const BOW_CODE_RE = /\b(MOD|FEAT|BUG|SEC|INT|ASM)-(\d{3,})\b/g;
+// BUG-135: case-insensitive so a lowercase/mixed-case code (mod-072, Feat-072)
+// is still recognised rather than silently skipped. Matches are normalised to
+// uppercase wherever the code is looked up, since that's the real stored form.
+const BOW_CODE_RE = /\b(MOD|FEAT|BUG|SEC|INT|ASM)-(\d{3,})\b/gi;
+
+// A dotted lowercase token that COULD be an mkey (tool.dispatchguard,
+// engine.invariant). Bounded segment count as a sanity cap, not a real limit.
+const MKEY_TOKEN_RE = /\b([a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){1,4})\b/g;
+
+// File-extension-shaped trailing segments that make a token look like a path
+// (data.catalogue.md, code.json) rather than a bare mkey. Stripped before the
+// segment-count/prefix checks below, so a correctly-named acceptance-doc path
+// is never mistaken for a wrong mkey, and bare filenames like code.json/
+// package.json fall below the 2-segment floor and are dropped entirely.
+const PATH_EXTENSIONS = new Set(['md', 'json', 'js', 'go', 'ts', 'txt']);
+
+/**
+ * BUG-135/BUG-139: the general form of the mkey-agreement check. Given a line
+ * of the brief, returns each dotted token that looks like a REAL registered
+ * mkey family (first segment matches a known prefix from the live BOW, not
+ * just "looks dotted") together with its character offset in the line — this
+ * is what keeps code.json/data.catalogue.md from ever being candidates,
+ * without hardcoding an extension or family list, and the offset is what
+ * lets BUG-139's nearest-pairing associate the right candidate with the
+ * right BOW code on a line that names more than one of either.
+ */
+function candidateMkeysWithPositions(line, knownPrefixes) {
+  const found = [];
+  for (const m of line.matchAll(MKEY_TOKEN_RE)) {
+    let segs = m[1].split('.');
+    const last = segs[segs.length - 1];
+    if (segs.length > 1 && PATH_EXTENSIONS.has(last)) segs = segs.slice(0, -1);
+    if (segs.length < 2) continue;
+    if (!knownPrefixes.has(segs[0])) continue;
+    found.push({ mkey: segs.join('.'), index: m.index });
+  }
+  return found;
+}
+
+/** Back-compat wrapper: the plain set of candidate mkeys, no positions. */
+function candidateMkeys(line, knownPrefixes) {
+  return new Set(candidateMkeysWithPositions(line, knownPrefixes).map((c) => c.mkey));
+}
+
+// BUG-142: BUG-139's raw-nearest-by-distance pairing produced false DENYs on
+// ordinary TRUE prose ("FEAT-072 and FEAT-073 both touch tool.dispatchguard")
+// because proximity alone doesn't mean possession — two codes can each be
+// "nearest" to one candidate that only one of them actually claims. Distance
+// is replaced with a requirement for an explicit SYNTACTIC attachment: the
+// candidate must sit immediately after the code (code appears first — this
+// deliberately does not cover "mkey, then code", trading recall for
+// precision) separated only by one of a short, fixed set of connectors that
+// this project's own citation styles actually use:
+//   - a parenthetical: "FEAT-072 (tool.dispatchguard)"
+//   - a colon or dash: "FEAT-072: tool.dispatchguard", "FEAT-072 - ..."
+//   - a bare copula: "FEAT-072 is tool.dispatchguard"
+//   - a possessive/relative assertion, matching this guard's OWN deny-message
+//     phrasing: "FEAT-072's (module) key is X", "BUG-136, whose mkey is X"
+// A gap of unrelated prose between the code and the candidate ("and FEAT-073
+// both touch") matches none of these and is correctly left unattached, rather
+// than guessed at by distance.
+const ATTACH_GAP_RE =
+  /^(?:\s*\(\s*|\s*:\s*|\s{0,2}-{1,2}\s{0,2}|\s+is\s+|'s\s+(?:real\s+|own\s+)?(?:module\s+)?(?:m)?key\s+is\s+|,?\s*whose\s+(?:real\s+|own\s+)?(?:module\s+)?(?:m)?key\s+is\s+)$/i;
+
+/**
+ * BUG-139/BUG-142: pairs every BOW code on a line with the candidate mkey
+ * token it is directly, syntactically attached to (see ATTACH_GAP_RE) —
+ * not gated on the line containing exactly one of each (BUG-139), and not
+ * inferred from raw character proximity alone (BUG-142). Returns a
+ * Map<code, attachedMkey>. A code with no attached candidate, or one tied
+ * between two equally-close attached candidates, is omitted (genuinely
+ * ambiguous, left unchecked rather than risked as a false DENY).
+ */
+function nearestMkeyPerCode(line, knownPrefixes) {
+  const codeMatches = [...line.matchAll(BOW_CODE_RE)].map((m) => ({
+    code: m[0].toUpperCase(),
+    index: m.index,
+    length: m[0].length,
+  }));
+  const nearestByCode = new Map();
+  if (!codeMatches.length) return nearestByCode;
+  const candidates = candidateMkeysWithPositions(line, knownPrefixes);
+  if (!candidates.length) return nearestByCode;
+
+  for (const { code, index, length } of codeMatches) {
+    let best = null;
+    let bestGapLen = Infinity;
+    let tied = false;
+    for (const cand of candidates) {
+      if (cand.index <= index) continue; // code-before-candidate only, see header note
+      const gap = line.slice(index + length, cand.index);
+      if (!ATTACH_GAP_RE.test(gap)) continue;
+      if (gap.length < bestGapLen) {
+        best = cand;
+        bestGapLen = gap.length;
+        tied = false;
+      } else if (gap.length === bestGapLen) {
+        tied = true;
+      }
+    }
+    if (best && !tied) nearestByCode.set(code, best.mkey);
+  }
+  return nearestByCode;
+}
+
+/** GR#15: the set of real mkey families, derived from the live BOW, never hardcoded. */
+async function knownMkeyPrefixes(conn) {
+  const [rows] = await conn.query(
+    `SELECT DISTINCT mkey FROM bow_items WHERE mkey IS NOT NULL AND mkey <> ''`
+  );
+  return new Set(rows.map((r) => r.mkey.split('.')[0]));
+}
 
 // Paths are recognised only under the repo's real top-level directories.
 // Matching anything slash-shaped would flag prose ("PASS/FAIL", "and/or")
@@ -156,8 +269,18 @@ function normalise(p) {
   return p.replace(/\\/g, '/').replace(/\/+$/, '').replace(/\/\*+$/, '');
 }
 
+// BUG-135: this repo's filesystem (Windows) is case-insensitive, so two
+// differently-cased spellings of the same real path must be treated as one
+// path for collision purposes. Folding happens only for the comparison —
+// claims are still stored and displayed in their original casing.
+function foldPath(p) {
+  return p.toLowerCase();
+}
+
 function overlaps(a, b) {
-  return a === b || a.startsWith(b + '/') || b.startsWith(a + '/');
+  const fa = foldPath(a);
+  const fb = foldPath(b);
+  return fa === fb || fa.startsWith(fb + '/') || fb.startsWith(fa + '/');
 }
 
 async function main() {
@@ -182,7 +305,7 @@ async function main() {
   const problems = [];
   const warnings = [];
 
-  const codes = [...new Set([...prompt.matchAll(BOW_CODE_RE)].map((m) => m[0]))];
+  const codes = [...new Set([...prompt.matchAll(BOW_CODE_RE)].map((m) => m[0].toUpperCase()))];
   const ownedPaths = extractOwnedPaths(prompt);
 
   const conn = await connect();
@@ -221,18 +344,35 @@ async function main() {
           );
         }
       }
-      // The mkey trap: the brief's spelling may differ from the record's.
-      for (const row of rows) {
-        if (!row.mkey) continue;
-        const spelled = new RegExp(`\\b${row.mkey.replace(/\./g, '\\.')}\\b`);
-        const nearMiss = new RegExp(`\\b${row.mkey.replace(/\./g, '\\.')}s\\b`);
-        if (!spelled.test(prompt) && nearMiss.test(prompt)) {
-          problems.push(
-            `${row.code}'s module key is "${row.mkey}", but the brief writes ` +
-              `"${row.mkey}s". This exact slip sent a BA to write ` +
-              `engine.invariants.md when complete criteria already sat at ` +
-              `engine.invariant.md.`
-          );
+    }
+
+    // --- 2: mkey agreement (BUG-135, BUG-139, BUG-142) — ANY dispatch type,
+    // not just criteria. Per-line: every BOW code on the line is paired with
+    // the candidate mkey token it is directly, SYNTACTICALLY attached to
+    // (parenthetical, colon/dash, bare "is", or a possessive/relative
+    // assertion — see ATTACH_GAP_RE), not gated on the line containing
+    // exactly one of each (BUG-135's original gate made the check inert for
+    // ordinary two-code brief prose) and not inferred from raw character
+    // proximity alone (BUG-139's distance-only fix falsely DENIED true
+    // sentences like "FEAT-072 and FEAT-073 both touch tool.dispatchguard",
+    // where proximity alone can't tell which code actually claims a shared
+    // nearby candidate). A code with no syntactically-attached candidate is
+    // left unchecked rather than risked as a false DENY.
+    if (rows.length) {
+      const knownPrefixes = await knownMkeyPrefixes(conn);
+      for (const line of prompt.split(/\r?\n/)) {
+        const nearestByCode = nearestMkeyPerCode(line, knownPrefixes);
+        for (const [code, candidate] of nearestByCode) {
+          const row = rows.find((r) => r.code === code);
+          if (!row || !row.mkey) continue;
+          if (candidate !== row.mkey) {
+            problems.push(
+              `${row.code}'s module key is "${row.mkey}", but the brief writes ` +
+                `"${candidate}" near it. This exact slip sent a BA to write ` +
+                `engine.invariants.md when complete criteria already sat at ` +
+                `engine.invariant.md — verify against the BOW record, not memory.`
+            );
+          }
         }
       }
     }
@@ -322,9 +462,22 @@ async function main() {
   allow();
 }
 
-main().catch((err) => {
-  // Fail OPEN, deliberately — see the header. A bug in this guard must not
-  // stop the team working; it must only stop being useful.
-  process.stderr.write(`dispatch-guard: internal error, allowing dispatch — ${err.message}\n`);
-  process.exit(0);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    // Fail OPEN, deliberately — see the header. A bug in this guard must not
+    // stop the team working; it must only stop being useful.
+    process.stderr.write(`dispatch-guard: internal error, allowing dispatch — ${err.message}\n`);
+    process.exit(0);
+  });
+}
+
+// Exported for unit testing (BUG-135) — no side effects on require, guarded above.
+module.exports = {
+  candidateMkeys,
+  candidateMkeysWithPositions,
+  nearestMkeyPerCode,
+  foldPath,
+  overlaps,
+  normalise,
+  extractOwnedPaths,
+};

@@ -52,6 +52,18 @@
 
 const { execSync } = require('child_process');
 const fs = require('fs');
+const { buildBareGitVerbTriggerRegex } = require('./claude-git-commit-trigger.js');
+
+// BUG-123 (2026-08-12): this guard's trigger used to be the bare
+// `/\bgit\s+(commit|push)\b/`, which does not tolerate ANY global option
+// between `git` and the verb — so `git -c user.email=... commit` (or
+// `-c commit.gpgsign=false`, or `--git-dir=...`) slipped past this
+// FAIL-CLOSED GR#22 guard entirely, unscanned. Built from the same shared
+// option-run grammar the sibling commit-only guards now use (GR#3 — see
+// claude-git-commit-trigger.js's header); this guard keeps its original bare
+// word-boundary shape (no shell-boundary anchoring), unchanged in every other
+// respect.
+const GIT_COMMIT_OR_PUSH_RE = buildBareGitVerbTriggerRegex('commit|push');
 
 // Fragments, never joined in source. See the header for why.
 const SKY = 'sky';
@@ -81,52 +93,85 @@ const SCRAP = 'scrap';
 const MODER = 'moder';
 const ARCHITECT = 'architect';
 
+// BUG-140: ordinary regex \b is a \w/non-\w transition, and underscore is a
+// \w character — so \bword\b silently fails to match "word_export" (snake_
+// case). A lookaround anchor built from a plain [a-zA-Z] class has a second
+// problem: these patterns carry the 'i' (case-insensitive) flag, which folds
+// case for the WHOLE regex including lookarounds — so [a-zA-Z] can't tell
+// "still lowercase" from "just turned uppercase", which is exactly the signal
+// needed to also catch camelCase (word immediately followed by a capital,
+// e.g. "wordConfig" — no separator at all). JS has no scoped/inline
+// case-insensitivity modifier, so the boundary check below is done in plain
+// JS instead of regex: `boundary: true` patterns are matched WITHOUT anchors
+// (via a global exec loop in scan()), and a match only counts as a real hit
+// if the character immediately before/after it is not a literal lowercase
+// letter — i.e. an adjacent digit, underscore, uppercase letter (camelCase
+// transition), punctuation, whitespace, or string edge all count as a
+// boundary; only continuing directly into another lowercase letter (embedded
+// inside one longer all-lowercase run) does not. This still declines to fire
+// in the middle of an ordinary lowercase word, matching \b's original
+// false-positive-avoidance intent, just letter-case-aware instead of
+// \w-based.
+function isLowerLetter(ch) {
+  return ch !== undefined && ch >= 'a' && ch <= 'z';
+}
+
 // Built at runtime. Matches the two-word title with any separator, the
 // single distinctive word on its own, and the numbered abbreviations.
 const PATTERNS = [
   {
-    re: new RegExp(`${CITY}${IES}[\\s:_-]*${SKY}${LINES}`, 'i'),
+    re: new RegExp(`${CITY}${IES}[\\s:_-]*${SKY}${LINES}`, 'gi'),
     what: 'the full reference title',
   },
   {
-    re: new RegExp(`\\b${SKY}${LINES}\\b`, 'i'),
+    re: new RegExp(`${SKY}${LINES}`, 'gi'),
     what: 'the distinctive single word from the reference title',
+    boundary: true,
   },
   {
-    re: /\bCS ?[12]\b/,
+    re: /CS ?[12]/g,
     what: 'a numbered abbreviation of the reference title',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${BRIDG}es${SEP}(?:${AMP}${SEP})?${PORT}ts\\b`, 'i'),
+    re: new RegExp(`${BRIDG}es${SEP}(?:${AMP}${SEP})?${PORT}ts`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${BEA}ch${SEP}${PROPERT}ies\\b`, 'i'),
+    re: new RegExp(`${BEA}ch${SEP}${PROPERT}ies`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${URB}an${SEP}${PROMENAD}e\\b`, 'i'),
+    re: new RegExp(`${URB}an${SEP}${PROMENAD}e`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${CITY}y${SEP}${STAT}ions\\b`, 'i'),
+    re: new RegExp(`${CITY}y${SEP}${STAT}ions`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${OFFIC}e${SEP}${EVOLUT}ion\\b`, 'i'),
+    re: new RegExp(`${OFFIC}e${SEP}${EVOLUT}ion`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${SAN_FRAN()}${SEP}set\\b`, 'i'),
+    re: new RegExp(`${SAN_FRAN()}${SEP}set`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${SKY}${SCRAP}ers\\b`, 'i'),
+    re: new RegExp(`${SKY}${SCRAP}ers`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
   {
-    re: new RegExp(`\\b${MODER}n${SEP}${ARCHITECT}ure\\b`, 'i'),
+    re: new RegExp(`${MODER}n${SEP}${ARCHITECT}ure`, 'gi'),
     what: 'a former expansion-content pack name',
+    boundary: true,
   },
 ];
 
@@ -154,12 +199,49 @@ function deny(reason) {
   process.exit(0);
 }
 
+// BUG-140/BUG-144: patterns marked `boundary: true` carry no regex anchor at
+// all — every candidate match is found via a global exec loop, then accepted
+// if EITHER neighbour is a real boundary (case transition, digit, underscore,
+// punctuation, or string edge — i.e. NOT a plain lowercase letter). Only a
+// match embedded on BOTH sides in a continuing all-lowercase run is rejected,
+// since that's the one case genuinely indistinguishable from ordinary prose.
+// BUG-140's original fix used AND semantics (require BOTH sides boundary),
+// which missed the camelCase middle-segment case (a forbidden word appearing
+// mid-identifier, e.g. prefixWordEngine-shaped): the
+// lowercase-adjacent left side was enough to reject it even though the right
+// side had an unambiguous uppercase transition. See the PATTERNS comment
+// above for why this can't be done as a regex lookaround once the 'i' flag
+// is in play.
+function lineMatches(re, line) {
+  re.lastIndex = 0;
+  let m;
+  while ((m = re.exec(line))) {
+    return true; // caller already filtered to boundary:false patterns here
+  }
+  return false;
+}
+
+function lineMatchesWithBoundary(re, line) {
+  re.lastIndex = 0;
+  let m;
+  while ((m = re.exec(line))) {
+    const before = m.index > 0 ? line[m.index - 1] : undefined;
+    const after = m.index + m[0].length < line.length ? line[m.index + m[0].length] : undefined;
+    if (!isLowerLetter(before) || !isLowerLetter(after)) return true;
+    if (re.lastIndex === m.index) re.lastIndex += 1; // guard against zero-length matches
+  }
+  return false;
+}
+
 function scan(text, where, hits) {
   if (!text) return;
   const lines = String(text).split(/\r?\n/);
   for (const p of PATTERNS) {
     for (let i = 0; i < lines.length; i++) {
-      if (!p.re.test(lines[i])) continue;
+      const hit = p.boundary
+        ? lineMatchesWithBoundary(p.re, lines[i])
+        : lineMatches(p.re, lines[i]);
+      if (!hit) continue;
       hits.push(
         `${where}${lines.length > 1 ? ` (line ${i + 1})` : ''}: contains ${p.what}.`
       );
@@ -181,7 +263,7 @@ function main() {
   }
 
   const cmd = String((payload.tool_input || {}).command || '');
-  if (!/\bgit\s+(commit|push)\b/.test(cmd)) allow();
+  if (!GIT_COMMIT_OR_PUSH_RE.test(cmd)) allow();
 
   const hits = [];
 
@@ -206,11 +288,24 @@ function main() {
       maxBuffer: 64 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'ignore'],
     });
-    const added = diff
-      .split(/\r?\n/)
+    const diffLines = diff.split(/\r?\n/);
+    const added = diffLines
       .filter((l) => l.startsWith('+') && !l.startsWith('+++'))
       .join('\n');
     scan(added, 'staged content (added lines)', hits);
+
+    // BUG-137: a forbidden word appearing ONLY in a new/renamed/copied file's
+    // PATH — never in file content or the commit message — bypassed the
+    // content-only scan above, since a unified diff's path-header lines
+    // ('+++ b/<path>', '--- a/<path>', 'rename to/from <path>', 'copy
+    // to/from <path>') all start with something other than a plain '+' and
+    // were excluded outright rather than stripped and scanned.
+    const PATH_HEADER_RE = /^(\+\+\+ |--- |rename to |rename from |copy to |copy from )/;
+    const paths = diffLines
+      .filter((l) => PATH_HEADER_RE.test(l))
+      .map((l) => l.replace(PATH_HEADER_RE, ''))
+      .join('\n');
+    scan(paths, 'staged file path (new, renamed, or copied file)', hits);
   } catch (err) {
     deny(
       `🛑 CODENAME GUARD (GR#22): could not read the staged diff to check it ` +
@@ -241,6 +336,13 @@ function main() {
   allow();
 }
 
+// require.main === module guard (BUG-123, same testability pattern already
+// used by claude-secret-guard.js / claude-version-guard.js /
+// claude-plan-guard.js): when run directly as the hook, behaviour is
+// unchanged — main() still runs unconditionally below. When require()'d by a
+// test harness, main() is never called (so stdin is never touched) and the
+// trigger regex is exported for direct, unit-level testing.
+if (require.main === module) {
 try {
   main();
 } catch (err) {
@@ -250,4 +352,9 @@ try {
       `Failing closed deliberately. Bypass only if you have checked by hand: ` +
       `CLAUDE_DISABLE_CODENAME_GUARD=1`
   );
+}
+} else {
+  module.exports = {
+    GIT_COMMIT_OR_PUSH_RE,
+  };
 }

@@ -1,0 +1,462 @@
+[
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|RunCommandLoop|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|StartSubscriptionPump|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|accept|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|checkSpeed8xAllowed|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|clockTickForResult|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|handleAdvanceTicks|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|handleDebug|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|handleInspectEntity|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|handleSubscribe|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|handleUnsubscribe|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|reject|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|signalSubscriptionPump|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|receiver method|AdvanceTicks|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|receiver method|PoolSize|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|receiver method|Registry|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|receiver method|TicksCompleted|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|receiver method|WorldSeed|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|receiver method|advanceOneDailyTick|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/persist.go|*Engine|receiver method|snapshotStateLocked|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/phase.go|*Engine|receiver method|runPhaseForHook|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/phase.go|*Engine|receiver method|runPhase|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/subscribe.go|*Engine|receiver method|EngineStatusView|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/debug/cheats.go|*State|receiver method|InvokeCheat|s|*State",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/debug/gates.go|*State|receiver method|AllowSpeed8x|s|*State",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/debug/gates.go|*State|receiver method|RequireConsole|s|*State",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/debug/gates.go|*State|receiver method|RequireFixtureControls|s|*State",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/debug/state.go|*State|receiver method|IsOn|s|*State",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/helper/registry.go|*Registry|receiver method|Preview|r|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/helper/registry.go|*Registry|receiver method|Recommend|r|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/helper/registry.go|*Registry|receiver method|Register|r|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/helper/registry.go|*Registry|receiver method|Seal|r|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/invariant/registry.go||function (parameter)|RunSuite|reg|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/invariant/wire.go||function (parameter)|WireDaily|reg|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/invariant/wire.go||function (parameter)|Wire|reg|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/load.go|*Manager|receiver method|LoadLatest|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/load.go|*Manager|receiver method|Load|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/manager.go|*Manager|receiver method|Root|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/manager.go|*Manager|receiver method|SetMaxDecodedBytes|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/retention.go|*Manager|receiver method|pruneAutosaves|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/save.go|*Manager|receiver method|Autosave|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/save.go|*Manager|receiver method|Milestone|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/save.go|*Manager|receiver method|SaveManual|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/save/save.go|*Manager|receiver method|writeBundle|m|*Manager",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|Run|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|World|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|acceptAt|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|advanceSubscriptionScriptLocked|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|emitDeltaLocked|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|handleDebug|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|handleInspectEntity|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go|*StubEngine|receiver method|reject|s|*StubEngine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/foundation/errs/log.go|*Logger|receiver method|rejectCopiedLog|l|*Logger",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/foundation/errs/log.go|*Logger|receiver method|rotateLocked|l|*Logger",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/foundation/errs/log.go|*ringBuffer|receiver method|push|r|*ringBuffer",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/foundation/errs/log.go|*ringBuffer|receiver method|snapshot|r|*ringBuffer",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/foundation/registry/registry.go|*Registry|receiver method|SetStatus|r|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/foundation/registry/registry.go|*Registry|receiver method|sortedEntriesLocked|r|*Registry",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/fixture.go||function (parameter)|Save|rec|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/record.go|*Recorder|receiver method|ObserveCommand|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/record.go|*Recorder|receiver method|ObserveDelta|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/record.go|*Recorder|receiver method|ObserveEvent|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/record.go|*Recorder|receiver method|ObserveResult|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/tap.go|*Recorder|receiver method|TapTransport|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/tap.go|*Recorder|receiver method|forwardDeltas|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/tap.go|*Recorder|receiver method|forwardEvents|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/replay/tap.go|*Recorder|receiver method|forwardResults|r|*Recorder",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/uitest/harness.go|*Harness|receiver method|RunScript|h|*Harness",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/harness/uitest/harness.go|*Harness|receiver method|barrierObserved|h|*Harness",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/grammar.go|*KeyGrammar|receiver method|FeedTcellEvent|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/grammar.go|*KeyGrammar|receiver method|computeFeed|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/grammar.go|*KeyGrammar|receiver method|consumeCountLocked|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/grammar.go|*KeyGrammar|receiver method|resetLocked|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/keymap.go|*KeyGrammar|receiver method|actionExistsLocked|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/keymap.go|*KeyGrammar|receiver method|resolveActionLocked|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/keymap.go||function (parameter)|LoadKeymapFile|g|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/palette.go|*Palette|receiver method|Match|p|*Palette",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/palette.go|*Palette|receiver method|ParseCommand|p|*Palette",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/palette.go|*Palette|receiver method|RegisterCommand|p|*Palette",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/keys/palette.go||function (parameter)|NewPalette|grammar|*KeyGrammar",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go|*Screen|receiver method|TailEntry|s|*Screen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go|*Screen|receiver method|collectBoW|s|*Screen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go|*Screen|receiver method|collectErrorTail|s|*Screen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go|*Screen|receiver method|collectPhaseSeries|s|*Screen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go|*Screen|receiver method|collectRegistry|s|*Screen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go|*Screen|receiver method|logUnavailable|s|*Screen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/demo/screen.go|*Screen|receiver method|applyCommute|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded) via its view-name switch, on the SAME already-validated *Screen receiver. Same reasoning as applyPopulation/applyLeisure/applyHousing (see those entries). Mirrors debug.Screen's collectRegistry/collectErrorTail/collectPhaseSeries/collectBoW precedent. Real per-finding triage, FEAT-018 fix round, superseding the prior blanket note."
+  },
+  {
+    "finding": "internal/ui/screens/demo/screen.go|*Screen|receiver method|applyHousing|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded) via its view-name switch, on the SAME already-validated *Screen receiver. This is the exact method Widowmaker's Destructive proof-of-concept targeted (concurrent map read/write on typologies) -- the fix is the copy-guard on ApplyDelta and every other exported entry point (copyguard.go), not a guard on this unexported helper itself, since it is never reachable except through an already-guarded caller. Mirrors debug.Screen's collectRegistry/collectErrorTail/collectPhaseSeries/collectBoW precedent. Real per-finding triage, FEAT-018 fix round, superseding the prior blanket note."
+  },
+  {
+    "finding": "internal/ui/screens/demo/screen.go|*Screen|receiver method|applyLeisure|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded) via its view-name switch, on the SAME already-validated *Screen receiver. Same reasoning as applyPopulation (see that entry) -- package-private, only ever called on a receiver ApplyDelta's own checkNotCopied already cleared. Mirrors debug.Screen's collectRegistry/collectErrorTail/collectPhaseSeries/collectBoW precedent. Real per-finding triage, FEAT-018 fix round, superseding the prior blanket note."
+  },
+  {
+    "finding": "internal/ui/screens/demo/screen.go|*Screen|receiver method|applyPopulation|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded -- checkNotCopied called before mu is ever touched, twice: once before Lock, once after acquiring it) via its view-name switch, on the SAME already-validated *Screen receiver ApplyDelta itself checked. No external holder of a *Screen (copy or not) can call applyPopulation directly -- it is package-private. Mirrors internal/ui/screens/debug/screen.go's collectRegistry/collectErrorTail/collectPhaseSeries/collectBoW precedent exactly: an unexported helper behind an already-guarded entry point does not need a second, redundant guard. Real per-finding triage, FEAT-018 fix round, superseding the prior blanket note."
+  },
+  {
+    "finding": "internal/ui/screens/demo/screen.go|*Screen|receiver method|logMalformed|s|*Screen",
+    "reason": "Unexported, called only from applyPopulation/applyLeisure/applyHousing/applyCommute and only reads s.correlationID -- an immutable string set once in New and never written again, so there is no aliased mutable state here for a struct copy to corrupt even in principle. Reachable only through already-guarded entry points (ApplyDelta), on the same already-validated receiver. Mirrors debug.Screen.TailEntry's \"reads zero mutable fields\" precedent as well as the collectRegistry-family \"already-guarded reachable path\" precedent. Real per-finding triage, FEAT-018 fix round, superseding the prior blanket note."
+  },
+  {
+    "finding": "internal/ui/screens/demo/screen.go|*Screen|receiver method|logUnknownSubscription|s|*Screen",
+    "reason": "Unexported, called only from ApplyDelta (guarded) and only reads s.correlationID -- an immutable string set once in New and never written again, so there is no aliased mutable state here for a struct copy to corrupt even in principle. Reachable only through the already-guarded ApplyDelta, on the same already-validated receiver. Mirrors debug.Screen.TailEntry's \"reads zero mutable fields\" precedent as well as the collectRegistry-family \"already-guarded reachable path\" precedent. Real per-finding triage, FEAT-018 fix round, superseding the prior blanket note."
+  },
+  {
+    "finding": "internal/ui/screens/map/render.go|*MapScreen|receiver method|snapshotLocked|m|*MapScreen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/map/screen.go|*MapScreen|receiver method|applyFullLocked|m|*MapScreen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/map/screen.go|*MapScreen|receiver method|applySparseLocked|m|*MapScreen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/map/screen.go|*MapScreen|receiver method|clampCursorLocked|m|*MapScreen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/map/screen.go|*MapScreen|receiver method|clampOffsetLocked|m|*MapScreen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/ui/screens/map/screen.go|*MapScreen|receiver method|logMalformed|m|*MapScreen",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 61>|e|*Engine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 71>|e|*Engine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 83>|e|*Engine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 88>|e|*Engine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 116>|e|*Engine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 124>|e|*Engine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/debug/feedback.go||function (parameter)|<func literal at line 65>|s|*State",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/debug/state.go||function (parameter)|<func literal at line 125>|s|*State",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/debug/state.go||function (parameter)|<func literal at line 132>|s|*State",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/debug/state.go||function (parameter)|<func literal at line 138>|s|*State",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/debug/state.go||function (parameter)|<func literal at line 143>|s|*State",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/debug/state.go||function (parameter)|<func literal at line 149>|s|*State",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/engine/stub/engine.go||function (parameter)|<func literal at line 33>|s|*StubEngine",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/foundation/registry/registry.go||function (parameter)|<func literal at line 157>|r|*Registry",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go||function (parameter)|<func literal at line 63>|s|*Screen",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go||function (parameter)|<func literal at line 71>|s|*Screen",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go||function (parameter)|<func literal at line 77>|s|*Screen",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  },
+  {
+    "finding": "internal/ui/screens/debug/screen.go||function (parameter)|<func literal at line 85>|s|*Screen",
+    "reason": "BUG-138: newly surfaced by the FuncLit-walk fix (astgate now scans function literals/closures, which it never did before) -- a candidate type copied by value inside a closure, e.g. a phase-hook/command-handler registered as a var. Not yet individually triaged for whether the closure genuinely needs a checkNotCopied() guard or is safe by construction (e.g. never actually re-entrant, or the copy is intentionally cheap/read-only) -- that per-site review is separate follow-up work (BUG-141), matching this ratchet's existing ASM-120/ASM-121 precedent for pre-existing findings. Recorded here, generated from a live scan (GR#15), so the BUG-138 fix itself can land without blocking on unrelated triage."
+  }
+]
