@@ -59,6 +59,40 @@ func TestRender_BuildInfo_RendersInjectedValuesVerbatim(t *testing.T) {
 	}
 }
 
+// --- SEC-011: raw control/escape bytes in errs.Entry.Msg must never
+// reach the Buffer as a raw rune via the real F12 error-tail render
+// path (the BOW item's documented example: an untrusted/wrapped error
+// message carrying a raw ESC-led sequence, e.g. "\x1b[2J", reconstructs
+// on the real terminal once flushed if this pane doesn't filter it). ---
+
+func TestRender_ErrorTail_StripsRawEscapeFromEntryMsg(t *testing.T) {
+	s := debug.NewScreen(nil, "corr-1",
+		debug.WithDebugFlag(func() bool { return true }),
+		debug.WithErrorTailSource(func() []errs.Entry {
+			return []errs.Entry{{Ts: "t0", Level: "error", Code: "MET-U100", Msg: "boom\x1b[2Jmore"}}
+		}),
+	)
+	buf := core.NewBuffer(160, 60)
+	debug.Render(buf, core.Rect{X: 0, Y: 0, W: 160, H: 60}, debugOnSnapshot(s), widgets.DefaultPalette)
+
+	w, h := buf.Size()
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			if r := buf.Get(x, y).Rune; r == 0x1B {
+				t.Fatalf("raw ESC rune (0x1B) found in rendered Buffer at (%d,%d) — SEC-011 escape injection not filtered", x, y)
+			}
+		}
+	}
+
+	text := renderToText(t, debugOnSnapshot(s))
+	if !strings.Contains(text, "boom") || !strings.Contains(text, "more") {
+		t.Errorf("rendered error-tail pane lost the surrounding legitimate text, want \"boom\" and \"more\" both present:\n%s", text)
+	}
+	if strings.Contains(text, "\x1b[2J") {
+		t.Errorf("rendered error-tail pane still contains the raw escape sequence verbatim:\n%q", text)
+	}
+}
+
 // --- AC-2: memory fields render against their named budget ---
 
 func TestRender_RuntimeMemory_ShownAgainstNamedBudget(t *testing.T) {

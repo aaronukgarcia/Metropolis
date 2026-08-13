@@ -1,6 +1,40 @@
 package core
 
-import "github.com/gdamore/tcell/v2"
+import (
+	"unicode"
+
+	"github.com/gdamore/tcell/v2"
+)
+
+// replacementRune is drawn in place of any non-printable rune Set is
+// asked to write — SEC-011: this package is the single trust boundary
+// between caller-supplied strings (which may carry raw control/escape
+// bytes, e.g. a wrapped Go error's text reaching the F12 error-tail
+// pane via errs.Entry.Msg) and the real terminal, which would
+// reconstruct a raw ESC-led byte sequence from consecutive cells and
+// execute it (cursor repositioning, scrollback clearing, OSC
+// title-bar spoofing, terminal-emulator-specific exploits). U+FFFD
+// (the Unicode replacement character) is itself unicode.IsPrint==true,
+// so it never re-triggers the same filter.
+const replacementRune = '�'
+
+// sanitizeRune returns r unchanged if it is safe to hand to a real
+// terminal (unicode.IsPrint==true — this already covers every
+// box-drawing, block-element, and geometric-shape glyph this package
+// draws itself: border.go's ─│┌┐└┘├┤━┃┏┓┗┛, sparkline.go's ▁▂▃▄▅▆▇█,
+// bignum.go's ▬▲▼, and queuelane.go's ▮◆●▲▩ are all category L/M/N/P/S
+// and pass IsPrint unmodified — verified by direct rune check, not
+// assumed), and replacementRune otherwise. This is the ONE chokepoint
+// SEC-011 asks for: every drawText/drawRow/drawTitle routine in
+// ui.core, ui.widgets, and ui.screens.debug funnels through Buffer.Set
+// before a rune becomes a Cell, so filtering here enforces the
+// untrusted-text trust boundary centrally rather than per widget.
+func sanitizeRune(r rune) rune {
+	if !unicode.IsPrint(r) {
+		return replacementRune
+	}
+	return r
+}
 
 // Cell is one styled terminal cell: a single primary rune (combining
 // runes are not modelled at the Buffer level — v1 scope, UI-SPEC §1) and
@@ -53,9 +87,17 @@ func (b *Buffer) idx(x, y int) (int, bool) {
 // ignored (matching tcell.Screen.SetContent's own out-of-range
 // behaviour), never a panic — a widget computing a coordinate slightly
 // off during a resize race must not be able to crash T-RENDER.
+//
+// SEC-011: r is passed through sanitizeRune first, so any non-printable
+// rune (raw ESC 0x1B, CR, BEL, and every other C0/C1 control or format
+// character) is replaced before it can ever reach a Cell and, via
+// Flush, tcell.Screen.SetContent — this is the single point every
+// render path in ui.core/ui.widgets/ui.screens.debug funnels through,
+// so the terminal-escape-injection trust boundary is enforced once,
+// here, rather than needing every widget author to remember it.
 func (b *Buffer) Set(x, y int, r rune, style tcell.Style) {
 	if i, ok := b.idx(x, y); ok {
-		b.cells[i] = Cell{Rune: r, Style: style}
+		b.cells[i] = Cell{Rune: sanitizeRune(r), Style: style}
 	}
 }
 
