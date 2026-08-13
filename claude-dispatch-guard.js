@@ -233,15 +233,45 @@ function readStdin() {
   }
 }
 
+// FEAT-076 AC-8: host default fixed from 'localhost' to '127.0.0.1' for
+// parity with claude-sync.js/claude-bow.js (no localhost/::1 divergence).
+// Exported below so claude-agent-stop.js can reuse this exact connection
+// logic instead of standing up a fourth connect() implementation (GR#3).
 async function connect() {
   const mysql = require('mysql2/promise');
   return mysql.createConnection({
-    host: process.env.METRO_DB_HOST || 'localhost',
+    host: process.env.METRO_DB_HOST || '127.0.0.1',
     port: Number(process.env.METRO_DB_PORT || 3306),
     user: process.env.METRO_DB_USER || 'root',
     password: process.env.METRO_DB_PASSWORD || '',
     database: process.env.METRO_DB_NAME || 'metro',
   });
+}
+
+/**
+ * FEAT-076 AC-7: identity resolution mirroring claude-statusline.js's own
+ * file-reading chain (see that file's SessionStart-adjacent read logic) —
+ * per-window file first (multi-window safe: the shared .identity is
+ * last-checkin-wins and can show ANOTHER window's name), then the shared
+ * file, then the CLAUDE_IDENTITY env var, then the literal fallback 'lead'.
+ * Pure and side-effect-free (only reads), so it's directly unit-testable
+ * against fixture directories without touching this machine's real
+ * .claude/.identity* files.
+ */
+function resolveIdentity(dotClaudeDir, sessionId) {
+  const candidates = [];
+  if (sessionId) candidates.push(path.join(dotClaudeDir, `.identity-${sessionId}`));
+  candidates.push(path.join(dotClaudeDir, '.identity'));
+  for (const p of candidates) {
+    try {
+      const v = fs.readFileSync(p, 'utf8').trim();
+      if (v) return v;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  if (process.env.CLAUDE_IDENTITY) return process.env.CLAUDE_IDENTITY;
+  return 'lead';
 }
 
 /**
@@ -293,14 +323,24 @@ async function main() {
     allow(); // Unparsable input is not this guard's problem to adjudicate.
   }
 
-  if (payload.tool !== 'Agent') allow();
+  // BUG-204: real Claude Code hook payloads carry the tool name as `tool_name`;
+  // `tool` alone is undefined live, so this gate early-allow()ed EVERY real
+  // dispatch — silently no-op'ing this guard's BOW-code/mkey/file-collision
+  // checks (FEAT-072) and FEAT-076's dispatch logging alike (0 dispatch rows
+  // ever landed live, only SubagentStop's — which reads tool_name||tool). The
+  // repo's other guards dodge this by not re-checking the name at all (the
+  // settings.json matcher already filters); this one does, so it must read the
+  // real field. Defensive fallback to `tool` keeps crafted-payload tests valid.
+  const toolName = payload.tool_name || payload.tool || '';
+  if (toolName !== 'Agent') allow();
 
   const input = payload.tool_input || {};
   const prompt = String(input.prompt || '');
   if (!prompt.trim()) allow();
 
   const sessionId = payload.session_id || process.env.CLAUDE_SESSION_ID || 'unknown';
-  const identity = (process.env.CLAUDE_IDENTITY || 'lead').slice(0, 16);
+  // FEAT-076 AC-7: no longer env-only — see resolveIdentity's header comment.
+  const identity = resolveIdentity(path.join(ROOT, '.claude'), sessionId).slice(0, 16);
 
   const problems = [];
   const warnings = [];
@@ -444,6 +484,31 @@ async function main() {
       );
     }
 
+    // FEAT-076 AC-3/AC-5: record this dispatch in sync_dispatch_events, on
+    // the SAME already-open connection, immediately after the sync_file_claims
+    // write above (post-deny-checks). Own try/catch, deliberately separate
+    // from the outer fail-open handler in main.catch() below: an event-insert
+    // failure (DB blip, table not yet migrated) must never be able to skip or
+    // undo the sync_file_claims write that already happened, and must never
+    // deny a dispatch that has already been allowed. Lazy-required at point
+    // of use per this repo's convention (see claude-bow-autoref.js et al.).
+    try {
+      const { buildDispatchEvent, insertEvent } = require('./claude-dispatch-log.js');
+      await insertEvent(
+        conn,
+        buildDispatchEvent({
+          sessionId,
+          name: identity,
+          subagentType: input.subagent_type,
+          description: input.description,
+          bowCodes: codes,
+          promptChars: prompt.length,
+        })
+      );
+    } catch (err) {
+      process.stderr.write(`dispatch-guard: dispatch-event log failed (non-fatal) — ${err.message}\n`);
+    }
+
     if (warnings.length) {
       process.stderr.write(
         `dispatch-guard: ${warnings.length} warning(s)\n` +
@@ -480,4 +545,6 @@ module.exports = {
   overlaps,
   normalise,
   extractOwnedPaths,
+  connect,
+  resolveIdentity,
 };

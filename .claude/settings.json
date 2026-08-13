@@ -195,6 +195,27 @@
             "timeout": 3
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-agent-stop.js",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-agent-stop.js",
+            "timeout": 5
+          }
+        ]
       }
     ]
   },

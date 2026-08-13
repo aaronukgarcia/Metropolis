@@ -49,6 +49,19 @@
  *   loop-show --session <id>    - FEAT-070: show the caller's own standing loop state
  *                                 spec text is printable-ASCII-only (allowlist, not blocklist —
  *                                 round 2 finding B).
+ *   util [--hours N] [--target N] [--set-target N] [--now] [--json]
+ *                                - FEAT-076 (tool.agentlog): hourly agent dispatch/stop
+ *                                 utilisation report, built from sync_dispatch_events
+ *                                 (logged by claude-dispatch-guard.js on dispatch and
+ *                                 claude-agent-stop.js on stop). --hours sets the report
+ *                                 window (default 12). --target overrides the target lane
+ *                                 count for this one run only. --set-target PERSISTS a new
+ *                                 target to project_meta.dispatch_target_lanes (default 12
+ *                                 when never set -- GR#15, no hardcoded target elsewhere).
+ *                                 --now prints a compact RUNNING NOW block (measured lanes,
+ *                                 per-identity counts, oldest-open age) instead of the full
+ *                                 table. --json emits the bucketed rows as machine-readable
+ *                                 JSON instead of the padded table.
  *
  * Identity resolution (same as prix6 v2.2): the Claude window's session UUID
  * arrives via the CLAUDE_CODE_SESSION_ID env var (hooks set it from the hook
@@ -107,7 +120,15 @@ const flags = {};
 // AC-5 (FEAT-069): `--to`/`--body-file` MUST be listed here, or `--to Bob`
 // silently corrupts the message (`--to` becomes `true`, "Bob" lands in
 // `positional` and is mistaken for message text).
-const VALUE_FLAGS = new Set(['name', 'session', 'to', 'body-file']);
+// FEAT-076 AC-17/AC-18: 'hours'/'target'/'set-target' are the util command's
+// own value flags — added here (not a bespoke parser) so they inherit this
+// loop's existing dangling-value-flag rejection (BUG-168/BUG-196 precedent
+// in claude-bow.js: a value flag with nothing after it, or immediately
+// followed by another recognized flag, is a hard parse error, never a
+// silent mis-parse or silent clear). '--now'/'--json' are deliberately NOT
+// listed — they're plain booleans, same treatment as the other bare `--flag`
+// tokens already falling through to the `else if` branch below.
+const VALUE_FLAGS = new Set(['name', 'session', 'to', 'body-file', 'hours', 'target', 'set-target']);
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--') && VALUE_FLAGS.has(a.slice(2))) {
@@ -203,6 +224,25 @@ async function ensureSchema(db) {
     name         VARCHAR(16) PRIMARY KEY,
     last_read_id INT NOT NULL DEFAULT 0
   ) ENGINE=InnoDB`);
+  // FEAT-076 (tool.agentlog, AC-1): agent dispatch/stop event log. Created
+  // ONLY here — hooks (claude-dispatch-guard.js, claude-agent-stop.js) never
+  // run DDL themselves; an ER_NO_SUCH_TABLE there is a stderr note + exit 0
+  // fail-open, never a schema-creation attempt from inside a hook. Append-
+  // only by usage (AC-2): no code path anywhere issues UPDATE/DELETE against
+  // this table.
+  await db.query(`CREATE TABLE IF NOT EXISTS sync_dispatch_events (
+    id             INT AUTO_INCREMENT PRIMARY KEY,
+    ts             TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    event          ENUM('dispatch','stop') NOT NULL,
+    session_id     CHAR(36) NULL,
+    name           VARCHAR(16) NULL,
+    subagent_type  VARCHAR(64) NULL,
+    description    VARCHAR(255) NULL,
+    bow_codes      VARCHAR(255) NULL,
+    prompt_chars   INT NULL,
+    INDEX idx_dispatch_ts (ts),
+    INDEX idx_dispatch_session (session_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   // FEAT-070 (tool.looparm): standing /loop configuration, one row per identity.
   // Deliberately NO boot_id column — unlike sync_permits, this table's entire
   // purpose is to survive a reboot (see tool.looparm.md Design section); gating
@@ -214,6 +254,17 @@ async function ensureSchema(db) {
     set_by_session CHAR(36) NULL,
     last_armed_ms  BIGINT NULL,
     armed_count    INT NOT NULL DEFAULT 0
+  ) ENGINE=InnoDB`);
+  // Pre-existing on the real machine DB (CLAUDE.md: "Created 2026-08-08",
+  // project facts key/value store) but NOT previously created by this file —
+  // FEAT-076's resolveTargetLanes()/`util --set-target` need it to exist on
+  // any fresh/test DB too, so it's declared here, idempotently, same as
+  // every other table in this function. Schema matches the live table
+  // exactly (meta_key PK, meta_value text, updated_at auto-touched).
+  await db.query(`CREATE TABLE IF NOT EXISTS project_meta (
+    meta_key   VARCHAR(64) PRIMARY KEY,
+    meta_value TEXT NOT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE=InnoDB`);
   for (const n of NAMES) {
     await db.query('INSERT IGNORE INTO sync_permits (name) VALUES (?)', [n]);
@@ -284,6 +335,15 @@ async function printSuccess(name, sessionId, db) {
     await require('./claude-bow.js').printStartupSummary(db);
   } catch (err) {
     console.log(`(startup summary unavailable: ${err.message})`);
+  }
+  // FEAT-076 AC-19: one-line utilisation summary, between the BOW summary
+  // above and the standing-loop check below — failure-tolerant like both of
+  // its neighbours, must never abort checkin over a DB blip or a table that
+  // hasn't been created yet on a fresh install.
+  try {
+    await printUtilSummary(db);
+  } catch (err) {
+    console.log(`(utilisation unavailable: ${err.message})`);
   }
   // FEAT-070 (AC-6/AC-7/AC-8/AC-9): standing-loop auto-arm. Only prints
   // anything at all when `name` has a sync_loop_config row (AC-7: silent,
@@ -921,6 +981,121 @@ async function cmdLoopShow(db) {
   console.log(`  set ${setAge} ago, last armed: ${armedAge}, armed_count=${row.armed_count}`);
 }
 
+/**
+ * FEAT-076 AC-19: the one-line utilisation summary shown at checkin.
+ * Explicit "no dispatch events" message on an empty table (never a silent
+ * 0/0), and its own errors propagate to printSuccess()'s try/catch above —
+ * this function has no fallback of its own beyond fetching + formatting.
+ */
+async function printUtilSummary(db) {
+  const { currentRunning, resolveTargetLanes } = require('./claude-dispatch-log.js');
+  const since = new Date(Date.now() - 12 * 60 * 60 * 1000);
+  const [rows] = await db.query(
+    `SELECT event, ts, session_id, name FROM sync_dispatch_events WHERE ts >= ? ORDER BY ts`,
+    [since]
+  );
+  if (!rows.length) {
+    console.log('Utilisation (12h): no dispatch events recorded yet.');
+    return;
+  }
+  const { running } = currentRunning(rows, { now: Date.now() });
+  const { target, source } = await resolveTargetLanes(db);
+  console.log(`Utilisation (12h): ${running}/${target} lanes running now (target: ${source}). Full report: node claude-sync.js util`);
+}
+
+/**
+ * FEAT-076 (tool.agentlog) AC-17: `util` — hourly utilisation report built
+ * entirely from claude-dispatch-log.js's pure functions; this command's own
+ * job is just DB I/O (fetch events, optionally persist a new target) and CLI
+ * flag handling. `--hours N` (default 12), `--target N` (one-run override,
+ * never persisted), `--set-target N` (persists to project_meta and prints a
+ * confirmation), `--now` (compact RUNNING NOW block), `--json` (machine-
+ * readable bucket dump). AC-18's dangling-value-flag rejection is inherited
+ * for free from the shared argv loop above (hours/target/set-target are in
+ * VALUE_FLAGS) — no separate parsing here.
+ */
+async function cmdUtil(db) {
+  const {
+    bucketHours, formatUtilTable, resolveTargetLanes, currentRunning, sweepConcurrency, DEFAULT_CAP_MS,
+  } = require('./claude-dispatch-log.js');
+
+  const hours = flags.hours !== undefined ? Number(flags.hours) : 12;
+  if (!Number.isFinite(hours) || hours <= 0) {
+    console.error('claude-sync: --hours must be a positive number.');
+    process.exit(1);
+  }
+
+  if (flags['set-target'] !== undefined) {
+    const v = Number(flags['set-target']);
+    if (!Number.isFinite(v) || v <= 0) {
+      console.error('claude-sync: --set-target must be a positive number.');
+      process.exit(1);
+    }
+    await db.query(
+      `INSERT INTO project_meta (meta_key, meta_value) VALUES ('dispatch_target_lanes', ?)
+       ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)`,
+      [String(v)]
+    );
+    console.log(`dispatch_target_lanes set to ${v} in project_meta.`);
+  }
+
+  let target, targetSource;
+  if (flags.target !== undefined) {
+    const v = Number(flags.target);
+    if (!Number.isFinite(v) || v <= 0) {
+      console.error('claude-sync: --target must be a positive number.');
+      process.exit(1);
+    }
+    target = v;
+    targetSource = 'one-run --target override (not persisted)';
+  } else {
+    const resolved = await resolveTargetLanes(db);
+    target = resolved.target;
+    targetSource = resolved.source;
+  }
+
+  const now = Date.now();
+  // Fetch window generous enough that a dispatch just inside `hours` ago,
+  // still open, has its capMs-synthetic-close correctly computed even if
+  // that close time falls after the window start.
+  const since = new Date(now - hours * 60 * 60 * 1000 - DEFAULT_CAP_MS);
+  const [rows] = await db.query(
+    `SELECT event, ts, session_id, name FROM sync_dispatch_events WHERE ts >= ? ORDER BY ts`,
+    [since]
+  );
+
+  if (flags.now) {
+    const { running, byName } = currentRunning(rows, { now });
+    const { intervals } = sweepConcurrency(rows, {});
+    const openNow = intervals.filter((iv) => iv.start <= now && iv.end > now);
+    console.log(`RUNNING NOW: ${running}/${target} lanes (target: ${targetSource})`);
+    if (openNow.length) {
+      const oldestStart = Math.min(...openNow.map((iv) => iv.start));
+      console.log(`  oldest open dispatch: ${Math.round((now - oldestStart) / 60000)}m ago`);
+    }
+    const names = Object.keys(byName).filter((n) => byName[n] > 0).sort();
+    if (!names.length) {
+      console.log('  (no lanes currently running)');
+    } else {
+      for (const n of names) console.log(`  ${n.padEnd(16)} ${byName[n]}`);
+    }
+    return;
+  }
+
+  const bucketed = bucketHours(rows, { hours, now, targetLanes: target });
+
+  if (flags.json) {
+    console.log(JSON.stringify({ hours, target, targetSource, rows: bucketed }, null, 2));
+    return;
+  }
+
+  if (!rows.length) {
+    console.log(`No dispatch events in the last ${hours}h.`);
+  }
+  console.log(`Utilisation — last ${hours}h, target ${target} lanes (${targetSource}):`);
+  console.log(formatUtilTable(bucketed));
+}
+
 async function runCli() {
   const db = await connect();
   try {
@@ -941,9 +1116,10 @@ async function runCli() {
       case 'loop-set': await cmdLoopSet(db); break;
       case 'loop-clear': await cmdLoopClear(db); break;
       case 'loop-show': await cmdLoopShow(db); break;
+      case 'util': await cmdUtil(db); break;
       default:
         console.error(`Unknown command: ${command}`);
-        console.error('Commands: init, checkin, renew, ping, checkout, status, read, write, message, claim, release, gc, loop-set, loop-clear, loop-show');
+        console.error('Commands: init, checkin, renew, ping, checkout, status, read, write, message, claim, release, gc, loop-set, loop-clear, loop-show, util');
         process.exit(1);
     }
   } catch (err) {
@@ -961,6 +1137,7 @@ module.exports = {
   cmdRelease, cmdGc,
   cmdLoopSet, cmdLoopClear, cmdLoopShow, printLoopArmStatus,
   LOOP_MARKER, LOOP_STALE_MS,
+  cmdUtil, printUtilSummary,
 };
 
 // ── Entry ─────────────────────────────────────────────────────────────────────

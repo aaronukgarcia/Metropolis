@@ -6,12 +6,15 @@ allowed-tools: Bash(node:*), Agent
 ## Context
 
 - Live coordination state: !`node claude-sync.js read`
+- Measured lanes (FEAT-076 dispatch log): !`node claude-sync.js util --now`
 
 ## Your task
 
-Print the compact agent status board (agent/ID | BOW item | ~15-word status, DONE/DEAD shown once then dropped) using the live agent list, not memory.
+Print the compact agent status board (agent/ID | BOW item | ~15-word status, DONE/DEAD shown once then dropped) using the live agent list, not memory. The board's **running count is the MEASURED one** from `util --now` above (dispatch minus stop rows, FEAT-076) — if it disagrees with your own lane memory or feed prose, print both and say which is which; never silently trust either.
 
-**MANDATORY never-idle check — this is the part that was missed before, do not skip it:**
+**MANDATORY saturation check — this is the part that was missed before, do not skip it:**
+
+The old floor ("0 running twice in a row is a bug") is now a ceiling-seeking rule: **if measured running < the target lanes printed by `util --now` AND ready BOW items exist, dispatch until saturated or until every remaining ready item is blocked — dispatching one agent and stopping is the exact under-utilisation this check exists to catch.** Lane PRIORITY (Aaron, 2026-08-13): game code first — S3/engine/UI/data items before `tool.*`/framework work; tooling stays at background-lane levels while game work is dispatchable.
 
 If the board would show **AGENTS: 0 running**, you MUST NOT just print the empty board and stop. Before printing:
 

@@ -41,6 +41,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const {
   candidateMkeys,
@@ -49,6 +52,8 @@ const {
   overlaps,
   normalise,
   extractOwnedPaths,
+  connect,
+  resolveIdentity,
 } = require('./claude-dispatch-guard.js');
 
 const PREFIXES = new Set(['tool', 'engine', 'foundation', 'data', 'feat', 'harness']);
@@ -199,6 +204,101 @@ test('nearestMkeyPerCode is a no-op when the line has candidates but no codes', 
   assert.equal(pairs.size, 0);
 });
 
+// --- FEAT-076 (tool.agentlog) AC-7: resolveIdentity's file-then-env-then- ---
+// --- fallback chain, mirroring claude-statusline.js. Exercised against    ---
+// --- throwaway fixture directories — never this machine's real .claude.   ---
+
+test('resolveIdentity prefers the per-session file over the shared file and env when all three disagree', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-guard-identity-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.identity-sess-1'), 'bill');
+    fs.writeFileSync(path.join(dir, '.identity'), 'bob');
+    const prevEnv = process.env.CLAUDE_IDENTITY;
+    process.env.CLAUDE_IDENTITY = 'ben';
+    try {
+      assert.equal(resolveIdentity(dir, 'sess-1'), 'bill');
+    } finally {
+      if (prevEnv === undefined) delete process.env.CLAUDE_IDENTITY; else process.env.CLAUDE_IDENTITY = prevEnv;
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveIdentity falls back to the shared .identity file when no per-session file exists', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-guard-identity-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.identity'), 'bob');
+    assert.equal(resolveIdentity(dir, 'sess-missing'), 'bob');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveIdentity falls back to CLAUDE_IDENTITY env when neither file exists', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-guard-identity-'));
+  try {
+    const prevEnv = process.env.CLAUDE_IDENTITY;
+    process.env.CLAUDE_IDENTITY = 'ben';
+    try {
+      assert.equal(resolveIdentity(dir, 'sess-1'), 'ben');
+    } finally {
+      if (prevEnv === undefined) delete process.env.CLAUDE_IDENTITY; else process.env.CLAUDE_IDENTITY = prevEnv;
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveIdentity falls back to the literal "lead" when no file and no env exist', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-guard-identity-'));
+  try {
+    const prevEnv = process.env.CLAUDE_IDENTITY;
+    delete process.env.CLAUDE_IDENTITY;
+    try {
+      assert.equal(resolveIdentity(dir, 'sess-1'), 'lead');
+    } finally {
+      if (prevEnv !== undefined) process.env.CLAUDE_IDENTITY = prevEnv;
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('resolveIdentity works with no sessionId at all (falls straight to shared file, then env, then lead)', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dispatch-guard-identity-'));
+  try {
+    fs.writeFileSync(path.join(dir, '.identity'), 'bob');
+    assert.equal(resolveIdentity(dir, undefined), 'bob');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- FEAT-076 AC-8: connect() is exported and defaults host to 127.0.0.1 ---
+// --- (parity with claude-sync.js/claude-bow.js — no more 'localhost').   ---
+
+test('connect() is exported as a function', () => {
+  assert.equal(typeof connect, 'function');
+});
+
+test('connect() defaults host to 127.0.0.1 when METRO_DB_HOST is unset (AC-8)', async () => {
+  const mysql = require('mysql2/promise');
+  const originalCreateConnection = mysql.createConnection;
+  const prevHost = process.env.METRO_DB_HOST;
+  let capturedOptions = null;
+  mysql.createConnection = async (opts) => { capturedOptions = opts; return { end: async () => {} }; };
+  delete process.env.METRO_DB_HOST;
+  try {
+    await connect();
+  } finally {
+    mysql.createConnection = originalCreateConnection;
+    if (prevHost !== undefined) process.env.METRO_DB_HOST = prevHost;
+  }
+  assert.ok(capturedOptions, 'createConnection should have been called');
+  assert.equal(capturedOptions.host, '127.0.0.1');
+});
+
 test('BOW_CODE_RE-equivalent lowercase code is matched case-insensitively', () => {
   // The guard's own regex is internal, but its /gi behavior is verified via
   // the same pattern shape here since candidateMkeys/extractOwnedPaths don't
@@ -206,4 +306,60 @@ test('BOW_CODE_RE-equivalent lowercase code is matched case-insensitively', () =
   const re = /\b(MOD|FEAT|BUG|SEC|INT|ASM)-(\d{3,})\b/gi;
   const matches = [...'dispatch on feat-072 and Mod-070'.matchAll(re)].map((m) => m[0].toUpperCase());
   assert.deepEqual(matches, ['FEAT-072', 'MOD-070']);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-205 regression — the gate must read the REAL hook payload field.
+// Live payloads carry `tool_name`; the guard read only `tool`, so every real
+// dispatch early-allow()ed before ANY check or the FEAT-076 insert ran (0
+// dispatch rows ever landed live vs 114 stops). These tests spawn the real
+// script with a dead DB port: a payload that PASSES the gate reaches
+// connect(), which throws, producing the fail-open stderr note — a payload
+// that is early-allowed produces NO stderr. That stderr difference proves
+// which side of the gate a shape lands on, with no live DB needed. This is
+// exactly the end-to-end coverage whose absence let BUG-205 ship.
+// ---------------------------------------------------------------------------
+const { spawnSync: spawnGuard } = require('child_process');
+
+function runGuardWithDeadDb(payload) {
+  return spawnGuard(process.execPath, [path.join(__dirname, 'claude-dispatch-guard.js')], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, METRO_DB_PORT: '1', CLAUDE_DISABLE_DISPATCH_GUARD: '' },
+  });
+}
+
+test('BUG-205: a real tool_name-shaped payload passes the gate (reaches connect, fail-open stderr) instead of being silently early-allowed', () => {
+  const r = runGuardWithDeadDb({
+    tool_name: 'Agent',
+    hook_event_name: 'PreToolUse',
+    session_id: 'bug205-test-session',
+    tool_input: { prompt: 'do real work', subagent_type: 'general-purpose', description: 'x' },
+  });
+  assert.equal(r.status, 0, 'guard must stay fail-open');
+  assert.match(
+    r.stderr,
+    /allowing dispatch|cannot connect|ECONNREFUSED/i,
+    'a tool_name payload must get PAST the gate to the DB step — empty stderr means the BUG-205 early-allow is back'
+  );
+});
+
+test('BUG-205: the legacy tool-shaped payload still passes the gate (crafted-payload tests stay valid)', () => {
+  const r = runGuardWithDeadDb({
+    tool: 'Agent',
+    session_id: 'bug205-test-session-2',
+    tool_input: { prompt: 'do real work', subagent_type: 'general-purpose', description: 'x' },
+  });
+  assert.equal(r.status, 0);
+  assert.match(r.stderr, /allowing dispatch|cannot connect|ECONNREFUSED/i);
+});
+
+test('BUG-205: a non-Agent tool_name payload is still ignored (no DB attempt, no stderr)', () => {
+  const r = runGuardWithDeadDb({
+    tool_name: 'Bash',
+    session_id: 'bug205-test-session-3',
+    tool_input: { prompt: 'irrelevant' },
+  });
+  assert.equal(r.status, 0);
+  assert.equal(r.stderr, '', 'a non-Agent payload must exit at the gate without touching the DB');
 });
