@@ -200,6 +200,45 @@ func (s *StubEngine) Tick() protocol.Tick {
 	return s.tick
 }
 
+// Paused reports whether the stub is currently paused (BUG-010). Mirrors
+// engine.core's Clock.Paused() getter shape (internal/engine/core/clock.go)
+// so a consumer written against either engine can read pause state the
+// same way. Queryable only — it is NOT consulted by handleAdvanceTicks as
+// an advance-gate, matching engine.core's Clock (see handleAdvanceTicks'
+// BUG-010 RECONCILED comment for why). SEC-020 wave 2: identity-checked
+// before AND after s.mu is acquired — see Tick's identical note above for
+// why.
+func (s *StubEngine) Paused() bool {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.self.Load() != s {
+		return false
+	}
+	return s.paused
+}
+
+// Speed returns the currently configured pacing multiplier (BUG-010).
+// Mirrors engine.core's Clock.Speed() getter shape (clock.go); returned
+// as plain int (not core.Speed) since this package has no dependency on
+// engine.core and StubEngine already stores speed as an int (see the
+// StubEngine struct's speed field and handleSetSpeed's validSpeeds
+// table). SEC-020 wave 2: identity-checked before AND after s.mu is
+// acquired — see Tick's identical note above for why.
+func (s *StubEngine) Speed() int {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.self.Load() != s {
+		return 0
+	}
+	return s.speed
+}
+
 // Run drives the engine loop: range over t.Commands(), dispatch and
 // answer each one, until ctx is cancelled or the transport closes
 // (Commands() channel closes). It is the only goroutine that reads
@@ -359,6 +398,19 @@ func (s *StubEngine) handleAdvanceTicks(cmd protocol.Command) protocol.CommandRe
 		s.mu.Unlock()
 		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}))
 	}
+	// BUG-010 RECONCILED (Bill's ruling, 2026-08-13): AdvanceTicks does
+	// NOT gate on s.paused here, deliberately matching engine.core's real
+	// Clock/Engine contract instead of diverging from it. engine.core's
+	// clock.go documents Paused as feeding only SecondsPerMonth/
+	// TicksPerRealSecond for a future real-time driver — advanceOneDay's
+	// own doc comment there is explicit that "the explicit AdvanceTicks
+	// command is the deliberate, explicit driver of ticks" and
+	// intentionally bypasses Paused. A stub that gated here instead would
+	// give stub-based tests false confidence about pause semantics that
+	// the real engine does not honour. Paused()/Speed() remain exported
+	// getters (still correct/useful to expose) — they are just not used
+	// as an advance-gate. Do NOT reintroduce a `if s.paused { ... }`
+	// no-op here; that was tried and reverted for exactly this reason.
 	// SEC-006 (Weakness pattern #1 — guard the arithmetic, not just the
 	// input): bounding N per call does not by itself prove s.tick, which
 	// accumulates across every call for the life of the engine, can

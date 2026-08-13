@@ -515,3 +515,83 @@ func TestStubEngine_InspectEntityAndDebug_EmitEvents(t *testing.T) {
 		t.Fatal("timed out waiting for debug.op.executed Event")
 	}
 }
+
+// BUG-010: a fresh StubEngine starts unpaused at Speed 1, matching the
+// NewStubEngine struct literal (speed:1, paused left at its bool zero
+// value, false) — exercised here so a future change to that literal
+// cannot silently flip the documented starting posture without a test
+// noticing.
+func TestStubEngine_PausedSpeed_InitialState(t *testing.T) {
+	_, eng := newTestEngine(t)
+
+	if eng.Paused() {
+		t.Fatal("Paused() = true on a fresh StubEngine, want false")
+	}
+	if got := eng.Speed(); got != 1 {
+		t.Fatalf("Speed() = %d on a fresh StubEngine, want 1", got)
+	}
+}
+
+// BUG-010: Pause/Resume commands are reflected by the Paused() getter,
+// and SetSpeed is reflected by the Speed() getter.
+func TestStubEngine_PausedSpeed_Getters(t *testing.T) {
+	tr, eng := newTestEngine(t)
+
+	pr := send(t, tr, protocol.KindPause, protocol.PausePayload{})
+	if !pr.Accepted {
+		t.Fatalf("Pause rejected: %#v", pr.Error)
+	}
+	if !eng.Paused() {
+		t.Fatal("Paused() = false after Pause command, want true")
+	}
+
+	rr := send(t, tr, protocol.KindResume, protocol.ResumePayload{})
+	if !rr.Accepted {
+		t.Fatalf("Resume rejected: %#v", rr.Error)
+	}
+	if eng.Paused() {
+		t.Fatal("Paused() = true after Resume command, want false")
+	}
+
+	sr := send(t, tr, protocol.KindSetSpeed, protocol.SetSpeedPayload{Speed: 3})
+	if !sr.Accepted {
+		t.Fatalf("SetSpeed rejected: %#v", sr.Error)
+	}
+	if got := eng.Speed(); got != 3 {
+		t.Fatalf("Speed() = %d after SetSpeed(3), want 3", got)
+	}
+}
+
+// BUG-010 RECONCILED (Bill's ruling, 2026-08-13): AdvanceTicks is the
+// explicit, deliberate driver of ticks and DOES advance even while
+// paused — this locks in the correct behaviour (matching engine.core's
+// real Clock/Engine contract, see engine.go's handleAdvanceTicks BUG-010
+// RECONCILED comment and core/clock.go's advanceOneDay doc comment) and
+// must genuinely fail if a future change reintroduces a pause-gate here.
+func TestStubEngine_AdvanceTicks_AdvancesWhilePaused(t *testing.T) {
+	tr, eng := newTestEngine(t)
+
+	pr := send(t, tr, protocol.KindPause, protocol.PausePayload{})
+	if !pr.Accepted {
+		t.Fatalf("Pause rejected: %#v", pr.Error)
+	}
+	if !eng.Paused() {
+		t.Fatal("Paused() = false after Pause command, want true")
+	}
+
+	r := send(t, tr, protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: 5})
+	if !r.Accepted {
+		t.Fatalf("AdvanceTicks rejected: %#v", r.Error)
+	}
+	if r.Tick != 5 {
+		t.Fatalf("CommandResult.Tick = %d after AdvanceTicks(5) while paused, want 5 (advances regardless of pause)", r.Tick)
+	}
+	if got := eng.Tick(); got != 5 {
+		t.Fatalf("Tick() = %d after AdvanceTicks(5) while paused, want 5 (advances regardless of pause)", got)
+	}
+	// Paused() itself is unaffected by AdvanceTicks — it stays whatever
+	// Pause/Resume last set it to; AdvanceTicks does not touch s.paused.
+	if !eng.Paused() {
+		t.Fatal("Paused() = false after AdvanceTicks, want true (AdvanceTicks does not change pause state)")
+	}
+}
