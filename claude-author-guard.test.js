@@ -1141,3 +1141,356 @@ test('BUG-079 regression guard: word-boundary widening does not turn "mygit"/"di
   assert.equal(guard.findCommitInvocation('echo digit status'), null);
   assert.equal(guard.findCommitInvocation('gitlint check'), null);
 });
+
+// ---------------------------------------------------------------------------
+// BUG-082: heredoc-body "--author=" prose is no longer scanned as a real flag
+// ---------------------------------------------------------------------------
+
+test('BUG-082: git commit -F - <<EOF whose piped-in message merely MENTIONS "--author=<email>" as prose is ALLOWED, not falsely flagged', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    // Exact fixture shape from the bug report: an ordinary commit message,
+    // fed via a heredoc into `-F -`, that documents this very guard by
+    // mentioning "--author=<email>" as prose — no real --author flag
+    // anywhere on the command line.
+    const cmd =
+      'git commit --allow-empty -F - <<EOF\n' +
+      'Docs: explain that --author=<email> on the command line is what BUG-035 guards against.\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      false,
+      `expected no advisory at all for pure heredoc-body prose, got: ${result.reason}`
+    );
+  });
+});
+
+test('BUG-082 unit: extractAuthorFlag ignores "--author=" text that only appears inside a heredoc body', () => {
+  const suffix = '--allow-empty -F - <<EOF\nDocs mention --author=<fake@fake.com> here.\nEOF';
+  assert.equal(guard.extractAuthorFlag(suffix), null);
+});
+
+test('BUG-082 regression: a REAL --author flag used as an actual command-line argument (no heredoc involved) still triggers the advisory — no loss of detection', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `git commit --allow-empty --author="${id.name} <${id.email}>" -m "plain commit, no heredoc"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'a real --author flag must still be detected and advised on');
+    assert.match(result.reason, /--author/);
+  });
+});
+
+test('BUG-082 regression: a fabricated --author hidden inside a heredoc body is STILL CAUGHT when a SECOND, real, non-heredoc --author flag is also present on the same command line — the heredoc exemption is not a blanket bypass for the rest of the line', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    // The real --author flag sits in ordinary argument position, BEFORE the
+    // heredoc redirection (an unambiguous shell shape — a real flag placed
+    // on the same logical command line after a heredoc's own delimiter word
+    // but before its terminator would itself be ambiguous shell grammar, not
+    // a meaningful bypass repro, so it is deliberately not used here). The
+    // heredoc body separately mentions "--author=" as prose, exactly like
+    // the BUG-082 fixture, to prove the body text is still ignored even when
+    // a real flag is present elsewhere on the line.
+    const cmd =
+      `git commit --allow-empty --author="${id.name} <${id.email}>" -F - <<EOF\n` +
+      'Docs: --author=<not-a-real-flag@example.invalid> is just prose here too.\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      true,
+      'the real --author flag elsewhere on the line must still be caught, heredoc or not'
+    );
+    assert.match(result.reason, /--author/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-163: bash allows trailing argv AFTER the heredoc delimiter word but
+// still on its OWN header line (`cmd <<EOF --author=...`) — the body always
+// starts on the NEXT physical line regardless. tokenize()'s heredoc branch
+// used to jump straight from the delimiter word to skipping the body,
+// silently dropping that same-line remainder (a real forged --author flag)
+// without ever tokenizing it. Fixed by tokenizing header.afterHeader through
+// the header line's own newline as ordinary text before skipping the body.
+// ---------------------------------------------------------------------------
+
+test('BUG-163: a forged --author flag placed AFTER the heredoc delimiter word, on the header line itself, is now DETECTED (was a total silent bypass)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    // Exact fixture shape from the bug report: the forged --author flag
+    // sits on the SAME line as the `<<EOF` redirect, after the delimiter
+    // word — real argv to git, per bash's own grammar, even though the
+    // heredoc BODY (the lines that follow) is unrelated message text.
+    const cmd =
+      `git commit -F - <<EOF --author="${id.name} <${id.email}>"\n` +
+      'some message body\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      true,
+      'a --author flag on the heredoc header line itself must now be caught'
+    );
+    assert.match(result.reason, /--author/);
+  });
+});
+
+test('BUG-163 unit: extractAuthorFlag finds a --author flag placed on the heredoc header line, after the delimiter word', () => {
+  const suffix = '-F - <<EOF --author="Fake <fake@evil.com>"\nsome message body\nEOF';
+  const flag = extractAuthorFlag(suffix);
+  assert.notEqual(flag, null, 'expected the header-line --author flag to be found, not silently dropped');
+  assert.equal(flag.email, 'fake@evil.com');
+});
+
+test('BUG-163 non-regression: BUG-082s exact fixture (prose "--author=" INSIDE the heredoc BODY, not on the header line) still produces NO false advisory', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    // Identical to the BUG-082 fixture above: no trailing args on the
+    // header line at all, so the BUG-163 fix (which only tokenizes the
+    // header line's own remainder) must not reach into the body and must
+    // not reintroduce BUG-082's false positive.
+    const cmd =
+      'git commit --allow-empty -F - <<EOF\n' +
+      'Docs: explain that --author=<email> on the command line is what BUG-035 guards against.\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      false,
+      `expected no advisory for pure heredoc-body prose (BUG-082 must stay fixed), got: ${result.reason}`
+    );
+  });
+});
+
+test('BUG-163 unit: an ordinary heredoc with nothing but the delimiter word on its header line still tokenizes exactly as before (no trailing-args regression)', () => {
+  const suffix = '-F - <<EOF\nsome message body mentioning --author=<fake@fake.com>\nEOF';
+  assert.equal(extractAuthorFlag(suffix), null, 'body-only prose must still be ignored');
+  // The delimiter-word token itself is still present, unaffected by the fix.
+  assert.deepEqual(guard.tokenize(suffix), ['-F', '-', '<<EOF']);
+});
+
+test('BUG-163 unit: two heredocs on the same command line — a forged --author on the FIRST heredocs header line is caught, and the SECOND heredocs body prose is still ignored', () => {
+  const suffix =
+    '-F - <<EOF --author="Fake <fake@evil.com>"\n' +
+    'first body\n' +
+    'EOF' +
+    ' -F - <<EOF2\n' +
+    'second body mentioning --author=<other@fake.com> as prose\n' +
+    'EOF2';
+  const flag = extractAuthorFlag(suffix);
+  assert.notEqual(flag, null, 'the forged flag on the first heredoc header line must still be found');
+  assert.equal(flag.email, 'fake@evil.com');
+});
+
+test('BUG-163 unit: a CRLF-terminated heredoc (BUG-081s known-open gap: terminator line not matched, heredoc swallows to EOF) does not crash tokenize() and does not fabricate a false --author match from header-line-remainder handling', () => {
+  const suffix = '-F - <<EOF --allow-empty\r\nsome message\r\nEOF\r\n';
+  // BUG-081 is a separate, already-logged, still-open gap (CRLF terminator
+  // lines are not recognised, so the heredoc swallows to end-of-string) —
+  // this test only asserts the BUG-163 fix does not regress THAT behaviour
+  // or throw, and does not turn an ordinary flag on the header line into a
+  // false author match.
+  assert.doesNotThrow(() => guard.tokenize(suffix));
+  const flag = extractAuthorFlag(suffix);
+  assert.equal(flag, null, 'no --author flag on this fixture — none should be found');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-165: BUG-163's fix made tokenize()'s heredoc branch recursively call
+// tokenize(remainder) on the header line's own trailing text, once per
+// `<<word`-shaped marker found there — recursion depth was unbounded and
+// proportional to marker COUNT on that one line. ~7000+ markers threw
+// RangeError: Maximum call stack size exceeded. Fixed by replacing the
+// recursive call with a single non-recursive scan (scanTokens(text, false))
+// for the header-line remainder, capping total call depth at 2 regardless of
+// marker count. Also: extractAuthorFlag() in main() had no try/catch (unlike
+// identity.deriveSanctioned() nearby), so the RangeError crashed the hook
+// with an uncaught native exception instead of the guard's documented
+// fail-OPEN contract (AC-8) — fixed with a matching try/catch at the call
+// site.
+// ---------------------------------------------------------------------------
+
+test('BUG-165: a header line with thousands of stacked <<word markers no longer stack-overflows tokenize()', () => {
+  // Exact fixture shape from the bug report: one heredoc header line
+  // carrying ~7000 additional `<<word`-shaped markers, followed by an
+  // ordinary body/terminator for the FIRST (real) heredoc.
+  const markerCount = 7000;
+  const markers = Array.from({ length: markerCount }, (_, i) => `<<X${i}`).join(' ');
+  const suffix = `-F - <<EOF ${markers}\nsome message body\nEOF`;
+  const start = Date.now();
+  let tokens;
+  assert.doesNotThrow(() => {
+    tokens = guard.tokenize(suffix);
+  }, 'BUG-165: thousands of heredoc-shaped markers on one header line must not throw');
+  const elapsedMs = Date.now() - start;
+  assert.ok(Array.isArray(tokens) && tokens.length > markerCount, 'expected a real token array, not a truncated/partial result');
+  assert.ok(elapsedMs < 5000, `expected the scan to complete quickly (iterative, not recursive); took ${elapsedMs}ms`);
+});
+
+test('BUG-165: the same thousands-of-markers fixture run end-to-end through the guard process exits 0 with no uncaught-exception stack trace on stderr', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const markerCount = 7000;
+    const markers = Array.from({ length: markerCount }, (_, i) => `<<X${i}`).join(' ');
+    const cmd = `git commit --allow-empty -F - <<EOF ${markers}\nsome message body\nEOF`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.status, 0, `BUG-165: guard must exit 0, not crash; stderr: ${result.stderr}`);
+    assert.equal(
+      /RangeError|Maximum call stack/.test(result.stderr || ''),
+      false,
+      `BUG-165: no uncaught RangeError/stack-overflow trace expected on stderr; got: ${result.stderr}`
+    );
+  });
+});
+
+test('BUG-165 non-regression: BUG-163s exact fixture (forged --author flag on a normal heredoc header line) still works correctly', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd =
+      `git commit -F - <<EOF --author="${id.name} <${id.email}>"\n` +
+      'some message body\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      true,
+      'BUG-165 must not regress BUG-163: a --author flag on the heredoc header line itself must still be caught'
+    );
+    assert.match(result.reason, /--author/);
+  });
+});
+
+test('BUG-165 non-regression: BUG-082s exact fixture (heredoc-body-only prose mentioning "--author=") still produces no false advisory', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const cmd =
+      'git commit --allow-empty -F - <<EOF\n' +
+      'Docs: explain that --author=<email> on the command line is what BUG-035 guards against.\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      false,
+      `BUG-165 must not regress BUG-082: expected no advisory for pure heredoc-body prose, got: ${result.reason}`
+    );
+  });
+});
+
+test('BUG-165: extractAuthorFlag forced to throw synthetically (test-only escape hatch) is caught by main()s try/catch and fails OPEN, not an uncaught crash', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const result = runGuard(dir, 'git commit --allow-empty -m "x"', {
+      ...process.env,
+      CLAUDE_AUTHOR_GUARD_FORCE_TOKENIZE_ERROR: '1',
+    });
+    assert.equal(result.status, 0, 'BUG-165: a forced tokenize()/extractAuthorFlag() throw must still fail OPEN, exit 0');
+    assert.equal(
+      /RangeError|at extractAuthorFlag|at tokenize/.test(result.stderr || ''),
+      false,
+      `BUG-165: no uncaught-exception stack trace expected on stderr; got: ${result.stderr}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-169: BUG-165's fix capped scanTokens()'s RECURSION depth at 2, but the
+// same RangeError: Maximum call stack size exceeded still reproduced at a
+// HIGHER marker count via a DIFFERENT unbounded construct on the same code
+// path: `tokens.push(...remainderTokens)` spread the heredoc header-line
+// remainder's tokens as individual call arguments, and V8 caps argument
+// count per call (independent of recursion depth) at roughly 125,000-135,000
+// on the build the bug was filed against. Fixed by replacing both spread-call
+// sites in scanTokens()'s heredoc-remainder merge with plain loops
+// (`for (const t of remainderTokens) tokens.push(t)`), which has no
+// call-arity ceiling at all. Regression fixture below is well above the
+// empirically-found threshold (500,000, vs. the ~125-135k ceiling) to prove
+// the fix removes the ceiling entirely rather than merely raising it.
+// ---------------------------------------------------------------------------
+
+test('BUG-169: a header line with 500,000 stacked <<word markers (far above the ~125-135k V8 argument-count ceiling that broke the spread-call merge) does not stack-overflow tokenize()', () => {
+  const markerCount = 500000;
+  const markers = Array.from({ length: markerCount }, (_, i) => `<<X${i}`).join(' ');
+  const suffix = `-F - <<EOF ${markers}\nsome message body\nEOF`;
+  const start = Date.now();
+  let tokens;
+  assert.doesNotThrow(() => {
+    tokens = guard.tokenize(suffix);
+  }, 'BUG-169: half a million heredoc-shaped markers on one header line must not throw');
+  const elapsedMs = Date.now() - start;
+  assert.ok(
+    Array.isArray(tokens) && tokens.length > markerCount,
+    'expected a real token array, not a truncated/partial result'
+  );
+  assert.ok(
+    elapsedMs < 30000,
+    `expected the scan to complete within a generous bounded timeout (loop, not spread-call); took ${elapsedMs}ms`
+  );
+});
+
+test('BUG-169 non-regression: BUG-165s exact fixture (7000 markers) still completes with no throw', () => {
+  const markerCount = 7000;
+  const markers = Array.from({ length: markerCount }, (_, i) => `<<X${i}`).join(' ');
+  const suffix = `-F - <<EOF ${markers}\nsome message body\nEOF`;
+  let tokens;
+  assert.doesNotThrow(() => {
+    tokens = guard.tokenize(suffix);
+  }, 'BUG-169 must not regress BUG-165: 7000 markers must still not throw');
+  assert.ok(Array.isArray(tokens) && tokens.length > markerCount);
+});
+
+test('BUG-169 non-regression: BUG-163s exact fixture (forged --author flag on the heredoc header line) still detected', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd =
+      `git commit -F - <<EOF --author="${id.name} <${id.email}>"\n` +
+      'some message body\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      true,
+      'BUG-169 must not regress BUG-163: a --author flag on the heredoc header line itself must still be caught'
+    );
+    assert.match(result.reason, /--author/);
+  });
+});
+
+test('BUG-169 non-regression: BUG-082s exact fixture (heredoc-body-only prose mentioning "--author=") still produces no false advisory', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const cmd =
+      'git commit --allow-empty -F - <<EOF\n' +
+      'Docs: explain that --author=<email> on the command line is what BUG-035 guards against.\n' +
+      'EOF';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+    assert.equal(
+      result.advisory,
+      false,
+      `BUG-169 must not regress BUG-082: expected no advisory for pure heredoc-body prose, got: ${result.reason}`
+    );
+  });
+});

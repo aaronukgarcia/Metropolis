@@ -293,7 +293,25 @@ const identity = require('./claude-author-identity.js');
 // the token's own quote characters/escapes once its true end is known) are
 // the same fix BUG-123 round 6 applied to claude-git-commit-trigger.js,
 // reused here rather than re-patched with yet another bare regex.
-const { buildQuoteMask, consumeShellToken, dequoteShellToken } = require('./claude-quote-mask.js');
+// BUG-082: matchHeredocHeader()/findHeredocBodyEnd() (the same heredoc
+// helpers buildQuoteMask() already uses internally, and the same ones
+// BUG-081/BUG-078 hardened) are pulled in here too, so tokenize() can treat a
+// heredoc BODY the same way buildQuoteMask() already treats it for the
+// GIT_TOKEN_RE scan: opaque, not scanned as flag/argument syntax. Before this
+// fix, tokenize() was a second, independent hand-rolled scanner (quote-aware
+// only, no heredoc awareness at all) that never consulted these helpers, so a
+// legitimate `git commit -F - <<EOF` whose piped-in message merely MENTIONS
+// "--author=<...>" as prose was tokenized as if that prose were real
+// command-line flag syntax — the false DENY this bug is about. Reusing the
+// SAME helpers already proven correct for the identical "heredoc body is
+// opaque" fact (GR#3) rather than writing new heredoc-detection logic here.
+const {
+  buildQuoteMask,
+  consumeShellToken,
+  dequoteShellToken,
+  matchHeredocHeader,
+  findHeredocBodyEnd,
+} = require('./claude-quote-mask.js');
 
 // ---------------------------------------------------------------------------
 // Config
@@ -727,16 +745,62 @@ function extractEnvOverrides(prefix) {
 
 /** Splits `suffix` into shell-like argument tokens, respecting single and
  * double quotes (unescaped whitespace is the separator; quote characters
- * themselves are stripped from the returned token). Good enough for this
- * guard's one job — telling "this word is the --author flag" from "this
- * word is inside the -m message string" — without being a full shell
- * grammar (see header: NOT a general shell parser). */
-function tokenize(suffix) {
+ * themselves are stripped from the returned token) and — BUG-082 — treating
+ * a heredoc BODY as opaque, exactly as buildQuoteMask() already does for the
+ * GIT_TOKEN_RE scan. Good enough for this guard's one job — telling "this
+ * word is the --author flag" from "this word is inside the -m message
+ * string, or inside a piped-in -F - heredoc message body" — without being a
+ * full shell grammar (see header: NOT a general shell parser).
+ *
+ * BUG-082: when a `<<[-]word` heredoc header is found (via
+ * matchHeredocHeader(), the same recogniser buildQuoteMask() uses), the
+ * header text itself is kept as ordinary characters (it was already being
+ * scanned as such before this fix, and it never matches `--author`), but
+ * everything from there through the body's terminator line
+ * (findHeredocBodyEnd()) is skipped entirely — not accumulated into `cur`,
+ * not split into tokens. A real shell never interprets heredoc BODY content
+ * as command-line flag syntax; a piped-in commit message (`-F -`) mentioning
+ * "--author=<...>" as prose is exactly that body content, so it must never
+ * reach extractAuthorFlag()/hasFlag() as if it were a real token. Tokenizing
+ * resumes normally right after the terminator line, so anything genuinely
+ * outside the heredoc (a real flag positioned elsewhere on the same command
+ * line) is still tokenized and still checked — this is a heredoc-body
+ * exemption, not a blanket "ignore everything after a heredoc starts". */
+/** BUG-165: shared scanning core for tokenize(), extracted so the "tokenize
+ * a header line's own trailing remainder" step (BUG-163) no longer works by
+ * having tokenize() call ITSELF recursively.
+ *
+ * `allowBodySkip` selects which of the two heredoc semantics is legal at
+ * this scan's position:
+ *   - true  (fresh scan, or resuming after a real body was skipped): a
+ *     matched `<<word` genuinely owns a heredoc BODY, found for real via
+ *     findHeredocBodyEnd() against `text`'s actual newlines, and the loop
+ *     jumps past it — exactly the original BUG-082/BUG-163 behaviour.
+ *   - false (scanning an already-isolated header-line remainder): the
+ *     remainder passed in is, by construction (see the `allowBodySkip: true`
+ *     branch below — it is sliced up to the position of `text`'s next real
+ *     "\n", never past it), newline-free. findHeredocBodyEnd() can never
+ *     find a real body to skip inside newline-free text (its own
+ *     `text.indexOf('\n', pos)` guard degenerates to "no body, swallow
+ *     nothing"), so a `<<word` found in THIS mode is provably always just
+ *     literal characters — it is appended to `cur` atomically (so internal
+ *     whitespace like `<<  EOF` still lands in one token, matching the old
+ *     behaviour) and scanning simply continues in the SAME loop. This mode
+ *     therefore never needs to look for a body and never recurses further.
+ *
+ * Because mode `false` never calls back into mode `true`, and mode `true`
+ * calls mode `false` at most once per header line (for that line's own
+ * remainder) before continuing its own loop, total call depth is capped at
+ * 2 regardless of how many `<<word`-shaped markers appear on one header
+ * line — BUG-165's exact fixture (~7000+ markers) previously recursed
+ * ~7000+ deep here and blew the native call stack (RangeError: Maximum call
+ * stack size exceeded); now it is a single flat pass over the remainder. */
+function scanTokens(text, allowBodySkip) {
   const tokens = [];
   let cur = '';
   let quote = null;
-  for (let i = 0; i < suffix.length; i++) {
-    const c = suffix[i];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (quote) {
       if (c === quote) {
         quote = null;
@@ -749,6 +813,84 @@ function tokenize(suffix) {
       quote = c;
       continue;
     }
+    if (c === '<' && text[i + 1] === '<') {
+      const header = matchHeredocHeader(text, i);
+      if (header) {
+        cur += text.slice(i, header.afterHeader);
+
+        if (!allowBodySkip) {
+          // Literal-only mode (see header comment): no body to skip, just
+          // resume scanning right after the matched header span.
+          i = header.afterHeader - 1; // loop's i++ lands exactly after it
+          continue;
+        }
+
+        const end = findHeredocBodyEnd(
+          text,
+          header.afterHeader,
+          header.word,
+          header.stripLeadingTabs
+        );
+        // BUG-163: bash allows trailing command-line arguments AFTER the
+        // heredoc delimiter word but still on its OWN header line — the
+        // heredoc BODY always starts on the next physical line regardless
+        // (`cmd <<EOF --author="Fake <fake@evil.com>"` really does put
+        // `--author=...` in argv). findHeredocBodyEnd()'s own internal
+        // `text.indexOf('\n', pos)` (re-derived here, not re-invented — same
+        // "first newline after the header" fact it already computes for
+        // itself) marks where the opaque body actually begins; everything
+        // from `header.afterHeader` up to that newline is still the
+        // header's own line and must be tokenized as ordinary text, exactly
+        // like any other argument on the command line, BEFORE jumping past
+        // the body. Previously this span was silently dropped (never
+        // appended to `cur`, never tokenized), which is what let a forged
+        // --author flag placed here go completely undetected.
+        const firstNewline = text.indexOf('\n', header.afterHeader);
+        const headerLineEnd = firstNewline === -1 ? text.length : firstNewline;
+        const remainder = text.slice(header.afterHeader, headerLineEnd);
+        if (remainder !== '') {
+          // BUG-165: was `tokenize(remainder)` (a genuine recursive call
+          // into this same function once per marker on the header line).
+          // Now a single non-recursive scan in literal-only mode — see the
+          // header comment for why this is provably equivalent.
+          const remainderTokens = scanTokens(remainder, false).tokens;
+          if (remainderTokens.length) {
+            if (/^\s/.test(remainder) || cur === '') {
+              // Remainder starts with whitespace (the normal case — a space
+              // between the delimiter word and the first real argument), or
+              // `cur` is already empty: the remainder's tokens are all
+              // independent of whatever `cur` holds so far.
+              if (cur !== '') {
+                tokens.push(cur);
+                cur = '';
+              }
+              // BUG-169: was `tokens.push(...remainderTokens)` — spreading the
+              // remainder's tokens as individual call arguments has its own
+              // unbounded-JS ceiling independent of recursion depth (V8 caps
+              // arguments per call at ~125,000-135,000 on this build), so a
+              // header line with enough markers still threw the same
+              // RangeError BUG-165 was filed to eliminate. `tokens` is
+              // mutated in place and returned by reference elsewhere in this
+              // function, so a plain loop (not reassignment/concat) is the
+              // correct fix here.
+              for (const t of remainderTokens) tokens.push(t);
+            } else {
+              // No whitespace between the delimiter word and the remainder
+              // (e.g. a quoted delimiter running straight into more text) —
+              // the remainder's first token is a continuation of `cur`,
+              // same as ordinary character-by-character accumulation would
+              // produce.
+              cur += remainderTokens[0];
+              for (let ri = 1; ri < remainderTokens.length; ri++) {
+                tokens.push(remainderTokens[ri]);
+              }
+            }
+          }
+        }
+        i = end - 1; // loop's i++ lands exactly at `end`
+        continue;
+      }
+    }
     if (/\s/.test(c)) {
       if (cur !== '') {
         tokens.push(cur);
@@ -759,7 +901,11 @@ function tokenize(suffix) {
     cur += c;
   }
   if (cur !== '') tokens.push(cur);
-  return tokens;
+  return { tokens, cur };
+}
+
+function tokenize(suffix) {
+  return scanTokens(suffix, true).tokens;
 }
 
 /** Pull `--author=<value>` / `--author <value>` out of the ARGUMENT TOKENS
@@ -773,6 +919,14 @@ function tokenize(suffix) {
  *     (unverifiable — caller fails closed on this).
  */
 function extractAuthorFlag(suffix) {
+  // BUG-165: test-only escape hatch, same pattern as
+  // CLAUDE_AUTHOR_IDENTITY_FORCE_ERROR in claude-author-identity.js — makes
+  // this throw synthetically so main()'s try/catch around this call site
+  // (added for BUG-165) can be exercised without needing a real stack
+  // overflow.
+  if (process.env.CLAUDE_AUTHOR_GUARD_FORCE_TOKENIZE_ERROR === '1') {
+    throw new RangeError('CLAUDE_AUTHOR_GUARD_FORCE_TOKENIZE_ERROR forced failure (test-only escape hatch)');
+  }
   const tokens = tokenize(suffix);
   for (let i = 0; i < tokens.length; i++) {
     const tok = tokens[i];
@@ -831,7 +985,18 @@ function main() {
   const hasResetAuthor = hasFlag(suffix, '--reset-author');
 
   const envOverrides = extractEnvOverrides(prefix);
-  const authorFlag = extractAuthorFlag(suffix);
+  // BUG-165: extractAuthorFlag() (via tokenize()) previously had no
+  // try/catch here, unlike identity.deriveSanctioned() a few lines below —
+  // any throw from tokenizing (this bug's RangeError, or any future one)
+  // crashed the hook with a raw uncaught stack trace instead of honoring
+  // this guard's own documented fail-OPEN contract (AC-8). Same posture as
+  // the deriveSanctioned() catch below: swallow, allow.
+  let authorFlag;
+  try {
+    authorFlag = extractAuthorFlag(suffix);
+  } catch {
+    allow();
+  }
 
   // -c user.email / -c user.name (BUG-044): the identity THIS invocation
   // would produce if nothing else overrides it — a tier below an explicit
