@@ -68,13 +68,29 @@
       "path": "internal/protocol/",
       "inbound": {
         "guid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b",
-        "name": "ProtocolV1",
+        "name": "Transport",
         "format": "Go types + (dormant) gRPC IDL",
         "pattern": "versioned command/event/delta envelope with correlationId",
         "consumers": [
           {
             "key": "engine.core",
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
+          {
+            "key": "engine.world",
+            "outboundGuid": "d9ef1d5a-9436-4f25-a1db-a426d407efc1"
+          },
+          {
+            "key": "feat.detgate",
+            "outboundGuid": "f3b59855-9e6a-4fd0-8a6a-4fcca269e7a9"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
+            "key": "harness.headless",
+            "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
           },
           {
             "key": "harness.replay",
@@ -87,6 +103,10 @@
           {
             "key": "ui.core",
             "outboundGuid": "b0b339f9-0052-469e-9138-0eb930798f69"
+          },
+          {
+            "key": "ui.harness",
+            "outboundGuid": "1185f757-2553-4d06-a8c2-c141bcf9b9d0"
           },
           {
             "key": "ui.screen.demo",
@@ -198,7 +218,7 @@
       "path": "internal/foundation/solver/",
       "inbound": {
         "guid": "d20c26e9-5a1a-4628-9c93-f95938547f19",
-        "name": "SolverContract",
+        "name": "Solver",
         "format": "Go interface + gRPC-ready messages",
         "pattern": "stateless request/response, backend-agnostic, local fallback mandatory",
         "consumers": [
@@ -254,7 +274,7 @@
       "path": "internal/foundation/errs/",
       "inbound": {
         "guid": "d230f06c-f605-4e79-a80f-61638344e6a8",
-        "name": "ErrsAPI",
+        "name": "E",
         "format": "Go package API",
         "pattern": "errs.New(code, correlationId, ctx) — the only legal error constructor",
         "consumers": [
@@ -496,7 +516,7 @@
       "path": "internal/foundation/det/",
       "inbound": {
         "guid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81",
-        "name": "DetAPI",
+        "name": "Stream",
         "format": "Go package API",
         "pattern": "hash-stream draws + shard scheduler; no shared RNG object anywhere",
         "consumers": [
@@ -536,7 +556,7 @@
       "path": "internal/foundation/registry/",
       "inbound": {
         "guid": "1c1aac4c-1234-438a-be11-6733e50ec945",
-        "name": "RegistryAPI",
+        "name": "Registry",
         "format": "Go package API",
         "pattern": "Register(module, stub); status transitions emit world-events",
         "consumers": [
@@ -580,7 +600,7 @@
       "path": "internal/foundation/data/",
       "inbound": {
         "guid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41",
-        "name": "DataAPI",
+        "name": "Store",
         "format": "Go package API over JSON files",
         "pattern": "typed loaders + schema validation + hot-reload hook",
         "consumers": [
@@ -845,7 +865,7 @@
       "path": "internal/ui/core/",
       "inbound": {
         "guid": "fb5bbde6-9be1-4875-b460-d203a6249606",
-        "name": "UICoreAPI",
+        "name": "RenderScreen",
         "format": "Go package API",
         "pattern": "single-goroutine screen ownership (T-RENDER); widgets draw to back buffer only",
         "consumers": [
@@ -856,10 +876,6 @@
           {
             "key": "ui.harness",
             "outboundGuid": "1185f757-2553-4d06-a8c2-c141bcf9b9d0"
-          },
-          {
-            "key": "ui.keys",
-            "outboundGuid": "c92533bc-bf4f-4b3d-a2bd-0528afdc6c1c"
           },
           {
             "key": "ui.screen.debug",
@@ -913,7 +929,7 @@
       "path": "internal/ui/widgets/",
       "inbound": {
         "guid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8",
-        "name": "WidgetAPI",
+        "name": "TableData",
         "format": "Go package API on shared cell-buffer",
         "pattern": "custom widgets over UICoreAPI; no allocation on draw paths",
         "consumers": [
@@ -980,13 +996,7 @@
       },
       "outbound": {
         "guid": "c92533bc-bf4f-4b3d-a2bd-0528afdc6c1c",
-        "calls": [
-          {
-            "key": "ui.core",
-            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
-            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
-          }
-        ]
+        "calls": []
       },
       "securityScan": null
     },
@@ -1004,7 +1014,7 @@
       "path": "internal/engine/core/",
       "inbound": {
         "guid": "62889f18-fa2a-4ae9-a48c-22de5f632c28",
-        "name": "EngineAPI",
+        "name": "Engine",
         "format": "ProtocolV1 server",
         "pattern": "command in -> phase pipeline -> deltas/events out; phases are barriers",
         "consumers": [
@@ -1121,6 +1131,11 @@
             "key": "engine.core",
             "moduleGuid": "0bef8af8-0883-4604-bf98-71212100fffb",
             "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -1212,7 +1227,13 @@
       },
       "outbound": {
         "guid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a",
-        "calls": []
+        "calls": [
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          }
+        ]
       },
       "securityScan": {
         "scannedAt": "2026-08-09T17:49:30Z",
@@ -1404,6 +1425,11 @@
             "key": "harness.replay",
             "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
             "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -1449,6 +1475,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -1618,6 +1649,11 @@
             "key": "engine.core",
             "moduleGuid": "0bef8af8-0883-4604-bf98-71212100fffb",
             "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -1739,7 +1775,7 @@
       "path": "internal/engine/invariant/",
       "inbound": {
         "guid": "4a4b44ab-9ed0-4322-8a2a-ad4b0178302f",
-        "name": "InvariantAPI",
+        "name": "Registry",
         "format": "Go package API: RegisterStock(name string, snapshot func() int64) called once per conserved stock at module init",
         "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, §14, §19.3); violation is a hard assert in dev builds, a registry error in release",
         "consumers": [

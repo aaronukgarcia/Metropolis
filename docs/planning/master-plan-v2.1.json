@@ -55,7 +55,7 @@
       "specRef": "§15; UI-SPEC §1, §6; M0-ENG §1.1; V.2.1",
       "path": "internal/protocol/",
       "inbound": {
-        "name": "ProtocolV1",
+        "name": "Transport",
         "format": "Go types + (dormant) gRPC IDL",
         "pattern": "versioned command/event/delta envelope with correlationId"
       },
@@ -95,7 +95,7 @@
       "specRef": "§15; A4; A9; M0-ENG §1",
       "path": "internal/foundation/solver/",
       "inbound": {
-        "name": "SolverContract",
+        "name": "Solver",
         "format": "Go interface + gRPC-ready messages",
         "pattern": "stateless request/response, backend-agnostic, local fallback mandatory"
       },
@@ -115,7 +115,7 @@
       "specRef": "GR#1; GR#7; M0-ENG §3 (log tail)",
       "path": "internal/foundation/errs/",
       "inbound": {
-        "name": "ErrsAPI",
+        "name": "E",
         "format": "Go package API",
         "pattern": "errs.New(code, correlationId, ctx) — the only legal error constructor"
       },
@@ -172,7 +172,7 @@
       "specRef": "§1.2; A8",
       "path": "internal/foundation/det/",
       "inbound": {
-        "name": "DetAPI",
+        "name": "Stream",
         "format": "Go package API",
         "pattern": "hash-stream draws + shard scheduler; no shared RNG object anywhere"
       },
@@ -194,7 +194,7 @@
       "specRef": "M0-ENG §2; M0-ENG §3",
       "path": "internal/foundation/registry/",
       "inbound": {
-        "name": "RegistryAPI",
+        "name": "Registry",
         "format": "Go package API",
         "pattern": "Register(module, stub); status transitions emit world-events"
       },
@@ -216,7 +216,7 @@
       "specRef": "§24; GR#15",
       "path": "internal/foundation/data/",
       "inbound": {
-        "name": "DataAPI",
+        "name": "Store",
         "format": "Go package API over JSON files",
         "pattern": "typed loaders + schema validation + hot-reload hook"
       },
@@ -279,7 +279,7 @@
       "specRef": "UI-SPEC §1, §5; M0-ENG §1.1",
       "path": "internal/ui/core/",
       "inbound": {
-        "name": "UICoreAPI",
+        "name": "RenderScreen",
         "format": "Go package API",
         "pattern": "single-goroutine screen ownership (T-RENDER); widgets draw to back buffer only"
       },
@@ -304,7 +304,7 @@
       "specRef": "UI-SPEC §2",
       "path": "internal/ui/widgets/",
       "inbound": {
-        "name": "WidgetAPI",
+        "name": "TableData",
         "format": "Go package API on shared cell-buffer",
         "pattern": "custom widgets over UICoreAPI; no allocation on draw paths"
       },
@@ -335,9 +335,7 @@
       "deps": [
         "ui.core"
       ],
-      "calls": [
-        "ui.core"
-      ],
+      "calls": [],
       "sprint": 2
     },
     {
@@ -352,7 +350,7 @@
       "specRef": "§3; M0-ENG §1.1–1.3; §9 (month index)",
       "path": "internal/engine/core/",
       "inbound": {
-        "name": "EngineAPI",
+        "name": "Engine",
         "format": "ProtocolV1 server",
         "pattern": "command in -> phase pipeline -> deltas/events out; phases are barriers"
       },
@@ -386,7 +384,8 @@
         "foundation.repo"
       ],
       "calls": [
-        "engine.core"
+        "engine.core",
+        "int.protocol"
       ],
       "sprint": 1
     },
@@ -430,7 +429,9 @@
         "engine.core",
         "feat.detgate"
       ],
-      "calls": [],
+      "calls": [
+        "int.protocol"
+      ],
       "sprint": 1
     },
     {
@@ -516,7 +517,8 @@
       ],
       "calls": [
         "ui.core",
-        "harness.replay"
+        "harness.replay",
+        "int.protocol"
       ],
       "sprint": 2
     },
@@ -536,7 +538,8 @@
       ],
       "calls": [
         "engine.core",
-        "int.serializer"
+        "int.serializer",
+        "int.protocol"
       ],
       "sprint": 1
     },
@@ -600,7 +603,8 @@
         "feat.georef"
       ],
       "calls": [
-        "engine.core"
+        "engine.core",
+        "int.protocol"
       ],
       "sprint": 3
     },
@@ -654,7 +658,7 @@
       ],
       "sprint": 2,
       "inbound": {
-        "name": "InvariantAPI",
+        "name": "Registry",
         "format": "Go package API: RegisterStock(name string, snapshot func() int64) called once per conserved stock at module init",
         "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, §14, §19.3); violation is a hard assert in dev builds, a registry error in release"
       }
