@@ -407,6 +407,26 @@ const GOLDEN_CASES = [
     name: 'unterminated heredoc swallows to end of string (ASM-351, declared fail-safe)',
     ...build(seg('cat ', false), seg('<<EOF\nbody with no terminator anywhere in this string', true)),
   },
+  {
+    // BUG-093: a DOUBLE-QUOTED heredoc delimiter (<<"WORD"). Real bash
+    // semantics: <<"WORD" suppresses expansion inside the body exactly like
+    // <<'WORD' does (both disable parameter/command substitution), and the
+    // terminator line still has to equal the bare word WORD (the quotes are
+    // part of the delimiter syntax, not part of the matched terminator text)
+    // -- this is unrelated to matchHeredocHeader()'s OWN behaviour, which
+    // parses the double-quoted form via the SAME regex alternation as the
+    // single-quoted and bare-word forms (`(?:"([^"\n]*)"|'([^'\n]*)'|(bare))`)
+    // and feeds whichever group matched into the identical `word` variable
+    // used by findHeredocBodyEnd() -- i.e. this is a pure corpus coverage
+    // gap, not a second code path, confirmed by reading matchHeredocHeader()
+    // (claude-quote-mask.js) in full before writing this case.
+    name: 'BUG-093: double-quoted heredoc delimiter (<<"EOF") is recognised and its body stays masked',
+    ...build(
+      seg('cat ', false),
+      seg('<<"EOF"\n' + 'some content with a git commit mention that should stay inert\n' + 'EOF\n', true),
+      seg('git commit -m real\n', false)
+    ),
+  },
 ];
 
 // BUG-081: CRLF-terminated heredoc. Deliberately NOT a golden case — see the
