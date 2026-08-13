@@ -114,6 +114,27 @@ package synth
 //     (e.g. a conditional call `var Wire = cond()`) — the same
 //     "AST-shape only, no evaluation" limit this whole scan has always
 //     had.
+//   - A LOCAL (`:=`) wire-table/alias declared anywhere inside an ordinary
+//     reachable function's body — not a package-level GenDecl, not inside
+//     init() — e.g. `handlers := map[string]func(*engine){"default":
+//     wireDefaultHook}` written directly in headless.Run or any function
+//     it calls, followed by `handlers["default"](e)`: YES, fixed by
+//     BUG-172. inspectFuncBody now walks every *ast.AssignStmt with
+//     Tok == token.DEFINE found anywhere in the body it is given (bare
+//     identifier, FuncLit, or func-shaped map/slice CompositeLit RHS,
+//     the same three shapes the package-level and init() cases already
+//     cover) and folds each into its own synthetic alias node, exactly
+//     like a package-level var or an init() reassignment — EXCEPT the
+//     node's name is scoped to the declaring function (qualifier-prefixed,
+//     not the bare local name), so two unrelated functions each declaring
+//     their own same-named local table do not collide in the whole-program
+//     byName lookup reachableFromEntry's BFS uses. TestReachability_
+//     LocalWireTableInReachableFuncIsCaught (BUG-172's own exact
+//     reproduction), TestReachability_LocalWireTableInCalledFuncIsCaught
+//     (the same shape one call hop away from the entry point), and
+//     TestReachability_LocalWireTableDoesNotLeakAcrossFunctions (the
+//     scoping guarantee itself, proved by a same-named decoy local table
+//     in an unrelated function that must NOT be reachable) now prove this.
 //   - reflect.MethodByName with a runtime-built string: NOT resolved,
 //     same as scanForCallSites — no *ast.Ident named RegisterPhaseHook
 //     exists anywhere in that call's syntax at all, so there is nothing
@@ -319,7 +340,8 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 				if d.Body == nil {
 					continue
 				}
-				hasIdent, calls := inspectFuncBody(d.Body)
+				qualifier := rel + "#" + receiverTypeName(d.Recv) + "." + d.Name.Name
+				hasIdent, calls, extra := inspectFuncBody(qualifier, d.Body)
 				nodes = append(nodes, &reachFuncNode{
 					file:     rel,
 					recv:     receiverTypeName(d.Recv),
@@ -327,6 +349,12 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 					hasIdent: hasIdent,
 					calls:    calls,
 				})
+				// BUG-172: any local (`:=`) wire-table/alias declared
+				// anywhere in this function's body — not just package
+				// level, not just inside init() — surfaces here as
+				// qualifier-scoped synthetic nodes; see inspectFuncBody's
+				// doc comment for why the scoping matters.
+				nodes = append(nodes, extra...)
 				if d.Recv == nil && d.Name.Name == "init" {
 					// BUG-116: init()-time reassignment of a package-level
 					// func-typed var (`func init() { DefaultWire =
@@ -384,13 +412,15 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 							// the var's synthetic node directly, so a call
 							// through the var's name resolves straight to
 							// this node.
-							hasIdent, calls := inspectFuncBody(val.Body)
+							qualifier := rel + "#var:" + name.Name
+							hasIdent, calls, extra := inspectFuncBody(qualifier, val.Body)
 							nodes = append(nodes, &reachFuncNode{
 								file:     rel,
 								name:     name.Name,
 								hasIdent: hasIdent,
 								calls:    calls,
 							})
+							nodes = append(nodes, extra...)
 						case *ast.CompositeLit:
 							// BUG-116: `var handlers = map[string]func(){...}`
 							// or `var dispatch = []func(){...}` -- the
@@ -417,13 +447,15 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 							if !isFuncShapedComposite(val) {
 								continue
 							}
-							hasIdent, calls := collectFuncTableEntries(val)
+							qualifier := rel + "#var:" + name.Name
+							hasIdent, calls, extra := collectFuncTableEntries(qualifier, val)
 							nodes = append(nodes, &reachFuncNode{
 								file:     rel,
 								name:     name.Name,
 								hasIdent: hasIdent,
 								calls:    calls,
 							})
+							nodes = append(nodes, extra...)
 						}
 					}
 				}
@@ -438,15 +470,290 @@ func buildReachabilityGraph(root string) ([]*reachFuncNode, error) {
 }
 
 // inspectFuncBody walks a function body (an *ast.FuncDecl's Body, or an
-// *ast.FuncLit's Body — the two shapes this scan builds a reachFuncNode
-// from) and returns whether the target identifier appears directly inside
-// it and the simple names of every call it makes, exactly as the
-// per-FuncDecl walk originally did inline. Factored out so a package-level
-// func-typed var initialized from a FuncLit (BUG-101's second alias shape)
-// gets identical treatment to an ordinary function declaration's body,
-// rather than a second, divergent copy of the same walk.
-func inspectFuncBody(body *ast.BlockStmt) (hasIdent bool, calls []string) {
+// *ast.FuncLit's Body — the shapes this scan builds a reachFuncNode from)
+// and returns whether the target identifier appears directly inside it,
+// the simple names of every call it makes, and any synthetic alias nodes
+// contributed by LOCAL (`:=`) wire-table/alias declarations found anywhere
+// in the body (BUG-172, block-scoped per BUG-176).
+//
+// BUG-172: BUG-116 gave this alias-edge treatment to a package-level `var`
+// (GenDecl/ValueSpec) and to an init()-body REASSIGNMENT (`=`,
+// collectInitReassignments), but a local `:=` (token.DEFINE) declaration
+// of the identical shape — `handlers := map[string]func(*engine){"default":
+// wireDefaultHook}` followed by `handlers["default"](e)`, written directly
+// inside an ordinary reachable function such as headless.Run itself —
+// evaded both: buildReachabilityGraph never visits statements inside a
+// function body looking for declarations (only GenDecl/init), so no node
+// named "handlers" was ever built, and the IndexExpr call case below
+// resolves to nothing. This function now walks every DEFINE assignment in
+// the body (bare identifier, FuncLit, or func-shaped composite-literal
+// RHS) and folds it into a synthetic alias node, exactly like the existing
+// shapes, EXCEPT the node's name is qualifier-scoped
+// ("<qualifier>\x00local#N:<name>") rather than the bare local name: a
+// package-level var genuinely lives in one whole-program namespace, so two
+// unrelated `var handlers` declarations really would collide at runtime
+// too, but two unrelated LOCAL `handlers :=` in two different functions do
+// not — giving them the bare name would let reachableFromEntry's global
+// byName BFS wrongly hop from one function's local table into a
+// completely different function's local table of the same name, a
+// false-positive this scan does not already make for anything else that
+// is genuinely local.
+//
+// BUG-176: qualifier-scoping alone is not enough — the ORIGINAL BUG-172
+// fix kept ONE flat `map[string]string` for the whole function, keyed by
+// bare local name only. When the SAME bare name is `:=`-declared in two
+// DISJOINT blocks of the same function (e.g. an if-branch and its
+// else-branch), ast.Inspect visits both AssignStmts, and the second one
+// visited silently overwrote the first in that flat map — so EVERY call
+// site in the function, regardless of which block it is actually in,
+// resolved to whichever declaration happened to be recorded last. That is
+// a false negative in the unsafe direction this scan's own doc comment
+// says must never happen (GR#15: over-approximate, never miss) whenever
+// the LAST-visited same-named local is the decoy and an EARLIER one
+// dominates a call site the scan then wrongly treats as unreached.
+//
+// The fix: `locals` is now `blockLocals map[*ast.BlockStmt]map[string]string`
+// — one declaration map PER lexical block, keyed by the literal
+// *ast.BlockStmt that directly contains the `:=` statement, not one
+// function-wide map. Both passes track the current ancestor chain of
+// blocks (a path stack, using ast.Inspect's documented f(nil) post-order
+// callback to pop on the way back out) so that:
+//   - A call site resolves a bare name by walking its OWN enclosing block
+//     chain from innermost to outermost, checking each block's own
+//     declaration map in turn — so it only ever matches a local that
+//     actually DOMINATES it (is declared in that block or an enclosing
+//     one), never a same-named local declared in a sibling/disjoint block.
+//   - Two disjoint blocks (if vs. else) each get their own map entry, so
+//     neither can overwrite or be seen by the other, closing BUG-176.
+//   - A second `:=` of the SAME name in the SAME block still overwrites
+//     the first in THAT block's own map (ast.Inspect visits a block's
+//     statement list in source order), preserving ordinary
+//     shadowing/reassignment-within-one-scope semantics.
+//   - A nested block (if inside if, a for-loop body) gets its own map too,
+//     so its own declarations shadow an outer block's same-named local for
+//     calls made inside the nested block, while calls made in a sibling
+//     block, or in the outer block after the nested one closes (and is
+//     popped off the path stack), still resolve against the outer block's
+//     declaration — never the nested block's, which is out of scope by
+//     the time the path stack no longer contains it.
+//
+// BUG-177: BUG-176's fix keyed scope purely by *ast.BlockStmt identity,
+// which is not the whole story — go/ast does NOT give each switch/type-switch
+// `case` clause or `select` `comm` clause its own *ast.BlockStmt. Per the
+// go/ast struct definitions, *ast.CaseClause and *ast.CommClause both hold
+// their statement list as a bare `Body []Stmt`; only the ENCLOSING
+// SwitchStmt/TypeSwitchStmt/SelectStmt wraps its overall Body in one
+// *ast.BlockStmt, SHARED by every clause. So a `:=` declared directly in two
+// different case/comm clauses of the same switch/select both got filed under
+// that ONE shared block, reproducing BUG-176's exact flat-map collision one
+// level down. The fix: the scope key is generalized from *ast.BlockStmt to
+// plain ast.Node, and the nearest-enclosing-scope search now also stops at
+// an *ast.CaseClause or *ast.CommClause — whichever is closer to the current
+// node in the ancestor chain, exactly mirroring how a nested inner
+// *ast.BlockStmt already shadows an outer one. Since a case/comm clause is
+// always visited (and pushed onto the path) strictly BETWEEN the switch's
+// shared body block and anything declared directly inside that clause, it is
+// always the nearer ancestor when relevant, giving each clause its own
+// scope-isolated declaration map without disturbing any existing BlockStmt
+// behaviour (a nested `if` inside a case still gets its own inner BlockStmt
+// scope exactly as before).
+func inspectFuncBody(qualifier string, body *ast.BlockStmt) (hasIdent bool, calls []string, extra []*reachFuncNode) {
+	localIdx := 0
+
+	// blockLocals holds, per scope node (an *ast.BlockStmt, *ast.CaseClause,
+	// or *ast.CommClause) directly containing a `:=` declaration, that
+	// scope's own bare-name -> qualifier-scoped-node-name map. Keying by the
+	// literal scope node (rather than one flat map for the whole function,
+	// or *ast.BlockStmt alone) is what makes disjoint blocks AND disjoint
+	// case/comm clauses scope-isolated, and nested scopes shadow correctly
+	// (BUG-176, BUG-177).
+	blockLocals := map[ast.Node]map[string]string{}
+
+	// isScopeNode reports whether n is one of the AST node kinds this scan
+	// treats as its own lexical declaration scope: an ordinary block, a
+	// switch/type-switch case clause, a select comm clause — the latter two
+	// because Go's AST gives them a bare []Stmt body with no BlockStmt
+	// wrapper of their own (BUG-177), so without this they would fall
+	// through to the next BlockStmt ancestor and share scope with every
+	// sibling clause — or an if/for/switch/type-switch statement itself
+	// (BUG-178).
+	//
+	// BUG-178: *ast.IfStmt, *ast.ForStmt, *ast.SwitchStmt, and
+	// *ast.TypeSwitchStmt each carry an `Init Stmt` field (per go/ast's
+	// struct definitions) that is a SIBLING of Body/Else, not something
+	// living inside Body's *ast.BlockStmt — `if handlers := decoy; cond {
+	// ... }` declares `handlers` directly as a child of the *ast.IfStmt
+	// node, with no BlockStmt in between it and the if. Before this fix,
+	// currentBlock's search for the nearest isScopeNode ancestor walked
+	// straight past the IfStmt (not a recognized scope kind) to whatever
+	// *ast.BlockStmt enclosed the whole if statement — the SAME block an
+	// outer same-named `:=` before the if was filed under — so the Init
+	// declaration silently overwrote the outer one in that shared map,
+	// and a call AFTER the if (still in the outer block, no longer
+	// shadowed by anything in real Go) wrongly resolved to the if-local
+	// decoy instead of the outer original.
+	//
+	// The fix is to add these four statement kinds to isScopeNode itself.
+	// That alone is sufficient — no separate "is this AssignStmt the
+	// parent's Init field" check is needed — because of WHERE Init sits
+	// in the traversal: ast.Inspect visits the IfStmt/ForStmt/SwitchStmt/
+	// TypeSwitchStmt node (pushing it onto the path) and then visits its
+	// Init child directly, with nothing pushed in between (Init is not
+	// wrapped in a BlockStmt). So when pass 1 reaches the Init `:=` and
+	// calls currentBlock(path1), the nearest scope-node ancestor on the
+	// path is the statement itself — giving the Init declaration its own
+	// scope key, distinct from both the enclosing outer block AND the
+	// following Body/Else block(s). Meanwhile a `:=` declared directly
+	// inside Body (already a *ast.BlockStmt, pushed AFTER the IfStmt) or
+	// Else still finds that nearer BlockStmt first, exactly as before —
+	// so declarations inside either branch remain visible to the whole
+	// branch and shadow the Init/outer scope correctly, and Init's own
+	// declarations remain visible to Body/Else (via resolveLocal's
+	// outward walk through the ancestor chain: BodyBlock -> IfStmt ->
+	// outerBlock) without leaking to code before or after the statement,
+	// and without colliding with an outer same-named declaration.
+	//
+	// ForStmt/SwitchStmt/TypeSwitchStmt.Init have the identical AST shape
+	// and get the identical treatment for the identical reason.
+	// TypeSwitchStmt also has a separate `Assign Stmt` field (`v :=
+	// x.(type)`) — its RHS is always an *ast.TypeAssertExpr, which pass 1's
+	// switch on x.Rhs[i]'s type never matches (only *ast.Ident, *ast.FuncLit,
+	// and func-shaped *ast.CompositeLit do), so it never reaches the
+	// blockLocals map at all regardless of scoping and needs no fix.
+	// *ast.RangeStmt has no Init field — its Key/Value loop variables are a
+	// distinct AST shape (RangeStmt.Key/Value/Tok fields, not a nested
+	// AssignStmt), never matched by pass 1's `case *ast.AssignStmt`, so they
+	// were never entered into blockLocals before this fix either and are
+	// unaffected by it. *ast.SelectStmt has no Init field at all (only
+	// Body, CommClauses only) and was already fully handled by the
+	// CommClause case in BUG-177.
+	isScopeNode := func(n ast.Node) bool {
+		switch n.(type) {
+		case *ast.BlockStmt, *ast.CaseClause, *ast.CommClause,
+			*ast.IfStmt, *ast.ForStmt, *ast.SwitchStmt, *ast.TypeSwitchStmt:
+			return true
+		}
+		return false
+	}
+
+	// currentBlock returns the innermost scope node in path (searched from
+	// the end, i.e. the deepest ancestor first) — the lexical scope directly
+	// enclosing whatever node is currently being visited. A case/comm clause
+	// ancestor is always nearer than the switch/select's own shared body
+	// block, so it is found first when relevant (BUG-177).
+	currentBlock := func(path []ast.Node) ast.Node {
+		for i := len(path) - 1; i >= 0; i-- {
+			if isScopeNode(path[i]) {
+				return path[i]
+			}
+		}
+		return nil
+	}
+
+	// Pass 1: collect local `:=` alias/table declarations, block-scoped.
+	// Does NOT descend into nested *ast.FuncLit bodies except the ones
+	// explicitly handled as a DEFINE's own RHS immediately below — a
+	// FuncLit reached any other way (passed as an argument, an IIFE,
+	// etc.) is a different function's own scope, not this one's, and its
+	// own local declarations (if walked at all — closures are still
+	// caught via pass 2's identifier walk exactly as before) must not be
+	// folded into THIS qualifier's blocks. A path stack tracks the
+	// current ancestor chain so each DEFINE is filed under the
+	// *ast.BlockStmt that directly contains it, using ast.Inspect's
+	// documented behaviour of calling f(nil) once a node's children have
+	// all been visited as the pop signal.
+	var path1 []ast.Node
 	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			path1 = path1[:len(path1)-1]
+			return true
+		}
+		switch x := n.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.AssignStmt:
+			if x.Tok != token.DEFINE {
+				break
+			}
+			block := currentBlock(path1)
+			if block == nil {
+				block = body
+			}
+			for i, lhs := range x.Lhs {
+				if i >= len(x.Rhs) {
+					continue
+				}
+				id, ok := lhs.(*ast.Ident)
+				if !ok || id.Name == "_" {
+					continue
+				}
+				localIdx++
+				qname := fmt.Sprintf("%s\x00local#%d:%s", qualifier, localIdx, id.Name)
+				switch val := x.Rhs[i].(type) {
+				case *ast.Ident:
+					extra = append(extra, &reachFuncNode{name: qname, calls: []string{val.Name}})
+				case *ast.FuncLit:
+					h, c, e2 := inspectFuncBody(qname, val.Body)
+					extra = append(extra, &reachFuncNode{name: qname, hasIdent: h, calls: c})
+					extra = append(extra, e2...)
+				case *ast.CompositeLit:
+					if !isFuncShapedComposite(val) {
+						continue
+					}
+					h, c, e2 := collectFuncTableEntries(qname, val)
+					extra = append(extra, &reachFuncNode{name: qname, hasIdent: h, calls: c})
+					extra = append(extra, e2...)
+				default:
+					continue
+				}
+				// Same-block redeclaration/shadowing: a later `:=` of the
+				// identical name in THIS SAME block (visited later, since
+				// a block's statement list is walked in source order)
+				// overwrites the earlier entry in THIS block's own map —
+				// ordinary within-one-scope shadowing. A same-named `:=`
+				// in a DIFFERENT (sibling or outer) block lives under a
+				// different map key entirely and never touches this one.
+				if blockLocals[block] == nil {
+					blockLocals[block] = map[string]string{}
+				}
+				blockLocals[block][id.Name] = qname
+			}
+			return false
+		}
+		path1 = append(path1, n)
+		return true
+	})
+
+	// resolveLocal walks the CURRENT call site's own enclosing block
+	// chain (innermost first, via path2 below) and returns the first
+	// matching declaration found — so a call only ever resolves against a
+	// local declared in a block that actually dominates it (BUG-176), not
+	// merely "declared anywhere in this function under this name".
+	var path2 []ast.Node
+	resolveLocal := func(name string) (string, bool) {
+		for i := len(path2) - 1; i >= 0; i-- {
+			if !isScopeNode(path2[i]) {
+				continue
+			}
+			if m, ok := blockLocals[path2[i]]; ok {
+				if q, ok := m[name]; ok {
+					return q, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	// Pass 2: the original walk, unchanged in shape and in its full
+	// descent into nested *ast.FuncLit bodies (so closures are still
+	// caught exactly as before), except a call target (bare Ident call or
+	// the base of an IndexExpr call) now resolves via resolveLocal's
+	// block-scoped lookup instead of one flat function-wide map.
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			path2 = path2[:len(path2)-1]
+			return true
+		}
 		switch x := n.(type) {
 		case *ast.Ident:
 			if x.Name == registerPhaseHookIdent {
@@ -459,7 +766,11 @@ func inspectFuncBody(body *ast.BlockStmt) (hasIdent bool, calls []string) {
 		case *ast.CallExpr:
 			switch fn := x.Fun.(type) {
 			case *ast.Ident:
-				calls = append(calls, fn.Name)
+				if q, ok := resolveLocal(fn.Name); ok {
+					calls = append(calls, q)
+				} else {
+					calls = append(calls, fn.Name)
+				}
 			case *ast.SelectorExpr:
 				calls = append(calls, fn.Sel.Name)
 			case *ast.IndexExpr:
@@ -469,17 +780,23 @@ func inspectFuncBody(body *ast.BlockStmt) (hasIdent bool, calls []string) {
 				// *ast.SelectorExpr but an *ast.IndexExpr, so without this
 				// case the var's name never enters `calls` at all and the
 				// table's synthetic node (built in buildReachabilityGraph's
-				// GenDecl/CompositeLit case) is never reached by anything.
-				// Only the base identifier being indexed matters here --
-				// the key/index expression itself is not a call target.
+				// GenDecl/CompositeLit case, or pass 1 above for a local
+				// one) is never reached by anything. Only the base
+				// identifier being indexed matters here -- the key/index
+				// expression itself is not a call target.
 				if id, ok := fn.X.(*ast.Ident); ok {
-					calls = append(calls, id.Name)
+					if q, ok := resolveLocal(id.Name); ok {
+						calls = append(calls, q)
+					} else {
+						calls = append(calls, id.Name)
+					}
 				}
 			}
 		}
+		path2 = append(path2, n)
 		return true
 	})
-	return hasIdent, calls
+	return hasIdent, calls, extra
 }
 
 // isFuncShapedComposite reports whether cl is a composite literal whose
@@ -505,10 +822,13 @@ func isFuncShapedComposite(cl *ast.CompositeLit) bool {
 // every entry's value into one aggregate hasIdent/calls pair, exactly as
 // inspectFuncBody does for an ordinary function body: a bare identifier
 // entry (`"default": wireDefaultHook`) becomes an alias edge, and a FuncLit
-// entry has its own body inspected in place. A map entry is unwrapped from
-// its *ast.KeyValueExpr first; a slice/array entry is the element itself.
-func collectFuncTableEntries(cl *ast.CompositeLit) (hasIdent bool, calls []string) {
-	for _, elt := range cl.Elts {
+// entry has its own body inspected in place (BUG-172: qualified by
+// qualifier so any LOCAL alias/table the entry's own FuncLit declares is
+// scoped correctly, same as inspectFuncBody's own nested handling). A map
+// entry is unwrapped from its *ast.KeyValueExpr first; a slice/array entry
+// is the element itself.
+func collectFuncTableEntries(qualifier string, cl *ast.CompositeLit) (hasIdent bool, calls []string, extra []*reachFuncNode) {
+	for i, elt := range cl.Elts {
 		v := elt
 		if kv, ok := elt.(*ast.KeyValueExpr); ok {
 			v = kv.Value
@@ -517,14 +837,15 @@ func collectFuncTableEntries(cl *ast.CompositeLit) (hasIdent bool, calls []strin
 		case *ast.Ident:
 			calls = append(calls, val.Name)
 		case *ast.FuncLit:
-			h, c := inspectFuncBody(val.Body)
+			h, c, e2 := inspectFuncBody(fmt.Sprintf("%s:entry#%d", qualifier, i), val.Body)
 			if h {
 				hasIdent = true
 			}
 			calls = append(calls, c...)
+			extra = append(extra, e2...)
 		}
 	}
-	return hasIdent, calls
+	return hasIdent, calls, extra
 }
 
 // collectInitReassignments walks an init() function's body (BUG-116: the
@@ -563,13 +884,15 @@ func collectInitReassignments(file string, body *ast.BlockStmt) []*reachFuncNode
 					calls: []string{val.Name},
 				})
 			case *ast.FuncLit:
-				hasIdent, calls := inspectFuncBody(val.Body)
+				qualifier := file + "#init:" + id.Name
+				hasIdent, calls, extra := inspectFuncBody(qualifier, val.Body)
 				out = append(out, &reachFuncNode{
 					file:     file,
 					name:     id.Name,
 					hasIdent: hasIdent,
 					calls:    calls,
 				})
+				out = append(out, extra...)
 			}
 		}
 		return true
@@ -1323,5 +1646,508 @@ func Run(e *engine) {
 	}
 	if hit.file != "tagged.go" {
 		t.Errorf("expected the hit to be in tagged.go, got %s", hit.file)
+	}
+}
+
+// TestReachability_LocalWireTableInReachableFuncIsCaught proves BUG-172's
+// FIX — BUG-172's own exact reproduction: a wire table declared with `:=`
+// directly inside Run itself (not a package-level GenDecl, not inside
+// init()) followed by an indexed call, `handlers["default"](e)`. Before
+// this fix, buildReachabilityGraph only visited GenDecl/ValueSpec and
+// init()-body declarations looking for alias edges, so no node named
+// "handlers" was ever built at all, and reachableFromEntry returned nil —
+// reproduced live by BUG-172's own report. Reverting inspectFuncBody's
+// pass-1 local-declaration walk reproduces that evasion and makes this
+// test fail, which is how the before/after was confirmed for this change.
+func TestReachability_LocalWireTableInReachableFuncIsCaught(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func wireDefaultHook(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func Run(e *engine) {
+	handlers := map[string]func(*engine){"default": wireDefaultHook}
+	handlers["default"](e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the local (`:=`) wire table declared directly inside Run to be CAUGHT by this " +
+			"scan (BUG-172) — if this is nil, the local-declaration alias-edge walk in inspectFuncBody has " +
+			"regressed")
+	}
+	if hit.file != "run.go" || hit.name != "wireDefaultHook" {
+		t.Errorf("expected the hit to be run.go's wireDefaultHook (reached via the local handlers table alias "+
+			"edge), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_LocalWireTableInCalledFuncIsCaught proves BUG-172's fix
+// also covers a local wire table declared in a function Run CALLS (not
+// Run's own body directly), matching the report's "or any function it
+// calls" phrasing precisely — the local declaration and its alias node are
+// scoped to wireUp's own qualifier, not Run's, and reachableFromEntry still
+// gets there via the ordinary Run -> wireUp call edge.
+func TestReachability_LocalWireTableInCalledFuncIsCaught(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func wireDefaultHook(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func wireUp(e *engine) {
+	handlers := map[string]func(*engine){"default": wireDefaultHook}
+	handlers["default"](e)
+}
+
+func Run(e *engine) {
+	wireUp(e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the local wire table declared inside wireUp (a function Run calls, not Run itself) " +
+			"to be CAUGHT by this scan (BUG-172)")
+	}
+	if hit.file != "run.go" || hit.name != "wireDefaultHook" {
+		t.Errorf("expected the hit to be run.go's wireDefaultHook, got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_LocalWireTableSameNameDisjointBranchesIsCaught is
+// BUG-176's own exact reproduction: an if/else where BOTH branches declare
+// their OWN local `handlers :=` table under the IDENTICAL bare name, but
+// only the if-branch's table (realHandler) reaches RegisterPhaseHook — the
+// else-branch's same-named table wires a decoy (decoyHandler) that reaches
+// nothing. Run unconditionally executes exactly one of the two branches at
+// runtime and the if-branch is live code, so the SOUND answer is
+// "reachable". Before this fix, ast.Inspect visited both `:=` declarations
+// into ONE flat function-wide `locals` map keyed by the bare name
+// "handlers"; whichever declaration was visited LAST (the else-branch's
+// decoy, since it appears later in the source) silently overwrote the
+// if-branch's entry, so BOTH call sites resolved to the decoy and
+// reachableFromEntry wrongly reported "not reachable" — a false negative,
+// the unsafe direction this scan's own doc comment says must never happen
+// (GR#15). Reverting inspectFuncBody's block-scoped `blockLocals` back to
+// a flat map reproduces that false negative and makes this test fail.
+func TestReachability_LocalWireTableSameNameDisjointBranchesIsCaught(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func decoyHandler(e *engine) {}
+
+func Run(e *engine, cond bool) {
+	if cond {
+		handlers := map[string]func(*engine){"default": realHandler}
+		handlers["default"](e)
+	} else {
+		handlers := map[string]func(*engine){"default": decoyHandler}
+		handlers["default"](e)
+	}
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the if-branch's local \"handlers\" table (which reaches realHandler) to be " +
+			"CAUGHT as reachable despite the else-branch declaring a same-named decoy \"handlers\" table " +
+			"(BUG-176) — if this is nil, the block-scoping fix has regressed back to the flat-map false " +
+			"negative")
+	}
+	if hit.file != "run.go" || hit.name != "realHandler" {
+		t.Errorf("expected the hit to be run.go's realHandler (reached via the if-branch's own local "+
+			"handlers table alias edge), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_LocalWireTableDoesNotLeakAcrossFunctions proves BUG-172's
+// scoping requirement directly: TWO unrelated functions each declare their
+// OWN local `handlers` table (same bare name, deliberately), but only
+// otherFunc's ever reaches RegisterPhaseHook — Run's own local "handlers"
+// only ever calls a decoy. If the local alias nodes were registered under
+// their bare local name (unscoped) rather than a qualifier-scoped name,
+// reachableFromEntry's global byName BFS would wrongly hop from Run's own
+// "handlers" call site into otherFunc's SAME-NAMED but entirely unrelated
+// local table and report reachable — a false positive this test would
+// catch by failing.
+func TestReachability_LocalWireTableDoesNotLeakAcrossFunctions(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func decoyHandler(e *engine) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+// otherFunc is never called from Run's own reachable call graph at all —
+// its local "handlers" table (which DOES reach RegisterPhaseHook) must not
+// leak into Run's identically-named local table just because the two
+// share a bare local variable name.
+func otherFunc(e *engine) {
+	handlers := map[string]func(*engine){"default": realHandler}
+	handlers["default"](e)
+}
+
+func Run(e *engine) {
+	handlers := map[string]func(*engine){"default": decoyHandler}
+	handlers["default"](e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit != nil {
+		t.Fatalf("expected Run's own local \"handlers\" table (which only ever calls the decoy) to stay "+
+			"UNREACHABLE to RegisterPhaseHook — got a hit at %s#%s.%s, which means otherFunc's same-named "+
+			"but unrelated local table leaked across functions (BUG-172's scoping requirement has regressed)",
+			hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_LocalWireTableSwitchCaseSameNameIsCaught is BUG-177's own
+// exact reproduction (the attacker's live repro from BUG-176's destructive
+// round, restated as a mechanical test): a same-named local `:=` wire table
+// declared in two DIFFERENT case clauses of the SAME switch statement. Go's
+// AST gives every case clause a bare []Stmt Body -- only the switch's own
+// overall Body is an *ast.BlockStmt, shared by every clause -- so before
+// BUG-177's fix, both case clauses' "handlers" declarations were filed under
+// that ONE shared block and the later-visited one silently overwrote the
+// earlier, exactly like BUG-176's if/else collision one level down. Only
+// case 1 reaches RegisterPhaseHook (via realHandler); the default clause's
+// same-named "handlers" only ever calls decoyHandler. Asserts the hit
+// resolves to realHandler specifically, not merely non-nil, so a fix that
+// happens to return SOME hit without actually distinguishing the two
+// clauses would still fail this test.
+func TestReachability_LocalWireTableSwitchCaseSameNameIsCaught(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func decoyHandler(e *engine) {}
+
+func Run(e *engine, mode int) {
+	switch mode {
+	case 1:
+		handlers := map[string]func(*engine){"default": realHandler}
+		handlers["default"](e)
+	default:
+		handlers := map[string]func(*engine){"default": decoyHandler}
+		handlers["default"](e)
+	}
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected case 1's local \"handlers\" table (which reaches realHandler) to be CAUGHT as " +
+			"reachable despite the default clause declaring a same-named decoy \"handlers\" table (BUG-177) " +
+			"— if this is nil, switch/case clauses are still sharing the switch body's one BlockStmt scope, " +
+			"reproducing BUG-176's flat-map false negative one level down")
+	}
+	if hit.file != "run.go" || hit.name != "realHandler" {
+		t.Errorf("expected the hit to be run.go's realHandler (reached via case 1's own local handlers "+
+			"table alias edge), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_LocalWireTableSelectCommSameNameIsCaught proves
+// BUG-177's fix extends to select statements: *ast.CommClause has the
+// IDENTICAL shape problem as *ast.CaseClause (a bare []Stmt Body, no
+// per-clause BlockStmt of its own, only the enclosing SelectStmt's Body is
+// one shared *ast.BlockStmt) -- confirmed against go/ast's struct
+// definitions, not assumed. A same-named local `:=` wire table declared in
+// two different comm clauses of the same select must stay scope-isolated
+// exactly like switch/case and if/else.
+func TestReachability_LocalWireTableSelectCommSameNameIsCaught(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func decoyHandler(e *engine) {}
+
+func Run(e *engine, ch1, ch2 chan int) {
+	select {
+	case <-ch1:
+		handlers := map[string]func(*engine){"default": realHandler}
+		handlers["default"](e)
+	case <-ch2:
+		handlers := map[string]func(*engine){"default": decoyHandler}
+		handlers["default"](e)
+	}
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the ch1 comm clause's local \"handlers\" table (which reaches realHandler) to be " +
+			"CAUGHT as reachable despite the ch2 clause declaring a same-named decoy \"handlers\" table " +
+			"(BUG-177, select/CommClause) — if this is nil, comm clauses are still sharing the select body's " +
+			"one BlockStmt scope")
+	}
+	if hit.file != "run.go" || hit.name != "realHandler" {
+		t.Errorf("expected the hit to be run.go's realHandler (reached via the ch1 clause's own local "+
+			"handlers table alias edge), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_IfInitLocalDoesNotShadowOuterAfterIf is BUG-178's own
+// exact reproduction (the attacker's live repro from BUG-177's destructive
+// round, restated as a mechanical test): an OUTER local `handlers` table is
+// declared before an if statement, the if statement's OWN Init clause (`if
+// handlers := ...; cond { ... }`) declares a SAME-NAMED decoy local, and then
+// an UNCONDITIONAL call after the if statement — still in the outer block,
+// no longer shadowed by anything in real Go once the if closes — must
+// resolve to the OUTER table (reaching realHandler), not the if-local decoy.
+// *ast.IfStmt.Init is a sibling field of Body/Else, not something living
+// inside Body's *ast.BlockStmt, so before this fix currentBlock's ancestor
+// search walked straight past the IfStmt to the shared enclosing block and
+// the Init declaration silently overwrote the outer one there.
+func TestReachability_IfInitLocalDoesNotShadowOuterAfterIf(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func decoyHandler(e *engine) {}
+
+func Run(e *engine, cond bool) {
+	handlers := map[string]func(*engine){"default": realHandler}
+	if handlers := map[string]func(*engine){"default": decoyHandler}; cond {
+		handlers["default"](e)
+	}
+	handlers["default"](e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the OUTER local \"handlers\" table (which reaches realHandler via the " +
+			"unconditional post-if call) to be CAUGHT as reachable despite the if statement's OWN Init " +
+			"clause declaring a same-named decoy \"handlers\" table (BUG-178) — if this is nil, the " +
+			"if-Init declaration is still colliding with the outer block's scope key")
+	}
+	if hit.file != "run.go" || hit.name != "realHandler" {
+		t.Errorf("expected the hit to be run.go's realHandler (reached via the outer handlers table's "+
+			"post-if call), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_ForInitLocalDoesNotShadowOuterAfterFor proves BUG-178's
+// fix extends to *ast.ForStmt.Init, which has the identical AST shape as
+// IfStmt.Init (a Stmt sibling field of Body, not wrapped in Body's own
+// BlockStmt): an outer "handlers" table declared before a for loop, the
+// loop's own Init clause declaring a same-named decoy, and an unconditional
+// call after the loop that must resolve to the outer table.
+func TestReachability_ForInitLocalDoesNotShadowOuterAfterFor(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func decoyHandler(e *engine) {}
+
+func Run(e *engine) {
+	handlers := map[string]func(*engine){"default": realHandler}
+	for handlers := map[string]func(*engine){"default": decoyHandler}; false; {
+		handlers["default"](e)
+	}
+	handlers["default"](e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the OUTER local \"handlers\" table (which reaches realHandler via the " +
+			"unconditional post-for call) to be CAUGHT as reachable despite the for statement's OWN " +
+			"Init clause declaring a same-named decoy \"handlers\" table (BUG-178, ForStmt.Init) — if " +
+			"this is nil, the for-Init declaration is still colliding with the outer block's scope key")
+	}
+	if hit.file != "run.go" || hit.name != "realHandler" {
+		t.Errorf("expected the hit to be run.go's realHandler (reached via the outer handlers table's "+
+			"post-for call), got %s#%s.%s", hit.file, hit.recv, hit.name)
+	}
+}
+
+// TestReachability_SwitchInitLocalDoesNotShadowOuterAfterSwitch proves
+// BUG-178's fix extends to *ast.SwitchStmt.Init, the same AST shape once
+// more: an outer "handlers" table declared before a switch statement, the
+// switch's own Init clause declaring a same-named decoy, and an
+// unconditional call after the switch that must resolve to the outer table.
+func TestReachability_SwitchInitLocalDoesNotShadowOuterAfterSwitch(t *testing.T) {
+	src := `package headless
+
+type engine struct{}
+
+func (e *engine) RegisterPhaseHook(kind, hook string) {}
+
+func realHandler(e *engine) {
+	e.RegisterPhaseHook("default", "hook")
+}
+
+func decoyHandler(e *engine) {}
+
+func Run(e *engine, mode int) {
+	handlers := map[string]func(*engine){"default": realHandler}
+	switch handlers := map[string]func(*engine){"default": decoyHandler}; mode {
+	case 1:
+		handlers["default"](e)
+	}
+	handlers["default"](e)
+}
+`
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.go"), []byte(src), 0o644); err != nil {
+		t.Fatalf("writing fixture: %v", err)
+	}
+
+	nodes, err := buildReachabilityGraph(dir)
+	if err != nil {
+		t.Fatalf("buildReachabilityGraph: %v", err)
+	}
+	hit, err := reachableFromEntry(nodes, "run.go", "", "Run")
+	if err != nil {
+		t.Fatalf("reachableFromEntry: %v", err)
+	}
+	if hit == nil {
+		t.Fatal("expected the OUTER local \"handlers\" table (which reaches realHandler via the " +
+			"unconditional post-switch call) to be CAUGHT as reachable despite the switch statement's " +
+			"OWN Init clause declaring a same-named decoy \"handlers\" table (BUG-178, SwitchStmt.Init) " +
+			"— if this is nil, the switch-Init declaration is still colliding with the outer block's " +
+			"scope key")
+	}
+	if hit.file != "run.go" || hit.name != "realHandler" {
+		t.Errorf("expected the hit to be run.go's realHandler (reached via the outer handlers table's "+
+			"post-switch call), got %s#%s.%s", hit.file, hit.recv, hit.name)
 	}
 }
