@@ -186,15 +186,47 @@ function collectJsFiles(dir, out) {
   return out;
 }
 
-/** Discovers every file in the repo containing a literal buildQuoteMask
- * function declaration (see the header comment for what this does and does
- * not catch). Returns absolute paths, sorted for a deterministic report.
+/** BUG-092: the original discovery pattern (kept here, unused by
+ * discoverCopies() itself, purely so the "old regex would have missed this"
+ * claim below is provable against the exact historical text rather than a
+ * paraphrase) matched ONLY a function DECLARATION: `function buildQuoteMask(`.
+ * A same-named copy written as a function EXPRESSION
+ * (`const buildQuoteMask = function(text) {...}`), an arrow function
+ * (`const buildQuoteMask = (text) => {...}`), or object-literal method
+ * shorthand (`{ buildQuoteMask(text) {...} }`) is invisible to it despite
+ * not being a rename — ASM-367 understated this as a renaming problem when
+ * it is actually any non-`function NAME(` declaration syntax. See the
+ * "BUG-092" test below for the red/green proof against this exact constant. */
+const BUG_092_OLD_PATTERN = /function\s+buildQuoteMask\s*\(/;
+
+/** Discovers every file containing a live declaration of buildQuoteMask
+ * (see the header comment for what this does and does not catch). Returns
+ * absolute paths, sorted for a deterministic report.
+ *
+ * BUG-092 FIX: broadened from a declaration-only match
+ * (`function buildQuoteMask(`) to also catch the same name declared as a
+ * function expression / arrow function assigned to a variable or object
+ * property (`buildQuoteMask = function(...)`, `buildQuoteMask: (...) =>`)
+ * and as object-literal method shorthand (`buildQuoteMask(...) {`). This is
+ * still a source-pattern scan, not a behavioural one — the header comment's
+ * existing "what this still misses" list (actual renames, non-.js files,
+ * node_modules) still applies; BUG-092 closes the "same name, different
+ * declaration syntax" gap specifically, not discovery in general.
+ *
+ * `dir` defaults to ROOT (the real scan target) but is accepted as a
+ * parameter so BUG-092's own regression test can point the same discovery
+ * logic at an isolated throwaway fixture directory instead of polluting the
+ * top-level `discovered` set that the golden/cross-copy tests below iterate
+ * over.
+ *
  * Same ENOENT race as collectJsFiles applies to reading a file's contents
  * (a fixture .js file could theoretically be removed between being listed
  * and being read) — same narrow, errno-scoped tolerance applies here. */
-function discoverCopies() {
-  const all = collectJsFiles(ROOT, []);
-  const pattern = /function\s+buildQuoteMask\s*\(/;
+function discoverCopies(dir) {
+  const scanRoot = dir || ROOT;
+  const all = collectJsFiles(scanRoot, []);
+  const pattern =
+    /function\s+buildQuoteMask\s*\(|buildQuoteMask\s*[:=]\s*(?:async\s*)?(?:function\s*)?\(|buildQuoteMask\s*\([^)]*\)\s*\{/;
   const copies = [];
   for (const file of all) {
     let src;
@@ -455,6 +487,60 @@ function firstDivergingIndex(a, b) {
   }
   return -1;
 }
+
+// ---------------------------------------------------------------------------
+// BUG-092: discoverCopies() must find non-declaration copies of the same
+// name (function expression, arrow function, method shorthand), not just
+// `function buildQuoteMask(`. Proven red-then-green against the OLD pattern
+// constant above using isolated throwaway fixtures, so this run never
+// touches the real five-guard scan or the top-level `discovered` set.
+// ---------------------------------------------------------------------------
+
+test('BUG-092: discoverCopies() finds a function-expression / arrow / method-shorthand copy that the old declaration-only regex would have missed', () => {
+  const fixtureDir = path.join(ROOT, `bug092-fixture-${process.pid}-${Date.now()}`);
+  fs.mkdirSync(fixtureDir, { recursive: true });
+  try {
+    const fixtures = {
+      'function-expression.js':
+        "'use strict';\nconst buildQuoteMask = function(text) { return text.length; };\nmodule.exports = { buildQuoteMask };\n",
+      'arrow-function.js':
+        "'use strict';\nconst buildQuoteMask = (text) => text.length;\nmodule.exports = { buildQuoteMask };\n",
+      'method-shorthand.js':
+        "'use strict';\nconst helpers = {\n  buildQuoteMask(text) { return text.length; },\n};\nmodule.exports = { buildQuoteMask: helpers.buildQuoteMask };\n",
+      // Sanity control: a real declaration, which BOTH the old and new
+      // pattern must catch — proves this isn't a case of the old pattern
+      // being broadly non-functional.
+      'declaration.js':
+        "'use strict';\nfunction buildQuoteMask(text) { return text.length; }\nmodule.exports = { buildQuoteMask };\n",
+    };
+
+    for (const [name, src] of Object.entries(fixtures)) {
+      fs.writeFileSync(path.join(fixtureDir, name), src, 'utf8');
+    }
+
+    // RED: prove the OLD regex misses the three non-declaration shapes and
+    // catches only the declaration control.
+    assert.equal(BUG_092_OLD_PATTERN.test(fixtures['function-expression.js']), false,
+      'the old regex should NOT match a function-expression copy (that is exactly BUG-092)');
+    assert.equal(BUG_092_OLD_PATTERN.test(fixtures['arrow-function.js']), false,
+      'the old regex should NOT match an arrow-function copy (that is exactly BUG-092)');
+    assert.equal(BUG_092_OLD_PATTERN.test(fixtures['method-shorthand.js']), false,
+      'the old regex should NOT match a method-shorthand copy (that is exactly BUG-092)');
+    assert.equal(BUG_092_OLD_PATTERN.test(fixtures['declaration.js']), true,
+      'sanity check: the old regex DOES match a real declaration, so the misses above are the bug, not a broken regex');
+
+    // GREEN: the fixed discoverCopies() finds all four, scoped to this
+    // throwaway fixture directory only.
+    const found = discoverCopies(fixtureDir).map(f => path.relative(fixtureDir, f).replace(/\\/g, '/')).sort();
+    assert.deepEqual(
+      found,
+      ['arrow-function.js', 'declaration.js', 'function-expression.js', 'method-shorthand.js'].sort(),
+      `discoverCopies() should find all four same-named copies regardless of declaration syntax; found: ${found.join(', ')}`
+    );
+  } finally {
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+});
 
 test(`discovered ${discovered.length} copy/copies of buildQuoteMask: ${discovered
   .map(f => path.relative(ROOT, f))
