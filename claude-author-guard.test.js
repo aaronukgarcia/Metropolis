@@ -1041,3 +1041,103 @@ test('ROUND4-3: widening to full-path tokens does not weaken the nine originals 
 test('ROUND4-3: findCommitInvocation still ignores plain git.exe with no path when it is not a real invocation shape (git status)', () => {
   assert.equal(guard.findCommitInvocation('git.exe status'), null);
 });
+
+// ---------------------------------------------------------------------------
+// BUG-079 (P0): GIT_TOKEN_RE's left-hand boundary class was `^` / a shell
+// separator ONLY — no alternative for "preceded by an ordinary leading word
+// and a space." `sudo git commit ...`, `env git commit ...`, and any other
+// single leading wrapper word this guard cannot enumerate put a plain space
+// (not a boundary character) immediately before the scan region, so the
+// WHOLE match failed and findCommitInvocation() returned null: total
+// silent non-detection on completely ordinary command shapes, live-verified
+// end-to-end (real bash executed the fabricated-author commit while the
+// guard's stdin contract returned empty stdout / ALLOW). Fix: the boundary
+// class now also accepts plain whitespace, so the git-token scan can start
+// right after any leading word, not just after `^`/`;`/`&`/`|`/`(`/`\n`. The
+// "is this real shell syntax or just prose" distinction remains entirely
+// buildQuoteMask()'s job (BUG-043), unchanged by this fix — see the updated
+// header comment above GIT_TOKEN_RE.
+// ---------------------------------------------------------------------------
+
+for (const wrapper of ['sudo', 'env', 'time', 'nice', 'command']) {
+  test(`BUG-079: '${wrapper} git commit --author=<fake>' is now DETECTED (advisory) — was a total silent bypass`, () => {
+    withTempRepo((dir) => {
+      initRepoWithHistory(dir, 3);
+      const id = fabricatedIdentity();
+      const cmd = `${wrapper} git commit --allow-empty --author="${id.name} <${id.email}>" -m x`;
+      const result = runGuard(dir, cmd);
+      assert.equal(result.denied, false);
+      assert.equal(result.status, 0);
+      assert.equal(result.advisory, true, `expected '${wrapper} git commit ...' to be advised, not silently allowed`);
+    });
+  });
+}
+
+test("BUG-079: 'xargs -I{} git commit --author=<fake> {}'-shaped invocation is now DETECTED (advisory)", () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `echo x | xargs -I{} git commit --allow-empty --author="${id.name} <${id.email}>" -m x`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true);
+  });
+});
+
+test('BUG-079: an ARBITRARY, unenumerated leading wrapper word (a made-up shell function name) is also DETECTED — proves this is not just enumerating known wrappers', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `myTotallyMadeUpWrapperFn123 git commit --allow-empty --author="${id.name} <${id.email}>" -m x`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'an unenumerated wrapper word must not defeat detection either');
+  });
+});
+
+test('BUG-079: findCommitInvocation finds the invocation directly for sudo/env-prefixed commands (unit-level, no subprocess)', () => {
+  assert.notEqual(guard.findCommitInvocation('sudo git commit --author="x <x@x.com>" -m y'), null);
+  assert.notEqual(guard.findCommitInvocation('env git commit --author="x <x@x.com>" -m y'), null);
+  assert.notEqual(guard.findCommitInvocation('time git commit --author="x <x@x.com>" -m y'), null);
+  assert.notEqual(guard.findCommitInvocation('nice git commit --author="x <x@x.com>" -m y'), null);
+});
+
+test('BUG-079 regression guard: plain "git commit" with NO wrapper prefix still detected (no regression from the boundary widening)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `git commit --allow-empty --author="${id.name} <${id.email}>" -m x`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true);
+  });
+});
+
+test('BUG-079 regression guard: the BUG-043/BUG-078 quote-mask fix still holds after widening the boundary class — quoted prose mentioning "git" (now reachable via a whitespace boundary too) is still ALLOWED, not treated as a real invocation', () => {
+  assert.equal(guard.findCommitInvocation('echo "please git commit later"'), null);
+  assert.equal(
+    guard.findCommitInvocation(
+      'node claude-bow.js comment FEAT-040 "see the guard doc (git commit --author=nottrusted@example.com is the exact bypass BUG-035 fixed)"'
+    ),
+    null
+  );
+});
+
+test('BUG-079 regression guard: a wrapper-prefixed command with the fabricated author hidden in an ordinary QUOTED commit message is still ALLOWED (BUG-050 shape, now reachable via a leading wrapper word too)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const cmd = 'sudo git commit --allow-empty -m "docs: explain the --author=<email> flag in the guard header"';
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false, result.reason);
+    assert.equal(result.status, 0);
+  });
+});
+
+test('BUG-079 regression guard: word-boundary widening does not turn "mygit"/"digit"/"gitlint" into false invocation matches', () => {
+  assert.equal(guard.findCommitInvocation('run mygit status'), null);
+  assert.equal(guard.findCommitInvocation('echo digit status'), null);
+  assert.equal(guard.findCommitInvocation('gitlint check'), null);
+});

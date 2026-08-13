@@ -446,17 +446,31 @@ function unescapeDoubleQuoted(s) {
 // SPACE-CONTAINING Windows install path only reachable quoted —
 // `"C:\Program Files\Git\bin\git.exe"` — Git for Windows' actual default
 // install location; found live-executing by a sibling-guard round, see
-// ASM-author-guard-quoted-path-token below). The left-hand boundary is
-// deliberately the SAME strict class v1 used (start of the candidate text,
-// or a shell separator `;&|(\n`) — NOT a generic word-boundary. That
-// strictness is what keeps a quoted English sentence mentioning "please git
-// commit later" from matching (there is no shell separator before "git"
-// there), while still matching after `&&`, `;`, a literal newline, or at the
-// very start of an extracted wrapper body (which satisfies `^`). Widening
-// this to a bare word-boundary was tried and rejected during development —
-// it reintroduced exactly the false-positive shape BUG-050 is about, one
-// level up (matching "git" inside prose instead of just inside "-m" message
-// flags).
+// ASM-author-guard-quoted-path-token below). The left-hand boundary class is
+// `^`, a shell separator (`;&|(\n`), OR plain whitespace (`\s` — BUG-079).
+// v1/v2 deliberately left plain whitespace OUT of this class, reasoning that
+// it was "a generic word-boundary" and would reopen BUG-050's false-positive
+// shape (matching "git" inside prose). That reasoning no longer holds and,
+// per BUG-079 (P0, live-verified), left an ordinary single leading wrapper
+// word — `sudo git commit ...`, `env git commit ...`, `time`, `nice`,
+// `command`, `xargs -I{} ...`, or literally any other one-word wrapper this
+// guard cannot enumerate — putting a plain space (not a separator character)
+// immediately before "git", so the ENTIRE match failed and
+// findCommitInvocation() returned null: total silent non-detection, not a
+// narrowed one. The prose concern is a non-issue today because it is handled
+// by a DIFFERENT, more precise mechanism than the boundary class ever was:
+// buildQuoteMask() (BUG-043, see below) tells the scan loop whether the
+// matched "git" token sits inside an outer quoted string (real prose, e.g.
+// `echo "please git commit later"` or a `-m "... git ..."` message) and
+// skips it there regardless of what character preceded the boundary. Adding
+// `\s` to the boundary class only lets the token-matching START at an
+// ordinary word gap; it does not change what counts as "real" vs "prose" —
+// that distinction is still entirely the quote-mask's job, unchanged by this
+// fix. The token itself still requires an exact `git`/`git.exe`/`git.cmd`
+// word (or a path ending in one) immediately after the boundary, with a
+// mandatory trailing `(?=\s)` — so this still cannot turn "mygit", "digit",
+// or "gitlint" into a false match; only a real standalone "git" word,
+// wherever it sits after whitespace, start-of-text, or a shell separator.
 //
 // Between the boundary and the token an optional run of inline env-var
 // assignments is allowed — `GIT_AUTHOR_NAME=x GIT_AUTHOR_EMAIL=y git commit`
@@ -505,7 +519,7 @@ function unescapeDoubleQuoted(s) {
 // syntax, not prose, so it needs a different quote-mask check than a bare
 // "git" sitting inside someone else's quotes does).
 const GIT_TOKEN_RE =
-  /(?:^|[;&|(\n])(?:\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+))*\s*("(?:[^"]*[\\/])?git(?:\.(?:exe|cmd))?"|'(?:[^']*[\\/])?git(?:\.(?:exe|cmd))?'|(?:[^"'<>|&;()\n]*[\\/])?git(?:\.(?:exe|cmd))?)(?=\s)/gi;
+  /(?:^|[;&|(\n]|\s)(?:\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+))*\s*("(?:[^"]*[\\/])?git(?:\.(?:exe|cmd))?"|'(?:[^']*[\\/])?git(?:\.(?:exe|cmd))?'|(?:[^"'<>|&;()\n]*[\\/])?git(?:\.(?:exe|cmd))?)(?=\s)/gi;
 
 // ---------------------------------------------------------------------------
 // Quote-state tracking for GIT_TOKEN_RE (BUG-043, this guard's instance)
