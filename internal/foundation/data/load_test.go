@@ -289,6 +289,131 @@ func TestLoadSeasonal_WrongCurveLengthRejected(t *testing.T) {
 	assertPlaceholderCode(t, err, CodeSchemaInvalid, "curves[bad].multipliers")
 }
 
+// --- duplicate key detection (BUG-060) -------------------------------------
+
+// TestLoadSeasonal_DuplicateCurveKeyRejected is BUG-060's regression test:
+// a hand-edited seasonal.json with the same curve key ("gasSeasonal")
+// appearing twice inside "curves" must now fail Load with a clear,
+// registry-sourced error naming the duplicate, instead of silently
+// keeping the second body (standard encoding/json map-decode behaviour)
+// with no signal that the first was ever discarded.
+func TestLoadSeasonal_DuplicateCurveKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileSeasonal, `{
+		"version": 1,
+		"curves": {
+			"gasSeasonal": {"multipliers": [2.2,1,1,1,1,1,0.2,1,1,1,1,1]},
+			"gasSeasonal": {"multipliers": [9,9,9,9,9,9,9,9,9,9,9,9]}
+		}
+	}`)
+
+	_, err := LoadSeasonal(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeDuplicateKey, "curves.gasSeasonal")
+}
+
+// TestLoadSeasonal_NoFalsePositiveOnDistinctKeys confirms the duplicate
+// check does not misfire on a normal, duplicate-free seasonal.json with
+// multiple distinct curves -- the same shape a real §17.1 file uses
+// (gas/water/electricity seasonal curves side by side).
+func TestLoadSeasonal_NoFalsePositiveOnDistinctKeys(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileSeasonal, `{
+		"version": 1,
+		"curves": {
+			"gasSeasonal": {"multipliers": [2.2,1,1,1,1,1,0.2,1,1,1,1,1]},
+			"waterSummerPeak": {"multipliers": [1,1,1,1,1,1.25,1.25,1.25,1,1,1,1]},
+			"electricityWinter": {"multipliers": [1.15,1.15,1,1,1,1,1,1,1,1,1,1.15]}
+		}
+	}`)
+
+	s, err := LoadSeasonal(dir, testCorrelationID())
+	if err != nil {
+		t.Fatalf("LoadSeasonal: %v", err)
+	}
+	if len(s.Curves) != 3 {
+		t.Errorf("len(Curves) = %d, want 3", len(s.Curves))
+	}
+	if s.Curves["gasSeasonal"].Multipliers[0] != 2.2 {
+		t.Errorf("gasSeasonal[0] = %v, want 2.2", s.Curves["gasSeasonal"].Multipliers[0])
+	}
+}
+
+// TestLoadSeasonal_DuplicateKeyThenLaterSyntaxErrorReportsMalformed is
+// BUG-060 round 2's regression test: a file with BOTH a genuine
+// duplicate key (earlier in the byte stream) AND a later syntax error
+// (a trailing comma, here) must report CodeMalformedJSON, not
+// CodeDuplicateKey. Round 1's walkForDuplicateKey returned as soon as it
+// found the duplicate, without continuing to scan the rest of the
+// document, so the later syntax error was never discovered and the
+// file's real breakage was masked until a second run (after the
+// duplicate was fixed) surfaced it. Load now runs json.Unmarshal before
+// the duplicate-key walk, so any genuine syntax error anywhere in the
+// document -- including after an earlier duplicate key -- is reported
+// first.
+func TestLoadSeasonal_DuplicateKeyThenLaterSyntaxErrorReportsMalformed(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileSeasonal, `{
+		"version": 1,
+		"curves": {
+			"gasSeasonal": {"multipliers": [2.2,1,1,1,1,1,0.2,1,1,1,1,1]},
+			"gasSeasonal": {"multipliers": [9,9,9,9,9,9,9,9,9,9,9,9]},
+			"waterSummerPeak": {"multipliers": [1,1,1,1,1,1.25,1.25,1.25,1,1,1,],}
+		}
+	}`)
+
+	_, err := LoadSeasonal(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeMalformedJSON, "")
+}
+
+// TestLoadSeasonal_SyntaxErrorBeforeDuplicateStillReportsMalformed
+// confirms the reverse ordering (syntax error earlier in the byte
+// stream than the duplicate key) keeps reporting CodeMalformedJSON, as
+// it already did before round 2 -- this scenario was never broken, only
+// the opposite ordering was.
+func TestLoadSeasonal_SyntaxErrorBeforeDuplicateStillReportsMalformed(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileSeasonal, `{
+		"version": 1,
+		"curves": {
+			"waterSummerPeak": {"multipliers": [1,1,1,1,1,1.25,1.25,1.25,1,1,1,],}
+			"gasSeasonal": {"multipliers": [2.2,1,1,1,1,1,0.2,1,1,1,1,1]},
+			"gasSeasonal": {"multipliers": [9,9,9,9,9,9,9,9,9,9,9,9]}
+		}
+	}`)
+
+	_, err := LoadSeasonal(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeMalformedJSON, "")
+}
+
+// TestFindDuplicateKey_NestedPath confirms the underlying walker reports
+// a dotted path for a duplicate nested inside an object (not just a
+// top-level duplicate), matching the "curves.<name>" shape the seasonal
+// tests above rely on.
+func TestFindDuplicateKey_NestedPath(t *testing.T) {
+	path, found, err := findDuplicateKey([]byte(`{"a":{"b":1,"b":2}}`))
+	if err != nil {
+		t.Fatalf("findDuplicateKey: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a duplicate to be found")
+	}
+	if path != "a.b" {
+		t.Errorf("path = %q, want %q", path, "a.b")
+	}
+}
+
+// TestFindDuplicateKey_NoDuplicate confirms a duplicate-free document
+// reports found=false.
+func TestFindDuplicateKey_NoDuplicate(t *testing.T) {
+	_, found, err := findDuplicateKey([]byte(`{"a":{"b":1,"c":2},"d":[1,2,3]}`))
+	if err != nil {
+		t.Fatalf("findDuplicateKey: %v", err)
+	}
+	if found {
+		t.Error("expected no duplicate to be found")
+	}
+}
+
 // --- LoadAll (AC-3) --------------------------------------------------------
 
 func seedAllFixtures(t *testing.T, dir string) {

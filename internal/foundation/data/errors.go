@@ -56,4 +56,13 @@ const (
 	// array, so this is rejected before either lock (or the shared cbs
 	// append) is ever reached.
 	CodeStoreCopied = "MET-F608"
+
+	// CodeDuplicateKey: a config file's raw JSON contains the same key
+	// twice within one object (e.g. two "curves.gasSeasonal" entries in
+	// seasonal.json) -- BUG-060. Standard encoding/json unmarshaling into
+	// a map/struct silently keeps the last occurrence and discards the
+	// first with no signal, which could mask a real data-authoring
+	// mistake, so Load walks the raw token stream ahead of Unmarshal to
+	// catch it explicitly.
+	CodeDuplicateKey = "MET-F609"
 )

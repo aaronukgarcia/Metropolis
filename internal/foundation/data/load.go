@@ -1,6 +1,7 @@
 package data
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
@@ -48,6 +49,20 @@ func Load[T any, PT interface {
 		})
 	}
 
+	// BUG-060 round 2: json.Unmarshal now runs FIRST, before the
+	// duplicate-key walk below. Round 1 had the walk run first and return
+	// as soon as it found a duplicate, WITHOUT continuing to scan the
+	// rest of the document -- so a file with both a genuine duplicate key
+	// (earlier in the byte stream) and a later syntax error (e.g. a
+	// trailing comma) reported CodeDuplicateKey and masked the file's
+	// real CodeMalformedJSON syntax breakage until a second run, after
+	// the duplicate was fixed. Unmarshal-first fixes that: any genuine
+	// syntax error anywhere in the document fails here and is reported as
+	// CodeMalformedJSON immediately, before the duplicate-key walk ever
+	// runs. A document with a duplicate key but otherwise-valid JSON
+	// syntax still unmarshals successfully here (encoding/json's
+	// last-write-wins map behaviour), so the walk below still catches it
+	// -- round 1's whole point is preserved.
 	var v T
 	if err := json.Unmarshal(b, &v); err != nil {
 		var ute *json.UnmarshalTypeError
@@ -70,6 +85,22 @@ func Load[T any, PT interface {
 		return zero, errs.Wrap(CodeMalformedJSON, correlationID, err, map[string]any{
 			"path":  path,
 			"cause": err.Error(),
+		})
+	}
+
+	// Unmarshal above has already proven b is syntactically valid JSON,
+	// so any duplicate key found by walking the raw token stream here
+	// (at any nesting depth -- e.g. a duplicate curve name inside
+	// seasonal.json's "curves" object) is a genuine semantic problem, not
+	// a symptom of a syntax error elsewhere in the file. A walkErr here
+	// would mean the walker disagrees with encoding/json about what's
+	// valid JSON, which shouldn't happen post-Unmarshal-success; treat it
+	// as "no verdict" and fall through to Validate rather than raising a
+	// confusing secondary error.
+	if dupPath, found, walkErr := findDuplicateKey(b); walkErr == nil && found {
+		return zero, errs.Wrap(CodeDuplicateKey, correlationID, errors.New("duplicate key: "+dupPath), map[string]any{
+			"path":  path,
+			"field": dupPath,
 		})
 	}
 
@@ -177,6 +208,15 @@ func LoadMarketFile(dir, correlationID string) (MarketFile, error) {
 	return Load[MarketFile, *MarketFile](filepath.Join(dir, FileMarket), correlationID)
 }
 
+// LoadPacing loads and validates pacing.json from dir (FEAT-030 — see
+// pacing.go's package-level doc comment). Not part of the eight-file
+// §24 set LoadAll aggregates; engine.core's own Load calls this
+// directly, matching engine.market/engine.season's precedent for a
+// module-owned loader built on this shared generic Load.
+func LoadPacing(dir, correlationID string) (Pacing, error) {
+	return Load[Pacing, *Pacing](filepath.Join(dir, FilePacing), correlationID)
+}
+
 // Config aggregates all eight §24 files loaded by LoadAll. errors.json
 // is deliberately excluded (see the package doc and
 // foundation.data.md's Out of scope section) — foundation.errors owns
@@ -236,4 +276,97 @@ func LoadAll(dir, correlationID string) (*Config, error) {
 	}
 
 	return &c, nil
+}
+
+// findDuplicateKey walks b's raw JSON token stream (ahead of, and
+// independently from, json.Unmarshal) and reports the dotted field path
+// of the first object key that occurs twice within the same object,
+// anywhere in the document -- BUG-060. Unmarshaling into a Go map or
+// struct has already thrown this information away by the time Validate
+// runs (last occurrence silently wins), so this check has to happen on
+// the raw bytes, before that collapse occurs.
+//
+// Returns ("", false, nil) when no duplicate is found. A non-nil error
+// means the token walk itself failed (e.g. genuinely malformed JSON);
+// callers should treat that as "no verdict" and let json.Unmarshal's own
+// CodeMalformedJSON path report the real syntax error, since this
+// walker's error messages aren't the registry-sourced ones users expect.
+func findDuplicateKey(b []byte) (path string, found bool, err error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	return walkForDuplicateKey(dec, "")
+}
+
+// walkForDuplicateKey consumes exactly one JSON value from dec (dec must
+// be positioned immediately before that value's first token) and
+// recurses into objects/arrays looking for a duplicate key. path is the
+// dotted/bracketed field path accumulated so far, used to name the
+// duplicate in the returned error context.
+func walkForDuplicateKey(dec *json.Decoder, path string) (string, bool, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return "", false, err
+	}
+
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		// A scalar (string/number/bool/null): nothing further to walk.
+		return "", false, nil
+	}
+
+	switch delim {
+	case '{':
+		seen := make(map[string]bool)
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return "", false, err
+			}
+			key, _ := keyTok.(string)
+
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			if seen[key] {
+				return childPath, true, nil
+			}
+			seen[key] = true
+
+			dupPath, found, err := walkForDuplicateKey(dec, childPath)
+			if err != nil {
+				return "", false, err
+			}
+			if found {
+				return dupPath, true, nil
+			}
+		}
+		if _, err := dec.Token(); err != nil { // consume closing '}'
+			return "", false, err
+		}
+		return "", false, nil
+
+	case '[':
+		i := 0
+		for dec.More() {
+			childPath := path + "[" + itoa(i) + "]"
+			dupPath, found, err := walkForDuplicateKey(dec, childPath)
+			if err != nil {
+				return "", false, err
+			}
+			if found {
+				return dupPath, true, nil
+			}
+			i++
+		}
+		if _, err := dec.Token(); err != nil { // consume closing ']'
+			return "", false, err
+		}
+		return "", false, nil
+
+	default:
+		// '}' or ']' should never be handed to us directly here; treat
+		// defensively as "nothing to walk".
+		return "", false, nil
+	}
 }
