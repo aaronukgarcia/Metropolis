@@ -270,6 +270,107 @@ func TestRun_AcceptedRegistryEntryForADifferentCommitDoesNotRescue(t *testing.T)
 	}
 }
 
+// TestRun_AcceptedRegistryRescuesZeroValuedFirstRecordLock is BUG-094's own
+// regression test, reproducing the EXACT scenario named in its report
+// rather than TestRun_AcceptedRegistryRescuesCouldNotEvaluate's ScaleMismatch
+// stand-in: a degenerate all-zero (CitizenCount=0, Months=0,
+// PerMonthTick=0) PerfRecord with Measured=true is the FIRST record ever
+// seen for a preset.
+//
+// That record is plausible under PerfResult.ImplausibleReason() (ASM-374
+// deliberately checks only for NEGATIVE values, to avoid false positives
+// against this package's own zero-valued test fixtures — see perf.go), so
+// LoadLatestBaseline's seeding branch (results.go, `case anchor == nil`)
+// takes it unconditionally as both baseline and anchor: that branch never
+// consults MinMeasurableDuration. Every subsequent real measurement then
+// compares a real PerMonthTick against a below-floor (zero) baseline,
+// which CompareToBaseline's noise-floor check (baseline.go) reports as
+// BelowNoiseFloor — CouldNotEvaluate() — regardless of how fast or slow
+// the real run itself measured, which is what makes this test
+// deterministic rather than a real-wall-clock race: baseline=0 is below
+// MinMeasurableDuration no matter what.
+//
+// Pre-BUG-095-fold-in, this was a genuine permanent lock: -accept-regression
+// only fired on cmp.Regressed, and a BelowNoiseFloor verdict always has
+// Regressed==false, so the escape hatch could never reach it. This test
+// proves the CURRENT accept path (main.go's registry check now runs before
+// the CouldNotEvaluate branch, ahead of both Regressed and
+// CouldNotEvaluate) reaches and rescues this exact degenerate-seed shape,
+// not only the ScaleMismatch shape the sibling test exercises.
+func TestRun_AcceptedRegistryRescuesZeroValuedFirstRecordLock(t *testing.T) {
+	results := filepath.Join(t.TempDir(), "perf-results.ndjson")
+
+	// The degenerate first record BUG-094 named: all-zero, but Measured
+	// is true (as a hand-crafted record bypassing RunPerf would report —
+	// AppendResult's own Measured==true gate, BUG-073, is satisfied) and
+	// ImplausibleReason() is "" (all three checked fields are ==0, not
+	// <0), so nothing already in the pipeline rejects it.
+	zeroSeed := synth.PerfRecord{
+		CommitHash: "degenerate-seed-commit",
+		Preset:     "1M",
+		Result:     synth.PerfResult{CitizenCount: 0, Months: 0, PerMonthTick: 0, Measured: true},
+	}
+	if zeroSeed.Result.ImplausibleReason() != "" {
+		t.Fatalf("precondition failed: zero-valued record should be plausible (ASM-374 checks only <0), got reason %q", zeroSeed.Result.ImplausibleReason())
+	}
+	if err := synth.AppendResult(results, zeroSeed); err != nil {
+		t.Fatalf("seeding the degenerate zero-valued first record: %v", err)
+	}
+
+	// (1) An ordinary subsequent run, no registry entry -- still locked,
+	// exiting the distinct could-not-evaluate code, never a silent pass
+	// and never laundered into a new baseline.
+	before, readErr := os.ReadFile(results)
+	if readErr != nil {
+		t.Fatalf("reading results file after seeding: %v", readErr)
+	}
+	var out1, err1 bytes.Buffer
+	code := run([]string{
+		"-preset", "1M", "-citizens", "50", "-months", "1", "-results", results,
+		"-commit", "real-follow-up-commit",
+		"-accepted-regressions", filepath.Join(t.TempDir(), "no-such-registry.json"),
+	}, &out1, &err1)
+	if code != exitCouldNotEvaluate {
+		t.Fatalf("run() against a zero-valued baseline with no registry entry = %d, want %d (locked, BUG-094); stdout=%s stderr=%s", code, exitCouldNotEvaluate, out1.String(), err1.String())
+	}
+	after, readErr := os.ReadFile(results)
+	if readErr != nil {
+		t.Fatalf("reading results file after locked run: %v", readErr)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("results file changed after a could-not-evaluate run against a zero-valued baseline — an unevaluated measurement must never become the new baseline.\nbefore=%s\nafter=%s", before, after)
+	}
+
+	// (2) The SAME zero-valued lock, but this run's exact commit is named
+	// in the accepted-regressions registry — BUG-094's endorsed fix: the
+	// human override must reach a permanently could-not-evaluate baseline,
+	// not only an ordinary Regressed==true comparison.
+	registryPath := filepath.Join(t.TempDir(), "perf-accepted-regressions.json")
+	registryContent := `[{"preset": "1M", "commitHash": "real-follow-up-commit", "reason": "BUG-094: rescuing a zero-valued degenerate seed baseline"}]`
+	if err := os.WriteFile(registryPath, []byte(registryContent), 0o644); err != nil {
+		t.Fatalf("writing registry fixture: %v", err)
+	}
+	var out2, err2 bytes.Buffer
+	code = run([]string{
+		"-preset", "1M", "-citizens", "50", "-months", "1", "-results", results,
+		"-commit", "real-follow-up-commit",
+		"-accepted-regressions", registryPath,
+	}, &out2, &err2)
+	if code != 0 {
+		t.Fatalf("run() with a matching registry entry against a zero-valued lock = %d, want 0 (rescued, BUG-094); stdout=%s stderr=%s", code, out2.String(), err2.String())
+	}
+	if !bytes.Contains(out2.Bytes(), []byte("ACCEPTING")) {
+		t.Fatalf("stdout = %q, want an ACCEPTING banner", out2.String())
+	}
+	data, err := os.ReadFile(results)
+	if err != nil {
+		t.Fatalf("reading results file after rescue: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"acceptedRegression":true`)) || !bytes.Contains(data, []byte("real-follow-up-commit")) {
+		t.Fatalf("results file = %s, want a persisted record for commit %q with acceptedRegression=true", data, "real-follow-up-commit")
+	}
+}
+
 // TestRun_MalformedAcceptedRegistryIsAUsageError proves a corrupted
 // accepted-regressions file fails the run outright (exit 2) rather than
 // being silently treated as "nothing accepted" — see
