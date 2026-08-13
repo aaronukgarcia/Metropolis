@@ -1,5 +1,74 @@
 /**
- * PreToolUse hook — Prix Six commit-style enforcement.
+ * PreToolUse hook — Prix Six commit-style enforcement, DEMOTED TO ADVISORY
+ * (BUG-088, 2026-08-11; BOW mkey: tool.secretguard).
+ *
+ * ============================================================================
+ * THE DEMOTION (BUG-088) — READ THIS FIRST.
+ * ============================================================================
+ *
+ * This file used to catch `git commit` commands whose message body contains
+ * a `Co-Authored-By:` trailer and DENY them. BUG-088 found this guard is
+ * architecturally `claude-author-guard.js`'s twin, not its sibling: not only
+ * was its *trigger* (`isRealGitCommit()` below, parsed from the proposed
+ * command STRING) defeated by any leading word, shell wrapper, or
+ * non-bareword git invocation — its *payload* (message extraction:
+ * `-m`/`--file`/heredoc, ALSO parsed from that same command string) was
+ * equally unsound, with three documented residual gaps of its own (a bare
+ * `git commit` with no message source, `-F -` fed by a plain pipe, an
+ * unreadable `-F` target — see the @FIX history below, retained unchanged).
+ * Per `claude-author-guard.js`'s own precedent (FEAT-045, Aaron's ruling):
+ * fixing the trigger alone does not fix a check whose payload is equally
+ * unsound, so this file gets the SAME demotion FEAT-045 already gave
+ * claude-author-guard.js, for the same reason.
+ *
+ * THIS FILE NO LONGER EMITS A BLOCKING DECISION OF ANY KIND (AC-C3). No code
+ * path here ever produces the harness-blocking permissionDecision value
+ * (spelled without the adjacent literal here on purpose, matching
+ * claude-author-guard.js's own convention, so a grep for it against this
+ * file finds zero matches) — every path exits 0. The detection machinery
+ * below (message extraction + TRAILER_RE matching, unchanged internals —
+ * the same command-text-parsing machinery that BUG-088 found equally
+ * unsound as the trigger stays exactly as unsound as it is; demotion
+ * changes what happens with a positive detection, not the detection quality
+ * itself) still runs, and when it believes it has found a trailer, this
+ * file now says so as INFORMATION ONLY (a non-blocking advisory reason) —
+ * never as a decision the harness could act on as a pause or refusal.
+ *
+ * THE REAL CONTROL, GOING FORWARD: a future `commit-msg` git hook (out of
+ * scope for this dispatch — see docs/planning/acceptance/tool.secretguard.md's
+ * BUG-088 section) that reads the composed message directly from the file
+ * git passes it ($1, resolving to COMMIT_EDITMSG) via the newly-extracted
+ * claude-trailer-checker.js module (AC-D1) — no command-text parsing, no
+ * engage decision, no residual extraction gaps, because git always writes
+ * that file before invoking commit-msg regardless of which flag supplied
+ * the message. Until that hook is wired in (a follow-on integration
+ * dispatch, per the acceptance file's Escalations), THIS file's advisory
+ * warning is the only signal at all for a Co-Authored-By trailer — same
+ * "before vs at" tradeoff already documented for claude-author-guard.js:
+ * nothing is lost from the index/working tree by a later commit-msg catch,
+ * only the convenience of being warned off before the commit is attempted.
+ *
+ * FAIL-OPEN, matching claude-author-guard.js's inversion (AC-C3 table):
+ * every internal error in this file (fs read failure, unparseable stdin,
+ * any uncaught exception) now results in a silent, non-blocking exit 0.
+ * This is the opposite of the future commit-msg hook's expected fail-closed
+ * posture on the identical condition — the two layers deliberately
+ * disagree because a false pause at this advisory layer used to cost a
+ * human/agent seconds for nothing, and this file is no longer a hard stop.
+ *
+ * `git commit --no-verify` and the ASM-386 cherry-pick/revert/am gap are
+ * unaffected by this file either way — see claude-trailer-checker.js's
+ * header for the details; not re-stated here.
+ *
+ * Everything below this point (message extraction, TRAILER_RE, the
+ * detection functions) is HISTORICAL — retained unchanged as the record of
+ * why this guard's payload was never sound independent of its trigger, and
+ * because the same regex (TRAILER_RE) is what claude-trailer-checker.js
+ * also uses (unchanged) for the real, future enforcement point.
+ *
+ * ---------------------------------------------------------------------
+ * ORIGINAL HEADER (pre-BUG-088, retained for history) — READ AS PAST TENSE.
+ * ---------------------------------------------------------------------
  *
  * Catches `git commit` commands whose message body contains a
  * `Co-Authored-By:` trailer. The project policy (commit.md GATE 0) is that
@@ -78,6 +147,26 @@
  *   both sides. `-F -` fed BY a heredoc is unaffected — its body is still
  *   extracted and scanned via HEREDOC_RE, same as before.
  *
+ * @FIX (BUG-043, class fix ported from claude-author-guard.js): GIT_COMMIT_RE's
+ *   boundary class (`[;&|(\n]`) exists to catch a real invocation hidden after
+ *   a shell separator, but a regex has no notion of "inside a string
+ *   literal" — a BOW comment quoting the phrase "...(git commit ... is the
+ *   bypass...)" matched the `(` boundary exactly as if it were real shell
+ *   syntax, and this guard then went looking for a message source that did
+ *   not exist because there was no real commit at all (see BUG-043 — the
+ *   guard denied its own bug report). Fixed by porting buildQuoteMask() from
+ *   claude-author-guard.js (that guard's own BUG-043 fix, Tester-verified)
+ *   unchanged: a same-length boolean mask over the command text marking
+ *   which positions sit inside an open quoted region or heredoc body. Any
+ *   GIT_COMMIT_RE match whose "git" token falls inside that mask is now
+ *   skipped. Detection of a REAL invocation immediately after a genuine,
+ *   UNQUOTED `(`/`;`/`&`/`|`/newline is unchanged — the fix is knowing which
+ *   side of a quote the boundary sits on, not removing the boundary class.
+ *   See buildQuoteMask()'s own comment below for the KNOWN LIMITATION
+ *   (ASM-344) carried forward from the author guard: this is a toggle, not a
+ *   real shell lexer, and a deliberately unbalanced quote earlier in the
+ *   string can still flip parity for everything after it.
+ *
  * Fail-graceful in the sense that stayed: an unparseable/unexpected hook
  * INPUT (not a message-inspection failure — a genuine plumbing error, e.g.
  * malformed JSON on stdin) still exits 0 silently, because that failure mode
@@ -88,19 +177,52 @@
  * To disable: set env var `CLAUDE_DISABLE_COMMIT_CHECK=1` before commit.
  *
  * Receives JSON on stdin: { tool: "Bash", tool_input: { command: "..." } }
- * Returns JSON to block: { hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "..." } }
+ * (HISTORICAL — pre-demotion; see the DEMOTION block at the top of this
+ * file for what this hook actually emits now: never a blocking decision.)
  */
 
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+// BUG-123 round 6: buildQuoteMask() (and its heredoc helpers) moved to a
+// single shared module, claude-quote-mask.js — see that file's header for
+// why this file no longer carries its own copy.
+const { buildQuoteMask } = require('./claude-quote-mask.js');
 
 // Same shell-boundary-anchored `git commit` matcher used by
 // claude-version-guard.js / claude-bow-ref-check.js (SEC-008 fix): matches a
 // real invocation at the start of the command or after a shell separator,
-// never a bare mention inside a quoted string.
-const GIT_COMMIT_RE = /(?:^|[;&|(\n])\s*git\s+(?:-C\s+\S+\s+)?commit\b/;
+// never a bare mention inside a quoted string. 'g' flag added for BUG-043 —
+// isRealGitCommit() below needs to walk every match, not just the first.
+const GIT_COMMIT_RE = /(?:^|[;&|(\n])\s*git\s+(?:-C\s+\S+\s+)?commit\b/g;
+
+// ---------------------------------------------------------------------------
+// Quote-state tracking for GIT_COMMIT_RE (BUG-043) — buildQuoteMask() (and
+// its heredoc helpers) now lives in claude-quote-mask.js and is imported at
+// the top of this file (BUG-123 round 6). It was previously a standalone
+// hand-copy of claude-author-guard.js's implementation, kept deliberately
+// separate on the argument that a shared dependency could break all guards
+// at once if broken; the round-6 ruling supersedes that with GR#3 (a single
+// source of truth for this exact scanner, given three independent copies had
+// each proven capable of drifting) — see claude-quote-mask.js's own header.
+// ---------------------------------------------------------------------------
+
+/** True if `command` contains a REAL `git commit` invocation — a
+ * GIT_COMMIT_RE match whose "git" token is NOT inside a quoted argument or
+ * heredoc body (BUG-043). Walks every match rather than stopping at the
+ * first, so a quoted mention earlier in the string never masks a real
+ * invocation later in the same command. */
+function isRealGitCommit(command) {
+  const mask = buildQuoteMask(command);
+  GIT_COMMIT_RE.lastIndex = 0;
+  let m;
+  while ((m = GIT_COMMIT_RE.exec(command)) !== null) {
+    const gitPos = m.index + m[0].toLowerCase().lastIndexOf('git');
+    if (!mask[gitPos]) return true;
+  }
+  return false;
+}
 
 // Matches -m "..." / -m '...' / --message="..." / --message '...', allowing
 // escaped quotes inside the body. Multiple matches = multiple -m flags
@@ -172,6 +294,27 @@ function extractHeredocBodies(command) {
   return bodies;
 }
 
+/** BUG-088 DEMOTION (matching claude-author-guard.js's advise() exactly):
+ * emits a non-blocking, harness-visible reason via the SAME field the old
+ * blocking decision used to travel next to (hookSpecificOutput /
+ * permissionDecisionReason) but with the decision itself set to the
+ * harness's non-pausing value — proceeds without pausing, exactly like a
+ * silent exit(0), just with a message attached. Always exits 0. This is the
+ * ONLY place in this file that writes hookSpecificOutput any more. */
+function advise(reason) {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'allow',
+        permissionDecisionReason: reason,
+      },
+    })
+  );
+  process.exit(0);
+}
+
+function main() {
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => { input += chunk; });
@@ -184,8 +327,9 @@ process.stdin.on('end', () => {
     const data = JSON.parse(input.replace(/^\uFEFF/, ''));
     const command = data?.tool_input?.command ?? '';
 
-    // Only intercept real `git commit` invocations (SEC-008 fix).
-    if (!GIT_COMMIT_RE.test(command)) {
+    // Only intercept real `git commit` invocations (SEC-008 fix, quote-aware
+    // since BUG-043).
+    if (!isRealGitCommit(command)) {
       process.exit(0);
     }
 
@@ -239,24 +383,17 @@ process.stdin.on('end', () => {
       }
     }
 
-    // Deny (fail-closed) if any -F target genuinely could not be read: an
-    // inspection failure must not let the check pass (this is the fix for
-    // the ASM-034 concern — see file header investigation notes).
+    // BUG-088 DEMOTION: previously denied (fail-closed) if any -F target
+    // genuinely could not be read. Now advisory-only — see the file header.
     if (unreadableNotes.length > 0) {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason:
-            '🛑 PRIX SIX COMMIT POLICY: could not verify this commit message is free of a ' +
-            'Co-Authored-By trailer.\n\n' +
-            `${unreadableNotes.join('\n')}\n\n` +
-            'An unreadable message source is treated as a failed check, not a passed one. ' +
-            'Fix the -F/--file path, or if you are certain the content is clean, bypass with ' +
-            'CLAUDE_DISABLE_COMMIT_CHECK=1.',
-        },
-      }));
-      process.exit(0);
+      advise(
+        '⚠️ PRIX SIX COMMIT POLICY (advisory only, BUG-088): could not verify this commit ' +
+        'message is free of a Co-Authored-By trailer.\n\n' +
+        `${unreadableNotes.join('\n')}\n\n` +
+        'This is a WARNING, not a block — the real control is the future commit-msg hook ' +
+        '(fail-closed, at commit time; see claude-trailer-checker.js).'
+      );
+      return;
     }
 
     // No -m/--message, no -F/--file flag at ALL (not even `-F -`), and no
@@ -271,22 +408,16 @@ process.stdin.on('end', () => {
     // flag DOES count as "found a source" here even when its content is
     // unreadable, because that shape can genuinely succeed (see
     // pipedStdinUnverified below, handled separately as a warn).
+    // BUG-088 DEMOTION: previously denied here too — same rationale, now
+    // advisory-only.
     if (messages.length === 0 && filePaths.length === 0) {
-      process.stdout.write(JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'deny',
-          permissionDecisionReason:
-            '🛑 PRIX SIX COMMIT POLICY: could not find a message source (-m/--message, ' +
-            '-F/--file, or a heredoc) for this `git commit`, so the Co-Authored-By check ' +
-            'could not be performed.\n\n' +
-            'A commit with no discoverable message source cannot succeed non-interactively ' +
-            'anyway (git aborts on an empty message when stdin is not a TTY) — use ' +
-            '`-m "..."` or `-F <file>` instead. If you believe this is a false positive, ' +
-            'bypass with CLAUDE_DISABLE_COMMIT_CHECK=1.',
-        },
-      }));
-      process.exit(0);
+      advise(
+        '⚠️ PRIX SIX COMMIT POLICY (advisory only, BUG-088): could not find a message source ' +
+        '(-m/--message, -F/--file, or a heredoc) for this `git commit`, so the Co-Authored-By ' +
+        'check could not be performed. This is a WARNING, not a block — the real control is ' +
+        'the future commit-msg hook (fail-closed, at commit time; see claude-trailer-checker.js).'
+      );
+      return;
     }
 
     if (pipedStdinUnverified && messages.length === 0) {
@@ -308,29 +439,40 @@ process.stdin.on('end', () => {
       process.exit(0);
     }
 
-    // Trailer found — block with an instructional message.
-    const reason = '🛑 PRIX SIX COMMIT POLICY: Co-Authored-By trailer detected.\n' +
+    // BUG-088 DEMOTION: trailer found — previously blocked; now an advisory
+    // only (see the file header). The real control is the future commit-msg
+    // hook via claude-trailer-checker.js.
+    advise(
+      '⚠️ PRIX SIX COMMIT POLICY (advisory only, BUG-088): Co-Authored-By trailer detected.\n' +
       '\n' +
-      'This repo is solely Aaron\'s; no AI authorship trailers belong here. The rule\n' +
-      'is in commit.md and in Vestige memory (feedback_no_co_authored_by_lines).\n' +
-      '\n' +
-      'Remove the Co-Authored-By line from the commit message and try again.\n' +
-      'If you intentionally need to bypass, set CLAUDE_DISABLE_COMMIT_CHECK=1.';
-
-    const output = JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason,
-      },
-    });
-    process.stdout.write(output);
-    process.exit(0);
+      'This repo is solely Aaron\'s; no AI authorship trailers belong here. This is a WARNING, ' +
+      'not a block — the real control is now the future commit-msg hook (fail-closed, at ' +
+      'commit time; see claude-trailer-checker.js).'
+    );
 
   } catch (err) {
-    // Parse error or unexpected hook-input shape — don't block. This is a
-    // plumbing failure (can't even read what command ran), not a message-
-    // inspection failure, so it stays fail-graceful.
+    // Fail-OPEN (BUG-088 demotion, inverted from the pre-demotion posture):
+    // any internal error here — parse failure, fs error, or unexpected
+    // hook-input shape — never blocks. This layer is no longer a hard stop.
     process.exit(0);
   }
 });
+}
+
+// require.main === module guard (same pattern as claude-secret-guard.js,
+// added here for BUG-043 testability): when run directly as the hook (the
+// only way PreToolUse ever invokes it), behaviour is unchanged. When
+// require()'d by a test harness, main() is never called (so stdin is never
+// touched) and the pure helper functions below are exported instead.
+if (require.main === module) {
+  main();
+} else {
+  module.exports = {
+    GIT_COMMIT_RE,
+    buildQuoteMask,
+    isRealGitCommit,
+    extractMFlagMessages,
+    extractFileFlagPaths,
+    extractHeredocBodies,
+  };
+}

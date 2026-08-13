@@ -148,9 +148,32 @@ const SKIP_DIRS = new Set(['node_modules', '.git']);
 
 /** Recursively collects absolute paths of every *.js file under `dir`,
  * skipping node_modules/.git and any dotdir, and skipping this file's own
- * *.test.js siblings (a copy's own regression test file is not a copy). */
+ * *.test.js siblings (a copy's own regression test file is not a copy).
+ *
+ * ENOENT HARDENING (round-4 Destructive follow-up, Vex's flakiness finding).
+ * `node --test *.test.js` runs test files concurrently, and several sibling
+ * suites (e.g. claude-secret-guard.test.js's BUG-123 end-to-end tests)
+ * create/rmSync throwaway fixture directories DIRECTLY UNDER `ROOT` while
+ * this scan is walking the same tree — a real cross-file test-isolation
+ * race, not a buildQuoteMask defect. If another test's `fs.rmSync(dir,
+ * {recursive:true})` wins between this function listing a directory's
+ * entries and recursing into (or lstat-ing, via `withFileTypes`) one of
+ * them, `readdirSync` throws ENOENT for a directory that simply no longer
+ * exists — not a real error about the repo's actual, permanent source
+ * files. A directory that appears and vanishes entirely within one test run
+ * cannot contain a real guard-copy file worth flagging, so treat ENOENT (and
+ * the sibling ENOTDIR, in case a dir/file swap raced too) as "nothing here",
+ * not a scan failure. Any OTHER errno still propagates — this is scoped to
+ * the exact race, not a blanket swallow. */
 function collectJsFiles(dir, out) {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (err) {
+    if (err && (err.code === 'ENOENT' || err.code === 'ENOTDIR')) return out;
+    throw err;
+  }
+  for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     if (SKIP_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
@@ -165,24 +188,59 @@ function collectJsFiles(dir, out) {
 
 /** Discovers every file in the repo containing a literal buildQuoteMask
  * function declaration (see the header comment for what this does and does
- * not catch). Returns absolute paths, sorted for a deterministic report. */
+ * not catch). Returns absolute paths, sorted for a deterministic report.
+ * Same ENOENT race as collectJsFiles applies to reading a file's contents
+ * (a fixture .js file could theoretically be removed between being listed
+ * and being read) — same narrow, errno-scoped tolerance applies here. */
 function discoverCopies() {
   const all = collectJsFiles(ROOT, []);
   const pattern = /function\s+buildQuoteMask\s*\(/;
   const copies = [];
   for (const file of all) {
-    const src = fs.readFileSync(file, 'utf8');
+    let src;
+    try {
+      src = fs.readFileSync(file, 'utf8');
+    } catch (err) {
+      if (err && err.code === 'ENOENT') continue;
+      throw err;
+    }
     if (pattern.test(src)) copies.push(file);
   }
   return copies.sort();
 }
 
-const KNOWN_COPIES_AS_OF_2026_08_11 = [
-  'claude-author-guard.js',
-  'claude-plan-guard.js',
-  'claude-pre-commit-check.js',
-  'claude-secret-guard.js',
-  'claude-version-guard.js',
+// UPDATED 2026-08-12 (BUG-123 round 2, Tester B finding 2): the BUG-123
+// round-1 fix legitimately REMOVED the literal buildQuoteMask() declaration
+// from claude-plan-guard.js, claude-secret-guard.js and claude-version-
+// guard.js — their `git commit`/`git push` trigger detection now goes
+// through the shared claude-git-commit-trigger.js module instead (see that
+// file's header), which has no buildQuoteMask of its own. At that point only
+// claude-author-guard.js (the original) and claude-pre-commit-check.js (a
+// still-standing deliberate copy, see this file's header) contained the
+// literal declaration.
+//
+// UPDATED AGAIN 2026-08-12 (BUG-123 round 6, Bill's ruling): the "keep
+// deliberate standalone copies so one broken shared module can't break every
+// guard at once" argument this file's own header used to justify the
+// two-copy state was superseded once a THIRD, independent hand-rolled
+// scanner (claude-git-commit-trigger.js's consumeShellToken()) proved the
+// opposite failure mode across rounds 3-5: "model it, don't share it" is how
+// this project ended up re-shipping the same already-fixed escape-handling
+// gaps three times. buildQuoteMask() (and its heredoc helpers) is now
+// extracted to claude-quote-mask.js as the single canonical implementation;
+// claude-author-guard.js, claude-pre-commit-check.js and
+// claude-git-commit-trigger.js all `require()` it rather than declaring
+// their own copy. So as of this date, discoverCopies() is expected to find
+// exactly ONE file with a literal declaration: the shared module itself.
+// This is exactly the "legitimately consolidated into a shared module" case
+// the inventory test below already anticipates — verified against
+// discoverCopies()'s actual output, not just asserted from memory. (The
+// cross-copy-agreement tests below become vacuous with a single discovered
+// copy — see their own `discovered.length < 2` short-circuit — but the
+// golden-expectation tests still exercise the shared module directly, so
+// behavioural coverage is unchanged, not lost.)
+const KNOWN_COPIES_AS_OF_2026_08_12 = [
+  'claude-quote-mask.js',
 ].sort();
 
 const discovered = discoverCopies();
@@ -191,12 +249,12 @@ test('inventory: the discovered copy set matches the documented state (informati
   const relDiscovered = discovered.map(f => path.relative(ROOT, f).replace(/\\/g, '/')).sort();
   assert.deepEqual(
     relDiscovered,
-    KNOWN_COPIES_AS_OF_2026_08_11,
+    KNOWN_COPIES_AS_OF_2026_08_12,
     'The set of files containing a literal buildQuoteMask() declaration changed since this test ' +
       'was written. This is not automatically a bug: it could mean a copy was legitimately ' +
       'consolidated into a shared module (the ASM-356 "what would change my mind" case), or a ' +
       'NEW undocumented copy appeared (the exact failure mode BUG-076 exists to catch) — either ' +
-      'way it needs a human look and, if intentional, this KNOWN_COPIES_AS_OF_2026_08_11 list ' +
+      'way it needs a human look and, if intentional, this KNOWN_COPIES_AS_OF_2026_08_12 list ' +
       'and its date should be updated. The behavioural corpus tests below run against whatever ' +
       'was discovered regardless of this assertion\'s outcome, so a new copy still gets checked ' +
       'even if nobody updates this list.'

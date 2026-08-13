@@ -2,25 +2,46 @@
  * PreToolUse hook — secret & hardcoding pre-commit guard (BOW mkey: tool.secretguard).
  *
  * Spec: GR#11 (Pre-Commit Security Review); GR#15 (Validators Derive From
- * Data); M0-ENG §5 (hooks)
+ * Data); M0-ENG §5 (hooks); BUG-088 (this file's trigger-only remediation)
  *
  * GR#11 requires a mandatory security threat model before every commit; this
  * hook mechanises the secrets half of that review so it no longer depends on
  * lead vigilance. It intercepts `git commit` and scans STAGED content only
- * (`git diff --cached`, plus the staged file list for binary
- * certificate/keystore files that never show up as text diff lines) for:
+ * for private-key blocks, certificate/keystore files, api-key/token
+ * patterns, connection-string passwords, high-entropy literals, and GR#15
+ * hardcoding smells — see claude-secret-checker.js for the full detector
+ * list and the allowlist matching rules.
  *
- *   - private-key blocks         (-----BEGIN ... PRIVATE KEY-----)
- *   - certificate/keystore files (.pem/.key/.p12/.pfx/.jks/.crt/.cer staged)
- *   - api-key / token patterns   (AKIA..., ghp_/gho_..., sk-..., xox[baprs]-,
- *                                 generic key/token/secret = "literal",
- *                                 Bearer <token>)
- *   - connection-string-password (scheme://user:pass@host, any scheme)
- *   - high-entropy string literals (Shannon entropy over base64/hex-looking
- *     quoted literals, length-gated to avoid firing on short tokens)
- *   - GR#15 hardcoding smells (a comparison/assertion against a bare numeric
- *     literal where the other operand reads like an expected count/total,
- *     e.g. `assert(count === 45)`)
+ * BUG-088 (2026-08-11): this hook's *trigger* — the bare `GIT_COMMIT_RE.test
+ * (command)` check below, deciding whether to engage at all — was defeated
+ * by any leading word (`env git commit`), any shell wrapper (`bash -c
+ * "git commit ..."`), or any non-bareword git invocation (`git.exe commit`,
+ * a quoted full path). Its *payload* (the actual scan) was always sound —
+ * real git/filesystem state, read via `spawnSync`, never re-parsed from the
+ * command string. Per docs/planning/acceptance/tool.secretguard.md's
+ * BUG-088 section, this file KEEPS its blocking PreToolUse posture unchanged
+ * (a secret false positive has a cheap, documented remedy —
+ * claude-secret-guard.allow.json — unlike identity's false positives, and a
+ * missed secret on a public repo is this item's own "worst outcome in the
+ * class"). The payload logic itself has been extracted, UNCHANGED, into
+ * claude-secret-checker.js — a standalone, requireable module that is now
+ * the single source of truth for the scan (GR#3), reachable by this guard
+ * AND by a future `commit-msg` hook dispatcher (out of scope for this file
+ * — see the acceptance file's Section B). The real, durable fix for
+ * BUG-088's trigger defect is that future `commit-msg` hook, which has no
+ * text-parsing engage decision to make at all; this file's own trigger check
+ * is UNCHANGED by this item (still the original, best-effort boundary-regex
+ * check it has always been — see the trigger-comment correction further
+ * below for a P0 finding on a prior pass of this refactor that briefly
+ * ported quote-masking into this check, which has now been reverted)
+ * because it still needs SOME engage decision at the PreToolUse layer until
+ * that hook exists.
+ *
+ * KNOWN LIMITATION INHERITED FROM ASM-386 (AC-B2, stated here too since this
+ * guard is the PreToolUse half of the same finding): even once a commit-msg
+ * hook exists, it will not fire for `git cherry-pick` / `git revert` /
+ * `git am` on this project's git version — verified independently for
+ * claude-author-guard.js's identical situation, not re-verified here.
  *
  * A finding is suppressed only when it matches claude-secret-guard.allow.json
  * exactly (an allowlisted path skips the whole file; an allowlisted pattern
@@ -61,46 +82,174 @@
 
 'use strict';
 
-const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
 
-const ROOT = __dirname;
-const ALLOWLIST_PATH = path.join(ROOT, 'claude-secret-guard.allow.json');
+const checker = require('./claude-secret-checker.js');
 
-// Why 3.7: a canonical hex GUID/UUID ("1c0a8c46-ba8a-4063-92f8-0bbcdb580753")
-// measures ~3.8 bits/char and must clear this bar so it gets flagged as
-// high-entropy by default — the allowlist's guid-uuid-literal pattern is
-// what proves it suppresses that flag (see AC-11), not an accidental gap in
-// the detector. Ordinary English prose is excluded upstream by the
-// base64/hex shape prefilter (TOKEN_SHAPE_RE rejects whitespace), not by
-// this threshold, so lowering it further does not risk flagging sentences.
-const ENTROPY_THRESHOLD = 3.7;
-// Why 20: shorter literals (short flags, enum values, single words) produce
-// noisy entropy estimates and would false-positive constantly; 20 chars is
-// comfortably below the shortest secret shapes this guard targets elsewhere
-// (e.g. the 32-char AWS secret key, 36-char GitHub PAT) while still catching
-// the metro-DB-default / GUID-length (36-char) fixtures used to prove the
-// allowlist path in AC-11.
-const ENTROPY_MIN_LENGTH = 20;
+// LAZY / DEFERRED require (BUG-123 round 9, attacker "Cinder" REJECT).
+// claude-git-commit-trigger.js — and, transitively as of round 6,
+// claude-quote-mask.js — used to be require()'d right here, at TRUE module
+// top level, unconditionally, before main() (or its try/catch) existed at
+// all. This file's own header says "Fail-CLOSED... an internal error while
+// scanning a `git commit`... results in a DENY rather than an allow" — but a
+// synchronous throw during that top-level require() (a syntax error in
+// claude-quote-mask.js while it's under live concurrent edit in this same
+// tree, a missing file, anything) happens during MODULE EVALUATION, before
+// main()'s try/catch block is ever reached. Node's default handling of an
+// uncaught exception at module-load time is to print a stack trace to
+// stderr and exit 1 — NO stdout, NO hookSpecificOutput JSON at all. Under
+// the PreToolUse contract (documented at claude-destructive-guard.js:137-158)
+// that is a NON-BLOCKING failure: the proposed `git commit` PROCEEDS
+// completely unscanned, reproducing BUG-123's own original impact (a
+// fail-closed guard silently skipping its scan) via a brand new mechanism —
+// a dependency crash instead of a regex-trigger miss. Live-reproduced in an
+// isolated sandbox (this repo's files untouched): a broken copy of
+// claude-quote-mask.js crashed this guard at require() time for EVERY
+// command, not just commit-shaped ones, exit 1, zero stdout.
+//
+// claude-destructive-guard.js was already hardened against this identical
+// shape after its own round-2/3 (see its DEPENDENCY LOADING comment) by
+// moving its `require()`s of claude-author-guard.js / claude-bow.js INSIDE
+// main(), where a throw is an ordinary JS exception the existing
+// main().catch() net (here: the existing top-level try/catch inside
+// process.stdin's 'end' handler) already covers. That pattern is now
+// carried into this file: the trigger module is loaded lazily via
+// loadGitCommitTrigger() below, called from INSIDE main()'s try block, so a
+// load-time throw is caught by the SAME catch() that already denies on any
+// other internal error — no new mechanism invented. A load failure does not
+// unconditionally deny every Bash/PowerShell command in the session (that
+// would brick `git status` / `npm install` over a bug in a file this guard
+// doesn't even need for those) — it denies only when the raw command text
+// PLAUSIBLY looks like a git commit (looksLikeCommitFallback(), dependency-
+// free by construction, mirroring claude-destructive-guard.js's own
+// FALLBACK_LOOKS_LIKE_COMMIT_RE), the same commit-shaped narrowing this
+// file's unparseable-stdin branch already applies.
+//
+// Path resolution supports an optional env var override
+// (CLAUDE_SECRET_GUARD_TRIGGER_PATH), defaulting to the real sibling file —
+// production behaviour is byte-for-byte unchanged; the override exists only
+// so the regression test suite can point at disposable fixture files
+// (missing / syntax-error / wrong-exports) under the OS temp dir without
+// ever touching the real, live-edited claude-git-commit-trigger.js /
+// claude-quote-mask.js.
+let _gitCommitTriggerMod = null;
+function loadGitCommitTrigger() {
+  if (_gitCommitTriggerMod) return _gitCommitTriggerMod;
+  const triggerPath =
+    process.env.CLAUDE_SECRET_GUARD_TRIGGER_PATH || path.join(__dirname, 'claude-git-commit-trigger.js');
+  // eslint-disable-next-line global-require, import/no-dynamic-require
+  const mod = require(triggerPath);
+  if (typeof mod.buildAnchoredGitVerbTriggerRegex !== 'function') {
+    throw new Error(
+      'claude-git-commit-trigger.js loaded but did not export buildAnchoredGitVerbTriggerRegex ' +
+        '(wrong module shape — cannot build the commit trigger without it)'
+    );
+  }
+  _gitCommitTriggerMod = mod;
+  return mod;
+}
 
-const SENSITIVE_FILE_EXTENSIONS = ['.pem', '.key', '.p12', '.pfx', '.jks', '.crt', '.cer'];
+// Self-contained (NO further `require()`s — must work even when
+// loadGitCommitTrigger() itself is what just failed) best-effort check: does
+// `command` plausibly contain a git commit invocation? Deliberately COARSER
+// than the real trigger (which needs claude-git-commit-trigger.js's real
+// tokenizer) — it exists only to decide "is a dependency-load failure worth
+// denying over", mirroring claude-destructive-guard.js's
+// looksLikeCommitFallback() exactly.
+//
+// ROUND 10 (attacker "Thresher" REJECT): this used to be a single regex,
+// FALLBACK_LOOKS_LIKE_COMMIT_RE = /\bgit(?:\.(?:exe|cmd))?\b[\s\S]{0,200}?\bcommit\b/i,
+// which capped the gap between "git" and "commit" at ~200 chars. That cap was
+// a mistaken performance guard: a single legitimately long `-c` option value
+// (e.g. `git -c user.name="<250 chars>" commit -m x`, Thresher's exact repro)
+// pushes the real invocation's git-to-commit distance past the window, so
+// with the primary dependency broken NOTHING catches it — reproducing
+// BUG-123's own original impact (a real commit landing completely unscanned)
+// via a fourth mechanism. This fallback runs only on the rare
+// dependency-broken path, so it never needed to be bounded for performance;
+// it needs to find "commit" anywhere after "git" in the WHOLE string. Rebuilt
+// below as plain indexOf/startsWith scanning rather than a regex at all —
+// each scan is strictly O(n) with zero backtracking, so it is immune to
+// catastrophic-backtracking-style ReDoS regardless of adversarial input
+// length or shape (measured: a 1MB non-matching string completes in low
+// single-digit milliseconds, see the round-10 regression test).
+function isWordChar(ch) {
+  return !!ch && /[a-z0-9_]/.test(ch);
+}
+function looksLikeCommitFallback(command) {
+  const lower = (command || '').toLowerCase();
+  let idx = 0;
+  while (idx < lower.length) {
+    const gitIdx = lower.indexOf('git', idx);
+    if (gitIdx === -1) return false;
+    const beforeCh = gitIdx > 0 ? lower[gitIdx - 1] : '';
+    const afterStart = gitIdx + 3;
+    const hasSuffix = lower.startsWith('.exe', afterStart) || lower.startsWith('.cmd', afterStart);
+    const afterEnd = hasSuffix ? afterStart + 4 : afterStart;
+    const afterCh = afterEnd < lower.length ? lower[afterEnd] : '';
+    if (!isWordChar(beforeCh) && !isWordChar(afterCh)) {
+      // Found a bare "git" (or git.exe/git.cmd) token — now look for "commit"
+      // anywhere after it, no distance bound at all.
+      return lower.indexOf('commit', afterEnd) !== -1;
+    }
+    idx = gitIdx + 3;
+  }
+  return false;
+}
 
 // @FIX (SEC-008 follow-up, Bill-directed scope expansion 2026-08-09): this
 // hook's commit-intercept used to be a bare `command.includes('git commit')`
-// substring test — the same unanchored-substring fragility flagged in
-// claude-plan-guard.js / claude-pre-commit-check.js (SEC-008), just not one
-// of the five findings a single Destructive-agent sweep happened to sample.
-// Bill's ruling: fix it here too rather than leave one hook below the
-// standard the other four were just raised to — a below-standard hook left
-// in place produces false confidence that the class is closed. Replaced with
-// the same shell-command-boundary-anchored regex already proven in
-// claude-version-guard.js / claude-bow-ref-check.js / claude-plan-guard.js /
-// claude-pre-commit-check.js: the phrase must sit at the start of the
-// command or immediately after a shell separator (`;`, `&`, `|`, `(`,
-// newline), so a quoted mention never matches but every real invocation
-// still does.
-const GIT_COMMIT_RE = /(?:^|[;&|(\n])\s*git\s+(?:-C\s+\S+\s+)?commit\b/;
+// substring test. Replaced with the same shell-command-boundary-anchored
+// regex already proven in claude-version-guard.js / claude-bow-ref-check.js /
+// claude-plan-guard.js / claude-pre-commit-check.js: the phrase must sit at
+// the start of the command or immediately after a shell separator (`;`,
+// `&`, `|`, `(`, newline), so a quoted mention never matches but every real
+// invocation still does.
+//
+// BUG-088 CORRECTION (2026-08-11): a prior pass of this refactor silently
+// ported claude-author-guard.js's buildQuoteMask()/isRealGitCommit()
+// quote-tracking machinery into this trigger check. That machinery does NOT
+// belong here and never shipped here — `git show HEAD:claude-secret-guard.js`
+// confirms this file's trigger has only ever been a bare `GIT_COMMIT_RE.test
+// (command)`, matching AC-C1/AC-C2's explicit claim that this guard's
+// PreToolUse trigger is unchanged by BUG-088. Porting the quote mask in
+// introduced a NEW, undisclosed false-negative: an unbalanced/odd-count
+// quote character earlier in the command string (e.g. inside a shell
+// comment, `"# don't forget to review; git commit -m x"`) flips the mask's
+// quote-state parity and makes a real, immediately-following `git commit`
+// invisible to the trigger, silently skipping the whole scan. Reverted to
+// the original bare-regex shape. The quote-masking fix (BUG-043) is real and
+// correct, but it lives ONLY in claude-author-guard.js (and, deliberately,
+// claude-destructive-guard.js) — see GR#3: duplicating it into this guard is
+// exactly the kind of accidental, unreviewed drift GR#3 exists to prevent.
+//
+// This trigger machinery stays HERE, not in claude-secret-checker.js
+// (AC-B4/AC-B3): it is what decides whether to engage at THIS PreToolUse
+// layer specifically, which is unchanged in posture by BUG-088 (see header).
+// A future commit-msg dispatcher requiring claude-secret-checker.js has no
+// engage decision to make at all, so it needs none of this.
+//
+// BUG-123 (2026-08-12): the single `(?:-C\s+\S+\s+)?` global-option slot only
+// tolerated one bare `-C <dir>` between `git` and `commit`, so the extremely
+// common `git -c user.email=... commit` idiom (or `-c commit.gpgsign=false`,
+// or several `-c`s, or `-c` combined with `-C`) did not match at all — this
+// fail-closed guard exited BEFORE calling checker.runScan(), silently
+// skipping the secret scan. Fixed by building the trigger from
+// claude-git-commit-trigger.js's shared option-run grammar (GR#3 — see that
+// module's header for why this is a shared regex builder and not four
+// independently-drifting copies, and for why it is NOT the same thing as the
+// whole-command quote-mask machinery BUG-088 deliberately kept out of this
+// file). Still a bare, single RegExp-like object — no quote-masking of the
+// surrounding command text, unchanged posture.
+//
+// ROUND 9: no longer built here at module top level — see the LAZY /
+// DEFERRED require comment above. Built on demand by buildGitCommitRe()
+// (production, inside main()'s try block) and once, eagerly, in the
+// module.exports branch below (test-import path only, never the production
+// hook path — see that branch's own comment).
+function buildGitCommitRe() {
+  return loadGitCommitTrigger().buildAnchoredGitVerbTriggerRegex('commit');
+}
 
 function deny(reason) {
   const output = JSON.stringify({
@@ -115,587 +264,8 @@ function deny(reason) {
 }
 
 // ---------------------------------------------------------------------------
-// Allowlist loading / validation
-// ---------------------------------------------------------------------------
-
-function loadAllowlist() {
-  if (!fs.existsSync(ALLOWLIST_PATH)) {
-    throw new Error(`allowlist file missing: ${ALLOWLIST_PATH}`);
-  }
-  let raw;
-  try {
-    raw = fs.readFileSync(ALLOWLIST_PATH, 'utf8').replace(/^\uFEFF/, '');
-  } catch (err) {
-    throw new Error(`failed to read allowlist file: ${err.message}`);
-  }
-  let data;
-  try {
-    data = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(`allowlist file is not valid JSON: ${err.message}`);
-  }
-  if (!data || typeof data !== 'object' || Array.isArray(data)) {
-    throw new Error('allowlist file must be a JSON object');
-  }
-  const allowedPaths = data.allowedPaths;
-  const allowedPatterns = data.allowedPatterns;
-  if (!Array.isArray(allowedPaths)) {
-    throw new Error('allowlist "allowedPaths" must be an array');
-  }
-  // BUG-001 follow-up: entries must be {path, reason} objects — bare strings
-  // are rejected (same "mandatory, non-empty reason" discipline as
-  // allowedPatterns), and a path of exactly "**" or "*" is rejected outright
-  // as over-broad (it would allowlist the entire staged tree).
-  for (const [i, entry] of allowedPaths.entries()) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new Error(`allowlist "allowedPaths[${i}]" must be an object {path, reason} — bare strings are not accepted`);
-    }
-    if (typeof entry.path !== 'string' || entry.path.trim().length === 0) {
-      throw new Error(`allowlist "allowedPaths[${i}].path" must be a non-empty string`);
-    }
-    if (entry.path.trim() === '**' || entry.path.trim() === '*') {
-      throw new Error(`allowlist "allowedPaths[${i}].path" ("${entry.path}") is over-broad — it would allowlist the entire staged tree; use a specific path or a scoped glob like "docs/**"`);
-    }
-    if (typeof entry.reason !== 'string' || entry.reason.trim().length === 0) {
-      throw new Error(`allowlist "allowedPaths[${i}].reason" is mandatory and must be a non-empty string`);
-    }
-  }
-  if (!Array.isArray(allowedPatterns)) {
-    throw new Error('allowlist "allowedPatterns" must be an array');
-  }
-  for (const [i, entry] of allowedPatterns.entries()) {
-    if (!entry || typeof entry !== 'object') {
-      throw new Error(`allowlist "allowedPatterns[${i}]" must be an object`);
-    }
-    if (entry.type !== 'exact' && entry.type !== 'regex') {
-      throw new Error(`allowlist "allowedPatterns[${i}].type" must be "exact" or "regex"`);
-    }
-    if (typeof entry.value !== 'string' || entry.value.length === 0) {
-      throw new Error(`allowlist "allowedPatterns[${i}].value" must be a non-empty string`);
-    }
-    if (typeof entry.reason !== 'string' || entry.reason.trim().length === 0) {
-      throw new Error(`allowlist "allowedPatterns[${i}].reason" is mandatory and must be a non-empty string`);
-    }
-    if (entry.type === 'regex') {
-      try {
-        // eslint-disable-next-line no-new
-        new RegExp(entry.value);
-      } catch (err) {
-        throw new Error(`allowlist "allowedPatterns[${i}].value" is not a valid regex: ${err.message}`);
-      }
-    }
-  }
-  return { allowedPaths, allowedPatterns };
-}
-
-// Precise match only (AC-12): "exact" entries compare the whole candidate
-// string byte-for-byte; "regex" entries match the whole candidate string
-// anchored (never a bare substring search), regardless of whether the
-// author remembered to anchor their own pattern.
-function isAllowlistedValue(candidate, allowedPatterns) {
-  for (const entry of allowedPatterns) {
-    if (entry.type === 'exact') {
-      if (candidate === entry.value) return true;
-    } else {
-      const anchored = new RegExp(`^(?:${entry.value})$`);
-      if (anchored.test(candidate)) return true;
-    }
-  }
-  return false;
-}
-
-function isAllowlistedPath(filePath, allowedPaths) {
-  const normalized = filePath.replace(/\\/g, '/');
-  for (const entry of allowedPaths) {
-    if (globMatch(entry.path, normalized)) return true;
-  }
-  return false;
-}
-
-// Minimal glob: '**' matches any (possibly empty) path segment span, '*'
-// matches within a single segment. Sufficient for allowlist entries like
-// "go.sum", "code.json", "tools/plan/bow-import.json", "docs/**".
-function globMatch(pattern, str) {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    .replace(/\*\*/g, '\u0000')
-    .replace(/\*/g, '[^/]*')
-    .replace(/\u0000/g, '.*');
-  const re = new RegExp(`^${escaped}$`);
-  return re.test(str);
-}
-
-// ---------------------------------------------------------------------------
-// Entropy
-// ---------------------------------------------------------------------------
-
-function shannonEntropy(str) {
-  const freq = Object.create(null);
-  for (const ch of str) freq[ch] = (freq[ch] || 0) + 1;
-  const len = str.length;
-  let entropy = 0;
-  for (const ch in freq) {
-    const p = freq[ch] / len;
-    entropy -= p * Math.log2(p);
-  }
-  return entropy;
-}
-
-// base64/hex-looking: no whitespace, only characters plausible in a
-// base64/hex/token alphabet. This is the primary filter — it is what keeps
-// ordinary English sentences and identifiers-with-separators out of scope
-// before entropy is even considered.
-const TOKEN_SHAPE_RE = /^[A-Za-z0-9+/_=-]+$/;
-
-function looksHighEntropy(candidate) {
-  if (candidate.length < ENTROPY_MIN_LENGTH) return false;
-  if (!TOKEN_SHAPE_RE.test(candidate)) return false;
-  return shannonEntropy(candidate) >= ENTROPY_THRESHOLD;
-}
-
-// ---------------------------------------------------------------------------
-// BUG-026: Go package-identifier suppression for the high-entropy check
-// ---------------------------------------------------------------------------
-//
-// A long camelCase Go identifier (codeReplayTargetClosedEarly, 27 chars) can
-// legitimately clear the entropy bar when it appears as a QUOTED STRING
-// LITERAL — e.g. a test that greps production source for the identifier's
-// text, as sec034_differential_test.go does for MET-H004. Bare identifiers
-// are never scanned (only quoted candidates are), so the guard is not wrong
-// to look at the literal; but a quoted string that exactly matches an
-// identifier DECLARED in the same Go package is by construction not a
-// credential, and one-off exact allowlist entries per identifier do not
-// scale (each new call site needs its own entry, forever).
-//
-// CRITICAL CONSTRAINT (learned from the SEC-015 regression on this same
-// file): do NOT touch ENTROPY_THRESHOLD or ENTROPY_MIN_LENGTH to fix this —
-// widening either would blind the guard to real secrets of similar length.
-// This suppression is scoped as narrowly as possible instead: it only
-// applies to candidates found in .go files, and only when the EXACT literal
-// text matches an identifier declared at package scope (func/type/const/var)
-// somewhere in the same directory (a Go package is exactly the set of .go
-// files in one directory — no cross-package or recursive lookup). A real
-// secret would have to coincidentally be spelled as the exact text of a name
-// already declared in that same package's source, which is not a
-// realistic collision for genuine credential material.
-//
-// Package-scope only (not function-body locals): the extractor tracks
-// top-level const(...)/var(...) blocks by paren depth so it does not walk
-// into function bodies and start treating local variable names as
-// "declared in the package" — that would widen the suppression surface
-// well past what the fix is meant to cover.
-
-// Removes `//` and `/* */` comments and the CONTENTS of "...", '...', and
-// `...` literals (replacing them with a single space, preserving line
-// structure) so a naive line/regex scan below never mistakes text inside a
-// string or comment for a declaration.
-function stripGoCommentsAndStrings(src) {
-  let out = '';
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    const c2 = i + 1 < n ? src[i + 1] : '';
-    if (c === '/' && c2 === '/') {
-      while (i < n && src[i] !== '\n') i++;
-      continue;
-    }
-    if (c === '/' && c2 === '*') {
-      i += 2;
-      // Preserve embedded newlines so a block comment spanning multiple
-      // lines does not shift every subsequent line's line-based scan below.
-      while (i < n && !(src[i] === '*' && src[i + 1] === '/')) {
-        if (src[i] === '\n') out += '\n';
-        i++;
-      }
-      i = Math.min(n, i + 2);
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') {
-      const quote = c;
-      out += ' ';
-      i++;
-      while (i < n && src[i] !== quote) {
-        if (quote !== '`' && src[i] === '\\') i++; // skip escaped char
-        else if (src[i] === '\n') out += '\n'; // preserve line structure (raw strings can span lines)
-        i++;
-      }
-      i++; // consume closing quote (or run off the end on malformed input)
-      out += ' ';
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
-// Collects every func/type/const/var identifier declared at package scope
-// across the .go files directly inside dirAbsPath (Go packages are
-// per-directory, not recursive). Best-effort regex/line scan, not a real Go
-// parser — sufficient for a suppression heuristic that only needs an exact
-// name match, never a semantic one.
-function collectGoPackageIdentifiers(dirAbsPath) {
-  const identifiers = new Set();
-  let entries;
-  try {
-    entries = fs.readdirSync(dirAbsPath).filter(f => f.endsWith('.go'));
-  } catch {
-    return identifiers; // directory unreadable/missing — nothing to suppress
-  }
-  for (const fname of entries) {
-    let src;
-    try {
-      src = fs.readFileSync(path.join(dirAbsPath, fname), 'utf8');
-    } catch {
-      continue;
-    }
-    const cleaned = stripGoCommentsAndStrings(src);
-
-    let m;
-    const funcRe = /\bfunc\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(/g;
-    while ((m = funcRe.exec(cleaned))) identifiers.add(m[1]);
-    const typeRe = /\btype\s+([A-Za-z_]\w*)\b/g;
-    while ((m = typeRe.exec(cleaned))) identifiers.add(m[1]);
-
-    // Top-level const/var: single-line ("const Name = ..."), comma lists
-    // ("const A, B = ..."), and grouped blocks ("const (\n  Name = ...\n)").
-    // parenDepth tracks only the current const/var block's own parens, so a
-    // value expression like `= time.Duration(5 * time.Second)` doesn't
-    // confuse the scanner into leaving the block early.
-    let parenDepth = 0;
-    for (const rawLine of cleaned.split('\n')) {
-      const trimmed = rawLine.trim();
-      if (parenDepth === 0) {
-        if (/^(?:const|var)\s*\($/.test(trimmed)) {
-          parenDepth = 1;
-          continue;
-        }
-        const single = trimmed.match(/^(?:const|var)\s+([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b/);
-        if (single) for (const name of single[1].split(',')) identifiers.add(name.trim());
-        continue;
-      }
-      // Inside a top-level const(...)/var(...) block.
-      const blockLine = trimmed.match(/^([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\b/);
-      if (blockLine) for (const name of blockLine[1].split(',')) identifiers.add(name.trim());
-      for (const ch of trimmed) {
-        if (ch === '(') parenDepth++;
-        else if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
-      }
-    }
-  }
-  return identifiers;
-}
-
-const goPackageIdentifierCache = new Map();
-
-// fileRelPath is repo-root-relative (forward or back slashes as staged by
-// git). Cached per directory so a commit touching many files in one Go
-// package only reads that package's source once.
-function isGoPackageIdentifier(candidate, fileRelPath) {
-  const dirAbs = path.dirname(path.join(ROOT, fileRelPath));
-  let identifiers = goPackageIdentifierCache.get(dirAbs);
-  if (!identifiers) {
-    identifiers = collectGoPackageIdentifiers(dirAbs);
-    goPackageIdentifierCache.set(dirAbs, identifiers);
-  }
-  return identifiers.has(candidate);
-}
-
-// ---------------------------------------------------------------------------
-// Redaction
-// ---------------------------------------------------------------------------
-
-// BUG-001 (QA finding on FEAT-028, commit 0d09b04): a fixed 4-prefix+4-suffix
-// reveal was up to 89% disclosure for a 9-char secret. Reveal is now capped
-// at <=25% of the secret's length (rounded down), split as evenly as
-// possible between prefix and suffix, with a mask floor of >=50% of length
-// enforced explicitly (redundant with the 25% cap today, but keeps the
-// invariant self-documenting if the reveal cap is ever loosened). Secrets of
-// 8 chars or fewer stay fully masked — there is no safe partial reveal at
-// that length.
-function redact(secret) {
-  const len = secret.length;
-  if (len <= 8) return '*'.repeat(len);
-  const maxRevealTotal = Math.floor(len * 0.25); // never reveal more than 25% of characters
-  const minMaskLen = Math.ceil(len * 0.5); // mask floor: always mask at least half the characters
-  const revealTotal = Math.max(0, Math.min(maxRevealTotal, len - minMaskLen));
-  const prefixLen = Math.floor(revealTotal / 2);
-  const suffixLen = revealTotal - prefixLen;
-  const maskLen = len - prefixLen - suffixLen;
-  const prefix = prefixLen > 0 ? secret.slice(0, prefixLen) : '';
-  const suffix = suffixLen > 0 ? secret.slice(-suffixLen) : '';
-  return `${prefix}${'*'.repeat(maskLen)}${suffix}`;
-}
-
-// ---------------------------------------------------------------------------
-// Pattern-based detectors (run per added line)
-// ---------------------------------------------------------------------------
-
-const PRIVATE_KEY_RE = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/;
-
-const API_KEY_PATTERNS = [
-  { name: 'aws-access-key-id', re: /AKIA[0-9A-Z]{16}/ },
-  { name: 'openai-style-secret', re: /sk-[A-Za-z0-9]{20,}/ },
-  { name: 'github-pat', re: /gh[pousr]_[A-Za-z0-9]{36}/ },
-  { name: 'slack-token', re: /xox[baprs]-[A-Za-z0-9-]+/ },
-  { name: 'bearer-token', re: /\bBearer\s+[A-Za-z0-9._-]{16,}/i },
-  {
-    name: 'generic-key-assignment',
-    re: /\b(api[_-]?key|api[_-]?token|secret|access[_-]?token|auth[_-]?token|password)\s*[:=]\s*["']([A-Za-z0-9+/_.=-]{12,})["']/i,
-  },
-];
-
-const CONNECTION_STRING_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([A-Za-z0-9_.%-]+):([^@\s'"]*)@([^\s'"]+)/g;
-
-// GR#15 hardcoding smell: a comparison against a bare numeric literal where
-// the other operand's identifier reads like an expected count/total, e.g.
-// `assert(count === 45)`, `if (total != 1200)`. Comparisons against a
-// non-literal (EXPECTED.count, a config lookup) are the compliant form and
-// are not matched here because the RHS/LHS group requires \d.
-//
-// SEC-015 fix (2026-08-09): the original heuristic had two independent
-// false-positive sources, both fixed here rather than allowlisted (SEC-015's
-// explicit instruction — allowedPaths must not be used to blind the guard on
-// real source):
-//
-//  1. Keyword match was a bare substring test (`/count|total|.../i.test(ident)`),
-//     so `accountNumber` matched `num` and `sizeLimit` matched `size` purely
-//     by letters-in-sequence, with no relation to what the identifier means.
-//     Fixed by requiring the keyword to equal one whole WORD of the
-//     identifier — identifiers are split on `.`/`_` and camelCase boundaries
-//     (isHardcodeKeywordIdentifier below), so `accountNumber` -> "account",
-//     "number" (no match) but `expectedCount` -> "expected", "count" (match,
-//     correctly).
-//  2. No distinction was drawn between a STRUCTURAL check (is this container
-//     empty / does it have exactly one element?) and a DOMAIN assertion (is
-//     this magnitude the specific number the spec says it must be?).
-//     `x.length === 0`, `results.length === 1` assert nothing about domain
-//     data — emptiness and singleton-ness are properties of the container,
-//     true for literally any correctly-functioning collection in that state.
-//     `results.length === 24` and `expectedCount === 12` assert a specific
-//     domain magnitude, which is exactly what GR#15 requires be sourced from
-//     data/config, not hardcoded. The line is drawn at {0, 1} only, not
-//     wider: 2 is already a real cardinality claim ("exactly two drivers"),
-//     and every value above 1 is unambiguously about domain content rather
-//     than container shape. HARDCODE_EXEMPT_LITERALS below encodes that cut.
-const HARDCODE_KEYWORDS = new Set(['count', 'total', 'expected', 'actual', 'num', 'length', 'size']);
-const HARDCODE_EXEMPT_LITERALS = new Set([0, 1]);
-const HARDCODE_CMP_RE = /\b([A-Za-z_$][A-Za-z0-9_.$]*)\s*(===|!==|==|!=)\s*(\d+(?:\.\d+)?)\b|\b(\d+(?:\.\d+)?)\s*(===|!==|==|!=)\s*([A-Za-z_$][A-Za-z0-9_.$]*)\b/g;
-
-// Splits an identifier (possibly dotted, e.g. `filePaths.length`) into its
-// constituent words on `.`, `_`, and camelCase boundaries, lowercased.
-//
-// Bill/Tester-2 regression fix (2026-08-09, second pass on this code — logged
-// per v1.7.2 as ASM-049): the first version split on a lookahead before
-// EVERY uppercase letter (`seg.split(/(?=[A-Z])/)`), which is correct for
-// `expectedCount` (one boundary, before `C`) but SHATTERS an all-uppercase
-// run into single letters — `MAX_COUNT` -> "m","a","x","c","o","u","n","t" —
-// so no word ever equals a whole keyword and the check went silently blind
-// on SCREAMING_SNAKE_CASE constants, an entirely ordinary pattern for
-// hardcoded literals. That is a false NEGATIVE in a security guard, strictly
-// worse than the false positives this fix exists to remove, and the old
-// substring regex caught it (accidentally) before this file was touched.
-//
-// Fixed with the standard two-boundary insertion technique instead of a
-// single blanket lookahead:
-//   1. lower/digit -> upper   ("fooBar" -> "foo_Bar", "file9Bar" -> "file9_Bar")
-//   2. upper-run -> upper+lower  ("HTTPServer" -> "HTTP_Server": the run
-//      "HTTP" ends and "Server" begins at the last capital before a
-//      lowercase letter, not at every capital)
-// Both insert a separator; the string is then split on `.`/`_`/inserted
-// separators as one pass. This keeps a same-case run (SCREAMING_SNAKE_CASE,
-// or an all-lowercase word) intact as a single word, which is exactly what
-// closes the regression: "MAX_COUNT" already has explicit underscores, so no
-// case-boundary insertion is even needed there — split on `_` alone now
-// yields ["MAX","COUNT"], not eight single letters.
-function identifierWords(ident) {
-  return ident
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
-    .split(/[._]+/)
-    .map(w => w.toLowerCase())
-    .filter(Boolean);
-}
-
-// True only if one WHOLE word of the identifier equals one of the
-// hardcoding-smell keywords — never a substring match (see SEC-015 point 1
-// above).
-function isHardcodeKeywordIdentifier(ident) {
-  return identifierWords(ident).some(w => HARDCODE_KEYWORDS.has(w));
-}
-
-function scanLine(lineText) {
-  const findings = [];
-
-  if (PRIVATE_KEY_RE.test(lineText)) {
-    findings.push({ category: 'private-key', evidence: redact(lineText.trim()) });
-  }
-
-  for (const pat of API_KEY_PATTERNS) {
-    const m = lineText.match(pat.re);
-    if (m) {
-      const secret = m[2] || m[0];
-      findings.push({ category: 'api-key', detail: pat.name, evidence: redact(secret), candidate: secret });
-    }
-  }
-
-  let connMatch;
-  CONNECTION_STRING_RE.lastIndex = 0;
-  while ((connMatch = CONNECTION_STRING_RE.exec(lineText))) {
-    const full = connMatch[0];
-    findings.push({ category: 'connection-string-password', evidence: redact(full), candidate: full });
-  }
-
-  // High-entropy quoted literals.
-  const stringLiteralRe = /'([^'\\]{1,200})'|"([^"\\]{1,200})"/g;
-  let strMatch;
-  while ((strMatch = stringLiteralRe.exec(lineText))) {
-    const literal = strMatch[1] !== undefined ? strMatch[1] : strMatch[2];
-    if (looksHighEntropy(literal)) {
-      findings.push({ category: 'high-entropy', evidence: redact(literal), candidate: literal });
-    }
-  }
-
-  // GR#15 hardcoding smell.
-  let hcMatch;
-  HARDCODE_CMP_RE.lastIndex = 0;
-  while ((hcMatch = HARDCODE_CMP_RE.exec(lineText))) {
-    const ident = hcMatch[1] || hcMatch[6];
-    const literalStr = hcMatch[3] || hcMatch[4];
-    if (ident && isHardcodeKeywordIdentifier(ident)) {
-      // Structural emptiness/singleton checks (x.length === 0, x.length ===
-      // 1) are not GR#15 violations — see SEC-015 point 2 above. Everything
-      // else (a real domain magnitude) is still flagged.
-      if (HARDCODE_EXEMPT_LITERALS.has(parseFloat(literalStr))) continue;
-      findings.push({ category: 'hardcoding-smell', evidence: lineText.trim().slice(0, 160) });
-    }
-  }
-
-  return findings;
-}
-
-// ---------------------------------------------------------------------------
-// Staged diff parsing
-// ---------------------------------------------------------------------------
-
-// Parses `git diff --cached -U0` output into { file, line, text } records
-// for added lines only. With -U0 there are no context lines, so every '+'
-// (that isn't the '+++' file header) is a staged addition.
-function parseAddedLines(diffText) {
-  const records = [];
-  let currentFile = null;
-  let nextLineNo = null;
-  const lines = diffText.split('\n');
-  for (const raw of lines) {
-    if (raw.startsWith('+++ ')) {
-      const m = raw.match(/^\+\+\+ b\/(.+)$/);
-      currentFile = m ? m[1] : null;
-      continue;
-    }
-    if (raw.startsWith('--- ')) {
-      continue;
-    }
-    if (raw.startsWith('@@')) {
-      const m = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-      nextLineNo = m ? parseInt(m[1], 10) : null;
-      continue;
-    }
-    if (raw.startsWith('+') && currentFile !== null && nextLineNo !== null) {
-      records.push({ file: currentFile, line: nextLineNo, text: raw.slice(1) });
-      nextLineNo += 1;
-      continue;
-    }
-    // '-' lines (removed) and diff/index metadata lines don't advance the
-    // added-line cursor and are not scanned (staged-scope only, AC-5).
-  }
-  return records;
-}
-
-// ---------------------------------------------------------------------------
-// Main scan
-// ---------------------------------------------------------------------------
-
-function runScan() {
-  const { allowedPaths, allowedPatterns } = loadAllowlist();
-
-  const nameResult = spawnSync('git', ['diff', '--cached', '--name-only'], { cwd: ROOT, encoding: 'utf8' });
-  if (nameResult.error || nameResult.status !== 0) {
-    const details = nameResult.error ? nameResult.error.message
-      : [nameResult.stdout, nameResult.stderr].filter(Boolean).join('\n').trim();
-    throw new Error(`git diff --cached --name-only failed: ${details}`);
-  }
-  const stagedFiles = nameResult.stdout.split('\n').map(s => s.trim()).filter(Boolean);
-
-  const diffResult = spawnSync('git', ['diff', '--cached', '-U0', '--', '.'], {
-    cwd: ROOT,
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (diffResult.error || diffResult.status !== 0) {
-    const details = diffResult.error ? diffResult.error.message
-      : [diffResult.stdout, diffResult.stderr].filter(Boolean).join('\n').trim();
-    throw new Error(`git diff --cached failed: ${details}`);
-  }
-
-  const findings = [];
-
-  // Certificate/keystore files staged as-is (binary, no useful text diff).
-  for (const file of stagedFiles) {
-    if (isAllowlistedPath(file, allowedPaths)) continue;
-    const ext = path.extname(file).toLowerCase();
-    if (SENSITIVE_FILE_EXTENSIONS.includes(ext)) {
-      findings.push({ file, line: 'N/A', category: 'certificate-file', evidence: `staged file with sensitive extension (${ext})` });
-    }
-  }
-
-  const addedLines = parseAddedLines(diffResult.stdout);
-  for (const rec of addedLines) {
-    if (isAllowlistedPath(rec.file, allowedPaths)) continue;
-    const lineFindings = scanLine(rec.text);
-    for (const f of lineFindings) {
-      if (f.candidate && isAllowlistedValue(f.candidate, allowedPatterns)) continue;
-      // BUG-026: a high-entropy quoted literal in a .go file that exactly
-      // matches an identifier declared in the same package is a source
-      // reference, not a credential (see comment above
-      // collectGoPackageIdentifiers). Scoped to 'high-entropy' only —
-      // never applied to the actual secret-shaped detectors (AWS/GitHub/
-      // Slack/OpenAI/private-key/connection-string), which is why this
-      // check does not sit inside scanLine() itself.
-      if (
-        f.category === 'high-entropy' &&
-        f.candidate &&
-        rec.file.toLowerCase().endsWith('.go') &&
-        isGoPackageIdentifier(f.candidate, rec.file)
-      ) {
-        continue;
-      }
-      findings.push({ file: rec.file, line: rec.line, category: f.category, evidence: f.evidence, detail: f.detail });
-    }
-  }
-
-  return findings;
-}
-
-function formatFindings(findings) {
-  return findings
-    .map(f => `  - ${f.file}:${f.line} [${f.category}]${f.detail ? ` (${f.detail})` : ''} — ${f.evidence}`)
-    .join('\n');
-}
-
-// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
-//
-// ASM (logged as SEC-015 follow-up testability note, not a behaviour change):
-// wrapped in `require.main === module` so a test harness can `require()` this
-// file to reach the pure functions below (scanLine, isHardcodeKeywordIdentifier,
-// etc.) without the process blocking on stdin — this guard previously could
-// only be exercised end-to-end via a real `git commit` hook invocation, which
-// is why it had no test suite at all. When run directly as the hook (the only
-// way it is invoked in production — PreToolUse always execs it as a script,
-// never requires it), require.main === module is always true, so behaviour is
-// unchanged.
 
 function main() {
   let input = '';
@@ -707,35 +277,52 @@ function main() {
       process.exit(0);
     }
 
-    // Strip a UTF-8 BOM (PowerShell pipes prepend one) before parsing.
     let command;
     try {
       const data = JSON.parse(input.replace(/^\uFEFF/, ''));
       command = data?.tool_input?.command ?? '';
     } catch {
-      // Unparseable input: fail-closed applies to commits ONLY — denying
-      // every Bash command because stdin hiccuped would brick the whole
-      // session. Fall back to a raw substring sniff: deny only if it might
-      // be a commit, allow anything else. (Same lesson claude-plan-guard.js
-      // already hardcoded from its own BOM incident.)
       if (input.includes('git commit')) {
         deny('🛑 SECRET GUARD: hook input was unparseable but appears to contain a git commit — denying (fail-closed). Raw input parse error; retry the commit.');
       }
       process.exit(0);
     }
 
-    // Only intercept real git commit invocations (SEC-008-class fix — see
-    // GIT_COMMIT_RE comment above).
+    // ROUND 9 (BUG-123, Cinder REJECT): the trigger module is loaded HERE,
+    // lazily, inside this try block — not at module top level — so a
+    // load-time throw (broken claude-quote-mask.js, missing
+    // claude-git-commit-trigger.js, wrong exports) is caught by the SAME
+    // catch() below that already denies on any other internal error, rather
+    // than crashing the whole process before this try/catch ever existed.
+    // See the LAZY / DEFERRED require comment near the top of this file.
+    let GIT_COMMIT_RE;
+    try {
+      GIT_COMMIT_RE = buildGitCommitRe();
+    } catch (err) {
+      if (looksLikeCommitFallback(command)) {
+        deny(
+          'SECRET GUARD: a required dependency (claude-git-commit-trigger.js) failed to load — ' +
+          'cannot determine whether this is a git commit. Denying (fail-closed; this command looks ' +
+          'like it could be a git commit) — see claude-secret-guard.js header.\n\n' +
+          `${err && err.stack ? err.stack : err}\n\n` +
+          'Emergency bypass (use deliberately, not routinely): CLAUDE_DISABLE_SECRET_GUARD=1'
+        );
+      }
+      process.exit(0);
+    }
+
     if (!GIT_COMMIT_RE.test(command)) {
       process.exit(0);
     }
 
-    const findings = runScan();
+    // Delegate the actual scan to the extracted checker module (BUG-088,
+    // AC-C1: observable PreToolUse behaviour is unchanged).
+    const findings = checker.runScan();
 
     if (findings.length > 0) {
       deny(
         '🛑 SECRET GUARD: staged content contains possible secrets or GR#15 hardcoding smells (GR#11).\n\n' +
-        `${formatFindings(findings)}\n\n` +
+        `${checker.formatFindings(findings)}\n\n` +
         'Remove or rotate the secret(s), or read the value from config/data instead of hardcoding it, then re-stage and retry.\n' +
         'If this is a false positive, add a precise entry to claude-secret-guard.allow.json (see its inline docs) — never widen a pattern to fix a single case.\n' +
         'Emergency bypass (use deliberately, not routinely): CLAUDE_DISABLE_SECRET_GUARD=1'
@@ -743,24 +330,9 @@ function main() {
       return;
     }
 
-    // Clean: no findings. Allow.
     process.exit(0);
 
   } catch (err) {
-    // Fail-CLOSED by design (see header comment), scoped to commits only:
-    // an internal guard error (git failure, malformed allowlist, etc.) must
-    // never silently let a possibly-secret-bearing commit through.
-    //
-    // ** UNREDACTED CHANNEL — BUG-001 follow-up (QA note) **
-    // err.stack (and err itself) is echoed to the deny reason VERBATIM below,
-    // with no redact() pass. That is safe today because every throw on this
-    // path is guard-internal plumbing (git invocation failures, allowlist
-    // parse errors) — never scanned repo content. It MUST stay that way:
-    // never construct or rethrow an Error whose message/stack embeds a
-    // matched line, literal, or candidate secret from runScan()/scanLine(),
-    // or this catch-all becomes a way to leak exactly what redact() exists
-    // to hide. Findings must only ever reach the user through
-    // formatFindings(), which redacts every evidence string.
     deny(
       '🛑 SECRET GUARD: internal error while scanning staged content — denying commit ' +
       '(fail-closed by design; see claude-secret-guard.js header).\n\n' +
@@ -773,25 +345,41 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  // Exported for tests only (see comment above `main`). Not part of the
-  // hook's runtime contract — these are internal helpers, kept intentionally
-  // ungrouped so a test file can import exactly the pure functions it needs.
+  // Exported for tests only. Re-exports the checker's payload-inspection
+  // helpers verbatim (AC-D2 — this file no longer defines them itself, but
+  // the existing test suite's require()'d names must keep working, per
+  // AC-C1's "only require() target may change" allowance) plus this file's
+  // own trigger constant (GIT_COMMIT_RE, which stays local to the PreToolUse
+  // layer — see AC-B4). No isRealGitCommit()/buildQuoteMask() any more
+  // (BUG-088 correction, see the trigger comment above) — the trigger is a
+  // bare regex test, matching HEAD's original, un-refactored shape.
+  //
+  // ROUND 9: this eager build (rather than lazy, as main() now uses) is
+  // deliberate and SAFE here — this branch runs only when a test harness
+  // require()'s this file directly (never the production PreToolUse hook
+  // path, which always takes the `require.main === module` branch above),
+  // and the existing test suite's ~180 assertions call `GIT_COMMIT_RE.test
+  // (...)` synchronously with no setup step, so the trigger must already be
+  // a built object by the time this module.exports runs.
+  const GIT_COMMIT_RE = buildGitCommitRe();
   module.exports = {
-    scanLine,
-    identifierWords,
-    isHardcodeKeywordIdentifier,
-    HARDCODE_KEYWORDS,
-    HARDCODE_EXEMPT_LITERALS,
-    looksHighEntropy,
-    shannonEntropy,
-    redact,
-    stripGoCommentsAndStrings,
-    collectGoPackageIdentifiers,
-    isGoPackageIdentifier,
-    isAllowlistedValue,
-    isAllowlistedPath,
-    globMatch,
-    parseAddedLines,
-    loadAllowlist,
+    GIT_COMMIT_RE,
+    looksLikeCommitFallback,
+    scanLine: checker.scanLine,
+    identifierWords: checker.identifierWords,
+    isHardcodeKeywordIdentifier: checker.isHardcodeKeywordIdentifier,
+    HARDCODE_KEYWORDS: checker.HARDCODE_KEYWORDS,
+    HARDCODE_EXEMPT_LITERALS: checker.HARDCODE_EXEMPT_LITERALS,
+    looksHighEntropy: checker.looksHighEntropy,
+    shannonEntropy: checker.shannonEntropy,
+    redact: checker.redact,
+    stripGoCommentsAndStrings: checker.stripGoCommentsAndStrings,
+    collectGoPackageIdentifiers: checker.collectGoPackageIdentifiers,
+    isGoPackageIdentifier: checker.isGoPackageIdentifier,
+    isAllowlistedValue: checker.isAllowlistedValue,
+    isAllowlistedPath: checker.isAllowlistedPath,
+    globMatch: checker.globMatch,
+    parseAddedLines: checker.parseAddedLines,
+    loadAllowlist: checker.loadAllowlist,
   };
 }
