@@ -231,6 +231,75 @@ func TestRender_UnavailablePanes_NoPanicClearText(t *testing.T) {
 	}
 }
 
+// --- BUG-025: coalesced entries (Repeat > 0) must render visibly
+// differently from a single occurrence (Repeat == 0), on BOTH F12
+// render paths — the compact tail row and the detail view. ---
+
+func TestRender_ErrorTail_RepeatCountVisibleWhenNonZero(t *testing.T) {
+	single := debug.NewScreen(nil, "corr-1",
+		debug.WithDebugFlag(func() bool { return true }),
+		debug.WithErrorTailSource(func() []errs.Entry {
+			return []errs.Entry{{Ts: "t0", Level: "warn", Code: "MET-U100", Module: "mod", Msg: "hello", Repeat: 0}}
+		}),
+	)
+	coalesced := debug.NewScreen(nil, "corr-1",
+		debug.WithDebugFlag(func() bool { return true }),
+		debug.WithErrorTailSource(func() []errs.Entry {
+			return []errs.Entry{{Ts: "t0", Level: "warn", Code: "MET-U100", Module: "mod", Msg: "hello", Repeat: 4127}}
+		}),
+	)
+
+	singleText := renderToText(t, debugOnSnapshot(single))
+	coalescedText := renderToText(t, debugOnSnapshot(coalesced))
+
+	if singleText == coalescedText {
+		t.Fatalf("compact tail row renders a coalesced entry (Repeat=4127) byte-identically to a single occurrence (Repeat=0):\n%s", singleText)
+	}
+	if !strings.Contains(coalescedText, "x4127") {
+		t.Errorf("compact tail row missing repeat-count suffix for Repeat=4127:\n%s", coalescedText)
+	}
+	if strings.Contains(singleText, "x0") {
+		t.Errorf("compact tail row shows bare repeat noise (x0) for an ordinary Repeat=0 entry:\n%s", singleText)
+	}
+}
+
+func TestRenderTailDetail_RepeatCountVisibleWhenNonZero(t *testing.T) {
+	single := errs.Entry{Ts: "t0", Level: "warn", Code: "MET-U100", CorrelationID: "corr-1", Module: "mod", Msg: "hello", Repeat: 0}
+	coalesced := single
+	coalesced.Repeat = 4127
+
+	renderDetail := func(e errs.Entry) string {
+		buf := core.NewBuffer(160, 60)
+		debug.RenderTailDetail(buf, core.Rect{X: 0, Y: 0, W: 160, H: 60}, e)
+		w, h := buf.Size()
+		var sb strings.Builder
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				r := buf.Get(x, y).Rune
+				if r == 0 {
+					r = ' '
+				}
+				sb.WriteRune(r)
+			}
+			sb.WriteByte('\n')
+		}
+		return sb.String()
+	}
+
+	singleText := renderDetail(single)
+	coalescedText := renderDetail(coalesced)
+
+	if singleText == coalescedText {
+		t.Fatalf("detail view renders a coalesced entry (Repeat=4127) byte-identically to a single occurrence (Repeat=0):\n%s", singleText)
+	}
+	if !strings.Contains(coalescedText, "x4127") {
+		t.Errorf("detail view missing repeat-count suffix for Repeat=4127:\n%s", coalescedText)
+	}
+	if strings.Contains(singleText, "x0") {
+		t.Errorf("detail view shows bare repeat noise (x0) for an ordinary Repeat=0 entry:\n%s", singleText)
+	}
+}
+
 // --- AC-13: pure function of inputs; repeated calls identical ---
 
 func TestRender_PureFunction_RepeatedCallsIdentical(t *testing.T) {

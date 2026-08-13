@@ -116,6 +116,24 @@ func orNA(s string) string {
 	return s
 }
 
+// repeatSuffix renders errs.Entry.Repeat as the " x<N>" badge BUG-025
+// requires on both F12 error-tail render paths, so a coalesced entry
+// (SEC-030/SEC-031/SEC-033's ring-buffer coalescing) no longer renders
+// byte-identically to one seen exactly once. Repeat counts ADDITIONAL
+// occurrences beyond the first (see errs.Entry.Repeat's doc comment,
+// whose own worked example is literally "MET-U101 x4127" for a Repeat
+// of 4127) — this suffix reproduces that exact worked example verbatim,
+// so "x4127" reads as "4127 more of these landed after the one shown,"
+// not a total. Repeat == 0 (the overwhelming common case: seen once, no
+// coalescing) renders no suffix at all — never a bare "x0" noise floor
+// on every ordinary line.
+func repeatSuffix(repeat int) string {
+	if repeat <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" x%d", repeat)
+}
+
 func renderRegistryPane(c *cursor, snap Snapshot, palette widgets.Palette) {
 	c.line("=== Module registry ===", tcell.StyleDefault.Bold(true))
 	if !snap.RegistryAvailable {
@@ -157,7 +175,7 @@ func renderErrorTailPane(c *cursor, snap Snapshot, palette widgets.Palette) {
 		case "warn":
 			style = palette.Style(widgets.TokenWarning)
 		}
-		c.line(fmt.Sprintf("[%2d] %s %-5s %-10s %s: %s", i, e.Ts, e.Level, e.Code, e.Module, e.Msg), style)
+		c.line(fmt.Sprintf("[%2d] %s %-5s %-10s %s: %s%s", i, e.Ts, e.Level, e.Code, e.Module, e.Msg, repeatSuffix(e.Repeat)), style)
 	}
 }
 
@@ -173,7 +191,7 @@ func RenderTailDetail(buf *core.Buffer, rect core.Rect, entry errs.Entry) {
 	c.line("=== Log entry detail ===", tcell.StyleDefault.Bold(true))
 	c.line("ts: "+entry.Ts, tcell.StyleDefault)
 	c.line("level: "+entry.Level, tcell.StyleDefault)
-	c.line("code: "+entry.Code, tcell.StyleDefault)
+	c.line("code: "+entry.Code+repeatSuffix(entry.Repeat), tcell.StyleDefault)
 	c.line("correlationId: "+entry.CorrelationID, tcell.StyleDefault)
 	c.line("module: "+entry.Module, tcell.StyleDefault)
 	c.line("msg: "+entry.Msg, tcell.StyleDefault)
