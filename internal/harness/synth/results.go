@@ -233,6 +233,18 @@ type CorruptLine struct {
 // ALL does this function return a hard error (codeBaselineCorrupt),
 // because at that point "corrupt" and "no baseline yet" are genuinely
 // indistinguishable from the caller's perspective otherwise.
+//
+// # BUG-086: the hard-error path is per-preset, not whole-file
+//
+// A syntactically malformed line can't be attributed to any preset —
+// json.Unmarshal fails before rec.Preset is even readable — but the
+// hard-error decision above is scoped to preset. Escalating to
+// codeBaselineCorrupt purely because SOME corrupt line exists ANYWHERE
+// in the file, even when every other line proves it belongs to a
+// different preset entirely, would turn one preset's torn write into a
+// false-positive failure for an unrelated preset's legitimate first run
+// (AC-8). See otherPresetRecordSeen in the implementation below for the
+// more precise, per-preset-aware signal this function now uses instead.
 func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baseline, anchor *PerfResult, corrupt []CorruptLine, err error) {
 	correlationID := errs.NewCorrelationID()
 
@@ -263,6 +275,46 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 	// still-crossable number.
 	reader := bufio.NewReader(f)
 	lineNo := 0
+	// BUG-086: the corrupt-line list above is whole-FILE-grained (a
+	// syntactically malformed line can't even be attributed to a preset —
+	// json.Unmarshal fails before rec.Preset is readable), but the hard-
+	// error decision below is per-PRESET. Without this signal, one
+	// corrupt line anywhere in a shared results file would escalate a
+	// totally unrelated preset's legitimate "fresh preset, no prior
+	// baseline" case (AC-8) into a hard codeBaselineCorrupt failure.
+	// otherPresetRecordSeen tracks whether at least one line elsewhere in
+	// the file parsed as a well-formed PerfRecord for a DIFFERENT preset
+	// — proof the file's NDJSON format is generally intact, so an
+	// unparseable line is much more plausibly that OTHER preset's own
+	// torn/corrupt write than this preset's. It deliberately does NOT
+	// fire on a well-formed-but-rejected record (Measured=false,
+	// implausible, uncorroborated accepted-regression) for the REQUESTED
+	// preset — those are still-attributable, known-bad evidence about
+	// THIS preset specifically, not an unrelated one, so they must not
+	// soften the hard-error path below.
+	otherPresetRecordSeen := false
+	// BUG-187: otherPresetRecordSeen (above) proves the file format is
+	// generally sound, but it must ONLY soften the hard-error decision
+	// below for corrupt entries that are genuinely UNATTRIBUTABLE — a
+	// json.Unmarshal failure before rec.Preset was even readable, or a
+	// well-formed record for a DIFFERENT preset. It must NEVER soften the
+	// decision for a corrupt entry that WAS successfully attributed to
+	// the REQUESTED preset itself and then rejected by the provenance
+	// checks below (Measured=false / implausible / unjustified or
+	// uncorroborated AcceptedRegression — BUG-073/085/095). Live-verified
+	// (Destructive, BUG-187): a file with a valid record for an unrelated
+	// preset plus a tampered {"preset":requested,"measured":false} line
+	// for the REQUESTED preset was wrongly treated as "fresh preset, no
+	// baseline yet" (nil, nil, nil) purely because the unrelated preset's
+	// valid record set otherPresetRecordSeen — laundering a known-bad,
+	// attributable rejection of THIS preset's own history into a silent
+	// pass, the exact BUG-071-family direction and a real regression of
+	// BUG-073/085/095's provenance guarantees. requestedPresetCorruptSeen
+	// tracks that distinct, stronger signal: at least one corrupt entry
+	// is KNOWN — not merely presumed by elimination — to belong to the
+	// requested preset, which must always still hard-error regardless of
+	// what other presets' records prove about the file's general format.
+	requestedPresetCorruptSeen := false
 	for {
 		line, readErr := reader.ReadString('\n')
 		if readErr != nil && readErr != io.EOF {
@@ -285,7 +337,20 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 				// rarer "one bad line buried in history" case) is
 				// still found.
 				corrupt = append(corrupt, CorruptLine{LineNo: lineNo, Err: unmarshalErr})
-			} else if rec.Preset == preset {
+			} else if rec.Preset != preset {
+				// BUG-086: well-formed JSON for a preset OTHER than the
+				// one requested — proof this file's format is generally
+				// intact, which is the signal the hard-error check below
+				// uses to avoid escalating an unrelated preset's corrupt
+				// line into this preset's failure. Deliberately not
+				// scrutinised any further (Measured/plausibility/
+				// accepted-registry checks only apply to the requested
+				// preset's own records) — those checks decide what THIS
+				// function trusts as a baseline candidate, not whether
+				// the file format itself is sound.
+				otherPresetRecordSeen = true
+			} else {
+				corruptBefore := len(corrupt)
 				switch {
 				// BUG-073: AppendResult enforces Measured==true BEFORE
 				// a record is ever written (MET-H308) — but that
@@ -390,6 +455,20 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 						// above.
 					}
 				}
+				if len(corrupt) > corruptBefore {
+					// BUG-187: the switch above added at least one
+					// CorruptLine, and this branch is only reached for a
+					// record whose rec.Preset == preset — so this corrupt
+					// entry is a KNOWN, attributable rejection of the
+					// REQUESTED preset's own history (Measured=false /
+					// implausible / unjustified or uncorroborated
+					// AcceptedRegression), never a line that could plausibly
+					// belong to some other preset instead. It must always
+					// still hard-error below, regardless of what
+					// otherPresetRecordSeen proves about the rest of the
+					// file's format.
+					requestedPresetCorruptSeen = true
+				}
 			}
 		}
 		if readErr == io.EOF {
@@ -397,7 +476,7 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 		}
 	}
 
-	if baseline == nil && len(corrupt) > 0 {
+	if baseline == nil && len(corrupt) > 0 && (requestedPresetCorruptSeen || !otherPresetRecordSeen) {
 		// Nothing usable recovered for preset, and the file is not
 		// merely absent/unwritten — this is genuine corruption, and
 		// GR#17 forbids treating it as indistinguishable from "no
@@ -405,6 +484,31 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 		// silently returning (nil, nil, nil, nil), which a caller would
 		// read as "first run, record a new baseline" and thereby mask a
 		// corrupted history under a fresh one.
+		//
+		// BUG-086: this escalation is skipped when otherPresetRecordSeen
+		// is true AND requestedPresetCorruptSeen is false — a well-formed
+		// record for a DIFFERENT preset proves the file's NDJSON format
+		// is generally sound, so a corrupt line that cannot be
+		// attributed to any preset is far more plausibly that OTHER
+		// preset's own torn write than genuine corruption affecting the
+		// requested (fresh, never-yet-recorded) preset. Falls through to
+		// the ordinary AC-8 "no prior baseline" return below in that
+		// case. When NO other preset's record is present either, the
+		// corrupt line's preset can't be ruled out either way, and the
+		// original hard-error behaviour is preserved — exactly the
+		// ambiguous case this function cannot safely treat as benign.
+		//
+		// BUG-187: otherPresetRecordSeen must NEVER excuse a corrupt
+		// entry that requestedPresetCorruptSeen proves was successfully
+		// attributed to the REQUESTED preset itself and rejected by the
+		// provenance checks above (Measured=false / implausible /
+		// unjustified or uncorroborated AcceptedRegression). That is
+		// known-bad evidence about THIS preset's own history, not an
+		// unrelated preset's torn write — a tampered or rejected record
+		// for the requested preset must always still hard-error here,
+		// regardless of what other presets elsewhere in the file prove
+		// about the format. requestedPresetCorruptSeen therefore takes
+		// priority over otherPresetRecordSeen in the condition above.
 		// The registry template for codeBaselineCorrupt (MET-H306,
 		// data/errors.json) renders "{path} ... {line}: {cause}" — the
 		// ctx keys MUST match those placeholders or the one-line GR#1

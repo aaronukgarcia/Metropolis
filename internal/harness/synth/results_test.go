@@ -160,6 +160,125 @@ func TestLoadLatestBaseline_CorruptFileIsAnError(t *testing.T) {
 	}
 }
 
+// TestLoadLatestBaseline_UnrelatedPresetCorruptionDoesNotBlockFreshPreset
+// is BUG-086's exact live-verified false positive: the corrupt-line
+// tracking above is whole-FILE-grained, but the hard-error decision it
+// feeds is per-PRESET, so a garbage line anywhere in a shared results
+// file used to escalate a totally unrelated preset's legitimate "fresh
+// preset, no prior baseline" case (AC-8) into a hard codeBaselineCorrupt
+// failure. Here the file has a genuine, valid record for "1M" — proving
+// the file's NDJSON format is generally intact — plus one unparseable
+// line, and the caller asks for "10M", which has zero records of its
+// own. That must recover as the ordinary AC-8 "no prior baseline"
+// case (nil baseline, nil anchor, nil error), not an error, even though
+// corrupt is still non-empty (GR#17: still reported, never silently
+// dropped).
+func TestLoadLatestBaseline_UnrelatedPresetCorruptionDoesNotBlockFreshPreset(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+
+	other := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	if err := AppendResult(path, other); err != nil {
+		t.Fatalf("AppendResult(other): %v", err)
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("opening results file to append a corrupt line: %v", err)
+	}
+	if _, err := f.WriteString("{not valid json\n"); err != nil {
+		t.Fatalf("writing corrupt line: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing results file: %v", err)
+	}
+
+	baseline, anchor, corrupt, err := LoadLatestBaseline(path, "10M", nil)
+	if err != nil {
+		t.Fatalf("LoadLatestBaseline: got err %v, want nil — BUG-086: an unrelated preset's corrupt line must not block this preset's legitimate first baseline", err)
+	}
+	if baseline != nil {
+		t.Fatalf("baseline = %+v, want nil for a preset with no records of its own", baseline)
+	}
+	if anchor != nil {
+		t.Fatalf("anchor = %+v, want nil for a preset with no records of its own", anchor)
+	}
+	if len(corrupt) != 1 {
+		t.Fatalf("corrupt lines = %+v, want exactly 1 — still reported per GR#17, just not escalated to a hard error", corrupt)
+	}
+}
+
+// TestLoadLatestBaseline_AmbiguousCorruptLineStillHardErrors confirms
+// BUG-086's fix did not make corruption detection permissive where it
+// must still fire: when a corrupt line's preset genuinely cannot be
+// ruled out — no OTHER preset's valid record exists anywhere in the
+// file to prove the corrupt line belongs elsewhere — the original
+// codeBaselineCorrupt behaviour must be preserved exactly as
+// TestLoadLatestBaseline_CorruptFileIsAnError above already proves. This
+// test names the same scenario explicitly under BUG-086 to document that
+// the ambiguous case was a deliberate, considered non-change, not an
+// oversight.
+func TestLoadLatestBaseline_AmbiguousCorruptLineStillHardErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+	if err := writeFile(path, "{not valid json\n"); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+
+	baseline, anchor, corrupt, err := LoadLatestBaseline(path, "10M", nil)
+	wantCode(t, err, codeBaselineCorrupt)
+	if baseline != nil || anchor != nil {
+		t.Fatalf("baseline/anchor = %+v/%+v, want nil/nil on a hard error", baseline, anchor)
+	}
+	if len(corrupt) != 1 {
+		t.Fatalf("corrupt lines = %+v, want exactly 1", corrupt)
+	}
+}
+
+// TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors is
+// BUG-187's exact live-verified attack, reproduced as a regression test:
+// BUG-086's fix suppressed codeBaselineCorrupt whenever
+// otherPresetRecordSeen was true, without distinguishing genuinely
+// unattributable corrupt lines (BUG-086's real target) from corrupt
+// entries already successfully attributed to the REQUESTED preset itself
+// and rejected by the provenance checks (BUG-073/085/095). Here the file
+// has a valid record for an UNRELATED preset ("10M") — proving the file's
+// NDJSON format is generally sound and setting otherPresetRecordSeen —
+// plus a hand-injected {"preset":"1M","result":{"measured":false}} line
+// for the ACTUALLY REQUESTED preset ("1M"). Pre-fix, LoadLatestBaseline
+// wrongly returned (nil, nil, corrupt, nil) — "fresh preset, no baseline
+// yet" — silently treating a tampered/rejected record for the requested
+// preset as if no baseline existed at all (the dangerous BUG-071-family
+// direction: laundering a bad result into a pass). This test is RED
+// against that behaviour and GREEN against the fix, which must still
+// hard-error with codeBaselineCorrupt because the corrupt entry is known,
+// not merely presumed, to belong to the requested preset.
+func TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+
+	other := PerfRecord{CommitHash: "commit1", Preset: "10M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	if err := AppendResult(path, other); err != nil {
+		t.Fatalf("AppendResult(other): %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("opening results file to hand-inject a tampered record: %v", err)
+	}
+	if _, err := f.WriteString(`{"preset":"1M","result":{"measured":false}}` + "\n"); err != nil {
+		t.Fatalf("writing tampered record for the requested preset: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing results file: %v", err)
+	}
+
+	baseline, anchor, corrupt, err := LoadLatestBaseline(path, "1M", nil)
+	wantCode(t, err, codeBaselineCorrupt)
+	if baseline != nil || anchor != nil {
+		t.Fatalf("baseline/anchor = %+v/%+v, want nil/nil on a hard error — BUG-187: a tampered record for the REQUESTED preset must never be treated as a fresh, baseline-free preset just because an unrelated preset elsewhere in the file happens to be valid", baseline, anchor)
+	}
+	if len(corrupt) != 1 {
+		t.Fatalf("corrupt lines = %+v, want exactly 1 (the tampered requested-preset record)", corrupt)
+	}
+}
+
 // TestLoadLatestBaseline_RecoversPastATornLine is BUG-054's exact
 // live-verified attack, reproduced as a regression test: a valid record,
 // then a torn/partial JSON line (simulating a killed perfci.exe or any
