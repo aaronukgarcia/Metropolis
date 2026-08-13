@@ -33,7 +33,11 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const PLAN_PATH = path.join(ROOT, 'docs', 'planning', 'master-plan-v2.1.json');
+// MET_PLAN_PATH override exists solely for test isolation (BUG-069): tests
+// that need to mutate the plan point this at a temp copy instead of the
+// live SSOT. Unset in every real invocation, so production behaviour is
+// unchanged.
+const PLAN_PATH = process.env.MET_PLAN_PATH || path.join(ROOT, 'docs', 'planning', 'master-plan-v2.1.json');
 const CODE_JSON_PATH = path.join(ROOT, 'code.json');
 const BOW_IMPORT_PATH = path.join(__dirname, 'bow-import.json');
 
