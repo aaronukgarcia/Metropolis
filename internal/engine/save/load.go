@@ -31,6 +31,11 @@ import (
 // always a registry-sourced *errs.E (GR#7), never the bare underlying
 // error.
 func (m *Manager) Load(dir string) (serialize.Header, Meta, error) {
+	// SEC-020-class: identity check before touching any field — see
+	// checkNotCopied's doc comment (manager.go).
+	if err := m.checkNotCopied(map[string]any{"method": "Load", "dir": dir}); err != nil {
+		return serialize.Header{}, Meta{}, err
+	}
 	if _, err := os.Stat(dir); err != nil {
 		return serialize.Header{}, Meta{}, errs.Wrap(ErrBundleNotFound, m.correlationID, err, map[string]any{"dir": dir, "cause": err.Error()})
 	}
@@ -111,6 +116,11 @@ type SkipInfo struct {
 // way. Returns ErrNoValidSaveFound only if every autosave in the
 // history failed to load.
 func (m *Manager) LoadLatest() (serialize.Header, Meta, []SkipInfo, error) {
+	// SEC-020-class: identity check before touching any field — see
+	// checkNotCopied's doc comment (manager.go).
+	if err := m.checkNotCopied(map[string]any{"method": "LoadLatest"}); err != nil {
+		return serialize.Header{}, Meta{}, nil, err
+	}
 	seqs, err := listAutosaveSeqs(m.root)
 	if err != nil {
 		return serialize.Header{}, Meta{}, nil, errs.Wrap(ErrListFailed, m.correlationID, err, map[string]any{"root": m.root, "dir": m.root, "cause": err.Error()})

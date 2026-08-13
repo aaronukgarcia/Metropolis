@@ -923,6 +923,12 @@
       "message": "manual save name \"{name}\" is unsafe (contains a path separator, drive letter, \"..\"/\".\" component, or NUL byte)",
       "remedy": "BUG-160: SaveManual rejects any name that is unsafe to join, unmodified, into a save bundle path -- before any filesystem write. Choose a plain manual save name with no '/', '\\\\', ':', embedded NUL, and that is not empty, \".\", or \"..\"."
     },
+    "MET-E818": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "Manager method called on a struct-copied value, not the one NewManager constructed",
+      "remedy": "Always use the *Manager pointer NewManager returned. Do not dereference-and-reassign it ('m2 := *m') or pass it by value -- that produces a second Manager value with its own independent mu but an ALIASED participants slice, defeating this package's single-save-in-flight guard (SEC-020-class, mirroring Engine.checkNotCopied/Registry.checkNotCopied/Store.checkNotCopied). If you need a second independent Manager, call NewManager again."
+    },
     "MET-E900": {
       "severity": "fatal",
       "module": "feat.skeleton",

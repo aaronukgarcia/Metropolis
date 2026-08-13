@@ -150,4 +150,15 @@ const (
 	// colon anywhere in it, or any name containing a C0 control
 	// character (byte 0x00-0x1F, including but not limited to NUL).
 	ErrUnsafeSaveName = "MET-E817"
+
+	// ErrManagerCopied: a *Manager method was called on a struct copy of
+	// the value NewManager returned (SEC-020-class — astgate's live-tree
+	// scan flagged writeBundleLocked as an unguarded mutex-hazard
+	// candidate: Manager has both mu sync.Mutex and aliasable reference
+	// fields (participants []Participant), exactly the shape every other
+	// checkNotCopied guard in this codebase protects). checkNotCopied
+	// (manager.go) rejects every guarded call before mu is ever touched,
+	// mirroring Engine.checkNotCopied/Registry.checkNotCopied/
+	// Store.checkNotCopied/Screen.checkNotCopied exactly (GR#3).
+	ErrManagerCopied = "MET-E818"
 )

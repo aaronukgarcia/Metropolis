@@ -26,6 +26,11 @@ import (
 // unrelated prefix-matching slot to glob-match and delete it
 // (reapDisplacedSiblings).
 func (m *Manager) SaveManual(ctx Context, name string) error {
+	// SEC-020-class: identity check before touching any field — see
+	// checkNotCopied's doc comment (manager.go).
+	if err := m.checkNotCopied(map[string]any{"method": "SaveManual", "name": name}); err != nil {
+		return err
+	}
 	// BUG-160/BUG-161: reject a name that is unsafe to join, unmodified,
 	// into a filesystem path (path separators, ".."/"." components, an
 	// absolute or drive-letter/UNC path, a NUL byte), or is otherwise
@@ -70,6 +75,12 @@ func (m *Manager) SaveManual(ctx Context, name string) error {
 // gates are atomic with respect to every other SaveManual/Autosave/
 // Milestone call on this Manager.
 func (m *Manager) Autosave(ctx Context) error {
+	// SEC-020-class: identity check BEFORE m.mu is ever touched — see
+	// checkNotCopied's doc comment (manager.go) for why a copy must
+	// never attempt to acquire its own mu.
+	if err := m.checkNotCopied(map[string]any{"method": "Autosave"}); err != nil {
+		return err
+	}
 	if !m.mu.TryLock() {
 		return errs.New(ErrSaveInProgress, m.correlationID, map[string]any{"finalDir": autosaveSubdir})
 	}
@@ -97,6 +108,11 @@ func autosaveDisplayName(seq int) string {
 // section; the caller (the future engine.unlocks/engine.core wiring)
 // supplies tier once it has determined a crossing occurred.
 func (m *Manager) Milestone(ctx Context, tier Tier) error {
+	// SEC-020-class: identity check before touching any field — see
+	// checkNotCopied's doc comment (manager.go).
+	if err := m.checkNotCopied(map[string]any{"method": "Milestone"}); err != nil {
+		return err
+	}
 	meta := Meta{
 		SaveKind:            KindMilestone,
 		DisplayName:         tier.Name,
@@ -147,6 +163,12 @@ func (m *Manager) Milestone(ctx Context, tier Tier) error {
 // and the freshly-built header's DebugTouched starts false exactly as
 // before this fix.
 func (m *Manager) writeBundle(ctx Context, finalDir string, meta Meta) error {
+	// SEC-020-class: identity check BEFORE m.mu is ever touched — see
+	// checkNotCopied's doc comment (manager.go) for why a copy must
+	// never attempt to acquire its own mu.
+	if err := m.checkNotCopied(map[string]any{"method": "writeBundle", "finalDir": finalDir}); err != nil {
+		return err
+	}
 	if !m.mu.TryLock() {
 		return errs.New(ErrSaveInProgress, m.correlationID, map[string]any{"finalDir": finalDir})
 	}
@@ -160,6 +182,14 @@ func (m *Manager) writeBundle(ctx Context, finalDir string, meta Meta) error {
 // deadlocking against writeBundle's own TryLock. Every caller MUST
 // already hold m.mu before calling this — it does no locking of its own.
 func (m *Manager) writeBundleLocked(ctx Context, finalDir string, meta Meta) error {
+	// SEC-020-class: defence-in-depth identity check. Every documented
+	// caller (writeBundle, Autosave) already checks checkNotCopied
+	// before ever taking m.mu, so this is belt-and-braces against a
+	// future caller that forgets to — see checkNotCopied's doc comment
+	// (manager.go).
+	if err := m.checkNotCopied(map[string]any{"method": "writeBundleLocked", "finalDir": finalDir}); err != nil {
+		return err
+	}
 	// BUG-158: reap any stray ".replaced-stage-<random>" sibling left
 	// over from a PRIOR writeBundle call to this same finalDir that
 	// crashed between displacing the old bundle and promoting the new

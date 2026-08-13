@@ -15,6 +15,12 @@ const autosaveRetentionSlots = 10
 // single locked/permission-denied old directory doesn't mask the fact
 // that later ones were still cleaned up.
 func (m *Manager) pruneAutosaves() error {
+	// SEC-020-class: identity check before touching any field — see
+	// checkNotCopied's doc comment (manager.go). Defence-in-depth: the
+	// only caller (Autosave) already checks before taking m.mu.
+	if err := m.checkNotCopied(map[string]any{"method": "pruneAutosaves"}); err != nil {
+		return err
+	}
 	seqs, err := listAutosaveSeqs(m.root)
 	if err != nil {
 		return err
