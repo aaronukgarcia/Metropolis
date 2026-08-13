@@ -4,6 +4,18 @@
   "source": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
   "updated": "2026-08-08",
   "authoring": "Hand-authored single source of truth. tools/plan/generate.js derives code.json and tools/plan/bow-import.json from this file — never edit those outputs directly (GR#3). Sequence numbers are gapped by ~10 to allow insertions. v1.1.0 (2026-08-08): sprint assignments S0-S11 added (cloud/future items unscheduled); tool.bow decision enacted; tool.planguard + tool.ready added; engine.comms resequenced after engine.firms.",
+  "designNorthStar": {
+    "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
+    "doc": "docs/planning/design-north-star.md",
+    "thesis": "The game is the juggle of conflicting requirements. The entertainment comes from managing genuinely competing demands, not from arithmetic.",
+    "fiveQuestionTest": [
+      "Which conflicting demand does this sharpen?",
+      "What does the player give up?",
+      "Does the consequence stick?",
+      "Does it snowball?",
+      "Can a long bet be made on it?"
+    ]
+  },
   "conventions": {
     "naming": {
       "moduleKey": "dot-separated lowercase: <layer>.<name> (e.g. engine.traffic, ui.widgets); matches BOW mkey and code.json key",

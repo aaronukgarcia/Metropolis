@@ -301,6 +301,7 @@ const codeJson = {
   specSource: plan.source,
   updated: plan.updated,
   conventions: plan.conventions,
+  designNorthStar: plan.designNorthStar,
   moduleCount: modules.length,
   modules,
 };

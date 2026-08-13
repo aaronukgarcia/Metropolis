@@ -27,6 +27,18 @@
     },
     "determinism": "Same seed + same command log => bit-identical world at any worker count (§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG §6.4)."
   },
+  "designNorthStar": {
+    "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
+    "doc": "docs/planning/design-north-star.md",
+    "thesis": "The game is the juggle of conflicting requirements. The entertainment comes from managing genuinely competing demands, not from arithmetic.",
+    "fiveQuestionTest": [
+      "Which conflicting demand does this sharpen?",
+      "What does the player give up?",
+      "Does the consequence stick?",
+      "Does it snowball?",
+      "Can a long bet be made on it?"
+    ]
+  },
   "moduleCount": 106,
   "modules": [
     {
