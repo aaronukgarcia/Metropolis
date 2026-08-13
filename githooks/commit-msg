@@ -1,0 +1,281 @@
+#!/usr/bin/env node
+/**
+ * githooks/commit-msg — TRACKED canonical source for `.git/hooks/commit-msg`
+ * (FEAT-045, the enforcing half of the commit-identity control demoted from
+ * claude-author-guard.js). Installed via claude-committhook-install.js
+ * (`node claude-committhook-install.js install`). `.git/hooks/` itself is
+ * never version-controlled (AC-11) — this file is what survives a fresh
+ * clone; the installed copy does not.
+ *
+ * ============================================================================
+ * WHY commit-msg, NOT pre-commit AND NOT prepare-commit-msg (AC-1).
+ * ============================================================================
+ *
+ * Live evidence gathered against real git 2.55 on this machine, in throwaway
+ * repos, before this file was written:
+ *
+ *   `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT`, run from
+ *   inside `pre-commit`, `prepare-commit-msg`, `commit-msg`, and
+ *   `post-commit` hooks, ALL FOUR correctly reflected a `--author` override
+ *   and a distinct GIT_COMMITTER_NAME/GIT_COMMITTER_EMAIL override on this
+ *   git version. Identity resolution ALONE does not distinguish the three
+ *   pre-commit-family hooks here — this is a materially different result
+ *   from received git-hook lore that `pre-commit` cannot see `--author`;
+ *   that lore may be version-dependent and is not what this repo's git does.
+ *
+ *   What DOES distinguish them is VERB COVERAGE: a real `git merge --no-ff`
+ *   merge commit fires `commit-msg` (confirmed) but does NOT fire
+ *   `pre-commit` at all (re-confirmed cleanly, see the ASM-386 note below —
+ *   an intermediate draft of this file briefly mis-stated this point after
+ *   a flawed re-test, then corrected it back after re-testing properly; see
+ *   claude-committhook.test.js's "AC-1 evidence" tests for the clean,
+ *   out-of-repo-marker/always-fail-hook reproduction this claim now rests
+ *   on). A guard installed only at `pre-commit` would therefore never see a
+ *   merge commit's identity on this machine.
+ *
+ *   `commit-msg` is chosen because it is the LATEST point that still runs
+ *   BEFORE the commit object is written (so a rejection here truly prevents
+ *   the commit — nothing to undo, no working-tree/index cleanup needed) AND
+ *   covers `commit` + `merge`, which `pre-commit` alone does not.
+ *
+ * ==== ADDITIONAL FINDING, made during the build of this file (ASM-386, P0) ====
+ *
+ *   Independent of the pre-commit-vs-commit-msg question above: on this
+ *   same git version, NEITHER `pre-commit` NOR `commit-msg` fires AT ALL for
+ *   `git cherry-pick`, `git revert`, or `git am` — verified three
+ *   independent ways (Node spawnSync + real commit-count fixtures, an
+ *   always-exit-1 hook + commit counting, and the identical always-exit-1
+ *   hook run directly in Git Bash with no Node layer involved). `commit`
+ *   and `merge` ARE protected by this hook; `cherry-pick`, `revert`, and
+ *   `am` currently are NOT, on this environment. This was NOT part of the
+ *   acceptance file's own verified evidence (it logged this specific gap as
+ *   an unverified P1 assumption, not a confirmed finding) — logged here as
+ *   ASM-386 (P0) now that it is confirmed. Root cause not determined (a
+ *   Git-for-Windows-specific dispatch difference for sequencer-based
+ *   commands is suspected, not confirmed) and left for Bill/Aaron; NOT
+ *   silently worked around here. `commit-msg` remains the right choice of
+ *   the two hook points tested for the verbs it DOES cover — it is simply
+ *   not, by itself, a complete answer to all five KNOWN_COMMIT_VERBS on
+ *   this machine.
+ *
+ * ============================================================================
+ * IDENTITY SOURCE (AC-2): git's OWN resolution, never parsed text.
+ * ============================================================================
+ *
+ * This hook determines the commit's author and committer by invoking
+ * `git var GIT_AUTHOR_IDENT` and `git var GIT_COMMITTER_IDENT` (BOTH —
+ * BUG-035's original finding was that author and committer are separate
+ * fields and checking only one is a hole) and extracting the email from
+ * each RESOLVED identity string. It never reads GIT_AUTHOR_EMAIL /
+ * GIT_COMMITTER_EMAIL env vars directly — those are one INPUT to the
+ * resolution, not the resolution itself, and are absent when the override
+ * came from `--author` or `-c` rather than an env var. There is also no
+ * shell command visible to a commit-msg hook to parse in the first place —
+ * it receives only a path to the commit-message file as argv[2] ($1 in a
+ * shell hook), which this hook does not even need to read (this item's
+ * scope is identity only, not message/content inspection — see
+ * tool.destructiveguard, FEAT-040, for code-bearing detection).
+ *
+ * ============================================================================
+ * THE GAPS THIS DOES NOT CLOSE — TWO OF THEM, NOT ONE.
+ * ============================================================================
+ *
+ * (1) AC-15, out of scope, stated not solved: `git commit --no-verify`
+ * bypasses commit-msg ENTIRELY — this is git's own native, always-available
+ * escape hatch, present for every hook on every git repository. Closing it
+ * is not possible from a hook, by construction: the hook simply is not
+ * invoked. No paired CI authorship check exists either — explicitly ruled
+ * out by Aaron ("local-only scope is accepted").
+ *
+ * (2) ASM-386, P0, NOT out of scope, NOT deliberately accepted — a live gap
+ * discovered building this file: `git cherry-pick`, `git revert`, and
+ * `git am` do not invoke this hook AT ALL on this machine's git (see the
+ * CORRECTION note above). Unlike (1), this was not a scope decision anyone
+ * made — it means this hook's real guarantee, TODAY, on THIS environment,
+ * is "a commit made via `git commit` or `git merge` cannot fabricate an
+ * identity," not "...via any of the five KNOWN_COMMIT_VERBS." Flagged to
+ * Bill/Aaron for a follow-up decision (investigate the root cause; find a
+ * hook point that DOES cover the sequencer verbs; or accept the narrower
+ * guarantee explicitly) — this file does not attempt to paper over it.
+ *
+ * ============================================================================
+ * FAIL-CLOSED — the OPPOSITE posture of the demoted claude-author-guard.js.
+ * ============================================================================
+ *
+ * Unlike the demoted PreToolUse guard (which now fails OPEN on every
+ * internal error — see that file's header), THIS hook is FAIL-CLOSED: a
+ * `git var` invocation failure, the shared sanctioned-identity module
+ * (claude-author-identity.js) throwing, or any other internal error DENIES
+ * the commit (non-zero exit, no commit object written). The two layers
+ * deliberately disagree because they have different costs of being wrong:
+ * this hook is the ONLY remaining hard stop for a normal `git commit`, so it
+ * fails closed; the demoted guard is no longer a hard stop at all, so it
+ * fails open. Do not "fix" this file to match the guard's posture — that
+ * would silently reopen the exact hole this item exists to close.
+ *
+ * Verb scope: KNOWN_COMMIT_VERBS is not consulted here — there is no verb
+ * dispatch inside this hook to get wrong; every invocation of this hook is,
+ * by construction, one of the verbs that DOES reach it. The point that
+ * needs restating (see ASM-386 above) is that on this environment, that set
+ * is `commit` and `merge` only, NOT all five KNOWN_COMMIT_VERBS — this
+ * hook simply is never invoked at all for `cherry-pick`/`revert`/`am`
+ * here, so there is nothing for this hook's own logic to get right or
+ * wrong for those three; the gap is upstream of this file, in git's own
+ * hook dispatch on this machine.
+ */
+
+'use strict';
+
+const { execFileSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+/** Resolves claude-author-identity.js relative to THIS file's own location,
+ * which differs depending on how this file is currently being run:
+ *   - INSTALLED (production): <repo-root>/.git/hooks/commit-msg, so
+ *     __dirname is <repo-root>/.git/hooks — TWO levels up reaches
+ *     <repo-root> (found the hard way: one level up only reaches
+ *     <repo-root>/.git, which does not have it — a real bug this item's own
+ *     AC-1/AC-3 throwaway-repo end-to-end tests caught immediately).
+ *   - TRACKED SOURCE, required directly (tests): githooks/commit-msg, so
+ *     __dirname is <repo-root>/githooks — only ONE level up reaches
+ *     <repo-root> (claude-author-identity.test.js requires this file this
+ *     way, to assert the two consumers share the exact same function
+ *     references — see AC-4).
+ * Existence-checked rather than guessed, so wherever this file legitimately
+ * lives, it finds the real module — no path-shape assumption baked in that
+ * only holds for one of the two cases. */
+function resolveIdentityModulePath() {
+  const candidates = [
+    path.join(__dirname, '..', '..', 'claude-author-identity.js'), // installed
+    path.join(__dirname, '..', 'claude-author-identity.js'), // tracked source, required directly
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `claude-author-identity.js not found relative to ${__dirname} ` +
+      `(tried: ${candidates.join(', ')})`
+  );
+}
+
+const identity = require(resolveIdentityModulePath());
+
+/** Denies the commit: non-zero exit, message to stderr. commit-msg running
+ * before the commit object is written means a non-zero exit here writes
+ * NOTHING — the index and working tree are untouched (AC-3/AC-16 — proven
+ * by real subprocess tests, not by inspecting this branch). */
+function fail(reason) {
+  process.stderr.write(
+    `\n🛑 COMMIT-MSG IDENTITY HOOK (FEAT-045) — commit REJECTED:\n\n${reason}\n\n` +
+      `This check cannot be bypassed except by git's own native ` +
+      `\`git commit --no-verify\` escape hatch — see this file's header, ` +
+      `AC-15 (out of scope by construction, not by choice).\n`
+  );
+  process.exitCode = 1;
+}
+
+function gitVar(name) {
+  return execFileSync('git', ['var', name], { encoding: 'utf8' }).trim();
+}
+
+/** Extracts the email from a resolved "Name <email> timestamp tz" identity
+ * string, lowercased. Returns null if no "<...>" segment is present. */
+function extractEmail(identLine) {
+  const m = /<([^<>]*)>/.exec(identLine || '');
+  return m ? m[1].trim().toLowerCase() : null;
+}
+
+/** Core check, factored out for direct unit-testing (AC-1/AC-2/AC-16
+ * tests call this without spawning a subprocess). Returns
+ * { ok: true } or { ok: false, problems: [...] } — never throws for a
+ * NORMAL unsanctioned identity (that is a problem to report, not an
+ * error); DOES throw if `sanctioned` derivation itself is broken, which the
+ * caller (main()) is responsible for turning into a fail-closed exit. */
+function checkAgainstSanctioned(sanctioned, authorIdent, committerIdent) {
+  if (!sanctioned || sanctioned.size === 0) {
+    return {
+      ok: false,
+      problems: [
+        'could not derive ANY sanctioned identity (no git config ' +
+          'user.email, no qualifying history, no ' +
+          'CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES).',
+      ],
+    };
+  }
+  const authorEmail = extractEmail(authorIdent);
+  const committerEmail = extractEmail(committerIdent);
+  const problems = [];
+  if (!authorEmail || !sanctioned.has(authorEmail)) {
+    problems.push(`author identity "${authorIdent}" is not sanctioned.`);
+  }
+  if (!committerEmail || !sanctioned.has(committerEmail)) {
+    problems.push(`committer identity "${committerIdent}" is not sanctioned.`);
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+/** Full entry point, used both by the CLI invocation below and directly by
+ * tests. Fail-closed: any throw from git var or from
+ * identity.deriveSanctioned() is caught HERE (not left to propagate to a
+ * generic top-level handler) so the fail-closed reasoning is explicit and
+ * co-located with the rest of this hook's decision logic. */
+function main() {
+  let authorIdent;
+  let committerIdent;
+  try {
+    authorIdent = gitVar('GIT_AUTHOR_IDENT');
+    committerIdent = gitVar('GIT_COMMITTER_IDENT');
+  } catch (err) {
+    fail(`could not resolve git identity via \`git var\`: ${err.message}\n\nFailing closed.`);
+    return;
+  }
+
+  let sanctioned;
+  try {
+    sanctioned = identity.deriveSanctioned();
+  } catch (err) {
+    // AC-4's "lazy implementation" trap: there is NO fallback list here.
+    // A broken shared module means this hook cannot verify anything, so it
+    // denies — it does not silently substitute a second, undeclared source
+    // of truth.
+    fail(`sanctioned-identity derivation failed internally: ${err.message}\n\nFailing closed.`);
+    return;
+  }
+
+  const result = checkAgainstSanctioned(sanctioned, authorIdent, committerIdent);
+  if (!result.ok) {
+    fail(
+      result.problems.map((p) => `  - ${p}`).join('\n') +
+        `\n\nThis machine derives ${sanctioned.size} sanctioned ` +
+        `identit${sanctioned.size === 1 ? 'y' : 'ies'} (addresses withheld ` +
+        `deliberately — this repo is public). Check your own ` +
+        `\`git config user.email\`.`
+    );
+    return;
+  }
+
+  process.exitCode = 0;
+}
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (err) {
+    // Defense in depth: main() already catches its own known failure modes
+    // and fails closed explicitly; this is the fail-closed backstop for
+    // anything that still escapes (e.g. an unreadable commit message file
+    // path in a future revision that reads argv[2] — not currently read by
+    // this hook, but AC-16 names it as a class this hook must fail closed
+    // on if it is ever added).
+    fail(`internal error: ${err.message}\n\nFailing closed.`);
+  }
+} else {
+  module.exports = {
+    gitVar,
+    extractEmail,
+    checkAgainstSanctioned,
+    main,
+    deriveSanctioned: identity.deriveSanctioned,
+  };
+}

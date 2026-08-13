@@ -369,6 +369,47 @@ test('SEC-052: a real `git -c user.email=X commit` bypass attempt is rejected en
   });
 });
 
+test('SEC-052: a real `git -c user.email=X merge --no-ff` bypass attempt is rejected end-to-end by the fixed, installed hook (the other verb this hook exists to protect, per the original finding)', () => {
+  withTempRepo((dir) => {
+    git(dir, ['init', '-b', 'main']);
+    git(dir, ['config', 'user.name', SANCTIONED_NAME]);
+    git(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
+    fs.copyFileSync(
+      path.join(__dirname, 'claude-author-identity.js'),
+      path.join(dir, 'claude-author-identity.js')
+    );
+    install.install(dir);
+
+    fs.writeFileSync(path.join(dir, 'a.txt'), '1', 'utf8');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-m', 'base']);
+    git(dir, ['checkout', '-b', 'topic']);
+    fs.writeFileSync(path.join(dir, 'b.txt'), '2', 'utf8');
+    git(dir, ['add', '-A']);
+    git(dir, ['commit', '-m', 'topic commit']);
+    git(dir, ['checkout', 'main']);
+
+    // The exact original finding's second verb: `-c user.email=X ... merge
+    // --no-ff` poisons BOTH the identity under test AND (pre-fix) the
+    // sanctioned set it is checked against, in the same invocation.
+    const bad = spawnSync(
+      'git',
+      ['-c', 'user.email=merge-bypass@example.invalid', '-c', 'user.name=Merge Bypass',
+       'merge', '--no-ff', 'topic', '-m', 'merge with fabricated identity'],
+      { cwd: dir, encoding: 'utf8' }
+    );
+    assert.notEqual(bad.status, 0, 'the `-c user.email=` merge bypass must be rejected now that configuredEmail() is scope-pinned');
+    // No merge commit object should have landed with the fabricated identity.
+    git(dir, ['merge', '--abort']);
+
+    // Control: a legitimate no-ff merge with the real configured identity
+    // must still succeed — the fix must not become a false-positive machine
+    // on the verb it exists to protect.
+    const ok = spawnSync('git', ['merge', '--no-ff', 'topic', '-m', 'legit merge'], { cwd: dir, encoding: 'utf8' });
+    assert.equal(ok.status, 0, `legitimate merge --no-ff with the real configured identity must succeed: ${ok.stderr}`);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // SEC-052 ROUND 2: the global-scope fallback (`--global`) is itself
 // redirectable via GIT_CONFIG_GLOBAL (git 2.32+) or HOME/USERPROFIL, neither
