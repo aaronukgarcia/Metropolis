@@ -307,13 +307,13 @@ func driveTicks(t *protocol.InProcTransport, months int64) (int64, error) {
 // persist_test.go's unit tests.
 func writeBundle(dir string, e *core.Engine, correlationID string, prior serialize.Header) (serialize.Header, error) {
 	if err := serialize.CreateBundleDir(dir); err != nil {
-		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir, "cause": err.Error()})
 	}
 
 	meta := serialize.ShardMeta{Name: "meta", Kind: "meta", Encoding: "ndjson+gzip"}
 	f, err := serialize.CreateShardWriter(dir, meta)
 	if err != nil {
-		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir, "cause": err.Error()})
 	}
 
 	header, snapErr := e.Snapshot(f, correlationID, prior)
@@ -326,11 +326,11 @@ func writeBundle(dir string, e *core.Engine, correlationID string, prior seriali
 		return serialize.Header{}, snapErr
 	}
 	if closeErr != nil {
-		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, closeErr, map[string]any{"path": dir})
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, closeErr, map[string]any{"path": dir, "cause": closeErr.Error()})
 	}
 
 	if err := serialize.WriteHeader(dir, header); err != nil {
-		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
+		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir, "cause": err.Error()})
 	}
 	return header, nil
 }
