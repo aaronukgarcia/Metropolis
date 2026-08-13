@@ -1467,6 +1467,154 @@ func TestOrphanedEntry_AllEntriesLive_DoesNotFailBuild(t *testing.T) {
 	}
 }
 
+// --- SEC-051 regression: malformed-SHAPE (fabricated) allowlist keys ----
+//
+// The two tests above (TestOrphanedEntry_*) exercise enforceNoOrphanedEntries,
+// which only fires once a live Run scan result exists to compare an entry
+// against. The tests below exercise the EARLIER, load-time check
+// (validateFindingKeyShape, wired into LoadAcceptedFindings, accepted.go):
+// a key that is not shaped the way violationKey (gate.go) could ever have
+// produced it is rejected the moment accepted-findings.json is READ, with
+// no live scan involved at all -- a distinct failure mode (MET-F708) from
+// the orphan-detection one (which has no error code of its own -- it is a
+// t.Errorf inside a test, not a LoadAcceptedFindings-time hard error).
+
+// TestLoadAcceptedFindings_FabricatedKeyShape_RejectsAtLoadTime writes a
+// fixture accepted-findings.json whose one entry has a plausible-LOOKING
+// but wrong-shaped key -- SEC-051's own reproduction shape, five
+// pipe-delimited fields instead of violationKey's six (missing the
+// MatchedExprPrinted component) -- and confirms LoadAcceptedFindings
+// rejects it with MET-F708, distinct from MET-F706/MET-F707's
+// empty-field/duplicate failure modes.
+func TestLoadAcceptedFindings_FabricatedKeyShape_RejectsAtLoadTime(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "accepted-findings.json")
+	const fixtureJSON = `[
+  {
+    "finding": "internal/orphanfabfix|SpeculativeType|function (parameter)|FutureFunc|x",
+    "reason": "SEC-051 attack: fabricated entry pre-approved before FutureFunc exists anywhere in the tree"
+  }
+]`
+	if err := os.WriteFile(path, []byte(fixtureJSON), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadAcceptedFindings(path)
+	e := assertRegistryError(t, err, "MET-F708")
+	if got, _ := e.Ctx["finding"].(string); got == "" {
+		t.Error("expected ctx[\"finding\"] to name the offending malformed key")
+	}
+	if got, _ := e.Ctx["reason"].(string); !strings.Contains(got, "6") {
+		t.Errorf("expected the shape-validation reason to explain the field-count mismatch, got %q", got)
+	}
+	t.Logf("SEC-051 load-time shape check fired as designed: %s", e.Display())
+}
+
+// TestLoadAcceptedFindings_WellFormedRealEntries_LoadCleanly is the
+// mirror-image proof: LoadAcceptedFindings against the project's REAL,
+// checked-in accepted-findings.json (the actual SEC-049-triaged entries,
+// currently 142 of them) must load with no error at all -- proving
+// validateFindingKeyShape does not false-positive on any genuine,
+// scanner-produced key, only on fabricated ones.
+func TestLoadAcceptedFindings_WellFormedRealEntries_LoadCleanly(t *testing.T) {
+	root, err := resolveRepoRoot()
+	if err != nil {
+		t.Fatalf("resolveRepoRoot: %v", err)
+	}
+	acceptedPath := filepath.Join(root, filepath.FromSlash(acceptedFindingsFile))
+	accepted, err := LoadAcceptedFindings(acceptedPath)
+	if err != nil {
+		t.Fatalf("SEC-051 REGRESSION: LoadAcceptedFindings rejected the real, checked-in %s (every entry should already be "+
+			"well-shaped -- SEC-049's triage): %v", acceptedFindingsFile, err)
+	}
+	if len(accepted) == 0 {
+		t.Fatal("fixture setup broken: the real accepted-findings.json loaded with zero entries -- this test proves nothing " +
+			"without a substantial, genuinely populated registry to validate against")
+	}
+	t.Logf("SEC-051: all %d real accepted-findings.json entries pass validateFindingKeyShape", len(accepted))
+}
+
+// TestValidateFindingKeyShape_TableDriven unit-tests validateFindingKeyShape
+// directly against a small table of malformed shapes (each isolating ONE
+// way a fabricated/hand-typed key can go wrong) plus one well-formed
+// control, proving the check catches each failure mode independently
+// rather than only the exact SEC-051 reproduction string above.
+func TestValidateFindingKeyShape_TableDriven(t *testing.T) {
+	cases := []struct {
+		name    string
+		key     string
+		wantErr bool
+	}{
+		{
+			name:    "well-formed control (6 fields, real kind, .go file)",
+			key:     "internal/foundation/errs/log.go|*Logger|receiver method|SetSink|l|*Logger",
+			wantErr: false,
+		},
+		{
+			name:    "well-formed free function (empty receiver-expr field is legal)",
+			key:     "internal/foundation/errs/log.go||function (parameter)|SetSink|l|*Logger",
+			wantErr: false,
+		},
+		{
+			name:    "SEC-051 reproduction: only 5 fields, missing matchedExpr",
+			key:     "internal/orphanfabfix|SpeculativeType|function (parameter)|FutureFunc|x",
+			wantErr: true,
+		},
+		{
+			name:    "too many fields (7)",
+			key:     "a.go|b|receiver method|c|d|e|f",
+			wantErr: true,
+		},
+		{
+			name:    "unrecognised kind label",
+			key:     "internal/foo.go|*T|totally made up kind|F|v|*T",
+			wantErr: true,
+		},
+		{
+			name:    "file component does not end in .go",
+			key:     "internal/foo.txt|*T|receiver method|F|v|*T",
+			wantErr: true,
+		},
+		{
+			name:    "absolute file path",
+			key:     "/internal/foo.go|*T|receiver method|F|v|*T",
+			wantErr: true,
+		},
+		{
+			name:    "backslashed (Windows-style) file path",
+			key:     `internal\foo.go|*T|receiver method|F|v|*T`,
+			wantErr: true,
+		},
+		{
+			name:    "empty funcName",
+			key:     "internal/foo.go|*T|receiver method||v|*T",
+			wantErr: true,
+		},
+		{
+			name:    "empty valueName",
+			key:     "internal/foo.go|*T|receiver method|F||*T",
+			wantErr: true,
+		},
+		{
+			name:    "empty matchedExpr",
+			key:     "internal/foo.go|*T|receiver method|F|v|",
+			wantErr: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateFindingKeyShape(c.key)
+			if c.wantErr && err == nil {
+				t.Errorf("validateFindingKeyShape(%q) = nil, want a shape error", c.key)
+			}
+			if !c.wantErr && err != nil {
+				t.Errorf("validateFindingKeyShape(%q) = %v, want nil (well-formed key)", c.key, err)
+			}
+		})
+	}
+}
+
 // --- SEC-048: registry-sourced errors, not bare fmt.Errorf --------------
 //
 // The three tests below are the direct regression coverage for SEC-048's

@@ -293,6 +293,12 @@
       "message": "astgate accepted-findings registry {path} has more than one entry for finding {finding}",
       "remedy": "SEC-048: LoadAcceptedFindings refuses to guess which of two entries for the same violationKey is authoritative (fail closed, not silently take-the-last). Remove the duplicate entry from accepted-findings.json, keeping the one reason that should stand."
     },
+    "MET-F708": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate accepted-findings registry {path} entry {index} has a malformed finding key {finding}: {reason}",
+      "remedy": "SEC-051: every \"finding\" value in accepted-findings.json must be shaped exactly like violationKey's own output (gate.go) -- six pipe-delimited fields (file|receiverExpr|kind|funcName|valueName|matchedExpr), a repo-root-relative forward-slash .go file path, and a kind field equal to one of FuncKind.String()'s three known values. A key that does not match this shape cannot have come from a real scan (validateFindingKeyShape, accepted.go) -- it was hand-typed or otherwise fabricated. This is a STRICTER, earlier check than the separate orphan-detection test (enforceNoOrphanedEntries): that one only catches a fabricated entry once it is compared against a live scan's findings; this one rejects an ill-shaped entry at load time, before any scan runs. Fix or remove the offending entry in {path}."
+    },
     "MET-U001": {
       "severity": "fatal",
       "module": "ui.core",
