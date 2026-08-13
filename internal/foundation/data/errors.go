@@ -47,4 +47,13 @@ const (
 	// buildings.json alone, so it gets its own code distinct from
 	// CodeSchemaInvalid.
 	CodeBuildingDanglingConsumptionRef = "MET-F607"
+
+	// CodeStoreCopied: Get, OnChange, or Reload was called on a
+	// struct-copied Store[T, PT] value (`s2 := *s1`), not the *Store
+	// NewStore constructed. BUG-125/SEC-020: mirrors engine.core's
+	// ErrEngineCopied exactly — a copy's reloadMu/cbMu are independently
+	// zeroed but its cbs slice can still alias the original's backing
+	// array, so this is rejected before either lock (or the shared cbs
+	// append) is ever reached.
+	CodeStoreCopied = "MET-F608"
 )
