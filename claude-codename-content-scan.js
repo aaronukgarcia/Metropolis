@@ -65,6 +65,14 @@
  *     covered by NEITHER layer today, escalated to Bill/Aaron per the
  *     acceptance file (docs/planning/acceptance/tool.codenamehook.md),
  *     not resolved unilaterally here.
+ *
+ * BUG-183 (fixed here): a forbidden pattern landing ONLY in a new, renamed,
+ * or copied file's PATH — never in file content or the commit message —
+ * used to bypass this enforcing layer, since it scanned added hunk-body
+ * content exclusively. The sibling PreToolUse `claude-codename-guard.js`
+ * already scanned `splitDiffSections()`'s `pathHeaderLines` output for the
+ * same class of gap (BUG-137); this module now does the same, via the same
+ * shared `scan()` — no second detection path invented (GR#3).
  */
 
 'use strict';
@@ -114,6 +122,29 @@ function stagedAddedLines() {
   return splitDiffSections(diff).addedLines;
 }
 
+/** BUG-183: same `git diff --cached --unified=0 --no-color` invocation as
+ * stagedAddedLines(), but returns the diff's `pathHeaderLines` half of
+ * splitDiffSections()'s output — the per-file header lines identifying a
+ * new, renamed, or copied file's PATH (BUG-137's shape, extracted by the
+ * same shared claude-codename-diff.js module claude-codename-guard.js
+ * already consumes for this exact purpose). A path-only violation (a
+ * forbidden pattern in a filename, never in file content or the commit
+ * message) reaches neither stagedAddedLines() above nor the commit message,
+ * so without this the enforcing layer could not see it at all — the gap
+ * this item exists to close. Same fail-closed contract as
+ * stagedAddedLines(): git invocation failure propagates to the caller. */
+function stagedPathHeaderLines() {
+  if (process.env.CLAUDE_CODENAME_SCAN_FORCE_ERROR === '1') {
+    throw new Error('CLAUDE_CODENAME_SCAN_FORCE_ERROR forced failure (test-only escape hatch)');
+  }
+  const diff = execFileSync('git', ['diff', '--cached', '--unified=0', '--no-color'], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return splitDiffSections(diff).pathHeaderLines;
+}
+
 /** Core check: scans the staged diff's added lines against the shared GR#22
  * pattern set (claude-codename-patterns.js — GR#3, no second copy). Returns
  * an array of human-readable hit descriptions (empty when clean). Throws if
@@ -125,10 +156,18 @@ function scanStagedDiff() {
   const added = stagedAddedLines();
   const hits = [];
   patterns.scan(added, 'staged content (added lines)', hits);
+
+  // BUG-183: also scan the new/renamed/copied file paths themselves, same
+  // shared pattern set, same fail-closed posture — a violation living only
+  // in a filename must deny the commit exactly like one living in content.
+  const pathHeaders = stagedPathHeaderLines();
+  patterns.scan(pathHeaders, 'staged file path (new, renamed, or copied file)', hits);
+
   return hits;
 }
 
 module.exports = {
   stagedAddedLines,
+  stagedPathHeaderLines,
   scanStagedDiff,
 };

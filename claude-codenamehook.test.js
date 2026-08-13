@@ -263,6 +263,63 @@ test('BUG-182: scanStagedDiff() source-level — the "++"-prefixed content line 
   });
 });
 
+// ---------------------------------------------------------------------------
+// BUG-183 regression: the enforcing commit-msg content scan used to inspect
+// added hunk-body content only, never the diff's per-file path-header lines
+// — so a forbidden pattern living ONLY in a new/renamed/copied file's PATH,
+// with clean body content, committed cleanly straight through the real
+// installed hook. The sibling PreToolUse claude-codename-guard.js already
+// scanned this surface (BUG-137); this closes the same gap in the enforcing
+// layer by scanning splitDiffSections()'s pathHeaderLines here too, via the
+// same shared pattern module (GR#3) — see claude-codename-content-scan.js's
+// stagedPathHeaderLines().
+// ---------------------------------------------------------------------------
+
+test('BUG-183: the installed hook REJECTS a new file whose PATH (not body) carries a fragment-assembled positive, clean body content', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    writeAndStage(dir, `${ABBR}-notes.txt`, 'clean body content, nothing forbidden here\n');
+    const before = commitCount(dir);
+    const bad = git(dir, ['commit', '-m', 'x']);
+    assert.notEqual(bad.status, 0, 'expected the forbidden filename to be rejected even though the body is clean');
+    assert.match(bad.stderr || '', /CODENAME/);
+    assert.equal(commitCount(dir), before, 'no commit object should have been created');
+  });
+});
+
+test('BUG-183: scanStagedDiff() source-level — a forbidden pattern in a staged file PATH is present in stagedPathHeaderLines() and surfaces as a hit', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    writeAndStage(dir, `${ABBR}-notes.txt`, 'clean body content\n');
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      delete require.cache[require.resolve('./claude-codename-content-scan.js')];
+      const freshScan = require('./claude-codename-content-scan.js');
+      const pathHeaders = freshScan.stagedPathHeaderLines();
+      assert.match(pathHeaders, new RegExp(ABBR), `expected the forbidden filename to survive as a path header line, got: ${JSON.stringify(pathHeaders)}`);
+      const hits = freshScan.scanStagedDiff();
+      assert.ok(hits.length > 0, 'expected scanStagedDiff() to report at least one hit for the path-only violation');
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+});
+
+test('BUG-183: a clean rename (no forbidden content in old path, new path, or body) is still accepted (no false positive introduced by path scanning)', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    writeAndStage(dir, 'original.txt', 'ordinary technical prose\n');
+    gitOk(dir, ['commit', '-m', 'seed']);
+    gitOk(dir, ['mv', 'original.txt', 'renamed.txt']);
+    gitOk(dir, ['add', '-A']);
+    const before = commitCount(dir);
+    const r = git(dir, ['commit', '-m', 'clean rename']);
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(commitCount(dir), before + 1);
+  });
+});
+
 test('AC-3: clean staged content is accepted — zero exit AND exactly one new commit (the check can also pass)', () => {
   withTempRepo((dir) => {
     initRepo(dir);
