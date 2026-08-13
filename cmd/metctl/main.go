@@ -31,6 +31,16 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
 
+// promoteRename performs the final stagingDir -> dest rename in runExport.
+// It's a package-level seam (not a hardcoded os.Rename call) purely so
+// tests can inject a deterministic failure at that exact point -- BUG-154's
+// entire bug was about what happens when *that specific* rename fails after
+// the backup step has already run, and the underlying syscall failure
+// (locked file, AV scanner, concurrent reader, disk pressure) isn't
+// reproducible on demand any other way. Production code always uses the
+// real os.Rename; only tests in this package override it.
+var promoteRename = os.Rename
+
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -111,13 +121,120 @@ func runExport(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return fmt.Errorf("metctl export: creating output directory %q: %w", dest, err)
+
+	// BUG-153: write every shard into a private staging directory first,
+	// and promote (os.Rename) into dest only once every shard has
+	// succeeded -- mirroring internal/engine/save's stage-then-promote
+	// pattern (save.go's writeBundle / AC-9) so a shard failing partway
+	// through a multi-shard bundle (e.g. a later hostile/traversal name,
+	// MET-F301) never leaves earlier shards' output files sitting in
+	// dest looking like a genuine complete-but-small export. Any failure
+	// before promotion removes the staging directory and leaves dest
+	// completely untouched (whatever it held before this call, or
+	// nothing if it didn't exist).
+	destParent := filepath.Dir(dest)
+	if err := os.MkdirAll(destParent, 0o755); err != nil {
+		return fmt.Errorf("metctl export: creating parent of output directory %q: %w", dest, err)
 	}
+	stagingDir, err := os.MkdirTemp(destParent, ".metctl-export-*")
+	if err != nil {
+		return fmt.Errorf("metctl export: creating staging directory: %w", err)
+	}
+	promoted := false
+	defer func() {
+		if !promoted {
+			_ = os.RemoveAll(stagingDir)
+		}
+	}()
 
 	for _, meta := range h.ShardIndex {
-		if err := exportShard(dir, dest, meta); err != nil {
+		if err := exportShard(dir, stagingDir, meta); err != nil {
 			return fmt.Errorf("metctl export: shard %q: %w", meta.Name, err)
+		}
+	}
+
+	// dest may already exist from a previous export; replace it wholesale
+	// (rather than merging file-by-file) so a re-export never leaves
+	// stale files from a different shard set mixed in with the new ones.
+	//
+	// BUG-154: this used to be os.RemoveAll(dest) followed by
+	// os.Rename(stagingDir, dest) -- two separate, non-atomic syscalls. If
+	// RemoveAll succeeded but the following Rename then failed (locked
+	// file, AV scanner, concurrent reader, disk pressure, or a kill
+	// landing in that exact gap), dest ended up deleted with the new
+	// export never promoted: total loss of both old and new data, worse
+	// than BUG-153's original symptom. The fix below renames dest out of
+	// the way FIRST (recoverable), only promotes the staged export
+	// second, and only deletes the old export AFTER promotion succeeds --
+	// so a failure at any point leaves either the backup or the original
+	// dest intact, never neither.
+	backupPath := dest + ".metctl-export-backup"
+
+	destExisted := true
+	if _, statErr := os.Stat(dest); statErr != nil {
+		if !os.IsNotExist(statErr) {
+			return fmt.Errorf("metctl export: checking existing output directory %q: %w", dest, statErr)
+		}
+		destExisted = false
+	}
+
+	if !destExisted {
+		// BUG-155: dest is missing. Before assuming this is a first-ever
+		// export and clearing backupPath unconditionally, check whether a
+		// stale backup survives from a prior run that completed step 1
+		// (dest -> backupPath) but was killed before step 2 (promoteRename)
+		// ran. If so, backupPath holds the ONLY surviving good export --
+		// restore it to dest instead of deleting it, then fall through into
+		// the ordinary "dest already exists" path below, which will
+		// re-backup it before this run's promotion attempt, exactly as if
+		// this were a normal replace-export.
+		if _, statErr := os.Stat(backupPath); statErr == nil {
+			if err := os.Rename(backupPath, dest); err != nil {
+				return fmt.Errorf("metctl export: recovering surviving backup %q to %q: %w", backupPath, dest, err)
+			}
+			destExisted = true
+		} else if !os.IsNotExist(statErr) {
+			return fmt.Errorf("metctl export: checking backup path %q: %w", backupPath, statErr)
+		}
+	} else {
+		// dest exists cleanly, so any backupPath here is a genuine leftover
+		// from a fully-completed-but-not-cleaned-up prior export -- dest is
+		// already the good copy, so the backup is truly redundant and safe
+		// to clear before we claim the name ourselves.
+		if err := os.RemoveAll(backupPath); err != nil {
+			return fmt.Errorf("metctl export: clearing stale backup path %q: %w", backupPath, err)
+		}
+	}
+
+	if destExisted {
+		if err := os.Rename(dest, backupPath); err != nil {
+			return fmt.Errorf("metctl export: backing up existing output directory %q: %w", dest, err)
+		}
+		// If we fail anywhere below, put the prior export back exactly
+		// where it was rather than leaving it stranded under the backup
+		// name -- callers (and re-runs) expect dest to mean "the last
+		// good export", not "the last good export, if you know to look
+		// under a .metctl-export-backup suffix".
+		defer func() {
+			if !promoted {
+				if _, statErr := os.Stat(backupPath); statErr == nil {
+					_ = os.Rename(backupPath, dest)
+				}
+			}
+		}()
+	}
+
+	if err := promoteRename(stagingDir, dest); err != nil {
+		return fmt.Errorf("metctl export: promoting staged export to %q: %w", dest, err)
+	}
+	promoted = true
+
+	// Promotion succeeded; the backup (the previous export) is no longer
+	// needed. This is best-effort cleanup only -- promotion has already
+	// happened, so a failure here is disk-space leakage, not data loss.
+	if destExisted {
+		if err := os.RemoveAll(backupPath); err != nil {
+			return fmt.Errorf("metctl export: promoted to %q but failed to clean up backup %q: %w", dest, backupPath, err)
 		}
 	}
 
