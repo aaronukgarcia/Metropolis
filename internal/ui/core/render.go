@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // RenderTick is the UI render tick rate (UI-SPEC §1/§5: "10 Hz UI tick
@@ -57,6 +59,22 @@ func stubDraw(back *Buffer, _ *ViewModels) {
 // behind a build tag): a single atomic CAS is cheap enough that gating
 // it would only add complexity for no measurable benefit on the render
 // path's budget (UI-SPEC §5).
+//
+// # Copy safety (BUG-018)
+//
+// owned is an atomic.Bool VALUE: a struct copy (`r2 := *r`) gets its own,
+// entirely independent atomic word, so a copy's CompareAndSwap can
+// succeed even while the original already owns the screen — two
+// goroutines each correctly believing they hold T-RENDER's exclusive
+// ownership, and each free to call methods on RenderScreen concurrently
+// (two writers to one terminal). This is a different mechanism from
+// SEC-020's lock/aliased-referent shape (a mutex plus a reference field
+// diverging) — RenderLoop has no mutex — so it is fixed with the same
+// atomic-self-identity pattern already established for Engine
+// (SEC-014/SEC-016/SEC-018, internal/engine/core/engine.go) and
+// SubscriptionServer (SEC-019, internal/protocol/subscription.go): self
+// (below) plus checkNotCopied (copyguard.go) reject every exported/
+// receiver method call made on such a copy before owned is ever touched.
 type RenderLoop struct {
 	screen RenderScreen
 	front  *Buffer
@@ -66,6 +84,12 @@ type RenderLoop struct {
 
 	renderNow chan struct{}
 	owned     atomic.Bool
+
+	// self holds the address NewRenderLoop gave this RenderLoop at
+	// construction (self.Store(r), set once, at the end of
+	// NewRenderLoop, never stored to again). See copyguard.go's
+	// checkNotCopied for the full rationale.
+	self atomic.Pointer[RenderLoop]
 
 	lastStats FlushStats
 	belowMin  bool
@@ -85,6 +109,10 @@ func NewRenderLoop(screen RenderScreen, views *ViewStore, draws ...DrawFunc) *Re
 		renderNow: make(chan struct{}, 1),
 		belowMin:  BelowMinimum(w, h),
 	}
+	// Stored exactly once, here, before r is returned to any caller — no
+	// goroutine can have a reference to r to race this Store against
+	// (SEC-016; see copyguard.go's self doc comment).
+	r.self.Store(r)
 	return r
 }
 
@@ -94,7 +122,14 @@ func NewRenderLoop(screen RenderScreen, views *ViewStore, draws ...DrawFunc) *Re
 // than a queued second render (renders are idempotent snapshots of
 // current state, so coalescing is correct, not lossy). Safe to call from
 // any goroutine, including as an InputLoop.OnDelivered callback.
+//
+// BUG-018: a struct-copied RenderLoop's call is a silent no-op (never
+// touches renderNow, which a copy aliases with the original) — mirrors
+// how demo.Screen's void methods behave on a copy.
 func (r *RenderLoop) TriggerRender() {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "TriggerRender"}); err != nil {
+		return
+	}
 	select {
 	case r.renderNow <- struct{}{}:
 	default:
@@ -102,12 +137,24 @@ func (r *RenderLoop) TriggerRender() {
 }
 
 // LastStats returns the FlushStats from the most recently completed
-// render (zero value before the first render).
-func (r *RenderLoop) LastStats() FlushStats { return r.lastStats }
+// render (zero value before the first render, and BUG-018: also zero
+// value if called on a struct-copied RenderLoop).
+func (r *RenderLoop) LastStats() FlushStats {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "LastStats"}); err != nil {
+		return FlushStats{}
+	}
+	return r.lastStats
+}
 
 // BelowMinimum reports whether the current terminal size is below
-// MinCols x MinRows (AC-6).
-func (r *RenderLoop) BelowMinimum() bool { return r.belowMin }
+// MinCols x MinRows (AC-6). BUG-018: reports false, never the aliased
+// original's real value, if called on a struct-copied RenderLoop.
+func (r *RenderLoop) BelowMinimum() bool {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BelowMinimum"}); err != nil {
+		return false
+	}
+	return r.belowMin
+}
 
 // Resize reallocates front/back to (w, h) and re-evaluates the
 // below-minimum stub state. Safe to call before Run starts (initial
@@ -117,7 +164,13 @@ func (r *RenderLoop) BelowMinimum() bool { return r.belowMin }
 // resize handling through the same goroutine that calls Run, e.g. by
 // reacting to InputLoop's ResizeInput messages and calling Resize before
 // TriggerRender.
+//
+// BUG-018: a struct-copied RenderLoop's call is a silent no-op — never
+// resizes the aliased front/back buffers a second, uncoordinated way.
 func (r *RenderLoop) Resize(w, h int) {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Resize"}); err != nil {
+		return
+	}
 	r.front.Resize(w, h)
 	r.back.Resize(w, h)
 	r.belowMin = BelowMinimum(w, h)
@@ -126,7 +179,16 @@ func (r *RenderLoop) Resize(w, h int) {
 // Run drives T-RENDER: an initial render, then a loop alternating on a
 // RenderTick ticker and TriggerRender's channel, until stop is closed.
 // Intended to run in its own goroutine.
+//
+// BUG-018: a struct-copied RenderLoop's call returns immediately without
+// entering the loop — the copy-guard check that matters most is the one
+// inside renderOnce (below), since that is where the actual ownership
+// CAS happens, but rejecting Run itself means a copy never even starts
+// spinning a ticker against a screen it must not touch.
 func (r *RenderLoop) Run(stop <-chan struct{}) {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Run"}); err != nil {
+		return
+	}
 	r.renderOnce()
 	ticker := time.NewTicker(RenderTick)
 	defer ticker.Stop()
@@ -144,7 +206,21 @@ func (r *RenderLoop) Run(stop <-chan struct{}) {
 
 // renderOnce performs exactly one draw+flush cycle. See the ownership
 // guard note on RenderLoop's doc comment.
+//
+// BUG-018: checkNotCopied is called BEFORE the CAS, not after — the
+// entire point of this fix is that a struct copy's owned is its own,
+// independent atomic.Bool, so letting a copy reach the CAS at all would
+// let it succeed and believe it holds exclusive screen ownership
+// alongside the original (same pre-lock/pre-CAS ordering rationale as
+// Engine.RegisterPhaseHook's SEC-016 note: reject the copy before the
+// gate it would otherwise pass, not after). A copy's call is a silent
+// no-op — it never reaches r.owned, r.screen, or r.back/r.front, so
+// there is nothing for -race to catch and no second writer to the
+// terminal.
 func (r *RenderLoop) renderOnce() {
+	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "renderOnce"}); err != nil {
+		return
+	}
 	if !r.owned.CompareAndSwap(false, true) {
 		panic("ui/core: concurrent tcell screen access detected — T-RENDER must be the sole goroutine touching the screen (M0-ENG §1.1, UI-SPEC §1)")
 	}

@@ -275,6 +275,12 @@
       "message": "malformed delta for subscription {subscriptionId} at tick {tick} could not be applied: {cause}",
       "remedy": "The delta's Patch was not valid JSON (or otherwise failed to apply) and was dropped; the view model for that subscription keeps its last-known-good state. If this persists, check the sending engine module's view-patch encoding for that view."
     },
+    "MET-U003": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "RenderLoop method called on a struct-copied value (BUG-018): {method}",
+      "remedy": "A *core.RenderLoop value was copied by assignment/passing instead of being used via the single pointer core.NewRenderLoop returned (owned is an atomic.Bool VALUE -- a copy gets its own independent atomic word, so a copy's CAS can succeed even while the original already owns the screen, giving two goroutines that each believe they hold T-RENDER's exclusive tcell.Screen access). The call was rejected rather than risking two writers to one terminal; construct exactly one RenderLoop via NewRenderLoop and pass its pointer everywhere instead of a dereferenced copy."
+    },
     "MET-U100": {
       "severity": "warn",
       "module": "ui.screen.map",
