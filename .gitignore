@@ -47,3 +47,8 @@ nul
 # Go saves (curated fixtures are the exception; committed explicitly)
 *.ndjson.gz
 !fixtures/**/*.ndjson.gz
+
+# FEAT-065 dev-mode feedback file-drop inbox: runtime-generated free-text
+# submissions and their processed/error sidecars — never committed (this
+# is player/dev-typed content landing on disk, not source or fixtures).
+data/devfeedback/
