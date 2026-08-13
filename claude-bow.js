@@ -472,6 +472,51 @@ const RISKY_CONTENT_RE = /`|\$\(|"/;
  * the string, any command substitution the outer shell was going to do has
  * already happened. Never blocks the write.
  */
+// SEC-050 (Destructive finding on BUG-090): --desc-file/--note-file/
+// --detail-file (resolveTextFlag below) had NO path-scope restriction --
+// confirmed live by reading C:\Windows\win.ini through it. resolveTextFlag
+// doesn't grant a NEW capability (an agent invoking this already has
+// unrestricted filesystem read via its own tools), but it creates a new
+// SINK: file content lands silently in a BOW field that other
+// sessions/exports/doc pipelines may surface more broadly than intended.
+// Same shared boundary-check shape as FIX-2's `isPathUnderAllowedGrepRoot`
+// further down this file (GR#3 -- one "is this path in bounds"
+// implementation, reused here via `isPathUnderAnyRoot` rather than
+// re-derived). The allowed roots for these CLI text flags are deliberately
+// wider than the tripwire grep roots (this is an operator/agent-supplied
+// flag, not untrusted acceptance-doc text): the project repo root
+// (legitimate -- reading a doc/note out of the repo itself) and the OS temp
+// directory (legitimate -- the project's own scratchpad convention writes
+// working files there, and BUG-090's own test suite already exercises
+// --desc-file/--note-file against os.tmpdir()-based fixtures). Anything
+// else -- /etc/passwd, C:\Windows\win.ini, an arbitrary absolute path, a
+// ../ escape from either root -- is refused before the read is attempted.
+const TEXT_FLAG_ALLOWED_ROOTS = [__dirname, os.tmpdir()];
+
+function isTextFlagPathAllowed(filePath) {
+  return isPathUnderAnyRoot(process.cwd(), filePath, TEXT_FLAG_ALLOWED_ROOTS);
+}
+
+/**
+ * Shared overflow-check helper (BUG-151/BUG-173/BUG-027 -- GR#3: one
+ * mechanism, not three near-duplicate length checks). Checks `text`'s
+ * length against `maxLen` and, if it would exceed the column's real limit,
+ * prints a clear, typed error naming the column, the limit, and the actual
+ * length, then exits non-zero BEFORE any DB write is attempted -- never
+ * lets a raw driver error ("Data too long for column '...'") leak through.
+ * `context` is a short human string identifying what's being checked (e.g.
+ * "closing note for BUG-145", "title for new bug item") so the message is
+ * actionable, not generic. No-op for null/undefined/non-string text.
+ */
+function rejectIfOverColumnLimit(text, maxLen, columnLabel, context) {
+  if (typeof text === 'string' && text.length > maxLen) {
+    console.error(
+      `claude-bow error: ${context} is too long for the "${columnLabel}" column: ` +
+      `${text.length} chars, maximum is ${maxLen}. Shorten it and try again -- nothing was written.`);
+    process.exit(1);
+  }
+}
+
 function resolveTextFlag(fieldName) {
   const fileFlag = `${fieldName}-file`;
   const direct = flags[fieldName];
@@ -481,6 +526,10 @@ function resolveTextFlag(fieldName) {
     process.exit(1);
   }
   if (filePath !== undefined) {
+    if (!isTextFlagPathAllowed(filePath)) {
+      console.error(`claude-bow: --${fileFlag} "${filePath}" resolves outside the allowed roots (the project repo root or the OS temp directory) -- refusing to read (SEC-050 path-scope guard). This flag is for repo docs or scratch files, not arbitrary filesystem reads.`);
+      process.exit(1);
+    }
     try {
       return fs.readFileSync(filePath, 'utf8');
     } catch (err) {
@@ -545,6 +594,12 @@ async function cmdAdd(db) {
     console.error(`Invalid priority "${flags.priority}". Valid: ${PRIORITIES.join(', ')}`);
     process.exit(1);
   }
+  // BUG-027: validate title length BEFORE the INSERT (applies to every `add`
+  // subcommand -- module/feature/bug/interface/assumption/finding -- since
+  // they all share the one `title` column) so an over-length title fails
+  // with a clear, typed message naming the limit and given length instead
+  // of a raw "Data too long for column 'title'" driver error.
+  rejectIfOverColumnLimit(title, BOW_COLUMN_MAX_LEN.title, 'title', `title for new ${type} item`);
   // BUG-090 (AC-1/AC-3): resolved BEFORE the code/guid are minted and BEFORE
   // the INSERT — a mutual-exclusion or unreadable-file rejection here exits
   // non-zero with no row ever written, matching --example-file's precedent.
@@ -1804,9 +1859,24 @@ function runCheck2CallEdges(resolvedAcFiles, opts = {}) {
 // ── D. Check 3 — tripwires (AC-13..AC-15) ───────────────────────────────────
 
 /** Split acceptance-file text into top-level `- **AC-N ...` bullet blocks —
- * the "same AC block" unit AC-14 requires the Tripwire label to sit within. */
+ * the "same AC block" unit AC-14 requires the Tripwire label to sit within.
+ *
+ * BUG-162: the original split point was ONLY a following `- **` bullet, so
+ * a later section heading (e.g. `## D. Check 3 — "Check (once unblocked)"
+ * tripwires are armed`) with no AC bullet of its own got absorbed whole
+ * into the PRECEDING AC's block — right up to the next `- **` line. If that
+ * absorbed heading happened to contain the literal phrase "Check (once
+ * unblocked)" (as tool.sprintgate.md's own section D heading does, quoting
+ * the phrase it's about), `findTripwireChecks` wrongly treated the prior AC
+ * (AC-12 there) as a deferred-check AC needing a Tripwire block, found
+ * none, and misreported it "unarmed" — a false positive on an AC that was
+ * never a "Check (once unblocked)" AC at all. Fixed by also splitting
+ * ahead of any markdown heading line (`#` through `######`), so a heading
+ * always terminates the previous AC's block; headings are then dropped by
+ * the same `startsWith('- **')` filter that already excludes anything
+ * that isn't a real AC bullet. */
 function splitAcBlocks(acText) {
-  return (acText || '').split(/\n(?=- \*\*)/).map((s) => s.trim()).filter((s) => s.startsWith('- **'));
+  return (acText || '').split(/\n(?=- \*\*|#{1,6}\s)/).map((s) => s.trim()).filter((s) => s.startsWith('- **'));
 }
 
 /** AC-13/AC-14: for every "Check (once unblocked)" AC block, find its
@@ -2024,12 +2094,21 @@ function evaluateCodeJsonEdgeTripwire(parsed, codeJsonPath) {
  * — rejecting any `../` traversal that escapes them. */
 const ALLOWED_GREP_ROOT_NAMES = ['docs/planning/acceptance', 'internal', 'data'];
 
-function isPathUnderAllowedGrepRoot(cwd, pathArg) {
+/** Shared path-scope primitive (GR#3 -- reused by both this tripwire grep
+ * guard, FIX-2, and SEC-050's --desc-file/--note-file/--detail-file guard
+ * near resolveTextFlag above, rather than each maintaining its own copy).
+ * Resolves `pathArg` to an absolute path against `cwd` and returns true iff
+ * it falls under (or equals) ANY of the given absolute `roots`. */
+function isPathUnderAnyRoot(cwd, pathArg, roots) {
   const resolved = path.resolve(cwd, pathArg);
-  return ALLOWED_GREP_ROOT_NAMES.some((rootName) => {
-    const root = path.resolve(cwd, rootName);
+  return roots.some((rootDir) => {
+    const root = path.resolve(rootDir);
     return resolved === root || resolved.startsWith(root + path.sep);
   });
+}
+
+function isPathUnderAllowedGrepRoot(cwd, pathArg) {
+  return isPathUnderAnyRoot(cwd, pathArg, ALLOWED_GREP_ROOT_NAMES.map((rootName) => path.resolve(cwd, rootName)));
 }
 
 /**
@@ -2550,15 +2629,15 @@ async function cmdSet(db) {
 // `boundary: true` patterns) are ported verbatim from the guard's own
 // lineMatchesWithBoundary so a hit here is the same hit the guard would have
 // blocked at commit time.
-// BUG-151: redact's replacement marker ([REDACTED-GR22], 16 chars) can be
-// LONGER than the forbidden text it replaces (e.g. the 3-char numbered-
-// abbreviation pattern), so a redaction can grow a field past its column's
-// actual size. Only `bow_items.title` is a bounded VARCHAR (see the
-// VARCHAR(255) in ensureSchema() above, GR#3 — this constant mirrors that
-// schema value rather than re-deriving it); `description` and
-// `bow_comments.body` are TEXT/effectively unbounded for redact's purposes,
-// so they are intentionally absent from this map (no check needed there).
-const REDACT_FIELD_MAX_LEN = { title: 255 };
+// BUG-151/BUG-173/BUG-027 (GR#3 -- one source of truth for the real column
+// sizes, not three re-hardcoded copies of "255" and "512"): mirrors the
+// VARCHAR sizes declared in ensureSchema() above (bow_items.title
+// VARCHAR(255), bow_items.closed_note VARCHAR(512)). `description` and
+// `bow_comments.body` are TEXT/effectively unbounded, so they are
+// intentionally absent -- no check needed there.
+const BOW_COLUMN_MAX_LEN = { title: 255, closed_note: 512 };
+// Back-compat alias for redact's field-keyed lookup below.
+const REDACT_FIELD_MAX_LEN = { title: BOW_COLUMN_MAX_LEN.title };
 
 function loadCodenameGuardPatterns() {
   const guard = require('./claude-codename-guard.js');
@@ -2739,6 +2818,11 @@ async function cmdDone(db) {
     process.exit(1);
   }
   const note = resolveTextFlag('note'); // BUG-090 (AC-2/AC-3)
+  // BUG-173: validate closed_note length BEFORE the UPDATE, same mechanism
+  // as BUG-027's title check and BUG-151's redact check (GR#3) -- a clear,
+  // typed message naming the limit instead of a raw "Data too long for
+  // column 'closed_note'" driver error.
+  rejectIfOverColumnLimit(note, BOW_COLUMN_MAX_LEN.closed_note, 'closed_note', `closing note for ${item.code}`);
   await db.query(
     'UPDATE bow_items SET status = ?, closed_at = CURRENT_TIMESTAMP, closed_note = ? WHERE guid = ?',
     ['done', note, item.guid]);
@@ -3041,6 +3125,11 @@ module.exports = {
   // the mutual-exclusion/advisory-warning behaviour directly, in addition to
   // the required real-subprocess byte-identity checks (AC-1).
   resolveTextFlag, RISKY_CONTENT_RE,
+  // SEC-050 + BUG-151/BUG-173/BUG-027: exported for direct unit testing of
+  // the shared path-scope and overflow-check helpers, in addition to the
+  // required real-subprocess CLI tests.
+  isPathUnderAnyRoot, isTextFlagPathAllowed, TEXT_FLAG_ALLOWED_ROOTS,
+  rejectIfOverColumnLimit, BOW_COLUMN_MAX_LEN,
   // BUG-061 (tool.bow `redact`): exported for direct unit testing of the
   // replace/count logic against fixture text, in addition to the required
   // real-subprocess contract tests (Aaron's ruling: verify the way Tester-2

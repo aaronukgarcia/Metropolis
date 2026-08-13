@@ -65,6 +65,9 @@ const {
   recordGateVerdict, latestGateRun, deriveOverallVerdict, runGate,
   MANUAL_OVERRIDE_TAG, hasManualOverrideRows,
   GATE_CHECK_NAMES,
+  // SEC-050 + BUG-151/BUG-173/BUG-027
+  isPathUnderAnyRoot, isTextFlagPathAllowed, TEXT_FLAG_ALLOWED_ROOTS,
+  rejectIfOverColumnLimit, BOW_COLUMN_MAX_LEN,
 } = bow;
 
 const DB_HOST = process.env.METRO_DB_HOST || '127.0.0.1';
@@ -1948,6 +1951,184 @@ test('BUG-151 AC-3: `redact --comment` is unaffected by the title-length check (
   assert.match(rows[0].body, /\[REDACTED-GR22\]/, 'the comment body must be redacted normally, growing past 255 chars with no error');
   assert.ok(rows[0].body.length > 255, 'test setup sanity: the redacted body must actually have grown past 255 chars, proving the TEXT column absorbs it fine');
   assert.ok(!rows[0].body.includes(phrase));
+});
+
+// =============================================================================
+// BUG-173 — `done`'s closed_note column overflow must fail with a clear
+// message (same mechanism as BUG-151's redact check, BUG-027's title
+// check), never a raw "Data too long for column 'closed_note'" DB error.
+// closed_note is VARCHAR(512) (see ensureSchema()).
+// =============================================================================
+
+test('BUG-173: `done --note` over the 512-char closed_note limit fails clearly, item is left untouched, no raw DB error', async () => {
+  const guid = await insertItem({ code: 'FEAT-9120', status: 'open' });
+  const overlongNote = 'n'.repeat(513);
+
+  const r = bowCli(['done', 'FEAT-9120', '--note', overlongNote]);
+  assert.notEqual(r.status, 0, 'an over-limit closing note must exit non-zero, not truncate-and-succeed');
+  assert.doesNotMatch(r.stderr, /Data too long/i, 'the raw MySQL driver error must NOT leak through — this is the exact bug being fixed');
+  assert.match(r.stderr, /512|closed_note|too long/i, 'error should name the column/limit for operator clarity');
+
+  const [rows] = await db.query('SELECT status, closed_note FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].status, 'open', 'item must remain open — the length check must happen before the UPDATE');
+  assert.equal(rows[0].closed_note, null, 'closed_note must be untouched, no partial write');
+});
+
+test('BUG-173: `done --note` at exactly the 512-char limit still succeeds (boundary, not off-by-one)', async () => {
+  const guid = await insertItem({ code: 'FEAT-9121', status: 'open' });
+  const exactNote = 'n'.repeat(512);
+
+  const r = bowCli(['done', 'FEAT-9121', '--note', exactNote]);
+  assert.equal(r.status, 0, `a note exactly at the 512-char limit must succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT status, closed_note FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].status, 'done');
+  assert.equal(rows[0].closed_note, exactNote);
+});
+
+test('BUG-173: rejectIfOverColumnLimit is a no-op (does not exit) for text under/at the limit, and is the same helper BOW_COLUMN_MAX_LEN.closed_note derives its bound from', () => {
+  assert.equal(BOW_COLUMN_MAX_LEN.closed_note, 512);
+  assert.doesNotThrow(() => rejectIfOverColumnLimit('short note', BOW_COLUMN_MAX_LEN.closed_note, 'closed_note', 'test'));
+  assert.doesNotThrow(() => rejectIfOverColumnLimit(null, BOW_COLUMN_MAX_LEN.closed_note, 'closed_note', 'test'), 'null/omitted text must be a no-op, not a crash');
+});
+
+// =============================================================================
+// BUG-027 — `add`'s title column overflow must fail with a clear message,
+// same mechanism as BUG-173/BUG-151, applying to every `add` subcommand
+// (module/feature/bug/interface/assumption/finding) since they all share
+// the one `title` VARCHAR(255) column.
+// =============================================================================
+
+test('BUG-027: `add assumption` with an over-255-char title fails clearly, no row written, no raw DB error', async () => {
+  const overlongTitle = 't'.repeat(256);
+  const tmp = mkTempDir('bug027-');
+  const codePath = path.join(tmp, 'some-file.js');
+  fs.writeFileSync(codePath, '// fixture', 'utf8');
+
+  const r = bowCli(['add', 'assumption', overlongTitle, '--code-path', codePath, '--codejson', 'tool.bowcli']);
+  assert.notEqual(r.status, 0, 'an over-limit title must exit non-zero, not truncate-and-succeed');
+  assert.doesNotMatch(r.stderr, /Data too long/i, 'the raw MySQL driver error must NOT leak through — this is the exact bug being fixed');
+  assert.match(r.stderr, /255|title|too long/i, 'error should name the column/limit for operator clarity');
+
+  const [rows] = await db.query('SELECT * FROM bow_items WHERE title = ?', [overlongTitle]);
+  assert.equal(rows.length, 0, 'no row may be written when the title-length check rejects the command');
+});
+
+test('BUG-027: `add bug` (a non-assumption subcommand) with an over-255-char title is ALSO rejected — the check applies to every add subcommand, not just assumption', async () => {
+  const overlongTitle = 'b'.repeat(300);
+  const r = bowCli(['add', 'bug', overlongTitle]);
+  assert.notEqual(r.status, 0);
+  assert.doesNotMatch(r.stderr, /Data too long/i);
+
+  const [rows] = await db.query('SELECT * FROM bow_items WHERE title = ?', [overlongTitle]);
+  assert.equal(rows.length, 0);
+});
+
+test('BUG-027: `add bug` at exactly the 255-char title limit still succeeds (boundary, not off-by-one)', async () => {
+  const exactTitle = 'x'.repeat(255);
+  const r = bowCli(['add', 'bug', exactTitle]);
+  assert.equal(r.status, 0, `a title exactly at the 255-char limit must succeed: ${r.stderr}`);
+  const [rows] = await db.query('SELECT title FROM bow_items WHERE title = ?', [exactTitle]);
+  assert.equal(rows.length, 1);
+});
+
+// =============================================================================
+// SEC-050 — --desc-file/--note-file/--detail-file (resolveTextFlag) must
+// refuse to read a path outside the allowed roots (repo root, OS temp dir)
+// instead of reading ANY file the process can access. Confirmed live by
+// reading C:\Windows\win.ini through --desc-file before this fix.
+// =============================================================================
+
+test('SEC-050: `add --desc-file` pointed at a system file well outside the repo/temp roots is refused, no row written', async () => {
+  const winIni = 'C:\\Windows\\win.ini';
+  if (!fs.existsSync(winIni)) return; // only meaningful on this project's Windows environment
+  const r = bowCli(['add', 'bug', 'SEC-050 win.ini probe', '--desc-file', winIni]);
+  assert.notEqual(r.status, 0, 'reading a system file via --desc-file must be refused, not succeed');
+  assert.match(r.stderr, /path-scope guard|outside the allowed roots/i);
+
+  const [rows] = await db.query('SELECT * FROM bow_items WHERE title = ?', ['SEC-050 win.ini probe']);
+  assert.equal(rows.length, 0, 'no row may be written when the path-scope guard rejects the file');
+});
+
+test('SEC-050: `add --desc-file` with a `../` traversal escaping both allowed roots is refused', async () => {
+  const tmp = mkTempDir('sec050-traversal-');
+  // Escape the temp root itself via a traversal that lands outside BOTH the
+  // repo root and the temp root (a sibling directory of os.tmpdir()).
+  const escapeTarget = path.join(tmp, '..', '..', 'sec050-escape-probe-does-not-exist.txt');
+  const r = bowCli(['add', 'bug', 'SEC-050 traversal probe', '--desc-file', escapeTarget]);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /path-scope guard|outside the allowed roots/i);
+
+  const [rows] = await db.query('SELECT * FROM bow_items WHERE title = ?', ['SEC-050 traversal probe']);
+  assert.equal(rows.length, 0);
+});
+
+test('SEC-050: `add --desc-file` reading a legitimate file inside the repo root still works (repo root is an allowed root, not just temp)', async () => {
+  const repoFile = path.join(ROOT, 'package.json'); // a real, small (well under the TEXT column's 64KB cap), stable repo file
+  assert.ok(fs.existsSync(repoFile), 'test setup: code.json must exist at repo root');
+  const r = bowCli(['add', 'bug', 'SEC-050 repo-root read', '--desc-file', repoFile]);
+  assert.equal(r.status, 0, `reading a repo-root file via --desc-file must still work: ${r.stderr}`);
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE title = ?', ['SEC-050 repo-root read']);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].description, fs.readFileSync(repoFile, 'utf8'));
+});
+
+test('SEC-050: isPathUnderAnyRoot/isTextFlagPathAllowed unit-level — outside both roots is rejected, inside either is allowed', () => {
+  assert.deepEqual(TEXT_FLAG_ALLOWED_ROOTS.length, 2, 'exactly two allowed roots: repo root and OS temp dir');
+  assert.equal(isTextFlagPathAllowed(path.join(ROOT, 'claude-bow.js')), true);
+  assert.equal(isTextFlagPathAllowed(path.join(os.tmpdir(), 'anything.txt')), true);
+  assert.equal(isTextFlagPathAllowed('C:\\Windows\\win.ini'), false);
+  assert.equal(isTextFlagPathAllowed(path.join(ROOT, '..', 'outside-repo-probe.txt')), false);
+});
+
+// =============================================================================
+// BUG-162 — splitAcBlocks must not absorb a later section heading (with no
+// AC bullet of its own) into the preceding AC's block. Reproduced against
+// the real docs/planning/acceptance/tool.sprintgate.md, whose section D
+// heading contains the literal phrase "Check (once unblocked)" and was
+// getting folded into AC-12's block, misreporting AC-12 as an unarmed
+// deferred-check AC.
+// =============================================================================
+
+test('BUG-162: splitAcBlocks does not fold a later "## " section heading into the preceding AC bullet\'s block (synthetic repro)', () => {
+  const text = [
+    '- **AC-1 (first).** Some body text for AC-1, nothing about checks here.',
+    '',
+    '## D. Check 3 — "Check (once unblocked)" tripwires are armed',
+    '',
+    '- **AC-2 (second, a real deferred-check AC).** Check (once unblocked): do the thing.',
+    '  Tripwire (mechanical): `true` must exit 0.',
+  ].join('\n');
+
+  const blocks = splitAcBlocks(text);
+  assert.equal(blocks.length, 2, 'exactly two AC blocks, the heading must not become or merge into either');
+  assert.ok(!blocks[0].includes('Check (once unblocked)'), 'AC-1\'s block must NOT have absorbed the section heading\'s "Check (once unblocked)" phrase');
+  assert.ok(blocks[1].includes('Check (once unblocked)'), 'AC-2 legitimately contains the phrase itself');
+
+  const tripwireResults = findTripwireChecks(text);
+  assert.equal(tripwireResults.length, 1, 'only AC-2 is a real deferred-check AC — AC-1 must not be misreported as one');
+  assert.equal(tripwireResults[0].acNum, '2');
+  assert.equal(tripwireResults[0].armed, true);
+});
+
+test('BUG-162: real repro against docs/planning/acceptance/tool.sprintgate.md — AC-12 is correctly excluded from findTripwireChecks (not reported unarmed)', () => {
+  const acPath = path.join(ROOT, 'docs', 'planning', 'acceptance', 'tool.sprintgate.md');
+  const text = fs.readFileSync(acPath, 'utf8');
+
+  const blocks = splitAcBlocks(text);
+  const ac12Block = blocks.find((b) => /AC-12\b/.test(b));
+  assert.ok(ac12Block, 'AC-12\'s own block must still be found');
+  assert.ok(!ac12Block.includes('Check (once unblocked)'), 'AC-12\'s block must no longer contain section D\'s heading text (the BUG-162 defect)');
+
+  const tripwireResults = findTripwireChecks(text);
+  const ac12Result = tripwireResults.find((r) => r.acNum === '12');
+  assert.equal(ac12Result, undefined, 'AC-12 must not appear in findTripwireChecks results at all — it was never a "Check (once unblocked)" AC');
+
+  // tool.sprintgate.md's own bullets never literally contain the phrase
+  // "Check (once unblocked)" in an AC body (only in prose ABOUT the concept,
+  // outside any AC bullet, and in section D's heading) — so post-fix the
+  // correct result is that NO AC in this file is misreported either way.
+  assert.deepEqual(tripwireResults, [], 'no AC in this file genuinely contains "Check (once unblocked)" in its own bullet body — the pre-fix false positive on AC-12 must be gone, not replaced by a different false positive');
 });
 
 // =============================================================================
