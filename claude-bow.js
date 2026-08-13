@@ -1640,7 +1640,7 @@ function findTripwireChecks(acText) {
     if (!block.includes('Check (once unblocked)')) continue;
     const acNumMatch = block.match(/AC-(\d+)/);
     const acNum = acNumMatch ? acNumMatch[1] : '?';
-    const twMatch = block.match(/Tripwire \(mechanical[^)]*\):\s*`([^`]+)`\s*must exit\s*\*{0,2}(\d+)\*{0,2}/i);
+    const twMatch = block.match(/\*{0,2}Tripwire \(mechanical[^)]*\):\*{0,2}\s*`([^`]+)`\s*must exit\s*\*{0,2}(\d+)\*{0,2}/i);
     if (!twMatch) {
       results.push({ acNum, armed: false });
     } else {
@@ -2345,6 +2345,16 @@ async function cmdSet(db) {
 // `boundary: true` patterns) are ported verbatim from the guard's own
 // lineMatchesWithBoundary so a hit here is the same hit the guard would have
 // blocked at commit time.
+// BUG-151: redact's replacement marker ([REDACTED-GR22], 16 chars) can be
+// LONGER than the forbidden text it replaces (e.g. the 3-char numbered-
+// abbreviation pattern), so a redaction can grow a field past its column's
+// actual size. Only `bow_items.title` is a bounded VARCHAR (see the
+// VARCHAR(255) in ensureSchema() above, GR#3 — this constant mirrors that
+// schema value rather than re-deriving it); `description` and
+// `bow_comments.body` are TEXT/effectively unbounded for redact's purposes,
+// so they are intentionally absent from this map (no check needed there).
+const REDACT_FIELD_MAX_LEN = { title: 255 };
+
 function loadCodenameGuardPatterns() {
   const guard = require('./claude-codename-guard.js');
   if (!guard || !Array.isArray(guard.PATTERNS) || typeof guard.isLowerLetter !== 'function') {
@@ -2466,6 +2476,29 @@ async function cmdRedact(db) {
   if (!report.length) {
     console.log(`redact: no forbidden-pattern occurrences found in ${subject} — nothing changed.`);
     return;
+  }
+
+  // BUG-151: check the redacted result against each field's actual column
+  // limit BEFORE writing. The [REDACTED-GR22] marker (16 chars) can be
+  // longer than the pattern it replaces, so a title already near the 255
+  // cap can overflow on redact. If it would, refuse the write entirely —
+  // no partial write, no silent truncation — and say explicitly that the
+  // GR#22 violation is STILL PRESENT (the field is unmodified, since we
+  // never attempted the write), so an operator can't mistake this failure
+  // for a successful redaction. Never names the matched/redacted text
+  // itself (same discipline as the audit comment below).
+  for (const [field, newText] of Object.entries(newValues)) {
+    const maxLen = REDACT_FIELD_MAX_LEN[field];
+    if (maxLen !== undefined && newText.length > maxLen) {
+      console.error(
+        `claude-bow error: GR#22 redact BLOCKED for ${subject}, field "${field}": ` +
+        `redacting would grow this field to ${newText.length} chars, exceeding the ` +
+        `${maxLen}-char column limit. The write was NOT attempted — the GR#22 ` +
+        `violation in this field is STILL PRESENT and was NOT removed. Nothing was ` +
+        `changed in the database. Manually shorten the field (e.g. trim unrelated ` +
+        `text) and re-run redact, or edit out the violation by hand.`);
+      process.exit(1);
+    }
   }
 
   // Write the redacted text back via the same DB write paths the rest of

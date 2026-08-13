@@ -871,6 +871,74 @@ test('AC-15 (text-only, no execution): findTripwireChecks extracts the exact com
 });
 
 // ---------------------------------------------------------------------------
+// BUG-113/BUG-117 (same underlying regex gap, discovered from two angles):
+// findTripwireChecks's Tripwire-label regex required the literal, unadorned
+// text `Tripwire (mechanical...):` with no markdown around it. Real acceptance
+// docs (engine.destination.md, engine.leisure.md, engine.tourism.md, all
+// authored under BUG-100's remediation) wrap the whole label in bold markdown
+// — `**Tripwire (mechanical — BUG-100):**` — which the old regex silently
+// failed to match, leaving those ACs reported as UNARMED even though a real,
+// executable tripwire sits right there. That is the dangerous shape: no
+// crash, no warning, just an AC that looks armed in the doc but isn't
+// actually checked. Fixed by tolerating 0, 1, or 2 asterisks immediately
+// before "Tripwire" and immediately after the label's closing "):".
+// ---------------------------------------------------------------------------
+
+test('BUG-113/BUG-117 regression: a Tripwire block with a PLAIN TEXT label still parses as armed (no regression from the markdown-tolerance fix)', () => {
+  const plainText = '- **AC-20 (STILL BLOCKED). Tripwire (mechanical): `' + TRIPWIRE_AC_CMD +
+    '` must exit 0 (edge still absent); nonzero means re-arm this AC.** ' +
+    'Check (once unblocked): grep -n "x" file.go finds it.';
+  const results = findTripwireChecks(plainText);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].armed, true, 'plain-text Tripwire label must still be recognized as armed');
+  assert.equal(results[0].command, TRIPWIRE_AC_CMD);
+  assert.equal(results[0].expectedExit, 0);
+});
+
+test('BUG-113/BUG-117 regression: a Tripwire block wrapped in **bold** markdown (the real engine.destination.md/engine.leisure.md/engine.tourism.md shape) now parses as armed', () => {
+  const boldText = '- **AC-21 (STILL BLOCKED after c36778b; BUG-100 tripwire applied).** ' +
+    '**Tripwire (mechanical — BUG-100):** `' + TRIPWIRE_AC_CMD +
+    '` must exit **0** (edge still absent); a nonzero exit means the edge landed and this AC must be re-armed. ' +
+    'Until the tripwire fires: Check (once unblocked): grep -n "x" file.go finds it.';
+  const results = findTripwireChecks(boldText);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].armed, true, 'bold-wrapped Tripwire label must be recognized as armed, not silently dropped');
+  assert.equal(results[0].command, TRIPWIRE_AC_CMD);
+  assert.equal(results[0].expectedExit, 0);
+});
+
+test('BUG-113/BUG-117 regression: a Tripwire block wrapped in *italic* markdown also parses as armed', () => {
+  const italicText = '- **AC-22 (STILL BLOCKED).** ' +
+    '*Tripwire (mechanical):* `' + TRIPWIRE_AC_CMD +
+    '` must exit *0* (edge still absent); nonzero means re-arm this AC. ' +
+    'Check (once unblocked): grep -n "x" file.go finds it.';
+  const results = findTripwireChecks(italicText);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].armed, true, 'italic-wrapped Tripwire label must be recognized as armed');
+  assert.equal(results[0].command, TRIPWIRE_AC_CMD);
+  assert.equal(results[0].expectedExit, 0);
+});
+
+test('BUG-113/BUG-117 real-doc proof: the currently-committed acceptance docs with bold-markdown Tripwire blocks (engine.destination.md AC-6/7/8, engine.leisure.md AC-8, engine.tourism.md AC-7/8/9) are now all detected as armed, not silently unarmed', () => {
+  const expectedArmed = {
+    'engine.destination.md': ['6', '7', '8'],
+    'engine.leisure.md': ['8'],
+    'engine.tourism.md': ['7', '8', '9'],
+  };
+  for (const [file, acNums] of Object.entries(expectedArmed)) {
+    const acPath = path.join(__dirname, 'docs', 'planning', 'acceptance', file);
+    const text = fs.readFileSync(acPath, 'utf8');
+    const results = findTripwireChecks(text);
+    for (const acNum of acNums) {
+      const hit = results.find((r) => r.acNum === acNum);
+      assert.ok(hit, `${file} AC-${acNum} should be picked up as a "Check (once unblocked)" block at all`);
+      assert.equal(hit.armed, true, `${file} AC-${acNum}'s bold-markdown Tripwire block must be detected as armed, not silently unarmed`);
+      assert.ok(hit.command && hit.command.startsWith('node -e'), `${file} AC-${acNum} must extract a real, executable command`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
 // FIX-1 (P0 RCE regression) — Destructive finding on FEAT-061: runCheck3Tripwires
 // used `spawnSync(command, {shell:true})` on raw, untrusted acceptance-file
 // text, letting a malicious tripwire block smuggle and execute a SECOND,
@@ -1761,4 +1829,72 @@ test('BUG-061 AC: `redact` with no matching item exits non-zero with a clear mes
   const r = bowCli(['redact', 'FEAT-99999']);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /no BOW item matches/i);
+});
+
+// =============================================================================
+// BUG-151 — redact must refuse (not crash-into-a-raw-DB-error) when the
+// [REDACTED-GR22] marker (16 chars) would grow a title past the column's
+// 255-char VARCHAR limit. Must fail with a clear, typed message that says
+// the violation is STILL PRESENT, write nothing, and leave ordinary
+// (well-under-limit) redaction and --comment redaction unaffected.
+// =============================================================================
+
+test('BUG-151 AC-1: redact refuses an overflowing title redaction with a clear GR#22-still-present error, not a raw DB error, and writes nothing', async () => {
+  const guid = await insertItem({ code: 'FEAT-9110' });
+  // A 253-char title (within 15 of the 255 cap) containing the numbered-
+  // abbreviation phrase near the end. Its match ("CS2") is far shorter than
+  // the 16-char [REDACTED-GR22] marker, so redacting it grows the title
+  // past the column limit.
+  const phrase = buildNumberedAbbrevPhrase(); // "see the CS2 comparison doc"
+  const pad = 'a'.repeat(253 - phrase.length);
+  const overlongTitle = pad + phrase;
+  assert.equal(overlongTitle.length, 253, 'test setup: title must be 253 chars, within 15 of the 255 cap');
+
+  await db.query('UPDATE bow_items SET title = ? WHERE guid = ?', [overlongTitle, guid]);
+
+  const r = bowCli(['redact', 'FEAT-9110']);
+  assert.notEqual(r.status, 0, 'overflowing redact must exit non-zero, not succeed with a truncated/partial write');
+  assert.match(r.stderr, /still present|not removed/i, 'error must explicitly say the GR#22 violation is still present, not just "failed"');
+  assert.doesNotMatch(r.stderr, /Data too long/i, 'the raw MySQL driver error must NOT leak through — this is the exact bug being fixed');
+  assert.match(r.stderr, /255|column limit|exceed/i, 'error should name the column limit for operator clarity');
+
+  const [rows] = await db.query('SELECT title FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].title, overlongTitle, 'title must be byte-identical/unchanged — no partial write, no silent truncation');
+  assert.ok(rows[0].title.includes(phrase), 'the forbidden phrase must still be present verbatim since the write never happened');
+
+  const [comments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(comments[0].n, 0, 'no audit comment should be posted for a blocked (unattempted) redaction');
+});
+
+test('BUG-151 AC-2: ordinary redaction well under the column limit is unaffected by the new length check', async () => {
+  const guid = await insertItem({
+    code: 'FEAT-9111',
+    description: `Reference: ${buildFullTitlePhrase()}.`,
+  });
+
+  const r = bowCli(['redact', 'FEAT-9111']);
+  assert.equal(r.status, 0, `ordinary redact must still succeed: ${r.stderr}`);
+  assert.match(r.stdout, /redacted \d+ occurrence/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.match(rows[0].description, /\[REDACTED-GR22\]/);
+  assert.ok(!rows[0].description.includes(buildFullTitlePhrase()));
+});
+
+test('BUG-151 AC-3: `redact --comment` is unaffected by the title-length check (comment body is TEXT, not the bounded VARCHAR(255) title column) — a near-limit-length comment body still redacts successfully', async () => {
+  const guid = await insertItem({ code: 'FEAT-9112' });
+  const phrase = buildNumberedAbbrevPhrase();
+  const pad = 'a'.repeat(253 - phrase.length);
+  const longBody = pad + phrase; // same 253-char, near-VARCHAR(255)-sized shape as AC-1, but in a TEXT column
+  const [insertResult] = await db.query(
+    'INSERT INTO bow_comments (item_guid, body) VALUES (?, ?)', [guid, longBody]);
+  const commentId = insertResult.insertId;
+
+  const r = bowCli(['redact', '--comment', String(commentId)]);
+  assert.equal(r.status, 0, `redact --comment on a near-255-char body must still succeed (body is TEXT, unbounded here): ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT body FROM bow_comments WHERE id = ?', [commentId]);
+  assert.match(rows[0].body, /\[REDACTED-GR22\]/, 'the comment body must be redacted normally, growing past 255 chars with no error');
+  assert.ok(rows[0].body.length > 255, 'test setup sanity: the redacted body must actually have grown past 255 chars, proving the TEXT column absorbs it fine');
+  assert.ok(!rows[0].body.includes(phrase));
 });
