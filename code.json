@@ -3962,6 +3962,10 @@
           {
             "key": "feat.extraction",
             "outboundGuid": "78f8aefc-aacc-48b6-8a72-92c54808ec56"
+          },
+          {
+            "key": "feat.resourcesurvey",
+            "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
           }
         ]
       },
@@ -4064,6 +4068,11 @@
             "key": "feat.resourcedeposits",
             "moduleGuid": "837a51a3-5726-4770-a4b8-f2094b6af198",
             "inboundGuid": "225e12ba-2cf4-4562-ab0f-6b842435d4e3"
+          },
+          {
+            "key": "engine.mining",
+            "moduleGuid": "9062c545-c846-4f1d-8bfb-a2590359599a",
+            "inboundGuid": "1696baf9-c153-4e81-b358-f2cbb74957dd"
           }
         ]
       },

@@ -1778,16 +1778,18 @@
       "milestone": "M4",
       "layer": "ui",
       "title": "Resource survey + map overlay: 'Blue 2'-style deposit visibility in the F1 overlay cycle",
-      "desc": "FEAT-048/FEAT-050 (Aaron, 2026-08-11, resources-design-brief.md §4). A resource overlay renders deposit type and extent, slotting into F1's existing overlay-cycle architecture (feat.resourcedeposits' shuffle output; two-data-layers-per-cell rule, ui.screen.map). BA to confirm whether full deposit knowledge is free or surveying is itself a progression (prospecting -> survey -> proven reserves) — fits the risk ladder in feat.extraction and the squeezed-never-ambushed projection philosophy (pay to see underground).",
+      "desc": "FEAT-048/FEAT-050 (Aaron, 2026-08-11, resources-design-brief.md §4). A resource overlay renders deposit type and extent, slotting into F1's existing overlay-cycle architecture (feat.resourcedeposits' shuffle output; two-data-layers-per-cell rule, ui.screen.map). BA ruling (docs/planning/acceptance/feat.resourcesurvey.md, 2026-08-13): surveying is a paid four-tier progression (unsurveyed -> prospected, reusing engine.world's Prospect/IsProspected gate -> surveyed, a new paid command yielding a bounded estimate range -> proven reserves, deferred to feat.extraction), not free knowledge — the brief's own \"pay to see underground\" wording and §5's yield-variance-against-estimate mechanic both presuppose this. engine.mining added as an explicit dep/call: it owns the mutable per-tile survey-tier state and the finance-debiting paid-survey command, neither of which ui.screen.map or feat.resourcedeposits can own.",
       "specRef": "resources-design-brief.md §4",
       "path": "internal/ui/screens/map/",
       "deps": [
         "ui.screen.map",
-        "feat.resourcedeposits"
+        "feat.resourcedeposits",
+        "engine.mining"
       ],
       "calls": [
         "ui.screen.map",
-        "feat.resourcedeposits"
+        "feat.resourcedeposits",
+        "engine.mining"
       ],
       "sprint": 11
     },
