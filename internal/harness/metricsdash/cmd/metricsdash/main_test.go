@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
 )
 
 // TestRun_LogNoteWritesRecordWithoutRepoOrSprintFlags is AC-9: the
@@ -45,6 +48,63 @@ func TestRun_EmptyLogNoteFailsExplicitly(t *testing.T) {
 	stderrContent := readAll(t, stderr)
 	if !strings.Contains(stderrContent, "failed to log note") {
 		t.Errorf("stderr = %q, expected an explicit failure message (GR#1/AC-10)", stderrContent)
+	}
+}
+
+// TestRun_KindFlagSelectsRecordKind is the CLI-level regression test for
+// BUG-133: the -kind flag must genuinely select which BOW item type the
+// resulting FeedbackRecord asks claude-devfeedback-import.js to create,
+// not silently collapse to "bug" for anything other than the default.
+// LogNote and claude-devfeedback-import.js already have their own kind
+// regression coverage (BUG-126) -- this test closes the one gap those
+// didn't cover: that run()'s flag.String("kind", ...) value actually
+// reaches metricsdash.LogNote unmolested from the CLI entry point, for
+// every valid kind, not just the untested default.
+func TestRun_KindFlagSelectsRecordKind(t *testing.T) {
+	cases := []struct {
+		kindFlag string
+		want     string
+	}{
+		{"bug", "bug"},
+		{"finding", "finding"},
+		{"assumption", "assumption"},
+		{"", "bug"}, // no -kind flag at all -- documented default (AC-7)
+	}
+	for _, tc := range cases {
+		t.Run("kind="+tc.kindFlag, func(t *testing.T) {
+			dir := t.TempDir()
+			stdout, stderr := tempOutputFiles(t)
+
+			args := []string{"-log", "a note for the -kind regression test", "-inbox", dir}
+			if tc.kindFlag != "" {
+				args = append(args, "-kind", tc.kindFlag)
+			}
+
+			code := run(args, stdout, stderr)
+			if code != 0 {
+				t.Fatalf("run() exit code = %d, want 0 (stderr: %s)", code, readAll(t, stderr))
+			}
+
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatalf("ReadDir: %v", err)
+			}
+			if len(entries) != 1 {
+				t.Fatalf("expected exactly 1 logged record, got %d", len(entries))
+			}
+
+			raw, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			var rec debug.FeedbackRecord
+			if err := json.Unmarshal(raw, &rec); err != nil {
+				t.Fatalf("record is not valid debug.FeedbackRecord JSON: %v", err)
+			}
+			if rec.Kind != tc.want {
+				t.Errorf("-kind %q produced record.Kind = %q, want %q -- the -kind flag did not select the BOW item type", tc.kindFlag, rec.Kind, tc.want)
+			}
+		})
 	}
 }
 
