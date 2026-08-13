@@ -20,34 +20,40 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const ROOT = __dirname;
 const checker = require('./claude-plan-checker.js');
 
 // ---------------------------------------------------------------------------
-// BUG-088 P1 CORRECTION (2026-08-11): restoring a renamed-away REAL
-// production file must not itself be a single point of failure. Under an
-// 8-way concurrent stress run against this project's real, shared
-// tools/plan/generate.js, a transient Windows ENOENT was observed on the
-// restore rename even though the backup path (unique per pid+timestamp) was
-// never touched by any other process — consistent with NTFS/AV-scanner
-// metadata lag under heavy concurrent I/O on the same directory rather than
-// a genuine naming collision. A short bounded retry absorbs that transient
-// flake without masking a real failure (it still throws after exhausting
-// retries, so a genuinely stranded file is never silently swallowed).
-// ---------------------------------------------------------------------------
-function restoreWithRetry(from, to, attempts = 5, delayMs = 20) {
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      fs.renameSync(from, to);
-      return;
-    } catch (err) {
-      if (i === attempts) throw err;
-      const until = Date.now() + delayMs;
-      while (Date.now() < until) { /* brief busy-wait; no sleep primitive in sync context */ }
-    }
-  }
+// BUG-112 FIX (2026-08-13): the BUG-088 P1 correction above (superseded)
+// still renamed the REAL, SHARED tools/plan/generate.js away and back to
+// simulate "generate.js is missing" — even with a unique per-process backup
+// name and a bounded restore retry, the SOURCE path being renamed away was
+// still this project's one real generate.js. Any other concurrent process
+// (another `node --test` run, or this session's own parallel-agent pattern)
+// calling checker.checkPlan() during that window observed a spurious
+// internal-error, because fs.existsSync(GENERATE_PATH) genuinely returned
+// false for everyone, not just the test's own process. Confirmed via BUG-112
+// (Destructive round 3 on the BUG-088 fix): reproduced at 4-way and 16-way
+// concurrency.
+//
+// Fix: never touch the real file at all. checkPlan() resolves GENERATE_PATH
+// relative to this module's own __dirname at require() time, so copying
+// claude-plan-checker.js into an throwaway scratch directory (deliberately
+// WITHOUT a tools/plan/generate.js alongside it) and requiring that copy
+// fresh gives a checker instance whose GENERATE_PATH points at a path that
+// has never existed and is never shared with any other process — no rename,
+// no shared mutable state, no cross-process race, same assertion.
+function loadScratchCheckerMissingGenerate() {
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'planchecker_missing_generate_'));
+  const scratchModulePath = path.join(scratchDir, 'claude-plan-checker.js');
+  fs.copyFileSync(path.join(ROOT, 'claude-plan-checker.js'), scratchModulePath);
+  // Deliberately do NOT create scratchDir/tools/plan/generate.js — that's
+  // the whole point of this fixture.
+  const scratchChecker = require(scratchModulePath);
+  return { scratchChecker, scratchDir };
 }
 
 test('AC-B4: claude-plan-checker.js contains no boundary-regex/quote-mask trigger machinery', () => {
@@ -93,31 +99,14 @@ test('AC-D4: checkPlan() reports {status:"clean"} against an already-regenerated
 // ---------------------------------------------------------------------------
 
 test('AC-F1: checkPlan() returns {status:"internal-error"} (never silently "clean") when generate.js is missing', () => {
-  const real = checker.GENERATE_PATH;
-  // Unique per test-run (pid+timestamp, matching the convention already
-  // established in claude-secret-checker.test.js's fixture naming) so
-  // concurrent `node --test` runs across this project's guard/checker test
-  // files never collide on the same backup path (BUG-088 P1 correction).
-  const backup = `${real}.bug088_test_backup_${process.pid}_${Date.now()}`;
-  assert.ok(fs.existsSync(real), 'test setup: tools/plan/generate.js must exist');
-  let renamed = false;
+  assert.ok(fs.existsSync(checker.GENERATE_PATH), 'sanity: this repo\'s real tools/plan/generate.js must exist (untouched by this test)');
+  const { scratchChecker, scratchDir } = loadScratchCheckerMissingGenerate();
   try {
-    fs.renameSync(real, backup);
-    renamed = true;
-    const result = checker.checkPlan();
+    const result = scratchChecker.checkPlan();
     assert.equal(result.status, 'internal-error');
     assert.ok(result.error instanceof Error);
   } finally {
-    // Only restore if the rename-away actually succeeded — guarantees the
-    // real file is never left stranded on a thrown JS exception between the
-    // rename and here (try/finally executes on a throw), while never
-    // attempting a restore that would itself throw when there was nothing
-    // to restore. NOT guaranteed on a hard process kill (SIGKILL/OOM-kill/
-    // power-loss) between the successful rename-away and this restore step
-    // — try/finally cannot run in that case, so the real file would stay
-    // stranded under the backup name. This is a known, accepted residual
-    // gap, not a bug.
-    if (renamed) restoreWithRetry(backup, real);
+    fs.rmSync(scratchDir, { recursive: true, force: true });
   }
 });
 

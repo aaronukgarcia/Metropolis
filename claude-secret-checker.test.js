@@ -57,22 +57,35 @@ const checker = require('./claude-secret-checker.js');
 // other test in this same process observes the temporarily-redirected env).
 // ---------------------------------------------------------------------------
 
-// BUG-088 P1 CORRECTION (2026-08-11): see claude-plan-checker.test.js for the
-// full rationale — a short bounded retry on the restore-rename absorbs
-// transient Windows ENOENT/EBUSY under heavy concurrent I/O on the same
-// directory without masking a genuinely stranded file (still throws after
-// exhausting retries).
-function restoreWithRetry(from, to, attempts = 5, delayMs = 20) {
-  for (let i = 1; i <= attempts; i++) {
-    try {
-      fs.renameSync(from, to);
-      return;
-    } catch (err) {
-      if (i === attempts) throw err;
-      const until = Date.now() + delayMs;
-      while (Date.now() < until) { /* brief busy-wait; no sleep primitive in sync context */ }
-    }
-  }
+// BUG-112 FIX (2026-08-13), supersedes the BUG-088 P1 rename-retry
+// correction: the two "allowlist missing/unreadable" tests below used to
+// rename the REAL, SHARED claude-secret-guard.allow.json away and back
+// (with a bounded restore retry to absorb transient Windows ENOENT/EBUSY).
+// Even with that retry, and even with a unique per-process backup name, the
+// SOURCE path being renamed away was still the one real allowlist file every
+// process on the machine depends on — any other concurrent process (another
+// `node --test` run, or this session's own parallel-agent pattern) calling
+// checker.checkSecrets()/runScan() during that window spuriously observed
+// internal-error, because ALLOWLIST_PATH genuinely didn't exist for anyone
+// while the rename was in flight. Confirmed via BUG-112 (Destructive round 3
+// on the BUG-088 fix): reproduced at 4-way and 16-way concurrency.
+//
+// Fix: never touch the real file at all. loadAllowlist() resolves
+// ALLOWLIST_PATH relative to this module's own __dirname at require() time,
+// so copying claude-secret-checker.js into a throwaway scratch directory
+// (deliberately WITHOUT a claude-secret-guard.allow.json alongside it) and
+// requiring that copy fresh gives a checker instance whose ALLOWLIST_PATH
+// points at a path that has never existed and is never shared with any
+// other process — no rename, no shared mutable state, no cross-process
+// race, same assertion.
+function loadScratchCheckerMissingAllowlist() {
+  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'secretchecker_missing_allowlist_'));
+  const scratchModulePath = path.join(scratchDir, 'claude-secret-checker.js');
+  fs.copyFileSync(path.join(ROOT, 'claude-secret-checker.js'), scratchModulePath);
+  // Deliberately do NOT create scratchDir/claude-secret-guard.allow.json —
+  // that's the whole point of this fixture.
+  const scratchChecker = require(scratchModulePath);
+  return { scratchChecker, scratchDir };
 }
 
 function withThrowawayIndex(fn) {
@@ -186,36 +199,14 @@ test('AC-E1: checkSecrets() returns {status:"found-problems", findings:[...]} fo
 });
 
 test('AC-F1: checkSecrets() returns {status:"internal-error"} (never silently "clean") when the allowlist is unreadable', () => {
-  // Force loadAllowlist() to throw by pointing runScan's ALLOWLIST_PATH
-  // dependency at a broken state — simulate via a temporary rename rather
-  // than mutating the real allowlist in place (staging-area discipline: an
-  // atomic before/after inside one test, never left broken for another
-  // agent's concurrent tool call to observe).
-  const real = checker.ALLOWLIST_PATH;
-  // Unique per test-run (pid+timestamp — same convention as the fixture
-  // names above) so concurrent `node --test` runs never collide on the same
-  // backup path (BUG-088 P1 correction: this is the REAL allowlist file
-  // claude-secret-guard.js's loadAllowlist() depends on for every future
-  // commit — a stranded rename here is a self-inflicted fail-closed DoS).
-  const backup = `${real}.bug088_test_backup_${process.pid}_${Date.now()}`;
-  assert.ok(fs.existsSync(real), 'test setup: real allowlist file must exist');
-  let renamed = false;
+  assert.ok(fs.existsSync(checker.ALLOWLIST_PATH), 'sanity: this repo\'s real allowlist file must exist (untouched by this test)');
+  const { scratchChecker, scratchDir } = loadScratchCheckerMissingAllowlist();
   try {
-    fs.renameSync(real, backup);
-    renamed = true;
-    const result = checker.checkSecrets();
+    const result = scratchChecker.checkSecrets();
     assert.equal(result.status, 'internal-error');
     assert.ok(result.error instanceof Error);
   } finally {
-    // Only restore if the rename-away actually succeeded — guarantees the
-    // real allowlist is never left stranded on a thrown JS exception
-    // between the rename and here (try/finally executes on a throw). NOT
-    // guaranteed on a hard process kill (SIGKILL/OOM-kill/power-loss)
-    // between the successful rename-away and this restore step — try/
-    // finally cannot run in that case, so the real allowlist would stay
-    // stranded under the backup name. This is a known, accepted residual
-    // gap, not a bug.
-    if (renamed) restoreWithRetry(backup, real);
+    fs.rmSync(scratchDir, { recursive: true, force: true });
   }
 });
 
@@ -226,15 +217,11 @@ test('AC-F1: checkSecrets() returns {status:"internal-error"} (never silently "c
 // ---------------------------------------------------------------------------
 
 test('runScan() still throws on internal error (unchanged contract for claude-secret-guard.js)', () => {
-  const real = checker.ALLOWLIST_PATH;
-  const backup = `${real}.bug088_test_backup2_${process.pid}_${Date.now()}`;
-  let renamed = false;
+  const { scratchChecker, scratchDir } = loadScratchCheckerMissingAllowlist();
   try {
-    fs.renameSync(real, backup);
-    renamed = true;
-    assert.throws(() => checker.runScan());
+    assert.throws(() => scratchChecker.runScan());
   } finally {
-    if (renamed) restoreWithRetry(backup, real);
+    fs.rmSync(scratchDir, { recursive: true, force: true });
   }
 });
 
