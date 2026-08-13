@@ -33,12 +33,12 @@ func TestCleanupStaleStaging_RemovesOnlyOldEntries(t *testing.T) {
 		t.Fatalf("Chtimes: %v", err)
 	}
 
-	removed, err := CleanupStaleStaging(root, 1*time.Hour, now)
+	removed, err := ScanStaleStagingOffline(root, 1*time.Hour, now)
 	if err != nil {
-		t.Fatalf("CleanupStaleStaging: %v", err)
+		t.Fatalf("ScanStaleStagingOffline: %v", err)
 	}
 	if removed != 1 {
-		t.Fatalf("CleanupStaleStaging removed = %d, want 1 (only the stale entry)", removed)
+		t.Fatalf("ScanStaleStagingOffline removed = %d, want 1 (only the stale entry)", removed)
 	}
 	if _, err := os.Stat(staleDir); !os.IsNotExist(err) {
 		t.Fatalf("stale staging dir %q still exists (stat err=%v), want removed", staleDir, err)
@@ -53,8 +53,8 @@ func TestCleanupStaleStaging_RemovesOnlyOldEntries(t *testing.T) {
 // backdated to look stale, while a writeBundle is genuinely still
 // writing shards into it) and prove Manager.CleanupStaleStaging — the
 // fix — no longer deletes the live staging directory out from under
-// the in-flight save, unlike the bare package-level
-// CleanupStaleStaging function it wraps.
+// the in-flight save, unlike the unexported, un-locked
+// cleanupStaleStaging implementation it wraps.
 func TestManagerCleanupStaleStaging_NeverRacesActiveWrite(t *testing.T) {
 	root := t.TempDir()
 
@@ -156,11 +156,50 @@ func TestManagerCleanupStaleStaging_NeverRacesActiveWrite(t *testing.T) {
 // is not an error -- the common case for a fresh save root.
 func TestCleanupStaleStaging_NoStagingDir(t *testing.T) {
 	root := t.TempDir()
-	removed, err := CleanupStaleStaging(root, 1*time.Hour, time.Now())
+	removed, err := ScanStaleStagingOffline(root, 1*time.Hour, time.Now())
 	if err != nil {
-		t.Fatalf("CleanupStaleStaging on a root with no .staging dir: %v", err)
+		t.Fatalf("ScanStaleStagingOffline on a root with no .staging dir: %v", err)
 	}
 	if removed != 0 {
-		t.Fatalf("CleanupStaleStaging removed = %d, want 0", removed)
+		t.Fatalf("ScanStaleStagingOffline removed = %d, want 0", removed)
+	}
+}
+
+// TestBUG186_FreeFunctionUnexported_NoBypassOfManagerLock is the BUG-186
+// regression: it proves, by API shape rather than by runtime behaviour,
+// that the old bypass ("call the package-level CleanupStaleStaging
+// directly against a root a live *Manager already has open, skipping
+// m.mu entirely") is no longer expressible. The raw sweep is now
+// unexported (cleanupStaleStaging), so this same-package test is the
+// only place outside the package itself that can still name it — any
+// external package attempting `save.CleanupStaleStaging(...)` fails to
+// compile, which is the mechanical enforcement BUG-186 asked for. The
+// only two exported entry points left are Manager.CleanupStaleStaging
+// (locked) and ScanStaleStagingOffline (documented Manager-less use),
+// and calling the latter concurrently with a live Manager's write is a
+// misuse this test does NOT bless -- it only confirms the unlocked path
+// exists at all, unexported, for legitimate offline callers.
+func TestBUG186_FreeFunctionUnexported_NoBypassOfManagerLock(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+
+	// This call is only reachable because this test lives inside
+	// package save. Nothing outside this package can spell
+	// cleanupStaleStaging -- that identifier is unexported, so the
+	// compiler itself refuses any external "dial the lock-free sweep
+	// directly" call, which is exactly the BUG-186 gap being closed.
+	if _, err := cleanupStaleStaging(root, time.Hour, now); err != nil {
+		t.Fatalf("cleanupStaleStaging (in-package only): %v", err)
+	}
+
+	// The two supported external entry points must still both exist and
+	// behave: the locked Manager method and the explicitly-named
+	// offline scan.
+	mgr := NewManager(root, nil, "test-corr")
+	if _, err := mgr.CleanupStaleStaging(time.Hour, now); err != nil {
+		t.Fatalf("Manager.CleanupStaleStaging: %v", err)
+	}
+	if _, err := ScanStaleStagingOffline(root, time.Hour, now); err != nil {
+		t.Fatalf("ScanStaleStagingOffline: %v", err)
 	}
 }

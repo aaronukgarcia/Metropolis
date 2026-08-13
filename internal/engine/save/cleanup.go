@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// CleanupStaleStaging sweeps root/.staging for entries whose last
+// cleanupStaleStaging sweeps root/.staging for entries whose last
 // modification time is older than now.Add(-olderThan) and removes them
 // (Vex's secondary, non-blocking Destructive finding on FEAT-011: a
 // process killed mid-writeBundle leaves an orphaned
@@ -28,7 +28,8 @@ import (
 // if the .staging directory itself could not be listed at all. removed
 // is the count of directories actually deleted, for a caller that wants
 // to log/report what happened.
-// BUG-129: this package-level function has ZERO coordination with an
+//
+// BUG-129: this raw implementation has ZERO coordination with an
 // in-flight writeBundle — a staging directory's mtime is set once at
 // creation (newStagingDir's os.MkdirTemp) and never re-touched while
 // shards stream into its shards/ subdirectory, so an aggressive
@@ -43,17 +44,23 @@ import (
 // corrupts or half-promotes), but a real hazard once wired to any
 // scheduler/call path.
 //
-// This function itself is kept exactly as before (safe, well-tested,
-// and still the right tool for scanning a save root that has no live
-// *Manager open on it — e.g. offline tooling, or a one-shot sweep
-// before any Manager is constructed) — the fix is the new
-// [Manager.CleanupStaleStaging] method below, which takes m.mu before
-// delegating here. A caller that DOES have a live *Manager (the
-// documented real-caller pattern: "cmd/metropolis's boot sequence,
-// immediately after NewManager") MUST use the Manager method instead
-// of calling this bare function directly against that Manager's root,
-// or the race this comment describes is exactly what will happen.
-func CleanupStaleStaging(root string, olderThan time.Duration, now time.Time) (removed int, err error) {
+// BUG-186: this is now unexported precisely so the package's public API
+// shape cannot express the BUG-129 race by accident. There are exactly
+// two supported, mutually exclusive ways to reach it from outside the
+// package: [Manager.CleanupStaleStaging] (takes m.mu first — the only
+// safe choice when a live *Manager is open on root) and
+// [ScanStaleStagingOffline] (no locking at all — the only safe choice
+// when NO live *Manager is open on root, e.g. offline tooling or a
+// one-shot sweep before any Manager is constructed). Previously both
+// use cases were served by a single exported function distinguished
+// only by a doc-comment warning ("MUST use the Manager method
+// instead"), which nothing mechanically enforced; a caller holding a
+// live *Manager could still dial this function directly and reintroduce
+// the exact race Manager.CleanupStaleStaging exists to prevent. Renaming
+// it out of the exported API removes that call path at compile time —
+// the two exported entry points now name their own precondition instead
+// of relying on a comment nobody is compiler-forced to read.
+func cleanupStaleStaging(root string, olderThan time.Duration, now time.Time) (removed int, err error) {
 	base := stagingRoot(root)
 	entries, readErr := os.ReadDir(base)
 	if os.IsNotExist(readErr) {
@@ -83,8 +90,26 @@ func CleanupStaleStaging(root string, olderThan time.Duration, now time.Time) (r
 	return removed, nil
 }
 
+// ScanStaleStagingOffline sweeps root/.staging exactly like
+// [Manager.CleanupStaleStaging] does, for the one case that method
+// cannot cover: a save root with NO live *Manager open on it at all
+// (offline tooling inspecting/repairing a save directory, or a one-shot
+// sweep run before any Manager for that root has been constructed —
+// e.g. as part of a maintenance CLI). There is no m.mu to take because
+// there is no *Manager instance in scope; the name says so explicitly
+// so a call site can't mistake it for the Manager-locked path.
+//
+// Do NOT call this against a root that a live *Manager already has
+// open — that reintroduces the exact BUG-129 race
+// [Manager.CleanupStaleStaging] exists to prevent (this function
+// performs no locking whatsoever). If a *Manager is in scope, use its
+// CleanupStaleStaging method instead.
+func ScanStaleStagingOffline(root string, olderThan time.Duration, now time.Time) (removed int, err error) {
+	return cleanupStaleStaging(root, olderThan, now)
+}
+
 // CleanupStaleStaging sweeps m's save root the same way the package-
-// level CleanupStaleStaging function does, but takes m.mu FIRST
+// level cleanupStaleStaging function does, but takes m.mu FIRST
 // (BUG-129) so a sweep can never run concurrently with an in-flight
 // SaveManual/Autosave/Milestone call on this Manager. writeBundle (via
 // writeBundleLocked) already holds m.mu for its entire duration —
@@ -114,5 +139,5 @@ func (m *Manager) CleanupStaleStaging(olderThan time.Duration, now time.Time) (r
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return CleanupStaleStaging(m.root, olderThan, now)
+	return cleanupStaleStaging(m.root, olderThan, now)
 }
