@@ -3,7 +3,7 @@
 // must never hand-maintain (M0-ENG §3: "all injected via -ldflags at
 // build; NEVER hand-maintained").
 //
-// Module key: foundation.repo (see code.json)
+// Module key: foundation.buildinfo (see code.json)
 // Spec ref:   M0-ENG §3 (build info); M0-ENG §5; A8
 //
 // The variables below default to "dev" and are overwritten at link time via
