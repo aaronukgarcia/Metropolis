@@ -197,7 +197,7 @@ const positional = [];
 const flags = {};
 const VALUE_FLAGS = ['priority', 'desc', 'desc-file', 'status', 'type', 'on', 'note', 'note-file',
   'example', 'example-file', 'lang', 'author',
-  'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate',
+  'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'guid', 'estimate',
   'code-path', 'codejson', 'class', 'verdict', 'attacker', 'findings',
   'check', 'name', 'runner', 'run', 'detail', 'detail-file',
   // BUG-075: `exists CODE1 CODE2 ... | --codes CODE1,CODE2,...` batch check.
@@ -280,6 +280,38 @@ async function connect() {
   }
 }
 
+// BUG-221 (tool.bowcli): the four `... REFERENCES bow_items(guid) ON DELETE
+// CASCADE` foreign keys (bow_dependencies x2, bow_comments, bow_git_refs,
+// bow_destructive_verdicts) were written when `bow_items.guid` was assumed
+// immutable — nothing ever changed a row's primary key after INSERT. `set
+// --guid` (BUG-221) breaks that assumption on purpose: it is a sanctioned,
+// guarded UPDATE of `bow_items.guid` itself. Without `ON UPDATE CASCADE`,
+// MariaDB correctly refuses that UPDATE outright ("Cannot delete or update a
+// parent row: a foreign key constraint fails") the instant the item has ANY
+// row in a child table keyed on the OLD guid — which is exactly the common
+// case for a real, already-in-use BOW item (dependencies, comments, git
+// refs, verdicts). The fix is the standard relational one: let a primary-key
+// change cascade to its own foreign keys, the same way a delete already
+// does, rather than block it. This migrates any already-existing FK found
+// without `ON UPDATE CASCADE` (checked via information_schema, not assumed
+// from the CREATE TABLE text, since `CREATE TABLE IF NOT EXISTS` never
+// touches an already-existing table's constraints) — idempotent, safe to run
+// on every ensureSchema call including a freshly-migrated database.
+async function ensureFkOnUpdateCascade(db, table, constraintName, columnName, refTable, refColumn) {
+  const [rows] = await db.query(
+    `SELECT UPDATE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS
+     WHERE CONSTRAINT_SCHEMA = DATABASE() AND TABLE_NAME = ? AND CONSTRAINT_NAME = ?`,
+    [table, constraintName]
+  );
+  if (rows.length && rows[0].UPDATE_RULE === 'CASCADE') return; // already migrated, no-op
+  if (!rows.length) return; // constraint (or table) doesn't exist yet -- CREATE TABLE above already declares it correctly
+  await db.query(`ALTER TABLE ${table} DROP FOREIGN KEY ${constraintName}`);
+  await db.query(
+    `ALTER TABLE ${table} ADD CONSTRAINT ${constraintName} FOREIGN KEY (${columnName}) ` +
+    `REFERENCES ${refTable}(${refColumn}) ON DELETE CASCADE ON UPDATE CASCADE`
+  );
+}
+
 async function ensureSchema(db) {
   await db.query(`CREATE TABLE IF NOT EXISTS bow_items (
     guid        CHAR(36) PRIMARY KEY,
@@ -344,8 +376,8 @@ async function ensureSchema(db) {
     note            VARCHAR(255) NULL,
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (item_guid, depends_on_guid),
-    CONSTRAINT fk_bow_dep_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE,
-    CONSTRAINT fk_bow_dep_on   FOREIGN KEY (depends_on_guid) REFERENCES bow_items(guid) ON DELETE CASCADE
+    CONSTRAINT fk_bow_dep_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE,
+    CONSTRAINT fk_bow_dep_on   FOREIGN KEY (depends_on_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   await db.query(`CREATE TABLE IF NOT EXISTS bow_comments (
     id            INT AUTO_INCREMENT PRIMARY KEY,
@@ -355,7 +387,7 @@ async function ensureSchema(db) {
     example_code  MEDIUMTEXT NULL,
     code_language VARCHAR(32) NULL,
     created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_bow_comment_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE,
+    CONSTRAINT fk_bow_comment_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE,
     INDEX idx_bow_comment_item (item_guid)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   await db.query(`CREATE TABLE IF NOT EXISTS bow_git_refs (
@@ -365,7 +397,7 @@ async function ensureSchema(db) {
     branch      VARCHAR(128) NULL,
     note        VARCHAR(255) NULL,
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_bow_ref_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE,
+    CONSTRAINT fk_bow_ref_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE,
     INDEX idx_bow_ref_item (item_guid)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
   // FEAT-040 (tool.destructiveguard, GR#23): append-only Destructive-agent
@@ -386,9 +418,20 @@ async function ensureSchema(db) {
     findings         VARCHAR(512) NULL,
     note             TEXT NULL,
     created_at       TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    CONSTRAINT fk_bow_destructive_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE,
+    CONSTRAINT fk_bow_destructive_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE,
     INDEX idx_bow_destructive_item (item_guid)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  // BUG-221: migrate any of the five FKs above that were created by an OLDER
+  // run of this file (before `ON UPDATE CASCADE` was added to the CREATE
+  // TABLE text) and are still missing it -- see ensureFkOnUpdateCascade's own
+  // header comment for why this is needed at all. A brand-new database never
+  // hits the DROP/ADD branch (its CREATE TABLE already has the clause), so
+  // this only ever does real work once, against an already-existing `metro`.
+  await ensureFkOnUpdateCascade(db, 'bow_dependencies', 'fk_bow_dep_item', 'item_guid', 'bow_items', 'guid');
+  await ensureFkOnUpdateCascade(db, 'bow_dependencies', 'fk_bow_dep_on', 'depends_on_guid', 'bow_items', 'guid');
+  await ensureFkOnUpdateCascade(db, 'bow_comments', 'fk_bow_comment_item', 'item_guid', 'bow_items', 'guid');
+  await ensureFkOnUpdateCascade(db, 'bow_git_refs', 'fk_bow_ref_item', 'item_guid', 'bow_items', 'guid');
+  await ensureFkOnUpdateCascade(db, 'bow_destructive_verdicts', 'fk_bow_destructive_item', 'item_guid', 'bow_items', 'guid');
   // FEAT-061 (tool.sprintgate, GR#12/GR#15/GR#23): append-only per-check gate
   // verdicts, one row per check (1..5) per gate run, sharing a gate_run_guid
   // (AC-23/AC-25). Keyed on the plain `sprint` INT column bow_items already
@@ -2704,6 +2747,12 @@ async function cmdSet(db) {
   if (danglingFlags.has('mkey')) { console.error('claude-bow: --mkey requires a value (use --mkey \'\' to clear, or omit --mkey entirely to leave it unchanged).'); process.exit(1); }
   if (danglingFlags.has('seq')) { console.error('claude-bow: --seq requires a value (use --seq \'\' to clear, or omit --seq entirely to leave it unchanged).'); process.exit(1); }
   if (danglingFlags.has('sprint')) { console.error('claude-bow: --sprint requires a value (use --sprint \'\' to clear, or omit --sprint entirely to leave it unchanged).'); process.exit(1); }
+  // BUG-221: same dangling-flag idiom as --mkey/--seq/--sprint (BUG-168/171)
+  // -- a `--guid` with nothing after it (or immediately followed by another
+  // recognized `--flag`) is a malformed invocation, not a request to do
+  // anything. --guid has no `''`-clear meaning at all (see the empty-string
+  // rejection further down), so this is purely a usage-error guard.
+  if (danglingFlags.has('guid')) { console.error('claude-bow: --guid requires a value (a dangling --guid was not applied). Nothing was written.'); process.exit(1); }
   // BUG-196: `desc`/`desc-file` got NO dangling-flag guard when BUG-017
   // wired --desc into `set`, unlike mkey/seq/sprint above (BUG-168/171).
   // A dangling `--desc` (nothing after it, or the next token is itself a
@@ -2736,6 +2785,48 @@ async function cmdSet(db) {
     if (flags.sprint === '') { updates.push('sprint = NULL'); }
     else { updates.push('sprint = ?'); params.push(Number(flags.sprint)); }
   }
+  // BUG-221: `--guid` is a guarded RECONCILIATION path, not a general write
+  // path. It exists because a pre-existing free-standing BOW item linked to
+  // a master-plan mkey via `set --mkey` never gets its own `guid` column
+  // touched -- it keeps whatever guid it was created with, independent of
+  // code.json's guid for that mkey (and `import`'s UPDATE-existing-mkey path
+  // never syncs guid either, only INSERT-for-a-new-item does). Raw SQL is
+  // against project policy, so this is the sanctioned fix path. Strict
+  // apply-or-reject by design (Aaron, "keep it simple"): --guid can ONLY be
+  // used to make the BOW item's guid match what code.json already says it
+  // should be for that mkey -- never to set a value code.json doesn't
+  // already agree with, and never as a second, weaker write path around the
+  // master-plan SSOT (GR#3). No dry-run/mismatch-preview mode -- `show
+  // <code>` plus reading code.json directly already answers "do these
+  // differ?" without needing a third code path here.
+  if ('guid' in flags) {
+    if (flags.guid === '') {
+      console.error('claude-bow: --guid \'\' is rejected -- guid is not a clearable short-key field like --mkey/--seq/--sprint; it is a strict apply-or-reject reconciliation against code.json\'s registered value. Nothing was written.');
+      process.exit(1);
+    }
+    // The effective mkey is whichever this SAME invocation leaves in force:
+    // a --mkey being set this call takes precedence over any mkey the item
+    // already had in the DB, so `set CODE --mkey new.key --guid G` validates
+    // G against new.key, not a stale prior mkey (per task spec).
+    const effectiveMkey = ('mkey' in flags && flags.mkey !== '') ? flags.mkey : item.mkey;
+    if (!effectiveMkey) {
+      console.error(`claude-bow: --guid refused -- ${item.code} has no mkey (none in the DB, and none supplied via --mkey this call). A guid reconciliation only makes sense once the item is linked to a real master-plan entry -- set --mkey first (or in the same call).`);
+      process.exit(1);
+    }
+    let codeJsonForGuid;
+    try { codeJsonForGuid = JSON.parse(fs.readFileSync(CODE_JSON_PATH, 'utf8')); }
+    catch (e) { console.error(`claude-bow: --guid refused -- cannot read/parse code.json at ${CODE_JSON_PATH}: ${e.message}`); process.exit(1); }
+    const modForGuid = (codeJsonForGuid.modules || []).find((m) => m.key === effectiveMkey);
+    if (!modForGuid) {
+      console.error(`claude-bow: --guid refused -- no such mkey "${effectiveMkey}" found in code.json (checked ${CODE_JSON_PATH}).`);
+      process.exit(1);
+    }
+    if (modForGuid.guid !== flags.guid) {
+      console.error(`claude-bow: --guid refused -- supplied guid "${flags.guid}" does not match code.json's guid "${modForGuid.guid}" for mkey "${effectiveMkey}" -- refusing to write. --guid can only reconcile the BOW item's guid to what code.json already says, never set a different value.`);
+      process.exit(1);
+    }
+    updates.push('guid = ?'); params.push(flags.guid);
+  }
   if (flags.milestone) { updates.push('milestone = ?'); params.push(flags.milestone); }
   if (flags.layer) { updates.push('layer = ?'); params.push(flags.layer); }
   if (flags.spec) { updates.push('spec_ref = ?'); params.push(flags.spec); }
@@ -2766,7 +2857,7 @@ async function cmdSet(db) {
   // previously RIGHT and is now wrong, `amend` is the sanctioned path: same
   // -file safety shape, plus a mandatory --reason and an auto-comment audit
   // trail (old value, new value, reason, author) that `set` has never had.
-  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]  (correcting prose that is wrong, not merely empty? use `amend` instead -- audited, --reason required)'); process.exit(1); }
+  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--guid G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]  (--guid reconciles the item\'s guid column to code.json\'s registered value for its mkey -- refused unless it exactly matches; correcting prose that is wrong, not merely empty? use `amend` instead -- audited, --reason required)'); process.exit(1); }
   params.push(item.guid);
   await db.query(`UPDATE bow_items SET ${updates.join(', ')} WHERE guid = ?`, params);
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);

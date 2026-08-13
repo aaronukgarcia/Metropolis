@@ -2439,6 +2439,138 @@ test("BUG-196 AC-5: ordinary `set <CODE> --desc <text>` (a real value, not dangl
   assert.equal(rows[0].description, 'a real updated description', 'description must be set to the supplied value');
 });
 
+// =============================================================================
+// BUG-221 (tool.bowcli) — `set --guid` reconciles a BOW item's `guid` column
+// with code.json's registered guid for the item's mkey. Strict apply-or-
+// reject: refused unless the item already has (or is being given, in the
+// SAME call) an mkey, and refused unless the supplied value EXACTLY matches
+// code.json's guid for that mkey. Real subprocess (bowCli), and reads the
+// REAL repo-root code.json (claude-bow.js's CODE_JSON_PATH is derived from
+// its own __dirname, not the spawned process's cwd, and bowCli's cwd is the
+// repo root anyway) — so these fixtures use a real, currently-registered
+// mkey/guid pair rather than a mocked file.
+// =============================================================================
+
+// A real module entry that is stable and unlikely to be renumbered by
+// ordinary feature work — read fresh from the live code.json at test-file
+// load time (not hardcoded) so this suite tracks reality per GR#15 (never
+// hardcode an expected value that should come from data).
+const REAL_CODEJSON = JSON.parse(fs.readFileSync(path.join(ROOT, 'code.json'), 'utf8'));
+const REAL_MKEY_ENTRY = REAL_CODEJSON.modules.find((m) => m.key === 'plan.pipeline');
+assert.ok(REAL_MKEY_ENTRY && REAL_MKEY_ENTRY.guid, 'test setup: code.json must still register plan.pipeline with a guid for the BUG-221 fixtures below');
+const REAL_MKEY = REAL_MKEY_ENTRY.key;
+const REAL_GUID = REAL_MKEY_ENTRY.guid;
+const WRONG_GUID = crypto.randomUUID(); // guaranteed not to equal REAL_GUID
+
+test('BUG-221 AC-1: `set <CODE> --guid <value>` is REJECTED when the item has no mkey (neither already in the DB nor supplied this call), column untouched', async () => {
+  const guid = await insertItem({ code: 'FEAT-9500', mkey: null });
+
+  const r = bowCli(['set', 'FEAT-9500', '--guid', REAL_GUID]);
+  assert.notEqual(r.status, 0, '--guid on an item with no mkey must be refused, not silently applied');
+  assert.match(r.stderr, /no mkey/i, 'error must explain the refusal is because there is no mkey to reconcile against');
+
+  const [rows] = await db.query('SELECT guid FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].guid, guid, 'guid column must be UNCHANGED after the no-mkey refusal');
+});
+
+test('BUG-221 AC-2: `set <CODE> --guid <value>` is REJECTED when the value does not match code.json\'s guid for the item\'s existing mkey, column untouched', async () => {
+  const guid = await insertItem({ code: 'FEAT-9501', mkey: REAL_MKEY });
+
+  const r = bowCli(['set', 'FEAT-9501', '--guid', WRONG_GUID]);
+  assert.notEqual(r.status, 0, 'a --guid that does not match code.json\'s guid for the mkey must be refused');
+  assert.match(r.stderr, /does not match code\.json/i, 'error must name the mismatch-with-code.json reason');
+
+  const [rows] = await db.query('SELECT guid FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].guid, guid, 'guid column must be UNCHANGED after a mismatched --guid is refused');
+});
+
+test('BUG-221 AC-3: `set <CODE> --guid <value>` is ACCEPTED and applied when the value EXACTLY matches code.json\'s guid for the item\'s existing mkey', async () => {
+  const guid = await insertItem({ code: 'FEAT-9502', mkey: REAL_MKEY });
+
+  const r = bowCli(['set', 'FEAT-9502', '--guid', REAL_GUID]);
+  assert.equal(r.status, 0, `a --guid matching code.json's registered value must be accepted: ${r.stderr}`);
+
+  // Look up by `code`, not the old `guid` captured above -- the guid column
+  // itself is what just changed, so a WHERE guid = <old guid> would (wrongly)
+  // find nothing post-update.
+  const [rows] = await db.query('SELECT guid FROM bow_items WHERE code = ?', ['FEAT-9502']);
+  assert.equal(rows[0].guid, REAL_GUID, 'guid column must now equal code.json\'s registered guid for the mkey');
+  // Deliberately NOT pushed onto trackedFixtureGuids: REAL_GUID is a genuine
+  // code.json-registered guid that a legitimate row in the real `metro`
+  // database may already carry (that's the whole point of reconciliation),
+  // so tracking it there would produce a false "leak" failure in
+  // test.after unrelated to this suite's actual isolation.
+});
+
+test('BUG-221 AC-4: a dangling `--guid` (last token, no value following, and immediately followed by another recognized flag) is REJECTED, matching the BUG-168/171 idiom, nothing written', async () => {
+  const guid = await insertItem({ code: 'FEAT-9503', mkey: REAL_MKEY });
+
+  const rEnd = bowCli(['set', 'FEAT-9503', '--guid']);
+  assert.notEqual(rEnd.status, 0, 'a dangling --guid at end of argv must exit non-zero');
+  assert.match(rEnd.stderr, /--guid requires a value/i);
+  const [rowsEnd] = await db.query('SELECT guid, priority FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rowsEnd[0].guid, guid, 'guid must be UNCHANGED after a dangling --guid at end of argv');
+
+  const rNext = bowCli(['set', 'FEAT-9503', '--guid', '--priority', 'P1']);
+  assert.notEqual(rNext.status, 0, 'a dangling --guid immediately followed by another --flag must exit non-zero, not swallow --priority\'s value');
+  assert.match(rNext.stderr, /--guid requires a value/i);
+  const [rowsNext] = await db.query('SELECT guid, priority FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rowsNext[0].guid, guid, 'guid must be UNCHANGED after the dangling --guid + adjacent flag case');
+  assert.notEqual(rowsNext[0].priority, 'P1', 'priority must NOT have been applied either -- cmdSet rejects the whole command before any write');
+});
+
+test('BUG-221 AC-5: `set <CODE> --mkey <newkey> --guid <value>` in the SAME call reconciles against the NEW mkey being set, not any stale prior mkey', async () => {
+  // Seed the item pre-linked to a DIFFERENT real mkey/guid pair than the one
+  // being switched to, so validating against the OLD mkey (a latent bug)
+  // would accept a guid that in fact belongs to the NEW mkey -- and vice
+  // versa -- making a wrong implementation observably fail this assertion.
+  const otherEntry = REAL_CODEJSON.modules.find((m) => m.key !== REAL_MKEY && m.guid);
+  assert.ok(otherEntry, 'test setup: code.json must have at least two distinct module entries with guids');
+  const guid = await insertItem({ code: 'FEAT-9504', mkey: otherEntry.key });
+
+  // Wrong: supplying the OLD mkey's guid while switching to the NEW mkey
+  // must be refused, proving validation tracks the new mkey, not the old one.
+  const rWrong = bowCli(['set', 'FEAT-9504', '--mkey', REAL_MKEY, '--guid', otherEntry.guid]);
+  assert.notEqual(rWrong.status, 0, 'the OLD mkey\'s guid must be refused once --mkey switches the item to a NEW mkey in the same call');
+  const [rowsWrong] = await db.query('SELECT mkey, guid FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rowsWrong[0].mkey, otherEntry.key, 'mkey must be UNCHANGED after the whole command is rejected (no partial apply)');
+  assert.equal(rowsWrong[0].guid, guid, 'guid must be UNCHANGED after the whole command is rejected (no partial apply)');
+
+  // Right: the NEW mkey's own guid, combined with --mkey switching to it,
+  // must succeed and apply both fields together.
+  const rRight = bowCli(['set', 'FEAT-9504', '--mkey', REAL_MKEY, '--guid', REAL_GUID]);
+  assert.equal(rRight.status, 0, `switching mkey and reconciling guid to the NEW mkey's own value must succeed: ${rRight.stderr}`);
+  // Look up by `code`, not the pre-update `guid` captured above -- the guid
+  // column itself is what just changed, so WHERE guid = <old guid> would
+  // (wrongly) find nothing post-update.
+  const [rowsRight] = await db.query('SELECT mkey, guid FROM bow_items WHERE code = ?', ['FEAT-9504']);
+  assert.equal(rowsRight[0].mkey, REAL_MKEY, 'mkey must now be the new mkey');
+  assert.equal(rowsRight[0].guid, REAL_GUID, 'guid must now be the new mkey\'s own registered guid');
+  // REAL_GUID deliberately not tracked for the leak check -- see AC-3's
+  // comment above for why.
+});
+
+test('BUG-221 AC-6: `set <CODE> --guid \'\'` (empty string) is rejected outright -- --guid has no clear-to-NULL meaning, unlike --mkey/--seq/--sprint', async () => {
+  const guid = await insertItem({ code: 'FEAT-9505', mkey: REAL_MKEY });
+
+  const r = bowCli(['set', 'FEAT-9505', '--guid', '']);
+  assert.notEqual(r.status, 0, 'an empty --guid must be rejected, not treated as a clear or a no-op success');
+
+  const [rows] = await db.query('SELECT guid FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].guid, guid, 'guid must be UNCHANGED after an empty --guid is rejected');
+});
+
+test('BUG-221 AC-7: `set <CODE> --guid <value>` refuses when the mkey (existing or newly-set) has no entry at all in code.json', async () => {
+  const guid = await insertItem({ code: 'FEAT-9506', mkey: 'no.such.mkey.exists.anywhere.bug221' });
+
+  const r = bowCli(['set', 'FEAT-9506', '--guid', REAL_GUID]);
+  assert.notEqual(r.status, 0, 'an mkey with no code.json entry must be refused, not silently applied');
+  assert.match(r.stderr, /no such mkey/i);
+
+  const [rows] = await db.query('SELECT guid FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].guid, guid, 'guid must be UNCHANGED when the mkey has no code.json entry');
+});
+
 // ---------------------------------------------------------------------------
 // BUG-115: ensureSchema() (ALTER TABLE / CREATE TABLE / MODIFY COLUMN — all
 // MDL-locking DDL) must NOT run for read-only commands, but MUST still run
