@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 106,
+  "moduleCount": 113,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -1176,7 +1176,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.resourcesurvey",
+            "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
+          }
+        ]
       },
       "outbound": {
         "guid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0",
@@ -1649,6 +1654,10 @@
             "outboundGuid": "0cc95f4c-a850-4b26-b366-97ac2214dd3a"
           },
           {
+            "key": "feat.resourcedeposits",
+            "outboundGuid": "a04ecaa3-0d4d-45c6-8b7e-af6b81da845d"
+          },
+          {
             "key": "ui.screen.map",
             "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           }
@@ -1836,6 +1845,10 @@
         "pattern": "price/availability queries; dynamic-world future hook",
         "consumers": [
           {
+            "key": "engine.chemicals",
+            "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
+          },
+          {
             "key": "engine.consumption",
             "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
           },
@@ -1860,8 +1873,16 @@
             "outboundGuid": "1cd17147-10d9-41c6-ae98-27cbaa121a2d"
           },
           {
+            "key": "engine.mining",
+            "outboundGuid": "1289259c-6507-4ab1-be71-93de7fc2f787"
+          },
+          {
             "key": "engine.shopping",
             "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
+          },
+          {
+            "key": "feat.commoditymarket",
+            "outboundGuid": "878aa1b8-9b5b-411e-b405-182a7734560b"
           }
         ]
       },
@@ -2013,6 +2034,10 @@
             "outboundGuid": "ef93ba35-a092-4285-a9f3-f98e1377ba3e"
           },
           {
+            "key": "engine.mining",
+            "outboundGuid": "1289259c-6507-4ab1-be71-93de7fc2f787"
+          },
+          {
             "key": "engine.policies",
             "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
           },
@@ -2031,6 +2056,14 @@
           {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
+          },
+          {
+            "key": "feat.decommission",
+            "outboundGuid": "06715084-efc4-48bd-bed0-43e0a0129c54"
+          },
+          {
+            "key": "feat.facilitypermits",
+            "outboundGuid": "2c711338-b95f-48e1-b179-1671eb211f41"
           },
           {
             "key": "ui.screen.finance",
@@ -2341,6 +2374,10 @@
             "outboundGuid": "2b5739de-8802-4887-8a6a-d0305a27c900"
           },
           {
+            "key": "feat.facilitypermits",
+            "outboundGuid": "2c711338-b95f-48e1-b179-1671eb211f41"
+          },
+          {
             "key": "ui.screen.build",
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
           }
@@ -2643,6 +2680,10 @@
           {
             "key": "engine.spiral",
             "outboundGuid": "bed174ed-42bc-4b19-9381-939b51985b3b"
+          },
+          {
+            "key": "feat.extraction",
+            "outboundGuid": "78f8aefc-aacc-48b6-8a72-92c54808ec56"
           },
           {
             "key": "ui.alerts",
@@ -3652,7 +3693,12 @@
         "name": "EducationAPI",
         "format": "Go package API + deltas",
         "pattern": "stage pipeline gated by SeasonAPI Sept intake",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.megafacilities",
+            "outboundGuid": "658df60a-b0f2-449a-83c5-9b853eb3270d"
+          }
+        ]
       },
       "outbound": {
         "guid": "a180c700-5b49-4c98-976d-cedf6ab2524c",
@@ -3893,7 +3939,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "§32",
+      "specRef": "§32; resources-design-brief.md §1-3,5,7",
       "path": "internal/engine/mining/",
       "inbound": {
         "guid": "1696baf9-c153-4e81-b358-f2cbb74957dd",
@@ -3902,12 +3948,20 @@
         "pattern": "any module registers blighting objects; viewshed computed from WorldAPI elevation",
         "consumers": [
           {
+            "key": "engine.chemicals",
+            "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
+          },
+          {
             "key": "engine.destination",
             "outboundGuid": "af2de6ff-09ef-453c-b2a8-880326060b67"
           },
           {
             "key": "engine.tunnels",
             "outboundGuid": "2b5739de-8802-4887-8a6a-d0305a27c900"
+          },
+          {
+            "key": "feat.extraction",
+            "outboundGuid": "78f8aefc-aacc-48b6-8a72-92c54808ec56"
           }
         ]
       },
@@ -3928,6 +3982,263 @@
             "key": "engine.wellbeing",
             "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
             "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
+          },
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "837a51a3-5726-4770-a4b8-f2094b6af198",
+      "key": "feat.resourcedeposits",
+      "bowType": "feature",
+      "seq": 671,
+      "sprint": 11,
+      "title": "Deposit model + deterministic seeded shuffle: type/size/density/depth, geology-aware co-location, offshore fields",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §2-3",
+      "path": "internal/engine/mining/",
+      "inbound": {
+        "guid": "225e12ba-2cf4-4562-ab0f-6b842435d4e3",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": [
+          {
+            "key": "feat.resourcesurvey",
+            "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "a04ecaa3-0d4d-45c6-8b7e-af6b81da845d",
+        "calls": [
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "71e4a15c-d113-46d0-8c51-4ed78561962f",
+      "key": "feat.resourcesurvey",
+      "bowType": "feature",
+      "seq": 672,
+      "sprint": 11,
+      "title": "Resource survey + map overlay: 'Blue 2'-style deposit visibility in the F1 overlay cycle",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "specRef": "resources-design-brief.md §4",
+      "path": "internal/ui/screens/map/",
+      "inbound": {
+        "guid": "8db94cc8-a258-4858-a0f2-fa16477e3917",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "13e58e1a-05ec-417c-bfa9-d671aa776195",
+        "calls": [
+          {
+            "key": "ui.screen.map",
+            "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
+            "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
+          },
+          {
+            "key": "feat.resourcedeposits",
+            "moduleGuid": "837a51a3-5726-4770-a4b8-f2094b6af198",
+            "inboundGuid": "225e12ba-2cf4-4562-ab0f-6b842435d4e3"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "ca24a8e0-cbbc-44e7-b656-0182bd2a520e",
+      "key": "feat.extraction",
+      "bowType": "feature",
+      "seq": 673,
+      "sprint": 11,
+      "title": "Extraction ladder + finite depletion: two-men-and-a-dog to Parker-scale, risk/investment at every rung",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §5",
+      "path": "internal/engine/mining/",
+      "inbound": {
+        "guid": "6d2d9c17-e2df-471d-bc02-a7e8ef84e5ea",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "78f8aefc-aacc-48b6-8a72-92c54808ec56",
+        "calls": [
+          {
+            "key": "engine.mining",
+            "moduleGuid": "9062c545-c846-4f1d-8bfb-a2590359599a",
+            "inboundGuid": "1696baf9-c153-4e81-b358-f2cbb74957dd"
+          },
+          {
+            "key": "engine.projections",
+            "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
+            "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "956394f1-c484-49e3-8ee8-ad487678bbc8",
+      "key": "feat.commoditymarket",
+      "bowType": "feature",
+      "seq": 674,
+      "sprint": 11,
+      "title": "International commodities market + refinement/manufacture chains: crackers, Billingham/Wilton-class works, pharma campus",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §6",
+      "path": "internal/engine/chemicals/",
+      "inbound": {
+        "guid": "d33ef92f-433f-4a68-9133-d814cff21033",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "878aa1b8-9b5b-411e-b405-182a7734560b",
+        "calls": [
+          {
+            "key": "engine.chemicals",
+            "moduleGuid": "4f18fc17-5d0d-468e-8aee-e5ef3bd29d29",
+            "inboundGuid": "182f5e0e-60f0-41c6-b8a7-774c8312572f"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "5ae0b1d5-c0f5-46e1-9ea9-d5da182ebb54",
+      "key": "feat.facilitypermits",
+      "bowType": "feature",
+      "seq": 675,
+      "sprint": 11,
+      "title": "Facility land-allocation permit system: exp points, milestones, or purchase — for ANY large facility",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §7",
+      "path": "internal/engine/build/",
+      "inbound": {
+        "guid": "49cbf133-f43b-4339-bede-03481829d76e",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "2c711338-b95f-48e1-b179-1671eb211f41",
+        "calls": [
+          {
+            "key": "engine.build",
+            "moduleGuid": "046d98bc-3850-4b7d-b909-a97b7eab0920",
+            "inboundGuid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4"
+          },
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "b4baea13-87cf-400b-9094-b8c27526d16c",
+      "key": "feat.decommission",
+      "bowType": "feature",
+      "seq": 676,
+      "sprint": 11,
+      "title": "Decommissioning liability: every permitted facility carries a 'put back to nature' cost from day one",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §7",
+      "path": "internal/engine/finance/",
+      "inbound": {
+        "guid": "1af92cc2-b68e-4cd2-9a31-52e8abac9fb4",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "06715084-efc4-48bd-bed0-43e0a0129c54",
+        "calls": [
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "0b159996-eae3-4b93-8cb6-21b86bc26ee7",
+      "key": "feat.megafacilities",
+      "bowType": "feature",
+      "seq": 677,
+      "sprint": 11,
+      "title": "End-game mega-facilities: THORP/CANDU-class reprocessing, SpaceX/CERN/Aldermaston-class, Felixstowe+ container port",
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §8",
+      "path": "internal/engine/mining/",
+      "inbound": {
+        "guid": "4fad84c9-39d3-44dc-bef6-f127cf6ed1f0",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "658df60a-b0f2-449a-83c5-9b853eb3270d",
+        "calls": [
+          {
+            "key": "engine.education",
+            "moduleGuid": "bf17030a-a808-41c7-ad5b-b0c174262b0c",
+            "inboundGuid": "bae4923b-5043-45e1-82b7-7772afd79b0f"
+          },
+          {
+            "key": "engine.freight",
+            "moduleGuid": "093a00ae-97d6-47ce-bf38-4dbc7aa48c5a",
+            "inboundGuid": "3ce6d7c8-1aa6-46f4-94d1-07a20cf656e3"
           }
         ]
       },
@@ -3958,6 +4269,10 @@
           {
             "key": "engine.rail",
             "outboundGuid": "8cfa2a06-2d01-44af-8033-50dac845b33e"
+          },
+          {
+            "key": "feat.megafacilities",
+            "outboundGuid": "658df60a-b0f2-449a-83c5-9b853eb3270d"
           },
           {
             "key": "ui.screen.trade",
@@ -4695,14 +5010,19 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "§50; §26 (hazmat)",
+      "specRef": "§50; §26 (hazmat); resources-design-brief.md §6",
       "path": "internal/engine/chemicals/",
       "inbound": {
         "guid": "182f5e0e-60f0-41c6-b8a7-774c8312572f",
         "name": "ChemAPI",
         "format": "Go package API + deltas",
         "pattern": "chain stages as firms; pipeline as UtilityAPI-style network",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.commoditymarket",
+            "outboundGuid": "878aa1b8-9b5b-411e-b405-182a7734560b"
+          }
+        ]
       },
       "outbound": {
         "guid": "66c57025-8e56-45f2-a371-7b6aba74c97f",
@@ -4721,6 +5041,16 @@
             "key": "engine.dispatch",
             "moduleGuid": "351b5c05-1b42-4438-b495-c0aaf6855194",
             "inboundGuid": "ffb9d07e-1f14-4cfa-8573-192efaca1e3f"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
+          },
+          {
+            "key": "engine.mining",
+            "moduleGuid": "9062c545-c846-4f1d-8bfb-a2590359599a",
+            "inboundGuid": "1696baf9-c153-4e81-b358-f2cbb74957dd"
           }
         ]
       },

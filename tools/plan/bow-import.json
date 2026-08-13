@@ -1416,19 +1416,154 @@
       "mkey": "engine.mining",
       "type": "module",
       "title": "Mining, extraction & the general blight model",
-      "desc": "Geology-gated extraction (chalk/sand-gravel/clay+brickworks/ragstone/deep coal with spoil tips and subsidence radius/offshore dredging) revealed by prospecting surveys; THE BLIGHT MODEL (general — mines, heavy industry, abattoir, incinerator, landfill, airport, motorway): noise radius (dBA falloff) + viewshed from real elevation (escarpment hides or exposes honestly), heard = mental-health hit, seen = land-value hit, stacking; mitigations are real earthworks (bunds, tree belts with 5-year grow-in, enclosures, night bans); exhausted pits reclaim to lake/park/landfill void; deep-mine closure without transition = self-scripted Detroit test. [spec: §32] [path: internal/engine/mining/]",
+      "desc": "Geology-gated extraction (chalk/sand-gravel/clay+brickworks/ragstone/deep coal with spoil tips and subsidence radius/offshore dredging) revealed by prospecting surveys; THE BLIGHT MODEL (general — mines, heavy industry, abattoir, incinerator, landfill, airport, motorway): noise radius (dBA falloff) + viewshed from real elevation (escarpment hides or exposes honestly), heard = mental-health hit, seen = land-value hit, stacking; mitigations are real earthworks (bunds, tree belts with 5-year grow-in, enclosures, night bans); exhausted pits reclaim to lake/park/landfill void; deep-mine closure without transition = self-scripted Detroit test. FEAT-048 (Aaron, 2026-08-11, docs/planning/resources-design-brief.md): extends this module's scope to the full subsurface resource set — metallic ores (copper/tin/iron/uranium/REM, fictional resources allowed at realistic depths), hydrocarbons (gas/oil/coal, Kent's real East Kent coalfield as the deposit-generosity calibration point), offshore deposits, geology-aware co-location; deterministic seeded deposit shuffle at world-gen (size/density/depth, GR#21/GR#15 data-file balance parameters, deps on engine.world's terrain/geology pipeline); the extraction-scale ladder (artisanal two-men-and-a-dog through Parker-scale industrial, risk/investment at every rung); the land-allocation permit gate for any large facility (exp/milestone/purchase routes, calls engine.build); mandatory decommissioning liability accrued at permit time (calls engine.finance). See feat.resourcedeposits/feat.extraction/feat.facilitypermits/feat.decommission for the tracked feature-level breakdown. [spec: §32; resources-design-brief.md §1-3,5,7] [path: internal/engine/mining/]",
       "seq": 670,
       "sprint": 11,
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "§32",
+      "specRef": "§32; resources-design-brief.md §1-3,5,7",
       "guid": "9062c545-c846-4f1d-8bfb-a2590359599a",
       "guidIn": "1696baf9-c153-4e81-b358-f2cbb74957dd",
       "guidOut": "1289259c-6507-4ab1-be71-93de7fc2f787",
       "deps": [
         "engine.world",
         "engine.build"
+      ]
+    },
+    {
+      "mkey": "feat.resourcedeposits",
+      "type": "feature",
+      "title": "Deposit model + deterministic seeded shuffle: type/size/density/depth, geology-aware co-location, offshore fields",
+      "desc": "FEAT-048/FEAT-049 (Aaron, 2026-08-11, resources-design-brief.md §2-3). At world-gen, a pseudo-random deterministic shuffle (drawn from the seeded RNG, GR#21 — same seed => bit-identical deposit map, runs alongside the Terrain 50 heightmap pipeline) lays out deposits of varying size/density/depth across the owned-and-unowned tile extent. Metallic ores (copper/tin/iron/uranium/REM, fictional resources allowed at realistic depths), hydrocarbons/coal (Kent's real East Kent coalfield as the deposit-generosity calibration point — don't be stingy), offshore fields. Geology-aware co-location (hydrocarbon systems cluster, coal measures imply gas, uranium doesn't sit in the chalk) biased by engine.world's terrain/geology model, not scripted. Distribution parameters (counts, size curves, depth bands, co-location rules) are a GR#15 data file, balance-tunable. [spec: resources-design-brief.md §2-3] [path: internal/engine/mining/]",
+      "seq": 671,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §2-3",
+      "guid": "837a51a3-5726-4770-a4b8-f2094b6af198",
+      "guidIn": "225e12ba-2cf4-4562-ab0f-6b842435d4e3",
+      "guidOut": "a04ecaa3-0d4d-45c6-8b7e-af6b81da845d",
+      "deps": [
+        "engine.world",
+        "engine.mining"
+      ]
+    },
+    {
+      "mkey": "feat.resourcesurvey",
+      "type": "feature",
+      "title": "Resource survey + map overlay: 'Blue 2'-style deposit visibility in the F1 overlay cycle",
+      "desc": "FEAT-048/FEAT-050 (Aaron, 2026-08-11, resources-design-brief.md §4). A resource overlay renders deposit type and extent, slotting into F1's existing overlay-cycle architecture (feat.resourcedeposits' shuffle output; two-data-layers-per-cell rule, ui.screen.map). BA to confirm whether full deposit knowledge is free or surveying is itself a progression (prospecting -> survey -> proven reserves) — fits the risk ladder in feat.extraction and the squeezed-never-ambushed projection philosophy (pay to see underground). [spec: resources-design-brief.md §4] [path: internal/ui/screens/map/]",
+      "seq": 672,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "specRef": "resources-design-brief.md §4",
+      "guid": "71e4a15c-d113-46d0-8c51-4ed78561962f",
+      "guidIn": "8db94cc8-a258-4858-a0f2-fa16477e3917",
+      "guidOut": "13e58e1a-05ec-417c-bfa9-d671aa776195",
+      "deps": [
+        "ui.screen.map",
+        "feat.resourcedeposits"
+      ]
+    },
+    {
+      "mkey": "feat.extraction",
+      "type": "feature",
+      "title": "Extraction ladder + finite depletion: two-men-and-a-dog to Parker-scale, risk/investment at every rung",
+      "desc": "FEAT-048/FEAT-051 (Aaron, 2026-08-11, resources-design-brief.md §5). Wealth extraction spans a scale ladder: artisanal (trivial capex, small yield, low risk, the early-game snowball seed) through industrial Parker-style operations (serious capex/throughput, real operating risk — yield variance against survey estimates, price exposure, breakdowns). Mining is a large money generator by design, but the ground resource is finite: deposits deplete and can run out (a mine-dependent district is a §32 deep-mine Detroit test the player seeded themselves), depletion visible via surveys/projections — squeezed, never ambushed. [spec: resources-design-brief.md §5] [path: internal/engine/mining/]",
+      "seq": 673,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §5",
+      "guid": "ca24a8e0-cbbc-44e7-b656-0182bd2a520e",
+      "guidIn": "6d2d9c17-e2df-471d-bc02-a7e8ef84e5ea",
+      "guidOut": "78f8aefc-aacc-48b6-8a72-92c54808ec56",
+      "deps": [
+        "engine.mining",
+        "feat.resourcedeposits"
+      ]
+    },
+    {
+      "mkey": "feat.commoditymarket",
+      "type": "feature",
+      "title": "International commodities market + refinement/manufacture chains: crackers, Billingham/Wilton-class works, pharma campus",
+      "desc": "FEAT-048/FEAT-052 (Aaron, 2026-08-11, resources-design-brief.md §6). An international market is always available for raw and refined product (the always-on price floor/ceiling that makes extraction monetisable from day one, consistent with the off-map connections model, §2.2) — calls engine.market. In-game production facilities for the full extraction->refinement->manufacture chain: Billingham/Wilton-class integrated chemical works and crackers, Groton-Pfizer-class pharma/R&D campus (real Sandwich, Kent — FDI-anchor tie-in), Parker-class mines. Refinement/manufacture margin vs raw export is the classic value-add long bet. [spec: resources-design-brief.md §6] [path: internal/engine/chemicals/]",
+      "seq": 674,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §6",
+      "guid": "956394f1-c484-49e3-8ee8-ad487678bbc8",
+      "guidIn": "d33ef92f-433f-4a68-9133-d814cff21033",
+      "guidOut": "878aa1b8-9b5b-411e-b405-182a7734560b",
+      "deps": [
+        "engine.chemicals",
+        "engine.market",
+        "feat.extraction"
+      ]
+    },
+    {
+      "mkey": "feat.facilitypermits",
+      "type": "feature",
+      "title": "Facility land-allocation permit system: exp points, milestones, or purchase — for ANY large facility",
+      "desc": "FEAT-048/FEAT-053 (Aaron, 2026-08-11, resources-design-brief.md §7). All facilities can grow/expand with increasing run costs and profits; land allocation scales with facility size and is gated by a permit for any large facility (lab, airport, factory, mine, works — any). Permits acquired via three routes: experience points, milestones, or purchase — progression, achievement, and money are all currencies for the same gate. Expansion presumably re-engages the permit gate at size thresholds (BA to confirm shape). Cross-cutting: applies to the existing catalogue estate, not just new resource facilities — reconcile with buildings.json's current unlock-gate fields. [spec: resources-design-brief.md §7] [path: internal/engine/build/]",
+      "seq": 675,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §7",
+      "guid": "5ae0b1d5-c0f5-46e1-9ea9-d5da182ebb54",
+      "guidIn": "49cbf133-f43b-4339-bede-03481829d76e",
+      "guidOut": "2c711338-b95f-48e1-b179-1671eb211f41",
+      "deps": [
+        "engine.build",
+        "engine.finance"
+      ]
+    },
+    {
+      "mkey": "feat.decommission",
+      "type": "feature",
+      "title": "Decommissioning liability: every permitted facility carries a 'put back to nature' cost from day one",
+      "desc": "FEAT-048/FEAT-054 (Aaron, 2026-08-11, resources-design-brief.md §7). Every permitted facility carries a decommissioning/restoration liability accrued at build/permit time (calls engine.finance) — a real balance-sheet cost, not a surprise at closure. Finite resources + mandatory restoration liability prices in the full lifecycle: the player who strip-mines Kent owns the bill for the landscape afterwards. [spec: resources-design-brief.md §7] [path: internal/engine/finance/]",
+      "seq": 676,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §7",
+      "guid": "b4baea13-87cf-400b-9094-b8c27526d16c",
+      "guidIn": "1af92cc2-b68e-4cd2-9a31-52e8abac9fb4",
+      "guidOut": "06715084-efc4-48bd-bed0-43e0a0129c54",
+      "deps": [
+        "engine.finance",
+        "feat.facilitypermits"
+      ]
+    },
+    {
+      "mkey": "feat.megafacilities",
+      "type": "feature",
+      "title": "End-game mega-facilities: THORP/CANDU-class reprocessing, SpaceX/CERN/Aldermaston-class, Felixstowe+ container port",
+      "desc": "FEAT-048/FEAT-055 (Aaron, 2026-08-11, resources-design-brief.md §8). Ultimate-tier facilities available only toward end-game: THORP-reprocessing/CANDU-class nuclear and SpaceX/CERN/Aldermaston-class science/defence mega-facilities, both gated on a large workforce of highly trained experts (education system's long bet paying off at civilisational scale, calls engine.education — cannot be bought with money alone) plus the permit gate. Container port at Felixstowe scale or larger upgrades the existing port milestone (§9) to a genuine deep-sea container terminal tier. Extends the existing mega-projects buildings.json supplement rather than replacing it. [spec: resources-design-brief.md §8] [path: internal/engine/mining/]",
+      "seq": 677,
+      "sprint": 11,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "resources-design-brief.md §8",
+      "guid": "0b159996-eae3-4b93-8cb6-21b86bc26ee7",
+      "guidIn": "4fad84c9-39d3-44dc-bef6-f127cf6ed1f0",
+      "guidOut": "658df60a-b0f2-449a-83c5-9b853eb3270d",
+      "deps": [
+        "engine.education",
+        "feat.extraction",
+        "feat.facilitypermits"
       ]
     },
     {
@@ -1740,13 +1875,13 @@
       "mkey": "engine.chemicals",
       "type": "module",
       "title": "Oils, rubber, plastics & the chemical network",
-      "desc": "Crude by tanker -> tank farm -> refinery (fuel + feedstock, top blight class, hazmat fire category) -> petrochemical works -> plastics converters + rubber -> tyre plant; the chemical/fuel pipeline grid as a fourth network (expensive/km, small inspectable leak risk, removes hundreds of hazardous truck movements/day — safety-vs-capex shown in F5); no refinery? import refined at margin — make-vs-buy at its largest scale. [spec: §50; §26 (hazmat)] [path: internal/engine/chemicals/]",
+      "desc": "Crude by tanker -> tank farm -> refinery (fuel + feedstock, top blight class, hazmat fire category) -> petrochemical works -> plastics converters + rubber -> tyre plant; the chemical/fuel pipeline grid as a fourth network (expensive/km, small inspectable leak risk, removes hundreds of hazardous truck movements/day — safety-vs-capex shown in F5); no refinery? import refined at margin — make-vs-buy at its largest scale. FEAT-048 (Aaron, 2026-08-11, docs/planning/resources-design-brief.md §6): extends the chain past crude to the full extraction->refinement->manufacture pipeline for engine.mining's ore/hydrocarbon output — named reference-archetype facilities: Billingham/Wilton-class integrated works and crackers, Groton-Pfizer-class pharma/R&D campus (real-world Sandwich, Kent, doubling as an FDI anchor tie-in), always-on international commodity market (calls engine.market) as the price floor/ceiling that makes extraction monetisable from day one — the refine-later-vs-sell-raw-now margin decision is the long bet. See feat.commoditymarket for the tracked feature-level breakdown. [spec: §50; §26 (hazmat); resources-design-brief.md §6] [path: internal/engine/chemicals/]",
       "seq": 840,
       "sprint": 11,
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "§50; §26 (hazmat)",
+      "specRef": "§50; §26 (hazmat); resources-design-brief.md §6",
       "guid": "4f18fc17-5d0d-468e-8aee-e5ef3bd29d29",
       "guidIn": "182f5e0e-60f0-41c6-b8a7-774c8312572f",
       "guidOut": "66c57025-8e56-45f2-a371-7b6aba74c97f",
