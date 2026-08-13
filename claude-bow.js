@@ -114,6 +114,47 @@ const STATUSES = ['open', 'in_progress', 'blocked', 'done', 'cancelled'];
 const OPEN_STATUSES = ['open', 'in_progress', 'blocked'];
 const SUMMARY_MARKER = '── METROPOLIS STARTUP SUMMARY ──';
 
+// BUG-115: ensureSchema() issues ALTER TABLE / CREATE TABLE / MODIFY COLUMN
+// statements that take MariaDB metadata locks (MDL) — running it on every
+// single invocation, including pure reads, exposes every concurrent agent's
+// `list`/`show`/etc. to MDL-queue-starvation behind any long-running
+// transaction elsewhere against these tables. Every command below is a pure
+// read: verified by grepping each cmd* function's body for INSERT/UPDATE/
+// DELETE/REPLACE/ALTER/CREATE — none of them appear under any of these
+// commands.
+//
+// Several of these commands (list/show/ready/verdict/weakness) DO reference
+// columns that were added by ensureSchema's ALTER/MODIFY statements rather
+// than the original CREATE TABLE (seq, sprint, mkey, finding_class, the
+// widened item_type enum) — either directly in their own SQL, or indirectly
+// via the shared findItem() helper's `OR mkey = ?` clause. That is safe to
+// build on here because, per ensureSchema's own comments, those columns are
+// NOT a future/pending migration — they are already permanently present on
+// the real `metro` database (added out-of-band; ensureSchema's ALTER
+// statements have been confirmed no-ops there for some time) and the ADD
+// COLUMN IF NOT EXISTS / MODIFY COLUMN forms mean nothing here ever
+// regresses if ensureSchema is skipped for one invocation. A genuinely
+// UNMIGRATED database (a scratch DB nobody has run ensureSchema against
+// yet) is never handed to the read-only path in practice: the existing test
+// suite's own precedent (test.before() below) stands up a scratch DB by
+// calling connect()/ensureSchema() explicitly BEFORE issuing any CLI
+// command against it — exactly the mechanism GR#3's "single source of
+// truth" comment on ensureSchema recommends reusing, not by hoping a read
+// command bootstraps it. `gate-status`/`lint`/`summary` don't touch any
+// ALTER-added column or the mkey lookup at all.
+//
+// `init` and `startup-summary` are deliberately EXCLUDED — `startup-summary`
+// calls ensureSchema itself inside printStartupSummary() for its other
+// caller (claude-sync, which passes a raw connection and needs the tables
+// guaranteed), and `init`'s entire purpose is running ensureSchema. Every
+// write command (add/set/comment/depend/undepend/ref/redact/done/import/
+// destructive/gate/gate-run) is likewise excluded. When in doubt about a
+// command, it is NOT on this list — under-optimizing (still paying the
+// ensureSchema cost) is safe; skipping it for a command that turns out to
+// write, or to need a column no real database will ever actually be
+// missing, is not.
+const READ_ONLY_COMMANDS = new Set(['list', 'show', 'ready', 'summary', 'weakness', 'lint', 'verdict', 'gate-status']);
+
 // ── CLI parsing ───────────────────────────────────────────────────────────────
 
 const argv = process.argv.slice(2);
@@ -131,9 +172,48 @@ const VALUE_FLAGS = ['priority', 'desc', 'desc-file', 'status', 'type', 'on', 'n
   // forbidden text must never transit the command line, so the redact
   // command detects occurrences itself rather than being told what to redact.
   'comment'];
+// BUG-168: a VALUE_FLAGS flag as the LAST token on the command line (e.g. a
+// truncated/typo'd `set CODE --mkey` with nothing after it) makes
+// `argv[++i]` read past the end of the array, so `flags[name]` ends up
+// `undefined` rather than a real string. That is a genuinely distinct case
+// from an explicit `--mkey ''` (which is the string ''), but a plain
+// presence check (`'mkey' in flags`, BUG-132) can't tell them apart — the
+// key exists in both. `danglingFlags` records exactly which flag names hit
+// this out-of-bounds read, so any command with a presence-vs-value
+// distinction (currently cmdSet's mkey/seq/sprint) can treat "flag present
+// but consumed no value" as a usage error instead of a silent clear-to-NULL.
+//
+// BUG-171 (regression in BUG-168's fix): BUG-168 only caught the "off the
+// end of argv" case. It did NOT catch a dangling flag immediately followed
+// by ANOTHER recognized `--flag` token (e.g. `--mkey --seq 5`) — that next
+// token is not `undefined`, so the old check let it fall through and get
+// blindly consumed as `--mkey`'s string value, silently corrupting the
+// column and dropping `--seq` (and its own value `5`) on the floor with no
+// error at all. Fix: a candidate value that itself starts with `--` is
+// ALSO dangling — don't consume it, mark the ORIGINAL flag dangling, and
+// leave `i` where it is so the next loop iteration re-processes that token
+// as its own flag. No VALUE_FLAGS value is ever intentionally allowed to
+// start with `--` on this command line (the one case that needs `--`-shaped
+// literal content, --desc/--note/--detail, has a dedicated *-file sibling
+// added by BUG-090 specifically to keep risky text off argv), so this
+// widened check has no legitimate value it breaks.
+const danglingFlags = new Set();
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
-  if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) { flags[a.slice(2)] = argv[++i]; }
+  if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) {
+    const name = a.slice(2);
+    const next = argv[i + 1];
+    if (next === undefined || next.startsWith('--')) {
+      danglingFlags.add(name);
+      flags[name] = undefined;
+      // Deliberately do NOT advance i past `next` — if it's a real flag
+      // token, the next loop iteration must see it fresh and process it as
+      // its own flag rather than have it silently swallowed here.
+    } else {
+      i++;
+      flags[name] = next;
+    }
+  }
   else if (a.startsWith('--')) { flags[a.slice(2)] = true; }
   else { positional.push(a); }
 }
@@ -2309,9 +2389,36 @@ async function cmdSet(db) {
     if (s === 'done' || s === 'cancelled') { updates.push('closed_at = CURRENT_TIMESTAMP'); }
     else { updates.push('closed_at = NULL'); updates.push('closed_note = NULL'); }
   }
-  if (flags.mkey) { updates.push('mkey = ?'); params.push(flags.mkey); }
-  if (flags.seq != null) { updates.push('seq = ?'); params.push(Number(flags.seq)); }
-  if (flags.sprint != null) { updates.push('sprint = ?'); params.push(Number(flags.sprint)); }
+  // BUG-132: `flags.mkey` truthiness collapses "--mkey '' " (explicit clear
+  // request) into the same case as "--mkey never passed" (leave untouched),
+  // since '' is falsy in JS. The CLI parser (VALUE_FLAGS loop above) DOES
+  // still record the key on `flags` when an empty string is supplied — only
+  // the value is empty, not the presence — so `'mkey' in flags` is the
+  // correct presence test, distinct from `flags.mkey` truthiness. An explicit
+  // empty value clears the column to NULL; a non-empty value sets it; the key
+  // being absent entirely (never passed on the command line) leaves the
+  // column untouched, same as before. Same pattern applied to seq/sprint,
+  // the other nullable columns `set` exposes an explicit-clear path for.
+  // BUG-168: a dangling flag (last token on the command line, no value
+  // following) is a malformed invocation, NOT a request to clear the
+  // column — that would silently alias "forgot to type the value" onto
+  // "clear this field", which is exactly the data-loss regression BUG-132's
+  // presence check introduced. Reject before the '' vs value branch below.
+  if (danglingFlags.has('mkey')) { console.error('claude-bow: --mkey requires a value (use --mkey \'\' to clear, or omit --mkey entirely to leave it unchanged).'); process.exit(1); }
+  if (danglingFlags.has('seq')) { console.error('claude-bow: --seq requires a value (use --seq \'\' to clear, or omit --seq entirely to leave it unchanged).'); process.exit(1); }
+  if (danglingFlags.has('sprint')) { console.error('claude-bow: --sprint requires a value (use --sprint \'\' to clear, or omit --sprint entirely to leave it unchanged).'); process.exit(1); }
+  if ('mkey' in flags) {
+    if (flags.mkey === '') { updates.push('mkey = NULL'); }
+    else { updates.push('mkey = ?'); params.push(flags.mkey); }
+  }
+  if ('seq' in flags) {
+    if (flags.seq === '') { updates.push('seq = NULL'); }
+    else { updates.push('seq = ?'); params.push(Number(flags.seq)); }
+  }
+  if ('sprint' in flags) {
+    if (flags.sprint === '') { updates.push('sprint = NULL'); }
+    else { updates.push('sprint = ?'); params.push(Number(flags.sprint)); }
+  }
   if (flags.milestone) { updates.push('milestone = ?'); params.push(flags.milestone); }
   if (flags.layer) { updates.push('layer = ?'); params.push(flags.layer); }
   if (flags.spec) { updates.push('spec_ref = ?'); params.push(flags.spec); }
@@ -2838,6 +2945,10 @@ module.exports = {
   // real-subprocess contract tests (Aaron's ruling: verify the way Tester-2
   // verified the guard — real stdin/argv, not just internal functions).
   redactText, loadCodenameGuardPatterns, cmdRedact,
+  // BUG-115 (tool.planning): exported so the regression suite can assert the
+  // exact read-only/write classification directly, in addition to the
+  // required real-subprocess query-count proof.
+  READ_ONLY_COMMANDS,
 };
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
@@ -2846,34 +2957,65 @@ if (require.main === module) {
   (async () => {
     const db = await connect();
     try {
-      await ensureSchema(db);
-      switch (command) {
-        case 'init': console.log('metro BOW tables ready (bow_items, bow_dependencies, bow_comments, bow_git_refs).'); break;
-        case 'add': await cmdAdd(db); break;
-        case 'list': await cmdList(db); break;
-        case 'show': await cmdShow(db); break;
-        case 'comment': await cmdComment(db); break;
-        case 'depend': await cmdDepend(db); break;
-        case 'undepend': await cmdUndepend(db); break;
-        case 'ref': await cmdRef(db); break;
-        case 'set': await cmdSet(db); break;
-        case 'redact': await cmdRedact(db); break;
-        case 'done': await cmdDone(db); break;
-        case 'import': await cmdImport(db); break;
-        case 'ready': await cmdReady(db); break;
-        case 'summary': await printBowSummary(db); break;
-        case 'weakness': await cmdWeakness(db); break;
-        case 'lint': await cmdLint(db); break;
-        case 'startup-summary': await printStartupSummary(db); break;
-        case 'destructive': await cmdDestructive(db); break;
-        case 'verdict': await cmdVerdict(db); break;
-        case 'gate': await cmdGate(db); break;
-        case 'gate-status': await cmdGateStatus(db); break;
-        case 'gate-run': await cmdGateRun(db); break;
-        default:
-          console.error(`Unknown command: ${command}`);
-          console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, done, import, summary, startup-summary, weakness, lint, destructive, verdict, gate, gate-status, gate-run');
-          process.exit(1);
+      // BUG-115: only pay ensureSchema()'s metadata-lock cost for commands
+      // that actually write. See READ_ONLY_COMMANDS above for the exact
+      // enumerated set and the reasoning for excluding init/startup-summary.
+      if (!READ_ONLY_COMMANDS.has(command)) await ensureSchema(db);
+      const runDispatch = async () => {
+        switch (command) {
+          case 'init': console.log('metro BOW tables ready (bow_items, bow_dependencies, bow_comments, bow_git_refs).'); break;
+          case 'add': await cmdAdd(db); break;
+          case 'list': await cmdList(db); break;
+          case 'show': await cmdShow(db); break;
+          case 'comment': await cmdComment(db); break;
+          case 'depend': await cmdDepend(db); break;
+          case 'undepend': await cmdUndepend(db); break;
+          case 'ref': await cmdRef(db); break;
+          case 'set': await cmdSet(db); break;
+          case 'redact': await cmdRedact(db); break;
+          case 'done': await cmdDone(db); break;
+          case 'import': await cmdImport(db); break;
+          case 'ready': await cmdReady(db); break;
+          case 'summary': await printBowSummary(db); break;
+          case 'weakness': await cmdWeakness(db); break;
+          case 'lint': await cmdLint(db); break;
+          case 'startup-summary': await printStartupSummary(db); break;
+          case 'destructive': await cmdDestructive(db); break;
+          case 'verdict': await cmdVerdict(db); break;
+          case 'gate': await cmdGate(db); break;
+          case 'gate-status': await cmdGateStatus(db); break;
+          case 'gate-run': await cmdGateRun(db); break;
+          default:
+            console.error(`Unknown command: ${command}`);
+            console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, done, import, summary, startup-summary, weakness, lint, destructive, verdict, gate, gate-status, gate-run');
+            process.exit(1);
+        }
+      };
+      try {
+        await runDispatch();
+      } catch (err) {
+        // BUG-170: BUG-115's fix skips ensureSchema() for READ_ONLY_COMMANDS,
+        // which is correct for the steady-state (already-migrated) case this
+        // file's `metro` database is in practice always in — but leaves a
+        // genuinely fresh/never-migrated scratch DB (no tables at all) with
+        // no bootstrap path when a READ command happens to be the first one
+        // run against it, which is a very natural first action (a fresh
+        // clone, a new test env). Before this fix that silently worked
+        // because ensureSchema ran unconditionally on every command; restore
+        // that behaviour for read commands specifically, but ONLY as a
+        // one-shot fallback triggered by the exact missing-table error
+        // (errno 1146 / ER_NO_SUCH_TABLE) rather than unconditionally, so the
+        // steady-state case (BUG-115's own DDL-counter tests) still executes
+        // zero DDL statements per read command. Re-throw anything else
+        // (including a second ER_NO_SUCH_TABLE after the retry, which would
+        // mean ensureSchema itself failed to create the table it needs) so
+        // it surfaces as a real error rather than looping.
+        if (READ_ONLY_COMMANDS.has(command) && err && err.code === 'ER_NO_SUCH_TABLE') {
+          await ensureSchema(db);
+          await runDispatch();
+        } else {
+          throw err;
+        }
       }
     } catch (err) {
       console.error(`claude-bow error: ${err.message}`);

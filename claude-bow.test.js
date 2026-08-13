@@ -1898,3 +1898,367 @@ test('BUG-151 AC-3: `redact --comment` is unaffected by the title-length check (
   assert.ok(rows[0].body.length > 255, 'test setup sanity: the redacted body must actually have grown past 255 chars, proving the TEXT column absorbs it fine');
   assert.ok(!rows[0].body.includes(phrase));
 });
+
+// =============================================================================
+// BUG-132 (tool.bowcli) — `set --mkey ''` must CLEAR the column (explicit
+// empty value), distinct from omitting --mkey entirely (leave untouched).
+// Real subprocess (spawnSync via bowCli), not a function call into the
+// module — cmdSet reads module-load-time `flags`/`positional` derived from
+// process.argv, so it cannot be invoked in-process with synthetic argv.
+// =============================================================================
+
+test("BUG-132 AC-1: `set <CODE> --mkey ''` clears an existing mkey to NULL (verified by direct read-back, not just exit code)", async () => {
+  const guid = await insertItem({ code: 'FEAT-9200', mkey: 'engine.something' });
+
+  const r = bowCli(['set', 'FEAT-9200', '--mkey', '']);
+  assert.equal(r.status, 0, `set --mkey '' must succeed (not fall through to the usage error): ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, null, 'mkey must be NULL in the DB after an explicit empty-string clear');
+});
+
+test('BUG-132 AC-2: `set <CODE>` with no --mkey flag at all leaves the existing mkey UNCHANGED (no regression — absent must not mean clear)', async () => {
+  const guid = await insertItem({ code: 'FEAT-9201', mkey: 'engine.untouched' });
+
+  // Set an unrelated field so `updates` is non-empty and the command actually
+  // runs a real UPDATE, without ever mentioning --mkey.
+  const r = bowCli(['set', 'FEAT-9201', '--priority', 'P1']);
+  assert.equal(r.status, 0, `set --priority must succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT mkey, priority FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, 'engine.untouched', 'mkey must be unchanged when --mkey is never passed');
+  assert.equal(rows[0].priority, 'P1', 'sanity check: the unrelated field this test used to force a real UPDATE must itself have applied');
+});
+
+test("BUG-132 AC-3: `set <CODE> --mkey somevalue` still sets a real value (no regression to the ordinary case)", async () => {
+  const guid = await insertItem({ code: 'FEAT-9202', mkey: null });
+
+  const r = bowCli(['set', 'FEAT-9202', '--mkey', 'engine.newvalue']);
+  assert.equal(r.status, 0, `set --mkey <value> must succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, 'engine.newvalue', 'mkey must be set to the supplied value');
+});
+
+test("BUG-132 AC-4: `set <CODE> --seq ''` and `--sprint ''` clear those nullable columns the same way, without disturbing an unset --seq/--sprint on a later call", async () => {
+  const guid = await insertItem({ code: 'FEAT-9203', mkey: null });
+  await db.query('UPDATE bow_items SET seq = 7, sprint = 3 WHERE guid = ?', [guid]);
+
+  const r = bowCli(['set', 'FEAT-9203', '--seq', '', '--sprint', '']);
+  assert.equal(r.status, 0, `set --seq '' --sprint '' must succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT seq, sprint FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].seq, null, 'seq must be cleared to NULL by an explicit empty value');
+  assert.equal(rows[0].sprint, null, 'sprint must be cleared to NULL by an explicit empty value');
+});
+
+// =============================================================================
+// BUG-168 (regression in BUG-132's fix) — a dangling VALUE_FLAGS flag (the
+// last token on the command line, with nothing following it) must be
+// rejected as a usage error, NOT silently treated as an explicit clear.
+// Before BUG-132, `argv[++i] === undefined` was falsy so the old truthiness
+// check skipped the field; BUG-132's presence check (`'mkey' in flags`)
+// can't tell "explicit ''" apart from "ran off the end of argv" without the
+// parser's new `danglingFlags` tracking, so this proves that tracking
+// actually blocks the write rather than just existing unused.
+// =============================================================================
+
+test("BUG-168 AC-1: `set <CODE> --mkey` with no following value (last token) errors with a usage message and does NOT touch the column", async () => {
+  const guid = await insertItem({ code: 'FEAT-9210', mkey: 'engine.original' });
+
+  const r = bowCli(['set', 'FEAT-9210', '--mkey']);
+  assert.notEqual(r.status, 0, 'a dangling --mkey (no value) must exit non-zero, not silently succeed');
+  assert.match(r.stderr, /--mkey requires a value/i, 'error must explicitly name the missing-value problem, not a generic failure');
+
+  const [rows] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, 'engine.original', 'mkey must be UNCHANGED — this is the exact silent-NULL regression BUG-168 reported');
+});
+
+test("BUG-168 AC-2: the same dangling-flag protection applies to --seq and --sprint", async () => {
+  const guid = await insertItem({ code: 'FEAT-9211', mkey: null });
+  await db.query('UPDATE bow_items SET seq = 5, sprint = 2 WHERE guid = ?', [guid]);
+
+  const rSeq = bowCli(['set', 'FEAT-9211', '--seq']);
+  assert.notEqual(rSeq.status, 0, 'a dangling --seq (no value) must exit non-zero');
+  assert.match(rSeq.stderr, /--seq requires a value/i);
+
+  const rSprint = bowCli(['set', 'FEAT-9211', '--sprint']);
+  assert.notEqual(rSprint.status, 0, 'a dangling --sprint (no value) must exit non-zero');
+  assert.match(rSprint.stderr, /--sprint requires a value/i);
+
+  const [rows] = await db.query('SELECT seq, sprint FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].seq, 5, 'seq must be UNCHANGED after a dangling --seq is rejected');
+  assert.equal(rows[0].sprint, 2, 'sprint must be UNCHANGED after a dangling --sprint is rejected');
+});
+
+test("BUG-168 AC-3: `set <CODE> --mkey ''` (explicit empty string) still clears to NULL — no regression to BUG-132's fix", async () => {
+  const guid = await insertItem({ code: 'FEAT-9212', mkey: 'engine.tobecleared' });
+
+  const r = bowCli(['set', 'FEAT-9212', '--mkey', '']);
+  assert.equal(r.status, 0, `set --mkey '' must still succeed after the BUG-168 fix: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, null, 'an explicit empty-string --mkey must still clear the column to NULL');
+});
+
+test("BUG-168 AC-4: ordinary `set <CODE> --mkey somevalue` (a real value, not dangling) still works after the fix", async () => {
+  const guid = await insertItem({ code: 'FEAT-9213', mkey: null });
+
+  const r = bowCli(['set', 'FEAT-9213', '--mkey', 'engine.stillworks']);
+  assert.equal(r.status, 0, `ordinary set --mkey <value> must still succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, 'engine.stillworks', 'mkey must be set to the supplied value');
+});
+
+// =============================================================================
+// BUG-171 (regression in BUG-168's fix) — a dangling VALUE_FLAGS flag
+// immediately followed by ANOTHER recognized `--flag` token (not off the
+// end of argv, but butted up against a real flag) must ALSO be rejected as
+// dangling, and the following flag must still be parsed and applied
+// correctly as its own flag/value pair rather than being eaten as the
+// first flag's string value.
+// =============================================================================
+
+test("BUG-171 AC-1: `set <CODE> --mkey --seq 5` — --mkey is detected dangling (errors, column untouched) AND --seq 5 is still correctly applied, not silently eaten as --mkey's value", async () => {
+  const guid = await insertItem({ code: 'FEAT-9220', mkey: 'engine.original' });
+  await db.query('UPDATE bow_items SET seq = 1 WHERE guid = ?', [guid]);
+
+  const r = bowCli(['set', 'FEAT-9220', '--mkey', '--seq', '5']);
+  assert.notEqual(r.status, 0, 'a dangling --mkey followed by another --flag must exit non-zero, not silently succeed');
+  assert.match(r.stderr, /--mkey requires a value/i, 'error must name --mkey as the dangling flag, not a generic failure');
+
+  const [rows] = await db.query('SELECT mkey, seq FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, 'engine.original', 'mkey must be UNCHANGED — the exact BUG-171 corruption (writing the literal string "--seq")');
+});
+
+test("BUG-171 AC-1b: the same fixture with only --seq changed (--sprint --mkey X) proves the SECOND flag is parsed as its own flag, not consumed as the first flag's value", async () => {
+  const guid = await insertItem({ code: 'FEAT-9221', mkey: 'engine.original' });
+  await db.query('UPDATE bow_items SET sprint = 1 WHERE guid = ?', [guid]);
+
+  const r = bowCli(['set', 'FEAT-9221', '--sprint', '--mkey', 'engine.newvalue']);
+  assert.notEqual(r.status, 0, 'a dangling --sprint followed by --mkey must exit non-zero');
+  assert.match(r.stderr, /--sprint requires a value/i);
+
+  // Critically: --sprint must NOT have swallowed "--mkey" as its value, and
+  // this proves it by showing the command still fails on --sprint alone
+  // (if --mkey had been eaten as --sprint's value, --mkey engine.newvalue
+  // would never have been parsed as a flag at all, and there would be no
+  // way to distinguish that from this correct behaviour by exit code alone
+  // — so also confirm mkey was NOT written, since cmdSet aborts before any
+  // write once a dangling flag is found amongst the parsed flags).
+  const [rows] = await db.query('SELECT mkey, sprint FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].mkey, 'engine.original', 'mkey must be UNCHANGED — cmdSet must reject the whole command, not partially apply it');
+  assert.equal(rows[0].sprint, 1, 'sprint must be UNCHANGED');
+});
+
+test("BUG-171 AC-2: BUG-132/168 fixtures unaffected — dangling --mkey at end of argv, explicit --mkey '' clear, and ordinary --mkey value all still work", async () => {
+  const guidA = await insertItem({ code: 'FEAT-9222', mkey: 'engine.original' });
+  const rEnd = bowCli(['set', 'FEAT-9222', '--mkey']);
+  assert.notEqual(rEnd.status, 0, 'dangling --mkey at end of argv must still error (BUG-168 no regression)');
+  assert.match(rEnd.stderr, /--mkey requires a value/i);
+  const [rowsA] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guidA]);
+  assert.equal(rowsA[0].mkey, 'engine.original', 'mkey unchanged after end-of-argv dangling --mkey');
+
+  const guidB = await insertItem({ code: 'FEAT-9223', mkey: 'engine.tobecleared' });
+  const rClear = bowCli(['set', 'FEAT-9223', '--mkey', '']);
+  assert.equal(rClear.status, 0, `explicit --mkey '' clear must still succeed: ${rClear.stderr}`);
+  const [rowsB] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guidB]);
+  assert.equal(rowsB[0].mkey, null, 'explicit empty --mkey must still clear to NULL (BUG-132 no regression)');
+
+  const guidC = await insertItem({ code: 'FEAT-9224', mkey: null });
+  const rSet = bowCli(['set', 'FEAT-9224', '--mkey', 'engine.stillworks']);
+  assert.equal(rSet.status, 0, `ordinary --mkey <value> must still succeed: ${rSet.stderr}`);
+  const [rowsC] = await db.query('SELECT mkey FROM bow_items WHERE guid = ?', [guidC]);
+  assert.equal(rowsC[0].mkey, 'engine.stillworks', 'ordinary --mkey value must still be applied (BUG-168 AC-4 no regression)');
+});
+
+test("BUG-171 AC-3: an ordinary --desc value with no leading -- still parses correctly next to another flag (e.g. `add bug <title> --desc <text> --priority P1`) — proves the widened dangling check doesn't false-positive on normal adjacent flags", async () => {
+  const r = bowCli(['add', 'bug', 'BUG-171 AC-3 fixture', '--desc', 'an ordinary description', '--priority', 'P1']);
+  assert.equal(r.status, 0, `add with --desc followed by --priority must succeed: ${r.stderr}`);
+  const [rows] = await db.query('SELECT description, priority FROM bow_items WHERE title = ?', ['BUG-171 AC-3 fixture']);
+  assert.equal(rows.length, 1, 'exactly one row must be written');
+  assert.equal(rows[0].description, 'an ordinary description', '--desc value must be applied, not treated as dangling');
+  assert.equal(rows[0].priority, 'P1', '--priority (the following flag) must also be applied correctly');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-115: ensureSchema() (ALTER TABLE / CREATE TABLE / MODIFY COLUMN — all
+// MDL-locking DDL) must NOT run for read-only commands, but MUST still run
+// for write commands. Proven via a real subprocess + real MariaDB, query-
+// count based: MariaDB's GLOBAL STATUS counters (Com_alter_table,
+// Com_create_table) increment every time the server actually PARSES/EXECUTES
+// an ALTER TABLE / CREATE TABLE statement, regardless of whether it turns
+// out to be a no-op (the "IF NOT EXISTS" forms still count) — so diffing
+// these counters immediately before/after a spawned `node claude-bow.js
+// <command>` subprocess is a direct, non-mocked measurement of whether that
+// invocation's connection issued ensureSchema's DDL at all. Runs against the
+// suite's own already-fully-migrated TEST_DB (same one every other test in
+// this file uses), matching how this fix expects the real `metro` database
+// to be found in practice (migrated once, read many times) rather than
+// against a synthetic never-migrated database.
+// ---------------------------------------------------------------------------
+
+test('BUG-115: READ_ONLY_COMMANDS is the exact enumerated set this fix classified as safe to skip ensureSchema for', () => {
+  assert.deepEqual(
+    [...bow.READ_ONLY_COMMANDS].sort(),
+    ['gate-status', 'lint', 'list', 'ready', 'show', 'summary', 'verdict', 'weakness'].sort(),
+    'the read-only-skip set must be exactly this enumerated list — every write command (add/set/comment/depend/undepend/ref/redact/done/import/destructive/gate/gate-run) plus init/startup-summary must never appear here'
+  );
+});
+
+/** Global Com_alter_table + Com_create_table counters — incremented by the
+ * server itself every time it parses/executes that statement type, on ANY
+ * connection. Used to prove a spawned CLI subprocess did or did not issue
+ * ensureSchema's DDL, without mocking or spying on the code under test. */
+async function ddlCounters(conn) {
+  const [rows] = await conn.query("SHOW GLOBAL STATUS WHERE Variable_name IN ('Com_alter_table', 'Com_create_table')");
+  const out = {};
+  for (const r of rows) out[r.Variable_name] = Number(r.Value);
+  return out;
+}
+
+test('BUG-115: a read-only command (`list`) does NOT trigger ensureSchema\'s ALTER/CREATE TABLE statements', async () => {
+  const before = await ddlCounters(db);
+  const r = bowCli(['list', '--all']);
+  assert.equal(r.status, 0, `list must succeed: ${r.stderr}`);
+  const after = await ddlCounters(db);
+
+  assert.equal(after.Com_alter_table, before.Com_alter_table,
+    'BUG-115: `list` must not have caused any ALTER TABLE statement to run (Com_alter_table must be unchanged)');
+  assert.equal(after.Com_create_table, before.Com_create_table,
+    'BUG-115: `list` must not have caused any CREATE TABLE statement to run (Com_create_table must be unchanged)');
+});
+
+test('BUG-115: another read-only command (`show`) also does NOT trigger ensureSchema\'s DDL', async () => {
+  const guid = await insertItem({ code: 'BUG-9115', mkey: 'tool.planning' });
+
+  const before = await ddlCounters(db);
+  const r = bowCli(['show', 'BUG-9115']);
+  assert.equal(r.status, 0, `show must succeed: ${r.stderr}`);
+  const after = await ddlCounters(db);
+
+  assert.equal(after.Com_alter_table, before.Com_alter_table,
+    'BUG-115: `show` must not have caused any ALTER TABLE statement to run');
+  assert.equal(after.Com_create_table, before.Com_create_table,
+    'BUG-115: `show` must not have caused any CREATE TABLE statement to run');
+
+  await db.query('DELETE FROM bow_items WHERE guid = ?', [guid]);
+});
+
+test('BUG-115: a write command (`add`) still runs ensureSchema\'s DDL first — no regression to the write path', async () => {
+  const before = await ddlCounters(db);
+  const r = bowCli(['add', 'bug', 'BUG-115 write-path DDL proof', '--priority', 'P3']);
+  assert.equal(r.status, 0, `add must succeed: ${r.stderr}`);
+  const after = await ddlCounters(db);
+
+  // ensureSchema issues several ALTER TABLE statements (mkey/seq/... columns,
+  // the item_type MODIFY, two ADD INDEX IF NOT EXISTS) and several CREATE
+  // TABLE IF NOT EXISTS statements every time it runs — both counters must
+  // have moved for a write command, proving ensureSchema executed.
+  assert.ok(after.Com_alter_table > before.Com_alter_table,
+    `BUG-115: \`add\` must still run ensureSchema's ALTER TABLE statements (before=${before.Com_alter_table}, after=${after.Com_alter_table})`);
+  assert.ok(after.Com_create_table > before.Com_create_table,
+    `BUG-115: \`add\` must still run ensureSchema's CREATE TABLE statements (before=${before.Com_create_table}, after=${after.Com_create_table})`);
+
+  const [rows] = await db.query('SELECT code FROM bow_items WHERE title = ?', ['BUG-115 write-path DDL proof']);
+  assert.equal(rows.length, 1, 'the write itself must still have succeeded correctly, not just the DDL count');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-170: BUG-115's READ_ONLY_COMMANDS skip left a genuinely fresh/never-
+// migrated database (zero tables) with no bootstrap path when a read command
+// happens to be the first thing run against it — a hard `Table 'db.bow_items'
+// doesn't exist` (errno 1146 / ER_NO_SUCH_TABLE) instead of the pre-BUG-115
+// behaviour (ensureSchema ran unconditionally, silently created the schema,
+// `list` printed "BOW is clean"). Fix: the read-command dispatch now catches
+// ER_NO_SUCH_TABLE specifically, runs ensureSchema() exactly once, and
+// retries the same command once — restoring the old silent-bootstrap UX
+// without reintroducing BUG-115's per-invocation DDL cost for the
+// steady-state (already-migrated) case.
+// ---------------------------------------------------------------------------
+
+test('BUG-170: a read-only command (`list`) against a genuinely fresh, table-less scratch DB bootstraps gracefully instead of raising a raw ER_NO_SUCH_TABLE', async () => {
+  const freshDb = `metro_test_bug170_fresh_${Date.now()}`;
+  const boot = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
+  try {
+    // Genuinely fresh: CREATE DATABASE only, deliberately NEVER call
+    // ensureSchema — reproduces BUG-170's exact fixture (zero tables).
+    await boot.query(`CREATE DATABASE \`${freshDb}\``);
+
+    const r = spawnSync(process.execPath, ['claude-bow.js', 'list'], {
+      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb }, encoding: 'utf8',
+    });
+
+    assert.equal(r.status, 0,
+      `BUG-170: \`list\` against a fresh table-less DB must now succeed (old behaviour), not hard-fail: stdout=${r.stdout} stderr=${r.stderr}`);
+    assert.doesNotMatch(r.stderr, /doesn't exist/i,
+      'BUG-170: the raw "Table ... doesn\'t exist" error must never reach the user');
+    assert.doesNotMatch(r.stderr, /ER_NO_SUCH_TABLE/i,
+      'BUG-170: the raw ER_NO_SUCH_TABLE error code must never reach the user');
+    // Old (pre-BUG-115) behaviour on a freshly-bootstrapped, empty BOW: list
+    // reports no open items. Confirms actual BEHAVIOUR, not just exit code.
+    assert.match(r.stdout, /clean|no.*(open|items)|0 open/i,
+      `BUG-170: \`list\` against a freshly-bootstrapped empty BOW should read as clean, got: ${r.stdout}`);
+
+    // Confirm the schema really was created (not just that the command
+    // happened to exit 0 for an unrelated reason).
+    const verify = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: freshDb });
+    const [tables] = await verify.query('SHOW TABLES');
+    const tableNames = tables.map(row => Object.values(row)[0]);
+    assert.ok(tableNames.includes('bow_items'), 'BUG-170: ensureSchema must have run and created bow_items on the fresh DB');
+    await verify.end();
+  } finally {
+    await boot.query(`DROP DATABASE IF EXISTS \`${freshDb}\``);
+    await boot.end();
+  }
+});
+
+test('BUG-170: the one-shot fresh-DB bootstrap runs ensureSchema\'s DDL exactly once, not on every subsequent read (no regression to BUG-115\'s MDL-contention fix)', async () => {
+  const freshDb = `metro_test_bug170_once_${Date.now()}`;
+  const boot = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
+  try {
+    await boot.query(`CREATE DATABASE \`${freshDb}\``);
+
+    // First read against the fresh DB: expected to bootstrap (DDL runs).
+    const first = spawnSync(process.execPath, ['claude-bow.js', 'list'], {
+      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb }, encoding: 'utf8',
+    });
+    assert.equal(first.status, 0, `first list (bootstrap) must succeed: ${first.stderr}`);
+
+    // Second read against the NOW-migrated fresh DB: must behave exactly
+    // like BUG-115's existing test against TEST_DB — zero DDL statements.
+    const before = await ddlCounters(boot);
+    const second = spawnSync(process.execPath, ['claude-bow.js', 'list'], {
+      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb }, encoding: 'utf8',
+    });
+    assert.equal(second.status, 0, `second list must succeed: ${second.stderr}`);
+    const after = await ddlCounters(boot);
+
+    assert.equal(after.Com_alter_table, before.Com_alter_table,
+      'BUG-170: a second `list` against the now-migrated DB must not re-run ensureSchema\'s ALTER TABLE statements');
+    assert.equal(after.Com_create_table, before.Com_create_table,
+      'BUG-170: a second `list` against the now-migrated DB must not re-run ensureSchema\'s CREATE TABLE statements');
+  } finally {
+    await boot.query(`DROP DATABASE IF EXISTS \`${freshDb}\``);
+    await boot.end();
+  }
+});
+
+test('BUG-170: `init` and a write command (`add`) against the already-migrated TEST_DB are unaffected by the fresh-DB fallback', async () => {
+  const initResult = bowCli(['init']);
+  assert.equal(initResult.status, 0, `init must still succeed unmodified: ${initResult.stderr}`);
+  assert.match(initResult.stdout, /metro BOW tables ready/,
+    'BUG-170: init\'s existing message must be unchanged');
+
+  const before = await ddlCounters(db);
+  const addResult = bowCli(['add', 'bug', 'BUG-170 write-path unaffected', '--priority', 'P3']);
+  assert.equal(addResult.status, 0, `add must still succeed: ${addResult.stderr}`);
+  const after = await ddlCounters(db);
+
+  assert.ok(after.Com_alter_table > before.Com_alter_table,
+    'BUG-170: `add` against an already-migrated DB must still run ensureSchema unconditionally (unaffected by the fresh-DB retry path)');
+
+  const [rows] = await db.query('SELECT code FROM bow_items WHERE title = ?', ['BUG-170 write-path unaffected']);
+  assert.equal(rows.length, 1, 'the write itself must still have succeeded');
+});
