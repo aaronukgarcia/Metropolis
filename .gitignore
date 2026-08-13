@@ -38,6 +38,11 @@ nul
 # Microsoft Office lock files (e.g. docs/~$cloud.md while Word has it open)
 ~$*
 
+# claude-plan-checker.js's cross-process mutex directory (BUG-194); should
+# never persist past a checkPlan() call, but ignore it in case a crashed
+# process leaves it behind before the next acquirer's timeout clears it.
+.plan-checker.lock
+
 # Go build artifacts
 *.exe
 *.test
