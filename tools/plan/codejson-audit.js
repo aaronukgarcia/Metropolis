@@ -251,6 +251,21 @@ async function runAudit(opts = {}) {
   const preGitStatus = execFileSync('git', ['status', '--porcelain', '--', 'code.json', 'docs/planning/master-plan-v2.1.json', 'internal', 'cmd'],
     { cwd: ROOT, encoding: 'utf8' });
 
+  // Test-only synchronization point (BUG-181 regression fix). If provided,
+  // this is awaited HERE — immediately after the pre-run snapshot is taken
+  // and before any scanning work (astinfo/`go run`, etc.) begins — so a test
+  // can inject a mutation that is guaranteed BY CONSTRUCTION, not by
+  // wall-clock timing, to land inside the window the AC-7/AC-8 self-check
+  // below actually brackets (preGitStatus...postGitStatus). No production
+  // caller (cli() below) passes this; it is a no-op unless a test supplies
+  // it. This does not change what the self-check verifies or when the
+  // pre/post snapshots are taken — it only gives tests a deterministic hook
+  // instead of a timing guess for injecting the mutation they're proving
+  // gets caught.
+  if (typeof opts.afterPreSnapshot === 'function') {
+    await opts.afterPreSnapshot();
+  }
+
   const commitHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
   const goModule = readGoModule();
   const codeJson = JSON.parse(fs.readFileSync(CODE_JSON_PATH, 'utf8'));

@@ -218,26 +218,33 @@ test('AC-7/AC-8: a full audit run never modifies code.json or master-plan-v2.1.j
 });
 
 test('BUG-181: a third-party mutation of a scanned Go file DURING the run (not just an unreverted one) makes runAudit() throw the AC-7/AC-8 violation, naming the changed path', async () => {
-  const { spawn } = require('child_process');
   const target = path.join(ROOT, 'internal', 'foundation', 'buildinfo', 'buildinfo.go');
   const original = fs.readFileSync(target, 'utf8');
 
-  // An independent OS process (not a setTimeout in this process) appends a
-  // byte to a scanned Go file partway through the run. runAudit()'s Go
-  // introspection step (runAstinfo) blocks the event loop via spawnSync, so
-  // an in-process timer cannot race it — only a genuinely separate process
-  // can reproduce the real attack this regression guards against.
-  const mutatorScript = `
-    setTimeout(() => {
-      require('fs').appendFileSync(${JSON.stringify(target)}, '\\n// BUG-181 regression-test mutation\\n');
-    }, 300);
-  `;
-  const mutator = spawn(process.execPath, ['-e', mutatorScript], { stdio: 'ignore' });
-
+  // Previously this raced a fixed 300ms setTimeout (in a separate process)
+  // against runAudit()'s internal timing, betting that the mutation would
+  // land somewhere between the pre- and post-run snapshots. It didn't
+  // reliably: the pre/post window's actual duration is dominated by a
+  // blocking `spawnSync('go run ...')` call whose wall-clock time varies by
+  // machine and filesystem/scheduler characteristics (CI's ubuntu-latest
+  // containers vs a local Windows dev box), so the 300ms guess sometimes
+  // fired after runAudit() had already taken its post-run snapshot — the
+  // mutation missed the window entirely and runAudit() completed normally
+  // (BUG-181's CI-only flake).
+  //
+  // runAudit() now accepts an `afterPreSnapshot` test hook (codejson-audit.js)
+  // that is awaited immediately after the pre-run snapshot is taken and
+  // before any scanning work begins. Mutating the file from that hook lands
+  // inside the snapshot window BY CONSTRUCTION — no wall-clock guess, no
+  // separate process, no flake, on any machine.
   try {
     let threw = null;
     try {
-      await runAudit();
+      await runAudit({
+        afterPreSnapshot: () => {
+          fs.appendFileSync(target, '\n// BUG-181 regression-test mutation\n');
+        },
+      });
     } catch (e) {
       threw = e;
     }
@@ -245,11 +252,6 @@ test('BUG-181: a third-party mutation of a scanned Go file DURING the run (not j
     assert.match(threw.message, /AC-7\/AC-8 VIOLATION/, `expected an AC-7/AC-8 VIOLATION error, got: ${threw.message}`);
     assert.match(threw.message, /gitStatusUnchangedForScannedPaths=false/, `expected the violation message to name gitStatusUnchangedForScannedPaths as the failing check, got: ${threw.message}`);
   } finally {
-    await new Promise((resolve) => {
-      if (mutator.exitCode !== null) return resolve();
-      mutator.on('exit', resolve);
-      setTimeout(resolve, 2000);
-    });
     fs.writeFileSync(target, original, 'utf8');
     assert.equal(sha256(fs.readFileSync(target)), sha256(Buffer.from(original, 'utf8')), 'fixture file must be restored byte-for-byte');
   }
