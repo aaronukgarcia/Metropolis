@@ -203,13 +203,31 @@ jobs:
       METRO_DB_USER: root
       METRO_DB_PASSWORD: ""
     steps:
+      # fetch-depth: 0 (full history, not actions/checkout@v4's default
+      # shallow fetch-depth: 1) -- BUG-207: claude-pre-commit-check.test.js's
+      # "AC-C3 (load-bearing proof): last pre-demotion revision DOES deny"
+      # test walks git log back to a specific pre-demotion revision, which a
+      # depth-1 checkout does not have available and the test reports as
+      # "walked 1 revision(s)".
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      # BUG-207: the CI runner has no global git identity, so a `git commit`
+      # invoked by a test (claude-author-identity.test.js's "SEC-052 ROUND 2
+      # precondition" and "control(b)" subtests) fails for real with "Please
+      # tell me who you are". Throwaway/CI-only identity, scoped to this job
+      # only -- not used for anything this repo actually pushes.
+      - name: Configure git identity for tests
+        run: |
+          git config --global user.email "ci@example.invalid"
+          git config --global user.name "CI Runner"
 
       - name: npm ci
         run: npm ci
