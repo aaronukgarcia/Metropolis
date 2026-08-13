@@ -216,3 +216,206 @@ junior building this should port the `--example-file` shape, not design from scr
   higher than astgate's P1 flooding-risk item was scoped against, so a reasonable person
   could argue this warrants a harder gate) — see the item text logged to BOW for the
   "what breaks if wrong" detail.
+
+---
+
+BOW code: FEAT-044
+
+# Acceptance criteria — general auditable amend command for BOW prose (FEAT-044)
+
+**BOW code:** FEAT-044 (P2, open) — "General auditable amend command for BOW prose:
+correct stale/wrong text in titles, descriptions and comments with a mandatory audit
+trail."
+**Spec refs:** FEAT-044's own description (filed by Aaron 2026-08-11 as the generalisation
+of BUG-061's redact command — BUG-061 shipped narrow, GR#22-patterns-only, per Aaron's
+2026-08-11 ruling quoted on that item: "Redact ships first, narrow (GR#22 only); amend
+generalises its engine afterwards — shared code path, redact becomes a mode."). GR#22
+(codename discipline — `redactText`/`loadCodenameGuardPatterns`, `claude-bow.js:2693-2741`,
+the engine this item shares). GR#15 (validators/expected values derive from data, not
+hardcoded constants — applies to AC-2's immutable-field list, which must be checked
+against the actual `bow_items`/`bow_comments` schema, not a prose guess). BUG-017 (`set
+--desc`/`set --desc-file`, `claude-bow.js:2588-2662` — this session's fix; read first, see
+"Relationship to BUG-017" below). BUG-090/AC-1 (`resolveTextFlag`, `claude-bow.js:520` —
+the mutual-exclusion and file-based-input pattern this item's `--reason`/`--reason-file`
+pair must reuse verbatim, not reinvent).
+**Date:** 2026-08-13
+**Status:** active — normal pipeline order (criteria written before junior dispatch)
+**Package under test:** `claude-bow.js` — a new `amend` command, sharing its text-mutation
+engine with the existing `redact` command (`cmdRedact`, `redactText`,
+`claude-bow.js:2664-2856`) per Aaron's binding design constraint that redact and amend are
+"two commands, one engine."
+**Standard gates:** root tooling, version-guard-exempt (matching `tool.bow`/`tool.redact`'s
+posture) — AC-1 (`node --check claude-bow.js`), no Co-Authored-By, forbidden-touch (no file
+outside `claude-bow.js` and this acceptance doc changes).
+
+## Relationship to BUG-017's `set --desc`/`set --desc-file` — supersedes for prose, not for scope
+
+BUG-017 (this session) added `--desc`/`--desc-file` to the existing `set` command
+(`cmdSet`, `claude-bow.js:2588-2662`) as a repair path for a corrupted `description`
+column — it reuses BUG-090's `resolveTextFlag` mutual-exclusion/file-input pattern, but it
+is a **silent overwrite**: `set --desc` updates `bow_items.description` and prints a
+one-line confirmation (`"${item.code} updated..."`, `claude-bow.js:2661`) with **no
+before/after audit trail written anywhere** — no auto-comment, no old-value capture, no
+reason argument. FEAT-044 does **not** remove `set --desc` (AC-9 keeps it working
+unmodified, since other fields `set` touches — priority, status, mkey, seq — are correctly
+out of `amend`'s scope per Aaron's own constraint below). What FEAT-044 supersedes is *the
+practice of using `set --desc` to correct prose that is wrong, not merely absent* — `amend`
+becomes the sanctioned path for that specific case (title/description/comment-body
+correction with a mandatory trail), while `set --desc` remains what it always was: a
+one-shot, unaudited field-fill primarily meant for populating a field that started empty
+or was corrupted (BUG-017's own motivating case). AC-10 below documents this distinction
+in `set`'s own usage text so a future user is pointed at `amend` for corrections.
+
+## Acceptance criteria
+
+### A. Scope — which fields `amend` may touch
+
+- **AC-1. `amend <CODE> --field title|desc --to "<text>" --reason "<text>"` (and a
+  `--comment <id> --field body` mode mirroring `redact`'s existing `--comment <id>`
+  branch, `claude-bow.js:2752-2769`) updates exactly one of: an item's `title`, an item's
+  `description`, or a single historical comment's `body`.** No other field name is
+  accepted. Check: a passing test invokes `amend` with `--field priority` (or any field
+  name outside this list) and asserts non-zero exit, a clear "unsupported field" message
+  naming the rejected field, and no row changed (query `bow_items`/`bow_comments`
+  directly, not just the exit code).
+- **AC-2. `amend` refuses to touch `status`, `priority`, `deps` (`bow_dependencies`),
+  `refs` (`bow_git_refs`), `mkey`, `seq`, `sprint`, or any other structured/validated
+  column** — these already have sanctioned commands (`set`, `depend`/`undepend`, `ref`,
+  `done`) with their own validation (e.g. `set`'s `PRIORITIES.includes(p)` check,
+  `claude-bow.js:2594`), and Aaron's own FEAT-044 description states explicitly that
+  `amend` "must not become a second, weaker write route around their validations." Check:
+  `grep -n "amend" claude-bow.js` shows the command's field-name allowlist is a closed set
+  (title/description/comment-body only) — a passing test attempts `amend <CODE> --field
+  status --to done --reason x` and asserts it is rejected with the same "unsupported
+  field" message as AC-1, not silently routed to `cmdSet`'s status-update logic.
+- **AC-3. `guid`, `code`, `created_at`, and `closed_at`/`closed_note` are immutable via
+  `amend`** (and via `set`, unchanged) — these are either identity fields (GUID/code, GR#3
+  single-source-of-truth for BOW identity) or already have their own sanctioned mutation
+  path (`closed_at`/`closed_note` are written only by `set --status done|cancelled`,
+  `claude-bow.js:2601`). Check: the `amend` field allowlist (AC-1) does not include any of
+  these names by construction — a passing test confirms `--field guid` (or `created_at`)
+  is rejected the same way as AC-1/AC-2's out-of-scope fields.
+- **AC-4. `amend --comment <id> --field body` targets a single existing comment row by
+  its numeric `id`, exactly matching `redact`'s existing `--comment <id>` lookup
+  (`claude-bow.js:2752-2758`: `Number(flags.comment)`, `SELECT * FROM bow_comments WHERE
+  id = ?`, non-zero exit with a clear message if `Number.isFinite` fails or no row is
+  found).** No bulk/pattern-based comment amendment (e.g. "amend all comments containing
+  X") is in scope — one comment id per invocation, matching `redact`'s existing shape.
+  Check: a passing test invokes `amend --comment <nonexistent-id> --field body --to "x"
+  --reason "y"` and asserts the same "no comment with id N" class of error `redact`
+  already produces for the identical case.
+
+### B. The mandatory audit trail
+
+- **AC-5. Every successful `amend` write inserts exactly one row into `bow_comments`
+  (the same audit-trail table `redact`'s auto-comment already uses,
+  `claude-bow.js:2848-2852`) recording: the field amended, the OLD value, the NEW value,
+  the `--reason` text supplied, and the acting identity (`currentAuthor()`,
+  `claude-bow.js:418-423` — same attribution mechanism every other comment-writing command
+  already uses).** Unlike `redact` (which deliberately never quotes the pre-image, per
+  Aaron's GR#22 constraint against re-exposing forbidden text one table over), `amend`'s
+  whole purpose is correcting ordinary stale/wrong prose, so the audit comment DOES quote
+  both old and new text in full — the GR#22 suppression is `redact`-mode-only (see AC-8).
+  Check: a passing test amends an item's `description`, then queries `bow_comments` for
+  that item's GUID and asserts a new row exists whose `body` contains the pre-amend text,
+  the post-amend text, the supplied reason, and is attributed to the acting author — not
+  merely that *some* comment was added (a false pass would be an implementation that logs
+  "description amended" with no old/new/reason content).
+- **AC-6. `--reason` is a mandatory argument — `amend` invoked without it exits non-zero
+  before any write occurs, with a message stating the reason is required.** This is
+  FEAT-044's own explicit design constraint ("records who/when/why (--reason mandatory)").
+  Check: a passing test invokes `amend <CODE> --field title --to "New Title"` with no
+  `--reason` flag and asserts non-zero exit, the "reason is required" message, and — query
+  the DB directly — neither the target row nor `bow_comments` changed (no partial write:
+  the mandatory-reason check must run before the update, not merely before the confirmation
+  message).
+- **AC-7. `--reason`/`--reason-file` follow the identical mutual-exclusion and file-based-
+  input shape BUG-090 established for `--desc`/`--desc-file` (`resolveTextFlag`,
+  `claude-bow.js:520`)** — a reason containing shell-special characters (backtick, `$(`,
+  embedded quote) can be supplied via `--reason-file <path>` instead of inline, and
+  supplying both `--reason` and `--reason-file` together is a non-zero-exit conflict, not
+  silent precedence (mirroring BUG-090's AC-3 and its "silent precedence is a 'which one
+  actually landed' bug waiting to happen" reasoning). The `--to` argument (the new field
+  value itself) gets the same treatment: `--to`/`--to-file`, since a title/description/
+  comment-body correction is exactly the kind of free text BUG-090 was written to protect.
+  Check: a passing test supplies both `--reason` and `--reason-file`, and separately both
+  `--to` and `--to-file`, and asserts each conflicting pair is rejected non-zero with no
+  write, matching BUG-090/AC-3's evidentiary standard (query the table, not just the exit
+  code).
+- **AC-8. `amend`'s audit-trail engine is the same code path `redact` uses, with GR#22
+  quoting-suppression as a mode flag, not a fork** — per Aaron's binding constraint on
+  BUG-061 ("two commands, one engine... so the audit-trail discipline cannot drift between
+  them"). Concretely: both commands share one underlying "apply field mutation + write
+  audit comment" function; `redact`'s call site sets a suppress-old-text flag (GR#22),
+  `amend`'s call site does not. Check: `grep -n "function.*[Aa]mend\|function.*[Aa]udit"
+  claude-bow.js` shows `cmdRedact` and `cmdAmend` both calling into a shared helper — a
+  passing test (code-shape, not just behavioural) fails if `cmdAmend` re-implements its own
+  independent "insert into bow_comments" write rather than routing through the same helper
+  `cmdRedact` was refactored to use. **What a lazy implementation looks like:** writing
+  `cmdAmend` as a fresh, parallel function that never touches `cmdRedact`'s code — it could
+  pass every behavioural AC above while silently drifting from `redact`'s audit format the
+  first time either one is next edited, which is exactly the "audit-trail discipline
+  drifts between them" outcome Aaron's ruling was written to prevent.
+
+### C. Safety and backward compatibility
+
+- **AC-9. `set --desc`/`set --desc-file` (BUG-017) are unchanged in behaviour** — `amend`
+  is additive, not a replacement; existing `set` test coverage continues to pass unmodified.
+  `set`'s own usage/help text (`claude-bow.js:2658`) is updated to note that `amend` is the
+  audited alternative for correcting prose that was previously right and is now wrong (as
+  opposed to filling a field that is empty or corrupted), per "Relationship to BUG-017"
+  above. Check: existing `set` tests pass unmodified; `grep -n "amend" claude-bow.js`'s
+  match inside the `set` usage string confirms the pointer exists.
+- **AC-10. `amend`'s own usage/help text and a header comment near `cmdAmend` name the
+  mandatory `--reason` requirement and point to `redact` as the sibling command for GR#22
+  content specifically** (an operator trying to remove forbidden-title text via `amend`
+  should be told to use `redact` instead, since `amend` quotes old/new text in its audit
+  trail — the wrong tool for that specific case). Check: `grep -n "redact" claude-bow.js`
+  finds a match inside `amend`'s usage/help text or header comment, not only inside
+  `redact`'s own section.
+- **AC-11. `amend`'s `--to`/`--to-file` value is checked against the target column's
+  actual length limit before writing (mirroring `redact`'s `BOW_COLUMN_MAX_LEN`/
+  `REDACT_FIELD_MAX_LEN` pre-write check, `claude-bow.js:2689-2691, 2825-2837`)** — for
+  `title` (VARCHAR(255)), an amendment that would overflow the column is refused with no
+  partial write, stating the violation is still present because the write was never
+  attempted (same phrasing discipline as `redact`'s existing overflow message). `desc`
+  and comment `body` are TEXT/unbounded, matching `redact`'s existing no-limit-needed
+  reasoning for those columns. Check: a passing test attempts `amend <CODE> --field title
+  --to <a 300-char string> --reason x` and asserts non-zero exit, the specific overflow
+  message, and the title column unchanged (query directly).
+- **AC-12 (advisory, not gate-failing). `amend` warns — non-fatally — if `--to`/
+  `--to-file` content matches a GR#22 forbidden pattern (reusing
+  `loadCodenameGuardPatterns()`, `claude-bow.js:2693-2700`), suggesting `redact` instead.**
+  Does not block the write (an operator amending unrelated prose that happens to legitimately
+  discuss the guard's own pattern set in the abstract must not be blocked), mirroring
+  BUG-090/AC-6's advisory-not-gate posture for the identical reason: a heuristic
+  content-match warning that blocks is a process own-goal. Check: a passing test supplies
+  `--to` text containing a GR#22 pattern and asserts a stderr warning plus a successful
+  write (non-fatal); a second test with clean text asserts no warning.
+
+## Out of scope
+
+- Bulk/pattern-based amendment across multiple items or comments in one invocation — one
+  target (item field, or single comment id) per `amend` call, matching `redact`'s existing
+  single-target shape.
+- Amending `status`/`priority`/`mkey`/`seq`/`sprint`/deps/refs — explicitly excluded per
+  AC-2, Aaron's own constraint against a second, weaker write route around their existing
+  validated commands.
+- Retiring or deprecating `set --desc`/`set --desc-file` — BUG-017 shipped this session and
+  stays; AC-9 keeps it working, AC-10 only adds a documentation pointer.
+- Any change to `redact`'s own GR#22-suppression behaviour — AC-8 requires the two commands
+  share an engine, not that `redact` gain `amend`'s old/new quoting (that would reintroduce
+  the exact leak class BUG-061 exists to close).
+
+## Escalations
+
+- **AC-8's "shared engine" requirement may require a non-trivial refactor of the existing,
+  already-shipped `cmdRedact`** (extracting its apply-plus-audit logic into a helper both
+  commands call) rather than `amend` being purely additive new code. Flagging since this
+  touches code that shipped and was Destructive-verdicted under BUG-061 — the junior
+  should not consider `cmdRedact`'s existing behavioural tests (GR#22 redaction shape,
+  column-overflow refusal) permitted to change, only its internal structure. If the
+  refactor risk is judged too high relative to FEAT-044's P2 priority, Bill may choose to
+  accept two independently-implemented commands with a shared *test* (asserting both audit
+  comments follow the same structural shape) as a lighter-weight substitute for AC-8 — that
+  call is Bill's, not pre-empted here.
