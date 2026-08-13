@@ -32,4 +32,12 @@ const (
 	// complete run; any -out snapshot this run may have already started
 	// writing is not to be trusted.
 	ErrEngineRunFailed = "MET-H203"
+
+	// ErrInputReadFailed: FEAT-035's -in/-resume flag (Config.InDir)
+	// pointed at a bundle directory whose header.json could not be read
+	// (serialize.ReadHeader failed) — the reload mechanism AC-M1's
+	// end-to-end test relies on to carry a prior run's DebugTouched flag
+	// forward via Engine.Snapshot's MergeDebugTouched. Checked before the
+	// engine boots, so a bad -in path never produces a partial run.
+	ErrInputReadFailed = "MET-H204"
 )

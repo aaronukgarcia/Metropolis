@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -53,6 +54,31 @@ type Config struct {
 	// internally-minted command's correlation chain this run produces
 	// (GR#1). Empty mints a fresh one via protocol.NewCorrelationID().
 	CorrelationID string
+
+	// Debug enables feat.debugmode (FEAT-008/FEAT-035) for this run via
+	// debug.State's SourceFlag enable path (cmd/metropolis's -debug
+	// flag). This is the wiring FEAT-035 exists to close: enabling it
+	// sticky-flags the header this run's Snapshot writes to
+	// OutDir/header.json (debug.WithHeader against the exact prior
+	// header this call merges forward — see the doc comment on Run
+	// below), and injects debug.State.AllowSpeed8x as this run's
+	// core.Engine's Speed8xGate (AC-E3) so Speed8xDebug is genuinely
+	// gated rather than always-denied (the default with no gate wired
+	// at all) or always-allowed (the false-pass shape AC-E3 warns
+	// against).
+	Debug bool
+
+	// InDir, if non-empty, names a prior headless bundle directory
+	// (previously written via -out) whose header.json this run reads
+	// before constructing its own header, carrying the prior run's
+	// DebugTouched flag forward via serialize.Header's own
+	// MergeDebugTouched (OR-merge, sticky) — ASM-403's reload mechanism,
+	// built specifically so AC-M1's mandatory end-to-end test can prove
+	// DebugTouched survives a second, genuinely separate `-headless`
+	// invocation that never itself enables debug. Empty means this run
+	// starts from a fresh, untouched header exactly as before this
+	// field existed.
+	InDir string
 }
 
 // Result summarises a completed headless run.
@@ -85,6 +111,23 @@ type Result struct {
 // engine.headless.md — never Engine.AdvanceTicks directly), then writes
 // the -out snapshot bundle (AC-3).
 //
+// FEAT-035: this is also feat.debugmode's real wiring point. A
+// debug.State is always constructed (debug.WithHeader against a small
+// in-process header this function owns) and its AllowSpeed8x method is
+// always injected as the Engine's Speed8xGate (core.WithSpeed8xGate) —
+// this is what makes AC-E3's two-sided check possible: with cfg.Debug
+// false, Speed8xDebug is denied because the (real, configured) gate
+// says no, never because no gate was configured at all. If cfg.InDir
+// names a prior bundle, its header's DebugTouched flag is read and
+// merged into this run's own debug header BEFORE cfg.Debug is applied,
+// so a prior debug-touched save carries forward even when this run
+// never calls Enable itself (ASM-403's reload mechanism). The resulting
+// header is passed to Engine.Snapshot as its `prior` argument in
+// writeBundle, so the bundle Snapshot actually writes to
+// OutDir/header.json is the one debug.State touched — not a
+// separately-constructed header that merely shares field values
+// (AC-E4).
+//
 // Run blocks until the run completes, ctx is done, or a step fails. On
 // any failure it still performs the documented engine.core shutdown
 // sequence (cancel, join RunCommandLoop's goroutine, THEN close the
@@ -97,16 +140,37 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		correlationID = string(protocol.NewCorrelationID())
 	}
 
+	// FEAT-035 DoD#1/DoD#2: carry a prior bundle's DebugTouched flag
+	// forward (ASM-403) BEFORE this run's own debug.State is built, so
+	// dbgHeader already reflects "was this lineage ever debug-touched"
+	// regardless of whether cfg.Debug is set on THIS invocation.
+	dbgHeader := &serialize.Header{}
+	if cfg.InDir != "" {
+		prior, err := serialize.ReadHeader(cfg.InDir)
+		if err != nil {
+			return Result{}, errs.Wrap(ErrInputReadFailed, correlationID, err, map[string]any{"path": cfg.InDir, "cause": err.Error()})
+		}
+		dbgHeader.MergeDebugTouched(prior.DebugTouched())
+	}
+	dbgState := debug.NewState(debug.WithHeader(dbgHeader))
+
 	rw := newReportWriter(cfg.Report)
 
 	opts := []core.Option{
 		core.WithWorldSeed(cfg.Seed),
 		core.WithPhaseObserver(rw.phaseObserver()),
+		core.WithSpeed8xGate(dbgState.AllowSpeed8x),
 	}
 	if cfg.PoolSize > 0 {
 		opts = append(opts, core.WithPoolSize(cfg.PoolSize))
 	}
 	e := core.NewEngine(opts...)
+
+	if cfg.Debug {
+		if err := dbgState.Enable(debug.SourceFlag, correlationID); err != nil {
+			return Result{}, err
+		}
+	}
 
 	transport := protocol.NewInProcTransport(
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
@@ -164,7 +228,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return Result{}, errs.Wrap(ErrEngineRunFailed, correlationID, loopErr, nil)
 	}
 
-	header, err := writeBundle(cfg.OutDir, e, correlationID)
+	header, err := writeBundle(cfg.OutDir, e, correlationID, *dbgHeader)
 	if err != nil {
 		return Result{}, err
 	}
@@ -236,7 +300,12 @@ func driveTicks(t *protocol.InProcTransport, months int64) (int64, error) {
 // exact three-step pattern serialize_test.go's TestBundleRoundTripAndValidate
 // documents, so the result is a bundle `metctl verify` can validate, not
 // a bespoke ad-hoc JSON dump.
-func writeBundle(dir string, e *core.Engine, correlationID string) (serialize.Header, error) {
+//
+// FEAT-035 AC-S3: prior is passed straight through to Engine.Snapshot's
+// own variadic prior parameter, so DebugTouched carry-forward is
+// exercised by this real production write path, not only by
+// persist_test.go's unit tests.
+func writeBundle(dir string, e *core.Engine, correlationID string, prior serialize.Header) (serialize.Header, error) {
 	if err := serialize.CreateBundleDir(dir); err != nil {
 		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
 	}
@@ -247,7 +316,7 @@ func writeBundle(dir string, e *core.Engine, correlationID string) (serialize.He
 		return serialize.Header{}, errs.Wrap(ErrOutputWriteFailed, correlationID, err, map[string]any{"path": dir})
 	}
 
-	header, snapErr := e.Snapshot(f, correlationID)
+	header, snapErr := e.Snapshot(f, correlationID, prior)
 	closeErr := f.Close()
 	if snapErr != nil {
 		// Already a registry-sourced *errs.E (engine.core's ErrSnapshotFailed,

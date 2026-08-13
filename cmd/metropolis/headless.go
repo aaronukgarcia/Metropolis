@@ -22,6 +22,14 @@ type headlessFlags struct {
 	scenario *string
 	report   *string
 	poolSize *int
+
+	// debug and in are FEAT-035's wiring: -debug enables feat.debugmode
+	// (debug.SourceFlag) for this run, sticky-flagging the header this
+	// run writes; -in names a prior bundle directory to carry that
+	// prior run's DebugTouched flag forward from (ASM-403's reload
+	// mechanism, used by the mandatory two-hop end-to-end test).
+	debug *bool
+	in    *string
 }
 
 // registerHeadlessFlags wires every -headless flag into fs with a
@@ -34,6 +42,8 @@ func registerHeadlessFlags(fs *flag.FlagSet) headlessFlags {
 		scenario: fs.String("scenario", "", "headless: path to a JSON scenario script (a JSON array of protocol.Command envelopes) run before tick advancement"),
 		report:   fs.String("report", "", "headless: path to write per-tick phase-timing and invariant NDJSON reports to (default: not written)"),
 		poolSize: fs.Int("pool-size", 0, "headless: override POOL-SIM worker count (0 = default, runtime.NumCPU()-2)"),
+		debug:    fs.Bool("debug", false, "headless: enable feat.debugmode (FEAT-035) for this run -- sticky-flags the written bundle's header debug-touched"),
+		in:       fs.String("in", "", "headless: prior bundle directory to resume from -- carries that run's DebugTouched flag forward into this run's header (FEAT-035 AC-M1)"),
 	}
 }
 
@@ -76,6 +86,8 @@ func runHeadless(fs *flag.FlagSet, hf headlessFlags, stdout, stderr io.Writer) i
 		ScenarioPath:  *hf.scenario,
 		PoolSize:      *hf.poolSize,
 		CorrelationID: string(correlationID),
+		Debug:         *hf.debug,
+		InDir:         *hf.in,
 	}
 
 	if *hf.report != "" {

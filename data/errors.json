@@ -533,6 +533,12 @@
       "message": "engine.core.RunCommandLoop exited abnormally during a headless run: {cause}",
       "remedy": "A headless run has no operator watching a screen, so a premature engine-loop exit (the transport closing before shutdown was requested -- see engine.core's MET-E014) must never be mistaken for a clean, complete run. Investigate why the transport closed early; do not trust a snapshot file this run may have already written."
     },
+    "MET-H204": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "-in prior bundle directory {path} could not be read: {cause}",
+      "remedy": "FEAT-035's -in/-resume flag reads a prior headless bundle's header.json to carry its DebugTouched flag forward into this run's header (Engine.Snapshot's MergeDebugTouched carry-forward). Check the -in path points at a real bundle directory previously written by `metropolis -headless -out <dir>` and that header.json is present and well-formed."
+    },
     "MET-E100": {
       "severity": "error",
       "module": "engine.detgate",
