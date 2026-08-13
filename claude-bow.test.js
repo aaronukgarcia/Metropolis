@@ -2126,7 +2126,13 @@ test('SEC-050: isPathUnderAnyRoot/isTextFlagPathAllowed unit-level — outside b
   assert.deepEqual(TEXT_FLAG_ALLOWED_ROOTS.length, 2, 'exactly two allowed roots: repo root and OS temp dir');
   assert.equal(isTextFlagPathAllowed(path.join(ROOT, 'claude-bow.js')), true);
   assert.equal(isTextFlagPathAllowed(path.join(os.tmpdir(), 'anything.txt')), true);
-  assert.equal(isTextFlagPathAllowed('C:\\Windows\\win.ini'), false);
+  // A well-known system file outside every allowed root, expressed per-platform:
+  // a bare Windows-style literal (`C:\Windows\win.ini`) is NOT a valid "outside
+  // root" fixture on POSIX, because `\` is not a path separator there — it
+  // resolves to a single relative segment *under* cwd (an allowed root),
+  // flipping this assertion to true instead of false (BUG-207).
+  const outsideSystemPath = process.platform === 'win32' ? 'C:\\Windows\\win.ini' : '/etc/passwd';
+  assert.equal(isTextFlagPathAllowed(outsideSystemPath), false);
   assert.equal(isTextFlagPathAllowed(path.join(ROOT, '..', 'outside-repo-probe.txt')), false);
 });
 
