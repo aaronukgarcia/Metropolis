@@ -2,9 +2,10 @@ package astgate
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // AcceptedFinding is one human-reviewed, GIT-COMMITTED ratchet-allowlist
@@ -91,7 +92,7 @@ func LoadAcceptedFindings(path string) (AcceptedFindings, error) {
 		if os.IsNotExist(err) {
 			return AcceptedFindings{}, nil
 		}
-		return nil, fmt.Errorf("astgate: opening accepted-findings registry %q: %w", path, err)
+		return nil, errs.Wrap("MET-F704", errs.NewCorrelationID(), err, map[string]any{"path": path, "cause": err.Error()})
 	}
 
 	trimmed := strings.TrimSpace(string(data))
@@ -103,7 +104,7 @@ func LoadAcceptedFindings(path string) (AcceptedFindings, error) {
 
 	var entries []AcceptedFinding
 	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
-		return nil, fmt.Errorf("astgate: parsing accepted-findings registry %q: %w", path, err)
+		return nil, errs.Wrap("MET-F705", errs.NewCorrelationID(), err, map[string]any{"path": path, "cause": err.Error()})
 	}
 
 	out := make(AcceptedFindings, len(entries))
@@ -111,16 +112,14 @@ func LoadAcceptedFindings(path string) (AcceptedFindings, error) {
 		finding := strings.TrimSpace(e.Finding)
 		reason := strings.TrimSpace(e.Reason)
 		if finding == "" || reason == "" {
-			return nil, fmt.Errorf(
-				"astgate: accepted-findings registry %q entry %d is incomplete (finding=%q reason=%q) -- every field is required, this file is the sole evidence the ratchet trusts",
-				path, i, e.Finding, e.Reason,
-			)
+			return nil, errs.New("MET-F706", errs.NewCorrelationID(), map[string]any{
+				"path": path, "index": i, "finding": e.Finding, "reason": e.Reason,
+			})
 		}
 		if _, dup := out[finding]; dup {
-			return nil, fmt.Errorf(
-				"astgate: accepted-findings registry %q has more than one entry for finding %q -- ambiguous, refusing to guess which reason is authoritative",
-				path, finding,
-			)
+			return nil, errs.New("MET-F707", errs.NewCorrelationID(), map[string]any{
+				"path": path, "finding": finding,
+			})
 		}
 		out[finding] = reason
 	}

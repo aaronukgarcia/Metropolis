@@ -263,6 +263,30 @@
       "message": "astgate found two distinct violations with the identical ratchet key {key}: {firstLocation} and {secondLocation}",
       "remedy": "BUG-119 round 6/7's structural fix (Bill's ruling): violationKey must be derived from each node's complete identity (file + full enclosing declaration chain + kind + the full type expression as printed), and building the key map is REQUIRED to hard-fail on any two distinct nodes producing the same key -- a silent merge is exactly how rounds 1-5 shipped incomplete keys. This means violationKey itself is still missing something that distinguishes these two real, different findings. Do not special-case this pair -- find and fix the remaining gap in violationKey's identity tuple (or the printer/type-expression logic feeding it), then re-run. Never suppress this error by removing one of the findings from the ratchet map."
     },
+    "MET-F704": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate failed to open accepted-findings registry {path}: {cause}",
+      "remedy": "SEC-048: LoadAcceptedFindings' opening read of the checked-in accepted-findings.json (BUG-024's ratchet allowlist) failed for a reason other than the file simply not existing (a missing file is not an error -- see LoadAcceptedFindings' doc comment). Check that {path} is readable and not a directory; if the file was deliberately removed, that is a no-op (empty registry), not a fix for this error."
+    },
+    "MET-F705": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate could not parse accepted-findings registry {path} as JSON: {cause}",
+      "remedy": "SEC-048: the checked-in accepted-findings.json is malformed. This file is the sole evidence the BUG-024 ratchet trusts (ASM-204), so LoadAcceptedFindings fails closed rather than silently treating a corrupt file as an empty registry. Fix the JSON (must be an array of {finding, reason} objects) and re-run."
+    },
+    "MET-F706": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate accepted-findings registry {path} entry {index} is incomplete (finding={finding} reason={reason})",
+      "remedy": "SEC-048: every entry in accepted-findings.json requires both a non-empty \"finding\" (violationKey's output -- BUG-119) and a non-empty \"reason\" a human gave for accepting it. Fill in the missing field(s), or remove the entry if it was added by mistake."
+    },
+    "MET-F707": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate accepted-findings registry {path} has more than one entry for finding {finding}",
+      "remedy": "SEC-048: LoadAcceptedFindings refuses to guess which of two entries for the same violationKey is authoritative (fail closed, not silently take-the-last). Remove the duplicate entry from accepted-findings.json, keeping the one reason that should stand."
+    },
     "MET-U001": {
       "severity": "fatal",
       "module": "ui.core",
