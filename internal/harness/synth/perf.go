@@ -47,6 +47,14 @@ type PerfResult struct {
 	// comment for exactly what this is and is not (a manually-asserted,
 	// grep-guarded fact about harness.headless's engine construction,
 	// not a live introspection).
+	//
+	// BUG-055: ImplausibleReason (below) checks a Measured=true record's
+	// PhaseHookCount against PhaseHookCountInHeadlessPath()'s CURRENT
+	// return value — the one ground truth this package can derive
+	// without reaching outside its own file ownership — because RunPerf
+	// sets this field from that function unconditionally, on every
+	// call, with no other assignment path. A mismatch is exactly as
+	// structurally impossible as a negative CitizenCount.
 	PhaseHookCount int
 
 	// AllocBytes/AllocCount measure ONLY the tick-driving call
@@ -160,6 +168,31 @@ func (r PerfResult) ImplausibleReason() string {
 		return fmt.Sprintf("PerMonthTick=%s is negative -- it is TickTime/Months, the quotient of two non-negative measured quantities", r.PerMonthTick)
 	case r.PerMonthTick > MaxPlausiblePerMonthTick:
 		return fmt.Sprintf("PerMonthTick=%s exceeds the sanity ceiling of %s (BUG-096) -- a value this large is far more likely to be a corrupted field, a unit-mismatch bug, or a hand-crafted plant than a genuine measurement; a real RunPerf call has never produced anything close to this", r.PerMonthTick, MaxPlausiblePerMonthTick)
+	case r.PhaseHookCount != PhaseHookCountInHeadlessPath():
+		// BUG-055: unlike the other checks in this switch, this one has
+		// a PRECISE ground truth to compare against, not just a sanity
+		// range -- RunPerf (this file, above) sets PhaseHookCount from
+		// PhaseHookCountInHeadlessPath() UNCONDITIONALLY, every single
+		// call, with no other code path in this package ever assigning
+		// it any other value. So a Measured=true record whose
+		// PhaseHookCount differs from what that function returns RIGHT
+		// NOW cannot have come from a real RunPerf call against today's
+		// source tree -- it is exactly as structurally impossible as a
+		// negative CitizenCount or Months. This closes BUG-055's actual
+		// gap (a caller-supplied PhaseHookCount with no provenance check)
+		// using the one ground truth this package can independently
+		// derive without reaching into internal/engine/core or
+		// internal/harness/headless (files outside this package's
+		// ownership -- see phasehooks.go's doc comment for the full
+		// rationale and reachability_test.go's
+		// TestPhaseHookCountAssertionStillTrue for what keeps
+		// PhaseHookCountInHeadlessPath() itself honest against source
+		// drift). Note this DELIBERATELY tracks PhaseHookCountInHeadlessPath()
+		// rather than a hardcoded literal: the day that function's
+		// return value changes (Sprint 3 registering a real PhaseHook),
+		// this check moves with it automatically, with no edit needed
+		// here.
+		return fmt.Sprintf("PhaseHookCount=%d does not match PhaseHookCountInHeadlessPath()=%d (BUG-055) -- RunPerf always sets PhaseHookCount from that function, so a genuine measurement can never disagree with it; a mismatch means this record was hand-built or hand-edited, not produced by a real RunPerf call against the current source tree", r.PhaseHookCount, PhaseHookCountInHeadlessPath())
 	default:
 		return ""
 	}

@@ -1,6 +1,7 @@
 package synth
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -108,6 +109,70 @@ func TestImplausibleReason_AllowsRealisticPerMonthTick(t *testing.T) {
 	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 500 * time.Millisecond, Measured: true}
 	if reason := r.ImplausibleReason(); reason != "" {
 		t.Fatalf("ImplausibleReason() = %q, want \"\" for a realistic (if slow) 500ms PerMonthTick", reason)
+	}
+}
+
+// TestImplausibleReason_RejectsMismatchedPhaseHookCount is BUG-055's
+// core regression test: PhaseHookCount was previously accepted verbatim
+// with no provenance check at all, so a hand-built record could claim
+// any PhaseHookCount, real or forged, with zero friction. RunPerf
+// (perf.go) always sets PhaseHookCount from
+// PhaseHookCountInHeadlessPath() — never from any other source — so a
+// Measured=true record whose PhaseHookCount disagrees with that
+// function's current return value cannot have come from a genuine
+// RunPerf call. RED against the pre-fix ImplausibleReason (would return
+// "" here); GREEN against the fix, which rejects any mismatch.
+func TestImplausibleReason_RejectsMismatchedPhaseHookCount(t *testing.T) {
+	r := PerfResult{
+		CitizenCount:   OneMillionCitizens,
+		Months:         3,
+		PerMonthTick:   500 * time.Millisecond,
+		PhaseHookCount: PhaseHookCountInHeadlessPath() + 1,
+		Measured:       true,
+	}
+	if reason := r.ImplausibleReason(); reason == "" {
+		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for a PhaseHookCount that disagrees with PhaseHookCountInHeadlessPath() (BUG-055)")
+	}
+}
+
+// TestImplausibleReason_AllowsGenuinePhaseHookCount is the companion
+// zero-false-positive check: a record whose PhaseHookCount matches
+// PhaseHookCountInHeadlessPath() exactly — as every real RunPerf call
+// always produces — must not be rejected by BUG-055's fix.
+func TestImplausibleReason_AllowsGenuinePhaseHookCount(t *testing.T) {
+	r := PerfResult{
+		CitizenCount:   OneMillionCitizens,
+		Months:         3,
+		PerMonthTick:   500 * time.Millisecond,
+		PhaseHookCount: PhaseHookCountInHeadlessPath(),
+		Measured:       true,
+	}
+	if reason := r.ImplausibleReason(); reason != "" {
+		t.Fatalf("ImplausibleReason() = %q, want \"\" for a PhaseHookCount matching PhaseHookCountInHeadlessPath()", reason)
+	}
+}
+
+// TestAppendResult_RejectsMismatchedPhaseHookCount is BUG-055's
+// end-to-end regression test: proves the mismatch is caught at the
+// actual write boundary (AppendResult), not merely by the standalone
+// ImplausibleReason unit tests above.
+func TestAppendResult_RejectsMismatchedPhaseHookCount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+
+	rec := PerfRecord{
+		CommitHash: "attacker",
+		Preset:     "1M",
+		Result: PerfResult{
+			PerMonthTick:   1 * time.Millisecond,
+			PhaseHookCount: PhaseHookCountInHeadlessPath() + 1,
+			Measured:       true,
+		},
+	}
+	err := AppendResult(path, rec)
+	wantCode(t, err, codeImplausibleResult)
+
+	if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+		t.Fatalf("AppendResult wrote/touched %q despite rejecting the record", path)
 	}
 }
 
