@@ -357,8 +357,8 @@
       "path": "internal/foundation/buildinfo/",
       "inbound": {
         "guid": "7f744a93-4823-440d-a2de-551ba87a70e5",
-        "name": "BuildInfoAPI",
-        "format": "Go package API (package vars + String())",
+        "name": "String",
+        "format": "Go package API (exported vars Version/Commit/Branch/BuildTime consumed directly by callers; String() composes the single human-readable identity line)",
         "pattern": "link-time -ldflags injection; read-only at runtime",
         "consumers": [
           {
