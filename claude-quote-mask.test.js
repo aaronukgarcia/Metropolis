@@ -296,3 +296,99 @@ test('consumeShellToken + dequoteShellToken together recover BUG-044 round 2\'s 
   const kv = dequoteShellToken(text.slice(valueStart, valueEnd));
   assert.equal(kv, 'user.email=fake attacker <fake@evil.com>');
 });
+
+// ---------------------------------------------------------------------------
+// BUG-080: ANSI-C quoting (`$'...'`) is a DISTINCT quote form from a bare
+// POSIX single-quote (`'...'`) — inside it, backslash DOES escape the
+// following character (same rule as double quotes), so `\'` is a literal
+// escaped quote, not the terminator. The prior scanner treated `$'` as
+// opening a plain `'...'` region (no escape handling), which closed the mask
+// one character early at the escaped `\'`, then the literal's real closing
+// `'` opened a NEW unbalanced region that swallowed everything after it
+// (including a real `git commit ...`) as inert quoted prose.
+// ---------------------------------------------------------------------------
+
+test('BUG-080: ANSI-C quoting ($\'...\') treats an internal \\\' as a literal escaped quote, not a terminator', () => {
+  // echo $'x\'y'; git commit --author="Fake <fake@evil.com>" -m x
+  //
+  // The ANSI-C literal is `$'x\'y'` (chars 5..12): `$` at 5, `'` at 6 (open),
+  // `x` at 7, `\` at 8, `'` at 9 (escaped, literal), `y` at 10, `'` at 11
+  // (real close). Everything from `;` onward (12+) must be UNMASKED so the
+  // real `git commit` is scanned as a genuine invocation, not swallowed.
+  const text = "echo $'x\\'y'; git commit --author=\"Fake <fake@evil.com>\" -m x";
+  const mask = buildQuoteMask(text);
+  const ansicStart = text.indexOf("$'");
+  const ansicEnd = text.indexOf("y'") + 1; // index of the real closing quote
+  for (let i = ansicStart; i <= ansicEnd; i++) {
+    assert.equal(mask[i], true, `index ${i} (inside $'...') must be masked`);
+  }
+  // Everything after the ANSI-C literal's real close must be unmasked, in
+  // particular the `git commit` invocation and the fabricated --author value
+  // must be scanned, not treated as inert quoted prose.
+  const afterAnsic = ansicEnd + 1;
+  const gitIdx = text.indexOf('git commit');
+  assert.ok(gitIdx > afterAnsic, 'sanity: git commit must appear after the ANSI-C literal');
+  for (let i = afterAnsic; i < gitIdx; i++) {
+    assert.equal(mask[i], false, `index ${i} (between $'...' and git commit) must be unmasked`);
+  }
+  // The fabricated author value's own quotes still open/close a normal
+  // double-quoted region — confirm it is NOT accidentally left open/closed
+  // by the ANSI-C fix, i.e. the mask closes cleanly by end of string.
+  assert.equal(mask[mask.length - 1], false, 'string must not end inside an unterminated quote');
+});
+
+test('BUG-080 regression guard: a plain POSIX single-quote with a literal backslash inside still takes NO escapes', () => {
+  // No leading `$` — this must remain a real, unescaped single-quote region,
+  // exactly like the pre-existing 'single-quoted regions take NO backslash
+  // escapes' test above. The backslash is just a literal character; the
+  // very next `'` closes the region.
+  const text = "echo 'x\\y'; git commit -m evil";
+  const mask = buildQuoteMask(text);
+  const quoteStart = text.indexOf("'");
+  const quoteEnd = text.indexOf("y'") + 1;
+  for (let i = quoteStart; i <= quoteEnd; i++) {
+    assert.equal(mask[i], true, `index ${i} (inside '...') must be masked`);
+  }
+  // Confirm the region closed exactly at the real closing quote (not one
+  // character early, not swallowing anything extra) and the trailing real
+  // git commit is unmasked.
+  const gitIdx = text.indexOf('git commit');
+  for (let i = quoteEnd + 1; i < gitIdx; i++) {
+    assert.equal(mask[i], false, `index ${i} (after '...') must be unmasked`);
+  }
+  assert.equal(mask[mask.length - 1], false, 'string must not end inside an unterminated quote');
+});
+
+test('BUG-080: ANSI-C-quoted escaped-quote NOT followed by a real commit does not over-trigger / mis-scan', () => {
+  // A benign ANSI-C literal with an escaped quote, with ordinary prose after
+  // it (no command injection attempt at all) — confirm the mask still closes
+  // correctly and nothing downstream is spuriously masked OR spuriously
+  // treated as a command.
+  const text = "echo $'it\\'s fine' && echo done";
+  const mask = buildQuoteMask(text);
+  const ansicStart = text.indexOf("$'");
+  const ansicEnd = text.indexOf("s fine'") + 6; // index of the real closing quote
+  for (let i = ansicStart; i <= ansicEnd; i++) {
+    assert.equal(mask[i], true, `index ${i} (inside $'...') must be masked`);
+  }
+  for (let i = ansicEnd + 1; i < text.length; i++) {
+    assert.equal(mask[i], false, `index ${i} (after $'...') must be unmasked`);
+  }
+  assert.equal(mask[mask.length - 1], false, 'string must not end inside an unterminated quote');
+});
+
+test('BUG-080: consumeShellToken correctly walks past an ANSI-C-quoted value containing an escaped quote', () => {
+  const text = String.raw`git commit --author=$'Fake \'Evil\' <fake@evil.com>' -m x`;
+  const valueStart = text.indexOf('$');
+  const valueEnd = consumeShellToken(text, valueStart);
+  assert.notEqual(valueEnd, -1, 'must not report unterminated');
+  const token = text.slice(valueStart, valueEnd);
+  assert.equal(token, String.raw`$'Fake \'Evil\' <fake@evil.com>'`);
+});
+
+test('BUG-080: dequoteShellToken resolves an ANSI-C-quoted value with an escaped internal quote', () => {
+  assert.equal(
+    dequoteShellToken(String.raw`author=$'Fake \'Evil\' Attacker'`),
+    "author=Fake 'Evil' Attacker"
+  );
+});

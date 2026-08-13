@@ -74,18 +74,23 @@
 
 function buildQuoteMask(text) {
   const mask = new Array(text.length).fill(false);
+  // `quote` is one of: null (unquoted), '"' (double-quoted), "'" (POSIX
+  // single-quoted — no escape character at all), or 'ansic' (BUG-080:
+  // ANSI-C-quoted, `$'...'` — escape-aware like double quotes, but closed by
+  // a bare `'`, not `$'`).
   let quote = null;
   let i = 0;
   while (i < text.length) {
     const c = text[i];
     if (quote) {
       mask[i] = true;
-      if (quote === '"' && c === '\\' && i + 1 < text.length) {
+      if ((quote === '"' || quote === 'ansic') && c === '\\' && i + 1 < text.length) {
         mask[i + 1] = true;
         i += 2;
         continue;
       }
-      if (c === quote) quote = null;
+      const closeChar = quote === 'ansic' ? "'" : quote;
+      if (c === closeChar) quote = null;
       i++;
       continue;
     }
@@ -96,6 +101,24 @@ function buildQuoteMask(text) {
     // opening a phantom quoted region that could swallow a real
     // `git commit ...` after it as prose.
     if (c === '\\' && i + 1 < text.length) {
+      i += 2;
+      continue;
+    }
+    // BUG-080: `$'...'` is bash's ANSI-C quoting, a DISTINCT form from a bare
+    // `'...'` POSIX single-quote — inside it, unlike a real single-quote,
+    // backslash DOES escape the following character (same rule as double
+    // quotes), so `\'` inside `$'...'` is a literal escaped quote, not the
+    // terminator. Treating `$'` as opening a plain `'` region (the prior
+    // behaviour) closed the mask's "quote" one character early at that
+    // escaped `\'`, then the real closing `'` of the `$'...'` literal opened
+    // a NEW, now-unbalanced region that swallowed everything after it —
+    // including a real `git commit ...` — as inert "inside quotes" prose.
+    // Recognising `$'` as its own trigger, distinct from a bare `'`, is what
+    // lets the escape-aware branch above apply to it correctly.
+    if (c === '$' && text[i + 1] === "'") {
+      quote = 'ansic';
+      mask[i] = true;
+      mask[i + 1] = true;
       i += 2;
       continue;
     }
@@ -227,17 +250,18 @@ function consumeShellToken(text, start, quoteMask) {
  */
 function dequoteShellToken(token) {
   let out = '';
-  let quote = null;
+  let quote = null; // null | '"' | "'" | 'ansic' (BUG-080, see buildQuoteMask)
   let i = 0;
   while (i < token.length) {
     const c = token[i];
     if (quote) {
-      if (quote === '"' && c === '\\' && i + 1 < token.length) {
+      if ((quote === '"' || quote === 'ansic') && c === '\\' && i + 1 < token.length) {
         out += token[i + 1];
         i += 2;
         continue;
       }
-      if (c === quote) {
+      const closeChar = quote === 'ansic' ? "'" : quote;
+      if (c === closeChar) {
         quote = null;
         i++;
         continue;
@@ -248,6 +272,11 @@ function dequoteShellToken(token) {
     }
     if (c === '\\' && i + 1 < token.length) {
       out += token[i + 1];
+      i += 2;
+      continue;
+    }
+    if (c === '$' && token[i + 1] === "'") {
+      quote = 'ansic';
       i += 2;
       continue;
     }
