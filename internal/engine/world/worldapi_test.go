@@ -1,6 +1,9 @@
 package world
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestImportAndPlaceStartTilePreservesOwnershipAndProspecting is
 // BUG-062's regression test: the exact Destructive-2 reproduction
@@ -78,6 +81,109 @@ func TestImportAndPlaceStartTilePreservesOwnershipAndProspecting(t *testing.T) {
 	}
 	if cellAfter.Zoning != ZoningResidential {
 		t.Fatalf("BUG-062 regression: expected cell(0,0).Zoning to survive reimport as Residential, got %v", cellAfter.Zoning)
+	}
+}
+
+// steepQualityFixture returns a small OS-Terrain-50-SHAPED fixture whose
+// elevation ramps up by a full 50m per source post (matching the 50m
+// native post spacing) north-to-south. After ImportTerrain's bilinear
+// resample onto the 10m-spaced 200x200 output grid, adjacent output
+// cells still differ by several metres, giving a slope grade far past
+// classifySlope's (slope.go) 20% SlopeUnbuildable threshold for EVERY
+// cell, which drives terrainQualityFactor (tile_price.go) to its
+// documented floor for on-land terrain, 0.4 — the opposite extreme from
+// a90x90Fixture's much gentler profile and, per this test's own
+// self-check, provably different from whatever quality
+// synthesizeTerrain's placeholder happened to produce for the start
+// tile's coordinate.
+func steepQualityFixture() *SourceGrid {
+	const n = 10 // small: this fixture only needs to cover the sampled span, not realism
+	src := fixtureAsciiGrid(n, n, 620000, 132500, 50, func(row, col int) float64 {
+		return float64(row) * 50.0
+	})
+	sg, err := ParseAsciiGrid(strings.NewReader(src), "TR23-steep-fixture", "test-corr")
+	if err != nil {
+		panic(err)
+	}
+	return sg
+}
+
+// TestImportAndPlaceStartTileRecomputesLandValueForOwnedTile is BUG-066's
+// regression test: the exact Destructive-3 reproduction. PurchaseTile
+// seeds an owned tile's per-cell landValue from
+// terrainQualityFactor(tile) (tile_price.go) at purchase time — here that
+// happens BEFORE any real import, so landValue seeds from
+// synthesizeTerrain's synthetic placeholder terrain (grid.go's
+// ensureTile falls back to synthesizeTerrain because w.startHeight is
+// still nil pre-import). Re-importing with real fixture terrain of
+// GENUINELY different quality (steepQualityFixture's steep ramp, forced
+// to terrainQualityFactor's 0.4 floor — see that helper's doc comment)
+// must recompute landValue against the NEW terrain, never leave
+// it stranded at the stale pre-reimport value. Before the fix, terrain
+// (elevation/slope/surface) was refreshed by populateTerrainFromHeightmap
+// but landValue was left untouched, silently mismatching the tile's
+// actual terrain (repro: 1500.00 stale vs 1346.00 fresh in the
+// Destructive-3 report); this test fails (red) against that code and
+// passes (green) against ImportAndPlaceStartTile's landValue-recompute
+// fix (worldapi.go, BUG-066 doc comment, ~line 107).
+func TestImportAndPlaceStartTileRecomputesLandValueForOwnedTile(t *testing.T) {
+	startCoord := TileCoord{15, 13}
+	api := NewWorldAPI(startCoord)
+
+	// Purchase BEFORE any real import: PurchaseTile's ensureTile call
+	// synthesizes placeholder terrain (w.startHeight is nil pre-import),
+	// so landValue seeds from that placeholder's terrainQualityFactor —
+	// NOT from real (or fixture) Kent ground.
+	if res := api.PurchaseTile(PurchaseCommand{CorrelationID: "test-corr", Tile: startCoord, BuyerID: 7}); !res.Accepted {
+		t.Fatalf("purchase failed: %+v", res.Error)
+	}
+
+	// White-box (same package) reach into the tile struct: this test
+	// needs to compute terrainQualityFactor directly, which has no public
+	// WorldAPI accessor (deliberately — it is an internal pricing/
+	// valuation detail, not part of the AC-1/AC-10 query surface).
+	tl := api.w.tiles[startCoord]
+	if tl == nil || tl.sim == nil {
+		t.Fatalf("setup check failed: expected start tile allocated with sim after purchase, got %+v", tl)
+	}
+	staleQ := terrainQualityFactor(tl)
+	staleLandValue := tl.sim.landValue[0]
+	if float32(staleQ*1000) != staleLandValue {
+		t.Fatalf("setup check failed: expected seeded landValue %v to equal placeholder terrainQualityFactor*1000 (%v)", staleLandValue, staleQ*1000)
+	}
+	for i, lv := range tl.sim.landValue {
+		if lv != staleLandValue {
+			t.Fatalf("setup check failed: expected uniform pre-reimport landValue, cell %d = %v want %v", i, lv, staleLandValue)
+		}
+	}
+
+	// The attack: re-import the (already-owned) start tile with real
+	// fixture terrain of deliberately different quality.
+	if err := api.ImportAndPlaceStartTile(steepQualityFixture(), "test-corr"); err != nil {
+		t.Fatalf("reimport: %v", err)
+	}
+
+	tl = api.w.tiles[startCoord]
+	freshQ := terrainQualityFactor(tl)
+
+	// Self-check: this test must not be able to pass vacuously. If the
+	// fixture happened to produce the SAME quality as the placeholder,
+	// a stale (unrecomputed) landValue would coincidentally match the
+	// fresh one too, and the assertions below would pass whether or not
+	// BUG-066's fix is present. Fail loudly instead of silently proving
+	// nothing.
+	if freshQ == staleQ {
+		t.Fatalf("fixture setup invalid: flat fixture quality %v must differ from placeholder quality %v for this test to be able to fail", freshQ, staleQ)
+	}
+
+	wantLandValue := float32(freshQ * 1000)
+	if wantLandValue == staleLandValue {
+		t.Fatalf("fixture setup invalid: fresh landValue %v must differ from stale landValue %v for this test to be able to fail", wantLandValue, staleLandValue)
+	}
+	for i, lv := range tl.sim.landValue {
+		if lv != wantLandValue {
+			t.Fatalf("BUG-066 regression: cell %d landValue = %v, want %v (recomputed terrainQualityFactor against the NEW post-reimport terrain); found the stale pre-reimport value %v instead", i, lv, wantLandValue, staleLandValue)
+		}
 	}
 }
 
