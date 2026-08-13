@@ -288,6 +288,125 @@ const TOKEN_SHAPE_RE = /^[A-Za-z0-9+/_=-]+$/;
 const SEGMENT_SEPARATOR_RE = /[-_]/;
 const WORD_SEGMENT_RE = /^[a-z0-9]+$/;
 
+// BUG-029: the exemption above only ever fires for EXPLICIT '-'/'_' separators
+// -- a camelCase identifier with no separator character at all (data/
+// buildings.json's snake_case ids were the first BUG-029 instance and are
+// already covered by the rule above; data/modes.json's laneCapacityPcuPerHour
+// and buildings_test.go's elecPerDay/foodPerDay/housingPerDay are the second,
+// UNCOVERED instance -- camelCase JSON field names, no '-'/'_' anywhere)
+// never reaches SEGMENT_SEPARATOR_RE's gate at all and falls straight through
+// to the raw whole-string entropy check, which flags it on length alone
+// (measured: laneCapacityPcuPerHour is 22 chars at 3.789 bits/char, clearing
+// ENTROPY_THRESHOLD, while every individual word inside it is an ordinary
+// dictionary-shaped fragment).
+//
+// This is deliberately a SEPARATE, STRICTER path from the '-'/'_' one above,
+// not a shared relaxation of WORD_SEGMENT_RE -- measured live (see this
+// file's own ad-hoc sweep in the BUG-029 fix commit) before picking the
+// rule: splitting on every lowercase/digit-to-uppercase transition and then
+// reusing the permissive lowercase-or-digit WORD_SEGMENT_RE per segment
+// (matching the '-'/'_' path's own rule) lets roughly 1 in 400 random 20-36
+// char mixed-case-plus-digit strings slip through as "exempt", because
+// random case noise alone produces plenty of transitions that happen to look
+// segmented, and the resulting segment lengths are irregular enough to dodge
+// rule (c) below. A deliberate '-'/'_' character, by contrast, essentially
+// never appears in a real generic-secret literal by chance -- an attacker
+// has to choose to add it -- so the permissive rule is safe there but not
+// here. Requiring every camelCase-derived segment to be LETTERS ONLY (no
+// digits) and at least 3 characters long closed that gap entirely across a
+// 150,000-sample sweep (100k digit-free, 50k with digits, 20-36 chars each,
+// zero false negatives at either width) while still recognizing every real
+// fixture this bug was filed against. The residual this can't close --
+// pronounceable-looking ALL-LETTER random noise landing on this same shape
+// purely by chance -- measured at ~1 in 7,000 samples in that same sweep,
+// which is the same order of magnitude as, and no worse than, the disclosed
+// order-0-entropy residual this file's header already accepts for the
+// '-'/'_' path (SEC-021): no wordlist is available to close it further
+// (FEAT-028 AC-3, stdlib-only). A digit anywhere in the candidate falls back
+// to the '-'/'_' path (which requires an explicit separator) or the raw
+// entropy check, same as any other non-word-shaped string.
+const CAMEL_BOUNDARY_RE = /[a-z][A-Z]/;
+const CAMEL_LOWER_TO_UPPER_RE = /([a-z])([A-Z])/g;
+const CAMEL_ACRONYM_TO_WORD_RE = /([A-Z]+)([A-Z][a-z])/g;
+const CAMEL_WORD_SEGMENT_RE = /^[A-Z]?[a-z]{2,}$/;
+
+function splitCamelCaseSegments(candidate) {
+  const normalized = candidate
+    .replace(CAMEL_LOWER_TO_UPPER_RE, '$1_$2')
+    .replace(CAMEL_ACRONYM_TO_WORD_RE, '$1_$2');
+  return normalized.split('_').filter(Boolean);
+}
+
+function isCamelCaseSegmentedIdentifier(candidate) {
+  if (SEGMENT_SEPARATOR_RE.test(candidate)) return false; // handled by the '-'/'_' path instead
+  if (!CAMEL_BOUNDARY_RE.test(candidate)) return false; // no case transition at all -- nothing to segment
+  const segments = splitCamelCaseSegments(candidate);
+  if (segments.length < 2) return false;
+  if (!segments.every(seg => CAMEL_WORD_SEGMENT_RE.test(seg))) return false;
+
+  const lowerSegments = segments.map(seg => seg.toLowerCase());
+
+  // Rule (b) is shared verbatim with the '-'/'_' path: a single long
+  // high-entropy segment disqualifies the exemption on its own.
+  for (const seg of lowerSegments) {
+    if (seg.length >= SEGMENT_ENTROPY_MIN_LENGTH && shannonEntropy(seg) >= ENTROPY_THRESHOLD) {
+      return false;
+    }
+  }
+
+  // BUG-189: rule (c) is DELIBERATELY NOT shared verbatim here. The '-'/'_'
+  // path's rule (c) only runs the reassembled-whole entropy check when
+  // lengthRange <= SEGMENT_LENGTH_RANGE_TOLERANCE, and grants an
+  // UNCONDITIONAL, no-scrutiny-at-all exemption outside that band (the
+  // "middle band" gap disclosed in this file's SEC-021 header). That gap was
+  // accepted for '-'/'_' only because reaching it requires an attacker to
+  // deliberately insert separator characters into a secret -- a conspicuous,
+  // unusual act. BUG-029 reused the identical rule (c) shape for bare
+  // camelCase, which requires NO deliberate attacker action at all (camelCase
+  // is the single most common value shape in this codebase), so the same
+  // unconditional-exemption gap became trivially, silently reachable by any
+  // ordinary randomly-generated camelCase-shaped secret (measured: 93.6%
+  // evasion on a 20k-sample adversarial sweep of length-range >= 2 camelCase
+  // candidates; live repro `qzxkWpfjtlaZbnmqrs` / `kjhVxplowqzmBtrsu` both
+  // wrongly exempt under the inherited rule).
+  //
+  // Fix: the camelCase path's rule (c) runs the reassembled-whole entropy
+  // check UNCONDITIONALLY -- no lengthRange gate, no band where scrutiny is
+  // skipped -- making it strictly narrower than the separator path's
+  // exemption, as it should be given camelCase's lower attacker-effort bar.
+  // The threshold is intentionally NOT reused as-is: ENTROPY_THRESHOLD
+  // (3.7) is too tight against this path's own accepted BUG-029 true
+  // exemptions once checked unconditionally (housingPerDay reassembles to
+  // 3.7004 bits/char -- a hair over 3.7 -- so reusing 3.7 here would
+  // re-break the exact false-positive fix BUG-029 shipped to close).
+  // CAMEL_REASSEMBLY_ENTROPY_THRESHOLD (3.75) clears every BUG-029 true
+  // exemption fixture with margin (housingPerDay 3.700, laneCapacityPcuPer-
+  // Hour 3.538, elecPerDay 2.846, foodPerDay 2.922) while still catching
+  // both live repro strings (3.948 / 4.087). A fresh 20k-sample sweep of
+  // this specific (post-fix) function, mirroring the attacker's own
+  // methodology, is recorded in claude-secret-checker.test.js.
+  //
+  // This does not claim to close the gap to zero -- this file's SEC-021
+  // header already proves, with a live counterexample, that no fixed
+  // order-0-entropy threshold can perfectly separate a machine-cut secret
+  // from a genuine multi-word phrase at these string lengths. What this
+  // closes is the specific defect BUG-189 was filed against: an
+  // UNCONDITIONAL, zero-scrutiny exemption band reachable with no deliberate
+  // attacker signal. Every camelCase candidate now gets SOME entropy
+  // scrutiny; only the '-'/'_' path, gated behind a conspicuous deliberate
+  // separator, still gets the free pass outside its tolerance band.
+  const lengths = lowerSegments.map(seg => seg.length);
+  const lengthRange = Math.max(...lengths) - Math.min(...lengths);
+  const reassembledEntropy = shannonEntropy(lowerSegments.join(''));
+  if (lengthRange <= SEGMENT_LENGTH_RANGE_TOLERANCE) {
+    if (reassembledEntropy >= ENTROPY_THRESHOLD) return false;
+  } else if (reassembledEntropy >= CAMEL_REASSEMBLY_ENTROPY_THRESHOLD) {
+    return false;
+  }
+
+  return true;
+}
+
 // SEC-021 REGRESSION FIX ROUND 2 (post-round-3-Destructive-rejection,
 // 2026-08-12): round 1's fix (below, rule (b), unchanged) closed the
 // case-folding attack, and round 1's rule (c) — gated behind "segments.length
@@ -368,9 +487,23 @@ const WORD_SEGMENT_RE = /^[a-z0-9]+$/;
 //       as round 1's rule (c) already relied on for that same fixture.
 const SEGMENT_ENTROPY_MIN_LENGTH = 12;
 const SEGMENT_LENGTH_RANGE_TOLERANCE = 1;
+// BUG-189: the reassembled-whole entropy bar used by the camelCase path's
+// rule (c) specifically for candidates OUTSIDE SEGMENT_LENGTH_RANGE_
+// TOLERANCE (see isCamelCaseSegmentedIdentifier's own comment above its
+// use). Deliberately higher than ENTROPY_THRESHOLD (3.7): reused as-is it
+// would re-flag BUG-029's own accepted true exemption housingPerDay
+// (reassembles to 3.7004 bits/char). 3.75 clears every BUG-029 true
+// exemption fixture with margin while still catching both BUG-189 live
+// repro strings (3.948 / 4.087 bits/char).
+const CAMEL_REASSEMBLY_ENTROPY_THRESHOLD = 3.75;
 
 function isWordSegmentedIdentifier(candidate) {
-  if (!SEGMENT_SEPARATOR_RE.test(candidate)) return false;
+  if (!SEGMENT_SEPARATOR_RE.test(candidate)) {
+    // BUG-029: no explicit '-'/'_' separator at all -- try the stricter,
+    // separately-validated camelCase path (see isCamelCaseSegmentedIdentifier's
+    // own comment for why it is not just a relaxed WORD_SEGMENT_RE reuse).
+    return isCamelCaseSegmentedIdentifier(candidate);
+  }
   const segments = candidate.split(/[-_]/);
   if (!segments.every(seg => WORD_SEGMENT_RE.test(seg))) return false;
 
@@ -813,6 +946,7 @@ module.exports = {
   looksHighEntropy,
   SEGMENT_ENTROPY_MIN_LENGTH,
   SEGMENT_LENGTH_RANGE_TOLERANCE,
+  CAMEL_REASSEMBLY_ENTROPY_THRESHOLD,
   stripGoCommentsAndStrings,
   collectGoPackageIdentifiers,
   isGoPackageIdentifier,

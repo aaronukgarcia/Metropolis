@@ -961,3 +961,205 @@ test('BUG-150: a 3-literal window IS still tried when literals are genuinely adj
     `expected the 3-way split secret to be caught, got: ${JSON.stringify(findings)}`
   );
 });
+
+// ---------------------------------------------------------------------------
+// BUG-029: camelCase-segmented lowercase/mixed-case identifiers (no '-'/'_'
+// separator at all) must be exempt from the high-entropy check the same way
+// hyphen/underscore-segmented identifiers already are (SEC-021 above) — the
+// original false positive named in the BUG report: data/modes.json's
+// laneCapacityPcuPerHour and buildings_test.go's elecPerDay/foodPerDay/
+// housingPerDay JSON field names, none of which contain a '-' or '_' at all,
+// so SEC-021's SEGMENT_SEPARATOR_RE gate never even engaged for them.
+// ---------------------------------------------------------------------------
+
+test('BUG-029: looksHighEntropy() exempts camelCase-segmented identifiers with no explicit separator', () => {
+  // The exact false-positive construct this bug was filed against: a
+  // multi-word camelCase JSON field name, long enough (>= ENTROPY_MIN_LENGTH)
+  // and mixed-case enough to have cleared the entropy bar on shape alone
+  // before this fix (measured pre-fix: 3.789 bits/char, above the 3.7
+  // threshold) despite being an ordinary descriptive identifier with no
+  // separator character anywhere.
+  const laneCapacity = 'laneCapacityPcuPerHour';
+  assert.ok(laneCapacity.length >= checker.ENTROPY_MIN_LENGTH, 'test fixture sanity: long enough to reach the entropy check at all');
+  assert.equal(checker.looksHighEntropy(laneCapacity), false);
+  assert.equal(checker.isWordSegmentedIdentifier(laneCapacity), true);
+
+  // The shorter camelCase field names named in the same BOW item — these
+  // already fell under ENTROPY_MIN_LENGTH so were never flagged, but the
+  // structural check must still recognize their shape correctly (a false
+  // "false" here would mean the new camelCase path is dead code for the
+  // exact fixtures it was written for).
+  for (const id of ['elecPerDay', 'foodPerDay', 'housingPerDay']) {
+    assert.equal(checker.isWordSegmentedIdentifier(id), true, `${id} must be recognized as camelCase-segmented`);
+  }
+});
+
+test('BUG-029: nearby true positive — a camelCase-shaped candidate carrying real secret entropy is still flagged', () => {
+  // Same visual "wordSegmented" shape (letters, camelCase-looking transitions)
+  // as the exempted fixtures above, but with a digit-bearing high-entropy
+  // suffix appended — proving the camelCase exemption is narrow (letters-only
+  // segments) rather than "anything that looks vaguely like camelCase is
+  // exempt", which would have widened the guard's blind spot instead of
+  // closing the false-positive class precisely.
+  const disguisedSecret = 'apiKeySecretAx7Qz9Km2Rp8Vt4Wy6';
+  assert.equal(checker.isWordSegmentedIdentifier(disguisedSecret), false);
+  assert.equal(checker.looksHighEntropy(disguisedSecret), true);
+
+  // A pure-letter contiguous secret shape with no separator and no camelCase
+  // transition at all (a real bearer-token-style blob) must also still be
+  // caught — proves the fix did not accidentally widen looksHighEntropy()'s
+  // contiguous-string path in general.
+  const contiguousHex = '9f2c8b7a1e6d4c3b0a5f8e7d2c1b6a4f9e8d7c6b';
+  assert.equal(checker.isWordSegmentedIdentifier(contiguousHex), false);
+  assert.equal(checker.looksHighEntropy(contiguousHex), true);
+});
+
+test('BUG-029: end-to-end — the camelCase field name is not flagged by scanLine() inside a realistic JSON-shaped line', () => {
+  const line = '  "laneCapacityPcuPerHour": 1800,';
+  const findings = checker.scanLine(line);
+  assert.deepEqual(
+    findings,
+    [],
+    `expected no findings for a realistic camelCase JSON field name, got: ${JSON.stringify(findings)}`
+  );
+});
+
+// ---------------------------------------------------------------------------
+// BUG-189: BUG-029's isCamelCaseSegmentedIdentifier inherited rules (b)/(c)
+// verbatim from the '-'/'_' path's isWordSegmentedIdentifier, INCLUDING the
+// "middle band" gap disclosed in this file's SEC-021 header: when every
+// segment is under SEGMENT_ENTROPY_MIN_LENGTH and the longest/shortest
+// segment length differ by MORE than SEGMENT_LENGTH_RANGE_TOLERANCE, rule (c)
+// used to be skipped ENTIRELY -- an unconditional, zero-scrutiny exemption.
+// Accepted for '-'/'_' because reaching it requires deliberately inserting a
+// separator; NOT acceptable for bare camelCase, which requires no deliberate
+// attacker signal at all. Fix: the camelCase path's rule (c) now runs the
+// reassembled-whole entropy check UNCONDITIONALLY, against a threshold
+// (CAMEL_REASSEMBLY_ENTROPY_THRESHOLD, 3.75) deliberately higher than
+// ENTROPY_THRESHOLD so it does not re-break BUG-029's own accepted true
+// exemptions (see isCamelCaseSegmentedIdentifier's own comment for the full
+// derivation).
+// ---------------------------------------------------------------------------
+
+test('BUG-189: the live repro strings are no longer wrongly granted the camelCase structural exemption', () => {
+  // The attacker's exact two repro strings: both letters-only, camelCase-
+  // shaped, every segment under SEGMENT_ENTROPY_MIN_LENGTH, and segment
+  // length-range > SEGMENT_LENGTH_RANGE_TOLERANCE -- i.e. squarely in the
+  // formerly-unconditional "middle band" gap. Both previously returned true
+  // (wrongly exempt) from isWordSegmentedIdentifier(); the structural fix
+  // must now recognize them as NOT exempt.
+  const repro1 = 'qzxkWpfjtlaZbnmqrs';
+  const repro2 = 'kjhVxplowqzmBtrsu';
+  assert.equal(checker.isWordSegmentedIdentifier(repro1), false, `${repro1} must no longer be exempt`);
+  assert.equal(checker.isWordSegmentedIdentifier(repro2), false, `${repro2} must no longer be exempt`);
+
+  // Both reassemble (lowercased) to reassembled-whole entropy above
+  // CAMEL_REASSEMBLY_ENTROPY_THRESHOLD, confirming this fix is what closes
+  // them (not an unrelated shape change).
+  assert.ok(
+    checker.shannonEntropy(repro1.toLowerCase()) >= checker.CAMEL_REASSEMBLY_ENTROPY_THRESHOLD,
+    `${repro1} reassembled entropy must clear the new camelCase threshold`
+  );
+  assert.ok(
+    checker.shannonEntropy(repro2.toLowerCase()) >= checker.CAMEL_REASSEMBLY_ENTROPY_THRESHOLD,
+    `${repro2} reassembled entropy must clear the new camelCase threshold`
+  );
+});
+
+test('BUG-189: end-to-end scanLine() flags a gap-band camelCase secret once it clears the pre-existing ENTROPY_MIN_LENGTH floor', () => {
+  // IMPORTANT CAVEAT (surfaced, not swept under the rug): the attacker's two
+  // exact repro strings above are 18 and 17 characters -- BOTH under this
+  // file's pre-existing, separately-justified ENTROPY_MIN_LENGTH floor (20,
+  // see this file's "Why 20" comment). That floor is unrelated to BUG-189
+  // (it exists to stop short literals/enum values from false-positiving) and
+  // is untouched by this fix, so scanLine() still returns [] for the two
+  // exact repro strings — looksHighEntropy() never even reaches the
+  // segmentation check for them, regardless of this fix. This test proves
+  // the fix closes the SAME gap end-to-end for a candidate of the same
+  // adversarial shape (letters-only, gap-band length-range) that is long
+  // enough to actually reach the entropy path -- the realistic population
+  // ENTROPY_MIN_LENGTH lets through, which is what real-world secrets of
+  // this shape typically look like.
+  const line = 'const apiSecretValue = "qzxkWpfjtlaZbnmqrsExtra";';
+  const findings = checker.scanLine(line);
+  assert.ok(
+    findings.some(f => f.category === 'high-entropy'),
+    `expected a high-entropy finding for a qualifying-length gap-band camelCase secret, got: ${JSON.stringify(findings)}`
+  );
+});
+
+test('BUG-189: BUG-029 true exemptions remain exempt (no overcorrection)', () => {
+  // Re-assert the original false-positive fixtures unchanged: the new,
+  // stricter unconditional check must not re-break the exact false positive
+  // BUG-029 was filed to close. housingPerDay is the tightest margin case
+  // (reassembles to ~3.7004 bits/char, just over ENTROPY_THRESHOLD but safely
+  // under CAMEL_REASSEMBLY_ENTROPY_THRESHOLD).
+  const laneCapacity = 'laneCapacityPcuPerHour';
+  assert.equal(checker.isWordSegmentedIdentifier(laneCapacity), true);
+  assert.equal(checker.looksHighEntropy(laneCapacity), false);
+  for (const id of ['elecPerDay', 'foodPerDay', 'housingPerDay']) {
+    assert.equal(checker.isWordSegmentedIdentifier(id), true, `${id} must remain exempt`);
+  }
+  const line = '  "laneCapacityPcuPerHour": 1800,';
+  assert.deepEqual(checker.scanLine(line), []);
+});
+
+test('BUG-189: empirical sweep — camelCase gap-band evasion rate is now far below the pre-fix 93.6%', () => {
+  // Mirrors the attacker's own methodology (BOW BUG-189 description): random
+  // letters-only camelCase candidates with segment length-range >= 2 (the
+  // adversarial "gap band" -- range > SEGMENT_LENGTH_RANGE_TOLERANCE), total
+  // length in the realistic secret range this checker actually scans
+  // (20-36 chars, matching BUG-029's own established sweep width). Live
+  // pre-fix baseline (recorded in the bug report): 93.6% evasion. This
+  // sweep, run against the ACTUAL post-fix isWordSegmentedIdentifier(),
+  // asserts the evasion rate is now a small minority of the population, not
+  // a near-certainty -- proving the fix has real, measured effect (not just
+  // passing the two named fixtures) without claiming a residual as low as
+  // the unrelated ~1/7000 shape-gate figure, which this file's own SEC-021
+  // header already proves no fixed order-0-entropy threshold can reach for
+  // this population (see isCamelCaseSegmentedIdentifier's comment).
+  function randInt(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  const letters = 'abcdefghijklmnopqrstuvwxyz';
+  function randWord(len) {
+    let s = '';
+    for (let i = 0; i < len; i++) s += letters[randInt(0, 25)];
+    return s;
+  }
+  function genGapBandCamelCandidate() {
+    for (let tries = 0; tries < 100; tries++) {
+      const nSeg = randInt(2, 5);
+      const lens = [];
+      for (let i = 0; i < nSeg; i++) lens.push(randInt(2, 14));
+      const total = lens.reduce((a, b) => a + b, 0);
+      const range = Math.max(...lens) - Math.min(...lens);
+      if (total < 20 || total > 36) continue;
+      if (range < 2) continue; // gap band: strictly outside SEGMENT_LENGTH_RANGE_TOLERANCE
+      const segs = lens.map(l => randWord(l));
+      return segs.map((s, i) => (i === 0 ? s : s[0].toUpperCase() + s.slice(1))).join('');
+    }
+    return null;
+  }
+
+  const SAMPLE_SIZE = 20000;
+  let sampled = 0;
+  let evaded = 0;
+  while (sampled < SAMPLE_SIZE) {
+    const candidate = genGapBandCamelCandidate();
+    if (!candidate) continue;
+    sampled++;
+    if (checker.isWordSegmentedIdentifier(candidate)) evaded++;
+  }
+  const evasionRate = evaded / sampled;
+  assert.ok(
+    evasionRate < 0.936,
+    `expected evasion rate to improve on the pre-fix 93.6% baseline, measured ${(evasionRate * 100).toFixed(1)}% (${evaded}/${sampled})`
+  );
+  // A generous, deterministic-enough backstop: post-fix evasion measured
+  // repeatedly in the 15-20% range during development. Assert well clear of
+  // the pre-fix regime (< 50%) so this test can actually fail if the fix
+  // regresses, without being flaky against sampling noise near a tight bound.
+  assert.ok(
+    evasionRate < 0.5,
+    `expected evasion rate materially below the pre-fix regime, measured ${(evasionRate * 100).toFixed(1)}% (${evaded}/${sampled})`
+  );
+});
