@@ -40,7 +40,7 @@ const { spawnSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
 const ROOT = __dirname;
-const TEST_DB = process.env.METRO_DB_TEST_NAME || 'metro_test_bowlint';
+const TEST_DB = process.env.METRO_DB_TEST_NAME || `metro_test_bowlint_${process.pid}`;
 
 // Set BEFORE requiring claude-bow.js's connect() — it reads METRO_DB_NAME
 // from process.env at call time (not at module load), but setting it up

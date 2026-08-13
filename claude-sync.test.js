@@ -61,7 +61,7 @@ const { spawnSync } = require('child_process');
 const mysql = require('mysql2/promise');
 
 const ROOT = __dirname;
-const TEST_DB = process.env.METRO_DB_TEST_NAME || 'metro_test_syncmsg';
+const TEST_DB = process.env.METRO_DB_TEST_NAME || `metro_test_syncmsg_${process.pid}`;
 
 const DB_HOST = process.env.METRO_DB_HOST || '127.0.0.1';
 const DB_PORT = Number(process.env.METRO_DB_PORT || 3306);
