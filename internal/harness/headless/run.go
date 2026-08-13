@@ -225,7 +225,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// function; nothing stops a future refactor from breaking it, and a
 	// discarded return would then silently hide that regression).
 	if loopErr := shutdown(); loopErr != nil {
-		return Result{}, errs.Wrap(ErrEngineRunFailed, correlationID, loopErr, nil)
+		return Result{}, errs.Wrap(ErrEngineRunFailed, correlationID, loopErr, map[string]any{"cause": loopErr.Error()})
 	}
 
 	header, err := writeBundle(cfg.OutDir, e, correlationID, *dbgHeader)
