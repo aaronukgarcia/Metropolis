@@ -328,6 +328,40 @@ const GOLDEN_CASES = [
     ...build(seg('note: ', false), seg('"...(git commit --author=x is the bypass)"', true)),
   },
   {
+    // BUG-091: a backslash immediately before a closing SINGLE quote. Real
+    // POSIX shell semantics: single-quoted strings take NO escape character
+    // at all, so the backslash at index 8 is a literal character and the
+    // quote at index 9 closes the region right there (worked out by manual
+    // POSIX tokenization AND confirmed empirically against buildQuoteMask()
+    // itself, not asserted on feel):
+    //   'it\'  -> opens at the first ', contains the literal two chars `it\`,
+    //             closes at the very next ' (index 9) — no escape happened.
+    //   s fine -> unquoted prose (the backslash bought it nothing).
+    //   ' ...  -> a NEW single-quoted region opens at the next ' (index 16)
+    //             and, because no further ' appears in this text, never
+    //             closes — it swallows to end-of-string (the same
+    //             already-documented ASM-351 unterminated fail-safe as the
+    //             heredoc case below, just via a quote instead of a heredoc).
+    // A one-character-class regression that widens the backslash-escape
+    // special case (currently `quote === '"' && c === '\\'`) to ALSO cover
+    // single quotes treats the backslash at index 8 as escaping the ' at
+    // index 9 instead of closing there — the first quoted region then runs
+    // all the way to the LATER ' at index 16 instead, which closes it early,
+    // leaving "git commit" unmasked/unquoted afterward. Either way the mask
+    // for "git commit" flips relative to this golden expectation, which is
+    // exactly what makes this case catch that mutation (verified with a
+    // throwaway local mutant, never committed: it produces
+    // 0000011111111111100000000000 here, diverging from this golden mask at
+    // index 10 — the corpus gap BUG-091 reported is closed).
+    name: 'BUG-091: backslash immediately before a closing single quote closes there, not an escape',
+    ...build(
+      seg('echo ', false),
+      seg("'it\\'", true),
+      seg('s fine', false),
+      seg("' git commit", true)
+    ),
+  },
+  {
     name: 'BUG-078: a stray unbalanced quote inside a heredoc body does not leak past the terminator',
     ...build(
       seg('cat ', false),
