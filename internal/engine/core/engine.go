@@ -175,6 +175,26 @@ type Engine struct {
 	// of merely documented.
 	sealed bool
 
+	// sealedFast mirrors sealed for seal()'s atomic fast path (BUG-016).
+	// sealed only ever transitions false -> true, once, under mu, and
+	// never flips back — a monotonic one-way latch. That is exactly the
+	// shape double-checked locking requires: once sealedFast reads true,
+	// no further synchronization can ever be needed to observe it,
+	// because there is no subsequent state change to miss. seal() Stores
+	// true here in the SAME critical section that sets e.sealed = true
+	// (see seal()), so any goroutine whose Load observes true is
+	// guaranteed by the Go memory model (a sync/atomic Store
+	// happens-before any Load that observes it) to also observe every
+	// write ordered before that Store.
+	//
+	// This does NOT change RegisterPhaseHook's synchronization at all —
+	// it still reads/writes e.hooks and e.sealed exclusively under mu,
+	// same as before. sealedFast only lets seal()'s OWN repeat calls
+	// (every AdvanceTicks call after the first) skip mu entirely, which
+	// is safe precisely because seal()'s fast path does nothing but
+	// report "already sealed" — it has no other state to mutate.
+	sealedFast atomic.Bool
+
 	// self holds the address NewEngine gave this Engine at construction
 	// (self.Store(e), set once, at the end of NewEngine, never stored to
 	// again). It is Metropolis's answer to SEC-014/SEC-016: `e2 := *e`
@@ -423,23 +443,27 @@ func (e *Engine) RegisterPhaseHook(kind PhaseKind, hook PhaseHook) error {
 
 // seal permanently closes hook registration. Called at the top of
 // AdvanceTicks, before any phase runs. Idempotent (a second/subsequent
-// AdvanceTicks call still runs the same two cheap checks but only
-// re-confirms sealed is already true) — see the sealed field's doc
-// comment for why removing all locking from the per-phase hot path
-// depends on this running once per AdvanceTicks call, and the self
-// field's doc comment for why the identity check specifically must run
-// BEFORE mu (SEC-016).
+// AdvanceTicks call still runs the same checks but only re-confirms
+// sealed is already true) — see the sealed field's doc comment for why
+// removing all locking from the per-phase hot path depends on this
+// running once per AdvanceTicks call, and the self field's doc comment
+// for why the identity check specifically must run BEFORE mu (SEC-016).
 //
-// Cost: one lock-free atomic.Pointer.Load (identity, pre-lock) + one
-// mutex acquisition (a command-level cost, not a per-tick or per-phase
-// one) + one more atomic.Pointer.Load (identity, post-lock, defence in
-// depth) per AdvanceTicks CALL — for AC-9's steady-state benchmark,
-// which calls AdvanceTicks(n=1) per iteration, that is two lock-free
-// loads and one uncontended Lock/Unlock pair per iteration, none of
-// which allocate, so this does not regress the 0-alloc property
-// (confirmed by re-running BenchmarkAdvanceTicks_SteadyState_
-// ZeroModules after this change — see the dispatch report; still 0
-// allocs/op).
+// Cost (BUG-016, atomic fast path added on top of the original
+// mutex-only design): the FIRST call on a given Engine pays one
+// lock-free atomic.Pointer.Load (identity, pre-lock) + one mutex
+// acquisition (a command-level cost, not a per-tick or per-phase one) +
+// one more atomic.Pointer.Load (identity, post-lock, defence in depth) +
+// one atomic.Bool.Store. EVERY SUBSEQUENT call — which is every
+// AdvanceTicks call after the first for the life of the Engine —
+// resolves via sealedFast.Load() alone (see its doc comment) and never
+// touches mu at all: two lock-free loads total (identity + sealedFast),
+// no lock, no allocation. For AC-9's steady-state benchmark, which
+// calls AdvanceTicks(n=1) per iteration, that means only iteration 1
+// pays a mutex acquisition; the remaining b.N-1 iterations pay none
+// (confirmed by BenchmarkSeal_FastPath_NoMutex in bench_test.go and by
+// re-running BenchmarkAdvanceTicks_SteadyState_ZeroModules after this
+// change — still 0 allocs/op).
 //
 // Returns ErrEngineCopied (SEC-014/SEC-016) if called on a struct-copied
 // Engine value — rejected here BEFORE mu is touched at all (the
@@ -454,12 +478,28 @@ func (e *Engine) seal(correlationID string) error {
 	if err := e.checkNotCopied(correlationID, nil); err != nil {
 		return err
 	}
+	// BUG-016 atomic fast path: sealedFast is a monotonic false->true
+	// latch that mirrors e.sealed (see its doc comment). Every
+	// AdvanceTicks call after the first observes true here and returns
+	// having touched nothing but two lock-free atomic loads — no
+	// e.mu.Lock() at all. This is safe DESPITE seal() being called
+	// concurrently from multiple goroutines (SEC-003's stress test)
+	// because the fast path is read-only: it makes no decision that
+	// depends on anything else being simultaneously true, and the one
+	// write that matters (sealedFast.Store(true) below) always happens
+	// inside the mu-guarded slow path, ordered after e.sealed = true, so
+	// a Load that observes true here can only do so after that write has
+	// fully completed (sync/atomic Store/Load happens-before).
+	if e.sealedFast.Load() {
+		return nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if err := e.checkNotCopied(correlationID, nil); err != nil {
 		return err
 	}
 	e.sealed = true
+	e.sealedFast.Store(true)
 	return nil
 }
 

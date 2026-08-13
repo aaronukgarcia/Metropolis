@@ -31,3 +31,54 @@ func BenchmarkAdvanceTicks_SteadyState_ZeroModules(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkSeal_FastPath_NoMutex is BUG-016's proof that seal()'s atomic
+// fast path removes the per-AdvanceTicks-call mutex acquisition once an
+// Engine is already sealed. It calls seal() directly (bypassing
+// AdvanceTicks' n-validation and tick loop, which are irrelevant here)
+// after sealing the Engine once, so every timed iteration takes the
+// fast path exclusively.
+//
+// Run with:
+//
+//	go test ./internal/engine/core/ -bench BenchmarkSeal -benchmem -run ^$
+//
+// Compare against BenchmarkSeal_SlowPath_MutexOnly below, which measures
+// the pre-BUG-016 cost (one uncontended Lock/Unlock per call) by
+// resetting sealedFast every iteration so the mutex path is always
+// taken. The fast path should show materially lower ns/op with 0
+// allocs/op preserved in both cases.
+func BenchmarkSeal_FastPath_NoMutex(b *testing.B) {
+	e := NewEngine(WithPoolSize(4))
+	if err := e.seal("bench-seal-warmup"); err != nil {
+		b.Fatalf("warm-up seal: %v", err)
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if err := e.seal("bench-seal-fast"); err != nil {
+			b.Fatalf("seal: %v", err)
+		}
+	}
+}
+
+// BenchmarkSeal_SlowPath_MutexOnly measures the mutex-acquisition cost
+// seal() paid on EVERY call before BUG-016 (and still pays on an
+// Engine's first call today): it forces the slow path every iteration
+// by clearing sealedFast between calls, restoring the "atomic check
+// always indicates work is needed" case the fast path is designed to
+// avoid. This is the baseline BenchmarkSeal_FastPath_NoMutex is compared
+// against.
+func BenchmarkSeal_SlowPath_MutexOnly(b *testing.B) {
+	e := NewEngine(WithPoolSize(4))
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		e.sealedFast.Store(false)
+		if err := e.seal("bench-seal-slow"); err != nil {
+			b.Fatalf("seal: %v", err)
+		}
+	}
+}
