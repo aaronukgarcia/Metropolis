@@ -83,4 +83,28 @@ const (
 	// and rejects rather than proceeding; see that file's doc comment for
 	// the pre-lock ordering requirement (SEC-016).
 	ErrStateCopied = "MET-E211"
+
+	// ErrFeedbackInboxNotConfigured: SubmitFeedback (feedback.go, FEAT-065
+	// AC-DM8) was called before WithFeedbackInbox wired a directory. No
+	// invented default path — the inbox location is a deployment/config
+	// concern the caller owns.
+	ErrFeedbackInboxNotConfigured = "MET-E212"
+
+	// ErrFeedbackInboxUnwritable: the configured feedback inbox directory
+	// could not be created/written (os.MkdirAll failed) — e.g. permission
+	// denied, path collides with a non-directory file.
+	ErrFeedbackInboxUnwritable = "MET-E213"
+
+	// ErrFeedbackWriteFailed: writing (or renaming into place) the
+	// per-submission JSON record failed. Never partially written into the
+	// final path — the temp-file-then-rename in SubmitFeedback means a
+	// reader polling the inbox never observes a half-written file even on
+	// this failure path.
+	ErrFeedbackWriteFailed = "MET-E214"
+
+	// ErrFeedbackMarshalFailed: the FeedbackRecord could not be
+	// JSON-marshalled. Defensive only — every field is a plain string/
+	// int64/bool, so this should be unreachable outside a future field
+	// addition introducing an unmarshalable type.
+	ErrFeedbackMarshalFailed = "MET-E215"
 )
