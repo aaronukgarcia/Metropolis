@@ -827,7 +827,7 @@
       "inbound": {
         "guid": "64530ba0-19ee-4a01-9f73-41e266863b99",
         "name": "StubEngine",
-        "format": "ProtocolV1 server",
+        "format": "Transport server",
         "pattern": "canned world + scripted deltas + chaos injection",
         "consumers": []
       },
@@ -931,7 +931,7 @@
         "guid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8",
         "name": "TableData",
         "format": "Go package API on shared cell-buffer",
-        "pattern": "custom widgets over UICoreAPI; no allocation on draw paths",
+        "pattern": "custom widgets over RenderScreen; no allocation on draw paths",
         "consumers": [
           {
             "key": "ui.dash",
@@ -1015,7 +1015,7 @@
       "inbound": {
         "guid": "62889f18-fa2a-4ae9-a48c-22de5f632c28",
         "name": "Engine",
-        "format": "ProtocolV1 server",
+        "format": "Transport server",
         "pattern": "command in -> phase pipeline -> deltas/events out; phases are barriers",
         "consumers": [
           {
@@ -1886,7 +1886,7 @@
         "guid": "3300a878-d938-4236-b138-dbb5e081674a",
         "name": "UtilityAPI",
         "format": "Go package API + deltas",
-        "pattern": "network solve per daily tick; coefficients from DataAPI",
+        "pattern": "network solve per daily tick; coefficients from Store",
         "consumers": [
           {
             "key": "engine.chemicals",
@@ -2078,7 +2078,7 @@
       "inbound": {
         "guid": "df65414a-b7cd-4003-b25d-0772bf9049d5",
         "name": "TrafficAPI",
-        "format": "Go package API + SolverContract client",
+        "format": "Go package API + Solver client",
         "pattern": "assignment via int.solver (CPU v1); results deterministic, cache contents-independent",
         "consumers": [
           {
@@ -4939,7 +4939,7 @@
       "inbound": {
         "guid": "7bc61f07-d9b4-413a-b283-c1c79eaf96c9",
         "name": "SolverGPU",
-        "format": "gRPC (SolverContract)",
+        "format": "gRPC (Solver wire contract)",
         "pattern": "stateless; local fallback mandatory",
         "consumers": []
       },
@@ -4970,7 +4970,7 @@
       "inbound": {
         "guid": "049859f7-ce29-44be-9dac-2d7656c83c3f",
         "name": "CloudServices",
-        "format": "gRPC (SolverContract) + Blob API",
+        "format": "gRPC (Solver wire contract) + Blob API",
         "pattern": "same seams as local; thresholds explicit in A9",
         "consumers": []
       },

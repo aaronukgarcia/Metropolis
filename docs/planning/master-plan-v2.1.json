@@ -212,7 +212,7 @@
       "milestone": "M0",
       "layer": "foundation",
       "title": "Config data files + loader + debug hot-reload",
-      "desc": "data/consumption.json, modes.json, buildings.json, unlock_trees.json, naming_corpus.json, seasonal.json, external_world.json, policies.json, errors.json — all JSON, hot-reloadable in debug, the entire balance surface for M2 Batch tuning. Validators derive expected values from these files, never hardcoded (GR#15). BUG-103: registered at the Go package implementing the declared DataAPI contract (internal/foundation/data/, self-declared \"Module key: foundation.data\" in its own doc.go), not at data/ — the JSON files it loads are inputs, not a code module in their own right, and carry no separate registry entry (ASM logged).",
+      "desc": "data/consumption.json, modes.json, buildings.json, unlock_trees.json, naming_corpus.json, seasonal.json, external_world.json, policies.json, errors.json — all JSON, hot-reloadable in debug, the entire balance surface for M2 Batch tuning. Validators derive expected values from these files, never hardcoded (GR#15). BUG-103: registered at the Go package implementing the declared Store contract (internal/foundation/data/, self-declared \"Module key: foundation.data\" in its own doc.go), not at data/ — the JSON files it loads are inputs, not a code module in their own right, and carry no separate registry entry (ASM logged).",
       "specRef": "§24; GR#15",
       "path": "internal/foundation/data/",
       "inbound": {
@@ -256,7 +256,7 @@
       "path": "internal/engine/stub/",
       "inbound": {
         "name": "StubEngine",
-        "format": "ProtocolV1 server",
+        "format": "Transport server",
         "pattern": "canned world + scripted deltas + chaos injection"
       },
       "deps": [
@@ -306,7 +306,7 @@
       "inbound": {
         "name": "TableData",
         "format": "Go package API on shared cell-buffer",
-        "pattern": "custom widgets over UICoreAPI; no allocation on draw paths"
+        "pattern": "custom widgets over RenderScreen; no allocation on draw paths"
       },
       "deps": [
         "ui.core"
@@ -351,7 +351,7 @@
       "path": "internal/engine/core/",
       "inbound": {
         "name": "Engine",
-        "format": "ProtocolV1 server",
+        "format": "Transport server",
         "pattern": "command in -> phase pipeline -> deltas/events out; phases are barriers"
       },
       "deps": [
@@ -703,7 +703,7 @@
       "inbound": {
         "name": "UtilityAPI",
         "format": "Go package API + deltas",
-        "pattern": "network solve per daily tick; coefficients from DataAPI"
+        "pattern": "network solve per daily tick; coefficients from Store"
       },
       "deps": [
         "engine.world",
@@ -774,7 +774,7 @@
       "path": "internal/engine/traffic/",
       "inbound": {
         "name": "TrafficAPI",
-        "format": "Go package API + SolverContract client",
+        "format": "Go package API + Solver client",
         "pattern": "assignment via int.solver (CPU v1); results deterministic, cache contents-independent"
       },
       "deps": [
@@ -2357,12 +2357,12 @@
       "milestone": "future",
       "layer": "cloud",
       "title": "GPU solver sidecar (C++/CUDA)",
-      "desc": "solver-gpu.exe speaking the frozen SolverContract: traffic assignment and cold-pass batches on the local RTX-class GPU (road graph + OD + flows well under 4GB VRAM); the engine cannot tell CPU from GPU except by latency; never entangle CUDA with the engine. v1 ships CPU-only.",
+      "desc": "solver-gpu.exe speaking the frozen wire contract for int.solver's Solver interface: traffic assignment and cold-pass batches on the local RTX-class GPU (road graph + OD + flows well under 4GB VRAM); the engine cannot tell CPU from GPU except by latency; never entangle CUDA with the engine. v1 ships CPU-only.",
       "specRef": "M0-ENG §1; A4; A9",
       "path": "sidecar/solver-gpu/",
       "inbound": {
         "name": "SolverGPU",
-        "format": "gRPC (SolverContract)",
+        "format": "gRPC (Solver wire contract)",
         "pattern": "stateless; local fallback mandatory"
       },
       "deps": [
@@ -2386,7 +2386,7 @@
       "path": "cloud/",
       "inbound": {
         "name": "CloudServices",
-        "format": "gRPC (SolverContract) + Blob API",
+        "format": "gRPC (Solver wire contract) + Blob API",
         "pattern": "same seams as local; thresholds explicit in A9"
       },
       "deps": [
