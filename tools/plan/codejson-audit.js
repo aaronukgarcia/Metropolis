@@ -35,6 +35,27 @@
  * BOW filing (AC-10, one item per drift CLASS, BUG-058 precedent) only
  * happens when invoked with --file; the default run never writes to the BOW.
  *
+ * KNOWN LIMITATION (BUG-184, accepted residual risk, not fixed):
+ *   The AC-7/AC-8 self-check below is a point-in-time snapshot compare — one
+ *   hash+git-status read taken before the run, one taken after. It proves
+ *   the guarded paths (code.json, master-plan-v2.1.json, internal/, cmd/)
+ *   were byte-identical at both instants, but it is structurally blind to a
+ *   mutate-then-revert cycle that both starts AND completes inside the
+ *   run's ~1s window (e.g. mutate at t=250ms, revert to the original bytes
+ *   at t=400ms) — reproduced against code.json and multiple Go files.
+ *   Exploiting this requires an attacker who already knows the run's
+ *   internal timing (DB round-trip + `go run` duration) closely enough to
+ *   land both the mutation and the revert inside that window — a much
+ *   narrower bar than BUG-181's gap (any concurrent process touching a
+ *   file at any point during the run, closed by the two-snapshot design
+ *   itself). This tool is a local CI/dev-tooling report-only gate (GR#3,
+ *   exit code always 0), not a live security boundary protecting a
+ *   production system or untrusted input — the realistic threat is a
+ *   misbehaving concurrent process or script, not a timing-precise
+ *   adversary. Accepted as residual risk rather than built out into
+ *   periodic polling; revisit only if the threat model changes (e.g. this
+ *   tool starts gating an untrusted/adversarial CI path).
+ *
  * Usage:
  *   node tools/plan/codejson-audit.js [--json <path>] [--md <path>] [--file] [--quiet]
  *
@@ -220,7 +241,9 @@ async function runAudit(opts = {}) {
 
   // AC-7/AC-8 read-only self-check: snapshot everything we must never touch,
   // BEFORE doing any work, so a mid-run mutation (not just an unreverted one)
-  // is caught.
+  // is caught. NOTE (BUG-184): this is a two-point-in-time compare, not
+  // continuous monitoring — see the "KNOWN LIMITATION" block in this file's
+  // header comment for the accepted mutate-then-revert-inside-the-window gap.
   const preHashes = {
     codeJson: sha256File(CODE_JSON_PATH),
     masterPlan: sha256File(MASTER_PLAN_PATH),
