@@ -129,7 +129,44 @@ type skeletonWiring struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// engineRunErr is StubEngine.Run's return value (BUG-020). It is
+	// written exactly once, by the Run goroutine started in bootCore,
+	// before that goroutine closes engineDone (below). engineDone's
+	// close-then-receive is the happens-before edge that makes this field
+	// safe to read from any goroutine once engineDone has been observed
+	// closed — including, but not limited to, after shutdown()'s
+	// w.wg.Wait() has returned (Wait() cannot return before the same
+	// goroutine's deferred wg.Done() runs, which is sequenced after
+	// engineDone closes). Reading it any earlier is a data race and a
+	// logic error: the Run goroutine may not have exited yet.
+	//
+	// Before BUG-020, this value was discarded outright (`_ =
+	// engine.Run(ctx)`), so nothing distinguished Commands() closing
+	// prematurely (codePrematureCommandsClose, MET-P094) from ctx
+	// cancellation's clean ctx.Err() exit. EngineRunErr (below) is how a
+	// caller — today, run.go's logEngineShutdown, and BUG-020's own
+	// regression test — observes it instead.
+	engineRunErr error
+
+	// engineDone is closed the instant the Run goroutine returns,
+	// independently of viewsLoop's own goroutine and of wg.Wait() (which
+	// blocks on BOTH). It exists so a caller can synchronize on "Run has
+	// exited and engineRunErr is now readable" without first having to
+	// cancel ctx (which would also be racing to stop the engine loop, the
+	// exact hazard Run's own doc comment warns about) or wait for
+	// viewsLoop to stop too. shutdown()'s w.wg.Wait() remains the primary,
+	// production shutdown path; engineDone is the narrower signal
+	// BUG-020's regression test needs to observe a premature Commands()
+	// close deterministically, before anything cancels ctx.
+	engineDone chan struct{}
 }
+
+// EngineRunErr returns the error StubEngine.Run exited with (BUG-020).
+// Only meaningful after engineDone has been observed closed (directly, or
+// via shutdown() having returned) — see engineRunErr's doc comment for why
+// reading it any earlier races the still-running Run goroutine.
+func (w *skeletonWiring) EngineRunErr() error { return w.engineRunErr }
 
 // newBootRegistry constructs the registry.Registry bootCore registers
 // modules into. A package-level indirection (not a bare call to
@@ -181,6 +218,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		mapScreen:     mapscreen.NewMapScreen(correlationID, widgets.DefaultPalette),
 		ctx:           ctx,
 		cancel:        cancel,
+		engineDone:    make(chan struct{}),
 	}
 	w.viewsLoop = core.NewViewsLoop(transport, w.viewStore, correlationID)
 
@@ -204,7 +242,11 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	)
 
 	w.wg.Add(2)
-	go func() { defer w.wg.Done(); _ = engine.Run(ctx) }()
+	go func() {
+		defer w.wg.Done()
+		w.engineRunErr = engine.Run(ctx)
+		close(w.engineDone)
+	}()
 	go func() { defer w.wg.Done(); w.viewsLoop.Run(ctx.Done()) }()
 
 	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's

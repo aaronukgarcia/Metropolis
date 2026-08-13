@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -57,13 +58,43 @@ func run(args []string, stdout, stderr io.Writer) int {
 		// screen — shut the already-started engine/views goroutines down
 		// cleanly rather than leaking them, then fail loudly.
 		w.shutdown()
+		logEngineShutdown(stderr, w.EngineRunErr())
 		printBootError(stderr, err)
 		return 1
 	}
 
 	runInteractive(w, screen)
 	w.shutdown()
+	logEngineShutdown(stderr, w.EngineRunErr())
 	return 0
+}
+
+// logEngineShutdown observes StubEngine.Run's return value (BUG-020) and
+// reports it distinctly from a clean, intentional shutdown, rather than
+// silently discarding it the way `_ = engine.Run(ctx)` used to. Callers
+// must call this only after w.shutdown() has returned — see
+// skeletonWiring.engineRunErr's doc comment (boot.go) for why reading the
+// value any earlier races the Run goroutine.
+//
+// A clean shutdown resolves to ctx.Err() (context.Canceled or
+// context.DeadlineExceeded — the normal cancel(); wg.Wait(); Close() path)
+// and is deliberately NOT logged: logging it would just be noise on every
+// ordinary exit. Anything else — in practice, codePrematureCommandsClose
+// (MET-P094, internal/engine/stub/codes.go) — means Commands() closed out
+// from under Run while ctx was still live, which BUG-020's own doc
+// comment says never happens under today's cancel-before-close wiring, so
+// seeing it here means that invariant broke; it must be visible on
+// stderr, not swallowed.
+func logEngineShutdown(stderr io.Writer, err error) {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	var e *errs.E
+	if errors.As(err, &e) {
+		_, _ = fmt.Fprintln(stderr, "metropolis: engine loop exited abnormally:", e.Display())
+		return
+	}
+	_, _ = fmt.Fprintln(stderr, "metropolis: engine loop exited abnormally:", err)
 }
 
 // printBootError renders a boot failure the GR#1 way: if it's a
