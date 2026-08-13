@@ -812,6 +812,57 @@ test('AC-11: a missing edge is a check-2 FAIL naming both mkeys (BUG-058 precede
   assert.equal(result.verdict, 'pass', `expected pass once the edge is registered, got: ${JSON.stringify(result)}`);
 });
 
+test('AC-12: check 2 logs an explicit FEAT-062 reuse deferral, not a stale "FEAT-062 does not exist" claim (Tester FAIL remediation)', () => {
+  // FEAT-062 (tools/plan/codejson-audit.js) shipped and exports runAudit()
+  // as of 2026-08-13, but check 2 still does its own direct code.json
+  // lookup rather than calling it. AC-12 requires that to be EITHER a real
+  // call into FEAT-062's interface OR a logged deferred assumption with a
+  // cross-reference -- this test asserts the latter path was taken
+  // correctly: the source comment names the deferral and its ASM by code,
+  // and the stale "does not yet exist" claim (accurate before FEAT-062
+  // shipped, false afterwards) is gone.
+  const src = fs.readFileSync(path.join(ROOT, 'claude-bow.js'), 'utf8');
+
+  // The runner source names FEAT-062 explicitly near check 2's code.
+  const check2Region = src.slice(src.indexOf('function runCheck2CallEdges') - 1500, src.indexOf('function runCheck2CallEdges') + 200);
+  assert.match(check2Region, /FEAT-062/, 'expected FEAT-062 to be named near runCheck2CallEdges');
+  assert.match(check2Region, /ASM-483/, 'expected the deferred-assumption BOW code to be named near runCheck2CallEdges');
+
+  // The stale claim this Tester FAIL was about must not survive: it asserted
+  // FEAT-062 "does not yet exist" -- that is now false (FEAT-062 is done),
+  // so that exact phrase must not remain describing FEAT-062's status.
+  assert.doesNotMatch(check2Region, /FEAT-062 does not yet exist/, 'stale "FEAT-062 does not yet exist" claim must be corrected now that FEAT-062 has shipped');
+
+  // The comment must accurately describe check 2 as registration-only
+  // (weaker than FEAT-062's AST-backed verification), not "checked live"
+  // phrasing that implied parity with FEAT-062's depth.
+  assert.match(check2Region, /registration|registered/i);
+});
+
+test('AC-12: a fixture where FEAT-062-depth verification would differ from the direct code.json lookup is exactly the scope-mismatch reason logged, not silently unhandled', () => {
+  // Demonstrates concretely WHY reuse is deferred: FEAT-062's edge check
+  // only evaluates edges where BOTH endpoints are BOW status 'done' (it
+  // AST-parses real Go imports). Check 2 runs pre-dispatch, when the
+  // sprint's own modules are typically NOT done yet -- so a FEAT-062-style
+  // check would report 'skip' for exactly the edges check 2 needs a real
+  // registration answer for, right now, from code.json alone. The direct
+  // lookup (AC-11) is deliberately the one that can answer during that
+  // window; this fixture proves the direct lookup DOES answer (registered
+  // edge -> pass) even though the modules involved are not built/done.
+  const rootDir = mkTempDir('sprintgate-ac12-scope-');
+  const codeJsonPath = path.join(rootDir, 'code.json');
+  const codeJsonWithEdge = { modules: [{ key: 'engine.notyetbuilt', outbound: { calls: [{ key: 'engine.alsonotbuilt' }] } }] };
+  fs.writeFileSync(codeJsonPath, JSON.stringify(codeJsonWithEdge));
+
+  const acFile = {
+    item: { code: 'FEAT-901' }, mkey: 'engine.notyetbuilt',
+    text: "Check: relies on a registered `engine.notyetbuilt`->`engine.alsonotbuilt` edge, for code not yet dispatched.",
+  };
+
+  const result = runCheck2CallEdges([acFile], { codeJsonPath });
+  assert.equal(result.verdict, 'pass', 'the direct registration lookup must answer pre-dispatch, when neither module has real Go code for a FEAT-062-style AST check to examine');
+});
+
 // ---------------------------------------------------------------------------
 // Check 3 — tripwires (AC-13..AC-15)
 // ---------------------------------------------------------------------------
@@ -2102,8 +2153,8 @@ test("BUG-171 AC-3: an ordinary --desc value with no leading -- still parses cor
 test('BUG-115: READ_ONLY_COMMANDS is the exact enumerated set this fix classified as safe to skip ensureSchema for', () => {
   assert.deepEqual(
     [...bow.READ_ONLY_COMMANDS].sort(),
-    ['gate-status', 'lint', 'list', 'ready', 'show', 'summary', 'verdict', 'weakness'].sort(),
-    'the read-only-skip set must be exactly this enumerated list — every write command (add/set/comment/depend/undepend/ref/redact/done/import/destructive/gate/gate-run) plus init/startup-summary must never appear here'
+    ['exists', 'gate-status', 'lint', 'list', 'ready', 'show', 'summary', 'verdict', 'weakness'].sort(),
+    'the read-only-skip set must be exactly this enumerated list — every write command (add/set/comment/depend/undepend/ref/redact/done/import/destructive/gate/gate-run) plus init/startup-summary must never appear here (BUG-075 added `exists`, a pure SELECT)'
   );
 });
 
@@ -2261,4 +2312,92 @@ test('BUG-170: `init` and a write command (`add`) against the already-migrated T
 
   const [rows] = await db.query('SELECT code FROM bow_items WHERE title = ?', ['BUG-170 write-path unaffected']);
   assert.equal(rows.length, 1, 'the write itself must still have succeeded');
+});
+
+// =============================================================================
+// BUG-075 — cheap batch existence check (`node claude-bow.js exists ...`).
+//
+// Two real incidents of fabricated/misattributed BOW-code citations
+// propagating between agents (see `node claude-bow.js show BUG-075`) led the
+// lead to rule (accepted, all three proposals): Testers/lead must verify a
+// cited code actually RESOLVES before relaying or accepting it as fact, and
+// `claude-bow.js` should expose a batch check so that verification is one
+// command rather than N `show` calls. Every test below invokes the real
+// `node claude-bow.js exists ...` subprocess (bowCli/spawnSync), matching
+// this file's own established BUG-090/BUG-061 real-CLI-process standard.
+// =============================================================================
+
+test('BUG-075: `exists` with codes that all exist reports EXISTS with the one-line title for each, in the order given, and exits 0', async () => {
+  await insertItem({ code: 'FEAT-9100', status: 'open' });
+  await insertItem({ code: 'BUG-9101', status: 'open' });
+
+  const r = bowCli(['exists', 'FEAT-9100', 'BUG-9101']);
+  assert.equal(r.status, 0, `exists must exit 0 even discussing found codes: ${r.stderr}`);
+  assert.match(r.stdout, /FEAT-9100: EXISTS — FEAT-9100 — FEAT-9100/);
+  assert.match(r.stdout, /BUG-9101: EXISTS — BUG-9101 — BUG-9101/);
+  assert.match(r.stdout, /2\/2 exist\./);
+});
+
+test('BUG-075: `exists` with codes that do NOT exist reports NOT FOUND for each, and still exits 0 (a report, not a failure)', async () => {
+  const r = bowCli(['exists', 'ASM-9999-fake', 'BUG-9998-fake']);
+  assert.equal(r.status, 0, `exists must exit 0 for a clean report of missing codes: ${r.stderr}`);
+  assert.match(r.stdout, /ASM-9999-fake: NOT FOUND/);
+  assert.match(r.stdout, /BUG-9998-fake: NOT FOUND/);
+  assert.match(r.stdout, /0\/2 exist\./);
+});
+
+test('BUG-075: `exists` with a mix of real and fabricated codes reports each correctly in ONE invocation — the BUG-075 shape (a fabricated ASM code cited alongside real ones)', async () => {
+  await insertItem({ code: 'ASM-9102', status: 'open' });
+
+  const r = bowCli(['exists', 'ASM-9102', 'ASM-9103-fake', 'ASM-9104-fake']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /ASM-9102: EXISTS — ASM-9102 — ASM-9102/);
+  assert.match(r.stdout, /ASM-9103-fake: NOT FOUND/);
+  assert.match(r.stdout, /ASM-9104-fake: NOT FOUND/);
+  assert.match(r.stdout, /1\/3 exist\./);
+});
+
+test('BUG-075: `exists` with no codes at all (no positional args, no --codes) exits non-zero with a usage message, and issues no query', async () => {
+  const r = bowCli(['exists']);
+  assert.notEqual(r.status, 0, 'empty-args case must be rejected, not silently report zero results');
+  assert.match(r.stderr, /Usage: node claude-bow\.js exists/);
+});
+
+test('BUG-075: `exists --codes A,B,C` (comma-separated single flag) is equivalent to passing them as separate positional args', async () => {
+  await insertItem({ code: 'FEAT-9105', status: 'open' });
+
+  const r = bowCli(['exists', '--codes', 'FEAT-9105,BUG-9106-fake']);
+  assert.equal(r.status, 0);
+  assert.match(r.stdout, /FEAT-9105: EXISTS — FEAT-9105 — FEAT-9105/);
+  assert.match(r.stdout, /BUG-9106-fake: NOT FOUND/);
+  assert.match(r.stdout, /1\/2 exist\./);
+});
+
+test('BUG-075: `exists` scales to many codes correctly (functional proof the batching works end to end, not just for 2-3 codes)', async () => {
+  const realCodes = ['FEAT-9107', 'FEAT-9108', 'FEAT-9109', 'FEAT-9111', 'FEAT-9112'];
+  for (const code of realCodes) await insertItem({ code, status: 'open' });
+  const fakeCodes = ['FEAT-9113-fake', 'FEAT-9114-fake', 'FEAT-9115-fake'];
+
+  const r = bowCli(['exists', ...realCodes, ...fakeCodes]);
+  assert.equal(r.status, 0);
+  for (const code of realCodes) assert.match(r.stdout, new RegExp(`${code}: EXISTS`));
+  for (const code of fakeCodes) assert.match(r.stdout, new RegExp(`${code}: NOT FOUND`));
+  assert.match(r.stdout, /5\/8 exist\./);
+});
+
+test('BUG-075: `cmdExists` issues exactly ONE query against bow_items regardless of how many codes are checked — proves the batching (IN(...) over all codes at once), not just the correct final answer via a real subprocess run separately above', () => {
+  const src = bow.cmdExists.toString();
+  const dbQueryCalls = (src.match(/db\.query\(/g) || []).length;
+  assert.equal(dbQueryCalls, 1, 'cmdExists must issue exactly one db.query call — the whole point of `exists` over N `show` calls is a single round-trip');
+  assert.match(src, /WHERE UPPER\(code\) IN/, 'the single query must batch all requested codes via IN(...), not loop per code');
+});
+
+test('BUG-075: `exists` is case-insensitive on short codes (matches findItem()/requireItem()\'s own UPPER(code) rule) and de-duplicates a repeated code to one output line', async () => {
+  await insertItem({ code: 'FEAT-9110', status: 'open' });
+
+  const r = bowCli(['exists', 'feat-9110', 'FEAT-9110', 'Feat-9110']);
+  assert.equal(r.status, 0);
+  const lines = r.stdout.split('\n').filter((l) => /EXISTS|NOT FOUND/.test(l));
+  assert.equal(lines.length, 1, 'a code repeated three times (any case) must produce exactly one output line');
+  assert.match(r.stdout, /1\/1 exist\./);
 });

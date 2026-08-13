@@ -66,6 +66,19 @@
  *                                           verdict row for the same item.
  *   verdict <code> [--json]               - Report the LATEST recorded Destructive verdict
  *                                           for an item (or "no verdict recorded").
+ *   exists CODE1 CODE2 ... | --codes CODE1,CODE2,...
+ *                                         - BUG-075: cheap batch existence check, one DB
+ *                                           round-trip for any number of codes. For each
+ *                                           code prints EXISTS (with its one-line title, so
+ *                                           the caller can also eyeball "does this look like
+ *                                           what I think it is") or NOT FOUND. Matches by
+ *                                           short code (case-insensitive) or mkey — same
+ *                                           lookup rule as findItem()/requireItem(), just
+ *                                           batched. Replaces N `show` calls when verifying a
+ *                                           report's cited codes actually resolve before
+ *                                           relaying or accepting them as fact (dev-team-
+ *                                           process.md's Tester/lead citation-verification
+ *                                           duty).
  *   gate <sprint#> --check <1-5> --name <data-files|call-edges|tripwires|
  *        boundary-rulings|ready-queue> --verdict pass|fail|partial|skipped
  *        --runner "<name>" [--detail "..." | --detail-file <path>] [--run <guid>]
@@ -153,7 +166,7 @@ const SUMMARY_MARKER = '── METROPOLIS STARTUP SUMMARY ──';
 // ensureSchema cost) is safe; skipping it for a command that turns out to
 // write, or to need a column no real database will ever actually be
 // missing, is not.
-const READ_ONLY_COMMANDS = new Set(['list', 'show', 'ready', 'summary', 'weakness', 'lint', 'verdict', 'gate-status']);
+const READ_ONLY_COMMANDS = new Set(['list', 'show', 'ready', 'summary', 'weakness', 'lint', 'verdict', 'gate-status', 'exists']);
 
 // ── CLI parsing ───────────────────────────────────────────────────────────────
 
@@ -166,6 +179,8 @@ const VALUE_FLAGS = ['priority', 'desc', 'desc-file', 'status', 'type', 'on', 'n
   'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate',
   'code-path', 'codejson', 'class', 'verdict', 'attacker', 'findings',
   'check', 'name', 'runner', 'run', 'detail', 'detail-file',
+  // BUG-075: `exists CODE1 CODE2 ... | --codes CODE1,CODE2,...` batch check.
+  'codes',
   // BUG-061 (tool.bow `redact`): --comment <id> selects a bow_comments row
   // instead of an item code. Deliberately no --match/--text value flag exists
   // ANYWHERE in this list — Aaron's binding constraint (BUG-061) is that the
@@ -848,6 +863,63 @@ async function cmdVerdict(db) {
 }
 
 /**
+ * BUG-075: a cheap batch existence check so verifying a report's cited BOW
+ * codes is one command rather than N separate `show` calls. BUG-075's two
+ * incidents were both a citation problem — a code that was never filed at
+ * all, and a code that IS real but does not say what the citing report
+ * claimed. This command answers the FIRST half mechanically (does the code
+ * resolve?) and hands back enough (the one-line title) for a human/agent to
+ * eyeball the SECOND half without a second round-trip. It does not and
+ * cannot fully automate "matches what the report claims" — that still needs
+ * a `show` and a read, per dev-team-process.md's citation-verification duty.
+ */
+async function cmdExists(db) {
+  const raw = [...positional];
+  if (flags.codes) raw.push(...String(flags.codes).split(','));
+  const codes = raw.flatMap((c) => String(c).split(',')).map((c) => c.trim()).filter(Boolean);
+
+  if (!codes.length) {
+    console.error('Usage: node claude-bow.js exists CODE1 CODE2 ... | --codes CODE1,CODE2,...');
+    console.error('  BUG-075: verify claimed ASM/BUG/FEAT/etc. codes actually resolve before citing or relaying them as fact.');
+    process.exit(1);
+  }
+
+  // Dedupe case-insensitively, preserving first-seen order for output —
+  // one caller-visible line per distinct code asked about, however many
+  // times it was repeated on the command line.
+  const seen = new Set();
+  const uniqueCodes = [];
+  for (const c of codes) {
+    const key = c.toUpperCase();
+    if (!seen.has(key)) { seen.add(key); uniqueCodes.push(c); }
+  }
+
+  // Single round-trip: match by short code (case-insensitive) or mkey, the
+  // same two-way lookup findItem()/requireItem() use for one code, batched
+  // via IN(...) for all of them at once.
+  const upperCodes = uniqueCodes.map((c) => c.toUpperCase());
+  const placeholders = uniqueCodes.map(() => '?').join(',');
+  const [rows] = await db.query(
+    `SELECT code, title, mkey FROM bow_items WHERE UPPER(code) IN (${placeholders}) OR mkey IN (${placeholders})`,
+    [...upperCodes, ...uniqueCodes]);
+
+  const byUpperCode = new Map();
+  const byMkey = new Map();
+  for (const r of rows) {
+    byUpperCode.set(r.code.toUpperCase(), r);
+    if (r.mkey) byMkey.set(r.mkey, r);
+  }
+
+  let foundCount = 0;
+  for (const c of uniqueCodes) {
+    const row = byUpperCode.get(c.toUpperCase()) || byMkey.get(c);
+    if (row) { foundCount++; console.log(`${c}: EXISTS — ${row.code} — ${row.title}`); }
+    else console.log(`${c}: NOT FOUND`);
+  }
+  console.log(`\n${foundCount}/${uniqueCodes.length} exist.`);
+}
+
+/**
  * Weakness-pattern report over security findings.
  *
  * The reason findings carry a closed `finding_class` is so this report can
@@ -1389,11 +1461,29 @@ async function cmdLint(db) {
 //                          numeric leaves without a provenance/placeholder
 //                          marker are flagged (AC-4..AC-9).
 //   2. call-edges       — every module-to-module call an in-scope AC asserts
-//                          has a real registered code.json outbound edge
-//                          (AC-10..AC-12). FEAT-062 does not yet exist/expose
-//                          a reusable interface (checked live each run, see
-//                          Escalation B) so this is the minimal direct-lookup
-//                          version the acceptance file explicitly permits.
+//                          has a real registered code.json outbound edge,
+//                          checked against a freshly-read code.json every run
+//                          (AC-10..AC-12). This is REGISTRATION-only: it
+//                          confirms the edge is PLANNED in code.json, not that
+//                          real Go code already imports across it — a
+//                          materially weaker claim than FEAT-062's AST-backed
+//                          check. FEAT-062 (tools/plan/codejson-audit.js,
+//                          done 2026-08-13) now exists and exports a reusable
+//                          runAudit(), but check 2 does NOT call it — this is
+//                          a deliberate, logged AC-12 deferral (ASM-483, BOW
+//                          comment on FEAT-061), not an oversight or a stale
+//                          "FEAT-062 doesn't exist yet" claim. Reason: check 2
+//                          runs BEFORE dispatch, when the sprint's modules are
+//                          NOT YET 'done' and no Go code exists to AST-parse —
+//                          FEAT-062's edge check is scoped to BOTH endpoints
+//                          being 'done', so for check 2's actual use case it
+//                          would just report 'skip', adding a live DB
+//                          connection + `go run` subprocess sweep of the
+//                          whole repo for no extra signal. runAudit() also
+//                          hardcodes ROOT/CODE_JSON_PATH with no fixture-path
+//                          override, so reuse would break this check's
+//                          isolated unit tests. See ASM-483 for the full
+//                          reasoning and the deferred-consolidation trigger.
 //   3. tripwires        — every "Check (once unblocked)" AC in scope has an
 //                          adjacent Tripwire (mechanical...) block, and that
 //                          block's LIVE exit code matches its own documented
@@ -1679,6 +1769,14 @@ function edgeExistsInCodeJson(codeJson, source, target) {
   return ((mod.outbound && mod.outbound.calls) || []).some((c) => c.key === target);
 }
 
+/** Check 2 — registration-only call-edge verification (AC-10..AC-12): confirms
+ * an in-scope AC's asserted (source,target) edge is REGISTERED in a
+ * freshly-read code.json, not that real Go code already imports across it.
+ * AC-12 escalation: does NOT call FEAT-062's tools/plan/codejson-audit.js
+ * runAudit() even though FEAT-062 has shipped and exports it — a logged
+ * deferral (ASM-483, cross-referenced on FEAT-061), not a stale assumption
+ * that FEAT-062 is unavailable. See the checklist comment above this
+ * function and ASM-483 for the full reasoning. */
 function runCheck2CallEdges(resolvedAcFiles, opts = {}) {
   const codeJsonPath = opts.codeJsonPath || CODE_JSON_PATH;
   let codeJson;
@@ -2906,6 +3004,9 @@ const findItemByRef = findItem;
 module.exports = {
   printStartupSummary, printBowSummary, SUMMARY_MARKER, findItemByRef,
   recordDestructiveVerdict, latestDestructiveVerdict,
+  // BUG-075: batch existence check exported for direct unit testing in
+  // addition to the required real-subprocess CLI tests.
+  cmdExists,
   // FEAT-060 (tool.bowlint): exported for direct unit testing against
   // fixture rows, per the acceptance file's AC-12..16 scratch-DB standard.
   // connect/ensureSchema/TYPE_PREFIX are exported so the test suite can
@@ -2982,12 +3083,13 @@ if (require.main === module) {
           case 'startup-summary': await printStartupSummary(db); break;
           case 'destructive': await cmdDestructive(db); break;
           case 'verdict': await cmdVerdict(db); break;
+          case 'exists': await cmdExists(db); break;
           case 'gate': await cmdGate(db); break;
           case 'gate-status': await cmdGateStatus(db); break;
           case 'gate-run': await cmdGateRun(db); break;
           default:
             console.error(`Unknown command: ${command}`);
-            console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, done, import, summary, startup-summary, weakness, lint, destructive, verdict, gate, gate-status, gate-run');
+            console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, done, import, summary, startup-summary, weakness, lint, destructive, verdict, exists, gate, gate-status, gate-run');
             process.exit(1);
         }
       };
