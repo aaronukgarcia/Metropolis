@@ -173,20 +173,22 @@ func (e *Engine) handleSetSpeed(cmd protocol.Command, correlationID string) prot
 // engine.go) — it calls whatever gate a caller injected via
 // WithSpeed8xGate, or refuses by default if none was.
 //
-// The default-deny branch reuses ErrInvalidSpeed (MET-E002) rather than
-// minting a new placeholder code: Speed8xDebug is only ever a
-// "documented multiplier" (ValidSpeed's sense) when a debug gate has
-// accepted it, so a request that reaches here with none configured is,
-// from this package's point of view, exactly the same failure shape as
-// an out-of-range speed — an unregistered "context" field
-// (reason: "no_gate_configured") distinguishes it in logs/telemetry
-// from ValidSpeed's own rejection without needing a second registry
-// code. See ASM-* in the BUG-009 dispatch report for the reasoning.
+// The default-deny branch returns ErrSpeed8xGateNotConfigured
+// (MET-E015), a dedicated registry code distinct from ErrInvalidSpeed
+// (MET-E002): Speed8xDebug's VALUE is valid (it is a documented
+// multiplier once a debug gate has accepted it) — the failure here is
+// that no gate was wired to authorise it at all, a genuinely different
+// triage case from an out-of-range speed value. BUG-011 (closing
+// ASM-012): this used to reuse MET-E002 with an unregistered
+// "reason: no_gate_configured" context field as a deliberate stopgap
+// while BUG-008 was concurrently rewriting the whole error registry;
+// that justification expired once BUG-008 landed and data/errors.json
+// stabilised. See ASM-* in the BUG-009 dispatch report for the original
+// reasoning this superseded.
 func (e *Engine) checkSpeed8xAllowed(correlationID string) error {
 	if e.speed8xGate == nil {
-		return errs.New(ErrInvalidSpeed, correlationID, map[string]any{
-			"speed":  int(Speed8xDebug),
-			"reason": "no_gate_configured",
+		return errs.New(ErrSpeed8xGateNotConfigured, correlationID, map[string]any{
+			"speed": int(Speed8xDebug),
 		})
 	}
 	return e.speed8xGate(correlationID)

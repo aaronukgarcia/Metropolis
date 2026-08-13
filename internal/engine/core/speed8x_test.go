@@ -45,7 +45,11 @@ func newTestDebugState(t *testing.T) *debug.State {
 // Engine built with no Speed8xGate injected at all (a bare NewEngine(),
 // exactly what a caller who forgot to wire feat.debugmode would produce)
 // refuses Speed8xDebug rather than silently permitting it — the safe
-// default a release build must fall back to.
+// default a release build must fall back to. BUG-011: this must return
+// the dedicated ErrSpeed8xGateNotConfigured (MET-E015), not the reused
+// ErrInvalidSpeed (MET-E002) — see TestHandleCommand_SetSpeed in
+// commands_test.go for the genuinely-invalid-value case (speed 3) that
+// still correctly returns MET-E002.
 func TestHandleCommand_SetSpeed_Speed8x_DefaultDeny(t *testing.T) {
 	e := NewEngine()
 
@@ -53,7 +57,7 @@ func TestHandleCommand_SetSpeed_Speed8x_DefaultDeny(t *testing.T) {
 	if result.Accepted {
 		t.Fatal("SetSpeed(8x) with no gate injected: accepted, want rejected (unsafe default)")
 	}
-	wantPlaceholderCode(t, result.Error, ErrInvalidSpeed)
+	wantPlaceholderCode(t, result.Error, ErrSpeed8xGateNotConfigured)
 	if clockOrFatal(t, e).Speed() != Speed1x {
 		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged Speed1x (%d)", clockOrFatal(t, e).Speed(), Speed1x)
 	}

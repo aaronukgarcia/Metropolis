@@ -98,4 +98,15 @@ const (
 	// now fixed in engine.core itself). Never returned on a clean
 	// ctx-cancelled shutdown (RunCommandLoop returns nil for that case).
 	ErrPrematureCommandsClose = "MET-E014"
+
+	// ErrSpeed8xGateNotConfigured: checkSpeed8xAllowed's default-deny
+	// branch — a SetSpeed(Speed8xDebug) command reached engine.core with
+	// no Speed8xGate wired at all (WithSpeed8xGate never called). This is
+	// deliberately distinct from ErrInvalidSpeed (MET-E002): the speed
+	// VALUE is valid (8x is a documented multiplier once feat.debugmode
+	// is wired), the failure is that nothing wired the gate that would
+	// authorise it. BUG-011: reused MET-E002 for this from BUG-009 until
+	// BUG-008 (the registry rewrite this stopgap was deliberately
+	// avoiding colliding with) landed and stabilised data/errors.json.
+	ErrSpeed8xGateNotConfigured = "MET-E015"
 )

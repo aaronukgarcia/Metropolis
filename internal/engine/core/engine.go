@@ -249,9 +249,9 @@ type Engine struct {
 
 	// speed8xGate is BUG-009's injected debug-speed gate (see
 	// Speed8xGate's doc comment above). nil until WithSpeed8xGate wires
-	// it — nil is read as "no gate configured, deny Speed8xDebug" by
-	// checkSpeed8xAllowed (commands.go), never as "no gate configured,
-	// allow it".
+	// it — nil is read as "no gate configured, deny Speed8xDebug"
+	// (ErrSpeed8xGateNotConfigured, MET-E015) by checkSpeed8xAllowed
+	// (commands.go), never as "no gate configured, allow it".
 	speed8xGate Speed8xGate
 
 	registry *registry.Registry

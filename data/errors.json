@@ -455,6 +455,12 @@
       "message": "RunCommandLoop's CommandSource closed its Commands() channel before ctx was done",
       "remedy": "This means the transport went away for some reason other than the shutdown you told RunCommandLoop about (e.g. Close() was called without first cancelling ctx and joining the loop's goroutine). Follow the documented shutdown order: cancel ctx, wait for RunCommandLoop to return, THEN close the transport -- see RunCommandLoop's 'Exit contract' doc comment (internal/engine/core/commands.go) and StubEngine.Run's identical contract (internal/engine/stub/engine.go) for the full ordering argument. A headless run treating this as a silent success would hash a truncated world (engine.headless.md AC-4)."
     },
+    "MET-E015": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "SetSpeed(8x) rejected: no Speed8xGate configured on this Engine",
+      "remedy": "Speed8xDebug is only a valid multiplier once a caller wires an authorising gate via WithSpeed8xGate (normally feat.debugmode.State.AllowSpeed8x) -- an Engine built without one denies Speed8xDebug by default rather than silently permitting it. Wire WithSpeed8xGate(...) when constructing the Engine, or use 1x/2x/4x if debug mode is not intended for this run. Distinct from MET-E002 (ErrInvalidSpeed): that code means the requested speed value itself is out of range, not that a valid 8x request has nowhere to be authorised."
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",
