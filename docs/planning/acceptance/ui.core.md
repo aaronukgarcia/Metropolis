@@ -1,5 +1,9 @@
 BOW code: MOD-009
 
+> **See also:** `SEC-011.md` (terminal-escape injection finding) and
+> `BUG-018.md` (RenderLoop copy-guard bug) carry their own acceptance
+> criteria for this package — see README.md's cross-reference convention.
+
 # Acceptance criteria — ui.core (MOD-009)
 
 **BOW code:** MOD-009

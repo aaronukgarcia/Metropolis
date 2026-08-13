@@ -1,5 +1,9 @@
 BOW code: MOD-008
 
+> **See also:** `BUG-020.md` (StubEngine.Run silent-exit bug) carries its
+> own acceptance criteria for this package — see README.md's
+> cross-reference convention.
+
 # Acceptance criteria — harness.stub (MOD-008)
 
 **BOW code:** MOD-008

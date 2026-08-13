@@ -1,5 +1,9 @@
 BOW code: MOD-012
 
+> **See also:** `BUG-019.md` (StartSubscriptionPump copy-guard bug) carries
+> its own acceptance criteria for this package — see README.md's
+> cross-reference convention.
+
 # Acceptance criteria — engine.core (MOD-012)
 
 **BOW code:** MOD-012

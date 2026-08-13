@@ -42,6 +42,22 @@ A PASS on an item requires **all** Standard gates above AND every AC in the item
   `internal/ui/screens/map/errors.go`). The Tester's SG-5 (forbidden-touch)
   gate already allows `data/errors.json` as a sanctioned touch path for
   exactly this reason.
+- **Findings/bugs without a clean module mkey get their own BOW-code-named
+  file, not a section in the module file.** When a finding or bug (`SEC-NNN`,
+  `BUG-NNN`) touches an existing module but is not itself that module's
+  planned scope, file its acceptance criteria as its own
+  `docs/planning/acceptance/<BOW-code>.md` (e.g. `SEC-011.md`, `BUG-018.md`)
+  rather than adding a section to the module's own file (`ui.core.md`,
+  `engine.core.md`, etc.) — this keeps "one file per module" intact for the
+  common case. The risk this creates: a future BA editing the module file
+  for unrelated reasons has no way to discover the sibling finding file and
+  could produce duplicate or conflicting criteria on the same package. The
+  cheap mitigation: **any such finding/bug file MUST add a one-line
+  cross-reference note at the top of every module acceptance file it
+  touches**, pointing to the finding-specific file (see `ui.core.md`,
+  `engine.core.md`, `harness.stub.md` for the pattern). If the module has no
+  acceptance file of its own, no cross-reference is needed. (Ratified
+  2026-08-12 per ASM-079.)
 - **`_test.go` files are exempt from the GR#20 depguard ban** on
   `internal/ui` importing `internal/engine`. GR#20 (Contract-First,
   Stub-Forever) protects *production* decoupling — UI code must consume the
