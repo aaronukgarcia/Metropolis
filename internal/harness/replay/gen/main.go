@@ -13,6 +13,23 @@
 // itself is fully deterministic (StubEngine with chaos disabled, no
 // wall-clock dependency anywhere on this path — GR#21), so re-running
 // this script without any code change reproduces byte-identical output.
+//
+// # GR#7 exemption (SEC-040, module key harness.replay)
+//
+// This file constructs its errors via bare fmt.Errorf, not
+// errs.New/errs.Wrap against the data/errors.json registry. That is a
+// deliberate, documented exemption, not an oversight: this is dev-only
+// generator tooling in the same class CLAUDE.md already exempts for
+// root tooling (see claude-version-guard.js's "docs/tooling exemption"
+// paragraph) — excluded from the normal build via the "ignore" build
+// tag above, never linked into any shipped binary, invoked manually by
+// a developer at the shell, and every error it can produce only ever
+// reaches that developer's terminal (main's os.Exit(1) path) — never a
+// player-facing or live-runtime surface. Registering MET- codes for a
+// one-shot fixture-regeneration script would add registry weight with
+// no corresponding runtime consumer. If this file ever gains a
+// build-tag-free, runtime-reachable path, this exemption no longer
+// applies and its errors must move to errs.New.
 package main
 
 import (
