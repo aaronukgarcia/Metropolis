@@ -48,7 +48,7 @@ The `RoadsAPI`: road-as-named-edge identity (class, lanes, speed limit, maintena
 
 ### Error handling
 
-- **AC-12 (GR#7).** An upgrade or roadworks-scheduling command targeting a nonexistent road, or an incompatible class transition rejected by AC-4's rule, returns a registry-sourced error (new `MET-E`-range code) rather than a silent no-op or a panic. Check: `grep -n "MET-" internal/engine/roads/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Ii]nvalid.*[Uu]pgrade\|func Test.*[Nn]onexistentRoad" internal/engine/roads/*_test.go`).
+- **AC-12 (GR#7).** An upgrade or roadworks-scheduling command targeting a nonexistent road, or an incompatible class transition rejected by AC-4's rule, returns a registry-sourced error (new `MET-E`-range code) rather than a silent no-op or a panic. Check: `grep -n "MET-" internal/engine/roads/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Ii]nvalid.*[Uu]pgrade\|func Test.*[Nn]onexistentRoad" internal/engine/roads/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no silent no-op upgrade/roadworks command was applied, not merely that a matching-named test function exists.
 - **AC-13.** A naming request for an unrecognised `ObjectKind`, or a corpus/registry load failure (`data/naming_corpus.json` malformed/missing), fails loudly via `foundation.data`'s validated-load path rather than silently returning an empty or placeholder name that could ship visible to the player. Check: passing test coverage (`grep -rn "func Test.*[Uu]nrecognisedKind\|func Test.*[Cc]orpusLoadFail" internal/engine/roads/*_test.go`).
 
 ### Determinism & safety

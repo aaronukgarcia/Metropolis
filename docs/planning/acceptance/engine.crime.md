@@ -49,7 +49,7 @@ Per-district, per-type crime generation from independently isolable drivers; the
 
 ### Error handling
 
-- **AC-14 (GR#7).** Querying an unregistered district's crime figures, or issuing a strategy-slider command against an un-built Constabulary HQ, returns a registry-sourced error (new `MET-E`-range code) rather than a silently-created zero-value district entry or a silently-dropped command. Check: `grep -n "MET-" internal/engine/crime/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredDistrict\|func Test.*[Nn]oHQ" internal/engine/crime/*_test.go`).
+- **AC-14 (GR#7).** Querying an unregistered district's crime figures, or issuing a strategy-slider command against an un-built Constabulary HQ, returns a registry-sourced error (new `MET-E`-range code) rather than a silently-created zero-value district entry or a silently-dropped command. Check: `grep -n "MET-" internal/engine/crime/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredDistrict\|func Test.*[Nn]oHQ" internal/engine/crime/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no zero-value district entry or dropped command occurred as a side effect, not merely that a matching-named test function exists.
 - **AC-15.** A decapitation command targeting a gang ID that doesn't exist, or a strategy-mix command whose three weights don't sum to a documented total, is rejected with a typed error, never silently ignored or silently renormalised. Check: passing test coverage (`grep -rn "func Test.*[Ii]nvalidDecap\|func Test.*[Ii]nvalidMix" internal/engine/crime/*_test.go`).
 
 ### Determinism, safety & scale

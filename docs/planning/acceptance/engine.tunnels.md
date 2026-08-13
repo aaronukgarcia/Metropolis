@@ -41,7 +41,7 @@ TBM buy/lease with cumulative-km learning-curve pricing; road/rail/metro/utility
 
 ### Error handling
 
-- **AC-10 (GR#7).** Issuing a tunnel order without an owned/leased TBM, routing a tunnel through geology `engine.world`'s prospecting has flagged as unbuildable (if such a flag exists at dispatch time — documented either way), or constructing Hyperloop before the M12 gate, produces a registry-sourced error (new `MET-E`-range code) rather than a silent rejection with no typed cause. Check: `grep -n "MET-" internal/engine/tunnels/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Nn]oTBM\|func Test.*[Pp]reGate" internal/engine/tunnels/*_test.go`).
+- **AC-10 (GR#7).** Issuing a tunnel order without an owned/leased TBM, routing a tunnel through geology `engine.world`'s prospecting has flagged as unbuildable (if such a flag exists at dispatch time — documented either way), or constructing Hyperloop before the M12 gate, produces a registry-sourced error (new `MET-E`-range code) rather than a silent rejection with no typed cause. Check: `grep -n "MET-" internal/engine/tunnels/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Nn]oTBM\|func Test.*[Pp]reGate" internal/engine/tunnels/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that the order was rejected with a typed, registry-sourced error rather than a silent no-typed-cause rejection, not merely that a matching-named test function exists.
 
 ### Determinism, safety & scale
 

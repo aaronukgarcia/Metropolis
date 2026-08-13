@@ -40,7 +40,7 @@ The generic service model (capacity, coverage radius, funding-level→quality fu
 
 ### Error handling
 
-- **AC-11 (GR#7).** Registering a service against an unregistered `ServiceKind`, or querying a service that was never registered, returns a registry-sourced error (new `MET-E`-range code) rather than a zero-value quality/capacity silently treated as "service exists but is empty". Check: `grep -n "MET-" internal/engine/services/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredService" internal/engine/services/*_test.go`).
+- **AC-11 (GR#7).** Registering a service against an unregistered `ServiceKind`, or querying a service that was never registered, returns a registry-sourced error (new `MET-E`-range code) rather than a zero-value quality/capacity silently treated as "service exists but is empty". Check: `grep -n "MET-" internal/engine/services/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredService" internal/engine/services/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no zero-value quality/capacity record was silently created, not merely that a matching-named test function exists.
 - **AC-12.** A funding-level command outside its valid range (negative, or above 100% where the data schema caps it) is rejected with a typed error, never silently clamped without the caller knowing clamping occurred. Check: passing test coverage (`grep -rn "func Test.*[Ii]nvalidFunding" internal/engine/services/*_test.go`).
 
 ### Determinism & safety

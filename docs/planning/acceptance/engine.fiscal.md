@@ -38,7 +38,7 @@ The whole-economy Fiscal Circuit: a Sankey-topology query over `engine.finance`'
 
 ### Error handling
 
-- **AC-10 (GR#7).** Querying an unknown Sankey node/flow category returns a registry-sourced error (new `MET-E`-range code) naming the category, never a zero-value node silently returned as if it were a real, built producer. Check: `grep -n "MET-" internal/engine/fiscal/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nknownCategory" internal/engine/fiscal/*_test.go`).
+- **AC-10 (GR#7).** Querying an unknown Sankey node/flow category returns a registry-sourced error (new `MET-E`-range code) naming the category, never a zero-value node silently returned as if it were a real, built producer. Check: `grep -n "MET-" internal/engine/fiscal/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nknownCategory" internal/engine/fiscal/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no zero-value node was silently returned as if it were a real producer, not merely that a matching-named test function exists.
 
 ### Determinism & safety
 

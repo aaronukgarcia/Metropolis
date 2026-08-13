@@ -43,7 +43,7 @@ Coefficient-driven demand computation (§17.1/§17.2, resolving `data/buildings.
 
 ### Error handling
 
-- **AC-13 (GR#7).** A `consumptionRef` in `data/buildings.json` that fails to resolve against `data/consumption.json`'s loaded classes produces a registry-sourced error (new `MET-E`-range code) at world-load/reference-resolution time, not a silent zero-demand default. Check: `grep -n "MET-" internal/engine/consumption/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Dd]anglingRef\|func Test.*[Uu]nresolved" internal/engine/consumption/*_test.go`).
+- **AC-13 (GR#7).** A `consumptionRef` in `data/buildings.json` that fails to resolve against `data/consumption.json`'s loaded classes produces a registry-sourced error (new `MET-E`-range code) at world-load/reference-resolution time, not a silent zero-demand default. Check: `grep -n "MET-" internal/engine/consumption/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Dd]anglingRef\|func Test.*[Uu]nresolved" internal/engine/consumption/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no silent zero-demand default was applied for the unresolved reference, not merely that a matching-named test function exists.
 - **AC-14.** A network with no source capable of meeting any demand at all (e.g. a water network with zero registered sources) produces a loud, registry-sourced diagnostic each tick it remains unsolvable, rather than silently reporting 100% shortfall indistinguishable from a partial, expected shortfall. Check: passing test coverage (`grep -rn "func Test.*[Nn]oSource" internal/engine/consumption/*_test.go`).
 
 ### Determinism & safety

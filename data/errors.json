@@ -30,6 +30,8 @@
       "E400-E499": "reserved for engine.world (internal/engine/world: OS Terrain 50 import, per-cell/tile queries and ownership commands, geology/hydrology derivation, tile purchase — MOD-017. Checked against this table AND `grep -rn \"MET-E4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E4xx code existed either place.)",
       "E500-E599": "reserved for engine.season (internal/engine/season: month-index seasonal curve lookups (power, water, gas, harvest, construction, school intake, leisure mix, health wave) loaded from data/seasonal.json — MOD-027. Checked against this table AND `grep -rn \"MET-E5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior real MET-E5xx code existed either place (source_scan_test.go's own MET-E500/E100 literals are synthetic test fixtures, not raised codes, and do not count).)",
       "E600-E699": "reserved for engine.market (internal/engine/market: nine-commodity price/availability/supply-mode registry loaded from data/market.json — MOD-020. Checked against this table AND `grep -rn \"MET-E6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E6xx code existed either place.)",
+      "E700-E799": "reserved for engine.helper (internal/engine/helper: FEAT-063's advisor-metadata Registrant/Registry contract and ask-driven Recommend/Preview panel query surface — no real player-action feature registers yet, per this item's fixture-only-proof scope; the errors below are constructed by the helper package itself AND by its helperfixture package, since the fixture lives inside the same E700-E799 range per BUG-008's per-range, not per-package, ownership rule. Checked against this table AND `grep -rn \"MET-E7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E7xx code existed either place.)",
+      "E800-E899": "reserved for feat.saveux (internal/engine/save: FEAT-011's save/load orchestration -- single-save-in-flight rejection, staging/promotion failures, format-version-mismatch and corrupted-load handling, list/enumerate failures, unknown-participant-kind on load. Checked against this table AND `grep -rn \"MET-E8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E8xx code existed either place.)",
       "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
@@ -37,7 +39,10 @@
       "H100-H199": "reserved for ui.harness (internal/harness/uitest, MOD-014: scripted-key-DSL parse errors, fixture-exhausted-before-script-complete, snapshot load/name errors, Harness copy guard — second H-layer sub-range, since H000-H099 already belongs to harness.replay). Checked against both this table AND `grep -rn \"MET-H1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H1xx code existed either place.",
       "H200-H299": "reserved for harness.headless (internal/harness/headless, MOD-015: CLI flag validation, scenario-script parse/read errors, -out write failures — third H-layer sub-range, since H000-H099/H100-H199 already belong to harness.replay/ui.harness). Checked against both this table AND `grep -rn \"MET-H2\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H2xx code existed either place.",
       "U300-U399": "reserved for ui.keys (internal/ui/keys, MOD-011: mnemonic-path Register conflicts (duplicate/prefix ambiguity), malformed keymap-profile fallback, keymap entries binding to an unregistered mnemonic path, palette parameterised-argument rejection, invalid mark-slot identifiers — third U-layer sub-range, since U000-U099/U100-U199/U200-U299 already belong to ui.core/ui.screen.map/ui.screen.debug). Checked against both this table AND `grep -rn \"MET-U3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U3xx code existed either place.",
-      "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place."
+      "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place.",
+      "U400-U499": "reserved for feat.devmode (internal/ui/screens/devmode, FEAT-065: pause-anywhere dev console gate/open-state rejections — fourth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys). Checked against both this table AND `grep -rn \"MET-U4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U4xx code existed either place.",
+    "U500-U599": "reserved for ui.screen.demo (internal/ui/screens/demo, FEAT-018: F6 Demographics screen — malformed f6.population/f6.leisure/f6.housing/f6.commute patch handling, unknown/stale subscription-ID drops (SF-7/DEMO-9) — fifth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode. Checked against both this table AND `grep -rn \"MET-U5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U5xx code existed either place.",
+      "H400-H499": "reserved for harness.metricsdash (internal/harness/metricsdash, FEAT-066/feat.metricsdash pending module-key confirmation ASM-451: read-only weakness/gate-status/lint/perf-CI dashboard aggregation and defect/query logging entry-point errors -- fifth H-layer sub-range, since H000-H099/H100-H199/H200-H299/H300-H399 already belong to harness.replay/ui.harness/harness.headless/harness.synth. Checked against both this table AND `grep -rn \"MET-H4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-H4xx code existed either place."
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -228,6 +233,12 @@
       "message": "buildings.json entry {field} references a consumption class that consumption.json does not define",
       "remedy": "Either add the missing class to data/consumption.json's \"classes\" map (engine.consumption/MOD-021's own balance data), or fix the offending buildings.json entry's consumptionRef to name an existing class key. See FEAT-010/data.catalogue AC-12."
     },
+    "MET-F608": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "Get/OnChange/Reload for {path} called on a copied Store value, not the one NewStore constructed",
+      "remedy": "Always use the *Store[T, PT] pointer NewStore returned. Do not dereference-and-reassign it ('s2 := *s1') or pass it by value -- that produces a second Store value with its own reloadMu/cbMu but an aliased cbs backing array, defeating this package's concurrency-safety invariant (BUG-125/SEC-020). If you need a second independent Store, call NewStore again."
+    },
     "MET-F700": {
       "severity": "error",
       "module": "tool.astgate",
@@ -245,6 +256,12 @@
       "module": "tool.astgate",
       "message": "astgate could not find go.mod walking upward from {dir}",
       "remedy": "Run astgate (directly, or via go test ./... in the build-test-vet CI job) from within the repository, or below its root, so resolveRepoRoot's upward search can find go.mod. If this fires in CI, check the working directory the job invoked the gate from."
+    },
+    "MET-F703": {
+      "severity": "error",
+      "module": "tool.astgate",
+      "message": "astgate found two distinct violations with the identical ratchet key {key}: {firstLocation} and {secondLocation}",
+      "remedy": "BUG-119 round 6/7's structural fix (Bill's ruling): violationKey must be derived from each node's complete identity (file + full enclosing declaration chain + kind + the full type expression as printed), and building the key map is REQUIRED to hard-fail on any two distinct nodes producing the same key -- a silent merge is exactly how rounds 1-5 shipped incomplete keys. This means violationKey itself is still missing something that distinguishes these two real, different findings. Do not special-case this pair -- find and fix the remaining gap in violationKey's identity tuple (or the printer/type-expression logic feeding it), then re-run. Never suppress this error by removing one of the findings from the ratchet map."
     },
     "MET-U001": {
       "severity": "fatal",
@@ -558,6 +575,72 @@
       "message": "debug.State method {method} was called on a struct-copied State, not the value NewState returned; the call was rejected before touching any shared field",
       "remedy": "Never copy a *debug.State value (`s2 := *s` or equivalent) — mu is an independent lock on the copy while header/cheatLog remain aliased with the original, so a copy is a second, uncoordinated lock domain over the SAME save header's sticky DebugTouched hygiene flag (SEC-020 wave 2). Always pass and store the *debug.State pointer NewState gave you."
     },
+    "MET-E212": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "cannot submit debug feedback: no feedback inbox directory configured",
+      "remedy": "Wire the feedback inbox directory via debug.WithFeedbackInbox before calling SubmitFeedback (FEAT-065 AC-DM8) — there is no invented default path; the inbox location is a deployment/config concern the caller owns."
+    },
+    "MET-E213": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "debug feedback inbox directory {inbox} could not be created or written: {cause}",
+      "remedy": "Check the configured feedback inbox path's permissions and that no non-directory file already occupies it. FEAT-065 AC-DM8's file-drop mechanism requires a writable directory before any submission can be durably recorded."
+    },
+    "MET-E214": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "debug feedback record could not be written to {path}: {cause}",
+      "remedy": "Check disk space and permissions on the feedback inbox directory. SubmitFeedback writes via a temp-file-then-rename (never appends, never overwrites) so a partial write here never leaves a half-written record visible to claude-devfeedback-import.js — but the submission itself was not durably recorded and should be retried."
+    },
+    "MET-E215": {
+      "severity": "error",
+      "module": "feat.debugmode",
+      "message": "debug feedback record could not be marshalled to JSON: {cause}",
+      "remedy": "Defensive-only: every FeedbackRecord field is a plain string/int64/bool. If this fires, a recent change to FeedbackRecord's fields likely introduced an unmarshalable type — fix the field type rather than working around this at the call site."
+    },
+    "MET-U400": {
+      "severity": "error",
+      "module": "feat.devmode",
+      "message": "dev console cannot open: no RequireConsole gate wired at construction",
+      "remedy": "Construct the Console with WithRequireConsole(state.RequireConsole) before calling Open. This is a construction-time misconfiguration — a genuine gate denial (debug off) is returned unwrapped as feat.debugmode's own ErrDebugRequired (MET-E200), never this code (FEAT-065 AC-DM1's 'not a devconsole-local error code' requirement)."
+    },
+    "MET-U401": {
+      "severity": "error",
+      "module": "feat.devmode",
+      "message": "dev console action {action!q} attempted before the console was open",
+      "remedy": "Call Console.Open successfully (which itself gates on debug.State.RequireConsole) before invoking Inspect or SubmitFeedback — FEAT-065 AC-DM7 requires every devconsole surface to be unreachable without first passing through the same gate the console's own open-action uses."
+    },
+    "MET-U402": {
+      "severity": "error",
+      "module": "feat.devmode",
+      "message": "dev console capability {capability!q} has no implementation wired",
+      "remedy": "The Console was constructed without the matching Option (e.g. WithInspect, WithSubmitFeedback, WithPause) for this capability. Wire every capability the caller intends to expose at construction time — an unwired optional seam is refused explicitly rather than silently doing nothing."
+    },
+    "MET-U500": {
+      "severity": "warn",
+      "module": "ui.screen.demo",
+      "message": "malformed {view} patch could not be applied: {cause}",
+      "remedy": "The patch was not valid JSON for the named f6.* view schema (bad JSON, unrecognised schemaVersion, or an oversized payload) and was dropped; the demo screen's affected view keeps its last-known-good state (SF-7/DEMO-9). If this persists, check the sending engine module's view patch encoding for the named view."
+    },
+    "MET-U501": {
+      "severity": "warn",
+      "module": "ui.screen.demo",
+      "message": "delta for unknown or stale subscription {subscriptionId} dropped",
+      "remedy": "ApplyDelta received a protocol.Delta whose SubscriptionID was never bound via BindSubscription (or was bound to a view since unsubscribed). This is expected transiently around resubscribe/unsubscribe races; if it persists, check the caller's SubscriptionID-to-view routing (SF-7/DEMO-9 — never applied, never a panic)."
+    },
+    "MET-U502": {
+      "severity": "error",
+      "module": "ui.screen.demo",
+      "message": "Subscribe called with unrecognised view name {view}",
+      "remedy": "This screen only subscribes to its four registered f6.* views (f6.population, f6.leisure, f6.housing, f6.commute). Passing any other name is a programming error at the call site — fix the caller rather than adding a new view name here without updating code.json's outbound edges and this package's doc.go."
+    },
+    "MET-U503": {
+      "severity": "error",
+      "module": "ui.screen.demo",
+      "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
+      "remedy": "A *demo.Screen value was copied (`s2 := *s`) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs/stale/typologies/ageMonths/personality/hoursByActivity/leisureTaste/typologyOrder are reference types a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) — this call is rejected fail-closed instead of racing or corrupting the shared maps/slices. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
     "MET-E300": {
       "severity": "error",
       "module": "engine.invariant",
@@ -593,7 +676,7 @@
       "module": "engine.world",
       "message": "OS Terrain 50 import of tile {tile} failed checksum/format validation: {cause}",
       "remedy": "The source ASCII-grid/GML tile at {tile} did not pass the importer's header/post-count/checksum check (data/georef.json's source.formats). Re-download the tile from https://osdatahub.os.uk/downloads/open/Terrain50 and re-run the build-time import — the importer never falls back to a silent best-effort partial grid (GR#7)."
-      },
+    },
     "MET-E401": {
       "severity": "fatal",
       "module": "engine.world",
@@ -695,6 +778,132 @@
       "module": "engine.market",
       "message": "internal error: commodity \"{commodity}\" record is missing required field \"{field}\" despite passing Load validation",
       "remedy": "This should be unreachable — Load's foundation/data.MarketFile.Validate and validateCommodityPricingXOR both enforce this field's presence before a *MarketAPI is ever returned, and the commodity map is never mutated afterward. If this fires, either that validation was weakened by a later edit, or a *MarketAPI was constructed by a path that bypasses Load (e.g. a hand-built test fixture); file a BUG item, do not treat the returned MarketAPI as trustworthy."
+    },
+    "MET-E700": {
+      "severity": "error",
+      "module": "engine.helper",
+      "message": "Registry.Register rejected an empty ActionTaxonomyID",
+      "remedy": "Every Registrant must return a stable, non-empty ActionTaxonomyID from its taxonomy-id accessor (AC-1a). Give the registrant's TaxonomyID() a real, unique identifier before registering it."
+    },
+    "MET-E701": {
+      "severity": "error",
+      "module": "engine.helper",
+      "message": "Registry.Register rejected a duplicate ActionTaxonomyID \"{actionID}\"",
+      "remedy": "Each ActionTaxonomyID may register at most once with a given *Registry (AC-1a: \"registry-unique identifier\"). Give the new Registrant a distinct taxonomy id, or fix the caller registering the same id twice."
+    },
+    "MET-E702": {
+      "severity": "error",
+      "module": "engine.helper",
+      "message": "Registry.Register called on ActionTaxonomyID \"{actionID}\" after the registry was sealed",
+      "remedy": "Registry.Register is boot-wiring-only (AC-3): once Recommend/Preview has read from the registry (or Seal was called explicitly), no further registration is accepted, so a live query never sees a stale view of a registry a later Register mutated underneath it. Move this registration earlier in boot wiring, before the first Recommend/Preview/Seal call."
+    },
+    "MET-E703": {
+      "severity": "error",
+      "module": "engine.helper",
+      "message": "Preview() rejected unknown action id \"{actionID}\"",
+      "remedy": "Preview only accepts an ActionTaxonomyID that a Registrant has already registered with this *Registry (AC-8, mirrors MarketAPI.lookup's ErrUnknownCommodity precedent). Check the id against Registry.Recommend's candidate set, or register the missing Registrant at boot."
+    },
+    "MET-E704": {
+      "severity": "error",
+      "module": "engine.helper",
+      "message": "precondition \"{preconditionID}\" could not be evaluated against the given GameStateView: {cause}",
+      "remedy": "A Precondition's Evaluate must return a registry-sourced error (never a silent false) when it genuinely cannot evaluate — e.g. a required GameStateView field is absent (AC-2). Supply a GameStateView carrying every field the named precondition needs, or fix the precondition to declare its required fields more precisely."
+    },
+    "MET-E705": {
+      "severity": "error",
+      "module": "engine.helper",
+      "message": "GameStateView is missing required field \"{field}\"",
+      "remedy": "The caller constructed a GameStateView without a field a registered Precondition or ProjectConsequence query needs (AC-2/AC-8). Populate the field before calling Recommend/Preview, or check the failing precondition/registrant's documented required-field list."
+    },
+    "MET-E800": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "save rejected: another save is already in flight for bundle \"{finalDir}\"",
+      "remedy": "AC-11's single-save-in-flight guard rejects a second SaveManual/Autosave/Milestone trigger while one is already running on the same Manager, rather than queuing it or letting the two interleave shard writes. Wait for the in-flight save to complete (or fail) before retrying, or use a separate Manager instance if truly concurrent saves to different roots are intended."
+    },
+    "MET-E801": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "could not create the staging bundle directory under \"{root}\": {cause}",
+      "remedy": "Check filesystem permissions and free space on the save root's volume. No shard has been written yet at this point -- nothing under the discoverable save tree (manual/autosave/milestone) is affected."
+    },
+    "MET-E802": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "writing shard for participant kind \"{kind}\" failed: {cause}",
+      "remedy": "A registered Participant's RecordSource returned an error, or the underlying shard write/close failed. The staged bundle is discarded (AC-9) -- no already-promoted save (manual, autosave, or milestone) is affected. Check the failing participant's Source implementation and the target filesystem."
+    },
+    "MET-E803": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "writing the staged bundle's header.json failed: {cause}",
+      "remedy": "Check filesystem permissions on the staging directory. The staged bundle is discarded; nothing already-promoted is affected."
+    },
+    "MET-E804": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "writing the staged bundle's save-meta.json sidecar failed: {cause}",
+      "remedy": "Check filesystem permissions on the staging directory. The staged bundle is discarded; nothing already-promoted is affected."
+    },
+    "MET-E805": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "staged bundle failed integrity validation before promotion: {cause}",
+      "remedy": "serialize.ValidateBundle found a problem with the staged bundle (header/shard hash or size mismatch) before this package would have promoted it to a discoverable name (AC-9). The staged bundle is discarded and never becomes selectable via List/Load -- nothing already-promoted is affected. This should be rare; if it recurs, check the participant(s) named in the underlying cause for non-deterministic or malformed record production."
+    },
+    "MET-E806": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "promoting the validated staged bundle to \"{finalDir}\" failed: {cause}",
+      "remedy": "The bundle passed integrity validation but the final os.Rename into the discoverable save tree failed (e.g. name collision or filesystem error). The staged bundle is deliberately left under root/.staging for forensic inspection rather than deleted. Check the target path and filesystem, then retry the save; clean up the orphaned staging directory once diagnosed."
+    },
+    "MET-E807": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "cannot load save at \"{dir}\": format version is incompatible with this build: {cause}",
+      "remedy": "The bundle's Header.FormatVersion has a different MAJOR version than this build's serialize.CurrentFormatVersion (AC-12). Newer-major saves require a newer build; older-major saves require a migrator, which does not exist yet (per int.serializer's own documented scope) -- this save cannot be loaded by this build."
+    },
+    "MET-E808": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "reading save-meta.json for bundle \"{dir}\" failed: {cause}",
+      "remedy": "The bundle's save-meta.json sidecar is missing or malformed. If the bundle was written by this package's own Manager, this indicates corruption or an out-of-band edit; check the file directly or restore from an older save."
+    },
+    "MET-E809": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "no save bundle found at \"{dir}\": {cause}",
+      "remedy": "The given path does not exist or is not a bundle directory (no header.json). Check the path, or use List to enumerate what actually exists under the save root."
+    },
+    "MET-E810": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "no valid autosave could be loaded from \"{root}\" ({candidates} candidates all failed)",
+      "remedy": "Every autosave in the rolling-10 history under this root failed to load (corrupted or truncated). Check the returned skip list for the per-entry reasons; if a manual or milestone save exists, load one of those instead via List/Load."
+    },
+    "MET-E811": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "could not enumerate save bundles under \"{root}\" / \"{dir}\": {cause}",
+      "remedy": "A filesystem-level failure while listing the manual/autosave/milestone subdirectories under a save root (distinct from a single bundle's header/meta failing to read, which List reports per-entry instead). Check filesystem permissions and that the save root path is correct."
+    },
+    "MET-E812": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "save bundle contains shard of kind \"{kind}\" with no matching registered Participant",
+      "remedy": "The Manager loading this bundle was constructed with a participant list that does not include a Participant whose Kind() matches this shard -- the registry that wrote the bundle and the one loading it back have drifted apart. Register the missing Participant (or use the same registry the save was written with)."
+    },
+    "MET-E813": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "reading shard for participant kind \"{kind}\" failed: {cause}",
+      "remedy": "A registered Participant's Handler returned an error, or the underlying shard decode failed, while loading a bundle. Check the failing participant's Handler implementation, or (if this bundle is the newest entry in an autosave history) prefer LoadLatest, which skips a corrupted newest entry and loads the next-older valid one instead (AC-10)."
+    },
+    "MET-E814": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "bundle at \"{dir}\" failed validation: {cause}",
+      "remedy": "serialize.ValidateBundle rejected this bundle for a reason other than a FormatVersion major mismatch (e.g. a checksum/size mismatch, missing header, a shard path that is a directory instead of a file, or a semantically-bogus header field). Check the wrapped cause for specifics; if this is the newest entry in an autosave history, prefer LoadLatest, which skips a corrupted newest entry and loads the next-older valid one instead (AC-10)."
     },
     "MET-E900": {
       "severity": "fatal",
@@ -905,6 +1114,42 @@
       "module": "harness.synth",
       "message": "perf record for preset {preset} sets AcceptedRegression=true with no AcceptedReason",
       "remedy": "BUG-083: cmd/perfci's -accept-regression flag (the deliberate, visible way to accept a legitimate slowdown as the new baseline) requires -accept-reason -- a human-readable justification persisted verbatim alongside the accepted measurement. A record claiming an override with no recorded reason is refused as untrustworthy at both the write boundary (AppendResult) and the read boundary (LoadLatestBaseline); re-run cmd/perfci with both flags set to actually accept a regression."
+    },
+    "MET-H400": {
+      "severity": "error",
+      "module": "harness.metricsdash",
+      "message": "could not obtain the weakness-histogram source data: {reason}",
+      "remedy": "RunWeakness could not exec `node claude-bow.js weakness` or could not parse its stdout into the expected histogram shape. Check node/claude-bow.js are reachable from the repo root, and that its output still matches cmdWeakness's documented shape (claude-bow.js) -- a source that genuinely returned zero findings prints its own known-empty sentinel, which this is NOT that."
+    },
+    "MET-H401": {
+      "severity": "error",
+      "module": "harness.metricsdash",
+      "message": "could not obtain the BOW lint drift report: {reason}",
+      "remedy": "RunLint could not exec `node claude-bow.js lint` or could not parse its stdout into the expected findings shape. Check node/claude-bow.js are reachable from the repo root, and that its output still matches cmdLint's documented shape."
+    },
+    "MET-H402": {
+      "severity": "error",
+      "module": "harness.metricsdash",
+      "message": "could not obtain sprint {sprint}'s gate status: {reason}",
+      "remedy": "RunGateStatus could not exec `node claude-bow.js gate-status <sprint>` or could not parse its stdout into the expected per-check/overall shape. Check node/claude-bow.js are reachable from the repo root and that a gate run has actually been recorded for this sprint."
+    },
+    "MET-H403": {
+      "severity": "error",
+      "module": "harness.metricsdash",
+      "message": "perf-CI source file unreadable: {path}",
+      "remedy": "The perf-results NDJSON file or the accepted-regression registry JSON file existed but could not be parsed cleanly (a torn write, corrupt JSON). This is distinct from the file simply not existing yet, which is not an error -- re-run the perf-CI job or repair/regenerate the named file."
+    },
+    "MET-H404": {
+      "severity": "error",
+      "module": "harness.metricsdash",
+      "message": "failed to write the logged note to the feedback inbox: {path}",
+      "remedy": "LogNote could not durably write the submitted note (disk error, unwritable inbox directory, marshal failure). The note was NOT filed -- retry the -log command; nothing was silently discarded, but nothing was recorded either until this succeeds."
+    },
+    "MET-H405": {
+      "severity": "error",
+      "module": "harness.metricsdash",
+      "message": "logged note had an empty body",
+      "remedy": "Pass real note text to -log -- an empty or whitespace-only note is rejected before any file is written, since it would file a useless blank BOW record."
     }
   }
 }

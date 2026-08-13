@@ -1,4 +1,80 @@
 {
+  "$comment": "Section 21 (External Commuting & Housing) + A6 amendment (§21's finite-era-scaled-capacity ruling, docs/METROPOLIS-MASTER-v2.1.md 'R6 -- Out-commuter tax farming exploit' section) of docs/METROPOLIS-MASTER-v2.1.md, transcribed into a schema-valid v1 dataset for the three named off-map job pools. FEAT-047 / data.modes-naming, ASM-274. Placeholder disclosure (ASM-393, per Aaron's standing balance-number regime -- see project memory 'Balance number regime'): every capacityByEra and wageMicropounds figure in this file is a placeholder pending M2 Batch tuning, NOT a literature-cited estimate -- A6 states mechanism only ('finite, era-scaled capacity... bounded and slowly growing') with no spec-given magnitude, unlike modes.json's coefficients which at least cite a structural literature source for the nest-tree convention. See docs/design/modes-naming-external-schema.md for the full field reference.",
   "version": 1,
-  "profiles": []
+  "eraConvention": "era corresponds to the game's milestone/tier index (M0-ENG); capacityByEra covers eras 1 through 12 (the full milestone range data/buildings.json's unlock milestones span) so era 5 -- the tier §21 names as when the external rail station unlocks -- is always covered, not merely reached as a boundary case.",
+  "moneyConvention": "wageMicropounds is int64 micro-pounds (1 GBP = 1,000,000 micropounds, M0-ENG §1.2), matching data/market.json's money-representation convention exactly -- never a float. Interpreted as a monthly gross wage per off-map job held.",
+  "profiles": [
+    {
+      "id": "london",
+      "name": "London",
+      "capacityByEra": [
+        { "era": 1, "capacity": 500 },
+        { "era": 2, "capacity": 550 },
+        { "era": 3, "capacity": 600 },
+        { "era": 4, "capacity": 650 },
+        { "era": 5, "capacity": 750 },
+        { "era": 6, "capacity": 800 },
+        { "era": 7, "capacity": 850 },
+        { "era": 8, "capacity": 900 },
+        { "era": 9, "capacity": 950 },
+        { "era": 10, "capacity": 1000 },
+        { "era": 11, "capacity": 1050 },
+        { "era": 12, "capacity": 1100 }
+      ],
+      "wageMicropounds": 2900000000,
+      "transportRequirement": [
+        { "channel": "motorway", "availableFromTier": 1 },
+        { "channel": "externalRail", "availableFromTier": 5 }
+      ],
+      "comment": "Plausible v1 placeholder capacity/wage figures, pending M2 Batch tuning -- no spec-stated magnitude exists for this pool (A6 states mechanism only). Growth rate deliberately the shallowest of the three pools, matching A6's explicit wording that 'London absorbs a bounded and slowly growing share'. Matches data/market.json's 'Plausible v1 static price, pending M2 Batch tuning' disclosure convention."
+    },
+    {
+      "id": "ashford",
+      "name": "Ashford",
+      "capacityByEra": [
+        { "era": 1, "capacity": 300 },
+        { "era": 2, "capacity": 340 },
+        { "era": 3, "capacity": 380 },
+        { "era": 4, "capacity": 420 },
+        { "era": 5, "capacity": 500 },
+        { "era": 6, "capacity": 540 },
+        { "era": 7, "capacity": 580 },
+        { "era": 8, "capacity": 620 },
+        { "era": 9, "capacity": 660 },
+        { "era": 10, "capacity": 700 },
+        { "era": 11, "capacity": 740 },
+        { "era": 12, "capacity": 780 }
+      ],
+      "wageMicropounds": 2300000000,
+      "transportRequirement": [
+        { "channel": "motorway", "availableFromTier": 1 },
+        { "channel": "externalRail", "availableFromTier": 5 }
+      ],
+      "comment": "Plausible v1 placeholder capacity/wage figures, pending M2 Batch tuning -- no spec-stated magnitude exists for this pool (A6 states mechanism only). Matches data/market.json's 'Plausible v1 static price, pending M2 Batch tuning' disclosure convention."
+    },
+    {
+      "id": "dover",
+      "name": "Dover",
+      "capacityByEra": [
+        { "era": 1, "capacity": 200 },
+        { "era": 2, "capacity": 220 },
+        { "era": 3, "capacity": 240 },
+        { "era": 4, "capacity": 260 },
+        { "era": 5, "capacity": 320 },
+        { "era": 6, "capacity": 340 },
+        { "era": 7, "capacity": 360 },
+        { "era": 8, "capacity": 380 },
+        { "era": 9, "capacity": 400 },
+        { "era": 10, "capacity": 420 },
+        { "era": 11, "capacity": 440 },
+        { "era": 12, "capacity": 460 }
+      ],
+      "wageMicropounds": 2100000000,
+      "transportRequirement": [
+        { "channel": "motorway", "availableFromTier": 1 },
+        { "channel": "externalRail", "availableFromTier": 5 }
+      ],
+      "comment": "Plausible v1 placeholder capacity/wage figures, pending M2 Batch tuning -- no spec-stated magnitude exists for this pool (A6 states mechanism only). Matches data/market.json's 'Plausible v1 static price, pending M2 Batch tuning' disclosure convention."
+    }
+  ]
 }

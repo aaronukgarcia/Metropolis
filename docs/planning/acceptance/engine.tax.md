@@ -39,8 +39,8 @@ The tax instrument panel: residential (council-tax bands by typology, per-distri
 
 ### Error handling
 
-- **AC-11 (GR#7).** Setting a rate outside an instrument's declared valid range (from `data/tax_instruments.json`) is rejected with a registry-sourced error (new `MET-E`-range code) naming the instrument and the attempted value, never silently clamped or accepted. Check: `grep -n "MET-" internal/engine/tax/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Ii]nvalidRate\|func Test.*[Oo]utOfRange" internal/engine/tax/*_test.go`).
-- **AC-12 (GR#7).** Querying/setting an unregistered instrument key returns a registry-sourced error, never a zero-value instrument silently treated as valid. Check: `grep -n "MET-" internal/engine/tax/*.go`; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredInstrument" internal/engine/tax/*_test.go`).
+- **AC-11 (GR#7).** Setting a rate outside an instrument's declared valid range (from `data/tax_instruments.json`) is rejected with a registry-sourced error (new `MET-E`-range code) naming the instrument and the attempted value, never silently clamped or accepted. Check: `grep -n "MET-" internal/engine/tax/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Ii]nvalidRate\|func Test.*[Oo]utOfRange" internal/engine/tax/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no clamped or silently-accepted rate was written to the instrument, not merely that a matching-named test function exists.
+- **AC-12 (GR#7).** Querying/setting an unregistered instrument key returns a registry-sourced error, never a zero-value instrument silently treated as valid. Check: `grep -n "MET-" internal/engine/tax/*.go`; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredInstrument" internal/engine/tax/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no zero-value instrument was silently treated as valid, not merely that a matching-named test function exists.
 
 ### Determinism & safety
 

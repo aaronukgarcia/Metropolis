@@ -1,4 +1,332 @@
 {
+  "$comment": "Section 19.1 (Transport, Routing & Traffic -- Modes) of docs/METROPOLIS-MASTER-v2.1.md, transcribed into a structured nested-logit mode-choice schema. FEAT-047 / data.modes-naming. Every base field (speedUrbanKmh/capacityPerUnit/pcuLoad/notes) is transcribed verbatim from the spec table. The nestedLogit nest tree (partition + nesting parameters) and every utility/personality-weight coefficient are v1 schema-authoring content, NOT final-tuned balance numbers (M2 Batch territory, same carve-out data.catalogue.md uses) -- see each block's own provenance object. Literature-cited: the nested-logit structural convention (nest partition + (0,1] nesting-parameter range) only, citing Train (2009) Discrete Choice Methods with Simulation, 2nd ed., Cambridge University Press, Ch. 4. Placeholder: every per-mode utility coefficient (ASC/betaTime/betaCost/betaComfort/betaReliability) and every personalityWeights entry -- these are Metropolis-specific v1 estimates fitted to this game's own cost/time/money units, not transcribed measured values from any study of this fictional city, honestly marked sourceType: derived-placeholder rather than dressed up as a false literature citation. See docs/design/modes-naming-external-schema.md for the full field reference and docs/planning/acceptance/data.modes-naming.md for acceptance criteria.",
   "version": 1,
-  "entries": []
+  "modeCountNote": "ASM-394: data.modes-naming.md's AC-1 states 'exactly the 11 modes' but its own enumerated list (walk, bicycle, motorbike, car, taxi, minibus, bus, tram, metro, heavy rail, ferry, air) and the §19.1 spec table both list 12 distinct modes. This file ships all 12 named modes -- treating '11' as a miscount in the acceptance text rather than a deliberate instruction to omit one of the spec's own worked examples (which the AC's own false-pass warning explicitly calls out as a defect: 'a test that only asserts len(entries) == 11 passes an implementation with the wrong 11 modes'). Logged as a new BOW assumption for Bill.",
+  "unitsConvention": "speedUrbanKmh in km/h unless unit overridden per-entry (ferry uses knots); capacityPerUnit shapes vary by mode per the spec's own varying column shape (single value / min-max pair / per-train+per-hour-per-direction pair); pcuLoad is passenger-car-unit load per vehicle where applicable, null with a trackType descriptor where the spec shows track/none instead; utility coefficients are per generalised-cost component: betaTime is utility per minute of time, betaCost is utility per micropound of monetary cost (1 GBP = 1,000,000 micropounds, M0-ENG §1.2, matching data/market.json), betaComfort/betaReliability are utility per index point on this schema's 0-10 comfort/reliability index.",
+  "modes": [
+    {
+      "id": "walk",
+      "name": "Walk",
+      "speedUrbanKmh": { "value": 5, "unit": "km/h" },
+      "capacityPerUnit": null,
+      "pcuLoad": null,
+      "trackType": "none",
+      "notes": "free; health+; ≤2 km trips",
+      "utility": {
+        "alternativeSpecificConstant": 0.60,
+        "betaTime": -0.090,
+        "betaCost": 0.0,
+        "betaComfort": 0.02,
+        "betaReliability": 0.08,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Positive ASC and low time-penalty reflect walking's free/healthy framing (§19.1 notes column); betaCost is genuinely 0.0 (walking has no monetary cost in this schema, not a placeholder omission). Sign/relative-magnitude ordering follows conventional generalised-cost mode-choice practice (Ortuzar & Willumsen, Modelling Transport, 4th ed., Wiley, 2011) but the specific numeric values are this game's own v1 estimate, not transcribed from that or any other source."
+        }
+      }
+    },
+    {
+      "id": "bicycle",
+      "name": "Bicycle",
+      "speedUrbanKmh": { "value": 15, "unit": "km/h" },
+      "capacityPerUnit": null,
+      "pcuLoad": 0.2,
+      "trackType": "bike lane (5,000/h capacity) or shared road (0.2 PCU)",
+      "notes": "health++; hills matter (real slopes!)",
+      "utility": {
+        "alternativeSpecificConstant": 0.30,
+        "betaTime": -0.070,
+        "betaCost": -0.0000005,
+        "betaComfort": 0.03,
+        "betaReliability": 0.09,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Small nonzero betaCost captures negligible running cost (maintenance/wear); slope sensitivity itself is engine.traffic's own generalised-cost term reading real terrain from engine.world (§19.1), not represented as a static coefficient here. Values are this game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "motorbike",
+      "name": "Motorbike",
+      "speedUrbanKmh": { "value": 28, "unit": "km/h" },
+      "capacityPerUnit": { "min": 1, "max": 2 },
+      "pcuLoad": 0.4,
+      "trackType": null,
+      "notes": "cheap, risky (accident rate)",
+      "utility": {
+        "alternativeSpecificConstant": -0.20,
+        "betaTime": -0.045,
+        "betaCost": -0.0000020,
+        "betaComfort": 0.05,
+        "betaReliability": 0.07,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Negative ASC reflects the accident-risk disutility the spec notes call out; this game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "car",
+      "name": "Car",
+      "speedUrbanKmh": { "min": 15, "max": 48, "unit": "km/h", "note": "varies by congestion (§19.1); represented as a min/max pair, not a single averaged number" },
+      "capacityPerUnit": { "min": 1, "max": 5 },
+      "pcuLoad": 1.0,
+      "laneCapacityPcuPerHour": 1800,
+      "trackType": null,
+      "notes": "needs parking (land!)",
+      "utility": {
+        "alternativeSpecificConstant": 0.50,
+        "betaTime": -0.040,
+        "betaCost": -0.0000015,
+        "betaComfort": 0.12,
+        "betaReliability": 0.10,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "High comfort coefficient reflects car's private-cabin advantage; this game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "taxi",
+      "name": "Taxi",
+      "speedUrbanKmh": { "min": 15, "max": 48, "unit": "km/h", "note": "as car (§19.1)" },
+      "capacityPerUnit": { "value": 4 },
+      "pcuLoad": { "value": 1.0, "deadheadNote": "additional deadhead PCU when repositioning empty; spec states '1.0 + deadhead' without a separate figure, not quantified further at v1" },
+      "trackType": null,
+      "notes": "fleet size player/market-set",
+      "utility": {
+        "alternativeSpecificConstant": -0.60,
+        "betaTime": -0.035,
+        "betaCost": -0.0000030,
+        "betaComfort": 0.14,
+        "betaReliability": 0.11,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Highest betaCost magnitude of the road modes reflects taxi fare being the most expensive per-trip cost in this schema; this game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "minibus",
+      "name": "Minibus",
+      "speedUrbanKmh": { "value": 20, "unit": "km/h" },
+      "capacityPerUnit": { "value": 14 },
+      "pcuLoad": 1.2,
+      "trackType": null,
+      "notes": "early transit before fixed routes",
+      "utility": {
+        "alternativeSpecificConstant": -0.80,
+        "betaTime": -0.050,
+        "betaCost": -0.0000018,
+        "betaComfort": 0.06,
+        "betaReliability": 0.05,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Low reliability coefficient reflects demand-responsive routing's less predictable wait; this game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "bus",
+      "name": "Bus",
+      "speedUrbanKmh": { "value": 17, "unit": "km/h", "note": "stops (§19.1)" },
+      "capacityPerUnit": { "value": 80 },
+      "pcuLoad": 2.0,
+      "trackType": null,
+      "notes": "routes player-drawn; bus lanes buildable",
+      "utility": {
+        "alternativeSpecificConstant": -0.70,
+        "betaTime": -0.055,
+        "betaCost": -0.0000012,
+        "betaComfort": 0.05,
+        "betaReliability": 0.06,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "This game's v1 estimate, not measured; magnitudes ordered relative to minibus/tram by capacity/fixed-route tier."
+        }
+      }
+    },
+    {
+      "id": "tram",
+      "name": "Tram",
+      "speedUrbanKmh": { "value": 22, "unit": "km/h" },
+      "capacityPerUnit": { "value": 250 },
+      "pcuLoad": null,
+      "trackType": "street track",
+      "notes": "tier 8",
+      "utility": {
+        "alternativeSpecificConstant": -0.30,
+        "betaTime": -0.045,
+        "betaCost": -0.0000014,
+        "betaComfort": 0.08,
+        "betaReliability": 0.09,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "This game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "metro",
+      "name": "Metro",
+      "speedUrbanKmh": { "value": 33, "unit": "km/h", "note": "spec names it \"tube\"" },
+      "capacityPerUnit": { "perTrain": 1200, "perHourPerDirection": 30000 },
+      "pcuLoad": null,
+      "trackType": "tunnel (capex!)",
+      "notes": "tier 10",
+      "utility": {
+        "alternativeSpecificConstant": -0.10,
+        "betaTime": -0.040,
+        "betaCost": -0.0000013,
+        "betaComfort": 0.09,
+        "betaReliability": 0.10,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "This game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "heavy_rail",
+      "name": "Heavy rail",
+      "speedUrbanKmh": { "value": 70, "unit": "km/h" },
+      "capacityPerUnit": { "perTrain": 1000 },
+      "pcuLoad": null,
+      "trackType": "surface track",
+      "notes": "internal tier 8; external from tier 5",
+      "utility": {
+        "alternativeSpecificConstant": 0.00,
+        "betaTime": -0.030,
+        "betaCost": -0.0000010,
+        "betaComfort": 0.10,
+        "betaReliability": 0.11,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Lowest betaTime magnitude reflects heavy rail's speed advantage making in-vehicle time less onerous per minute; this game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "ferry",
+      "name": "Ferry",
+      "speedUrbanKmh": { "value": 15, "unit": "kn", "note": "knots, not km/h -- water mode" },
+      "capacityPerUnit": { "value": 300 },
+      "pcuLoad": null,
+      "trackType": "none (waterway)",
+      "notes": "post-port",
+      "utility": {
+        "alternativeSpecificConstant": -0.90,
+        "betaTime": -0.035,
+        "betaCost": -0.0000016,
+        "betaComfort": 0.07,
+        "betaReliability": 0.06,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "This game's v1 estimate, not measured."
+        }
+      }
+    },
+    {
+      "id": "air",
+      "name": "Air",
+      "speedUrbanKmh": { "value": null, "unit": "km/h", "note": "not modelled at urban scale (— in spec); external only" },
+      "capacityPerUnit": null,
+      "pcuLoad": null,
+      "trackType": "none (airspace)",
+      "notes": "tier 9, external only",
+      "utility": {
+        "alternativeSpecificConstant": -1.20,
+        "betaTime": -0.025,
+        "betaCost": -0.0000008,
+        "betaComfort": 0.15,
+        "betaReliability": 0.12,
+        "provenance": {
+          "source": "Metropolis v1 authoring, FEAT-047",
+          "sourceType": "derived-placeholder",
+          "note": "Highest comfort coefficient of any mode, lowest ASC (rarest/most exceptional choice); this game's v1 estimate, not measured."
+        }
+      }
+    }
+  ],
+  "nestedLogit": {
+    "nests": [
+      {
+        "id": "active",
+        "members": ["walk", "bicycle"],
+        "nestingParameter": 0.50,
+        "rationale": "Unpowered human-effort modes sharing unobserved attributes (weather sensitivity, physical effort, short-trip suitability) -- close substitutes for each other, hence a lower nesting parameter (more within-nest correlation)."
+      },
+      {
+        "id": "private_motorised",
+        "members": ["motorbike", "car", "taxi"],
+        "nestingParameter": 0.45,
+        "rationale": "Privately-hired or privately-owned road vehicles sharing parking/road-network dependence and per-trip (not per-boarding) cost structure."
+      },
+      {
+        "id": "flexible_transit",
+        "members": ["minibus", "bus"],
+        "nestingParameter": 0.55,
+        "rationale": "Road-based scheduled/demand-responsive shared transit, distinct from fixed-track transit's much higher capacity and speed profile."
+      },
+      {
+        "id": "fixed_track_transit",
+        "members": ["tram", "metro", "heavy_rail"],
+        "nestingParameter": 0.60,
+        "rationale": "Fixed-guideway high-capacity transit sharing track-based reliability and capex-driven availability tiers."
+      },
+      {
+        "id": "specialised_long_distance",
+        "members": ["ferry", "air"],
+        "nestingParameter": 0.85,
+        "rationale": "Weakly substitutable specialised modes (water/air) available only in specific circumstances (post-port, external-only) -- closer to independent alternatives than the other four nests, hence a high nesting parameter approaching the flat-multinomial-logit degenerate case."
+      }
+    ],
+    "provenance": {
+      "source": "Train, K. (2009). Discrete Choice Methods with Simulation, 2nd ed., Cambridge University Press, Ch. 4 (nested logit: inclusive-value/dissimilarity parameter, valid range (0,1], nests group alternatives sharing unobserved utility components)",
+      "sourceType": "literature",
+      "note": "The nested-logit STRUCTURE (partition requirement, (0,1] nesting-parameter constraint, and the principle of grouping alternatives that share unobserved attributes) is a standard, citable econometric convention from this text. WHICH modes belong to which nest (the specific grouping below) is this item's own judgment call, logged as ASM-391 -- Bill flagged this as a data-authoring decision, not an architecturally-frozen one, in the acceptance file's Escalations section. No nest here reaches nestingParameter 1.0 (the degenerate flat-multinomial-logit special case AC-3 explicitly flags); if a future balance pass wants that, it must be a documented deliberate choice, not a silent default."
+    }
+  },
+  "personalityWeights": {
+    "physicality": {
+      "appliesTo": ["walk", "bicycle"],
+      "weight": 0.35,
+      "direction": "positive -- higher physicality increases walk/bicycle utility",
+      "provenance": {
+        "source": "Metropolis v1 authoring, FEAT-047",
+        "sourceType": "derived-placeholder",
+        "note": "§19.1: 'physicality→cycle/walk'. This game's v1 estimate for the trait-to-utility multiplier magnitude, not measured; the trait itself is read from engine.citizens per engine.traffic AC-10."
+      }
+    },
+    "patience": {
+      "appliesTo": ["bus", "tram", "metro", "heavy_rail"],
+      "weight": 0.25,
+      "direction": "positive -- higher patience increases tolerance for transit wait/transfer disutility (reduces the effective betaTime penalty applied to wait/transfer components for these modes)",
+      "provenance": {
+        "source": "Metropolis v1 authoring, FEAT-047",
+        "sourceType": "derived-placeholder",
+        "note": "§19.1: 'patience→transit tolerance', naming exactly bus/tram/metro/heavy rail (minibus excluded -- spec's own wording covers fixed/scheduled transit, not the demand-responsive early-transit mode). This game's v1 estimate, not measured."
+      }
+    },
+    "wealth": {
+      "appliesTo": ["taxi", "car"],
+      "weight": 0.30,
+      "direction": "positive -- higher wealth increases taxi/car utility",
+      "provenance": {
+        "source": "Metropolis v1 authoring, FEAT-047",
+        "sourceType": "derived-placeholder",
+        "note": "§19.1: 'wealth→taxi/car'. This game's v1 estimate, not measured."
+      }
+    }
+  }
 }

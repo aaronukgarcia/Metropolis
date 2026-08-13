@@ -41,7 +41,7 @@ Headless driving of `ui.core`'s widget layer via scripted key sequences and `har
 
 ### Error handling
 
-- **AC-7 (GR#7).** Sending a key sequence that decodes to no registered action (an unmapped or malformed script token) returns a typed/registry-sourced error rather than silently no-op'ing, so a typo'd test script fails the test instead of passing vacuously. Check: `grep -n "MET-" internal/harness/uitest/*.go` finds a registry code reference; a passing test covers this path (`grep -rn "func Test.*[Uu]nmapped\|func Test.*[Ii]nvalid" internal/harness/uitest/*_test.go`).
+- **AC-7 (GR#7).** Sending a key sequence that decodes to no registered action (an unmapped or malformed script token) returns a typed/registry-sourced error rather than silently no-op'ing, so a typo'd test script fails the test instead of passing vacuously. Check: `grep -n "MET-" internal/harness/uitest/*.go` finds a registry code reference; a passing test covers this path (`grep -rn "func Test.*[Uu]nmapped\|func Test.*[Ii]nvalid" internal/harness/uitest/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no action was silently no-op'd (the typed error is what fails the test script, not a swallowed key), not merely that a matching-named test function exists.
 - **AC-8.** A missing or unreadable golden snapshot file produces a clear "no golden exists — run with -update to create" failure, distinguishable from a mismatch diff. Check: passing test coverage (`grep -rn "func Test.*[Mm]issing.*[Gg]olden\|func Test.*[Nn]o.*[Gg]olden" internal/harness/uitest/*_test.go`).
 
 ### Determinism & safety

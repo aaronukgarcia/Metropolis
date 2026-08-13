@@ -43,7 +43,7 @@ XP accrual, the 13-tier milestone ladder (thresholds, grants: unlocks/expansion 
 
 ### Error handling
 
-- **AC-12 (GR#7).** A gate check or spend command referencing an unregistered tree/node/tier (a typo'd category name, an out-of-range tier index) returns a registry-sourced error (new `MET-E`-range code), never a silent "not unlocked" false negative indistinguishable from a genuine gate failure. Check: `grep -n "MET-" internal/engine/unlocks/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredGate" internal/engine/unlocks/*_test.go`).
+- **AC-12 (GR#7).** A gate check or spend command referencing an unregistered tree/node/tier (a typo'd category name, an out-of-range tier index) returns a registry-sourced error (new `MET-E`-range code), never a silent "not unlocked" false negative indistinguishable from a genuine gate failure. Check: `grep -n "MET-" internal/engine/unlocks/*.go` finds a registry code reference; passing test coverage (`grep -rn "func Test.*[Uu]nregisteredGate" internal/engine/unlocks/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no silent "not unlocked" false negative was returned in place of the typed error, not merely that a matching-named test function exists.
 - **AC-13.** A malformed `data/unlock_trees.json` (missing category, node referencing a nonexistent DP cost, a cyclic tree dependency) fails loudly at load time via `foundation.data`'s validated-load path. Check: passing test coverage (`grep -rn "func Test.*[Mm]alformedTree\|func Test.*[Cc]ycle" internal/engine/unlocks/*_test.go`).
 
 ### Determinism & safety

@@ -49,7 +49,7 @@ Off-map job pools (London, Ashford, Dover) with finite era-scaled capacity loade
 
 ### Error handling
 
-- **AC-15 (GR#7).** A malformed or schema-invalid `data/external_world.json` (a pool missing a capacity table, a negative capacity or wage figure, an era not covering the world's current era) produces a registry-sourced error at load time — new `MET-E`-range code — never a silent zero-capacity default (which would make the pool permanently unusable) or unlimited-capacity default (which would defeat AC-3's finiteness). Check: `grep -n "MET-" internal/engine/extcommute/*.go` finds a registry code reference; passing malformed-data test coverage (`grep -rn "func Test.*[Mm]alformed\|func Test.*[Ii]nvalidPool" internal/engine/extcommute/*_test.go`).
+- **AC-15 (GR#7).** A malformed or schema-invalid `data/external_world.json` (a pool missing a capacity table, a negative capacity or wage figure, an era not covering the world's current era) produces a registry-sourced error at load time — new `MET-E`-range code — never a silent zero-capacity default (which would make the pool permanently unusable) or unlimited-capacity default (which would defeat AC-3's finiteness). Check: `grep -n "MET-" internal/engine/extcommute/*.go` finds a registry code reference; passing malformed-data test coverage (`grep -rn "func Test.*[Mm]alformed\|func Test.*[Ii]nvalidPool" internal/engine/extcommute/*_test.go`) — **GR#7 assertion, stated explicitly (BUG-100):** the test asserts the returned error's registry code matches AND that no zero-capacity or unlimited-capacity pool default was silently loaded, not merely that a matching-named test function exists.
 
 ### Determinism & safety
 
