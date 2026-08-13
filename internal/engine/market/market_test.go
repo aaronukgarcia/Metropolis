@@ -327,6 +327,72 @@ func TestLoad_MalformedJSON(t *testing.T) {
 	assertCode(t, err, ErrMarketDataInvalid)
 }
 
+// TestLoad_MET_E600_CauseSubstituted is BUG-099's regression test:
+// MET-E600's registered template ("...could not be loaded or failed
+// schema validation: {cause}") must have its {cause} placeholder
+// actually substituted with the real underlying failure text, not left
+// as the literal, unhelpful string "{cause}" in the GR#1-visible
+// message. Covers all three of Load's MET-E600 raise sites — the
+// foundation/data.LoadMarketFile re-wrap (malformed JSON), the
+// pricingMode New() call, and validateCommodityPricingXOR's fail()
+// closure (waste/non-waste price XOR violation) — since each one
+// previously omitted ctx["cause"] independently.
+func TestLoad_MET_E600_CauseSubstituted(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(json string) string
+		wantSub string
+	}{
+		{
+			name: "malformed JSON re-wrap",
+			mutate: func(string) string {
+				return `{ not valid json`
+			},
+			// The underlying encoding/json syntax error text always
+			// mentions "invalid character" for this fixture.
+			wantSub: "invalid character",
+		},
+		{
+			name: "pricingMode New() call",
+			mutate: func(json string) string {
+				return strings.Replace(json, `"pricingMode": "static"`, `"pricingMode": "dynamic"`, 1)
+			},
+			wantSub: "pricingMode",
+		},
+		{
+			name: "validateCommodityPricingXOR fail() closure",
+			mutate: func(json string) string {
+				return strings.Replace(json,
+					`"waste": {"supplyMode": "hybrid", "unit": "kg", "exportPriceMicropounds": 50000, "capacityCeiling": 120000}`,
+					`"waste": {"supplyMode": "hybrid", "unit": "kg", "importPriceMicropounds": 50000, "capacityCeiling": 120000}`, 1)
+			},
+			wantSub: "waste",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFixture(t, dir, tc.mutate(fullValidMarketJSON()))
+
+			_, err := Load(dir, testCorrelationID())
+			e, ok := err.(*errs.E)
+			if !ok {
+				t.Fatalf("expected *errs.E, got %T: %v", err, err)
+			}
+			if e.Code != ErrMarketDataInvalid {
+				t.Fatalf("e.Code = %s, want %s", e.Code, ErrMarketDataInvalid)
+			}
+			if strings.Contains(e.Msg, "{cause}") {
+				t.Errorf("e.Msg = %q contains the literal unsubstituted placeholder %q", e.Msg, "{cause}")
+			}
+			if !strings.Contains(e.Msg, tc.wantSub) {
+				t.Errorf("e.Msg = %q, want it to contain the real cause text %q", e.Msg, tc.wantSub)
+			}
+		})
+	}
+}
+
 func TestLoad_MissingCommodity(t *testing.T) {
 	dir := t.TempDir()
 	// A fixture with every commodity except "waste".
@@ -453,6 +519,108 @@ func TestDeterministicAcrossRepeatedCalls(t *testing.T) {
 			if v != firstPrices[i] {
 				t.Errorf("iteration %d, commodity %v: got %v, want %v (non-deterministic)", iter, c, v, firstPrices[i])
 			}
+		}
+	}
+}
+
+// --- BUG-098: Load-time error blame must be deterministic under map iteration ---
+
+// TestLoad_BlameIsDeterministicAcrossMultipleViolations reproduces
+// BUG-098's attack: a market.json where MULTIPLE commodities
+// simultaneously violate validateCommodityPricingXOR (here: both
+// "power" and "water" are missing the required
+// importPriceMicropounds field). Before the fix, Load ranged over the
+// decoded commodities map directly — Go's map iteration order is
+// randomized per-process — so which commodity's error came back first
+// varied run to run for the byte-identical file. Running Load many
+// times against the SAME fixture must blame the SAME commodity every
+// single time (GR#21).
+func TestLoad_BlameIsDeterministicAcrossMultipleViolations(t *testing.T) {
+	dir := t.TempDir()
+	bad := strings.Replace(fullValidMarketJSON(),
+		`"water": {"supplyMode": "hybrid", "unit": "L", "importPriceMicropounds": 2000, "capacityCeiling": 5000000}`,
+		`"water": {"supplyMode": "hybrid", "unit": "L", "capacityCeiling": 5000000}`, 1)
+	bad = strings.Replace(bad,
+		`"power": {"supplyMode": "hybrid", "unit": "kWh", "importPriceMicropounds": 150000, "capacityCeiling": 2000000}`,
+		`"power": {"supplyMode": "hybrid", "unit": "kWh", "capacityCeiling": 2000000}`, 1)
+	writeFixture(t, dir, bad)
+
+	_, first := Load(dir, testCorrelationID())
+	assertCode(t, first, ErrMarketDataInvalid)
+	firstE, ok := first.(*errs.E)
+	if !ok {
+		t.Fatalf("expected *errs.E, got %T: %v", first, first)
+	}
+	blamed, ok := firstE.Ctx["commodity"]
+	if !ok {
+		t.Fatalf("first error has no \"commodity\" context: %+v", firstE)
+	}
+
+	// 60 iterations: enough that, against the pre-fix unsorted-map-range
+	// code, blame alternating between "power" and "water" would show up
+	// with overwhelming probability (Go deliberately randomizes small-map
+	// iteration start position per range, not just per process).
+	for i := 0; i < 60; i++ {
+		_, err := Load(dir, testCorrelationID())
+		assertCode(t, err, ErrMarketDataInvalid)
+		e, ok := err.(*errs.E)
+		if !ok {
+			t.Fatalf("run %d: expected *errs.E, got %T: %v", i, err, err)
+		}
+		got, ok := e.Ctx["commodity"]
+		if !ok {
+			t.Fatalf("run %d: error has no \"commodity\" context: %+v", i, e)
+		}
+		if got != blamed {
+			t.Fatalf("run %d: blamed commodity %v, want %v (non-deterministic — GR#21/BUG-098)", i, got, blamed)
+		}
+	}
+}
+
+// TestMarketFileValidate_BlameIsDeterministicAcrossMultipleViolations
+// covers the SAME class of bug in foundation/data.MarketFile.Validate
+// (the shared generic per-record schema loop BUG-098 also named) using
+// a fixture with two commodities that both violate a generic rule
+// Validate itself enforces (an unrecognised supplyMode), rather than
+// engine.market's waste-specific XOR rule.
+func TestMarketFileValidate_BlameIsDeterministicAcrossMultipleViolations(t *testing.T) {
+	dir := t.TempDir()
+	bad := strings.Replace(fullValidMarketJSON(),
+		`"water": {"supplyMode": "hybrid", "unit": "L", "importPriceMicropounds": 2000, "capacityCeiling": 5000000}`,
+		`"water": {"supplyMode": "bogus", "unit": "L", "importPriceMicropounds": 2000, "capacityCeiling": 5000000}`, 1)
+	bad = strings.Replace(bad,
+		`"power": {"supplyMode": "hybrid", "unit": "kWh", "importPriceMicropounds": 150000, "capacityCeiling": 2000000}`,
+		`"power": {"supplyMode": "bogus", "unit": "kWh", "importPriceMicropounds": 150000, "capacityCeiling": 2000000}`, 1)
+	writeFixture(t, dir, bad)
+
+	// The blamed commodity is embedded in the wrapped MET-F604 message
+	// text (foundation/data has no per-field structured Ctx of its
+	// own), not a top-level Ctx key — so compare on that substring
+	// rather than the full message, which also varies run to run by
+	// design (each call gets a fresh correlation ID).
+	blameOf := func(err error) string {
+		msg := err.Error()
+		const marker = "field commodities["
+		i := strings.Index(msg, marker)
+		if i < 0 {
+			t.Fatalf("error does not mention a blamed field: %v", err)
+		}
+		rest := msg[i+len(marker):]
+		j := strings.Index(rest, "]")
+		if j < 0 {
+			t.Fatalf("error does not close the blamed field name: %v", err)
+		}
+		return rest[:j]
+	}
+
+	first := blameOf(func() error { _, err := Load(dir, testCorrelationID()); return err }())
+
+	for i := 0; i < 60; i++ {
+		_, err := Load(dir, testCorrelationID())
+		assertCode(t, err, ErrMarketDataInvalid)
+		got := blameOf(err)
+		if got != first {
+			t.Fatalf("run %d: blamed commodity %q, want %q (non-deterministic — GR#21/BUG-098)", i, got, first)
 		}
 	}
 }

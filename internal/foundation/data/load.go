@@ -62,8 +62,14 @@ func Load[T any, PT interface {
 				"rule":  "type mismatch, want " + ute.Type.String(),
 			})
 		}
+		// MET-F602's registered template has a "{cause}" placeholder
+		// (BUG-099, shared with MET-E600) — populate it from the JSON
+		// decode error's own text so the rendered message actually names
+		// the syntax failure instead of leaving the literal "{cause}" in
+		// the operator/log-visible text.
 		return zero, errs.Wrap(CodeMalformedJSON, correlationID, err, map[string]any{
-			"path": path,
+			"path":  path,
+			"cause": err.Error(),
 		})
 	}
 

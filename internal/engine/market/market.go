@@ -1,6 +1,9 @@
 package market
 
 import (
+	"fmt"
+	"sort"
+
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
@@ -148,22 +151,45 @@ func Load(dir, correlationID string) (*MarketAPI, error) {
 		// this package's own ErrMarketDataInvalid so every Load-time
 		// failure this package's callers see carries one consistent
 		// MET-E6xx code, matching engine.season's LoadSeasonal wrap.
+		// MET-E600's registered template has a "{cause}" placeholder
+		// (BUG-099) — populate it from the wrapped error's own text so
+		// the rendered message actually names the failure instead of
+		// leaving the literal "{cause}" in the operator/log-visible text.
 		return nil, errs.Wrap(ErrMarketDataInvalid, correlationID, err, map[string]any{
-			"dir": dir,
+			"dir":   dir,
+			"cause": err.Error(),
 		})
 	}
 
 	if mf.PricingMode != staticPricingMode {
+		rule := "must be \"static\" (v1 supports no other mode)"
+		// No underlying error exists for this New-based path (BUG-099) —
+		// synthesize the {cause} template's substitution from the same
+		// field/rule/got facts already being reported structurally.
 		return nil, errs.New(ErrMarketDataInvalid, correlationID, map[string]any{
 			"dir":   dir,
 			"field": "pricingMode",
-			"rule":  "must be \"static\" (v1 supports no other mode)",
+			"rule":  rule,
 			"got":   mf.PricingMode,
+			"cause": fmt.Sprintf("field %q: %s (got %q)", "pricingMode", rule, mf.PricingMode),
 		})
 	}
 
+	// Validate (and insert) commodities in a deterministic (sorted)
+	// order rather than ranging over mf.Commodities directly — Go map
+	// iteration order is randomized per-run, so a market.json with
+	// MULTIPLE entries simultaneously violating validateCommodityPricingXOR
+	// would otherwise blame a different commodity on different runs
+	// against the byte-identical file (GR#21, BUG-098).
+	names := make([]string, 0, len(mf.Commodities))
+	for name := range mf.Commodities {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
 	commodities := make(map[CommodityType]commodityRecord, len(mf.Commodities))
-	for name, rec := range mf.Commodities {
+	for _, name := range names {
+		rec := mf.Commodities[name]
 		c := CommodityType(name)
 		if err := validateCommodityPricingXOR(c, rec, correlationID, dir); err != nil {
 			return nil, err
@@ -210,11 +236,16 @@ func Load(dir, correlationID string) (*MarketAPI, error) {
 // Load ever reaches this function.
 func validateCommodityPricingXOR(name CommodityType, rec data.CommodityRecord, correlationID, dir string) error {
 	fail := func(field, rule string) error {
+		// Same MET-E600 {cause} placeholder as Load's own two raise
+		// sites (BUG-099) — this closure has no underlying error either,
+		// so the cause text is synthesized from the field/rule this
+		// validation failure already carries structurally.
 		return errs.New(ErrMarketDataInvalid, correlationID, map[string]any{
 			"dir":       dir,
 			"commodity": string(name),
 			"field":     field,
 			"rule":      rule,
+			"cause":     fmt.Sprintf("commodity %q, field %q: %s", name, field, rule),
 		})
 	}
 

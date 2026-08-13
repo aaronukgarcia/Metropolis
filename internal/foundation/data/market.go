@@ -1,6 +1,9 @@
 package data
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sort"
+)
 
 // This file defines data/market.json's typed schema (engine.market,
 // MOD-020), routed through the SAME generic [Load] every other §24 file
@@ -83,7 +86,20 @@ func (m *MarketFile) Validate() error {
 	if err := requireVersion(m.Version); err != nil {
 		return err
 	}
-	for name, rec := range m.Commodities {
+	// Iterate commodity keys in a deterministic (sorted) order rather
+	// than ranging over the map directly (Go map iteration order is
+	// randomized per-run) so that, given the SAME malformed
+	// market.json with multiple violating entries, the FIRST violation
+	// returned — and therefore which commodity a caller's error blames
+	// — is identical on every run (GR#21, BUG-098).
+	names := make([]string, 0, len(m.Commodities))
+	for name := range m.Commodities {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		rec := m.Commodities[name]
 		switch rec.SupplyMode {
 		case "importOnly", "locallyProducible", "hybrid":
 		default:

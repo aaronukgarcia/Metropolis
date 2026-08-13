@@ -181,6 +181,33 @@ func TestLoad_MalformedJSON(t *testing.T) {
 	assertPlaceholderCode(t, err, CodeMalformedJSON, "")
 }
 
+// TestLoad_MET_F602_CauseSubstituted is BUG-099's regression test for
+// the shared foundation/data.Load path: MET-F602's registered template
+// ("...is not well-formed JSON: {cause}") must have its {cause}
+// placeholder substituted with the real json.Unmarshal error text, not
+// left as the literal unsubstituted string "{cause}" in the
+// GR#1-visible message (the same class of defect BUG-099 fixed for
+// engine.market's MET-E600).
+func TestLoad_MET_F602_CauseSubstituted(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{not valid json`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	e, ok := err.(*errs.E)
+	if !ok {
+		t.Fatalf("expected *errs.E, got %T: %v", err, err)
+	}
+	if e.Code != CodeMalformedJSON {
+		t.Fatalf("e.Code = %s, want %s", e.Code, CodeMalformedJSON)
+	}
+	if strings.Contains(e.Msg, "{cause}") {
+		t.Errorf("e.Msg = %q contains the literal unsubstituted placeholder %q", e.Msg, "{cause}")
+	}
+	if !strings.Contains(e.Msg, "invalid character") {
+		t.Errorf("e.Msg = %q, want it to contain the real json decode cause text", e.Msg)
+	}
+}
+
 // --- missing file (AC-8) --------------------------------------------------
 
 func TestLoad_MissingFile(t *testing.T) {
