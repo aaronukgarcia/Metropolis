@@ -48,6 +48,73 @@ func TestSnapshot_RoundTripsThroughSerialize(t *testing.T) {
 	}
 }
 
+// TestSnapshot_NewSaveHasNoDebugTouched is SEC-027 regression case 1: a
+// genuinely new save (no prior header passed at all — the existing
+// two-arg call shape) still gets debugTouched=false, exactly as before
+// this fix. Proves the fix did not accidentally start defaulting to
+// true or otherwise change new-save behaviour.
+func TestSnapshot_NewSaveHasNoDebugTouched(t *testing.T) {
+	e := NewEngine(WithWorldSeed(1))
+
+	var buf bytes.Buffer
+	header, err := e.Snapshot(&buf, "corr-new-save")
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if header.DebugTouched() {
+		t.Fatal("header.DebugTouched() = true for a genuinely new save with no prior header, want false")
+	}
+}
+
+// TestSnapshot_SaveOverCarriesDebugTouchedForward is SEC-027 regression
+// case 2: a save-over of an existing debug-touched save (simulated by
+// passing a prior header with TouchDebug already called, as a save-over
+// caller reading the on-disk header would) must carry debugTouched=true
+// forward into the fresh header Snapshot builds — proving the flag
+// survives a save-over via serialize.Header.MergeDebugTouched, closing
+// the exact gap SEC-027 flagged (NewHeader always starting false with
+// nothing merging the prior flag forward at the call site).
+func TestSnapshot_SaveOverCarriesDebugTouchedForward(t *testing.T) {
+	e := NewEngine(WithWorldSeed(2))
+
+	var prior serialize.Header
+	prior.TouchDebug()
+	if !prior.DebugTouched() {
+		t.Fatal("setup: prior.DebugTouched() = false after TouchDebug(), want true")
+	}
+
+	var buf bytes.Buffer
+	header, err := e.Snapshot(&buf, "corr-save-over-touched", prior)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if !header.DebugTouched() {
+		t.Fatal("header.DebugTouched() = false after a save-over of a debug-touched prior header, want true (SEC-027 regression)")
+	}
+}
+
+// TestSnapshot_SaveOverOfCleanSaveStaysClean is SEC-027 regression case
+// 3: a save-over of an existing NON-debug-touched save must stay
+// debugTouched=false — MergeDebugTouched must never contaminate a clean
+// save with a false positive, only carry forward a true prior flag.
+func TestSnapshot_SaveOverOfCleanSaveStaysClean(t *testing.T) {
+	e := NewEngine(WithWorldSeed(3))
+
+	var prior serialize.Header // never TouchDebug'd — a clean prior save
+	if prior.DebugTouched() {
+		t.Fatal("setup: prior.DebugTouched() = true for an untouched Header, want false")
+	}
+
+	var buf bytes.Buffer
+	header, err := e.Snapshot(&buf, "corr-save-over-clean", prior)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if header.DebugTouched() {
+		t.Fatal("header.DebugTouched() = true after a save-over of a clean prior header, want false (false-positive contamination)")
+	}
+}
+
 // blockingWriter blocks on unblock (a channel closed by the test) after
 // writing the first chunk of bytes, so the test can prove AdvanceTicks
 // keeps progressing while a Snapshot's write is still in flight — a

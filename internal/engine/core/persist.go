@@ -40,7 +40,27 @@ type snapshotMeta struct {
 // grows or how slow w is (AC-8; see persist_test.go's concurrency
 // assertion, which uses a deliberately slow w and a channel/counter,
 // never a wall-clock timing assertion).
-func (e *Engine) Snapshot(w io.Writer, correlationID string) (serialize.Header, error) {
+//
+// SEC-027: prior is an optional (variadic, at most one used) prior
+// on-disk serialize.Header — pass it when this Snapshot call is
+// conceptually a save-OVER of an existing save/continuation, never for
+// a genuinely first-time save. Snapshot itself has no way to detect a
+// save-over on its own: it only ever sees an io.Writer, never a save
+// path or directory, so it cannot stat anything to decide "does a prior
+// save already exist here". That decision — and reading the prior
+// header off disk — belongs entirely to the caller that DOES know
+// (e.g. a save-over/re-export path wiring engine.core to
+// int.serializer's bundle layout), which is exactly why this is a
+// caller-supplied parameter rather than something Snapshot derives
+// itself. When prior is supplied, its DebugTouched() flag is carried
+// forward into the freshly-built header via serialize.Header's own
+// MergeDebugTouched (OR-merge, sticky — SEC-024) BEFORE anything is
+// written, so a previously debug-touched save can never come back
+// clean through this call path. Omitting prior (the existing two-arg
+// call shape every current production caller uses) is unchanged
+// behaviour: a genuinely new save with debugTouched=false, exactly as
+// before this fix.
+func (e *Engine) Snapshot(w io.Writer, correlationID string, prior ...serialize.Header) (serialize.Header, error) {
 	// SEC-018: identity-checked BEFORE snapshotStateLocked ever touches
 	// mu — one of eight e.mu.Lock() sites in this package's non-test
 	// files. snapshotStateLocked has exactly one caller (this method), so
@@ -57,6 +77,9 @@ func (e *Engine) Snapshot(w io.Writer, correlationID string) (serialize.Header, 
 	tick, month, seed := e.snapshotStateLocked()
 
 	header := serialize.NewHeader(int64(seed), tick, month, buildinfo.Version)
+	if len(prior) > 0 {
+		header.MergeDebugTouched(prior[0].DebugTouched())
+	}
 
 	meta := snapshotMeta{Tick: tick, Month: month, Seed: seed}
 	written := false
