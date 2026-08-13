@@ -120,12 +120,33 @@ func (r *Registry) Seal() {
 func (r *Registry) Recommend(state GameStateView) []Recommendation {
 	r.Seal()
 
+	// BUG-128: snapshot the registrant set (a shallow copy of the map —
+	// Registrant values are themselves external references, not deep
+	// copies, but the map/slice bookkeeping is ours) under the RLock,
+	// then release it BEFORE calling into any registrant code
+	// (Preconditions()/ProjectConsequence()). Registrants are external/
+	// registrant-supplied code with no bound on how long they may take —
+	// a hung or slow ProjectConsequence must never hold this Registry's
+	// lock, because Go's RWMutex blocks new readers once a writer
+	// (Register) is queued, so a stuck call here would wedge every other
+	// Recommend/Preview/Register caller too, not just this one
+	// (confirmed empirically pre-fix with a deliberately-hung fixture —
+	// see TestRecommend_HangingProjectConsequence_DoesNotBlockRegister).
+	// Once sealed (which Recommend guarantees via the Seal() call above),
+	// the registrant set never changes again, so a snapshot taken here is
+	// exactly as valid as holding the lock for the whole call would have
+	// been — no relaxed consistency is actually being traded away.
 	r.mu.RLock()
-	defer r.mu.RUnlock()
+	ids := sortedTaxonomyIDs(r.registrants)
+	snapshot := make(map[ActionTaxonomyID]Registrant, len(ids))
+	for _, id := range ids {
+		snapshot[id] = r.registrants[id]
+	}
+	r.mu.RUnlock()
 
 	var out []Recommendation
-	for _, id := range sortedTaxonomyIDs(r.registrants) {
-		reg := r.registrants[id]
+	for _, id := range ids {
+		reg := snapshot[id]
 		allPass := true
 		for _, p := range reg.Preconditions() {
 			if p == nil {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/helper"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/helper/helperfixture"
@@ -141,6 +142,46 @@ func TestPrecondition_MissingFieldReturnsRegistryError_NeverSilentFalse(t *testi
 	}
 	if !strings.Contains(err.Error(), helper.ErrPreconditionEvalFailed) {
 		t.Errorf("error %v does not carry ErrPreconditionEvalFailed (%s)", err, helper.ErrPreconditionEvalFailed)
+	}
+}
+
+// TestPrecondition_MissingField_WrapsMalformedStateView is BUG-146's
+// regression test. Before the fix, GameStateView.RequireField
+// (ErrMalformedStateView / MET-E705) had zero real call sites anywhere
+// in the package, its fixtures, or its tests — a genuinely dead registry
+// code. treasuryPrecondition.Evaluate now calls RequireField directly
+// (see helperfixture/fixture.go) and wraps its ErrMalformedStateView
+// into ErrPreconditionEvalFailed via errs.Wrap, so a missing required
+// field now surfaces BOTH codes: the precondition-level
+// ErrPreconditionEvalFailed (already asserted by
+// TestPrecondition_MissingFieldReturnsRegistryError_NeverSilentFalse
+// above) AND, as its preserved wrapped cause, ErrMalformedStateView —
+// proving MET-E705 is now genuinely reachable, not dead.
+func TestPrecondition_MissingField_WrapsMalformedStateView(t *testing.T) {
+	p := helperfixture.NewTreasuryPrecondition(testCorrelationID)
+	state := helper.NewGameStateView(map[string]any{}) // treasuryMicropounds absent
+
+	_, err := p.Evaluate(state)
+	if err == nil {
+		t.Fatal("expected a registry-sourced error for a missing required field, got nil")
+	}
+	if !strings.Contains(err.Error(), helper.ErrMalformedStateView) {
+		t.Errorf("error %v does not carry the wrapped ErrMalformedStateView cause (%s) — RequireField is not actually on the call path",
+			err, helper.ErrMalformedStateView)
+	}
+
+	// Prove the code can actually appear (verification standard: a check
+	// that can't fail proves nothing) by exercising RequireField directly
+	// against a field that IS present — it must NOT return
+	// ErrMalformedStateView in that case.
+	presentState := helper.NewGameStateView(map[string]any{"treasuryMicropounds": int64(1)})
+	if _, err := presentState.RequireField("treasuryMicropounds", testCorrelationID); err != nil {
+		t.Errorf("RequireField on a present field returned an error: %v", err)
+	}
+	if _, err := presentState.RequireField("definitelyAbsentField", testCorrelationID); err == nil {
+		t.Fatal("RequireField on an absent field should return ErrMalformedStateView, got nil")
+	} else if !strings.Contains(err.Error(), helper.ErrMalformedStateView) {
+		t.Errorf("RequireField error %v does not carry ErrMalformedStateView (%s)", err, helper.ErrMalformedStateView)
 	}
 }
 
@@ -409,6 +450,106 @@ func TestRegistry_ConcurrentRecommendAndPreview_NoRace(t *testing.T) {
 		}(helper.ActionTaxonomyID("fixture.c1"))
 	}
 	wg.Wait()
+}
+
+// hangingRegistrant is a fixture Registrant whose ProjectConsequence
+// signals startedCh the instant it is entered, then blocks until
+// releaseCh is closed. It has no preconditions (Recommend must reach
+// ProjectConsequence unconditionally) — used by
+// TestRecommend_HangingProjectConsequence_DoesNotBlockRegister (BUG-128)
+// to simulate a real registrant whose consequence-pricing call hangs or
+// takes unbounded time.
+type hangingRegistrant struct {
+	id        helper.ActionTaxonomyID
+	startedCh chan struct{}
+	releaseCh chan struct{}
+}
+
+func (h *hangingRegistrant) TaxonomyID() helper.ActionTaxonomyID  { return h.id }
+func (h *hangingRegistrant) Preconditions() []helper.Precondition { return nil }
+func (h *hangingRegistrant) ProjectConsequence(helper.GameStateView, map[string]any) (helper.ConsequenceProjection, error) {
+	close(h.startedCh)
+	<-h.releaseCh
+	return helper.ConsequenceProjection{ActionID: h.id, Summary: "finally unblocked"}, nil
+}
+
+var _ helper.Registrant = (*hangingRegistrant)(nil)
+
+// TestRecommend_HangingProjectConsequence_DoesNotBlockRegister is
+// BUG-128's regression test. Before the fix, Recommend held its RLock
+// across the entire candidate loop, including the call into registrant
+// code (ProjectConsequence). Because Go's sync.RWMutex blocks new
+// readers once a writer is queued, a hanging ProjectConsequence
+// combined with a concurrent Register call would wedge the registry —
+// Register would never return while Recommend was stuck mid-call. This
+// test proves the fix (snapshotting the registrant set under the lock,
+// then releasing it before calling registrant code) by deliberately
+// hanging ProjectConsequence and asserting a concurrent Register
+// completes anyway, well before the hang is released — a real
+// concurrency proof via goroutines, not just a lock-scope code read.
+func TestRecommend_HangingProjectConsequence_DoesNotBlockRegister(t *testing.T) {
+	reg := helper.NewRegistry(testCorrelationID)
+	hanging := &hangingRegistrant{
+		id:        "fixture.hangs-forever",
+		startedCh: make(chan struct{}),
+		releaseCh: make(chan struct{}),
+	}
+	if err := reg.Register(hanging); err != nil {
+		t.Fatalf("Register(hanging) failed: %v", err)
+	}
+	state := helper.NewGameStateView(nil)
+
+	// Kick off Recommend in the background — it will seal the registry,
+	// enter the candidate loop, and block inside hanging.ProjectConsequence
+	// until releaseCh is closed below.
+	recommendDone := make(chan struct{})
+	go func() {
+		defer close(recommendDone)
+		_ = reg.Recommend(state)
+	}()
+
+	// Wait until Recommend is genuinely stuck inside ProjectConsequence
+	// (not just "about to call it") before proving anything about
+	// concurrent Register — otherwise this test would prove nothing.
+	select {
+	case <-hanging.startedCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("hanging ProjectConsequence was never entered — test setup is broken")
+	}
+
+	// The pre-fix bug: this Register call would block until
+	// hanging.ProjectConsequence returns, because Recommend was still
+	// holding the RLock and Register needs the Lock. Prove it completes
+	// promptly instead, with Recommend still stuck.
+	registerDone := make(chan error, 1)
+	go func() {
+		registerDone <- reg.Register(helperfixture.NewFixtureAction("fixture.registered-while-recommend-hangs", testCorrelationID))
+	}()
+
+	select {
+	case err := <-registerDone:
+		// Register is boot-wiring-only (AC-3): Recommend's Seal() call
+		// above already sealed the registry before hanging.startedCh
+		// fired, so this Register is EXPECTED to fail with
+		// ErrRegistrationSealed — that is a fast, well-formed rejection,
+		// not a hang. The bug this test guards against is Register never
+		// returning at all, not which error it returns.
+		if err == nil {
+			t.Error("expected Register to fail with ErrRegistrationSealed (Recommend seals on first call), got nil")
+		} else if !strings.Contains(err.Error(), helper.ErrRegistrationSealed) {
+			t.Errorf("Register returned an unexpected error (still fine as long as it's not a hang): %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Register did not return within 2s while a concurrent Recommend was hung inside ProjectConsequence — BUG-128 regression: the RLock is still held across registrant code")
+	}
+
+	// Clean up: release the hang and confirm Recommend itself completes.
+	close(hanging.releaseCh)
+	select {
+	case <-recommendDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Recommend did not complete after its hang was released")
+	}
 }
 
 // --- AC-14: no panic reachable from any exported surface ---

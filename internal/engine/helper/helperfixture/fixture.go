@@ -78,14 +78,22 @@ func (p treasuryPrecondition) Description() string {
 }
 
 func (p treasuryPrecondition) Evaluate(state helper.GameStateView) (bool, error) {
-	raw, ok := state.Field(treasuryFieldName)
-	if !ok {
+	// BUG-146: uses GameStateView.RequireField rather than a hand-rolled
+	// Field/ok check, so a missing field is diagnosed by the package's
+	// own ErrMalformedStateView (MET-E705) sentinel first, then wrapped
+	// (via errs.Wrap, preserving the cause for errors.Unwrap/As) into
+	// this precondition's ErrPreconditionEvalFailed — RequireField's doc
+	// comment's "a Precondition/Registrant MAY wrap
+	// ErrPreconditionEvalFailed with" case. This is the real call site
+	// RequireField was missing (it had zero callers before this fix).
+	raw, err := state.RequireField(treasuryFieldName, p.correlationID)
+	if err != nil {
 		// AC-2: a genuinely-unevaluable state (field absent) is a
 		// registry-sourced error, never (false, nil) — (false, nil)
 		// would read to a caller as "the treasury is insufficient",
 		// which is a different, false claim from "this could not be
 		// checked at all".
-		return false, errs.New(helper.ErrPreconditionEvalFailed, p.correlationID, map[string]any{
+		return false, errs.Wrap(helper.ErrPreconditionEvalFailed, p.correlationID, err, map[string]any{
 			"preconditionID": p.ID(),
 			"cause":          "GameStateView missing field \"" + treasuryFieldName + "\"",
 		})
