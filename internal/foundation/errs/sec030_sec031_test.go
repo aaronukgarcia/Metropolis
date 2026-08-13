@@ -120,7 +120,7 @@ func TestSetSink_RejectedCopy_DoesNotClearExistingSink(t *testing.T) {
 // N consecutive pushes of the same Code collapse into ONE ring slot with
 // Repeat == N-1, carrying the MOST RECENT occurrence's other fields.
 func TestRingBuffer_CoalescesConsecutiveSameCode(t *testing.T) {
-	r := newRingBuffer(200)
+	r := newRingBuffer(ringCapacity)
 	const n = 5000
 	for i := 0; i < n; i++ {
 		r.push(Entry{Code: "MET-U101", CorrelationID: fmt.Sprintf("corr-%d", i), Msg: "stuck copy", Ts: fmt.Sprintf("ts-%d", i)})
@@ -146,7 +146,7 @@ func TestRingBuffer_CoalescesConsecutiveSameCode(t *testing.T) {
 // interleaved stuck emitters with different codes never matched under
 // the original "check only the newest slot" rule.
 func TestRingBuffer_CoalescesAcrossOtherCodesWithinScanBack(t *testing.T) {
-	r := newRingBuffer(200)
+	r := newRingBuffer(ringCapacity)
 	r.push(Entry{Code: "MET-A"})
 	r.push(Entry{Code: "MET-B"})
 	r.push(Entry{Code: "MET-A"}) // 1 other entry in between -- well within the scan-back window
@@ -249,7 +249,7 @@ func TestRing_InterleavedFlood_DoesNotEvictGenuineEntry(t *testing.T) {
 // far smaller and unrelated "guarded types" count the old K was
 // mis-justified against) — not guarded types specifically.
 func TestRing_ManyDistinctCodes_ExactCoalescing(t *testing.T) {
-	r := newRingBuffer(200)
+	r := newRingBuffer(ringCapacity)
 
 	// Seed a genuine entry the flood must not evict.
 	r.push(Entry{Code: "MET-E006", CorrelationID: "corr-genuine-wide", Msg: "genuine, must survive a wide flood"})
@@ -310,10 +310,9 @@ func TestRing_ManyDistinctCodes_ExactCoalescing(t *testing.T) {
 // currently has an index entry is actually found, exactly once, at that
 // index in the live snapshot.
 func TestRingBuffer_EvictionKeepsIndexConsistent(t *testing.T) {
-	const capacity = 200
-	r := newRingBuffer(capacity)
+	r := newRingBuffer(ringCapacity)
 
-	const totalPushes = capacity * 5
+	const totalPushes = ringCapacity * 5
 	for i := 0; i < totalPushes; i++ {
 		// Every push is a NEW code every 7th iteration (never coalesces),
 		// otherwise repeats one of a small rotating set (coalesces) -- a
@@ -328,8 +327,8 @@ func TestRingBuffer_EvictionKeepsIndexConsistent(t *testing.T) {
 		r.push(Entry{Code: code, CorrelationID: fmt.Sprintf("corr-%d", i)})
 
 		snap := r.snapshot()
-		if len(snap) > capacity {
-			t.Fatalf("push %d: snapshot length = %d, want <= %d (ringCapacity)", i, len(snap), capacity)
+		if len(snap) > ringCapacity {
+			t.Fatalf("push %d: snapshot length = %d, want <= %d (ringCapacity)", i, len(snap), ringCapacity)
 		}
 
 		// Every Code the index currently claims to hold must resolve to
@@ -439,7 +438,7 @@ func TestRing_FloodCost_10kEntries_BoundedTime(t *testing.T) {
 // above with the standard Go benchmarking harness so a future regression
 // shows up in `go test -bench=. -benchmem` allocation counts too.
 func BenchmarkRingBuffer_Push(b *testing.B) {
-	r := newRingBuffer(200)
+	r := newRingBuffer(ringCapacity)
 	const distinctCodes = 25
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
