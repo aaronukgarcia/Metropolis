@@ -134,3 +134,12 @@ test('SPAWN: operator override CLAUDE_ALLOW_WORKTREE_RESET=1 allows a reset --ha
 test('SPAWN: non-git command is ALLOWED', () => {
   assert.equal(runGuard('rm -rf /tmp/scratch').stdout.trim(), '');
 });
+
+test('checkout of a tag/version ref is SAFE (not a path — the v1.2 false-positive fix)', () => {
+  assert.equal(isDestructiveInvocation('checkout', tk('v1.2')), false);
+  assert.equal(isDestructiveInvocation('checkout', tk('v1.2.3')), false);
+  assert.equal(isDestructiveInvocation('checkout', tk('release-2024.08')), false);
+  // but real source files still read as paths
+  assert.equal(isDestructiveInvocation('checkout', tk('main.go')), true);
+  assert.equal(isDestructiveInvocation('checkout', tk('config.yaml')), true);
+});

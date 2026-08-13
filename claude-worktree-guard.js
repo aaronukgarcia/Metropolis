@@ -124,11 +124,26 @@ function argTokens(suffix) {
     .filter(Boolean);
 }
 
+// Source/text file extensions this project actually contains. A bare token
+// ending in one reads as a pathspec, not a ref. Deliberately NOT "any dotted
+// token": `git checkout v1.2` / `v1.2.3` (a tag or version branch) is a legit
+// SAFE switch and must not be mistaken for a file. GR#15-ish: this is the
+// repo's real file-type surface, not an open-ended "has a dot" guess. A file
+// whose extension is not listed, and has no slash, is left to the safe side
+// (a false negative here just means "no worse than today"; a false positive
+// would wrongly block a real branch/tag switch).
+const PATHY_EXTENSIONS = new Set([
+  'go', 'js', 'ts', 'md', 'json', 'txt', 'yml', 'yaml', 'sh', 'ps1', 'bat',
+  'mod', 'sum', 'lock', 'toml', 'css', 'html', 'py', 'rs',
+]);
+
 function looksLikePath(tok) {
+  if (tok.startsWith('-')) return false;
   if (tok === '.' || tok === '*') return true;
   if (tok.includes('/') || tok.includes('\\')) return true;
-  // a bare filename with an extension (foo.go, x.md) reads as a pathspec, not a branch
-  return /\.[A-Za-z0-9]+$/.test(tok) && !tok.startsWith('-');
+  const dot = tok.lastIndexOf('.');
+  if (dot <= 0 || dot === tok.length - 1) return false;
+  return PATHY_EXTENSIONS.has(tok.slice(dot + 1).toLowerCase());
 }
 
 /** Is this a working-tree-discarding invocation of `verb`? */
