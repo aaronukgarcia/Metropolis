@@ -158,6 +158,17 @@ if (errors.length) {
   process.exit(1);
 }
 console.log(`master plan validates clean: ${items.length} items, seqs ${Math.min(...seqSeen.keys())}..${Math.max(...seqSeen.keys())}, dependency graph acyclic.`);
+// BUG-070: the collaborations forward-drift-gate (see the block above) is
+// scoped to whichever items happen to carry a `collaborations` field — it
+// has zero coverage on everything else. That scope limit was previously
+// only documented in prose (this file's header comment, a BOW thread), so
+// a reviewer reading only this script's stdout had no way to learn how
+// partial the gate's coverage actually is. Report it live, derived from the
+// same `items` array validation just ran over — never hardcoded (GR#15).
+{
+  const withCollab = items.filter(it => it.collaborations).length;
+  console.log(`collaborations declared for ${withCollab}/${items.length} modules (${items.length - withCollab} uncovered by this gate)`);
+}
 if (process.argv.includes('--check')) process.exit(0);
 
 // ── GUID assignment (stable across regenerations) ─────────────────────────────

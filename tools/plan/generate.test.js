@@ -165,6 +165,73 @@ test('generate.js FAILS validation when a declared collaboration has no matching
   }
 });
 
+test('BUG-070: generate.js reports live collaborations-gate coverage, and the count moves when the fixture is mutated', () => {
+  const { fixturePath, cleanup } = makePlanFixture();
+  try {
+    const plan = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+    const total = plan.items.length;
+    const before = plan.items.filter(it => it.collaborations).length;
+
+    const baseline = spawnSync(process.execPath, [GENERATE_PATH, '--check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, MET_PLAN_PATH: fixturePath },
+    });
+    assert.equal(baseline.status, 0, `baseline run should validate clean. stderr:\n${baseline.stderr}`);
+    const baselineRe = new RegExp(`collaborations declared for ${before}/${total} modules \\(${total - before} uncovered by this gate\\)`);
+    assert.match(
+      baseline.stdout,
+      baselineRe,
+      `expected the coverage line to report ${before}/${total}; stdout was:\n${baseline.stdout}`
+    );
+
+    // Now REMOVE a collaborations field from a module that has one, and
+    // prove the reported count decreases accordingly (not hardcoded).
+    const withCollab = plan.items.find(it => it.collaborations);
+    assert.ok(withCollab, 'fixture assumption broke: no master-plan item currently carries a collaborations field');
+    delete withCollab.collaborations;
+    fs.writeFileSync(fixturePath, JSON.stringify(plan, null, 2) + '\n', 'utf8');
+
+    const afterRemove = spawnSync(process.execPath, [GENERATE_PATH, '--check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, MET_PLAN_PATH: fixturePath },
+    });
+    assert.equal(afterRemove.status, 0, `run after removing a collaborations field should still validate clean. stderr:\n${afterRemove.stderr}`);
+    const afterRemoveRe = new RegExp(`collaborations declared for ${before - 1}/${total} modules \\(${total - before + 1} uncovered by this gate\\)`);
+    assert.match(
+      afterRemove.stdout,
+      afterRemoveRe,
+      `expected the coverage line to drop to ${before - 1}/${total} after removing a collaborations field; stdout was:\n${afterRemove.stdout}`
+    );
+
+    // And ADD a collaborations field to a module that has none, and prove
+    // the reported count increases accordingly. Use an item whose deps[]
+    // already give it a safe, real target to declare a (satisfied)
+    // collaboration against, so this doesn't also trip the drift check.
+    const withoutCollab = plan.items.find(it => !it.collaborations && (it.calls || []).length > 0);
+    assert.ok(withoutCollab, 'fixture assumption broke: no master-plan item without collaborations has any calls[] to declare against');
+    const target = withoutCollab.calls[0];
+    withoutCollab.collaborations = { consumesFrom: [target] };
+    fs.writeFileSync(fixturePath, JSON.stringify(plan, null, 2) + '\n', 'utf8');
+
+    const afterAdd = spawnSync(process.execPath, [GENERATE_PATH, '--check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, MET_PLAN_PATH: fixturePath },
+    });
+    assert.equal(afterAdd.status, 0, `run after adding a satisfied collaborations field should validate clean. stderr:\n${afterAdd.stderr}`);
+    const afterAddRe = new RegExp(`collaborations declared for ${before}/${total} modules \\(${total - before} uncovered by this gate\\)`);
+    assert.match(
+      afterAdd.stdout,
+      afterAddRe,
+      `expected the coverage line to return to ${before}/${total} after adding a collaborations field back; stdout was:\n${afterAdd.stdout}`
+    );
+  } finally {
+    cleanup();
+  }
+});
+
 test('generate.js passes validation when a declared collaboration DOES have a matching call edge', () => {
   const { fixturePath, cleanup } = makePlanFixture();
   try {
