@@ -87,7 +87,9 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 	defer func() { _ = transport.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	e.StartSubscriptionPump(ctx, transport)
+	if err := e.StartSubscriptionPump(ctx, transport); err != nil {
+		t.Fatalf("StartSubscriptionPump: %v", err)
+	}
 	// RunCommandLoop now returns an error (harness.headless [MOD-015]
 	// AC-4/AC-5) -- this test's own ctx cancels first via the deferred
 	// cancel() above, so a clean (nil) exit is expected here; ignored

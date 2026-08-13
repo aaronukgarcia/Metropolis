@@ -294,7 +294,28 @@ func (e *Engine) signalSubscriptionPump() {
 // pump) — NewEngine does not start one automatically, since not every
 // caller (e.g. a headless harness driving AdvanceTicks with no live
 // UI) needs one.
-func (e *Engine) StartSubscriptionPump(ctx context.Context, sink DeltaSink) {
+//
+// BUG-019: identity-checked BEFORE the goroutine is started — one of
+// this package's e.mu.Lock()-adjacent entry points missed by SEC-018's
+// enumeration (that pass covered every direct e.mu.Lock() call site;
+// this one only touches e.mu transitively via EngineStatusView(), which
+// already guards itself). Without this check, a struct-copied Engine
+// (e2 := *e) calling e2.StartSubscriptionPump would start a live
+// goroutine reading e2.deltaSignal — a copied channel HEADER aliasing
+// the same underlying channel as the original — and call
+// e2.subs.PublishEngineStatus(). Because e2.subs is the SAME POINTER as
+// e.subs (not itself a copy), PublishEngineStatus's own checkNotCopied
+// guard would never fire, so the failure mode is not a crash or a hang
+// but silently WRONG DATA: published engine.status deltas built from
+// e2.EngineStatusView()'s degrade-to-zero path (a copy's Clock() is
+// itself guarded and returns a zeroed Clock). Rejecting the copy here,
+// before the goroutine is ever started, closes that off at the same
+// entry point SEC-016/SEC-018 established for every other guarded
+// method on this type.
+func (e *Engine) StartSubscriptionPump(ctx context.Context, sink DeltaSink) error {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
 	go func() {
 		for {
 			select {
@@ -305,6 +326,7 @@ func (e *Engine) StartSubscriptionPump(ctx context.Context, sink DeltaSink) {
 			}
 		}
 	}()
+	return nil
 }
 
 // CommandSource is the minimal pull surface RunCommandLoop needs from a

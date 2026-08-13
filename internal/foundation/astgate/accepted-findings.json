@@ -4,10 +4,6 @@
     "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
   },
   {
-    "finding": "internal/engine/core/commands.go|*Engine|receiver method|StartSubscriptionPump|e|*Engine",
-    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
-  },
-  {
     "finding": "internal/engine/core/commands.go|*Engine|receiver method|accept|e|*Engine",
     "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
   },
