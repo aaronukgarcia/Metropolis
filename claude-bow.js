@@ -25,6 +25,18 @@
  *   undepend <code> --on <code>
  *   ref <code> <commit-hash> [--note "..." | --note-file <path>]    - Link a git commit to an item
  *   set <code> [--priority P1] [--status in_progress|blocked|open]
+ *   redact <code> | redact --comment <id>
+ *                                         - BUG-061 (GR#22): scan an item's title/
+ *                                           description, or a comment's body, for the
+ *                                           reference-title patterns (reusing
+ *                                           claude-codename-guard.js's own fragment-
+ *                                           assembled pattern set — GR#3) and replace
+ *                                           every hit with [REDACTED-GR22]. Auto-posts
+ *                                           an audit comment recording ONLY the pattern
+ *                                           class(es), count and field(s) affected —
+ *                                           never the matched text, never the pre-image.
+ *                                           No --match/--text flag exists: the forbidden
+ *                                           text never transits the command line.
  *   done <code> [--note "resolution" | --note-file <path>] [--force]
  *                                         - Blocked while open dependencies remain (GR#12)
  *                                           unless --force
@@ -112,7 +124,13 @@ const VALUE_FLAGS = ['priority', 'desc', 'desc-file', 'status', 'type', 'on', 'n
   'example', 'example-file', 'lang', 'author',
   'mkey', 'seq', 'sprint', 'spec', 'milestone', 'layer', 'guid-in', 'guid-out', 'estimate',
   'code-path', 'codejson', 'class', 'verdict', 'attacker', 'findings',
-  'check', 'name', 'runner', 'run', 'detail', 'detail-file'];
+  'check', 'name', 'runner', 'run', 'detail', 'detail-file',
+  // BUG-061 (tool.bow `redact`): --comment <id> selects a bow_comments row
+  // instead of an item code. Deliberately no --match/--text value flag exists
+  // ANYWHERE in this list — Aaron's binding constraint (BUG-061) is that the
+  // forbidden text must never transit the command line, so the redact
+  // command detects occurrences itself rather than being told what to redact.
+  'comment'];
 for (let i = 1; i < argv.length; i++) {
   const a = argv[i];
   if (a.startsWith('--') && VALUE_FLAGS.includes(a.slice(2))) { flags[a.slice(2)] = argv[++i]; }
@@ -2308,6 +2326,167 @@ async function cmdSet(db) {
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);
 }
 
+// ── redact (BUG-061, GR#22) ──────────────────────────────────────────────────
+//
+// Aaron's binding design constraints (BOW BUG-061, 2026-08-11 ruling): (1) the
+// forbidden text never transits the command line or any audit trail — no
+// --match/--text flag anywhere, detection is self-contained; (2) auditable,
+// never silent — an auto-comment records pattern-class + count + field only;
+// (3) the original (pre-redaction) text is stored nowhere — no backup column,
+// no log line, no stdout echo; (4) --comment <id> is also accepted, since
+// bow_comments is prose-bearing too.
+//
+// GR#3 (single source of truth): the pattern set itself is NOT re-derived
+// here. It is required straight from claude-codename-guard.js, which builds
+// it from string fragments at runtime specifically so no forbidden literal
+// ever sits whole in source (see that file's header). This module only adds
+// the REPLACE half (the guard only detects/denies); the matching semantics
+// (global regex per pattern, boundary-aware zero-width-safe scan for
+// `boundary: true` patterns) are ported verbatim from the guard's own
+// lineMatchesWithBoundary so a hit here is the same hit the guard would have
+// blocked at commit time.
+function loadCodenameGuardPatterns() {
+  const guard = require('./claude-codename-guard.js');
+  if (!guard || !Array.isArray(guard.PATTERNS) || typeof guard.isLowerLetter !== 'function') {
+    console.error('claude-bow: claude-codename-guard.js did not export PATTERNS/isLowerLetter — refusing to redact without the guard\'s canonical pattern set (GR#3: no second, hand-derived copy of the forbidden-pattern list).');
+    process.exit(1);
+  }
+  return guard;
+}
+
+/**
+ * Replace every occurrence of every codename-guard pattern in `text` with the
+ * literal marker [REDACTED-GR22]. Returns { text, hits } where hits is
+ * [{ what, count }] — `what` is the guard's own safe, non-identifying
+ * pattern-class description (e.g. "the distinctive single word from the
+ * reference title"), never the matched substring itself. Nothing about the
+ * original matched text is retained anywhere in the return value.
+ */
+function redactText(text, guardExports) {
+  const { PATTERNS, isLowerLetter } = guardExports;
+  let working = text;
+  const hits = [];
+  for (const p of PATTERNS) {
+    p.re.lastIndex = 0;
+    let count = 0;
+    let result = '';
+    let lastIndex = 0;
+    let m;
+    while ((m = p.re.exec(working))) {
+      let real = true;
+      if (p.boundary) {
+        const before = m.index > 0 ? working[m.index - 1] : undefined;
+        const after = m.index + m[0].length < working.length ? working[m.index + m[0].length] : undefined;
+        real = !isLowerLetter(before) || !isLowerLetter(after);
+      }
+      if (real) {
+        result += working.slice(lastIndex, m.index) + '[REDACTED-GR22]';
+        lastIndex = m.index + m[0].length;
+        count++;
+      }
+      if (p.re.lastIndex === m.index) p.re.lastIndex += 1; // zero-length-match guard
+    }
+    result += working.slice(lastIndex);
+    if (count > 0) {
+      working = result;
+      hits.push({ what: p.what, count });
+    }
+  }
+  return { text: working, hits };
+}
+
+async function cmdRedact(db) {
+  const guardExports = loadCodenameGuardPatterns();
+  const isComment = flags.comment !== undefined;
+
+  let subject;       // human-readable label for output/audit comment, safe to print
+  let auditItemGuid; // which item's comment thread carries the audit trail
+  let fieldSpecs;     // [{ name, value }]
+  let applyUpdate;    // async (newValuesByFieldName) => void
+
+  if (isComment) {
+    const commentId = Number(flags.comment);
+    if (!Number.isFinite(commentId)) {
+      console.error('Usage: node claude-bow.js redact --comment <id>');
+      process.exit(1);
+    }
+    const [rows] = await db.query('SELECT * FROM bow_comments WHERE id = ?', [commentId]);
+    if (!rows.length) {
+      console.error(`claude-bow: no comment with id ${commentId}`);
+      process.exit(1);
+    }
+    const comment = rows[0];
+    subject = `comment #${commentId}`;
+    auditItemGuid = comment.item_guid;
+    fieldSpecs = [{ name: 'body', value: comment.body }];
+    applyUpdate = async (newValues) => {
+      await db.query('UPDATE bow_comments SET body = ? WHERE id = ?', [newValues.body, commentId]);
+    };
+  } else {
+    const item = await requireItem(db, positional[0]);
+    subject = item.code;
+    auditItemGuid = item.guid;
+    fieldSpecs = [
+      { name: 'title', value: item.title },
+      { name: 'description', value: item.description },
+    ];
+    applyUpdate = async (newValues) => {
+      const sets = [];
+      const params = [];
+      if (newValues.title !== undefined) { sets.push('title = ?'); params.push(newValues.title); }
+      if (newValues.description !== undefined) { sets.push('description = ?'); params.push(newValues.description); }
+      params.push(item.guid);
+      await db.query(`UPDATE bow_items SET ${sets.join(', ')} WHERE guid = ?`, params);
+    };
+  }
+
+  const newValues = {};
+  // Aggregated by field+pattern-class so multiple distinct PATTERNS entries
+  // sharing the same safe `what` description (e.g. the several
+  // former-expansion-pack-name patterns) report as one summed count rather
+  // than one line per pattern — "the count" per Aaron's ruling means the
+  // occurrence count per class, not the internal pattern-table row count.
+  const reportMap = new Map(); // key `${field} ${what}` -> { field, what, count }
+  let totalCount = 0;
+  for (const f of fieldSpecs) {
+    if (!f.value) continue;
+    const { text, hits } = redactText(f.value, guardExports);
+    if (!hits.length) continue;
+    newValues[f.name] = text;
+    for (const h of hits) {
+      const key = `${f.name} ${h.what}`;
+      const existing = reportMap.get(key);
+      if (existing) existing.count += h.count;
+      else reportMap.set(key, { field: f.name, what: h.what, count: h.count });
+      totalCount += h.count;
+    }
+  }
+  const report = [...reportMap.values()];
+
+  if (!report.length) {
+    console.log(`redact: no forbidden-pattern occurrences found in ${subject} — nothing changed.`);
+    return;
+  }
+
+  // Write the redacted text back via the same DB write paths the rest of
+  // this file already uses (no raw ad-hoc SQL bypassing the query patterns
+  // above) — the pre-redaction text is discarded here, not stored anywhere.
+  await applyUpdate(newValues);
+
+  // Auto-comment: pattern-class + count + field ONLY (Aaron's constraint 2/3
+  // — never the redacted text, never the pre-image). `r.what` is always one
+  // of the guard's own fixed, non-identifying descriptions.
+  const summary = report.map((r) => `${r.field}: ${r.count} occurrence(s) of "${r.what}"`).join('; ');
+  await db.query(
+    'INSERT INTO bow_comments (item_guid, author, body) VALUES (?, ?, ?)',
+    [auditItemGuid, currentAuthor(),
+     `GR#22 redaction (BUG-061) applied to ${subject}${isComment ? ' (comment body)' : ''}: ${summary}. ` +
+     'Original text stored nowhere; occurrences replaced with [REDACTED-GR22].']);
+
+  console.log(`redact: ${subject} — redacted ${totalCount} occurrence(s):`);
+  for (const r of report) console.log(`  ${r.field}: ${r.count} x "${r.what}"`);
+}
+
 async function cmdDone(db) {
   const item = await requireItem(db, positional[0]);
   // GR#12: an item is not complete while the things it depends on are open.
@@ -2621,6 +2800,11 @@ module.exports = {
   // the mutual-exclusion/advisory-warning behaviour directly, in addition to
   // the required real-subprocess byte-identity checks (AC-1).
   resolveTextFlag, RISKY_CONTENT_RE,
+  // BUG-061 (tool.bow `redact`): exported for direct unit testing of the
+  // replace/count logic against fixture text, in addition to the required
+  // real-subprocess contract tests (Aaron's ruling: verify the way Tester-2
+  // verified the guard — real stdin/argv, not just internal functions).
+  redactText, loadCodenameGuardPatterns, cmdRedact,
 };
 
 // ── Entry ─────────────────────────────────────────────────────────────────────
@@ -2640,6 +2824,7 @@ if (require.main === module) {
         case 'undepend': await cmdUndepend(db); break;
         case 'ref': await cmdRef(db); break;
         case 'set': await cmdSet(db); break;
+        case 'redact': await cmdRedact(db); break;
         case 'done': await cmdDone(db); break;
         case 'import': await cmdImport(db); break;
         case 'ready': await cmdReady(db); break;
@@ -2654,7 +2839,7 @@ if (require.main === module) {
         case 'gate-run': await cmdGateRun(db); break;
         default:
           console.error(`Unknown command: ${command}`);
-          console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, done, import, summary, startup-summary, weakness, lint, destructive, verdict, gate, gate-status, gate-run');
+          console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, done, import, summary, startup-summary, weakness, lint, destructive, verdict, gate, gate-status, gate-run');
           process.exit(1);
       }
     } catch (err) {

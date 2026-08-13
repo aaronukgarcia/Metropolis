@@ -356,5 +356,16 @@ try {
 } else {
   module.exports = {
     GIT_COMMIT_OR_PUSH_RE,
+    // BUG-061 (tool.bow `redact` subcommand): exported so claude-bow.js can
+    // reuse this guard's own fragment-assembled pattern set and boundary
+    // logic verbatim (GR#3 single source of truth) instead of re-deriving a
+    // second copy of the forbidden-pattern list — a drifted second copy is
+    // exactly the kind of gap that would let a real name back into the BOW
+    // even after this guard blocks it from reaching git. Nothing here adds a
+    // new literal to this file: PATTERNS is still fragment-assembled above,
+    // isLowerLetter is the same boundary-classification helper the guard's
+    // own scan() uses.
+    PATTERNS,
+    isLowerLetter,
   };
 }

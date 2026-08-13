@@ -1564,3 +1564,201 @@ test('BUG-090 AC-5: the source cites BUG-090 by number AND offers --desc-file, m
   assert.match(src, /desc-file/, 'the --desc-file flag must appear in the source (usage text or a comment)');
   assert.match(src, /BUG-090/, 'the source must cite BUG-090 by number, not only add the flag silently');
 });
+
+// =============================================================================
+// BUG-061 (GR#22) — `redact <code>` / `redact --comment <id>`. Aaron's binding
+// ruling requires: (1) no --match/--text flag ever carries the forbidden text
+// on the command line; (2) auditable via an auto-comment naming ONLY the
+// pattern-class + count + field, never the matched text; (3) the pre-image is
+// stored nowhere; (4) --comment <id> is also supported. Verified the way
+// Tester-2 verified the guard itself (per the item's own history): real
+// `node claude-bow.js redact ...` subprocess calls through the actual CLI
+// contract, plus a negative control proving the detector can genuinely fail
+// to match ordinary text.
+//
+// GR#22 applies to this file too: the forbidden text is never written here as
+// a literal. Test payloads are assembled from fragments at runtime using the
+// SAME technique claude-codename-guard.js uses for its own PATTERNS (see that
+// file's header) — the joined word never sits whole anywhere in this source.
+// =============================================================================
+
+const RG_CITY = 'cit';
+const RG_SKY = 'sky';
+const RG_LINES = 'lines';
+const RG_BRIDG = 'bridg';
+const RG_PORT = 'por';
+
+/** city-word + sky-word + lines-word joined — matches PATTERNS[0], "the full reference title". */
+function buildFullTitlePhrase() {
+  return `${RG_CITY}y ${RG_SKY}${RG_LINES}`;
+}
+
+/** "<sky><lines>" on its own, word-bounded — matches PATTERNS[1] only. */
+function buildSingleWordPhrase() {
+  return `the ${RG_SKY}${RG_LINES} engine`;
+}
+
+/** Two-letter abbreviation + digit, built from single-character fragments — matches the numbered-abbreviation pattern. */
+function buildNumberedAbbrevPhrase() {
+  const letters = ['C', 'S'].join('');
+  return `see the ${letters}2 comparison doc`;
+}
+
+/** "<bridg>es and <por>ts" — matches a former-expansion-pack-name pattern. */
+function buildPackNamePhrase() {
+  return `the ${RG_BRIDG}es and ${RG_PORT}ts table`;
+}
+
+test('BUG-061 AC: `redact <code>` replaces a forbidden occurrence in title/description with [REDACTED-GR22] via the real CLI subprocess, and the marker (not the source text) lands in the DB', async () => {
+  const guid = await insertItem({
+    code: 'FEAT-9100',
+    description: `Comparing against ${buildFullTitlePhrase()} for scale reference.`,
+  });
+
+  const r = bowCli(['redact', 'FEAT-9100']);
+  assert.equal(r.status, 0, `redact failed: ${r.stderr}`);
+  assert.match(r.stdout, /\[REDACTED-GR22\]|redacted \d+ occurrence/i);
+
+  const [rows] = await db.query('SELECT title, description FROM bow_items WHERE guid = ?', [guid]);
+  assert.match(rows[0].description, /\[REDACTED-GR22\]/, 'the marker must replace the forbidden phrase');
+  assert.ok(!rows[0].description.includes(buildFullTitlePhrase()), 'the forbidden phrase itself must no longer be present');
+
+  // Constraint 2 (Aaron): auto-comment records pattern-class + count + field
+  // only — never the matched text.
+  const [comments] = await db.query(
+    'SELECT body FROM bow_comments WHERE item_guid = ? ORDER BY id DESC LIMIT 1', [guid]);
+  assert.equal(comments.length, 1, 'redact must auto-post exactly one audit comment');
+  assert.match(comments[0].body, /description/i, 'the audit comment must name the affected field');
+  assert.match(comments[0].body, /\d+ occurrence/i, 'the audit comment must name a count');
+  assert.ok(!comments[0].body.includes(buildFullTitlePhrase()), 'constraint 2: the audit comment must NEVER contain the matched text itself');
+
+  // Constraint 3 (Aaron): the pre-image is stored nowhere in the DB at all —
+  // not a backup column (none exists), not a second row.
+  const [anyLeak] = await db.query(
+    `SELECT title, description FROM bow_items WHERE title LIKE ? OR description LIKE ?`,
+    [`%${buildFullTitlePhrase()}%`, `%${buildFullTitlePhrase()}%`]);
+  assert.equal(anyLeak.length, 0, 'the original forbidden text must not survive anywhere in bow_items after redaction');
+});
+
+test('BUG-061 AC: `redact` also catches the standalone single-word pattern and the numbered-abbreviation pattern (real CLI subprocess)', async () => {
+  const guid = await insertItem({
+    code: 'FEAT-9101',
+    description: `${buildSingleWordPhrase()}. Also ${buildNumberedAbbrevPhrase()}.`,
+  });
+
+  const r = bowCli(['redact', 'FEAT-9101']);
+  assert.equal(r.status, 0, `redact failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.match(rows[0].description, /\[REDACTED-GR22\]/, 'at least one redaction marker must appear');
+  assert.ok(!rows[0].description.includes(buildSingleWordPhrase()), 'the standalone single-word phrase must be gone');
+  assert.ok(!rows[0].description.includes(buildNumberedAbbrevPhrase()), 'the numbered-abbreviation phrase must be gone');
+  void guid;
+});
+
+test('BUG-061 AC: `redact` catches a former expansion-pack-name phrase (real CLI subprocess)', async () => {
+  const guid = await insertItem({
+    code: 'FEAT-9102',
+    description: `Sec23 ${buildPackNamePhrase()} still needs review.`,
+  });
+
+  const r = bowCli(['redact', 'FEAT-9102']);
+  assert.equal(r.status, 0, `redact failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.match(rows[0].description, /\[REDACTED-GR22\]/);
+  assert.ok(!rows[0].description.includes(buildPackNamePhrase()));
+  void guid;
+});
+
+test('BUG-061 AC (negative control): `redact` leaves ordinary, unrelated text COMPLETELY untouched — proving the detector can genuinely fail to match when it should', async () => {
+  const ordinaryTitle = 'FEAT-9103';
+  const ordinaryDesc = 'Freight dispatch: assign trucks to depots by shortest queue, cap concurrent loads per dock, log idle time for the fleet-utilisation report.';
+  const guid = await insertItem({ code: ordinaryTitle, description: ordinaryDesc });
+
+  const r = bowCli(['redact', 'FEAT-9103']);
+  assert.equal(r.status, 0, `redact failed on ordinary text: ${r.stderr}`);
+  assert.match(r.stdout, /no forbidden-pattern occurrences found/i, 'must explicitly report zero occurrences, not silently succeed');
+
+  const [rows] = await db.query('SELECT title, description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, ordinaryDesc, 'ordinary description must be byte-identical after a no-op redact');
+
+  // No audit comment should be posted when nothing was redacted — an
+  // auto-comment on every invocation regardless of outcome would itself be
+  // a form of noise/false signal.
+  const [comments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(comments[0].n, 0, 'no audit comment should be posted when there was nothing to redact');
+});
+
+test('BUG-061 AC: `redact` is idempotent — running it a second time after a successful redaction finds nothing left to do', async () => {
+  const guid = await insertItem({
+    code: 'FEAT-9104',
+    description: `Reference: ${buildFullTitlePhrase()}.`,
+  });
+
+  const first = bowCli(['redact', 'FEAT-9104']);
+  assert.equal(first.status, 0);
+  assert.match(first.stdout, /redacted \d+ occurrence/i);
+
+  const second = bowCli(['redact', 'FEAT-9104']);
+  assert.equal(second.status, 0);
+  assert.match(second.stdout, /no forbidden-pattern occurrences found/i, 'a second run on already-redacted text must find nothing');
+  void guid;
+});
+
+test('BUG-061 AC (constraint 4): `redact --comment <id>` redacts a comment body in place, leaving the marker and posting a field-scoped audit comment on the parent item', async () => {
+  const guid = await insertItem({ code: 'FEAT-9105' });
+  const [insertResult] = await db.query(
+    'INSERT INTO bow_comments (item_guid, body) VALUES (?, ?)',
+    [guid, `Old note: compare to ${buildFullTitlePhrase()} directly.`]);
+  const commentId = insertResult.insertId;
+
+  const r = bowCli(['redact', '--comment', String(commentId)]);
+  assert.equal(r.status, 0, `redact --comment failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT body FROM bow_comments WHERE id = ?', [commentId]);
+  assert.match(rows[0].body, /\[REDACTED-GR22\]/);
+  assert.ok(!rows[0].body.includes(buildFullTitlePhrase()));
+
+  // The audit trail comment lands on the PARENT ITEM (not a second edit of
+  // the same comment row) and names the field as "body".
+  const [auditComments] = await db.query(
+    'SELECT body FROM bow_comments WHERE item_guid = ? AND id != ? ORDER BY id DESC LIMIT 1', [guid, commentId]);
+  assert.equal(auditComments.length, 1, 'an audit comment must be posted on the item for a --comment redaction');
+  assert.match(auditComments[0].body, /body/i);
+  assert.ok(!auditComments[0].body.includes(buildFullTitlePhrase()));
+});
+
+test('BUG-061 AC (constraint 1): `redact` never requires a --match/--text argument — "match" is not a recognized VALUE_FLAGS token, and the real CLI rejects it as an unknown/boolean flag rather than consuming a value', () => {
+  const { spawnSync: spawnDirect } = require('child_process');
+  const src = fs.readFileSync(path.join(ROOT, 'claude-bow.js'), 'utf8');
+  const valueFlagsMatch = src.match(/const VALUE_FLAGS = \[[\s\S]*?\];/);
+  assert.ok(valueFlagsMatch, 'VALUE_FLAGS array must be found in source');
+  assert.ok(!/'match'/.test(valueFlagsMatch[0]), 'constraint 1: "match" must never be a recognized value-carrying flag — the forbidden text must never transit the command line');
+
+  // Behavioural proof, not just source inspection: passing --match on the
+  // real CLI does NOT consume the next token as its value (it is treated as
+  // a bare boolean flag), so nothing resembling a matched-text argument is
+  // ever parsed out of argv for this command.
+  const r = spawnDirect(process.execPath, ['claude-bow.js', 'redact', '--match', 'FEAT-9106'], {
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+  });
+  // "FEAT-9106" ends up as the positional CODE argument (item likely absent,
+  // so requireItem fails) rather than as --match's value — proving --match
+  // took no argument.
+  assert.match(r.stderr, /no BOW item matches "FEAT-9106"/i, 'if --match had consumed "FEAT-9106" as its value, the positional CODE would be missing and the error message would differ');
+});
+
+test('BUG-061 AC: redactText() reuses claude-codename-guard.js\'s own exported PATTERNS/isLowerLetter rather than a re-derived copy (GR#3)', () => {
+  const guardSrc = fs.readFileSync(path.join(ROOT, 'claude-codename-guard.js'), 'utf8');
+  assert.match(guardSrc, /PATTERNS,\s*\n?\s*isLowerLetter,/s, 'claude-codename-guard.js must export PATTERNS and isLowerLetter for claude-bow.js to reuse (GR#3 single source of truth)');
+  const guard = require(path.join(ROOT, 'claude-codename-guard.js'));
+  assert.ok(Array.isArray(guard.PATTERNS) && guard.PATTERNS.length > 0);
+  assert.equal(typeof guard.isLowerLetter, 'function');
+});
+
+test('BUG-061 AC: `redact` with no matching item exits non-zero with a clear message, same shape as other commands\' requireItem() failures', () => {
+  const r = bowCli(['redact', 'FEAT-99999']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /no BOW item matches/i);
+});
