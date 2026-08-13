@@ -78,10 +78,33 @@ const DB_PASSWORD = process.env.METRO_DB_PASSWORD || '';
 let db;
 let realBowItemCountBefore;
 
+// BUG-207 (AC-12 fix): every guid this suite ever writes into ANY database
+// via insertItem() — always the scratch TEST_DB, never `metro` — is tracked
+// here. AC-12's real check (below, in test.after) is that NONE of these
+// guids ever show up in the real `metro` database. A raw whole-table
+// COUNT(*) diff (the previous approach) is not a safe way to prove that on
+// this project: `metro` is (a) the real, LIVE Book of Work other Claude
+// sessions are actively reading/writing while this suite runs (confirmed
+// locally — a concurrent session's `add` landed mid-run and flipped the
+// count), and (b) deliberately shared CI scratch space for sibling test
+// files that default to `METRO_DB_NAME || 'metro'`
+// (claude-destructive-guard.test.js et al — see .github/workflows/*.yml's
+// "Create metro database" step comment) and run as separate `node --test`
+// worker processes with their own independent cleanup timing. Either one
+// makes a bare row-count comparison flaky/false-positive by design, not
+// because this file leaks anything. A guid-based membership check is
+// immune to both: crypto.randomUUID() values from THIS suite's fixtures
+// cannot coincidentally collide with real BOW rows or another file's
+// fixtures, so this only ever fails if this suite's own isolation is
+// genuinely broken (e.g. `db` ends up pointed at `metro` instead of
+// TEST_DB) — a real leak, not background noise.
+const trackedFixtureGuids = [];
+
 test.before(async () => {
-  // Baseline the REAL metro database's bow_items count before touching
-  // anything — AC-12's check compares this against the same count taken
-  // again in test.after(), after the whole fixture suite has run.
+  // Baseline the REAL metro database's bow_items count purely as a
+  // diagnostic (logged on mismatch below, never asserted on its own — see
+  // trackedFixtureGuids above for why a raw count isn't a reliable signal
+  // on this project's live, multi-session `metro` database).
   const real = await mysql.createConnection({
     host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: 'metro',
   });
@@ -104,15 +127,38 @@ test.after(async () => {
     await db.query(`DROP DATABASE IF EXISTS \`${TEST_DB}\``);
     await db.end();
   }
+
   const real = await mysql.createConnection({
     host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: 'metro',
   });
+
+  // AC-12's real, deterministic assertion: none of this suite's own fixture
+  // guids ever reached the real `metro` database.
+  if (trackedFixtureGuids.length > 0) {
+    const [leaked] = await real.query(
+      `SELECT guid, code FROM bow_items WHERE guid IN (${trackedFixtureGuids.map(() => '?').join(',')})`,
+      trackedFixtureGuids
+    );
+    assert.equal(
+      leaked.length, 0,
+      `AC-12: ${leaked.length} of this fixture suite's own bow_items rows leaked into the real metro ` +
+      `database: ${leaked.map((r) => `${r.code} (${r.guid})`).join(', ')} — this suite's isolation is broken`
+    );
+  }
+
+  // Diagnostic-only: a raw row-count mismatch is EXPECTED noise on this
+  // project (a live, multi-session `metro` BOW, plus CI's sibling test
+  // files sharing it as scratch space — see trackedFixtureGuids' comment
+  // above), so it is logged for visibility, never asserted.
   const [[row]] = await real.query('SELECT COUNT(*) AS n FROM bow_items');
   await real.end();
-  assert.equal(
-    row.n, realBowItemCountBefore,
-    'AC-12: the real metro database bow_items row count must be unchanged by this fixture test suite'
-  );
+  if (row.n !== realBowItemCountBefore) {
+    console.log(
+      `AC-12 diagnostic: real metro bow_items count moved ${realBowItemCountBefore} -> ${row.n} during this ` +
+      `run — expected on this project (concurrent sessions / shared CI scratch), not itself a failure; the ` +
+      `guid-membership check above is the actual leak guard.`
+    );
+  }
 });
 
 test.beforeEach(async () => {
@@ -134,6 +180,9 @@ async function insertItem({ code, status = 'open', description = null, itemType 
      VALUES (?, ?, ?, ?, ?, 'P2', ?, ?, ?)`,
     [guid, code, itemType, code, description, status, mkey, sprint]
   );
+  // BUG-207 (AC-12): every guid this suite creates gets checked, in
+  // test.after, for having leaked into the real `metro` database.
+  trackedFixtureGuids.push(guid);
   return guid;
 }
 
@@ -2843,4 +2892,524 @@ test('BUG-017: `set` with neither --priority/--status/etc. nor --desc/--desc-fil
   const r = bowCli(['set', 'FEAT-9305']);
   assert.notEqual(r.status, 0, 'set with no update flags at all must still be a usage error');
   assert.match(r.stderr, /Usage: node claude-bow\.js set/);
+});
+
+// =============================================================================
+// FEAT-044 (docs/planning/acceptance/tool.bowcli.md) — general auditable
+// `amend` command for BOW prose: title/description/comment-body correction
+// with a mandatory --reason and an auto-comment recording OLD/NEW/reason/
+// author. Shares its "apply mutation, then audit" engine with `redact`
+// (applyMutationWithAudit) per Aaron's binding "two commands, one engine"
+// ruling. All tests below invoke the real `node claude-bow.js amend ...`
+// subprocess (bowCli), matching the evidentiary standard the rest of this
+// suite's BUG-090/BUG-061/BUG-017 sections already use for exactly this
+// class of "does the write, or refusal, actually reach the DB" question.
+// =============================================================================
+
+async function setTitle(itemGuid, title) {
+  await db.query('UPDATE bow_items SET title = ? WHERE guid = ?', [title, itemGuid]);
+}
+
+/** Insert a comment and return its numeric id (bow_comments.id AUTO_INCREMENT). */
+async function insertCommentGetId(itemGuid, body) {
+  await insertComment(itemGuid, body);
+  const [[row]] = await db.query(
+    'SELECT id FROM bow_comments WHERE item_guid = ? AND body = ? ORDER BY id DESC LIMIT 1', [itemGuid, body]);
+  return row.id;
+}
+
+test('FEAT-044 AC-1: `amend <code> --field desc --to "<text>" --reason "<text>"` actually changes the item description', async () => {
+  const guid = await insertItem({ code: 'FEAT-9400', description: 'stale, wrong description' });
+  const r = bowCli(['amend', 'FEAT-9400', '--field', 'desc', '--to', 'corrected, accurate description', '--reason', 'was factually wrong, corrected per Aaron']);
+  assert.equal(r.status, 0, `amend --field desc failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'corrected, accurate description');
+});
+
+test('FEAT-044 AC-1: `amend <code> --field title --to "<text>" --reason "<text>"` actually changes the item title', async () => {
+  const guid = await insertItem({ code: 'FEAT-9401' });
+  await setTitle(guid, 'Stale Title With A Typo');
+  const r = bowCli(['amend', 'FEAT-9401', '--field', 'title', '--to', 'Corrected Title', '--reason', 'fixed the typo']);
+  assert.equal(r.status, 0, `amend --field title failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT title FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].title, 'Corrected Title');
+});
+
+test('FEAT-044 AC-4: `amend --comment <id> --field body --to "<text>" --reason "<text>"` actually changes the comment body', async () => {
+  const guid = await insertItem({ code: 'FEAT-9402' });
+  const commentId = await insertCommentGetId(guid, 'stale comment text, wrong');
+
+  const r = bowCli(['amend', '--comment', String(commentId), '--field', 'body', '--to', 'corrected comment text', '--reason', 'the original was wrong']);
+  assert.equal(r.status, 0, `amend --comment failed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT body FROM bow_comments WHERE id = ?', [commentId]);
+  assert.equal(rows[0].body, 'corrected comment text');
+});
+
+test('FEAT-044 AC-5: a successful amend auto-comments the OLD value, the NEW value, the reason, and is attributed to the acting author — not merely "some comment was added"', async () => {
+  const guid = await insertItem({ code: 'FEAT-9403', description: 'the original wrong text' });
+  const r = bowCli(['amend', 'FEAT-9403', '--field', 'desc', '--to', 'the replacement correct text', '--reason', 'AC-5 audit trail check', '--author', 'test-author']);
+  assert.equal(r.status, 0, `amend failed: ${r.stderr}`);
+
+  const [comments] = await db.query(
+    'SELECT body, author FROM bow_comments WHERE item_guid = ? ORDER BY id DESC LIMIT 1', [guid]);
+  assert.equal(comments.length, 1, 'exactly one audit comment must be posted');
+  assert.match(comments[0].body, /the original wrong text/, 'audit comment must quote the OLD text (amend, unlike redact, quotes old/new in full)');
+  assert.match(comments[0].body, /the replacement correct text/, 'audit comment must quote the NEW text');
+  assert.match(comments[0].body, /AC-5 audit trail check/, 'audit comment must quote the supplied reason');
+  assert.equal(comments[0].author, 'test-author', 'audit comment must be attributed to the acting author (currentAuthor())');
+});
+
+test('FEAT-044 AC-6: `amend` invoked WITHOUT --reason exits non-zero before any write, with a "reason is required" message, and neither the target row nor bow_comments changes', async () => {
+  const guid = await insertItem({ code: 'FEAT-9404', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const r = bowCli(['amend', 'FEAT-9404', '--field', 'desc', '--to', 'attempted replacement']);
+  assert.notEqual(r.status, 0, 'amend with no --reason must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'the mandatory-reason check must run BEFORE the update -- no partial write');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when the write itself was refused');
+});
+
+test('FEAT-044 BOUNCE-BACK (attacker finding): `amend --reason " "` (whitespace-only, direct arg) is rejected exactly like a missing --reason -- a truthy-but-blank string must not bypass the mandatory-reason gate', async () => {
+  const guid = await insertItem({ code: 'FEAT-9440', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const r = bowCli(['amend', 'FEAT-9440', '--field', 'desc', '--to', 'attack: whitespace reason', '--reason', ' ']);
+  assert.notEqual(r.status, 0, 'a whitespace-only --reason must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a whitespace-only reason must not let the write through');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when --reason was whitespace-only');
+});
+
+test('FEAT-044 BOUNCE-BACK (attacker finding): `amend --reason` containing only a tab character is rejected the same way', async () => {
+  const guid = await insertItem({ code: 'FEAT-9441', description: 'must not change' });
+  const r = bowCli(['amend', 'FEAT-9441', '--field', 'desc', '--to', 'attack: tab reason', '--reason', '\t']);
+  assert.notEqual(r.status, 0, 'a tab-only --reason must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a tab-only reason must not let the write through');
+});
+
+test('FEAT-044 BOUNCE-BACK: a reason with genuine content plus surrounding whitespace still works, and is stored TRIMMED in the audit comment', async () => {
+  const guid = await insertItem({ code: 'FEAT-9442', description: 'original text' });
+  const r = bowCli(['amend', 'FEAT-9442', '--field', 'desc', '--to', 'new text', '--reason', '   real reason with padding   ']);
+  assert.equal(r.status, 0, `amend with a padded-but-real reason should succeed: ${r.stderr}`);
+
+  const [comments] = await db.query(
+    'SELECT body FROM bow_comments WHERE item_guid = ? ORDER BY id DESC LIMIT 1', [guid]);
+  assert.match(comments[0].body, /Reason: real reason with padding$/, 'the stored reason must be trimmed of leading/trailing whitespace');
+  assert.doesNotMatch(comments[0].body, /Reason:    real reason/, 'the stored reason must not retain the original leading padding');
+});
+
+test('FEAT-044 BOUNCE-BACK (same defect class): `amend --to " "` (whitespace-only replacement text) is rejected -- writing an all-whitespace field is not a meaningful amend', async () => {
+  const guid = await insertItem({ code: 'FEAT-9443', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const r = bowCli(['amend', 'FEAT-9443', '--field', 'desc', '--to', '   ', '--reason', 'trying to blank the field']);
+  assert.notEqual(r.status, 0, 'a whitespace-only --to must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /--to/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a whitespace-only replacement must not let the write through');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when --to was whitespace-only');
+});
+
+test('FEAT-044 BOUNCE-BACK: `amend --to` with genuine content plus surrounding whitespace still works, and is stored TRIMMED', async () => {
+  const guid = await insertItem({ code: 'FEAT-9444', description: 'original text' });
+  const r = bowCli(['amend', 'FEAT-9444', '--field', 'desc', '--to', '   padded replacement   ', '--reason', 'AC padded-to check']);
+  assert.equal(r.status, 0, `amend with a padded-but-real --to should succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'padded replacement', 'the stored description must be trimmed of leading/trailing whitespace');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3 (attacker finding): `amend --reason` containing ONLY a zero-width space (U+200B) is rejected exactly like a whitespace-only reason -- .trim() alone does not strip Unicode Cf-category invisible characters', async () => {
+  const guid = await insertItem({ code: 'FEAT-9450', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const r = bowCli(['amend', 'FEAT-9450', '--field', 'desc', '--to', 'attack: zero-width reason', '--reason', '​']);
+  assert.notEqual(r.status, 0, 'a zero-width-space-only --reason must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a zero-width-space-only reason must not let the write through');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when --reason was zero-width-space-only');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3: `amend --reason` containing a mix of other Cf-category invisible characters (ZWNJ, ZWJ, word joiner, soft hyphen, Mongolian vowel separator) with no visible content is rejected', async () => {
+  const guid = await insertItem({ code: 'FEAT-9451', description: 'must not change' });
+  const invisibleOnly = '‌‍⁠­᠎';
+  const r = bowCli(['amend', 'FEAT-9451', '--field', 'desc', '--to', 'attack: mixed invisible reason', '--reason', invisibleOnly]);
+  assert.notEqual(r.status, 0, 'a Cf-characters-only --reason must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a Cf-characters-only reason must not let the write through');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3 (same defect class): `amend --to` containing ONLY a zero-width space is rejected -- writing an invisible-but-technically-non-empty field is not a meaningful amend', async () => {
+  const guid = await insertItem({ code: 'FEAT-9452', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const r = bowCli(['amend', 'FEAT-9452', '--field', 'desc', '--to', '​', '--reason', 'trying to blank the field invisibly']);
+  assert.notEqual(r.status, 0, 'a zero-width-space-only --to must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /--to/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a zero-width-space-only replacement must not let the write through');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when --to was zero-width-space-only');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3 (attacker finding, live-reproduced): a --reason-file whose file contains ONLY a zero-width space is rejected -- confirms the fix covers the file-input path, not just direct args', async () => {
+  const guid = await insertItem({ code: 'FEAT-9453', description: 'must not change' });
+  const tmp = mkTempDir('feat044-round3-');
+  const filePath = path.join(tmp, 'zero-width-reason.txt');
+  fs.writeFileSync(filePath, '​', 'utf8');
+
+  const r = bowCli(['amend', 'FEAT-9453', '--field', 'desc', '--to', 'attack: file-based invisible reason', '--reason-file', filePath]);
+  assert.notEqual(r.status, 0, 'a --reason-file containing only a zero-width space must exit non-zero');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'the invisible-only reason-file must not let the write through');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3: a reason that legitimately CONTAINS a zero-width character alongside real content is still accepted, unmangled -- the fix must not over-reject genuine text', async () => {
+  const guid = await insertItem({ code: 'FEAT-9454', description: 'original text' });
+  const legitimateReason = 'real‌reason'; // ZWNJ embedded mid-word, e.g. from a copy-pasted CJK/Indic source
+  const r = bowCli(['amend', 'FEAT-9454', '--field', 'desc', '--to', 'new text', '--reason', legitimateReason]);
+  assert.equal(r.status, 0, `amend with a real reason that happens to contain a ZWNJ should succeed: ${r.stderr}`);
+
+  const [comments] = await db.query(
+    'SELECT body FROM bow_comments WHERE item_guid = ? ORDER BY id DESC LIMIT 1', [guid]);
+  assert.match(comments[0].body, new RegExp(`Reason: ${legitimateReason}$`), 'the embedded ZWNJ must be preserved verbatim, not stripped from genuine content');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3: `amend --to` that legitimately CONTAINS a zero-width character alongside real content is still accepted and stored verbatim', async () => {
+  const guid = await insertItem({ code: 'FEAT-9455', description: 'original text' });
+  const legitimateTo = 'real​content';
+  const r = bowCli(['amend', 'FEAT-9455', '--field', 'desc', '--to', legitimateTo, '--reason', 'ZWSP-embedded --to should still work']);
+  assert.equal(r.status, 0, `amend with real --to content that happens to contain a ZWSP should succeed: ${r.stderr}`);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, legitimateTo, 'the embedded zero-width space must be preserved verbatim in the stored value');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 3: hasVisibleContent unit-level truth table (direct import) covers the whitespace, Cf, mixed, and empty cases exhaustively', () => {
+  assert.equal(bow.hasVisibleContent('real text'), true, 'plain text has visible content');
+  assert.equal(bow.hasVisibleContent(''), false, 'empty string has no visible content');
+  assert.equal(bow.hasVisibleContent('   '), false, 'plain whitespace has no visible content');
+  assert.equal(bow.hasVisibleContent('\t\t'), false, 'tabs have no visible content');
+  assert.equal(bow.hasVisibleContent(' '), false, 'a lone NBSP has no visible content (round-1/round-2 case)');
+  assert.equal(bow.hasVisibleContent('​'), false, 'a lone zero-width space has no visible content (round-3 case)');
+  assert.equal(bow.hasVisibleContent('‌‍⁠­᠎'), false, 'a run of assorted Cf characters has no visible content');
+  assert.equal(bow.hasVisibleContent('  ​\t‌  '), false, 'a mix of ordinary whitespace and Cf characters has no visible content');
+  assert.equal(bow.hasVisibleContent('a​b'), true, 'real content with an embedded Cf character still counts as visible content');
+  assert.equal(bow.hasVisibleContent(null), false, 'non-string input is treated as having no visible content, not thrown on');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 4 (attacker finding): `amend --reason` containing ONLY a Cc-category control character (U+0001) is rejected -- neither \\s nor \\p{Cf} strip control characters, so rounds 1/2 both missed this', async () => {
+  const guid = await insertItem({ code: 'FEAT-9460', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const r = bowCli(['amend', 'FEAT-9460', '--field', 'desc', '--to', 'attack: control-char reason', '--reason', '\x01']);
+  assert.notEqual(r.status, 0, 'a control-character-only --reason must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /reason/i);
+  assert.match(r.stderr, /required/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a control-character-only reason must not let the write through');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when --reason was control-character-only');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 4: further Cc-category control characters (NUL via --reason-file, BEL, ESC) are all rejected the same way -- generalization confidence beyond the single U+0001 case the round-3 Tester found', async () => {
+  // NUL (U+0000) cannot survive as a shell/process argv element on most
+  // platforms, so it is exercised via --reason-file exactly like round 3's
+  // file-based ZWSP case did for the Cf family.
+  const guidNul = await insertItem({ code: 'FEAT-9461', description: 'must not change' });
+  const tmp = mkTempDir('feat044-round4-nul-');
+  const filePath = path.join(tmp, 'nul-reason.txt');
+  fs.writeFileSync(filePath, '\x00', 'utf8');
+  const rNul = bowCli(['amend', 'FEAT-9461', '--field', 'desc', '--to', 'attack: NUL reason', '--reason-file', filePath]);
+  assert.notEqual(rNul.status, 0, 'a NUL-only --reason-file must exit non-zero');
+  assert.match(rNul.stderr, /reason/i);
+  assert.match(rNul.stderr, /required/i);
+  const [rowsNul] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guidNul]);
+  assert.equal(rowsNul[0].description, 'must not change', 'a NUL-only reason-file must not let the write through');
+
+  const guidBel = await insertItem({ code: 'FEAT-9462', description: 'must not change' });
+  const rBel = bowCli(['amend', 'FEAT-9462', '--field', 'desc', '--to', 'attack: BEL reason', '--reason', '\x07']);
+  assert.notEqual(rBel.status, 0, 'a BEL-only --reason must exit non-zero');
+  assert.match(rBel.stderr, /reason/i);
+  assert.match(rBel.stderr, /required/i);
+  const [rowsBel] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guidBel]);
+  assert.equal(rowsBel[0].description, 'must not change', 'a BEL-only reason must not let the write through');
+
+  const guidEsc = await insertItem({ code: 'FEAT-9463', description: 'must not change' });
+  const rEsc = bowCli(['amend', 'FEAT-9463', '--field', 'desc', '--to', 'attack: ESC reason', '--reason', '\x1B']);
+  assert.notEqual(rEsc.status, 0, 'an ESC-only --reason must exit non-zero');
+  assert.match(rEsc.stderr, /reason/i);
+  assert.match(rEsc.stderr, /required/i);
+  const [rowsEsc] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guidEsc]);
+  assert.equal(rowsEsc[0].description, 'must not change', 'an ESC-only reason must not let the write through');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 4 (comprehensiveness proof): `amend --to` containing ONLY a Co-category private-use character (U+E000) is rejected -- proves this round\'s fix is genuinely comprehensive (the broad \\p{C} group), not just a targeted patch for the Cc case round 3 happened to find', async () => {
+  const guid = await insertItem({ code: 'FEAT-9464', description: 'must not change' });
+  const [beforeComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+
+  const privateUseOnly = '';
+  const r = bowCli(['amend', 'FEAT-9464', '--field', 'desc', '--to', privateUseOnly, '--reason', 'trying to blank the field with a private-use character']);
+  assert.notEqual(r.status, 0, 'a private-use-character-only --to must exit non-zero, not silently proceed');
+  assert.match(r.stderr, /--to/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'a private-use-character-only replacement must not let the write through');
+  const [afterComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [guid]);
+  assert.equal(afterComments[0].n, beforeComments[0].n, 'no audit comment may be posted when --to was private-use-character-only');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 4: hasVisibleContent unit-level truth table (direct import) confirms [\\p{C}\\p{Z}] alone is comprehensive -- covers control (Cc), private-use (Co), plus all prior rounds\' whitespace/Cf/mixed/empty cases', () => {
+  assert.equal(bow.hasVisibleContent('\x01'), false, 'a lone Cc control character (U+0001) has no visible content (round-3 case)');
+  assert.equal(bow.hasVisibleContent('\x00'), false, 'a lone NUL (U+0000) has no visible content');
+  assert.equal(bow.hasVisibleContent('\x07'), false, 'a lone BEL (U+0007) has no visible content');
+  assert.equal(bow.hasVisibleContent('\x1B'), false, 'a lone ESC (U+001B) has no visible content');
+  assert.equal(bow.hasVisibleContent(''), false, 'a lone private-use character (U+E000, category Co) has no visible content');
+  assert.equal(bow.hasVisibleContent('  \x01\t​\x1B  '), false, 'a mix of ordinary whitespace, Cc, and Cf characters has no visible content');
+  assert.equal(bow.hasVisibleContent('a\x01b'), true, 'real content with an embedded Cc control character still counts as visible content');
+  // Prior rounds' cases must still pass unchanged under the new [\p{C}\p{Z}] strip.
+  assert.equal(bow.hasVisibleContent('real text'), true, 'plain text has visible content');
+  assert.equal(bow.hasVisibleContent(''), false, 'empty string has no visible content');
+  assert.equal(bow.hasVisibleContent('   '), false, 'plain whitespace has no visible content');
+  assert.equal(bow.hasVisibleContent('\t\t'), false, 'tabs have no visible content');
+  assert.equal(bow.hasVisibleContent(' '), false, 'a lone NBSP has no visible content (round-1/round-2 case)');
+  assert.equal(bow.hasVisibleContent('​'), false, 'a lone zero-width space has no visible content (round-3 case)');
+  assert.equal(bow.hasVisibleContent('‌‍⁠­᠎'), false, 'a run of assorted Cf characters has no visible content');
+  assert.equal(bow.hasVisibleContent('  ​\t‌  '), false, 'a mix of ordinary whitespace and Cf characters has no visible content');
+  assert.equal(bow.hasVisibleContent('a​b'), true, 'real content with an embedded Cf character still counts as visible content');
+  assert.equal(bow.hasVisibleContent(null), false, 'non-string input is treated as having no visible content, not thrown on');
+});
+
+test('FEAT-044 BOUNCE-BACK ROUND 5: hasVisibleContent unit-level truth table (direct import) confirms Default_Ignorable_Code_Point catches the Hangul jamo filler gap (Lo category, not C/Z) plus all prior rounds\' cases', () => {
+  // U+115F HANGUL CHOSEONG FILLER, U+1160 HANGUL JUNGSEONG FILLER, U+3164
+  // HANGUL FILLER: all three are General Category Lo (Letter, other), so
+  // round 4's [\p{C}\p{Z}] strip does NOT remove them -- they are the
+  // round-5 Tester's bypass. Default_Ignorable_Code_Point covers them.
+  assert.equal(bow.hasVisibleContent('ᅟ'), false, 'a lone HANGUL CHOSEONG FILLER (U+115F, category Lo) has no visible content (round-5 case)');
+  assert.equal(bow.hasVisibleContent('ᅠ'), false, 'a lone HANGUL JUNGSEONG FILLER (U+1160, category Lo) has no visible content (round-5 case)');
+  assert.equal(bow.hasVisibleContent('ㅤ'), false, 'a lone HANGUL FILLER (U+3164, category Lo) has no visible content (round-5 case)');
+  assert.equal(bow.hasVisibleContent('ᅟᅠㅤ'), false, 'a run of all three Hangul filler characters has no visible content');
+  assert.equal(bow.hasVisibleContent('  ᅟ\tㅤ  '), false, 'a mix of ordinary whitespace and Hangul filler characters has no visible content');
+  // False-positive guard: real content with a filler embedded mid-string
+  // must still count as visible AND survive verbatim (not get stripped
+  // from the actual field value -- hasVisibleContent only gates accept/
+  // reject, it never mutates the stored --reason/--to text itself).
+  assert.equal(bow.hasVisibleContent('aㅤb'), true, 'real content with an embedded HANGUL FILLER still counts as visible content');
+  assert.equal(bow.hasVisibleContent('legitᅟreason'), true, 'real content with an embedded HANGUL CHOSEONG FILLER still counts as visible content');
+  // Prior rounds' cases must still pass unchanged under the new
+  // [\p{C}\p{Z}\p{Default_Ignorable_Code_Point}] strip.
+  assert.equal(bow.hasVisibleContent('\x01'), false, 'a lone Cc control character (U+0001) has no visible content (round-3 case)');
+  assert.equal(bow.hasVisibleContent(''), false, 'a lone private-use character (U+E000, category Co) has no visible content');
+  assert.equal(bow.hasVisibleContent('real text'), true, 'plain text has visible content');
+  assert.equal(bow.hasVisibleContent(''), false, 'empty string has no visible content');
+  assert.equal(bow.hasVisibleContent('   '), false, 'plain whitespace has no visible content');
+  assert.equal(bow.hasVisibleContent(' '), false, 'a lone NBSP has no visible content (round-1/round-2 case)');
+  assert.equal(bow.hasVisibleContent('​'), false, 'a lone zero-width space has no visible content (round-3 case)');
+  assert.equal(bow.hasVisibleContent('a​b'), true, 'real content with an embedded Cf character still counts as visible content');
+  assert.equal(bow.hasVisibleContent(null), false, 'non-string input is treated as having no visible content, not thrown on');
+});
+
+test('FEAT-044 AC-2/AC-3: `amend --field status` (a field with its own sanctioned command) is rejected with the same "unsupported field" message as an unrecognized field, and the row is unchanged', async () => {
+  const guid = await insertItem({ code: 'FEAT-9405', status: 'open' });
+  const r = bowCli(['amend', 'FEAT-9405', '--field', 'status', '--to', 'done', '--reason', 'trying to sneak a status change through']);
+  assert.notEqual(r.status, 0, 'amend --field status must be rejected, not silently routed to cmdSet\'s status logic');
+  assert.match(r.stderr, /unsupported field/i);
+  assert.match(r.stderr, /status/);
+
+  const [rows] = await db.query('SELECT status FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].status, 'open', 'status must be completely unchanged');
+});
+
+test('FEAT-044 AC-2/AC-3: `amend --field priority` and `amend --field guid` are both rejected the identical way (closed allowlist, not a hand-maintained blocklist that could miss one)', async () => {
+  const guid = await insertItem({ code: 'FEAT-9406', description: 'unchanged' });
+
+  const rPriority = bowCli(['amend', 'FEAT-9406', '--field', 'priority', '--to', 'P0', '--reason', 'x']);
+  assert.notEqual(rPriority.status, 0);
+  assert.match(rPriority.stderr, /unsupported field/i);
+
+  const rGuid = bowCli(['amend', 'FEAT-9406', '--field', 'guid', '--to', 'some-other-guid', '--reason', 'x']);
+  assert.notEqual(rGuid.status, 0);
+  assert.match(rGuid.stderr, /unsupported field/i);
+
+  const [rows] = await db.query('SELECT guid, priority FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].guid, guid, 'guid must be completely immutable via amend');
+  assert.equal(rows[0].priority, 'P2', 'priority (untouched by the rejected attempt) must be unchanged');
+});
+
+test('FEAT-044 AC-4: `amend --comment <nonexistent-id> --field body ...` fails with the same "no comment with id N" class of error `redact` already produces', async () => {
+  const r = bowCli(['amend', '--comment', '99999999', '--field', 'body', '--to', 'x', '--reason', 'y']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /no comment with id 99999999/);
+});
+
+test('FEAT-044 AC-7: supplying both --reason and --reason-file is rejected non-zero, matching BUG-090/AC-3\'s evidentiary standard (query the DB, not just the exit code)', async () => {
+  const guid = await insertItem({ code: 'FEAT-9407', description: 'must not change' });
+  const tmp = mkTempDir('feat044-reason-');
+  const reasonFile = path.join(tmp, 'reason.txt');
+  fs.writeFileSync(reasonFile, 'reason from file', 'utf8');
+
+  const r = bowCli(['amend', 'FEAT-9407', '--field', 'desc', '--to', 'x', '--reason', 'inline reason', '--reason-file', reasonFile]);
+  assert.notEqual(r.status, 0, 'both --reason and --reason-file together must be rejected');
+  assert.match(r.stderr, /--reason/);
+  assert.match(r.stderr, /--reason-file/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change');
+});
+
+test('FEAT-044 AC-7: supplying both --to and --to-file is rejected non-zero, matching BUG-090/AC-3\'s evidentiary standard', async () => {
+  const guid = await insertItem({ code: 'FEAT-9408', description: 'must not change' });
+  const tmp = mkTempDir('feat044-to-');
+  const toFile = path.join(tmp, 'to.txt');
+  fs.writeFileSync(toFile, 'replacement from file', 'utf8');
+
+  const r = bowCli(['amend', 'FEAT-9408', '--field', 'desc', '--to', 'inline replacement', '--to-file', toFile, '--reason', 'x']);
+  assert.notEqual(r.status, 0, 'both --to and --to-file together must be rejected');
+  assert.match(r.stderr, /--to/);
+  assert.match(r.stderr, /--to-file/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change');
+});
+
+test('FEAT-044 (BUG-196-class regression guard): a dangling `--to` (last token, no value following) is REJECTED, not silently ignored/dropped', async () => {
+  const guid = await insertItem({ code: 'FEAT-9409', description: 'must not change' });
+  const r = spawnSync(process.execPath, ['claude-bow.js', 'amend', 'FEAT-9409', '--field', 'desc', '--reason', 'x', '--to'], {
+    cwd: ROOT, env: { ...process.env, METRO_DB_NAME: TEST_DB }, encoding: 'utf8',
+  });
+  assert.notEqual(r.status, 0, 'a dangling --to must be rejected, not silently produce a no-op or a null write');
+  assert.match(r.stderr, /--to/);
+  assert.match(r.stderr, /requires a value|dangling/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change');
+});
+
+test('FEAT-044 (BUG-196-class regression guard): a dangling `--reason` immediately followed by another recognized flag (`--to`) is REJECTED, not silently consumed as --reason\'s value', async () => {
+  const guid = await insertItem({ code: 'FEAT-9410', description: 'must not change' });
+  const r = bowCli(['amend', 'FEAT-9410', '--field', 'desc', '--reason', '--to', 'sneaky replacement']);
+  assert.notEqual(r.status, 0, 'a dangling --reason followed by --to must be rejected, not swallow --to\'s value as the reason text');
+  assert.match(r.stderr, /--reason/);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'must not change', 'the dangling flag must not have silently landed a write with --to\'s literal string consumed as the reason');
+});
+
+test('FEAT-044 AC-8: `redact` and `amend` audit-trail writes route through the SAME shared engine (applyMutationWithAudit), not two independently-reimplemented "insert into bow_comments" calls', () => {
+  const { applyMutationWithAudit, cmdRedact, cmdAmend } = bow;
+  assert.equal(typeof applyMutationWithAudit, 'function', 'applyMutationWithAudit must be exported as the shared engine');
+  assert.equal(typeof cmdRedact, 'function');
+  assert.equal(typeof cmdAmend, 'function');
+
+  const src = fs.readFileSync(path.join(ROOT, 'claude-bow.js'), 'utf8');
+  const redactBody = src.slice(src.indexOf('async function cmdRedact'), src.indexOf('async function cmdAmend'));
+  const amendBody = src.slice(src.indexOf('async function cmdAmend'));
+  assert.match(redactBody, /applyMutationWithAudit\(/, 'cmdRedact must call the shared engine');
+  assert.match(amendBody, /applyMutationWithAudit\(/, 'cmdAmend must call the shared engine');
+  // Neither function may bypass the shared engine with its own direct
+  // "INSERT INTO bow_comments" call for the audit row.
+  const redactOwnInserts = (redactBody.match(/INSERT INTO bow_comments/g) || []).length;
+  const amendOwnInserts = (amendBody.match(/INSERT INTO bow_comments/g) || []).length;
+  assert.equal(redactOwnInserts, 0, 'cmdRedact must not independently INSERT INTO bow_comments outside the shared engine');
+  assert.equal(amendOwnInserts, 0, 'cmdAmend must not independently INSERT INTO bow_comments outside the shared engine');
+});
+
+test('FEAT-044 AC-8 (redact-mode suppression, shared engine): `redact`\'s audit comment never quotes the pre-image text, while `amend`\'s audit comment (same engine) always quotes old/new in full — proving redact is a suppression MODE of the same engine, not a fork with independently-drifting discipline', async () => {
+  const redactGuid = await insertItem({
+    code: 'FEAT-9411',
+    description: `Comparing against ${buildFullTitlePhrase()} for scale reference.`,
+  });
+  const redactResult = bowCli(['redact', 'FEAT-9411']);
+  assert.equal(redactResult.status, 0, `redact failed: ${redactResult.stderr}`);
+  const [[redactComment]] = await db.query(
+    'SELECT body FROM bow_comments WHERE item_guid = ? ORDER BY id DESC LIMIT 1', [redactGuid]);
+  assert.ok(!redactComment.body.includes(buildFullTitlePhrase()), 'redact mode: the audit comment must NEVER contain the matched/old text');
+
+  const amendGuid = await insertItem({ code: 'FEAT-9412', description: 'plain old text, no forbidden pattern' });
+  const amendResult = bowCli(['amend', 'FEAT-9412', '--field', 'desc', '--to', 'plain new text', '--reason', 'AC-8 suppression contrast check']);
+  assert.equal(amendResult.status, 0, `amend failed: ${amendResult.stderr}`);
+  const [[amendComment]] = await db.query(
+    'SELECT body FROM bow_comments WHERE item_guid = ? ORDER BY id DESC LIMIT 1', [amendGuid]);
+  assert.match(amendComment.body, /plain old text, no forbidden pattern/, 'amend mode: the audit comment MUST quote the old text in full');
+  assert.match(amendComment.body, /plain new text/, 'amend mode: the audit comment MUST quote the new text in full');
+});
+
+test('FEAT-044 AC-9: `set --desc`/`set --desc-file` remain unchanged, and `set`\'s own usage text now points to `amend` for prose correction', async () => {
+  const guid = await insertItem({ code: 'FEAT-9413', description: 'old' });
+  const r = bowCli(['set', 'FEAT-9413', '--desc', 'still works exactly as before']);
+  assert.equal(r.status, 0, `set --desc must still work unmodified: ${r.stderr}`);
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].description, 'still works exactly as before');
+
+  const src = fs.readFileSync(path.join(ROOT, 'claude-bow.js'), 'utf8');
+  const setBody = src.slice(src.indexOf('async function cmdSet'), src.indexOf('// ── redact'));
+  assert.match(setBody, /amend/, 'cmdSet\'s own body/usage text must name `amend` as the audited alternative for prose correction (AC-10 pointer)');
+});
+
+test('FEAT-044 AC-10: `amend`\'s own usage/help text or header comment names `redact` as the sibling command for GR#22 content specifically', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'claude-bow.js'), 'utf8');
+  const amendSection = src.slice(src.indexOf('// ── amend (FEAT-044'));
+  assert.match(amendSection, /redact/i, 'the amend section (header comment + usage text) must mention redact by name');
+  assert.match(amendSection, /reason/i, 'the amend section must document the mandatory --reason requirement');
+});
+
+test('FEAT-044 AC-11: `amend --field title --to <300-char string>` is refused with an overflow error before any write, title left unchanged', async () => {
+  const guid = await insertItem({ code: 'FEAT-9414' });
+  await setTitle(guid, 'Original Short Title');
+  const tooLong = 'x'.repeat(300);
+
+  const r = bowCli(['amend', 'FEAT-9414', '--field', 'title', '--to', tooLong, '--reason', 'AC-11 overflow check']);
+  assert.notEqual(r.status, 0, 'a 300-char title amendment must be refused (VARCHAR(255) limit)');
+  assert.match(r.stderr, /255/);
+
+  const [rows] = await db.query('SELECT title FROM bow_items WHERE guid = ?', [guid]);
+  assert.equal(rows[0].title, 'Original Short Title', 'title must be completely unchanged after the refused overflow write');
+});
+
+test('FEAT-044 AC-12: `amend --to` containing a GR#22 forbidden pattern produces a non-fatal stderr warning suggesting `redact`, but the write still succeeds', async () => {
+  const guid = await insertItem({ code: 'FEAT-9415', description: 'ordinary starting text' });
+  const r = bowCli(['amend', 'FEAT-9415', '--field', 'desc', '--to', `mentions ${buildSingleWordPhrase()} in passing`, '--reason', 'AC-12 advisory warning check']);
+  assert.equal(r.status, 0, 'AC-12 warning must never block the write');
+  assert.match(r.stderr, /WARNING/i);
+  assert.match(r.stderr, /redact/i);
+
+  const [rows] = await db.query('SELECT description FROM bow_items WHERE guid = ?', [guid]);
+  assert.match(rows[0].description, /mentions/, 'the write must have actually succeeded despite the advisory warning');
+});
+
+test('FEAT-044 AC-12: `amend --to` with plain text (no GR#22 pattern) produces NO warning', async () => {
+  await insertItem({ code: 'FEAT-9416', description: 'ordinary starting text' });
+  const r = bowCli(['amend', 'FEAT-9416', '--field', 'desc', '--to', 'a perfectly ordinary replacement with no special patterns at all', '--reason', 'AC-12 negative control']);
+  assert.equal(r.status, 0, `amend failed: ${r.stderr}`);
+  assert.ok(!/WARNING/i.test(r.stderr), `unexpected GR#22 advisory warning fired on clean text: ${r.stderr}`);
 });

@@ -40,6 +40,27 @@
  *   done <code> [--note "resolution" | --note-file <path>] [--force]
  *                                         - Blocked while open dependencies remain (GR#12)
  *                                           unless --force
+ *   amend <code> --field title|desc --to "<text>" --reason "<text>"
+ *   amend --comment <id> --field body --to "<text>" --reason "<text>"
+ *                                         - FEAT-044 (tool.bowcli.md): general auditable
+ *                                           correction of stale/wrong BOW prose — an item's
+ *                                           title/description, or a single comment's body.
+ *                                           Shares its "apply mutation, then audit" engine
+ *                                           with `redact` above (applyMutationWithAudit) so
+ *                                           the two commands' audit-trail discipline cannot
+ *                                           drift apart. Unlike `redact`, `amend` quotes both
+ *                                           the OLD and NEW text in full in its auto-comment
+ *                                           (this is ordinary prose correction, not GR#22
+ *                                           forbidden-text removal) — --reason is mandatory,
+ *                                           checked BEFORE any write. Refuses to touch
+ *                                           status/priority/deps/refs/mkey/seq/sprint/guid/
+ *                                           created_at/closed_at — those already have their
+ *                                           own sanctioned commands (set/depend/ref/done).
+ *                                           --to/--to-file and --reason/--reason-file both
+ *                                           follow BUG-090's resolveTextFlag mutual-exclusion/
+ *                                           file-input shape verbatim. For removing GR#22
+ *                                           forbidden-title/reference text specifically, use
+ *                                           `redact` instead — it never quotes the pre-image.
  *
  *   BUG-090 (docs/planning/acceptance/tool.bowcli.md): every free-text flag
  *   above (--desc/--note/--detail, plus the pre-existing --example) accepts a
@@ -186,7 +207,15 @@ const VALUE_FLAGS = ['priority', 'desc', 'desc-file', 'status', 'type', 'on', 'n
   // ANYWHERE in this list — Aaron's binding constraint (BUG-061) is that the
   // forbidden text must never transit the command line, so the redact
   // command detects occurrences itself rather than being told what to redact.
-  'comment'];
+  'comment',
+  // FEAT-044 (`amend`, tool.bowcli.md): --field selects which of title/desc/
+  // body is being corrected; --to/--to-file (mirroring --reason/--reason-file
+  // below) is the replacement text, following BUG-090's resolveTextFlag
+  // mutual-exclusion/file-input shape verbatim (AC-7) rather than reinventing
+  // it. --reason/--reason-file is the mandatory audit-trail justification
+  // (AC-6/AC-7) — unlike --desc/--note/--detail, `amend` has no bare
+  // "no reason supplied" fallback: the field is required, not optional.
+  'field', 'to', 'to-file', 'reason', 'reason-file'];
 // BUG-168: a VALUE_FLAGS flag as the LAST token on the command line (e.g. a
 // truncated/typo'd `set CODE --mkey` with nothing after it) makes
 // `argv[++i]` read past the end of the array, so `flags[name]` ends up
@@ -2731,7 +2760,13 @@ async function cmdSet(db) {
     const desc = resolveTextFlag('desc');
     updates.push('description = ?'); params.push(desc);
   }
-  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]'); process.exit(1); }
+  // FEAT-044: `set --desc`/`set --desc-file` stay exactly as they were
+  // (BUG-017's unaudited one-shot field-fill, meant for populating a field
+  // that started empty or corrupted) -- but for correcting prose that was
+  // previously RIGHT and is now wrong, `amend` is the sanctioned path: same
+  // -file safety shape, plus a mandatory --reason and an auto-comment audit
+  // trail (old value, new value, reason, author) that `set` has never had.
+  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]  (correcting prose that is wrong, not merely empty? use `amend` instead -- audited, --reason required)'); process.exit(1); }
   params.push(item.guid);
   await db.query(`UPDATE bow_items SET ${updates.join(', ')} WHERE guid = ?`, params);
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);
@@ -2814,6 +2849,29 @@ function redactText(text, guardExports) {
     }
   }
   return { text: working, hits };
+}
+
+/**
+ * Shared "apply mutation, then audit" engine for `redact` (BUG-061) and
+ * `amend` (FEAT-044) — Aaron's binding BUG-061 ruling: "two commands, one
+ * engine... so the audit-trail discipline cannot drift between them." Both
+ * commands do exactly two things in order: (1) write the new field value via
+ * a caller-supplied `applyUpdate(newValues)` closure (identical shape to
+ * `redact`'s own pre-existing `applyUpdate` closures — an item-field UPDATE
+ * or a bow_comments-body UPDATE), then (2) insert exactly one audit row into
+ * `bow_comments` recording what happened. Neither caller may skip step (2) or
+ * reimplement it independently — that independent-reimplementation shape is
+ * exactly what this function exists to prevent (AC-8). `commentBody` is
+ * fully composed by the caller: `redact` composes a pattern-class-only
+ * summary (GR#22 — never the matched text), `amend` composes an old/new/
+ * reason summary (FEAT-044/AC-5) — the suppression-vs-quoting difference is a
+ * caller-side mode, not a fork in this function.
+ */
+async function applyMutationWithAudit(db, { applyUpdate, newValues, auditItemGuid, commentBody }) {
+  await applyUpdate(newValues);
+  await db.query(
+    'INSERT INTO bow_comments (item_guid, author, body) VALUES (?, ?, ?)',
+    [auditItemGuid, currentAuthor(), commentBody]);
 }
 
 async function cmdRedact(db) {
@@ -2912,23 +2970,265 @@ async function cmdRedact(db) {
     }
   }
 
-  // Write the redacted text back via the same DB write paths the rest of
-  // this file already uses (no raw ad-hoc SQL bypassing the query patterns
-  // above) — the pre-redaction text is discarded here, not stored anywhere.
-  await applyUpdate(newValues);
-
+  // Write the redacted text back and post the audit comment via the shared
+  // FEAT-044 engine (applyMutationWithAudit, above) — no raw ad-hoc SQL
+  // bypassing the query patterns above, and no independent "insert into
+  // bow_comments" call here (AC-8: `amend` routes through the identical
+  // function). The pre-redaction text is discarded here, not stored anywhere.
   // Auto-comment: pattern-class + count + field ONLY (Aaron's constraint 2/3
   // — never the redacted text, never the pre-image). `r.what` is always one
   // of the guard's own fixed, non-identifying descriptions.
   const summary = report.map((r) => `${r.field}: ${r.count} occurrence(s) of "${r.what}"`).join('; ');
-  await db.query(
-    'INSERT INTO bow_comments (item_guid, author, body) VALUES (?, ?, ?)',
-    [auditItemGuid, currentAuthor(),
-     `GR#22 redaction (BUG-061) applied to ${subject}${isComment ? ' (comment body)' : ''}: ${summary}. ` +
-     'Original text stored nowhere; occurrences replaced with [REDACTED-GR22].']);
+  await applyMutationWithAudit(db, {
+    applyUpdate, newValues, auditItemGuid,
+    commentBody: `GR#22 redaction (BUG-061) applied to ${subject}${isComment ? ' (comment body)' : ''}: ${summary}. ` +
+      'Original text stored nowhere; occurrences replaced with [REDACTED-GR22].',
+  });
 
   console.log(`redact: ${subject} — redacted ${totalCount} occurrence(s):`);
   for (const r of report) console.log(`  ${r.field}: ${r.count} x "${r.what}"`);
+}
+
+// ── amend (FEAT-044, docs/planning/acceptance/tool.bowcli.md) ───────────────
+//
+// General auditable correction of stale/wrong BOW prose. Aaron's binding
+// design constraint (BUG-061 ruling, generalised by FEAT-044's own filed
+// description): "redact and amend are two commands, one engine" — `amend`
+// shares `applyMutationWithAudit` (above) with `redact` rather than
+// reimplementing its own "insert into bow_comments" write (AC-8). The
+// difference between the two commands is entirely in what each one composes
+// as `commentBody`: `redact` never quotes the matched/pre-image text (GR#22);
+// `amend` quotes BOTH the old and new text in full, because its whole point
+// is auditable correction of ordinary prose, not forbidden-text suppression.
+//
+// Scope (AC-1/AC-2/AC-3): amend may touch exactly one of an item's `title`,
+// an item's `description`, or a single comment's `body`. Everything else —
+// status, priority, deps, refs, mkey, seq, sprint, guid, created_at,
+// closed_at/closed_note — already has its own sanctioned, validated mutation
+// command (set/depend/undepend/ref/done) and is refused here BY CONSTRUCTION:
+// the allowlists below are the only field names `amend` recognizes at all,
+// there is no separate "is this field forbidden" blocklist to fall out of
+// sync with `set`'s own column list.
+const AMEND_ITEM_FIELDS = { title: 'title', desc: 'description' };
+const AMEND_COMMENT_FIELDS = { body: 'body' };
+
+// BOUNCE-BACK FIX (round 4, comprehensive -- supersedes rounds 1-3): each
+// prior round patched exactly one Unicode category at a time -- round 1
+// covered ordinary whitespace (\s), round 2 added Cf ("format") characters
+// after zero-width space (U+200B) etc. sailed through .trim(), round 3
+// found that Cc ("control") characters like U+0001 bypass BOTH of those.
+// The round-3 Tester's finding was structural, not just another missed
+// character: \s and \p{Cf} are two narrow, hand-picked slices of Unicode's
+// own top-level classification of "not a visible glyph", and patching one
+// category at a time will keep finding new bypasses (Co private-use, Cs
+// surrogate, Cn unassigned were all still open after round 3).
+//
+// Unicode's General Category groups EVERYTHING invisible/non-graphic under
+// two top-level groups: C ("Other" -- Cc control, Cf format, Co private-use,
+// Cs surrogate, Cn unassigned) and Z ("Separator" -- Zs space, Zl line,
+// Zp paragraph). hasVisibleContent now strips \p{C} and \p{Z} directly
+// instead of the narrower \s/\p{Cf} pair, closing the whole family in one
+// shot rather than the next member of it. Empirically verified (see
+// claude-bow.test.js round-4 tests): plain space, tab, NBSP, ZWSP, U+0001,
+// U+0000, U+0007, U+001B, and a private-use character (U+E000, category Co)
+// are ALL fully stripped by [\p{C}\p{Z}] alone -- \p{Z} subsumes \s's
+// separator characters (space/NBSP/line/paragraph separators) and \p{C}
+// subsumes \p{Cf} plus every other invisible "Other" subcategory, so no
+// combination with the old \s/\p{Cf} clauses is needed.
+//
+// A string made ENTIRELY of \p{C}/\p{Z} characters (including the empty
+// string) returns false. A string that legitimately CONTAINS an invisible
+// character alongside real content (e.g. a ZWNJ in the middle of a real
+// word) still returns true, because letters/numbers/punctuation/symbols/
+// marks (Unicode L/N/P/S/M) are untouched by this strip and survive it.
+//
+// BOUNCE-BACK FIX (round 5): round 4's \p{C}\p{Z} union still assumes the
+// invisible/visible line falls cleanly along General Category boundaries.
+// The round-5 Tester found it doesn't: U+115F (HANGUL CHOSEONG FILLER),
+// U+1160 (HANGUL JUNGSEONG FILLER), and U+3164 (HANGUL FILLER) are
+// purpose-built invisible placeholder characters -- they render as blank
+// space in virtually every font -- but their General Category is Lo
+// (Letter, other), not C or Z, because Unicode classifies them as letters
+// for text-segmentation purposes even though they carry no visible glyph.
+// Patching Lo in would repeat rounds 1-3's mistake of chasing one more
+// category. Instead this uses Unicode's own purpose-built answer: the
+// binary property Default_Ignorable_Code_Point, which Unicode maintains
+// SPECIFICALLY as "codepoints intended to be ignored in rendering/
+// processing when unsupported" -- it already covers the three Hangul
+// jamo fillers above, ZWSP and the rest of \p{Cf}, variation selectors,
+// and more, as one Unicode-curated set (verified supported in this
+// project's Node v25.3.0, node -e test passed before this patch landed;
+// project targets Node 22 where the same binary property is supported).
+// \p{C}\p{Z} is kept alongside it -- redundant overlap is cheap and safe,
+// and keeps round 4's already-verified cases covered without relying on
+// Default_Ignorable_Code_Point's coverage of them being exact.
+function hasVisibleContent(s) {
+  if (typeof s !== 'string') return false;
+  return s.replace(/[\p{C}\p{Z}\p{Default_Ignorable_Code_Point}]/gu, '').length > 0;
+}
+
+function amendUsage() {
+  console.error('Usage: node claude-bow.js amend <code> --field title|desc --to "<text>" --reason "<text>"');
+  console.error('       node claude-bow.js amend --comment <id> --field body --to "<text>" --reason "<text>"');
+  console.error('  --reason is MANDATORY -- every amend must record who/when/why (FEAT-044). No default, no silent skip.');
+  console.error('  --to/--to-file and --reason/--reason-file follow BUG-090\'s mutual-exclusion/file-input shape (resolveTextFlag) -- supplying both a direct value and a -file value for the same field is a non-zero-exit conflict, not silent precedence.');
+  console.error('  amend refuses status/priority/deps/refs/mkey/seq/sprint/guid/created_at/closed_at -- those already have sanctioned commands (set/depend/ref/done).');
+  console.error('  For removing GR#22 forbidden reference-title text specifically, use `redact` instead -- amend quotes the OLD text in full in its audit comment, which is the wrong tool for that case.');
+}
+
+async function cmdAmend(db) {
+  const isComment = flags.comment !== undefined;
+  const field = flags.field;
+  const validFields = isComment ? AMEND_COMMENT_FIELDS : AMEND_ITEM_FIELDS;
+
+  // AC-1/AC-2/AC-3: the field allowlist is a closed set. Any name outside it
+  // -- status/priority/deps/refs/mkey/seq/sprint/guid/created_at/closed_at
+  // included -- is rejected with the SAME "unsupported field" message, never
+  // silently routed to cmdSet's logic or any other write path.
+  if (typeof field !== 'string' || !Object.prototype.hasOwnProperty.call(validFields, field)) {
+    console.error(`claude-bow: amend --field "${field}" is unsupported field for amend. ${isComment
+      ? 'With --comment <id>, only --field body is amendable.'
+      : 'Without --comment, only --field title or --field desc are amendable.'} ` +
+      'amend refuses to touch status/priority/deps/refs/mkey/seq/sprint/guid/created_at/closed_at -- ' +
+      'those already have their own sanctioned commands (set/depend/undepend/ref/done). ' +
+      'For GR#22 forbidden reference-title text, use `redact` instead.');
+    amendUsage();
+    process.exit(1);
+  }
+
+  // BUG-196-class regression guard: a dangling --to/--to-file/--reason/
+  // --reason-file (nothing after it, or the next token is itself a
+  // recognized `--flag`) must be rejected BEFORE any lookup or write, not
+  // silently fall through resolveTextFlag's `direct || null` into "no value
+  // supplied" (which for --reason would otherwise misreport as "reason is
+  // required" rather than "you mistyped the flag" -- still safe, but the
+  // dedicated message here is clearer and mirrors cmdSet's own BUG-196 fix
+  // for --desc/--desc-file exactly).
+  if (danglingFlags.has('to')) { console.error('claude-bow: --to requires a value (a dangling --to was not applied). Nothing was written.'); process.exit(1); }
+  if (danglingFlags.has('to-file')) { console.error('claude-bow: --to-file requires a path (a dangling --to-file was not applied). Nothing was written.'); process.exit(1); }
+  if (danglingFlags.has('reason')) { console.error('claude-bow: --reason requires a value (a dangling --reason was not applied). Nothing was written.'); process.exit(1); }
+  if (danglingFlags.has('reason-file')) { console.error('claude-bow: --reason-file requires a path (a dangling --reason-file was not applied). Nothing was written.'); process.exit(1); }
+
+  // AC-6: --reason is mandatory, checked BEFORE any write (and before the
+  // item/comment lookup below writes nothing either, but the ORDER matters:
+  // this must run before applyMutationWithAudit is ever reachable).
+  // AC-7: --reason/--reason-file follow resolveTextFlag's mutual-exclusion
+  // shape verbatim (exits non-zero itself if both are supplied).
+  // BOUNCE-BACK FIX (attacker finding, round 1 REJECT): resolveTextFlag
+  // returns `direct || null`, and a whitespace-only string (" ", "\t") is
+  // truthy in JS, so `if (!reason)` alone let `--reason " "` sail straight
+  // through the mandatory-reason gate -- a functional silent skip that still
+  // validates, defeating AC-6's own advertised guarantee ("No default, no
+  // silent skip"). Fix: .trim() BEFORE the truthiness check, and store the
+  // TRIMMED value (both in the audit comment and in the success message) --
+  // a reason of "   why   " should read as "why" in the audit trail, not
+  // carry incidental shell-quoting whitespace. --reason-file's genuinely-
+  // empty-file case was already correctly caught (empty string is falsy)
+  // and remains so after trimming.
+  const reasonRaw = resolveTextFlag('reason');
+  const reason = typeof reasonRaw === 'string' ? reasonRaw.trim() : reasonRaw;
+  if (!reason || !hasVisibleContent(reason)) {
+    console.error('claude-bow: amend --reason "<text>" (or --reason-file <path>) is REQUIRED -- every amend must record why (FEAT-044\'s own design constraint: "records who/when/why"). A whitespace-only or invisible-characters-only (e.g. zero-width space) reason does not count. Nothing was written.');
+    amendUsage();
+    process.exit(1);
+  }
+
+  // AC-7: --to/--to-file, same shape.
+  // Same defect class as --reason above: the replacement text itself must
+  // not be allowed to be whitespace-only either -- writing an all-whitespace
+  // title/description is not a meaningful amend, and would otherwise let an
+  // operator "amend" a field to effectively blank it out while claiming (via
+  // the OLD/NEW audit comment) that NEW is some real value. Trim before the
+  // presence check and store the trimmed value.
+  const newValueRaw = resolveTextFlag('to');
+  if (newValueRaw === null) {
+    console.error('claude-bow: amend --to "<text>" (or --to-file <path>) is REQUIRED -- the replacement text. Nothing was written.');
+    amendUsage();
+    process.exit(1);
+  }
+  const newValue = newValueRaw.trim();
+  if (!newValue || !hasVisibleContent(newValue)) {
+    console.error('claude-bow: amend --to "<text>" (or --to-file <path>) must contain non-whitespace content -- a whitespace-only or invisible-characters-only (e.g. zero-width space) replacement is not a meaningful amend. Nothing was written.');
+    amendUsage();
+    process.exit(1);
+  }
+
+  let subject;       // human-readable label, safe to print/quote
+  let auditItemGuid; // which item's comment thread carries the audit trail
+  let oldValue;
+  let columnLabel;
+  let applyUpdate;
+
+  if (isComment) {
+    // AC-4: targets a single existing comment row by its numeric id, exactly
+    // matching redact's --comment <id> lookup shape (same Number.isFinite
+    // check, same "no comment with id N" message class).
+    const commentId = Number(flags.comment);
+    if (!Number.isFinite(commentId)) {
+      console.error('Usage: node claude-bow.js amend --comment <id> --field body --to "<text>" --reason "<text>"');
+      process.exit(1);
+    }
+    const [rows] = await db.query('SELECT * FROM bow_comments WHERE id = ?', [commentId]);
+    if (!rows.length) {
+      console.error(`claude-bow: no comment with id ${commentId}`);
+      process.exit(1);
+    }
+    const comment = rows[0];
+    subject = `comment #${commentId}`;
+    auditItemGuid = comment.item_guid;
+    oldValue = comment.body;
+    columnLabel = AMEND_COMMENT_FIELDS[field]; // 'body'
+    applyUpdate = async (nv) => {
+      await db.query('UPDATE bow_comments SET body = ? WHERE id = ?', [nv.body, commentId]);
+    };
+  } else {
+    const item = await requireItem(db, positional[0]);
+    subject = item.code;
+    auditItemGuid = item.guid;
+    columnLabel = AMEND_ITEM_FIELDS[field]; // 'title' or 'description'
+    oldValue = item[columnLabel];
+    applyUpdate = async (nv) => {
+      await db.query(`UPDATE bow_items SET ${columnLabel} = ? WHERE guid = ?`, [nv[columnLabel], item.guid]);
+    };
+  }
+
+  // AC-11: check the new value against the target column's actual length
+  // limit BEFORE writing, mirroring redact's BOW_COLUMN_MAX_LEN pre-write
+  // check (same helper, same "nothing was written" phrasing discipline).
+  // Only `title` is bounded (VARCHAR(255)); description/comment body are
+  // TEXT/unbounded, matching redact's existing no-limit-needed reasoning.
+  if (columnLabel === 'title') {
+    rejectIfOverColumnLimit(newValue, BOW_COLUMN_MAX_LEN.title, 'title', `amend of ${subject}`);
+  }
+
+  // AC-12 (advisory, non-fatal): warn if the replacement text matches a GR#22
+  // forbidden pattern, suggesting `redact` instead. Never blocks the write --
+  // an operator amending unrelated prose that happens to legitimately discuss
+  // the guard's own pattern set in the abstract must not be blocked (same
+  // reasoning as BUG-090/AC-6's advisory posture).
+  const guardExports = loadCodenameGuardPatterns();
+  const { hits: gr22Hits } = redactText(String(newValue), guardExports);
+  if (gr22Hits.length) {
+    console.error(
+      `claude-bow: WARNING -- amend --to contains a GR#22 forbidden pattern ` +
+      `(${gr22Hits.map((h) => h.what).join(', ')}). If you intend to REMOVE forbidden reference-title ` +
+      'text, use `redact` instead -- it never quotes the pre-image in its audit trail, unlike amend. ' +
+      '(advisory only -- not blocking)');
+  }
+
+  // AC-5/AC-8: apply the write and post the audit comment via the SAME
+  // shared engine redact uses (applyMutationWithAudit, above) -- never an
+  // independent "insert into bow_comments" call here. Unlike redact, amend
+  // quotes both old and new text in full (this is ordinary prose correction,
+  // not GR#22 suppression).
+  const commentBody =
+    `FEAT-044 amend applied to ${subject}, field "${columnLabel}": ` +
+    `OLD: "${oldValue == null ? '' : oldValue}" -> NEW: "${newValue}". Reason: ${reason}`;
+  await applyMutationWithAudit(db, {
+    applyUpdate, newValues: { [columnLabel]: newValue }, auditItemGuid, commentBody,
+  });
+
+  console.log(`amend: ${subject} field "${columnLabel}" updated. Audit comment recorded (reason: ${reason}).`);
 }
 
 async function cmdDone(db) {
@@ -3262,6 +3562,11 @@ module.exports = {
   // real-subprocess contract tests (Aaron's ruling: verify the way Tester-2
   // verified the guard — real stdin/argv, not just internal functions).
   redactText, loadCodenameGuardPatterns, cmdRedact,
+  // FEAT-044 (tool.bowcli `amend`): exported for direct unit testing of the
+  // shared audit engine and the field allowlists, in addition to the
+  // required real-subprocess CLI tests.
+  applyMutationWithAudit, cmdAmend, AMEND_ITEM_FIELDS, AMEND_COMMENT_FIELDS,
+  hasVisibleContent,
   // BUG-115 (tool.planning): exported so the regression suite can assert the
   // exact read-only/write classification directly, in addition to the
   // required real-subprocess query-count proof.
@@ -3290,6 +3595,7 @@ if (require.main === module) {
           case 'ref': await cmdRef(db); break;
           case 'set': await cmdSet(db); break;
           case 'redact': await cmdRedact(db); break;
+          case 'amend': await cmdAmend(db); break;
           case 'done': await cmdDone(db); break;
           case 'import': await cmdImport(db); break;
           case 'ready': await cmdReady(db); break;
@@ -3305,7 +3611,7 @@ if (require.main === module) {
           case 'gate-run': await cmdGateRun(db); break;
           default:
             console.error(`Unknown command: ${command}`);
-            console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, done, import, summary, startup-summary, weakness, lint, destructive, verdict, exists, gate, gate-status, gate-run');
+            console.error('Commands: init, add, list, show, comment, depend, undepend, ref, set, redact, amend, done, import, summary, startup-summary, weakness, lint, destructive, verdict, exists, gate, gate-status, gate-run');
             process.exit(1);
         }
       };
