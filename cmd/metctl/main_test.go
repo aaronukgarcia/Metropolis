@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
@@ -586,4 +587,83 @@ func TestRunExportPartialFailureLeavesNoTrace(t *testing.T) {
 			t.Fatalf("staging directory %q leaked next to -out after failure", e.Name())
 		}
 	}
+}
+
+// TestRunExportCleansUpStaleOrphanedStaging is BUG-156's regression test:
+// a prior runExport killed by SIGKILL between os.MkdirTemp creating its
+// staging directory and the deferred os.RemoveAll cleaning it up (a defer
+// that SIGKILL prevents from ever running) leaves an orphaned
+// .metctl-export-* directory behind forever unless a later run sweeps it.
+// This simulates exactly that: create an orphan directly, backdate its
+// mtime well past staleExportStagingThreshold, run a normal export, and
+// confirm the orphan is gone afterward -- while the export itself still
+// succeeds normally.
+func TestRunExportCleansUpStaleOrphanedStaging(t *testing.T) {
+	srcDir := buildSampleBundle(t)
+	out := filepath.Join(t.TempDir(), "cleans-up-stale-out")
+	destParent := filepath.Dir(out)
+	if err := os.MkdirAll(destParent, 0o755); err != nil {
+		t.Fatalf("MkdirAll(destParent): %v", err)
+	}
+
+	orphan, err := os.MkdirTemp(destParent, exportStagingPrefix+"*")
+	if err != nil {
+		t.Fatalf("creating orphan staging dir: %v", err)
+	}
+	// Give the orphan some contents, mirroring a real killed run that got
+	// partway through writing shards before being terminated -- proves
+	// the sweep is a real RemoveAll, not just an empty-dir rmdir.
+	if err := os.WriteFile(filepath.Join(orphan, "citizens.0.ndjson"), []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("seeding orphan contents: %v", err)
+	}
+	stale := time.Now().Add(-(staleExportStagingThreshold + time.Hour))
+	if err := os.Chtimes(orphan, stale, stale); err != nil {
+		t.Fatalf("backdating orphan mtime: %v", err)
+	}
+
+	if err := runExport([]string{"-out", out, srcDir}); err != nil {
+		t.Fatalf("runExport: %v", err)
+	}
+
+	if _, statErr := os.Stat(orphan); !os.IsNotExist(statErr) {
+		t.Fatalf("BUG-156 NOT fixed: stale orphaned staging dir %q still present after a later export run (stat err: %v)", orphan, statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(out, "citizens.0.ndjson")); statErr != nil {
+		t.Fatalf("export itself did not succeed alongside the sweep: %v", statErr)
+	}
+}
+
+// TestRunExportDoesNotSweepFreshConcurrentStaging is the "don't race an
+// active operation" half of BUG-156, mirroring the concern
+// internal/engine/save/cleanup.go's CleanupStaleStaging was hardened
+// against for BUG-129: a staging directory with a RECENT mtime must be
+// left alone by the sweep, because it could belong to a genuinely
+// concurrent export invocation that is still populating it -- not an
+// orphan safe to delete.
+func TestRunExportDoesNotSweepFreshConcurrentStaging(t *testing.T) {
+	srcDir := buildSampleBundle(t)
+	out := filepath.Join(t.TempDir(), "keeps-fresh-out")
+	destParent := filepath.Dir(out)
+	if err := os.MkdirAll(destParent, 0o755); err != nil {
+		t.Fatalf("MkdirAll(destParent): %v", err)
+	}
+
+	fresh, err := os.MkdirTemp(destParent, exportStagingPrefix+"*")
+	if err != nil {
+		t.Fatalf("creating fresh staging dir: %v", err)
+	}
+	// Left at its natural just-created mtime -- no Chtimes call -- to
+	// stand in for a staging directory a concurrent export is actively
+	// populating right now.
+
+	if err := runExport([]string{"-out", out, srcDir}); err != nil {
+		t.Fatalf("runExport: %v", err)
+	}
+
+	if _, statErr := os.Stat(fresh); statErr != nil {
+		t.Fatalf("sweep deleted a fresh (not stale) staging directory %q that could belong to a concurrent export: %v", fresh, statErr)
+	}
+	// Clean up the fixture directory ourselves since the sweep correctly
+	// left it alone and nothing else in this test will remove it.
+	_ = os.RemoveAll(fresh)
 }

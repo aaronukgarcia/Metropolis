@@ -26,10 +26,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 )
+
+// exportStagingPrefix is the os.MkdirTemp prefix used for runExport's
+// private staging directory (BUG-153). Named as a constant, rather than
+// inlined at each of its two use sites (MkdirTemp's pattern arg and
+// cleanupStaleExportStaging's matcher below), so the two can never drift
+// apart -- a sweep that used a different prefix than MkdirTemp actually
+// creates would silently stop finding anything to clean up.
+const exportStagingPrefix = ".metctl-export-"
+
+// staleExportStagingThreshold is how old a leftover exportStagingPrefix
+// directory must be (by ModTime) before cleanupStaleExportStaging will
+// treat it as orphaned rather than as a genuinely concurrent export still
+// in progress. Generous on purpose: exports are architected for up to
+// 100M-citizen saves (§5.3), so a real, slow, in-progress export can
+// legitimately sit un-promoted for a long time -- an aggressive threshold
+// here would reproduce BUG-129's "swept a live operation" class of bug
+// (internal/engine/save/cleanup.go) in this package instead.
+const staleExportStagingThreshold = 1 * time.Hour
 
 // promoteRename performs the final stagingDir -> dest rename in runExport.
 // It's a package-level seam (not a hardcoded os.Rename call) purely so
@@ -136,7 +156,19 @@ func runExport(args []string) error {
 	if err := os.MkdirAll(destParent, 0o755); err != nil {
 		return fmt.Errorf("metctl export: creating parent of output directory %q: %w", dest, err)
 	}
-	stagingDir, err := os.MkdirTemp(destParent, ".metctl-export-*")
+
+	// BUG-156: before claiming our own staging directory, sweep destParent
+	// for stale ones left behind by a prior runExport that was SIGKILL'd
+	// (or otherwise forcefully terminated) between os.MkdirTemp creating
+	// its staging directory and the deferred os.RemoveAll below running --
+	// SIGKILL cannot be trapped, so that defer never executes, and the
+	// directory is orphaned indefinitely. A NEXT-RUN sweep is the only
+	// place this can be recovered from. See cleanupStaleExportStaging's
+	// doc comment for why this is safe against a genuinely concurrent
+	// export.
+	cleanupStaleExportStaging(destParent, staleExportStagingThreshold, time.Now())
+
+	stagingDir, err := os.MkdirTemp(destParent, exportStagingPrefix+"*")
 	if err != nil {
 		return fmt.Errorf("metctl export: creating staging directory: %w", err)
 	}
@@ -240,6 +272,52 @@ func runExport(args []string) error {
 
 	fmt.Printf("metctl export: %s -> %s (%d shards)\n", dir, dest, len(h.ShardIndex))
 	return nil
+}
+
+// cleanupStaleExportStaging sweeps destParent for leftover
+// exportStagingPrefix directories orphaned by a prior runExport that was
+// killed (SIGKILL, power loss, etc.) between os.MkdirTemp creating the
+// staging directory and runExport's deferred os.RemoveAll cleaning it up
+// (BUG-156). This is a disk-space leak only, never a correctness hazard:
+// an orphaned staging directory is never promoted (only stagingDir, the
+// one THIS call created, is ever passed to promoteRename) and nothing
+// else in this package or serialize reads from a leftover one.
+//
+// A directory only qualifies for removal if its ModTime is older than
+// now.Add(-olderThan) -- mirroring internal/engine/save/cleanup.go's
+// CleanupStaleStaging "don't race a live operation" discipline (BUG-129
+// there), this must never delete a staging directory a genuinely
+// concurrent export invocation is still populating. os.MkdirTemp sets
+// ModTime once at creation and nothing in runExport re-touches it
+// afterward (shards are written as new files under it, which doesn't
+// bump the parent directory's mtime on any platform this project
+// targets), so an in-progress export's staging directory is
+// indistinguishable from an idle one by mtime alone -- the threshold is
+// the only guard, which is why staleExportStagingThreshold is
+// deliberately generous.
+//
+// Best-effort: a per-entry Stat/RemoveAll failure, or being unable to
+// list destParent at all (e.g. it doesn't exist yet on a first-ever
+// export), is silently skipped rather than failing the export --
+// exactly like CleanupStaleStaging's contract, an orphaned staging
+// directory is forensic clutter, not something worth aborting a real
+// export over.
+func cleanupStaleExportStaging(destParent string, olderThan time.Duration, now time.Time) {
+	entries, err := os.ReadDir(destParent)
+	if err != nil {
+		return
+	}
+	cutoff := now.Add(-olderThan)
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), exportStagingPrefix) {
+			continue
+		}
+		info, statErr := e.Info()
+		if statErr != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(destParent, e.Name()))
+	}
 }
 
 // exportLine is the plain-NDJSON line shape metctl export writes: the same
