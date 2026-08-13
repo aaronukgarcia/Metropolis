@@ -104,4 +104,50 @@ const (
 	// previously returned bare/unwrapped, the Destructive round's REJECT
 	// finding on this item).
 	ErrBundleValidationFailed = "MET-E814"
+
+	// ErrPriorHeaderReadFailed: writeBundle detected an existing bundle
+	// at finalDir (BUG-157 — this call is a save-over) but could not
+	// read that bundle's on-disk header.json to carry its DebugTouched
+	// flag forward via serialize.Header.MergeDebugTouched (the same
+	// SEC-024/SEC-027 sticky-flag hygiene SEC-027 enforced one layer up
+	// in engine.core's Snapshot). The save is aborted rather than
+	// proceeding and risking a debug-touched save silently coming back
+	// clean.
+	ErrPriorHeaderReadFailed = "MET-E815"
+
+	// ErrReservedSaveName: SaveManual was called with a name matching
+	// (or containing) the internal ".replaced-stage-<random>" marker
+	// bundle.go's writeBundle uses to tag a crash-stranded displaced
+	// sibling (BUG-158's replacedSuffixRe/isReplacedSiblingName/
+	// replacedSiblingGlob). BUG-159: that marker pattern was never
+	// actually unreachable from player input -- SaveManual's name
+	// parameter had zero validation, so a name that happened to end in
+	// (or contain) the literal marker text would either be permanently
+	// hidden by List's filter or, worse, cause reapDisplacedSiblings to
+	// glob-match and RemoveAll an unrelated real save on a later save to
+	// a prefix-matching slot. Rejected at SaveManual's entry point,
+	// before any filesystem write, so the collision can never occur.
+	ErrReservedSaveName = "MET-E816"
+
+	// ErrUnsafeSaveName: SaveManual was called with a name that is unsafe
+	// to join, unmodified, into a save bundle path -- BUG-160, a genuine
+	// arbitrary-directory-write vulnerability, worse in kind than
+	// BUG-159's marker-collision gap: name flowed straight into
+	// filepath.Join(root, "manual", name) with NO filepath.Clean/IsAbs/
+	// ".." rejection at all, so a name such as "../../evil-escaped-<root
+	// basename>" wrote a full valid save bundle OUTSIDE the configured
+	// save root entirely. Also covers BUG-161's follow-up finding: names
+	// that were technically safe to join into a path but degenerate
+	// enough that they should never reach real filesystem I/O either --
+	// other C0 control characters (tab, newline, BEL, ESC, backspace,
+	// etc, not just NUL), an empty-or-whitespace-only name, and an
+	// overlong name (see maxSaveNameLen). Rejected at SaveManual's entry
+	// point (before isReservedSaveName's marker check, and before any
+	// filesystem call) by isUnsafeSaveName (bundle.go): empty (or
+	// whitespace-only after trimming), ".", "..", longer than
+	// maxSaveNameLen, any name containing a path separator ('/' or '\',
+	// checked for both regardless of build GOOS) or a drive-letter/ADS
+	// colon anywhere in it, or any name containing a C0 control
+	// character (byte 0x00-0x1F, including but not limited to NUL).
+	ErrUnsafeSaveName = "MET-E817"
 )

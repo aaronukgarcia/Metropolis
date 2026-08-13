@@ -55,6 +55,16 @@ func List(root string) ([]SaveSummary, []error, error) {
 			if !e.IsDir() {
 				continue
 			}
+			// BUG-158: a stray ".replaced-stage-<random>" sibling left
+			// behind by a writeBundle save-over that crashed between
+			// displacing the prior bundle and promoting the new one is a
+			// fully-valid bundle on disk (header.json + save-meta.json
+			// intact) but is NEVER a real, player-visible save slot —
+			// filter it out here rather than letting readSummary treat it
+			// as an independent phantom entry.
+			if isReplacedSiblingName(e.Name()) {
+				continue
+			}
 			bundleDir := filepath.Join(dir, e.Name())
 			summary, err := readSummary(bundleDir)
 			if err != nil {

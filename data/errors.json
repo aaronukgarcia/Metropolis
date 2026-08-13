@@ -905,6 +905,24 @@
       "message": "bundle at \"{dir}\" failed validation: {cause}",
       "remedy": "serialize.ValidateBundle rejected this bundle for a reason other than a FormatVersion major mismatch (e.g. a checksum/size mismatch, missing header, a shard path that is a directory instead of a file, or a semantically-bogus header field). Check the wrapped cause for specifics; if this is the newest entry in an autosave history, prefer LoadLatest, which skips a corrupted newest entry and loads the next-older valid one instead (AC-10)."
     },
+    "MET-E815": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "reading prior header at \"{finalDir}\" for save-over debug-touched merge failed: {cause}",
+      "remedy": "BUG-157: writeBundle detected an existing bundle at finalDir (a save-over of SaveManual/Autosave/Milestone) but could not read its on-disk header.json to carry DebugTouched forward (SEC-024/SEC-027 hygiene). Check the wrapped cause -- a corrupted or hand-edited header.json at finalDir is the most likely culprit; the save is aborted rather than silently risking a debug-touched save coming back clean."
+    },
+    "MET-E816": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "manual save name \"{name}\" is reserved (contains the internal \".replaced-stage-\" crash-recovery marker)",
+      "remedy": "BUG-159: SaveManual rejects any name containing the literal \".replaced-stage-\" marker text bundle.go's crash-recovery sibling-detection (BUG-158) uses internally, before any filesystem write. Choose a different manual save name that does not contain this marker text."
+    },
+    "MET-E817": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "manual save name \"{name}\" is unsafe (contains a path separator, drive letter, \"..\"/\".\" component, or NUL byte)",
+      "remedy": "BUG-160: SaveManual rejects any name that is unsafe to join, unmodified, into a save bundle path -- before any filesystem write. Choose a plain manual save name with no '/', '\\\\', ':', embedded NUL, and that is not empty, \".\", or \"..\"."
+    },
     "MET-E900": {
       "severity": "fatal",
       "module": "feat.skeleton",
