@@ -89,6 +89,49 @@ func TestApplyDelta_RoutesToBoundView(t *testing.T) {
 	}
 }
 
+// TestApplyDelta_LeisureTasteDecodesThroughWire is BUG-202's regression
+// check: no other test in this package builds a wireLeisurePatch and
+// drives it through the real ApplyDelta -> applyLeisure -> wireTasteBucket
+// decode path (screen.go's applyLeisure) -- the personality/determinism
+// tests all construct TasteBucket literals directly, which would miss a
+// conversion regression at that decode site. This sends a genuine
+// f6.leisure wire patch with non-zero taste weights via ApplyDelta (the
+// same route production Deltas take) and asserts LeisureTaste() reflects
+// exactly those wire values.
+func TestApplyDelta_LeisureTasteDecodesThroughWire(t *testing.T) {
+	s := New("corr-leisure-taste")
+	s.BindSubscription(ViewLeisure, "sub-taste")
+
+	s.ApplyDelta(protocol.Delta{
+		SubscriptionID: "sub-taste",
+		Seq:            1,
+		Patch: mustJSON(t, wireLeisurePatch{
+			SchemaVersion: 1,
+			LeisureTaste: []wireTasteBucket{
+				{Taste: "Sport", Weight: 0.4},
+				{Taste: "Culture", Weight: 0.35},
+			},
+		}),
+	})
+
+	got, have := s.LeisureTaste()
+	want := []TasteBucket{
+		{Taste: "Sport", Weight: 0.4},
+		{Taste: "Culture", Weight: 0.35},
+	}
+	if !have {
+		t.Fatalf("LeisureTaste() haveLeisure = false after a valid f6.leisure Delta")
+	}
+	if len(got) != len(want) {
+		t.Fatalf("LeisureTaste() = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("LeisureTaste()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
 // TestApplyDelta_UnknownSubscriptionDropped is SF-7/DEMO-9's core check:
 // a Delta for an unbound SubscriptionID is dropped, never applied, and
 // never panics.
