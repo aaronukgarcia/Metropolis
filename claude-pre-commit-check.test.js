@@ -103,12 +103,20 @@ test('mixed case: a quoted mention earlier does not mask a REAL invocation later
 // file's original test suite had no deny-shaped assertions to invert (it
 // only ever exercised isRealGitCommit() above), so these are NEW tests that
 // establish the demoted behaviour directly, plus a load-bearing proof that
-// the OLD (pre-demotion, still-committed) guard genuinely used to deny the
-// exact same fixture — reconstructed from HEAD via `git show`, per
-// dev-team-process.md's "correct baseline" rule (a fix that is uncommitted
-// and sits on top of other uncommitted work still reconstructs cleanly from
-// HEAD here, since claude-pre-commit-check.js's last COMMITTED state is
-// pre-BUG-088 and pre-any-other-uncommitted-work on this file).
+// the OLD (pre-demotion) guard genuinely used to deny the exact same
+// fixture.
+//
+// BUG-199: this proof originally reconstructed the "old" guard from
+// `git show HEAD:claude-pre-commit-check.js`, which only worked because at
+// the time the demotion itself was still uncommitted. Once the demotion
+// landed (b96559a wave), HEAD started holding the demoted (permissive)
+// guard, and the proof self-falsified on every clean checkout. Fixed by
+// walking `git log` for this file from HEAD backwards and testing each
+// revision's content until one is found that actually denies the fixture —
+// that revision is, by construction, the last pre-demotion revision,
+// discovered dynamically so it never rots as more commits land. If no
+// denying revision is ever found in the walked history, this fails loudly
+// (never silently skips) per this project's verification standards.
 // ---------------------------------------------------------------------------
 
 const { spawnSync } = require('child_process');
@@ -125,6 +133,80 @@ function runGuard(scriptPath, command) {
   });
 }
 
+// Runs the guard's source text (as a string) against the trailer fixture by
+// materialising it to a scratch file first (the guard is a script, not a
+// requirable pure function, once we're reconstructing arbitrary historical
+// revisions). Returns { denies, result } — denies is true only when the
+// guard produced a well-formed deny decision; any other outcome (allow,
+// crash, malformed JSON) means denies is false.
+function revisionDeniesFixture(sourceText) {
+  const scratchDir = fs.mkdtempSync(path.join(__dirname, '__precommitcheck_old_'));
+  const scratchFile = path.join(scratchDir, 'old-claude-pre-commit-check.js');
+  try {
+    fs.writeFileSync(scratchFile, sourceText, 'utf8');
+    const result = runGuard(scratchFile, TRAILER_FIXTURE_COMMAND);
+    if (result.status !== 0 || !result.stdout || !result.stdout.trim()) {
+      return { denies: false, result };
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      return { denies: false, result };
+    }
+    const denies = parsed?.hookSpecificOutput?.permissionDecision === 'deny';
+    return { denies, result, parsed };
+  } finally {
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  }
+}
+
+// Walks `git log` for claude-pre-commit-check.js from HEAD backwards and
+// returns the content (via `git show <sha>:<path>`) of the FIRST (i.e. most
+// recent) revision whose guard denies the trailer fixture. Throws loudly if
+// the walk exhausts history without finding one — a gate that can't
+// evaluate must not report success (this project's verification standard).
+function findLastPreDemotionRevision() {
+  const REL_PATH = 'claude-pre-commit-check.js';
+  const log = spawnSync('git', ['log', '--format=%H', '--', REL_PATH], {
+    cwd: __dirname,
+    encoding: 'utf8',
+  });
+  if (log.status !== 0) {
+    throw new Error(
+      `AC-C3 setup failed: \`git log -- ${REL_PATH}\` exited ${log.status}: ${log.stderr}`
+    );
+  }
+  const shas = log.stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  if (shas.length === 0) {
+    throw new Error(
+      `AC-C3 setup failed: git log returned no revisions for ${REL_PATH} — cannot search for a pre-demotion baseline.`
+    );
+  }
+  for (const sha of shas) {
+    const show = spawnSync('git', ['show', `${sha}:${REL_PATH}`], {
+      cwd: __dirname,
+      encoding: 'utf8',
+    });
+    if (show.status !== 0) {
+      // File may not have existed yet at this revision (renamed/added
+      // later) — skip rather than fail the whole walk.
+      continue;
+    }
+    const { denies } = revisionDeniesFixture(show.stdout);
+    if (denies) {
+      return { sha, source: show.stdout };
+    }
+  }
+  throw new Error(
+    `AC-C3 load-bearing proof FAILED LOUDLY: walked ${shas.length} revision(s) of ${REL_PATH} ` +
+      `in git history and NOT ONE denied the Co-Authored-By trailer fixture. Either the ` +
+      `pre-demotion guard never existed in this history, or the demotion predates the oldest ` +
+      `revision walked — this test cannot prove its intended historical claim and must not be ` +
+      `treated as passing/skipping silently.`
+  );
+}
+
 test('AC-C3: current (demoted) guard never denies a Co-Authored-By trailer — advisory allow only', () => {
   const result = runGuard(path.join(__dirname, 'claude-pre-commit-check.js'), TRAILER_FIXTURE_COMMAND);
   assert.equal(result.status, 0);
@@ -138,33 +220,29 @@ test('AC-C3: current (demoted) guard never denies a Co-Authored-By trailer — a
   // is a blocking decision.
 });
 
-test('AC-C3 (load-bearing proof): the OLD, still-committed guard (pre-BUG-088, from HEAD) DOES deny this exact fixture', () => {
-  // Reconstruct the pre-demotion guard from HEAD into scratch and prove it
-  // denies — this is what makes the assertion above load-bearing: if the
-  // demotion were reverted, THIS test's own baseline shows what the old
-  // code did, and the assertion above would then fail against a
-  // re-introduced blocking guard (proving the new test actually exercises
-  // the demotion, not just an already-passing no-op).
-  const show = spawnSync('git', ['show', 'HEAD:claude-pre-commit-check.js'], {
-    cwd: __dirname,
-    encoding: 'utf8',
-  });
-  assert.equal(show.status, 0, show.stderr);
-  const scratchDir = fs.mkdtempSync(path.join(__dirname, '__precommitcheck_old_'));
-  const scratchFile = path.join(scratchDir, 'old-claude-pre-commit-check.js');
-  try {
-    fs.writeFileSync(scratchFile, show.stdout, 'utf8');
-    const result = runGuard(scratchFile, TRAILER_FIXTURE_COMMAND);
-    assert.equal(result.status, 0);
-    const parsed = JSON.parse(result.stdout);
-    assert.equal(
-      parsed.hookSpecificOutput.permissionDecision,
-      'deny',
-      'the pre-BUG-088 committed guard must still deny this fixture — proving the demotion above is a real behavioural change, not a pre-existing no-op'
-    );
-  } finally {
-    fs.rmSync(scratchDir, { recursive: true, force: true });
-  }
+test('AC-C3 (load-bearing proof): the last pre-demotion revision (discovered by walking git log) DOES deny this exact fixture', () => {
+  // Dynamically discover the last pre-demotion revision by walking git log
+  // from HEAD backwards (BUG-199 fix — no hardcoded SHA, so this can't rot
+  // as more commits land on top of the demotion). This is what makes the
+  // assertion above load-bearing: if the demotion were reverted, THIS
+  // test's own baseline shows what the old code did, and the assertion
+  // above would then fail against a re-introduced blocking guard (proving
+  // the new test actually exercises the demotion, not just an
+  // already-passing no-op). If history never contained a denying revision,
+  // findLastPreDemotionRevision() throws instead of letting this pass or
+  // skip silently.
+  const { sha, source } = findLastPreDemotionRevision();
+  const { denies, result, parsed } = revisionDeniesFixture(source);
+  assert.equal(result.status, 0, `guard process from revision ${sha} exited non-zero: ${result.stderr}`);
+  assert.ok(
+    denies,
+    `revision ${sha} was found by the walk but re-verification did not deny — parsed output: ${JSON.stringify(parsed)}`
+  );
+  assert.equal(
+    parsed.hookSpecificOutput.permissionDecision,
+    'deny',
+    'the last pre-demotion committed guard must deny this fixture — proving the demotion above is a real behavioural change, not a pre-existing no-op'
+  );
 });
 
 test('AC-C3: grep confirms zero deny/ask permissionDecision literals remain in the current file', () => {
