@@ -51,13 +51,17 @@ if (-not $?) { $branch = "dev" }
 
 $buildTime = (Get-Date).ToUniversalTime().ToString("o")
 
-$ldflags = "-X $pkg.Version=$version -X $pkg.Commit=$commit -X $pkg.Branch=$branch -X $pkg.BuildTime=$buildTime"
+$buildHost = $env:COMPUTERNAME
+if (-not $buildHost) { $buildHost = "dev" }
+
+$ldflags = "-X $pkg.Version=$version -X $pkg.Commit=$commit -X $pkg.Branch=$branch -X $pkg.BuildTime=$buildTime -X $pkg.Host=$buildHost"
 
 Write-Host "Building cmd/metropolis..."
 Write-Host "  Version:   $version"
 Write-Host "  Commit:    $commit"
 Write-Host "  Branch:    $branch"
 Write-Host "  BuildTime: $buildTime"
+Write-Host "  Host:      $buildHost"
 
 go build -ldflags $ldflags -o metropolis.exe ./cmd/metropolis
 if ($LASTEXITCODE -ne 0) {
