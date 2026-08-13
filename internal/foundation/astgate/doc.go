@@ -64,7 +64,16 @@
 //     the identical candidate-parameter check (appendParamFuncs) used
 //     for an ordinary *ast.FuncDecl. A closure has no receiver, so
 //     only its parameter list is relevant here, not the receiver-
-//     method path above.
+//     method path above. A THIRD path (SEC-049): every method declared
+//     on a type W that WRAPS a candidate type C via a struct field —
+//     embedded, named-by-value, or a pointer field, e.g. WorldAPI's
+//     `w *World` — is reachable for C through that field-then-method
+//     access chain (a.w.M(...)), even though W is not itself a
+//     candidate type and never takes C by parameter. This is what made
+//     WorldAPI's own exported methods, which lock a.w.mu directly,
+//     invisible before this fix (findFieldReachableFuncs). It is one
+//     field-access hop deep only — see "Known blind spots" below for
+//     the residual, un-transitively-resolved wrapper-of-a-wrapper case.
 //
 //  3. For each reachable function, determines whether it GUARDS: its body
 //     contains a call recognisable as an identity/copy check — a call to
@@ -170,6 +179,31 @@
 //     residual, not a defect: coverage comes from branch protection,
 //     mandatory PR review, and GR#23's own per-commit Destructive-verdict
 //     requirement, not from the ratchet mechanism itself.
+//   - FIELD-ACCESS CHAINS (SEC-049) ARE ONE HOP DEEP AND SAME-PACKAGE
+//     ONLY. findFieldReachableFuncs resolves W.field.Method(...) where
+//     field's type names a candidate type directly. It does NOT resolve
+//     transitively through a chain of wrappers: if X holds a *WorldAPI
+//     field and WorldAPI holds a *World field, X's own methods are not
+//     walked into a 3-segment X-to-World chain — only WorldAPI's own
+//     methods are enumerated for World. Nor does it resolve a field
+//     whose type is a QUALIFIED, other-package name (the same no-type-
+//     checking, same-directory-only scope every other check in this
+//     gate already has). A field reached via a slice/map/chan of a
+//     candidate type (e.g. `ws []*World`) is DELIBERATELY, EXPLICITLY
+//     rejected by collectFieldWraps' isContainerFieldType helper (SEC-049
+//     round 2, Destructive reattack: baseTypeName's *ast.ArrayType case —
+//     added for the unrelated slice-parameter fix — would otherwise
+//     silently unwrap such a field down to its element type and match it
+//     exactly like a direct pointer field, even though a container can
+//     never satisfy isGuarded's literal method-call shape, making any
+//     such finding permanently, uncorrectably unguardable). This is the
+//     same different-hazard-shape reasoning as the map-typed-candidate-
+//     values note above (a container of independently-copyable values,
+//     not one single field-then-method access chain), now enforced in
+//     code rather than merely assumed. An unnamed receiver on the
+//     wrapping type is also out of scope by construction — its fields
+//     are syntactically unreachable in the method body, so there is no
+//     access chain to be missing a guard on.
 //
 // See gate_test.go for the fixture-driven proof that every one of the
 // above actually fires (and, for the ones that must never miss, the

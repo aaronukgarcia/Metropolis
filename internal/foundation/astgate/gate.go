@@ -72,11 +72,25 @@ const (
 	// parameter, e.g. func SetSink(l *Logger) — AC-3(b), the documented
 	// blind spot this gate exists to close.
 	KindParameterFunc
+	// KindFieldAccess is SEC-049's fix: a method declared on a WRAPPING
+	// type W (e.g. WorldAPI) that holds a candidate type C (e.g. World)
+	// via a struct field — embedded/anonymous, named-by-value, or a
+	// pointer field, e.g. `w *World` — reaches C through a field-then-
+	// method access chain (a.w.M(...)) rather than a direct method call
+	// on C itself or C arriving as a parameter. Neither
+	// KindReceiverMethod nor KindParameterFunc recognises this shape,
+	// because W is not itself a candidate type (it has no mutex field of
+	// its own) and does not take C by parameter (C arrives already
+	// embedded in W's own struct layout) — see findFieldReachableFuncs.
+	KindFieldAccess
 )
 
 func (k FuncKind) String() string {
-	if k == KindReceiverMethod {
+	switch k {
+	case KindReceiverMethod:
 		return "receiver method"
+	case KindFieldAccess:
+		return "field access chain"
 	}
 	// "function (parameter)" rather than "package-level function
 	// (parameter)": a receiver method can ALSO be reached via this path
@@ -692,6 +706,17 @@ func findReachableFuncs(candidates []CandidateType, files []pkgFile) []*Reachabl
 		// so only the AC-3(b) parameter-scan applies here, never AC-3(a).
 		out = append(out, scanFuncLits(pf, byName)...)
 	}
+
+	// SEC-049: every method declared on a type that WRAPS a candidate
+	// type via a struct field (rather than being a candidate type
+	// itself, or taking a candidate type by parameter) is a third,
+	// independent reachable-function path — see findFieldReachableFuncs's
+	// own doc comment. Computed once over the WHOLE package's files (not
+	// per-file inside the loop above), since the wrapping type's struct
+	// declaration and its methods can live in different files of the
+	// same package.
+	out = append(out, findFieldReachableFuncs(byName, files)...)
+
 	return out
 }
 
@@ -795,14 +820,216 @@ func appendParamFuncs(out []*ReachableFunc, byName map[string]bool, pf pkgFile, 
 	return out
 }
 
+// fieldWrap records one struct field, found anywhere in a scanned
+// package, whose type names a candidate type — SEC-049. OwnerType is
+// the struct declaring the field (e.g. "WorldAPI"); FieldName is the
+// field's own identifier for a named field (e.g. "w" in `w *World`), or
+// the base type name itself for an anonymous/embedded field (e.g.
+// "World" for a bare `*World`/`World` field, since that is the
+// identifier Go itself uses to reach an embedded field); Candidate is
+// the candidate type reached through the field (e.g. "World").
+type fieldWrap struct {
+	OwnerType string
+	FieldName string
+	Candidate string
+}
+
+// isContainerFieldType reports whether expr is, after unwrapping at
+// most one level of pointer, a slice/array (*ast.ArrayType), map
+// (*ast.MapType), or channel (*ast.ChanType) type expression.
+// collectFieldWraps uses this to REJECT such fields explicitly (SEC-049
+// round 2, Destructive reattack): baseTypeName has an *ast.ArrayType
+// case (added for the slice-parameter fix, Destructive finding #4 —
+// see baseTypeName's own doc comment) that recurses into the element
+// type, so without this guard a field like `ws []*World` would be
+// silently unwrapped down to "World" and matched exactly like a direct
+// `w *World` field — even though a container can never satisfy
+// isGuarded's literal `<chain>.checkNotCopied(...)` call shape (you
+// cannot call a method on a slice/map/chan value), making any finding
+// registered for it permanently, uncorrectably unguardable. This
+// mirrors the doc.go "Known blind spots" disclosure precisely: a
+// container-of-candidate field is a genuinely different hazard shape
+// (independently copyable elements, not one field-then-method access
+// chain) and is out of scope for collectFieldWraps by construction, not
+// by accident of baseTypeName's unrelated slice-parameter behaviour.
+func isContainerFieldType(expr ast.Expr) bool {
+	if star, ok := expr.(*ast.StarExpr); ok {
+		expr = star.X
+	}
+	switch expr.(type) {
+	case *ast.ArrayType, *ast.MapType, *ast.ChanType:
+		return true
+	}
+	return false
+}
+
+// collectFieldWraps implements SEC-049's fix: for every struct type
+// declared in files, record every field — named, or
+// anonymous/embedded — whose type, after unwrapping at most one level
+// of pointer (the same unwrap baseTypeName already performs for
+// receivers and parameters), names one of candidates. A field typed as
+// a slice/map/chan of a candidate type is explicitly rejected by
+// isContainerFieldType above and never matched here: those are already
+// a DIFFERENT, already-disclosed blind spot (doc.go's "map-typed
+// candidate values are invisible" note) or a genuinely different hazard
+// shape (a container of independently copyable values, not one single
+// field-then-method access chain); SEC-049's own scope is the direct
+// field case that exposed it live (WorldAPI.w *World).
+func collectFieldWraps(byName map[string]bool, files []pkgFile) []fieldWrap {
+	var out []fieldWrap
+	for _, pf := range files {
+		for _, decl := range pf.AST.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.TYPE {
+				continue
+			}
+			for _, spec := range gd.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				st, ok := ts.Type.(*ast.StructType)
+				if !ok || st.Fields == nil {
+					continue
+				}
+				for _, f := range st.Fields.List {
+					if isContainerFieldType(f.Type) {
+						continue
+					}
+					name, _, ok := baseTypeName(f.Type)
+					if !ok || !byName[name] {
+						continue
+					}
+					if len(f.Names) == 0 {
+						// Anonymous/embedded field — Go reaches it by the
+						// base type name itself.
+						out = append(out, fieldWrap{OwnerType: ts.Name.Name, FieldName: name, Candidate: name})
+						continue
+					}
+					for _, fn := range f.Names {
+						out = append(out, fieldWrap{OwnerType: ts.Name.Name, FieldName: fn.Name, Candidate: name})
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// findFieldReachableFuncs implements SEC-049's fix: for every method
+// declared on a type W that WRAPS a candidate type C via a struct field
+// (collectFieldWraps), register a ReachableFunc for C reached via that
+// field-then-method chain — KindFieldAccess, distinct from
+// KindReceiverMethod (a direct method on C) and KindParameterFunc (C
+// arriving as a parameter). This is the exact shape SEC-049 reported:
+// WorldAPI's own methods reach World's mutex via a.w.mu/
+// a.w.checkNotCopied(...), and were invisible to reachable-function
+// enumeration because WorldAPI is not itself a candidate type (no mutex
+// field of its own) and does not take World by parameter — the only two
+// shapes findReachableFuncs recognised before this fix.
+//
+// A method whose receiver has NO name (`func (*WorldAPI) M()`) is
+// skipped: an unnamed receiver's fields are syntactically unreachable
+// inside the method body, so there is no access chain to construct or
+// to be missing a guard on.
+//
+// This is deliberately ONE field-access hop deep, matching the shape
+// SEC-049 reported live: W.field.Method(...). A wrapper-of-a-wrapper
+// (X holds a *WorldAPI field, WorldAPI holds a *World field) is NOT
+// transitively resolved to a 3-segment X-to-World chain — see doc.go's
+// "Known blind spots" for this logged as residual scope, not silently
+// missed.
+func findFieldReachableFuncs(byName map[string]bool, files []pkgFile) []*ReachableFunc {
+	wraps := collectFieldWraps(byName, files)
+	if len(wraps) == 0 {
+		return nil
+	}
+	wrapsByOwner := make(map[string][]fieldWrap, len(wraps))
+	for _, w := range wraps {
+		wrapsByOwner[w.OwnerType] = append(wrapsByOwner[w.OwnerType], w)
+	}
+
+	var out []*ReachableFunc
+	for _, pf := range files {
+		for _, decl := range pf.AST.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Body == nil || fd.Recv == nil || len(fd.Recv.List) == 0 {
+				continue
+			}
+			if fd.Name.Name == guardMethodName {
+				// See findReachableFuncs' identical exclusion: the guard
+				// method itself is the check, not a candidate for it.
+				continue
+			}
+			ownerName, _, ok := baseTypeName(fd.Recv.List[0].Type)
+			if !ok {
+				continue
+			}
+			owns, ok := wrapsByOwner[ownerName]
+			if !ok {
+				continue
+			}
+			if len(fd.Recv.List[0].Names) == 0 {
+				continue // unnamed receiver — its fields are unreachable in the body
+			}
+			recvName := fd.Recv.List[0].Names[0].Name
+			if recvName == "_" {
+				continue // blank receiver — same reasoning as an unnamed one
+			}
+			recvExprPrinted := printExpr(pf.Fset, fd.Recv.List[0].Type)
+			pos := pf.Fset.Position(fd.Pos())
+			for _, w := range owns {
+				out = append(out, &ReachableFunc{
+					TypeName:            w.Candidate,
+					Kind:                KindFieldAccess,
+					FuncName:            fd.Name.Name,
+					ValueName:           recvName + "." + w.FieldName,
+					ReceiverTypeName:    ownerName,
+					ReceiverExprPrinted: recvExprPrinted,
+					MatchedExprPrinted:  recvExprPrinted + "." + w.FieldName,
+					File:                pf.Rel,
+					Line:                pos.Line,
+					Body:                fd.Body,
+				})
+			}
+		}
+	}
+	return out
+}
+
 // callTargetsValue reports whether call is `<valueName>.checkNotCopied(...)`
 // or `(*<valueName>).checkNotCopied(...)`/`(<valueName>).checkNotCopied(...)`.
+//
+// SEC-049: valueName may now also be a DOTTED chain (e.g. "a.w") — the
+// shape findFieldReachableFuncs constructs for a field-then-method
+// access (a.w.checkNotCopied(...)), as opposed to the plain single
+// identifier every KindReceiverMethod/KindParameterFunc ReachableFunc
+// has always used. exprMatchesChain handles both: a chain of length 1
+// is exactly the old plain-identifier check, unchanged in behaviour.
 func callTargetsValue(call *ast.CallExpr, valueName string) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != guardMethodName {
 		return false
 	}
-	x := sel.X
+	return exprMatchesChain(sel.X, strings.Split(valueName, "."))
+}
+
+// exprMatchesChain reports whether expr, after unwrapping any
+// combination of parens and pointer-dereferences at each step, is
+// exactly the dotted identifier chain named by chain — e.g. chain
+// ["a", "w"] matches the source shapes `a.w`, `(*a).w`, `(a.w)`, and
+// `a.(w)` alike, mirroring the paren/star tolerance callTargetsValue has
+// always had for the single-identifier case. chain has length 1 for
+// every pre-SEC-049 ReachableFunc.ValueName (a receiver's or a matched
+// parameter's own name) and length 2 for SEC-049's field-access chain
+// (`<receiver>.<field>`); the recursion supports any length uniformly,
+// though today's only caller (findFieldReachableFuncs) constructs
+// exactly 2 segments.
+func exprMatchesChain(expr ast.Expr, chain []string) bool {
+	if len(chain) == 0 {
+		return false
+	}
+	x := expr
 	for {
 		switch t := x.(type) {
 		case *ast.ParenExpr:
@@ -814,8 +1041,16 @@ func callTargetsValue(call *ast.CallExpr, valueName string) bool {
 		}
 		break
 	}
-	id, ok := x.(*ast.Ident)
-	return ok && id.Name == valueName
+	last := chain[len(chain)-1]
+	if len(chain) == 1 {
+		id, ok := x.(*ast.Ident)
+		return ok && id.Name == last
+	}
+	sel, ok := x.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != last {
+		return false
+	}
+	return exprMatchesChain(sel.X, chain[:len(chain)-1])
 }
 
 // isGuarded implements AC-4's presence check: rf.Body contains, anywhere,
@@ -1413,8 +1648,11 @@ func violationMessage(rf *ReachableFunc) string {
 }
 
 func valueRole(k FuncKind) string {
-	if k == KindReceiverMethod {
+	switch k {
+	case KindReceiverMethod:
 		return "receiver"
+	case KindFieldAccess:
+		return "field chain"
 	}
 	return "parameter"
 }

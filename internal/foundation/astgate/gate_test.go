@@ -716,6 +716,250 @@ func ConsumeVariadic(gs ...Guarded) {
 	}
 }
 
+// --- SEC-049: field-access chain (WorldAPI-wraps-*World shape) --------
+
+// worldAPIShapedFixture mirrors the real engine.world/worldapi.go shape
+// SEC-049 was filed against: World is the candidate type (a by-value
+// sync.RWMutex plus an aliasable map field); WorldAPI wraps *World as a
+// struct field (not a receiver, not a parameter) and its own exported
+// methods reach World's mutex directly via the field
+// (a.w.mu.Lock()/a.w.checkNotCopied(...)). guarded controls whether
+// TouchGuarded calls a.w.checkNotCopied(...) before touching a.w.mu, so
+// the same fixture shape proves both the positive (unguarded → flagged)
+// and negative (guarded → clean) cases from one source template.
+func worldAPIShapedFixture(guarded bool) string {
+	guardCall := ""
+	if guarded {
+		guardCall = "\tif !a.w.checkNotCopied() {\n\t\treturn\n\t}\n"
+	}
+	return `package fixture
+
+import "sync"
+
+type World struct {
+	mu    sync.RWMutex
+	tiles map[int]int
+}
+
+func (w *World) checkNotCopied() bool { return true }
+
+type WorldAPI struct {
+	w *World
+}
+
+func (a *WorldAPI) TouchGuarded() {
+` + guardCall + `	a.w.mu.Lock()
+	defer a.w.mu.Unlock()
+}
+`
+}
+
+// TestFindFieldReachableFuncs_CatchesFieldAccessChain is SEC-049's core
+// regression test: WorldAPI.TouchGuarded reaches World's mutex via the
+// field-then-method chain a.w — a shape neither the receiver-method path
+// (WorldAPI is not itself a candidate type: it has no mutex field of its
+// own) nor the parameter path (TouchGuarded takes no World-typed
+// parameter — World arrives already embedded in WorldAPI's own struct
+// layout) recognised before this fix. Confirms findFieldReachableFuncs
+// directly: exactly one KindFieldAccess ReachableFunc for World, keyed on
+// the printed chain "a.w".
+func TestFindFieldReachableFuncs_CatchesFieldAccessChain(t *testing.T) {
+	root := writeFixturePkg(t, "worldapifieldfix", map[string]string{"fixture.go": worldAPIShapedFixture(false)})
+	byDir, err := loadPackages(root, "internal")
+	if err != nil {
+		t.Fatalf("loadPackages: %v", err)
+	}
+	files := byDir["internal/worldapifieldfix"]
+	if len(files) == 0 {
+		t.Fatal("fixture package not found by loadPackages")
+	}
+	candidates := findCandidateTypes("internal/worldapifieldfix", files)
+	byName := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		byName[c.Name] = true
+	}
+	if !byName["World"] {
+		t.Fatalf("World was not detected as a candidate type at all — fixture setup is broken, not testing SEC-049: candidates=%v", candidates)
+	}
+
+	fieldReachable := findFieldReachableFuncs(byName, files)
+	var found *ReachableFunc
+	for _, rf := range fieldReachable {
+		if rf.FuncName == "TouchGuarded" && rf.TypeName == "World" {
+			found = rf
+		}
+	}
+	if found == nil {
+		t.Fatalf("SEC-049 REGRESSION: WorldAPI.TouchGuarded (reaches World's mutex via the field-then-method chain a.w) "+
+			"was not enumerated as a ReachableFunc for candidate type World — findFieldReachableFuncs returned: %v", fieldReachable)
+	}
+	if found.Kind != KindFieldAccess {
+		t.Errorf("expected Kind == KindFieldAccess, got %v", found.Kind)
+	}
+	if found.ValueName != "a.w" {
+		t.Errorf("expected ValueName == %q (the printed receiver.field chain), got %q", "a.w", found.ValueName)
+	}
+}
+
+// TestRun_CatchesUnguardedFieldAccessChain is SEC-049's live end-to-end
+// regression test: Run must report WorldAPI.TouchGuarded as a violation
+// when it never calls a.w.checkNotCopied() before touching a.w.mu — the
+// exact live gap the BOW finding described (WorldAPI's 11 real exported
+// methods, invisible to reachable-function enumeration). Before this
+// fix, Run reported ZERO violations for this fixture — WorldAPI's method
+// matched neither the receiver-method path (WorldAPI is not a candidate
+// type) nor the parameter path (no World-typed parameter).
+func TestRun_CatchesUnguardedFieldAccessChain(t *testing.T) {
+	root := writeFixturePkg(t, "worldapifieldrunfix", map[string]string{"fixture.go": worldAPIShapedFixture(false)})
+	res, err := Run(root, "internal")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	found := false
+	for _, v := range res.Violations {
+		if strings.Contains(v, "TouchGuarded") && strings.Contains(v, "World") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("SEC-049 REGRESSION: expected a violation naming WorldAPI.TouchGuarded's unguarded reach into candidate type "+
+			"World via the field-access chain a.w, got: %v", res.Violations)
+	}
+}
+
+// TestRun_FieldAccessChain_CleanCaseNoFalsePositive is SEC-049's negative
+// control: the identical fixture, but with a.w.checkNotCopied() called
+// first, must produce ZERO violations naming TouchGuarded — proving the
+// new field-access path actually inspects guard presence rather than
+// unconditionally flagging every field-wrapped method.
+func TestRun_FieldAccessChain_CleanCaseNoFalsePositive(t *testing.T) {
+	root := writeFixturePkg(t, "worldapifieldcleanfix", map[string]string{"fixture.go": worldAPIShapedFixture(true)})
+	res, err := Run(root, "internal")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, v := range res.Violations {
+		if strings.Contains(v, "TouchGuarded") {
+			t.Errorf("false positive: TouchGuarded calls a.w.checkNotCopied() before touching a.w.mu but was still flagged: %s", v)
+		}
+	}
+}
+
+// holderSliceFieldFixture reproduces the SEC-049 round-2 Destructive
+// attacker's exact fixture: a wrapping type (Holder) holding a candidate
+// type via a SLICE field (ws []*World), not a direct pointer field. Both
+// gate.go's collectFieldWraps doc comment and doc.go's "Known blind
+// spots" claimed this shape was "deliberately NOT matched" — the
+// attacker proved that claim false: baseTypeName's *ast.ArrayType case
+// (added earlier for the slice-parameter fix) unwraps right through the
+// field's slice type down to "World", so before the round-2 fix
+// Holder.Bad was silently registered as a KindFieldAccess ReachableFunc
+// for World via the uncompilable chain h.ws.checkNotCopied(...) — a
+// finding that could never be marked guarded, a permanent false-positive
+// generator. isContainerFieldType now rejects this shape explicitly.
+func holderSliceFieldFixture() string {
+	return `package fixture
+
+import "sync"
+
+type World struct {
+	mu    sync.RWMutex
+	tiles map[int]int
+}
+
+func (w *World) checkNotCopied() bool { return true }
+
+type Holder struct {
+	ws []*World
+}
+
+func (h *Holder) Bad() {
+	for _, w := range h.ws {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+	}
+}
+`
+}
+
+// TestCollectFieldWraps_RejectsSliceOfCandidateField is SEC-049 round 2's
+// core regression test (the Destructive reattack): a field typed as a
+// slice of a candidate type (ws []*World) must NOT be recorded as a
+// fieldWrap at all — collectFieldWraps must reject it via
+// isContainerFieldType, matching what the doc comments have always
+// claimed. Before the round-2 fix this assertion failed: the field WAS
+// recorded (OwnerType Holder, FieldName ws, Candidate World).
+func TestCollectFieldWraps_RejectsSliceOfCandidateField(t *testing.T) {
+	root := writeFixturePkg(t, "holderslicefieldfix", map[string]string{"fixture.go": holderSliceFieldFixture()})
+	byDir, err := loadPackages(root, "internal")
+	if err != nil {
+		t.Fatalf("loadPackages: %v", err)
+	}
+	files := byDir["internal/holderslicefieldfix"]
+	if len(files) == 0 {
+		t.Fatal("fixture package not found by loadPackages")
+	}
+	candidates := findCandidateTypes("internal/holderslicefieldfix", files)
+	byName := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		byName[c.Name] = true
+	}
+	if !byName["World"] {
+		t.Fatalf("World was not detected as a candidate type at all — fixture setup is broken: candidates=%v", candidates)
+	}
+
+	wraps := collectFieldWraps(byName, files)
+	for _, w := range wraps {
+		if w.OwnerType == "Holder" && w.FieldName == "ws" {
+			t.Fatalf("SEC-049 ROUND 2 REGRESSION: Holder.ws (a slice-of-candidate field, []*World) was recorded as a "+
+				"fieldWrap (%+v) — collectFieldWraps must reject container-typed fields, matching the doc's disclosed scope", w)
+		}
+	}
+}
+
+// TestFindFieldReachableFuncs_NoFindingForSliceOfCandidateField is the
+// end-to-end companion: Holder.Bad (which touches h.ws, a slice field)
+// must produce NO ReachableFunc/KindFieldAccess entry for World at all —
+// not even an unguardable one — since a container field can never
+// satisfy isGuarded's literal single-chain checkNotCopied() call shape.
+func TestFindFieldReachableFuncs_NoFindingForSliceOfCandidateField(t *testing.T) {
+	root := writeFixturePkg(t, "holderslicefieldrunfix", map[string]string{"fixture.go": holderSliceFieldFixture()})
+	byDir, err := loadPackages(root, "internal")
+	if err != nil {
+		t.Fatalf("loadPackages: %v", err)
+	}
+	files := byDir["internal/holderslicefieldrunfix"]
+	if len(files) == 0 {
+		t.Fatal("fixture package not found by loadPackages")
+	}
+	candidates := findCandidateTypes("internal/holderslicefieldrunfix", files)
+	byName := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		byName[c.Name] = true
+	}
+
+	fieldReachable := findFieldReachableFuncs(byName, files)
+	for _, rf := range fieldReachable {
+		if rf.FuncName == "Bad" && rf.TypeName == "World" {
+			t.Fatalf("SEC-049 ROUND 2 REGRESSION: Holder.Bad was registered as a ReachableFunc (%+v) for a slice-field "+
+				"access chain — this shape must never be enumerated, since no guard call can ever satisfy it", rf)
+		}
+	}
+
+	// Also confirm the live end-to-end Run path stays clean for this
+	// fixture: no violation naming Bad should ever appear, now or later,
+	// since a container-of-candidate field is explicitly out of scope.
+	res, err := Run(root, "internal")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, v := range res.Violations {
+		if strings.Contains(v, "Bad") && strings.Contains(v, "World") {
+			t.Errorf("unexpected violation naming Holder.Bad for the slice-field shape (should be out of scope entirely): %s", v)
+		}
+	}
+}
+
 // TestRun_CatchesCandidateCopiedInsideFuncLit is BUG-138's regression
 // test: a package-level closure (*ast.FuncLit assigned to a var) that
 // copies a candidate type by value and locks the copy must be caught,
