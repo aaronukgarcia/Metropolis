@@ -28,9 +28,54 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const { runAudit, normalizeModulePath, isGoTreePath } = require('./codejson-audit.js');
+const { runAudit, normalizeModulePath, isGoTreePath, runAstinfo } = require('./codejson-audit.js');
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+/**
+ * BUG-207: the two AC-6 end-to-end tests below used to key off whichever
+ * module happened to already report 'contract-ok' under the LIVE BOW status
+ * gate (runAudit()'s default path, which queries the metro MariaDB for each
+ * module's `done`/not-done status). That precondition held locally (the dev
+ * box's BOW state happens to have done modules with resolvable Go contracts)
+ * but not on CI's fresh checkout — same commit, but the BOW MariaDB there
+ * has no matching 'done' rows, so every module falls into "not-yet-built"
+ * and zero contract rows are even produced, let alone a contract-ok one.
+ * The precondition was never about repo *content* drifting; it was about an
+ * external, environment-specific system (the live BOW DB) that this test
+ * has no business depending on to prove a pure name-matching classifier.
+ *
+ * Fix: construct a synthetic bowStatuses map (runAudit()'s existing
+ * test-isolation override, same pattern used elsewhere in this project for
+ * BOW-independent fixture tests) that forces exactly ONE specific,
+ * deterministically-chosen module to 'done' — chosen by scanning the real
+ * code.json + real Go source (both committed, identical on every checkout)
+ * for a module whose inbound.name already resolves to a real exported Go
+ * symbol. This makes the test self-contained: it no longer talks to the
+ * live BOW DB at all, so it can't drift between environments the way the
+ * live-DB-gated precondition did.
+ */
+function findContractOkFixtureModule() {
+  const codeJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'code.json'), 'utf8'));
+  for (const m of codeJson.modules) {
+    const inboundName = m.inbound && m.inbound.name;
+    if (!inboundName) continue;
+    const normPath = normalizeModulePath(m.path);
+    if (!isGoTreePath(normPath)) continue;
+    if (!fs.existsSync(path.join(ROOT, normPath))) continue;
+    const info = runAstinfo([normPath]).get(normPath);
+    if (!info || info.error) continue;
+    const exact = info.exported.find(s => s.name === inboundName);
+    if (!exact) continue;
+    return {
+      key: m.key,
+      name: inboundName,
+      dir: normPath,
+      bowStatuses: new Map([[m.key, { code: 'BUG-207-FIXTURE', status: 'done' }]]),
+    };
+  }
+  return null;
+}
 
 function stripHeader(report) {
   const clone = JSON.parse(JSON.stringify(report));
@@ -96,9 +141,13 @@ test('AC-4: a subdirectory of an already-registered module path is NOT a false o
 // ── AC-6: near-miss name/type drift — fixture rename/revert ────────────────
 
 test('AC-6: renaming a done module\'s exported contract identifier so it no longer matches ANY exported symbol is AC-2 no-match (not near-miss), and clears on revert', async () => {
-  const before = await runAudit();
-  const okRow = before.directionA.contracts.find(c => c.result === 'contract-ok');
-  assert.ok(okRow, 'need at least one contract-ok row in the live repo to run this fixture test against');
+  const fixture = findContractOkFixtureModule();
+  assert.ok(fixture, 'need at least one code.json module whose inbound.name resolves to a real exported Go symbol on disk to run this fixture test against');
+  const { bowStatuses } = fixture;
+
+  const before = await runAudit({ bowStatuses });
+  const okRow = before.directionA.contracts.find(c => c.key === fixture.key && c.result === 'contract-ok');
+  assert.ok(okRow, `expected forcing ${fixture.key} to BOW status done to produce a contract-ok row for it`);
 
   // Resolve the real file:line for okRow from astinfo's detail string
   // ("<dir>/<file>:<line>").
@@ -120,7 +169,7 @@ test('AC-6: renaming a done module\'s exported contract identifier so it no long
     lines[idx] = lines[idx].replace(re, okRow.name + 'X');
     fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
 
-    const mutated = await runAudit();
+    const mutated = await runAudit({ bowStatuses });
     const mutatedRow = mutated.directionA.contracts.find(c => c.key === okRow.key);
     assert.ok(mutatedRow, `expected a contract row for ${okRow.key} after mutation`);
     assert.equal(mutatedRow.result, 'no-match',
@@ -142,16 +191,20 @@ test('AC-6: renaming a done module\'s exported contract identifier so it no long
     fs.writeFileSync(filePath, original, 'utf8');
   }
 
-  const after = await runAudit();
+  const after = await runAudit({ bowStatuses });
   const afterRow = after.directionA.contracts.find(c => c.key === okRow.key);
   assert.equal(afterRow.result, 'contract-ok', 'reverting the file must restore contract-ok');
   assert.ok(sha256(fs.readFileSync(filePath)) === sha256(Buffer.from(original, 'utf8')), 'reverted file must be byte-identical to the original');
 });
 
 test('AC-6: end-to-end — uppercasing a done module\'s exported contract identifier (same normalized form, different literal string) fires a REAL near-miss finding distinct from AC-2\'s no-match, and clears on revert', async () => {
-  const before = await runAudit();
-  const okRow = before.directionA.contracts.find(c => c.result === 'contract-ok');
-  assert.ok(okRow, 'need at least one contract-ok row in the live repo to run this fixture test against');
+  const fixture = findContractOkFixtureModule();
+  assert.ok(fixture, 'need at least one code.json module whose inbound.name resolves to a real exported Go symbol on disk to run this fixture test against');
+  const { bowStatuses } = fixture;
+
+  const before = await runAudit({ bowStatuses });
+  const okRow = before.directionA.contracts.find(c => c.key === fixture.key && c.result === 'contract-ok');
+  assert.ok(okRow, `expected forcing ${fixture.key} to BOW status done to produce a contract-ok row for it`);
 
   const m = /^(.+)\/([^/]+):(\d+)$/.exec(okRow.detail);
   assert.ok(m, `could not parse contract-ok detail "${okRow.detail}"`);
@@ -176,7 +229,7 @@ test('AC-6: end-to-end — uppercasing a done module\'s exported contract identi
     lines[idx] = lines[idx].replace(re, okRow.name.toUpperCase());
     fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
 
-    const mutated = await runAudit();
+    const mutated = await runAudit({ bowStatuses });
     const mutatedRow = mutated.directionA.contracts.find(c => c.key === okRow.key);
     assert.ok(mutatedRow, `expected a contract row for ${okRow.key} after mutation`);
     assert.equal(mutatedRow.result, 'near-miss',
@@ -195,7 +248,7 @@ test('AC-6: end-to-end — uppercasing a done module\'s exported contract identi
     fs.writeFileSync(filePath, original, 'utf8');
   }
 
-  const after = await runAudit();
+  const after = await runAudit({ bowStatuses });
   const afterRow = after.directionA.contracts.find(c => c.key === okRow.key);
   assert.equal(afterRow.result, 'contract-ok', 'reverting the file must restore contract-ok');
   assert.ok(sha256(fs.readFileSync(filePath)) === sha256(Buffer.from(original, 'utf8')), 'reverted file must be byte-identical to the original');
