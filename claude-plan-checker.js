@@ -77,25 +77,36 @@ const CODE_JSON_PATH = path.join(ROOT, 'code.json');
 const BOW_IMPORT_PATH = path.join(ROOT, 'tools', 'plan', 'bow-import.json');
 
 function hashFiles(paths) {
-  // BUG-088 P2 CORRECTION (2026-08-11): a prior pass of this relocation
-  // silently changed the hash separator byte from the original NUL
-  // ('\x00', confirmed at `git show HEAD:claude-plan-guard.js`) to a plain
-  // space (' ') — functionally harmless here (only two fixed, hardcoded
-  // paths are ever hashed, in a fixed order, so no path/content string could
-  // collide across the separator either way), but undisclosed, contradicting
-  // this module's own header claim of "relocated, not reimplemented".
-  // Restored to the original NUL separator for a genuinely verbatim
-  // relocation (the simpler of the two options this finding offered — the
-  // other being to keep the space and disclose it in the header, matching
-  // how the "commit-msg-timing" divergence above is disclosed; NUL-restore
-  // was chosen instead because it makes the claim true rather than merely
-  // documenting why it's false).
+  // BUG-015 (2026-08-13): the separator was a literal NUL byte ('\x00'),
+  // confirmed at `git show HEAD:claude-plan-guard.js` before this function's
+  // BUG-088 relocation here. That NUL was never intentional — the author's
+  // intent (per the surrounding code style and BOW-015's finding) was a
+  // plain space (' ') separator between the hashed path and the hashed file
+  // content. The NUL had two real consequences: (1) any file containing this
+  // source — at the time, claude-plan-guard.js itself — got flagged BINARY
+  // by git purely because of the embedded NUL, hiding future diffs of a
+  // PreToolUse hook behind "Binary files differ"; (2) it wasn't the
+  // separator the author meant to use.
+  //
+  // This supersedes the BUG-088 P2 "correction" that used to sit here, which
+  // restored the NUL believing it to be the original, deliberate separator
+  // (true in the narrow sense that NUL is what the byte-for-byte relocation
+  // found, but the NUL itself was BUG-015's literal-byte-mistake all along,
+  // not a deliberate choice). BUG-015 is the authoritative fix for this
+  // separator; "verbatim relocation" of a bug is not a reason to keep it.
+  //
+  // No stored/compared hash baselines depend on this function's output —
+  // hashFiles() is only ever used for an in-process before/after comparison
+  // within a single checkPlan() call (see below), never persisted to disk or
+  // compared against a hardcoded value — so changing the separator byte
+  // changes what a given input hashes to, but nothing outside this module
+  // needs re-baselining as a result.
   const h = crypto.createHash('sha256');
   for (const p of paths) {
     h.update(p);
-    h.update('\0');
+    h.update(' ');
     h.update(fs.existsSync(p) ? fs.readFileSync(p) : Buffer.from('__MISSING__'));
-    h.update('\0');
+    h.update(' ');
   }
   return h.digest('hex');
 }
