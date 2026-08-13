@@ -1904,6 +1904,80 @@
       "guidIn": "1cf64418-d369-48ec-bb7f-2120022b9231",
       "guidOut": "b245ccc1-e900-46d4-baf5-58d6e74a26bc",
       "deps": []
+    },
+    {
+      "mkey": "feat.devmode",
+      "type": "feature",
+      "title": "FEAT-065: pause-anywhere dev console, object-metrics inspection, feedback-to-BOW capture",
+      "desc": "A UI overlay (internal/ui/screens/devmode) built on top of feat.debugmode's existing gates/InspectEntity (never a second gating mechanism): pause-anywhere console (RequireConsole gate, Enable-before-open so DebugTouched fires the moment the console becomes usable), an object-metrics selection/query surface thin-consuming InspectEntity, and in-game free-text feedback captured via a new gated debug.State.SubmitFeedback write path (one JSON record per submission to data/devfeedback/inbox/, never a direct DB/exec/network call) polled by a new companion script claude-devfeedback-import.js which calls claude-bow.js add bug --desc-file (BUG-090 discipline) and moves consumed records to data/devfeedback/processed/ or leaves a .error sidecar. Registered per Bill's ruling (2026-08-12): feat.devmode, not ui.devconsole, because DoD #3 (feedback-to-BOW) is the item's most architecturally significant piece and is not a UI concern. [spec: §14; M0-ENG §3; docs/planning/acceptance/feat.devmode.md] [path: internal/ui/screens/devmode/]",
+      "seq": 920,
+      "sprint": 3,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "§14; M0-ENG §3; docs/planning/acceptance/feat.devmode.md",
+      "guid": "7d49d8f6-f29e-48fe-af76-e67d6b15f501",
+      "guidIn": "61fbd7fa-acff-4e20-9099-02025feb7cda",
+      "guidOut": "fd1a00fd-bc5c-4f45-aaba-9228151168a5",
+      "deps": [
+        "feat.debugmode"
+      ]
+    },
+    {
+      "mkey": "feat.helper",
+      "type": "feature",
+      "title": "FEAT-063: The Helper — ask-driven advisor panel over a registered action taxonomy",
+      "desc": "Context-aware player advisor per Aaron's 2026-08-12 ruling (recorded on FEAT-063): Helper v1 is an ASK-DRIVEN PANEL, pull-only — the player asks 'what should I do?' / 'what if I do X?'; current features pay only the advisor-metadata registration cost (action taxonomy id, preconditions, consequence-pricing projection queries). Package internal/engine/helper/ holds the registration contract and query surface. Registered per Bill's ruling (2026-08-12, ASM on FEAT-063): a SINGLE key feat.helper covers both the registration-contract package and the panel query surface — the acceptance file's proposed engine.helper/feat.helper split is deferred until a real UI panel lands, because one BOW item maps to one mkey for destructive-guard and commit-tag resolution. No master-spec section exists for the advisor; docs/planning/acceptance/feat.helper.md is the item's SSOT. [spec: docs/planning/acceptance/feat.helper.md; FEAT-063 BOW ruling (Aaron via Bill, 2026-08-12)] [path: internal/engine/helper/]",
+      "seq": 930,
+      "sprint": 3,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "docs/planning/acceptance/feat.helper.md; FEAT-063 BOW ruling (Aaron via Bill, 2026-08-12)",
+      "guid": "5e185ef4-b9b0-4fa3-98ad-9f79079dc015",
+      "guidIn": "f80b19e5-9cc7-478f-846f-75027a46734a",
+      "guidOut": "c8ea150c-b1d0-4b9a-a087-79390447f78c",
+      "deps": [
+        "foundation.errors"
+      ]
+    },
+    {
+      "mkey": "feat.checkpoint",
+      "type": "feature",
+      "title": "FEAT-064: whole-state checkpoints with revert-and-fork lineage",
+      "desc": "Player-initiated whole-state checkpoints with revert-and-fork per Aaron's 2026-08-12 interview ruling (quoted on FEAT-064's BOW comment — that comment is the spec authority; no master-spec section names checkpoints). Reverting to a checkpoint preserves the abandoned timeline as a fork; the fork tree is bounded (size N is a balance-regime placeholder pending Aaron's row-by-row approval, never a junior-invented constant). Builds on feat.saveux's Participant/SaveKind whole-state save model (FEAT-011), harness.replay's record/replay + CompareResult diffing (MOD-013), and int.serializer's bundle format — consumes them, never reimplements (GR#3/GR#20). Known prerequisite gap logged as ASM-442/ASM-470: harness.replay's Recorder buffers in-memory with no incremental flush, the wrong shape for an always-on fork log — AC-11/AC-12 stay blocked until that is resolved on MOD-013's side. [spec: FEAT-064 BOW ruling (Aaron, 2026-08-12); docs/planning/acceptance/feat.checkpoint.md] [path: internal/engine/checkpoint/]",
+      "seq": 940,
+      "sprint": 7,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "specRef": "FEAT-064 BOW ruling (Aaron, 2026-08-12); docs/planning/acceptance/feat.checkpoint.md",
+      "guid": "9b46faf8-d4b8-4829-9633-860eef3c5b0e",
+      "guidIn": "ac14f052-a882-43b1-8a09-20d091b763bd",
+      "guidOut": "d02049bd-50e8-46db-9b48-0602ee2d969b",
+      "deps": [
+        "feat.saveux",
+        "harness.replay",
+        "int.serializer"
+      ]
+    },
+    {
+      "mkey": "feat.metricsdash",
+      "type": "feature",
+      "title": "FEAT-066: pipeline metrics dashboard (out-of-band CLI) + quick defect logging",
+      "desc": "Surfaces this project's own build/test/security/perf pipeline state (claude-bow.js weakness/gate-status/lint + perf-CI results) — it does not invent a new metrics-collection mechanism (GR#3). Built as an out-of-band CLI per Bill's Escalation-A ruling (2026-08-12, recorded on ASM-476): pipeline data has no business inside the TUI runtime, and an in-game screen would drag internal/ui into consuming project tooling across the GR#20 boundary; a future in-game surface is a new feature riding this core. Includes a quick one-line defect-logging entry point reusing feat.devmode's feedback-inbox/import plumbing rather than a second BOW-writing path; per Bill's ASM-477 ruling the importer derives attribution (codejson ref/code-path) from the submitting tool's declared mkey, never hardcoded. [spec: docs/planning/acceptance/feat.metricsdash.md; ASM-476/ASM-477 rulings (Bill, 2026-08-12)] [path: internal/harness/metricsdash/]",
+      "seq": 950,
+      "sprint": 3,
+      "priority": "P2",
+      "milestone": "M1",
+      "layer": "harness",
+      "specRef": "docs/planning/acceptance/feat.metricsdash.md; ASM-476/ASM-477 rulings (Bill, 2026-08-12)",
+      "guid": "39653594-e467-4cb1-9819-ddfe8fd29701",
+      "guidIn": "68c21622-6666-46a4-a806-cfdc4eafd0e3",
+      "guidOut": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132",
+      "deps": [
+        "feat.devmode"
+      ]
     }
   ]
 }

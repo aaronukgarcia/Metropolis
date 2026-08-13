@@ -27,7 +27,7 @@
     },
     "determinism": "Same seed + same command log => bit-identical world at any worker count (§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG §6.4)."
   },
-  "moduleCount": 102,
+  "moduleCount": 106,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -89,6 +89,10 @@
             "outboundGuid": "b0b339f9-0052-469e-9138-0eb930798f69"
           },
           {
+            "key": "ui.screen.demo",
+            "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
+          },
+          {
             "key": "ui.screen.map",
             "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           }
@@ -137,6 +141,10 @@
           {
             "key": "engine.core",
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
+          {
+            "key": "feat.checkpoint",
+            "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
           },
           {
             "key": "feat.debugmode",
@@ -250,6 +258,18 @@
         "format": "Go package API",
         "pattern": "errs.New(code, correlationId, ctx) — the only legal error constructor",
         "consumers": [
+          {
+            "key": "feat.devmode",
+            "outboundGuid": "fd1a00fd-bc5c-4f45-aaba-9228151168a5"
+          },
+          {
+            "key": "feat.helper",
+            "outboundGuid": "c8ea150c-b1d0-4b9a-a087-79390447f78c"
+          },
+          {
+            "key": "feat.metricsdash",
+            "outboundGuid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132"
+          },
           {
             "key": "ui.screen.debug",
             "outboundGuid": "5a703ff2-c659-4add-a6ed-7c01a2eeb2d2"
@@ -846,6 +866,10 @@
             "outboundGuid": "5a703ff2-c659-4add-a6ed-7c01a2eeb2d2"
           },
           {
+            "key": "ui.screen.demo",
+            "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
+          },
+          {
             "key": "ui.screen.map",
             "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           },
@@ -904,6 +928,10 @@
           {
             "key": "ui.screen.debug",
             "outboundGuid": "5a703ff2-c659-4add-a6ed-7c01a2eeb2d2"
+          },
+          {
+            "key": "ui.screen.demo",
+            "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
           },
           {
             "key": "ui.screen.map",
@@ -1270,7 +1298,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.devmode",
+            "outboundGuid": "fd1a00fd-bc5c-4f45-aaba-9228151168a5"
+          }
+        ]
       },
       "outbound": {
         "guid": "ac1e5b30-d9e6-4ffd-917d-e933e2c07f8d",
@@ -1313,6 +1346,10 @@
         "format": null,
         "pattern": null,
         "consumers": [
+          {
+            "key": "feat.checkpoint",
+            "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          },
           {
             "key": "ui.harness",
             "outboundGuid": "1185f757-2553-4d06-a8c2-c141bcf9b9d0"
@@ -2503,6 +2540,11 @@
             "key": "engine.finance",
             "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
             "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          },
+          {
+            "key": "engine.projections",
+            "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
+            "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
           }
         ]
       },
@@ -2549,6 +2591,10 @@
           {
             "key": "engine.social",
             "outboundGuid": "a5ae75cf-b566-4ae4-a521-112d48426ef3"
+          },
+          {
+            "key": "engine.spiral",
+            "outboundGuid": "bed174ed-42bc-4b19-9381-939b51985b3b"
           },
           {
             "key": "ui.alerts",
@@ -2907,7 +2953,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.checkpoint",
+            "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          }
+        ]
       },
       "outbound": {
         "guid": "086886fe-ec35-40a5-b653-910632dc7302",
@@ -3263,6 +3314,16 @@
         "guid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0",
         "calls": [
           {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.widgets",
+            "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
+            "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
+          },
+          {
             "key": "engine.citizens",
             "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
             "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
@@ -3281,6 +3342,11 @@
             "key": "engine.extcommute",
             "moduleGuid": "39bb5039-2f59-4e32-9cb5-d7f899a05d3a",
             "inboundGuid": "bc5b137e-5692-410b-a6cf-80da601ee414"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -4911,6 +4977,155 @@
       "outbound": {
         "guid": "b245ccc1-e900-46d4-baf5-58d6e74a26bc",
         "calls": []
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "7d49d8f6-f29e-48fe-af76-e67d6b15f501",
+      "key": "feat.devmode",
+      "bowType": "feature",
+      "seq": 920,
+      "sprint": 3,
+      "title": "FEAT-065: pause-anywhere dev console, object-metrics inspection, feedback-to-BOW capture",
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "§14; M0-ENG §3; docs/planning/acceptance/feat.devmode.md",
+      "path": "internal/ui/screens/devmode/",
+      "inbound": {
+        "guid": "61fbd7fa-acff-4e20-9099-02025feb7cda",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": [
+          {
+            "key": "feat.metricsdash",
+            "outboundGuid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "fd1a00fd-bc5c-4f45-aaba-9228151168a5",
+        "calls": [
+          {
+            "key": "feat.debugmode",
+            "moduleGuid": "d46840c1-b7d1-480b-a46d-e93d58fd7aa4",
+            "inboundGuid": "f1e42494-7f80-47c7-b4b4-5f7aab76880b"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "5e185ef4-b9b0-4fa3-98ad-9f79079dc015",
+      "key": "feat.helper",
+      "bowType": "feature",
+      "seq": 930,
+      "sprint": 3,
+      "title": "FEAT-063: The Helper — ask-driven advisor panel over a registered action taxonomy",
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "docs/planning/acceptance/feat.helper.md; FEAT-063 BOW ruling (Aaron via Bill, 2026-08-12)",
+      "path": "internal/engine/helper/",
+      "inbound": {
+        "guid": "f80b19e5-9cc7-478f-846f-75027a46734a",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "c8ea150c-b1d0-4b9a-a087-79390447f78c",
+        "calls": [
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "9b46faf8-d4b8-4829-9633-860eef3c5b0e",
+      "key": "feat.checkpoint",
+      "bowType": "feature",
+      "seq": 940,
+      "sprint": 7,
+      "title": "FEAT-064: whole-state checkpoints with revert-and-fork lineage",
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "specRef": "FEAT-064 BOW ruling (Aaron, 2026-08-12); docs/planning/acceptance/feat.checkpoint.md",
+      "path": "internal/engine/checkpoint/",
+      "inbound": {
+        "guid": "ac14f052-a882-43b1-8a09-20d091b763bd",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "d02049bd-50e8-46db-9b48-0602ee2d969b",
+        "calls": [
+          {
+            "key": "feat.saveux",
+            "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
+            "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
+          },
+          {
+            "key": "harness.replay",
+            "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
+            "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "39653594-e467-4cb1-9819-ddfe8fd29701",
+      "key": "feat.metricsdash",
+      "bowType": "feature",
+      "seq": 950,
+      "sprint": 3,
+      "title": "FEAT-066: pipeline metrics dashboard (out-of-band CLI) + quick defect logging",
+      "priority": "P2",
+      "milestone": "M1",
+      "layer": "harness",
+      "specRef": "docs/planning/acceptance/feat.metricsdash.md; ASM-476/ASM-477 rulings (Bill, 2026-08-12)",
+      "path": "internal/harness/metricsdash/",
+      "inbound": {
+        "guid": "68c21622-6666-46a4-a806-cfdc4eafd0e3",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132",
+        "calls": [
+          {
+            "key": "feat.devmode",
+            "moduleGuid": "7d49d8f6-f29e-48fe-af76-e67d6b15f501",
+            "inboundGuid": "61fbd7fa-acff-4e20-9099-02025feb7cda"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
       },
       "securityScan": null
     }

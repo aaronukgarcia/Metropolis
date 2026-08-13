@@ -986,12 +986,14 @@
         "engine.attract",
         "engine.build",
         "engine.world",
-        "engine.finance"
+        "engine.finance",
+        "engine.projections"
       ],
       "sprint": 7,
       "collaborations": {
         "consumesFrom": [
-          "engine.finance"
+          "engine.finance",
+          "engine.projections"
         ]
       }
     },
@@ -1398,10 +1400,13 @@
         "ui.widgets"
       ],
       "calls": [
+        "ui.core",
+        "ui.widgets",
         "engine.citizens",
         "engine.households",
         "engine.leisure",
-        "engine.extcommute"
+        "engine.extcommute",
+        "int.protocol"
       ],
       "sprint": 8
     },
@@ -2546,6 +2551,88 @@
         "int.serializer"
       ],
       "sprint": 0
+    },
+    {
+      "key": "feat.devmode",
+      "type": "feature",
+      "seq": 920,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "ui",
+      "title": "FEAT-065: pause-anywhere dev console, object-metrics inspection, feedback-to-BOW capture",
+      "desc": "A UI overlay (internal/ui/screens/devmode) built on top of feat.debugmode's existing gates/InspectEntity (never a second gating mechanism): pause-anywhere console (RequireConsole gate, Enable-before-open so DebugTouched fires the moment the console becomes usable), an object-metrics selection/query surface thin-consuming InspectEntity, and in-game free-text feedback captured via a new gated debug.State.SubmitFeedback write path (one JSON record per submission to data/devfeedback/inbox/, never a direct DB/exec/network call) polled by a new companion script claude-devfeedback-import.js which calls claude-bow.js add bug --desc-file (BUG-090 discipline) and moves consumed records to data/devfeedback/processed/ or leaves a .error sidecar. Registered per Bill's ruling (2026-08-12): feat.devmode, not ui.devconsole, because DoD #3 (feedback-to-BOW) is the item's most architecturally significant piece and is not a UI concern.",
+      "specRef": "§14; M0-ENG §3; docs/planning/acceptance/feat.devmode.md",
+      "path": "internal/ui/screens/devmode/",
+      "deps": [
+        "feat.debugmode"
+      ],
+      "calls": [
+        "feat.debugmode",
+        "foundation.errors"
+      ],
+      "sprint": 3
+    },
+    {
+      "key": "feat.helper",
+      "type": "feature",
+      "seq": 930,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "title": "FEAT-063: The Helper — ask-driven advisor panel over a registered action taxonomy",
+      "desc": "Context-aware player advisor per Aaron's 2026-08-12 ruling (recorded on FEAT-063): Helper v1 is an ASK-DRIVEN PANEL, pull-only — the player asks 'what should I do?' / 'what if I do X?'; current features pay only the advisor-metadata registration cost (action taxonomy id, preconditions, consequence-pricing projection queries). Package internal/engine/helper/ holds the registration contract and query surface. Registered per Bill's ruling (2026-08-12, ASM on FEAT-063): a SINGLE key feat.helper covers both the registration-contract package and the panel query surface — the acceptance file's proposed engine.helper/feat.helper split is deferred until a real UI panel lands, because one BOW item maps to one mkey for destructive-guard and commit-tag resolution. No master-spec section exists for the advisor; docs/planning/acceptance/feat.helper.md is the item's SSOT.",
+      "specRef": "docs/planning/acceptance/feat.helper.md; FEAT-063 BOW ruling (Aaron via Bill, 2026-08-12)",
+      "path": "internal/engine/helper/",
+      "deps": [
+        "foundation.errors"
+      ],
+      "calls": [
+        "foundation.errors"
+      ],
+      "sprint": 3
+    },
+    {
+      "key": "feat.checkpoint",
+      "type": "feature",
+      "seq": 940,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "title": "FEAT-064: whole-state checkpoints with revert-and-fork lineage",
+      "desc": "Player-initiated whole-state checkpoints with revert-and-fork per Aaron's 2026-08-12 interview ruling (quoted on FEAT-064's BOW comment — that comment is the spec authority; no master-spec section names checkpoints). Reverting to a checkpoint preserves the abandoned timeline as a fork; the fork tree is bounded (size N is a balance-regime placeholder pending Aaron's row-by-row approval, never a junior-invented constant). Builds on feat.saveux's Participant/SaveKind whole-state save model (FEAT-011), harness.replay's record/replay + CompareResult diffing (MOD-013), and int.serializer's bundle format — consumes them, never reimplements (GR#3/GR#20). Known prerequisite gap logged as ASM-442/ASM-470: harness.replay's Recorder buffers in-memory with no incremental flush, the wrong shape for an always-on fork log — AC-11/AC-12 stay blocked until that is resolved on MOD-013's side.",
+      "specRef": "FEAT-064 BOW ruling (Aaron, 2026-08-12); docs/planning/acceptance/feat.checkpoint.md",
+      "path": "internal/engine/checkpoint/",
+      "deps": [
+        "feat.saveux",
+        "harness.replay",
+        "int.serializer"
+      ],
+      "calls": [
+        "feat.saveux",
+        "harness.replay",
+        "int.serializer"
+      ],
+      "sprint": 7
+    },
+    {
+      "key": "feat.metricsdash",
+      "type": "feature",
+      "seq": 950,
+      "priority": "P2",
+      "milestone": "M1",
+      "layer": "harness",
+      "title": "FEAT-066: pipeline metrics dashboard (out-of-band CLI) + quick defect logging",
+      "desc": "Surfaces this project's own build/test/security/perf pipeline state (claude-bow.js weakness/gate-status/lint + perf-CI results) — it does not invent a new metrics-collection mechanism (GR#3). Built as an out-of-band CLI per Bill's Escalation-A ruling (2026-08-12, recorded on ASM-476): pipeline data has no business inside the TUI runtime, and an in-game screen would drag internal/ui into consuming project tooling across the GR#20 boundary; a future in-game surface is a new feature riding this core. Includes a quick one-line defect-logging entry point reusing feat.devmode's feedback-inbox/import plumbing rather than a second BOW-writing path; per Bill's ASM-477 ruling the importer derives attribution (codejson ref/code-path) from the submitting tool's declared mkey, never hardcoded.",
+      "specRef": "docs/planning/acceptance/feat.metricsdash.md; ASM-476/ASM-477 rulings (Bill, 2026-08-12)",
+      "path": "internal/harness/metricsdash/",
+      "deps": [
+        "feat.devmode"
+      ],
+      "calls": [
+        "feat.devmode",
+        "foundation.errors"
+      ],
+      "sprint": 3
     }
   ]
 }
