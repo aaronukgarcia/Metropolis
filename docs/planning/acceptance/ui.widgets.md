@@ -37,7 +37,7 @@ The shared visual grammar widget set: box-drawing borders (focused/unfocused var
 
 ### Error handling
 
-- **AC-11.** Every widget handles a nil/empty/degenerate input series (zero-length sparkline data, a table with zero rows, a gauge value outside [0,1]) without panicking — rendering a sane empty/clamped state instead. A passing test exercises at least one degenerate case per widget category (sparkline, gauge, table).
+- **AC-11.** Every widget handles a nil/empty/degenerate input series without panicking, rendering a documented, specific fallback rather than an undefined "sane-looking" state: a zero-length sparkline series renders a blank sparkline (no glyphs plotted, not a crash or a stale/repeated last value); a gauge value outside `[0,1]` is clamped to the nearest bound (0 or 1) before rendering, not extrapolated past the fill bar's ends; a table with zero rows renders its header with an empty visible-row set (`VisibleRows` returns `nil`/empty, not a slice indexing panic). A passing test exercises each of these three named cases and asserts the specific stated outcome (blank sparkline, clamped gauge fill, empty-but-headered table) — not merely that the widget function returns without panicking.
 
 ### Determinism & safety
 

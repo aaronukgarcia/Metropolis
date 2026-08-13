@@ -236,13 +236,20 @@ that a shared one exists by dispatch time.
 ### Error handling
 
 - **AC-10 (GR#7).** A failed BOW write (metro MariaDB unreachable, a
-  malformed submission) surfaces a registry-sourced error to the submitter
-  and does **not** silently discard the note — carrying forward
-  weakness-pattern-#5's rule (a guard/write path's failure must not destroy
-  the thing it exists to protect, here: the observation the user was trying
-  to record). A passing test forces the BOW write to fail and asserts the
-  submitter sees an explicit failure, and — if any local queuing/retry
-  exists (see Escalation B) — that the note is not lost, only deferred.
+  malformed submission) surfaces a registry-sourced error (new `MET-E`-range
+  code) to the submitter and does **not** silently discard the note —
+  carrying forward weakness-pattern-#5's rule (a guard/write path's failure
+  must not destroy the thing it exists to protect, here: the observation the
+  user was trying to record). Check: `grep -n "MET-" <package>/*.go` (the
+  logging affordance's package, confirmed at dispatch) finds a registry code
+  reference on the failed-write path; a passing test forces the BOW write to
+  fail and asserts the submitter sees an explicit failure — **GR#7 assertion,
+  stated explicitly (BUG-100 convention):** the test asserts the returned
+  error's registry code matches AND that the note text itself still exists
+  somewhere retrievable (the local queue, if AC-10's own retry mechanism
+  exists — see Escalation B — or an explicit "not recoverable" state the
+  submitter is shown), not merely that a matching-named test function exists
+  and that a "logged!" toast was suppressed.
 - **AC-11.** A malformed/unreadable perf-results or accepted-registry file
   (a torn write, corrupt JSON) is reported as a visible dashboard warning
   for that section, consistent with `perfci`'s own BUG-054 handling

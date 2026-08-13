@@ -34,7 +34,7 @@ The integration of `int.protocol`, `foundation.errors`, `harness.stub`, `engine.
 
 ### Error handling
 
-- **AC-7.** A boot-time failure in any wired component (e.g. `harness.stub` fixture fails to load) produces a clear, registry-sourced startup error and a non-zero exit — not a partial boot that silently renders a broken/blank screen.
+- **AC-7.** A boot-time failure in any wired component (e.g. `harness.stub` fixture fails to load) produces a clear, registry-sourced startup error (new `MET-E`-range code, or `MET-F001`/`MET-F002` per `foundation.errors`' own boot-time convention) and a non-zero exit — not a partial boot that silently renders a broken/blank screen. Check: `grep -n "MET-" cmd/metropolis/*.go` finds a registry code reference on the boot-failure path; a passing test forces a wired-component failure (e.g. a missing/corrupt fixture) and asserts (a) the process exits non-zero with the registry-sourced error surfaced, and (b) no partially-rendered frame/screen is produced — not merely that an error value was returned somewhere in the call chain.
 
 ### Determinism & safety
 

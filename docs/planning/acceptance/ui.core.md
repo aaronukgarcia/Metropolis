@@ -38,8 +38,8 @@ BOW code: MOD-009
 
 ### Error handling
 
-- **AC-8.** A `tcell` initialization failure (e.g. no compatible terminal) produces a clear, user-facing error at startup rather than a panic or silent blank screen.
-- **AC-9.** A malformed/unexpected `Delta` (fails to apply to any known view model) is logged via `foundation.errors` (registry-sourced) and dropped, without crashing the render loop or corrupting other view models' state.
+- **AC-8.** A `tcell` initialization failure (e.g. no compatible terminal) produces a registry-sourced error (new `MET-U`-range code, per the per-module subrange-claiming convention) identifying the underlying `tcell` failure, and the process exits with that message printed to the user rather than panicking with a raw Go stack trace or leaving a silent blank screen. Check: a passing test injects a failing `tcell.Screen` initialiser (mocked/stubbed) and asserts the returned/logged error's registry code matches the claimed code AND that no `tcell` panic reaches the caller — not merely that a function named `TestInit*` exists and passes.
+- **AC-9.** A malformed/unexpected `Delta` (fails to apply to any known view model) produces a registry-sourced error (new `MET-U`-range code, distinct from AC-8's) naming the `Delta`'s view name and the reason it failed to apply, and the `Delta` is dropped without mutating any view model. Check: a passing test feeds a `Delta` targeting an unknown view (or one with a shape that fails to apply to its known view model) and asserts (a) the returned/logged error's registry code matches the claimed code, and (b) every existing view model's state is byte-identical before and after the dropped `Delta`, and the render loop continues processing subsequent valid `Delta`s afterwards — not merely that a `TestMalformedDelta`-named test exists and passes.
 
 ### Determinism & safety
 

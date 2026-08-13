@@ -34,7 +34,7 @@ Three auto-laid-out block-text diagram engines — chain diagrams, network schem
 
 ### Error handling
 
-- **AC-7.** A degenerate topology (zero nodes, a node with no edges, a Sankey flow set that doesn't balance source-total to sink-total) does not panic — it renders a documented empty/partial state and, where the input is malformed rather than merely empty (e.g. an edge referencing a node ID not present in the node set), returns a distinct error rather than silently dropping the dangling edge. A passing test exercises at least the zero-node case and the dangling-edge-reference case.
+- **AC-7.** A degenerate topology (zero nodes, a node with no edges, a Sankey flow set that doesn't balance source-total to sink-total) does not panic — it renders a documented empty/partial state (zero nodes: an empty cell-buffer region with no error; a node with no edges: the node box renders alone with no dangling arrow stub). Where the input is malformed rather than merely empty (e.g. an edge referencing a node ID not present in the node set), the layout function returns a registry-sourced error (new `MET-U`-range code) naming the missing node ID, rather than silently dropping the dangling edge or panicking on the missing lookup. Check: a passing test exercises the zero-node case (asserts empty output, no error) and the dangling-edge-reference case (asserts the returned error's registry code is set and names the missing node ID, and that no partial/corrupted layout is returned alongside it).
 
 ### Determinism & safety
 
