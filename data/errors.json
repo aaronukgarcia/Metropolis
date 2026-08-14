@@ -8,7 +8,9 @@
       "E": "engine — internal/engine/* (simulation modules)",
       "U": "ui — internal/ui/* (screens, widgets, input, render)",
       "T": "tooling — build/plan/generate scripts (currently JS, outside the Go registry)",
-      "H": "harness — internal/harness/* (recorded fixtures/replay, and future UI/engine test harnesses)"
+      "H": "harness — internal/harness/* (recorded fixtures/replay, and future UI/engine test harnesses)",
+      "V": "ui (second block) — internal/ui/* overflow once the U layer (U000-U999) is exhausted",
+      "G": "engine (second block) — internal/engine/* overflow once the E layer (E000-E999) is exhausted; engine.citizens (MOD-018) is the first claimant, since every E sub-range was taken by eleven earlier engine modules by the time it landed (see the engine.mining/feat.skeleton range notes)"
     },
     "reserved": {
       "F000-F009": "reserved for foundation.errors (errs package self-errors: registry load/validation, unregistered code — always available even if the registry fails to load)",
@@ -32,7 +34,8 @@
       "E600-E699": "reserved for engine.market (internal/engine/market: nine-commodity price/availability/supply-mode registry loaded from data/market.json — MOD-020. Checked against this table AND `grep -rn \"MET-E6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E6xx code existed either place.)",
       "E700-E799": "reserved for engine.helper (internal/engine/helper: FEAT-063's advisor-metadata Registrant/Registry contract and ask-driven Recommend/Preview panel query surface — no real player-action feature registers yet, per this item's fixture-only-proof scope; the errors below are constructed by the helper package itself AND by its helperfixture package, since the fixture lives inside the same E700-E799 range per BUG-008's per-range, not per-package, ownership rule. Checked against this table AND `grep -rn \"MET-E7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E7xx code existed either place.)",
       "E800-E899": "reserved for feat.saveux (internal/engine/save: FEAT-011's save/load orchestration -- single-save-in-flight rejection, staging/promotion failures, format-version-mismatch and corrupted-load handling, list/enumerate failures, unknown-participant-kind on load. Checked against this table AND `grep -rn \"MET-E8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E8xx code existed either place.)",
-      "E900-E999": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path; distinct from E000-E899, which belong to individual internal/engine/* simulation modules as they land)",
+      "E900-E949": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path. NARROWED from E900-E999 on 2026-08-13: the E layer's 000-899 blocks were all claimed by earlier engine modules by the time engine.mining landed, and the code format is hard-capped at three digits, so E950-E999 was carved from this reservation's unused tail for engine.mining — feat.skeleton ships exactly one code, MET-E900, which remains in-range. Flagged for Bill/Aaron: any reallocation of a reserved range is their call.)",
+      "E950-E999": "reserved for engine.mining (internal/engine/mining: the deposit-parameter data-file load/schema-validation failure, the geology-not-yet-derived shuffle rejection, and the out-of-bounds deposit query — MOD-046/FEAT-049. Checked against this table AND `grep -rn \"MET-E9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E9xx code existed outside feat.skeleton's MET-E900.)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
       "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)",
@@ -42,7 +45,15 @@
       "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place.",
       "U400-U499": "reserved for feat.devmode (internal/ui/screens/devmode, FEAT-065: pause-anywhere dev console gate/open-state rejections — fourth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys). Checked against both this table AND `grep -rn \"MET-U4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U4xx code existed either place.",
     "U500-U599": "reserved for ui.screen.demo (internal/ui/screens/demo, FEAT-018: F6 Demographics screen — malformed f6.population/f6.leisure/f6.housing/f6.commute patch handling, unknown/stale subscription-ID drops (SF-7/DEMO-9) — fifth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode. Checked against both this table AND `grep -rn \"MET-U5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U5xx code existed either place.",
-      "H400-H499": "reserved for harness.metricsdash (internal/harness/metricsdash, FEAT-066/feat.metricsdash pending module-key confirmation ASM-451: read-only weakness/gate-status/lint/perf-CI dashboard aggregation and defect/query logging entry-point errors -- fifth H-layer sub-range, since H000-H099/H100-H199/H200-H299/H300-H399 already belong to harness.replay/ui.harness/harness.headless/harness.synth. Checked against both this table AND `grep -rn \"MET-H4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-H4xx code existed either place."
+      "H400-H499": "reserved for harness.metricsdash (internal/harness/metricsdash, FEAT-066/feat.metricsdash pending module-key confirmation ASM-451: read-only weakness/gate-status/lint/perf-CI dashboard aggregation and defect/query logging entry-point errors -- fifth H-layer sub-range, since H000-H099/H100-H199/H200-H299/H300-H399 already belong to harness.replay/ui.harness/harness.headless/harness.synth. Checked against both this table AND `grep -rn \"MET-H4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-H4xx code existed either place.",
+      "U600-U699": "reserved for ui.screen.menu (internal/ui/screens/menu, FEAT-021: F10 Menu & saves screen -- malformed f10.session patch handling, unknown/stale subscription-ID drops, unrecognised-view rejection, save-root enumeration failure, keymap/layout profile-write failures, layout-editor-unavailable -- sixth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo. Checked against both this table AND `grep -rn \"MET-U6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U6xx code existed either place.",
+      "U700-U799": "reserved for ui.screen.ticker (internal/ui/screens/ticker, FEAT-020: F9 Ticker & History screen -- malformed f9.ticker/f9.bulletin/f9.annual/f9.archive patch handling, unknown/stale subscription-ID drops, a story arriving with an empty eventId (TIK-5) -- seventh U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu. Checked against both this table AND `grep -rn \"MET-U7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U7xx code existed either place.",
+      "U800-U899": "reserved for ui.dash (internal/ui/dash, MOD-038: Dashboards, layout editor, drill-through rule -- missing/zero DrillTarget at tile construction (AC-4), invalid drill-target view name, malformed/corrupt layout profile fallback (AC-10), vanished drill target at drill time (AC-9), unknown tile ID in editor/navigation operations -- eighth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699/U700-U799 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu/ui.screen.ticker. Checked against both this table AND `grep -rn \"MET-U8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U8xx code existed either place.",
+      "U900-U949": "reserved for ui.diagrams (internal/ui/diagrams, MOD-037: text-Sankey/chain/network diagram engines -- dangling-edge topology rejection (MET-U900, AC-7) and struct-copied diagram-cache Engine rejection (MET-U905, SEC-020). Split from the former U900-U999 block on 2026-08-14 per lead arbitration: ui.diagrams owns U900-U949 and keeps MET-U900/MET-U905, while chrome's four codes moved to U950-U999 (ui.alerts). Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
+      "U950-U999": "reserved for ui.alerts (internal/ui/screens/chrome, FEAT-013: Top bar + prioritised alert stack + crisis auto-pause -- alert/crisis construction rejections (missing jump target / missing ID, AC-3/AC-11), struct-copy rejection (SEC-020), malformed chrome.topbar figures patch. Split from the former U900-U999 block on 2026-08-14 per lead arbitration: chrome's four codes moved from MET-U901..U904 to MET-U950..U953 to clear the collision with ui.diagrams' MET-U900/MET-U905, which stay in U900-U949. Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
+      "V000-V099": "reserved for ui.screen.proj (internal/ui/screens/proj, FEAT-019: F7 Projections screen — malformed f7.projections patch handling, unknown/stale subscription-ID drops (SF-7/PRJ-6), and the Screen struct-copy guard (SEC-020) — the U layer (U000-U999) is exhausted (ui.core/map/debug/keys/devmode/demo/menu/ticker/dash/alerts), so ui.screen.proj opens a second UI layer block. Checked against both this table AND `grep -rn \"MET-V\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V code existed either place.)",
+      "G000-G099": "reserved for engine.citizens (internal/engine/citizens: the Option-B citizen record, columnar cold SoA store, HOT/WARM/COLD dial, amortised cold pass, A7 sampling firewall, life-writing, Gompertz-Makeham mortality, households — MOD-018. The E layer (E000-E999) is fully claimed by eleven earlier engine modules (engine.core/detgate/debug/invariant/world/season/market/helper/saveux/skeleton/mining), and the code format is hard-capped at three digits (^MET-[A-Z]\\d{3}$, internal/foundation/errs/registry.go), so engine.citizens opens a second engine block under the next free single letter G (V is the UI-second-block precedent). Flagged for Bill/Aaron: adding a new layer letter is a registry-schema extension — if they prefer to reallocate an existing E sub-range instead, that is their call.)",
+      "G100-G199": "reserved for engine.projections (internal/engine/projections: the projection curve registry, month-query bounds guard, Slow-Fuse decision validation, and ghost-city death-warning provider — MOD-031. Second G-layer engine claim after engine.citizens' G000-G099; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -184,6 +195,12 @@
       "module": "foundation.solver",
       "message": "solver Registry method called on a struct-copied Registry value (correlation {correlationId})",
       "remedy": "Registry (internal/foundation/solver) must be constructed via NewRegistry and used through that same pointer for its whole lifetime — never dereferenced-and-copied ('r2 := *r'). A copy gets its own, independent mutex while its registrations slice still aliases the original's, and the copy's own next lock attempt can hang forever if it was taken mid-lock on the original (SEC-020/SEC-016). Fix the call site to hold and pass the original *Registry, not a copied value."
+    },
+    "MET-F401": {
+      "severity": "error",
+      "module": "foundation.solver",
+      "message": "solver Request.Payload is {payloadBytes} bytes for problem {problem}, exceeding the MaxRequestPayloadBytes limit of {maxBytes} bytes (correlation {correlationId})",
+      "remedy": "A Request.Payload over MaxRequestPayloadBytes (internal/foundation/solver/contract.go, 1 MiB) was rejected before any allocation sized from it (BUG-012). Requests must carry reference handles only — shard IDs, snapshot generation numbers, content hashes — with the referenced data fetched by the backend through a separate channel, never inlined. If a legitimate payload genuinely exceeds 1 MiB the payload schema is wrong (it is embedding data that should be a reference); change the limit only with an explicit ASM- recording the new figure and why."
     },
     "MET-F600": {
       "severity": "fatal",
@@ -731,6 +748,12 @@
       "message": "Registry.Register called twice with invariant name {name}",
       "remedy": "Every registered Invariant's Name() must be unique within a Registry — this mirrors foundation.registry.Register's duplicate-key rejection. Give the second invariant a distinct name, or confirm it is not an accidental double-registration."
     },
+    "MET-E305": {
+      "severity": "error",
+      "module": "engine.invariant",
+      "message": "RegisterStock/RegisterStockWithTerms called with a nil term function for stock {stock}, term {term} ({side})",
+      "remedy": "Every inflow/outflow term function registered for a conserved stock must be non-nil — a nil term would panic the tick loop the first time the invariant evaluates it. Fix the caller to supply a real func() int64 for each named term (or drop the entry)."
+    },
     "MET-E400": {
       "severity": "fatal",
       "module": "engine.world",
@@ -1234,6 +1257,288 @@
       "module": "harness.metricsdash",
       "message": "logged note had an empty body",
       "remedy": "Pass real note text to -log -- an empty or whitespace-only note is rejected before any file is written, since it would file a useless blank BOW record."
+    },
+    "MET-U600": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
+      "remedy": "A *menu.Screen value was copied (`s2 := *s`) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs/stale/saveEntries/settings/settingValues/selectedKeymap are reference types a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) — this call is rejected fail-closed instead of racing or corrupting the shared state. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
+    "MET-U601": {
+      "severity": "warn",
+      "module": "ui.screen.menu",
+      "message": "malformed {view} patch could not be applied: {cause}",
+      "remedy": "The patch was not valid JSON for the f10.session view schema (bad JSON, unrecognised schemaVersion, or an oversized payload) and was dropped; the menu screen's session view keeps its last-known-good state (SF-7). If this persists, check the sending engine module's view patch encoding for f10.session."
+    },
+    "MET-U602": {
+      "severity": "warn",
+      "module": "ui.screen.menu",
+      "message": "delta for unknown or stale subscription {subscriptionId} dropped",
+      "remedy": "ApplyDelta received a protocol.Delta whose SubscriptionID was never bound via BindSubscription (or was bound to a view since unsubscribed). This is expected transiently around resubscribe/unsubscribe races; if it persists, check the caller's SubscriptionID-to-view routing (SF-7 — never applied, never a panic)."
+    },
+    "MET-U603": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "Subscribe called with unrecognised view name {view}",
+      "remedy": "This screen only subscribes to its one registered view (f10.session). Passing any other name is a programming error at the call site — fix the caller rather than adding a new view name here without updating code.json's outbound edges and this package's doc.go."
+    },
+    "MET-U604": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "failed to enumerate the save root: {cause}",
+      "remedy": "The injected BundleLister (or the default save-root walk) returned an I/O error reading the save root directory. The save browser renders \"unavailable\" rather than a stale or empty list (SF-7/MEN-7). Check the configured save root path and the BundleLister wiring."
+    },
+    "MET-U605": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "failed to write profile file {path}: {cause}",
+      "remedy": "A keymap or dashboard-layout profile could not be durably written to disk (encode or write failure). Nothing was silently discarded — the write failed and reported; retry with a writable path. This one code is shared by keymap and layout profile writes (GR#3)."
+    },
+    "MET-U606": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "layout editor entry point opened with no ui.dash editor wired: {cause}",
+      "remedy": "OpenLayoutEditor was invoked while no layout editor is wired via WithLayoutEditor. The F10 → layouts entry point reports \"unavailable\" rather than silently no-op'ing (MEN-4/MEN-7). Wire ui.dash's (MOD-038) layout editor at construction when it lands."
+    },
+    "MET-U700": {
+      "severity": "warn",
+      "module": "ui.screen.ticker",
+      "message": "malformed {view} patch could not be applied: {cause}",
+      "remedy": "The patch was not valid JSON for the named f9.* view schema (bad JSON, unrecognised schemaVersion, or an oversized payload) and was dropped; the ticker screen's affected view keeps its last-known-good state (SF-7). If this persists, check the sending engine module's view patch encoding for the named view."
+    },
+    "MET-U701": {
+      "severity": "warn",
+      "module": "ui.screen.ticker",
+      "message": "delta for unknown or stale subscription {subscriptionId} dropped",
+      "remedy": "ApplyDelta received a protocol.Delta whose SubscriptionID was never bound via BindSubscription (or was bound to a view since unsubscribed). This is expected transiently around resubscribe/unsubscribe races; if it persists, check the caller's SubscriptionID-to-view routing (SF-7 -- never applied, never a panic)."
+    },
+    "MET-U702": {
+      "severity": "error",
+      "module": "ui.screen.ticker",
+      "message": "Subscribe called with unrecognised view name {view}",
+      "remedy": "This screen only subscribes to its four registered f9.* views (f9.ticker, f9.bulletin, f9.annual, f9.archive). Passing any other name is a programming error at the call site -- fix the caller rather than adding a new view name here without updating code.json's outbound edges and this package's doc.go."
+    },
+    "MET-U703": {
+      "severity": "error",
+      "module": "ui.screen.ticker",
+      "message": "news story with empty eventId dropped from {view} patch (TIK-5)",
+      "remedy": "A story in an otherwise well-formed f9.* patch carried no eventId, so it has no traceable source event (TIK-5's 'no hallucinated news' control). It is rejected -- never rendered -- rather than repaired with a placeholder ID; the rest of the patch still applies. Check the sending engine.news path to ensure every emitted story carries its originating event ID."
+    },
+    "MET-U704": {
+      "severity": "error",
+      "module": "ui.screen.ticker",
+      "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
+      "remedy": "A *ticker.Screen value was copied (s2 := *s) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs/stale/ticker/bulletin/annual/archive/searchMatches are reference types a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) -- this call is rejected fail-closed instead of racing or corrupting the shared maps/slices. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
+    "MET-U800": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "drill target {viewName} no longer available (entity {entityId})",
+      "remedy": "Enter was pressed on a dashboard element whose DrillTarget subscription or entity no longer exists at drill time (int.protocol stale-subscription/vanished-entity case). The UI shows a clear \"no longer available\" state rather than crashing or silently doing nothing -- nothing was navigated. Re-check the target once its source is live again."
+    },
+    "MET-U801": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "saved layout profile is malformed or corrupt: {cause}",
+      "remedy": "A saved layout-profile JSON document could not be parsed, or decoded to a structurally-corrupt layout (a tile/element missing its required DrillTarget, an unknown tile kind). The dashboard fell back to the shipped default layout for the screen rather than rendering a corrupt or partial layout -- re-save the profile to recover the custom arrangement."
+    },
+    "MET-U802": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "dashboard tile requires a valid DrillTarget: {reason}",
+      "remedy": "A tile was constructed or added with a zero/empty DrillTarget (or an empty tile ID, or a duplicate tile ID). The drill-through rule (UI-SPEC 4) requires every tile to carry a source identity, so this is rejected at construction time rather than by a later validator a caller could skip -- supply a non-empty DrillTarget (see NewDrillTarget / the New<Kind>Tile constructors)."
+    },
+    "MET-U803": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "invalid drill-target view name {viewName}: {cause}",
+      "remedy": "A DrillTarget ViewName does not match int.protocol view-name grammar (lowercase dot-separated segments; entity-scoped names like junction.14.approaches). Fix the name to a grammar-valid protocol view name."
+    },
+    "MET-U804": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "dashboard operation referenced an unknown tile id {tileId}",
+      "remedy": "RemoveTile, MoveTile, or Drill named a tile ID not present in the layout (or an element ID not present in the tile). This is a loud miss, not a silent no-op -- check the tile/element ID the caller passed."
+    },
+    "MET-U805": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "MapResolver method {method} called on a struct-copied value (SEC-020)",
+      "remedy": "A *dash.MapResolver value was copied by assignment/passing instead of being used via the single pointer dash.NewMapResolver returned (mu is a sync.RWMutex VALUE and live is an aliased map -- a copy is a second, independent lock racing the original over the same map). The call was rejected fail-closed rather than risking a lock-order hang or a torn map read; construct exactly one MapResolver via NewMapResolver and pass its pointer everywhere instead of a dereferenced copy."
+    },
+    "MET-U950": {
+      "severity": "error",
+      "module": "ui.alerts",
+      "message": "alert constructed without a required jump target (id {id}, crisis {crisis})",
+      "remedy": "An Alert (or a crisis-tagged alert) was constructed with an empty/whitespace jump target. Every alert must carry a non-empty target so that selecting it -- or a crisis firing -- has somewhere to navigate (AC-3/AC-11); the alert is rejected at construction, never silently entered onto the stack targetless. Supply a non-empty Target via NewAlert."
+    },
+    "MET-U951": {
+      "severity": "error",
+      "module": "ui.alerts",
+      "message": "alert constructed without a non-empty identifier (crisis {crisis})",
+      "remedy": "An Alert was constructed with an empty ID. The ID is the resolution key (AC-12) and, for crisis-tagged alerts, the stable per-instance crisis identity the auto-pause dedupe is keyed on (AC-8/FEAT-042 AC-25b); the alert is rejected rather than keyed on the empty string, which would make every subsequent crisis collide."
+    },
+    "MET-U952": {
+      "severity": "error",
+      "module": "ui.alerts",
+      "message": "method {method} called on a struct-copied Chrome (not the *Chrome New returned)",
+      "remedy": "A *chrome.Chrome value was copied (c2 := *c) and a method was then called on the copy. Chrome's mu is a sync.Mutex VALUE while alerts is a reference type a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) -- this call is rejected fail-closed instead of racing or corrupting the shared slice. Fix the caller to hold and pass the single *Chrome New returned."
+    },
+    "MET-U953": {
+      "severity": "warn",
+      "module": "ui.alerts",
+      "message": "malformed chrome.topbar figures patch could not be applied: {cause}",
+      "remedy": "The delta patch was not valid chrome.topbar v1 JSON (bad JSON or an unrecognised schemaVersion) and was dropped; the top bar keeps its last-known-good figures. If this persists, check the sending engine module's chrome.topbar patch encoding."
+    },
+    "MET-U900": {
+      "severity": "error",
+      "module": "ui.diagrams",
+      "message": "diagram topology edge {edge} references node {node}, which is not present in the node set",
+      "remedy": "An edge's From or To names a node ID absent from the topology's node set (a dangling reference). Fix the topology so every edge endpoint matches a node ID — the layout is rejected outright rather than silently dropping the dangling edge or panicking on the missing lookup (AC-7)."
+    },
+    "MET-U905": {
+      "severity": "error",
+      "module": "ui.diagrams",
+      "message": "diagram cache Engine method called on a struct-copied value (SEC-020)",
+      "remedy": "A *diagrams.Engine value was copied by assignment/passing instead of being used via the single pointer NewEngine returned (mu is a sync.Mutex VALUE and cache is an aliased map — a copy is a second, independent lock racing the original over the same cache map). The call was rejected rather than risking a lock-order hang or a torn map read; construct exactly one Engine via NewEngine and pass its pointer everywhere instead of a dereferenced copy."
+    },
+    "MET-E950": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "deposit-parameters data file could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/deposits.json is missing, malformed JSON, or failed the loader's schema validation (a negative count, an inverted depth band, an out-of-taxonomy resource key, a non-positive curve shape, or an out-of-range co-location factor). The deposit shuffle does NOT proceed with silent defaults or a partially-populated map (AC-11): fix the data file and reload. All-or-nothing — there is no partial load."
+    },
+    "MET-E951": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "deposit shuffle rejected for tile {tile}: engine.world geology has not been derived (prospected) yet",
+      "remedy": "The shuffle consumes engine.world's real geology layer via PocketGeology, which returns ErrGeologyNotProspected until Prospect(tile) has run. Call world.Prospect(tile) first (the world-gen caller derives geology before shuffling), then re-shuffle. Proceeding against zero-value geology would silently produce a geology-blind map (AC-12)."
+    },
+    "MET-E952": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "deposit query rejected: {cause}",
+      "remedy": "A DepositAt call named a TileCoord outside the 30x30 expansion extent or a CellLocal outside the 200x200 tile-local domain. The rejection is loud rather than a silent 'no deposit' (GR#1): fix the coordinate, or treat an in-domain false return as the genuine 'no deposit at this cell' answer."
+    },
+    "MET-E953": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "deposit map method called on a struct-copied value (SEC-020)",
+      "remedy": "A *mining.DepositMap value was copied by assignment/passing instead of being used via the single pointer NewDepositMap returned (mu is a sync.RWMutex VALUE and placed is an aliased map — a copy is a second, independent lock racing the original over the same placed map). The call was rejected rather than risking a lock-order hang or a torn map read; construct exactly one DepositMap via NewDepositMap and pass its pointer everywhere instead of a dereferenced copy."
+    },
+    "MET-V001": {
+      "severity": "warn",
+      "module": "ui.screen.proj",
+      "message": "malformed f7.projections patch could not be applied: {cause}",
+      "remedy": "The patch was not valid JSON for the f7.projections view schema (bad JSON, unrecognised schemaVersion, or an oversized payload) and was dropped; the projections screen keeps its last-known-good state (SF-7/PRJ-6). If this persists, check the sending engine module's view patch encoding for f7.projections."
+    },
+    "MET-V002": {
+      "severity": "warn",
+      "module": "ui.screen.proj",
+      "message": "delta for unknown or stale subscription {subscriptionId} dropped",
+      "remedy": "ApplyDelta received a protocol.Delta whose SubscriptionID was never bound via BindSubscription (or was bound and since unsubscribed). This is expected transiently around resubscribe/unsubscribe races; if it persists, check the caller's SubscriptionID-to-view routing (SF-7 — never applied, never a panic)."
+    },
+    "MET-V003": {
+      "severity": "error",
+      "module": "ui.screen.proj",
+      "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
+      "remedy": "A *proj.Screen value was copied (`s2 := *s`) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs is a map and curves/crossings are slices a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) — this call is rejected fail-closed instead of racing or corrupting the shared state. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
+    "MET-G001": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizen {id} constructed with a birthMonth ({birthMonth}) outside the representable range [0, 32767]",
+      "remedy": "A citizen's birthMonth is an absolute month index (0 = world genesis) and must fit the int16 delta the cold store encodes the age in (a larger value wraps: int16(40000) == -25536). Reject the record rather than silently clamp or wrap it (AC-13/GR#16)."
+    },
+    "MET-G002": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizen {id} personality axis {axis} is {value}, outside the documented 0-100 range",
+      "remedy": "Every personality axis must be within [0, 100]. Fix the constructing call site; the record is rejected rather than silently clamped (AC-13)."
+    },
+    "MET-G003": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizen {id} references household {household}, which does not exist",
+      "remedy": "Form the household first (ApplyLifeEventCommand with LifeEventPartner) before assigning it to a citizen, or pass a household id that is already registered. The record is rejected rather than silently orphaned (AC-13)."
+    },
+    "MET-G004": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "CitizensAPI method {method} called on a struct-copied value, not the one NewCitizensAPI constructed",
+      "remedy": "Always use the *CitizensAPI pointer NewCitizensAPI returned. A copy carries its own mutex over the same aliased hot/household maps and cold shard array (SEC-020)."
+    },
+    "MET-G005": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "cold shard index {shard} is out of range [0, {numShards})",
+      "remedy": "Every citizen is assigned to one of the 256 fixed id-hash shards via foundation/det.ShardForEntity. An out-of-range index is a programming error, not a data condition."
+    },
+    "MET-G006": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizen {id} education attainment score {attainment} is outside the int16 range the cold store encodes it in",
+      "remedy": "The cold store encodes attainment as int16. Reject the record rather than narrowing it (int16(40000) would wrap to -25536 and corrupt the record). Clamp the score to [-32768, 32767] at the call site, or store it in a wider field."
+    },
+    "MET-G007": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "citizen {id} field {field} value {value} is outside [{min}, {max}]",
+      "remedy": "A field at the hot-to-cold boundary fell outside its documented contract range (satisfaction 0-100, schooling int16, sex/health-band/stage/employment-state/sector enums, child count 0-255). Reject the record rather than silently narrow it — a bare int8(200) wraps to -56, and an out-of-domain enum is a data error (AC-13/GR#16)."
+    },
+    "MET-G100": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "unknown curve key {key} queried from engine.projections",
+      "remedy": "Register a curve provider for {key} via RegisterCurveProvider before querying it; no zero-value curve is returned (AC-9)."
+    },
+    "MET-G101": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "month query out of bounds: {detail} (negative month before world epoch, or a from/to range wider than the max query width)",
+      "remedy": "Query a non-negative month within the allowed range width; the request is rejected rather than overflowing the result buffer (AC-9, BUG-214 bounds guard)."
+    },
+    "MET-G102": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "Slow-Fuse decision has a non-finite or negative FuseYears ({value})",
+      "remedy": "FuseYears must be finite and non-negative; a NaN/Inf/negative fuse is rejected rather than silently treated as under-threshold (A5, Destructive round-1 break 1)."
+    },
+    "MET-G103": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "Slow-Fuse decision (FuseYears {value} > 5) submitted without a projected-consequence payload",
+      "remedy": "A decision whose principal effect lands >5 game-years out MUST carry a non-empty projected consequence before confirmation (A5, AC-5/AC-10)."
+    },
+    "MET-G104": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "operation references an unregistered decision {id}",
+      "remedy": "Enqueue the decision before cancelling/querying it (AC-10)."
+    },
+    "MET-G105": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "nil curve provider registered for key {key}",
+      "remedy": "Pass a non-nil CurveProvider to RegisterCurveProvider (AC-1)."
+    },
+    "MET-G106": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "duplicate curve-provider registration for key {key}",
+      "remedy": "Each curve key may be registered once; use a distinct key or unregister first (AC-1)."
+    },
+    "MET-G107": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "embedded projections config invalid at load: {detail}",
+      "remedy": "Fix the embedded horizon.json/deathwarnings.json (malformed JSON or missing disclosure); the package fails loudly rather than defaulting (AC-12/AC-20)."
+    },
+    "MET-G108": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "ghost-city death-warning provider shape invalid: {detail}",
+      "remedy": "The ghost-city provider must supply both current and historic-peak values so the dual-threshold margin is computable; an incomplete shape is rejected, not defaulted (FEAT-068, AC-18)."
     }
   }
 }
