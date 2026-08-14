@@ -55,8 +55,8 @@ func TestAppendResult_ResultSchema(t *testing.T) {
 func TestAppendResult_Appends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
-	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{PerMonthTick: 110 * time.Millisecond, Measured: true}}
+	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 110 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, older); err != nil {
 		t.Fatalf("AppendResult(older): %v", err)
 	}
@@ -124,7 +124,7 @@ func TestLoadLatestBaseline_MissingFileIsNotAnError(t *testing.T) {
 // fresh scale preset has no prior baseline either, AC-8).
 func TestLoadLatestBaseline_NoMatchingPresetIsNotAnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
-	if err := AppendResult(path, PerfRecord{CommitHash: "c1", Preset: "1M", Result: PerfResult{Measured: true}}); err != nil {
+	if err := AppendResult(path, PerfRecord{CommitHash: "c1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, Measured: true}}); err != nil {
 		t.Fatalf("AppendResult: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestLoadLatestBaseline_CorruptFileIsAnError(t *testing.T) {
 func TestLoadLatestBaseline_UnrelatedPresetCorruptionDoesNotBlockFreshPreset(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	other := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	other := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, other); err != nil {
 		t.Fatalf("AppendResult(other): %v", err)
 	}
@@ -253,7 +253,7 @@ func TestLoadLatestBaseline_AmbiguousCorruptLineStillHardErrors(t *testing.T) {
 func TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	other := PerfRecord{CommitHash: "commit1", Preset: "10M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	other := PerfRecord{CommitHash: "commit1", Preset: "10M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, other); err != nil {
 		t.Fatalf("AppendResult(other): %v", err)
 	}
@@ -294,7 +294,7 @@ func TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors(t *test
 func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, older); err != nil {
 		t.Fatalf("AppendResult(older): %v", err)
 	}
@@ -323,7 +323,7 @@ func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 	// see TestLoadLatestBaseline_FreezesOnRegressionInsteadOfRatcheting
 	// below for that dedicated test, which needs a record that DOES
 	// exceed the threshold).
-	newer := PerfRecord{CommitHash: "commit3", Preset: "1M", Result: PerfResult{PerMonthTick: 105 * time.Millisecond, Measured: true}}
+	newer := PerfRecord{CommitHash: "commit3", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 105 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, newer); err != nil {
 		t.Fatalf("AppendResult(newer): %v", err)
 	}
@@ -362,7 +362,7 @@ func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 func TestLoadLatestBaseline_RejectsHandInjectedUnmeasuredRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, legit); err != nil {
 		t.Fatalf("AppendResult(legit): %v", err)
 	}
@@ -434,7 +434,7 @@ func TestLoadLatestBaseline_RecoversPastAnOversizedLine(t *testing.T) {
 	}
 
 	// A genuinely later, valid, Measured record.
-	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{PerMonthTick: 77 * time.Millisecond, Measured: true}}
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 77 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, newer); err != nil {
 		t.Fatalf("AppendResult(newer): %v", err)
 	}
@@ -599,7 +599,7 @@ func TestLoadLatestBaseline_CatchesRatchetByInches(t *testing.T) {
 func TestLoadLatestBaseline_FreezesOnSingleRegressionInsteadOfRatcheting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	good := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	good := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, good); err != nil {
 		t.Fatalf("AppendResult(good): %v", err)
 	}
@@ -609,7 +609,7 @@ func TestLoadLatestBaseline_FreezesOnSingleRegressionInsteadOfRatcheting(t *test
 	// ci.yml's perf-smoke job does today: AppendResult runs before the
 	// exit code is returned, and the `if: always()` cache-save step
 	// persists it regardless of the job's own pass/fail result.
-	regressed := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{PerMonthTick: 150 * time.Millisecond, Measured: true}}
+	regressed := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 150 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, regressed); err != nil {
 		t.Fatalf("AppendResult(regressed): %v", err)
 	}
@@ -718,7 +718,7 @@ func TestAppendResult_RejectsUnjustifiedAcceptedRegression(t *testing.T) {
 	rec := PerfRecord{
 		CommitHash:         "commit1",
 		Preset:             "1M",
-		Result:             PerfResult{PerMonthTick: 200 * time.Millisecond, Measured: true},
+		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 200 * time.Millisecond, Measured: true},
 		AcceptedRegression: true,
 		// AcceptedReason deliberately left empty.
 	}
@@ -745,7 +745,7 @@ func TestAppendResult_RejectsUnjustifiedAcceptedRegression(t *testing.T) {
 func TestLoadLatestBaseline_HonorsRegistryCorroboratedAcceptedRegression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	original := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	original := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, original); err != nil {
 		t.Fatalf("AppendResult(original): %v", err)
 	}
@@ -753,7 +753,7 @@ func TestLoadLatestBaseline_HonorsRegistryCorroboratedAcceptedRegression(t *test
 	accepted := PerfRecord{
 		CommitHash:         "commit2",
 		Preset:             "1M",
-		Result:             PerfResult{PerMonthTick: 300 * time.Millisecond, Measured: true}, // +200%, a genuine regression
+		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 300 * time.Millisecond, Measured: true}, // +200%, a genuine regression
 		AcceptedRegression: true,
 		AcceptedReason:     "engine.core gained a real phase hook this commit; the slowdown is expected and reviewed",
 	}
@@ -864,7 +864,7 @@ func TestLoadLatestBaseline_RejectsUncorroboratedAcceptedRegression(t *testing.T
 func TestLoadLatestBaseline_RejectsHandInjectedUnjustifiedAcceptedRegression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
 	if err := AppendResult(path, legit); err != nil {
 		t.Fatalf("AppendResult(legit): %v", err)
 	}
@@ -872,7 +872,7 @@ func TestLoadLatestBaseline_RejectsHandInjectedUnjustifiedAcceptedRegression(t *
 	fabricated := PerfRecord{
 		CommitHash:         "attacker",
 		Preset:             "1M",
-		Result:             PerfResult{PerMonthTick: 999 * time.Millisecond, Measured: true},
+		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 999 * time.Millisecond, Measured: true},
 		AcceptedRegression: true,
 		// AcceptedReason deliberately left empty — bypassing
 		// AppendResult's write-boundary check.
@@ -904,5 +904,77 @@ func TestLoadLatestBaseline_RejectsHandInjectedUnjustifiedAcceptedRegression(t *
 	}
 	if len(corrupt) != 1 {
 		t.Fatalf("corrupt lines = %+v, want exactly 1 (the unjustified override) — GR#17 requires this be reported, not silently dropped", corrupt)
+	}
+}
+
+// TestAppendResult_RejectsZeroValuedCitizenCountAndMonths is ASM-374's
+// write-boundary regression test: a hand-crafted Measured=true record
+// with a zero CitizenCount or Months — structurally impossible from a
+// real RunPerf call — must be rejected before any write, exactly like
+// the negative-value cases BUG-085 already covered. Pre-ASM-374 these
+// zero-valued records sailed through ImplausibleReason (it checked `< 0`
+// only) and could seed a poisoned baseline.
+func TestAppendResult_RejectsZeroValuedCitizenCountAndMonths(t *testing.T) {
+	cases := []struct {
+		name   string
+		result PerfResult
+	}{
+		{"zero CitizenCount", PerfResult{CitizenCount: 0, Months: 3, PerMonthTick: 10 * time.Millisecond, Measured: true}},
+		{"zero Months", PerfResult{CitizenCount: 1000, Months: 0, PerMonthTick: 10 * time.Millisecond, Measured: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+			rec := PerfRecord{CommitHash: "attacker", Preset: "1M", Result: tc.result}
+
+			err := AppendResult(path, rec)
+			wantCode(t, err, codeImplausibleResult)
+
+			if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+				t.Fatalf("AppendResult rejected the implausible record but still touched %q on disk (stat err: %v)", path, statErr)
+			}
+		})
+	}
+}
+
+// TestLoadLatestBaseline_LineOverMaxBytesIsCorruptAndRecoverable is
+// ASM-355's regression test: the BUG-074 fix removed bufio.Scanner's
+// 64KiB token cap entirely by switching to bufio.Reader.ReadString, which
+// reads a line of ANY length — so a single multi-GiB line would OOM the
+// reader rather than fail gracefully. readResultsLine re-adds a GENEROUS
+// finite ceiling (maxResultsLineBytes, 1 MiB) with its own CorruptLine
+// path. This test proves two things: (1) a line OVER the ceiling is
+// reported as a CorruptLine (never silently trusted as a baseline, never
+// read unbounded), and (2) a good, later record is still recovered past
+// it — the same BUG-054 recovery contract as a torn line.
+func TestLoadLatestBaseline_LineOverMaxBytesIsCorruptAndRecoverable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
+
+	// One line strictly longer than maxResultsLineBytes, padded with a
+	// huge junk field — mirroring the SHAPE of a PhaseTimings blowup that
+	// a real oversized record would take — followed by a genuinely valid,
+	// measured record.
+	oversized := `{"commitHash":"oversized","preset":"1M","junk":"` + strings.Repeat("x", maxResultsLineBytes+4096) + `"}` + "\n"
+	if err := os.WriteFile(path, []byte(oversized), 0o644); err != nil {
+		t.Fatalf("writing over-ceiling line: %v", err)
+	}
+
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 77 * time.Millisecond, Measured: true}}
+	if err := AppendResult(path, newer); err != nil {
+		t.Fatalf("AppendResult(newer): %v", err)
+	}
+
+	got, _, corrupt, err := LoadLatestBaseline(path, "1M", nil)
+	if err != nil {
+		t.Fatalf("LoadLatestBaseline: got err %v, want nil — a good later record must recover past the over-ceiling line (ASM-355)", err)
+	}
+	if got == nil || got.PerMonthTick != newer.Result.PerMonthTick {
+		t.Fatalf("LoadLatestBaseline = %+v, want the later good record (%v) — the over-ceiling line must not hide it", got, newer.Result.PerMonthTick)
+	}
+	if len(corrupt) != 1 {
+		t.Fatalf("corrupt lines = %+v, want exactly 1 (the over-ceiling line) — GR#17 requires it be reported, not silently dropped", corrupt)
+	}
+	if corrupt[0].LineNo != 1 {
+		t.Fatalf("corrupt line number = %d, want 1 (the over-ceiling line is the 1st line)", corrupt[0].LineNo)
 	}
 }

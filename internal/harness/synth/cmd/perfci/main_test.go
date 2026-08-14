@@ -270,51 +270,41 @@ func TestRun_AcceptedRegistryEntryForADifferentCommitDoesNotRescue(t *testing.T)
 	}
 }
 
-// TestRun_AcceptedRegistryRescuesZeroValuedFirstRecordLock is BUG-094's own
-// regression test, reproducing the EXACT scenario named in its report
-// rather than TestRun_AcceptedRegistryRescuesCouldNotEvaluate's ScaleMismatch
-// stand-in: a degenerate all-zero (CitizenCount=0, Months=0,
-// PerMonthTick=0) PerfRecord with Measured=true is the FIRST record ever
-// seen for a preset.
-//
-// That record is plausible under PerfResult.ImplausibleReason() (ASM-374
-// deliberately checks only for NEGATIVE values, to avoid false positives
-// against this package's own zero-valued test fixtures — see perf.go), so
+// TestRun_AcceptedRegistryRescuesBelowNoiseFloorFirstRecordLock is
+// BUG-094's rescue-path regression test, updated for ASM-374. The
+// original version seeded an all-zero (CitizenCount=0, Months=0,
+// PerMonthTick=0) first record — but ASM-374 closed that shape at the
+// WRITE boundary: a zero-valued CitizenCount/Months is now implausible,
+// so AppendResult rejects it outright (see the zero-value cases in the
+// synth package's tests). The still-legitimate degenerate seed is a
+// BELOW-NOISE-FLOOR one: CitizenCount and Months match the follow-up
+// run's scale, but PerMonthTick=0 — a real, if degenerate, walking-
+// skeleton measurement (TickTime==0 is documented in limits.go's
+// MinMeasurableDuration re-derivation). Such a record is plausible, so
 // LoadLatestBaseline's seeding branch (results.go, `case anchor == nil`)
-// takes it unconditionally as both baseline and anchor: that branch never
-// consults MinMeasurableDuration. Every subsequent real measurement then
-// compares a real PerMonthTick against a below-floor (zero) baseline,
-// which CompareToBaseline's noise-floor check (baseline.go) reports as
-// BelowNoiseFloor — CouldNotEvaluate() — regardless of how fast or slow
-// the real run itself measured, which is what makes this test
-// deterministic rather than a real-wall-clock race: baseline=0 is below
-// MinMeasurableDuration no matter what.
-//
-// Pre-BUG-095-fold-in, this was a genuine permanent lock: -accept-regression
-// only fired on cmp.Regressed, and a BelowNoiseFloor verdict always has
-// Regressed==false, so the escape hatch could never reach it. This test
-// proves the CURRENT accept path (main.go's registry check now runs before
-// the CouldNotEvaluate branch, ahead of both Regressed and
-// CouldNotEvaluate) reaches and rescues this exact degenerate-seed shape,
-// not only the ScaleMismatch shape the sibling test exercises.
-func TestRun_AcceptedRegistryRescuesZeroValuedFirstRecordLock(t *testing.T) {
+// takes it as both baseline and anchor without consulting
+// MinMeasurableDuration; every subsequent real measurement then compares
+// against a below-floor (zero) baseline, which CompareToBaseline's
+// noise-floor check reports as BelowNoiseFloor — CouldNotEvaluate() —
+// regardless of how the real run measured. That is what makes this test
+// deterministic rather than a real-wall-clock race, and it is the exact
+// "permanently stuck baseline" lock BUG-094's fix must still reach.
+func TestRun_AcceptedRegistryRescuesBelowNoiseFloorFirstRecordLock(t *testing.T) {
 	results := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	// The degenerate first record BUG-094 named: all-zero, but Measured
-	// is true (as a hand-crafted record bypassing RunPerf would report —
-	// AppendResult's own Measured==true gate, BUG-073, is satisfied) and
-	// ImplausibleReason() is "" (all three checked fields are ==0, not
-	// <0), so nothing already in the pipeline rejects it.
-	zeroSeed := synth.PerfRecord{
+	// A plausible below-noise-floor first record: the seed's scale
+	// (CitizenCount=50, Months=1) matches the follow-up run below, so the
+	// comparison is skipped for BelowNoiseFloor, not ScaleMismatch.
+	belowFloorSeed := synth.PerfRecord{
 		CommitHash: "degenerate-seed-commit",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 0, Months: 0, PerMonthTick: 0, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 0, Measured: true},
 	}
-	if zeroSeed.Result.ImplausibleReason() != "" {
-		t.Fatalf("precondition failed: zero-valued record should be plausible (ASM-374 checks only <0), got reason %q", zeroSeed.Result.ImplausibleReason())
+	if reason := belowFloorSeed.Result.ImplausibleReason(); reason != "" {
+		t.Fatalf("precondition failed: a below-noise-floor (PerMonthTick=0) record should be plausible, got reason %q", reason)
 	}
-	if err := synth.AppendResult(results, zeroSeed); err != nil {
-		t.Fatalf("seeding the degenerate zero-valued first record: %v", err)
+	if err := synth.AppendResult(results, belowFloorSeed); err != nil {
+		t.Fatalf("seeding the below-noise-floor first record: %v", err)
 	}
 
 	// (1) An ordinary subsequent run, no registry entry -- still locked,
@@ -331,22 +321,22 @@ func TestRun_AcceptedRegistryRescuesZeroValuedFirstRecordLock(t *testing.T) {
 		"-accepted-regressions", filepath.Join(t.TempDir(), "no-such-registry.json"),
 	}, &out1, &err1)
 	if code != exitCouldNotEvaluate {
-		t.Fatalf("run() against a zero-valued baseline with no registry entry = %d, want %d (locked, BUG-094); stdout=%s stderr=%s", code, exitCouldNotEvaluate, out1.String(), err1.String())
+		t.Fatalf("run() against a below-noise-floor baseline with no registry entry = %d, want %d (locked, BUG-094); stdout=%s stderr=%s", code, exitCouldNotEvaluate, out1.String(), err1.String())
 	}
 	after, readErr := os.ReadFile(results)
 	if readErr != nil {
 		t.Fatalf("reading results file after locked run: %v", readErr)
 	}
 	if string(before) != string(after) {
-		t.Fatalf("results file changed after a could-not-evaluate run against a zero-valued baseline — an unevaluated measurement must never become the new baseline.\nbefore=%s\nafter=%s", before, after)
+		t.Fatalf("results file changed after a could-not-evaluate run against a below-noise-floor baseline — an unevaluated measurement must never become the new baseline.\nbefore=%s\nafter=%s", before, after)
 	}
 
-	// (2) The SAME zero-valued lock, but this run's exact commit is named
-	// in the accepted-regressions registry — BUG-094's endorsed fix: the
-	// human override must reach a permanently could-not-evaluate baseline,
-	// not only an ordinary Regressed==true comparison.
+	// (2) The SAME below-noise-floor lock, but this run's exact commit is
+	// named in the accepted-regressions registry — BUG-094's endorsed fix:
+	// the human override must reach a permanently could-not-evaluate
+	// baseline, not only an ordinary Regressed==true comparison.
 	registryPath := filepath.Join(t.TempDir(), "perf-accepted-regressions.json")
-	registryContent := `[{"preset": "1M", "commitHash": "real-follow-up-commit", "reason": "BUG-094: rescuing a zero-valued degenerate seed baseline"}]`
+	registryContent := `[{"preset": "1M", "commitHash": "real-follow-up-commit", "reason": "BUG-094: rescuing a below-noise-floor degenerate seed baseline"}]`
 	if err := os.WriteFile(registryPath, []byte(registryContent), 0o644); err != nil {
 		t.Fatalf("writing registry fixture: %v", err)
 	}
@@ -357,7 +347,7 @@ func TestRun_AcceptedRegistryRescuesZeroValuedFirstRecordLock(t *testing.T) {
 		"-accepted-regressions", registryPath,
 	}, &out2, &err2)
 	if code != 0 {
-		t.Fatalf("run() with a matching registry entry against a zero-valued lock = %d, want 0 (rescued, BUG-094); stdout=%s stderr=%s", code, out2.String(), err2.String())
+		t.Fatalf("run() with a matching registry entry against a below-noise-floor lock = %d, want 0 (rescued, BUG-094); stdout=%s stderr=%s", code, out2.String(), err2.String())
 	}
 	if !bytes.Contains(out2.Bytes(), []byte("ACCEPTING")) {
 		t.Fatalf("stdout = %q, want an ACCEPTING banner", out2.String())
@@ -389,5 +379,114 @@ func TestRun_MalformedAcceptedRegistryIsAUsageError(t *testing.T) {
 	}, &stdout, &stderr)
 	if code != 2 {
 		t.Fatalf("run() with a malformed accepted-regressions registry = %d, want 2 (usage/IO error); stderr=%s", code, stderr.String())
+	}
+}
+
+// TestFinishGate_RegressedRunIsNeverRecorded is ASM-353's core regression
+// test, driven through finishGate directly because a genuine Regressed
+// verdict is unreachable through run() itself today: a real wall-clock
+// RunPerf at walking-skeleton scale always measures below
+// MinMeasurableDuration, so CompareToBaseline reports BelowNoiseFloor
+// (could-not-evaluate), never Regressed. The pre-fix run() appended rec
+// unconditionally and only then branched on cmp.Regressed for the exit
+// code — so a regressed run still landed in the results file and, via
+// ci.yml's `if: always()` cache save, still became a candidate for the
+// next run's comparison point. This test is RED against that shape and
+// GREEN against finishGate, which must exit 1 AND leave the results file
+// untouched — a regressed run must never become the new baseline.
+func TestFinishGate_RegressedRunIsNeverRecorded(t *testing.T) {
+	results := filepath.Join(t.TempDir(), "perf-results.ndjson")
+	var stderr bytes.Buffer
+
+	rec := synth.PerfRecord{
+		CommitHash: "regressed-commit",
+		Preset:     "1M",
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 150 * time.Millisecond, Measured: true},
+	}
+	cmp := synth.BaselineComparison{HasBaseline: true, Regressed: true, Message: "REGRESSED (step): baseline=100ms current=150ms delta=50.0%"}
+
+	code := finishGate(results, rec, cmp, "test-correlation", &stderr)
+	if code != 1 {
+		t.Fatalf("finishGate() = %d, want 1 (genuine regression); stderr=%s", code, stderr.String())
+	}
+	if _, statErr := os.Stat(results); !os.IsNotExist(statErr) {
+		t.Fatalf("finishGate recorded a regressed run to %q — ASM-353: a regressed run must never become the new baseline (stat err: %v)", results, statErr)
+	}
+	if stderr.Len() == 0 {
+		t.Fatal("finishGate returned 1 but printed no regression signal to stderr — a regressed gate must be loud, not silent (GR#1)")
+	}
+}
+
+// TestFinishGate_PassingRunIsRecorded is the companion zero-false-positive
+// check: the ASM-353 fix must not suppress the ordinary pass path, which
+// still appends the measurement so the next run has a real baseline to
+// compare against.
+func TestFinishGate_PassingRunIsRecorded(t *testing.T) {
+	results := filepath.Join(t.TempDir(), "perf-results.ndjson")
+	var stderr bytes.Buffer
+
+	rec := synth.PerfRecord{
+		CommitHash: "pass-commit",
+		Preset:     "1M",
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true},
+	}
+	cmp := synth.BaselineComparison{HasBaseline: true}
+
+	code := finishGate(results, rec, cmp, "test-correlation", &stderr)
+	if code != 0 {
+		t.Fatalf("finishGate() = %d, want 0 (genuine pass); stderr=%s", code, stderr.String())
+	}
+	data, err := os.ReadFile(results)
+	if err != nil {
+		t.Fatalf("reading recorded results: %v", err)
+	}
+	if !bytes.Contains(data, []byte("pass-commit")) {
+		t.Fatalf("results file = %s, want the passing run recorded (ASM-353 must not suppress the pass path)", data)
+	}
+}
+
+// TestRun_AcceptPathUsesDefaultRegistryPathWhenFlagOmitted proves the
+// accept path works through cmd/perfci's DEFAULT -accepted-regressions
+// path (perf-accepted-regressions.json, resolved relative to the working
+// directory) — which is exactly how .github/workflows/ci.yml's perf-smoke
+// and perf-1m-probe jobs reach the accept-regression registry: both now
+// pass the flag explicitly, but the path itself is a checked-out repo-
+// root file. ASM-375 was raised because the accept-regression hatch was
+// wired through only one CI job; this test pins the default-path wiring
+// both jobs share, so a future regression in the flag default or the
+// path cannot silently remove every CI job's escape hatch.
+func TestRun_AcceptPathUsesDefaultRegistryPathWhenFlagOmitted(t *testing.T) {
+	dir := t.TempDir()
+	results := filepath.Join(dir, "perf-results.ndjson")
+
+	seed := synth.PerfRecord{
+		CommitHash: "seed",
+		Preset:     "1M",
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, Measured: true},
+	}
+	if err := synth.AppendResult(results, seed); err != nil {
+		t.Fatalf("seeding baseline: %v", err)
+	}
+
+	// Write the registry at the DEFAULT path, then chdir so that path
+	// resolves into dir — simulating a CI checkout where the repo root
+	// holds perf-accepted-regressions.json and perfci is run from there
+	// with no -accepted-regressions flag.
+	registry := `[{"preset": "1M", "commitHash": "default-path-commit", "reason": "default registry path works for CI jobs that omit the flag (ASM-375)"}]`
+	if err := os.WriteFile(filepath.Join(dir, "perf-accepted-regressions.json"), []byte(registry), 0o644); err != nil {
+		t.Fatalf("writing registry fixture: %v", err)
+	}
+	t.Chdir(dir)
+
+	var out, errb bytes.Buffer
+	code := run([]string{
+		"-preset", "1M", "-citizens", "500", "-months", "1", "-results", results,
+		"-commit", "default-path-commit",
+	}, &out, &errb)
+	if code != 0 {
+		t.Fatalf("run() relying on the default -accepted-regressions path = %d, want 0 (rescued); stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("ACCEPTING")) {
+		t.Fatalf("stdout = %q, want an ACCEPTING banner via the default registry path (ASM-375)", out.String())
 	}
 }

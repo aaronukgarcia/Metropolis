@@ -163,6 +163,55 @@ type CorruptLine struct {
 	Err    error
 }
 
+// maxResultsLineBytes is ASM-355's finite ceiling on a single NDJSON
+// results line (measured on the raw line, INCLUDING its trailing '\n').
+// The BUG-074 fix removed bufio.Scanner's 64KiB token cap entirely by
+// switching to bufio.Reader.ReadString('\n'), which reads a line of ANY
+// length into memory — trading one wrong-shaped failure (the scan aborts
+// permanently with ErrTooLong) for another (a single multi-GB line OOMs
+// the reader outright). A real PerfRecord line is a few hundred bytes (a
+// handful of phases, counters, and a commit hash), so 1 MiB is
+// deliberately generous headroom no genuine record can approach, while
+// still bounding per-line memory far below the failure ASM-355 names. A
+// line longer than this is recorded as a CorruptLine and skipped — the
+// same recovery contract as a torn line — rather than read unbounded or
+// allowed to abort the whole scan.
+const maxResultsLineBytes = 1 << 20 // 1 MiB
+
+// readResultsLine reads one '\n'-terminated line from r without trusting
+// the file's line lengths: it accumulates the line incrementally and, the
+// moment it exceeds maxResultsLineBytes, stops retaining any further
+// bytes and switches to draining (discarding) the remainder of the line,
+// so memory stays bounded no matter how large a single line is (ASM-355).
+// The returned line is the raw content INCLUDING any trailing '\n'
+// (matching bufio.Reader.ReadString's shape so the caller's empty-line
+// semantics are preserved); oversized is true when the line exceeded the
+// ceiling, in which case line holds only a truncated prefix. err is
+// io.EOF at a clean end of stream, or the underlying read error.
+func readResultsLine(r *bufio.Reader) (line []byte, oversized bool, err error) {
+	for {
+		frag, rerr := r.ReadSlice('\n')
+		if len(frag) > 0 && !oversized {
+			line = append(line, frag...)
+			if len(line) > maxResultsLineBytes {
+				oversized = true
+			}
+		}
+		// once oversized, further fragments are discarded, not retained.
+		if rerr != bufio.ErrBufferFull {
+			if rerr == io.EOF {
+				err = io.EOF
+			} else if rerr != nil {
+				err = rerr
+			}
+			return line, oversized, err
+		}
+		// rerr == bufio.ErrBufferFull: the internal buffer filled without
+		// finding '\n', so this line continues — loop to read (and, once
+		// oversized, discard) the next fragment.
+	}
+}
+
 // LoadLatestBaseline reads path (an AppendResult-written NDJSON file)
 // and reconstructs TWO reference points for preset — baseline (the
 // step-to-step "last known good") and anchor (BUG-083's fixed
@@ -186,18 +235,16 @@ type CorruptLine struct {
 // usable record for preset is replayed forward in commit order through
 // baseline.go's own CompareToBaseline: baseline only advances to a
 // record when that record, compared against the CURRENT reconstructed
-// baseline and anchor, is NOT regressed by either check. A record that
-// WOULD have regressed still appears in the file (AC-5's graphing
-// schema is unaffected — every evaluated run is still appended by
-// cmd/perfci) but is simply skipped when reconstructing what the next
-// run should compare against — baseline freezes at the last record that
-// actually passed, rather than sliding forward on a regression that
-// slipped through (fixing, for free, the .github/workflows/ci.yml
-// `if: always()` interaction: even a genuinely regressed run that reds
-// out CI still gets appended to the cache, but no longer becomes a
-// future baseline candidate, because THIS function decides that at read
-// time by re-evaluating the value, not by trusting whatever was written
-// last).
+// baseline and anchor, is NOT regressed by either check. (ASM-353:
+// cmd/perfci no longer appends a regressed run at all — see
+// cmd/perfci's finishGate — so a record that WOULD have regressed should
+// not even appear in a normally-written file; this replay-freeze remains
+// as the read-boundary defence for the second-writer routes
+// BUG-073/085/095 name and for legacy files written before ASM-353. Any
+// such record found here is simply skipped when reconstructing what the
+// next run should compare against, so baseline freezes at the last
+// record that actually passed rather than sliding forward on a
+// regression that slipped through.)
 //
 // anchor is seeded from the FIRST usable record found for preset, and
 // otherwise never moves except when a record explicitly sets
@@ -223,8 +270,9 @@ type CorruptLine struct {
 // same (nil, nil, nil, nil) for the identical reason: a fresh scale
 // preset has no prior baseline either.
 //
-// Malformed, unmeasured (BUG-073), or implausible (BUG-085) lines are
-// collected as CorruptLine entries and skipped, NOT treated as fatal,
+// Malformed, oversized (ASM-355), unmeasured (BUG-073), or implausible
+// (BUG-085) lines are collected as CorruptLine entries and skipped, NOT
+// treated as fatal,
 // as long as a good record for preset is still found somewhere in the
 // file (BUG-054's recovery contract) — the returned error is nil in
 // that case, but the corrupt-line list is never empty, so a caller that
@@ -272,7 +320,13 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 	// enforced. bufio.Reader.ReadString('\n') has no fixed token cap —
 	// any single line, however large, is read in full — which removes
 	// the hidden ceiling entirely rather than merely raising it to a
-	// still-crossable number.
+	// still-crossable number. ASM-355 then closed the downside of that
+	// removal: an unbounded per-line read trades one failure mode for
+	// another (a single multi-GB line OOMs the reader outright).
+	// readResultsLine below re-adds a GENEROUS finite ceiling
+	// (maxResultsLineBytes) with its own CorruptLine path, so an
+	// oversized line is skipped like a torn one instead of either
+	// aborting the scan or exhausting memory.
 	reader := bufio.NewReader(f)
 	lineNo := 0
 	// BUG-086: the corrupt-line list above is whole-FILE-grained (a
@@ -316,18 +370,31 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 	// what other presets' records prove about the file's general format.
 	requestedPresetCorruptSeen := false
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, oversized, readErr := readResultsLine(reader)
 		if readErr != nil && readErr != io.EOF {
 			return nil, nil, corrupt, fmt.Errorf("synth: reading results file %q: %w", path, readErr)
 		}
-		// line == "" only when ReadString read nothing at all before
-		// hitting EOF (i.e. the file ended cleanly on the previous
-		// line's newline) — that phantom final read is not a line and
-		// must not be counted or parsed. Anything else read, even a
-		// final line with no trailing newline, is real content.
-		if line != "" {
+		// len(line) == 0 only when the read hit EOF without reading any
+		// bytes (i.e. the file ended cleanly on the previous line's
+		// newline) — that phantom final read is not a line and must not
+		// be counted or parsed. Anything else read, even a final line
+		// with no trailing newline, is real content.
+		if oversized {
 			lineNo++
-			trimmed := strings.TrimRight(line, "\r\n")
+			// ASM-355: a line over maxResultsLineBytes is recorded as a
+			// CorruptLine (unattributable — its preset was never read) and
+			// skipped, exactly like a torn line, so a good later record is
+			// still recovered rather than the whole scan aborting or the
+			// reader exhausting memory on an unbounded line.
+			corrupt = append(corrupt, CorruptLine{LineNo: lineNo, Err: fmt.Errorf("record at line %d exceeds maxResultsLineBytes (%d bytes) -- refusing to read an unbounded line (ASM-355)", lineNo, maxResultsLineBytes)})
+			if readErr == io.EOF {
+				break
+			}
+			continue
+		}
+		if len(line) != 0 {
+			lineNo++
+			trimmed := strings.TrimRight(string(line), "\r\n")
 			var rec PerfRecord
 			if unmarshalErr := json.Unmarshal([]byte(trimmed), &rec); unmarshalErr != nil {
 				// BUG-054: do NOT abort the whole read on the first

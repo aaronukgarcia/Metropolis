@@ -96,10 +96,11 @@
 //	         this run becomes the new baseline) or the comparison ran
 //	         and found no regression over synth.RegressionThreshold.
 //	exit 1 — genuine regression: the comparison ran and found one
-//	         (AC-10). This run's measurement is still recorded, so the
-//	         next run compares against the branch's actual history
-//	         rather than silently re-comparing against the same old
-//	         baseline forever.
+//	         (AC-10). This run's measurement is NOT recorded (ASM-353):
+//	         a regressed run must never become the new baseline, so it
+//	         is reported loudly and then discarded rather than filed as
+//	         history the next run could ever compare against. See
+//	         finishGate's doc comment for the full rationale.
 //	exit exitCouldNotEvaluate (3) — the comparison was SKIPPED
 //	         (synth.BaselineComparison.CouldNotEvaluate(): ScaleMismatch
 //	         or BelowNoiseFloor) even though a baseline existed to judge
@@ -271,14 +272,36 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitCouldNotEvaluate
 	}
 
-	if err := synth.AppendResult(*results, rec); err != nil {
-		_, _ = fmt.Fprintf(stderr, "perfci: recording result: %v\n", err)
-		return 2
-	}
+	return finishGate(*results, rec, cmp, correlationID, stderr)
+}
 
+// finishGate applies the gate's post-comparison verdict to the results
+// file and returns the process exit code. This is the single place the
+// "record or not" decision lives, split out of run so a test can drive a
+// hand-built BaselineComparison deterministically — a real wall-clock
+// RunPerf at walking-skeleton scale always measures below
+// MinMeasurableDuration, so a genuine Regressed verdict is unreachable
+// through run() itself today.
+//
+// # ASM-353: a genuinely regressed run must NEVER become the new baseline
+//
+// The pre-fix shape appended rec unconditionally and only then branched
+// on cmp.Regressed for the exit code — so a run that reddened the gate
+// still landed in the results file, and (via .github/workflows/ci.yml's
+// `if: always()` cache save) still became a candidate for the next run's
+// comparison point. A poisoned baseline silently corrupts the 1M gate.
+// The fix mirrors the could-not-evaluate branch above: a regressed run is
+// reported loudly and discarded, never recorded. Only a genuine pass (or
+// the registry-corroborated acceptance branch, which returns before ever
+// reaching here) may write to the results file.
+func finishGate(resultsPath string, rec synth.PerfRecord, cmp synth.BaselineComparison, correlationID string, stderr io.Writer) int {
 	if cmp.Regressed {
 		_, _ = fmt.Fprintln(stderr, synth.RegressionError(correlationID, cmp))
 		return 1
+	}
+	if err := synth.AppendResult(resultsPath, rec); err != nil {
+		_, _ = fmt.Fprintf(stderr, "perfci: recording result: %v\n", err)
+		return 2
 	}
 	return 0
 }

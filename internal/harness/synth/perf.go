@@ -111,28 +111,38 @@ type PerfResult struct {
 // plausible, else a human-readable reason naming exactly which field
 // failed and why a genuine measurement can never produce it:
 //
-//   - CitizenCount < 0: ValidateParams (params.go) rejects any
-//     Params.CitizenCount below MinSyntheticCitizens (1) BEFORE
-//     Generate allocates anything, so RunPerf can never return a
-//     negative CitizenCount.
-//   - Months < 0: RunPerf itself rejects months <= 0 with
-//     codeInvalidMonths before any measurement begins.
+//   - CitizenCount < MinSyntheticCitizens: ValidateParams (params.go)
+//     rejects any Params.CitizenCount below MinSyntheticCitizens (1)
+//     BEFORE Generate allocates anything, so RunPerf can never return a
+//     zero OR negative CitizenCount.
+//   - Months <= 0: RunPerf itself rejects months <= 0 with
+//     codeInvalidMonths before any measurement begins, so a zero-month
+//     record is exactly as impossible as a negative one.
 //   - PerMonthTick < 0: derived as TickTime / time.Duration(months),
 //     the quotient of two non-negative measured quantities (a
 //     wall-clock duration and a positive month count), which cannot be
 //     negative.
 //
-// Deliberately checks < 0 only, not <= 0 or some positive floor: this
-// package's own tests legitimately construct zero-valued PerfResult{}
-// literals (results_test.go, baseline_test.go) to exercise storage/
-// comparison logic in isolation without a full realistic measurement —
-// a zero CitizenCount/Months is a degenerate, uninteresting input, not
-// a structurally IMPOSSIBLE one the way a negative value is. Widening
-// this to reject zero would create false positives against that
-// established, legitimate test convention; BUG-085 itself named
-// negative values specifically as "not merely implausible, it is
-// IMPOSSIBLE" — the zero-false-positive property this check exists to
-// keep.
+// # ASM-374: zero-valued CitizenCount/Months are now rejected too
+//
+// The original check deliberately used `< 0` only, reasoning that this
+// package's own tests construct zero-valued PerfResult{} literals and
+// that zero is "degenerate, not impossible". That reasoning confused a
+// TEST convenience with a STRUCTURAL guarantee: a hand-crafted
+// CitizenCount=0/Months=0 record — which AppendResult would otherwise
+// persist as a trusted baseline, and which LoadLatestBaseline's seeding
+// branch would then take verbatim as both baseline and anchor — is
+// exactly as unreachable from a real RunPerf call as a negative one,
+// because RunPerf's own months<=0 guard and ValidateParams'
+// MinSyntheticCitizens floor make zero impossible, not merely
+// degenerate. The zero-valued test fixtures that used to lean on that
+// leniency have been rewritten to carry a real MinSyntheticCitizens/1-
+// month floor (results_test.go, perf_test.go, and cmd/perfci's
+// main_test.go), so rejecting zero no longer causes false positives.
+// PerMonthTick==0 remains allowed for the separate reason above: TickTime
+// can genuinely resolve to zero at
+// walking-skeleton scale (limits.go's MinMeasurableDuration
+// re-derivation documents several real runs where it did).
 //
 // # BUG-096: the negative-only check has no UPPER bound
 //
@@ -160,10 +170,10 @@ type PerfResult struct {
 // constant and the ASM logged against choosing it.
 func (r PerfResult) ImplausibleReason() string {
 	switch {
-	case r.CitizenCount < 0:
-		return fmt.Sprintf("CitizenCount=%d is negative -- ValidateParams rejects any CitizenCount below %d before Generate ever runs, so RunPerf cannot produce this", r.CitizenCount, MinSyntheticCitizens)
-	case r.Months < 0:
-		return fmt.Sprintf("Months=%d is negative -- RunPerf rejects months<=0 with codeInvalidMonths before any measurement begins", r.Months)
+	case r.CitizenCount < MinSyntheticCitizens:
+		return fmt.Sprintf("CitizenCount=%d is below the minimum of %d -- ValidateParams rejects any CitizenCount below %d before Generate ever runs, so RunPerf cannot produce this (ASM-374: zero is as structurally impossible as negative)", r.CitizenCount, MinSyntheticCitizens, MinSyntheticCitizens)
+	case r.Months <= 0:
+		return fmt.Sprintf("Months=%d is not positive -- RunPerf rejects months<=0 with codeInvalidMonths before any measurement begins (ASM-374: zero is as structurally impossible as negative)", r.Months)
 	case r.PerMonthTick < 0:
 		return fmt.Sprintf("PerMonthTick=%s is negative -- it is TickTime/Months, the quotient of two non-negative measured quantities", r.PerMonthTick)
 	case r.PerMonthTick > MaxPlausiblePerMonthTick:

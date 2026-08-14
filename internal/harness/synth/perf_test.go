@@ -163,6 +163,8 @@ func TestAppendResult_RejectsMismatchedPhaseHookCount(t *testing.T) {
 		CommitHash: "attacker",
 		Preset:     "1M",
 		Result: PerfResult{
+			CitizenCount:   MinSyntheticCitizens,
+			Months:         1,
 			PerMonthTick:   1 * time.Millisecond,
 			PhaseHookCount: PhaseHookCountInHeadlessPath() + 1,
 			Measured:       true,
@@ -194,4 +196,38 @@ func TestLoadLatestBaseline_GiganticFirstRecordNoLongerSilentlySeeds(t *testing.
 	}
 	err := AppendResult(path, gigantic)
 	wantCode(t, err, codeImplausibleResult)
+}
+
+// TestImplausibleReason_RejectsZeroValuedCitizenCount is ASM-374's core
+// regression test: the pre-fix check used `< 0` only, so a hand-crafted
+// CitizenCount=0 record — unreachable from a real RunPerf call, which is
+// floor-capped at MinSyntheticCitizens by ValidateParams — was treated as
+// plausible and could be persisted as a trusted baseline. RED against the
+// pre-fix ImplausibleReason (returns ""); GREEN against the fix.
+func TestImplausibleReason_RejectsZeroValuedCitizenCount(t *testing.T) {
+	r := PerfResult{CitizenCount: 0, Months: 3, PerMonthTick: 10 * time.Millisecond, Measured: true}
+	if reason := r.ImplausibleReason(); reason == "" {
+		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for CitizenCount=0 (ASM-374: zero is as structurally impossible as negative)")
+	}
+}
+
+// TestImplausibleReason_RejectsZeroValuedMonths is ASM-374's Months half.
+func TestImplausibleReason_RejectsZeroValuedMonths(t *testing.T) {
+	r := PerfResult{CitizenCount: 1000, Months: 0, PerMonthTick: 10 * time.Millisecond, Measured: true}
+	if reason := r.ImplausibleReason(); reason == "" {
+		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for Months=0 (ASM-374)")
+	}
+}
+
+// TestImplausibleReason_AllowsZeroPerMonthTick is ASM-374's zero-false-
+// positive guard: PerMonthTick==0 is a REAL measurement (TickTime can
+// genuinely resolve to zero at walking-skeleton scale — limits.go's
+// MinMeasurableDuration re-derivation documents real runs where it did),
+// so widening the CitizenCount/Months checks must NOT also reject a zero
+// PerMonthTick.
+func TestImplausibleReason_AllowsZeroPerMonthTick(t *testing.T) {
+	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 0, Measured: true}
+	if reason := r.ImplausibleReason(); reason != "" {
+		t.Fatalf("ImplausibleReason() = %q, want \"\" for a zero PerMonthTick (a real, degenerate walking-skeleton measurement)", reason)
+	}
 }

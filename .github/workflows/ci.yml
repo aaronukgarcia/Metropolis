@@ -268,23 +268,23 @@ jobs:
   # AC-5), the command actually running, and a non-zero exit actually
   # failing this job (AC-10 verified end to end, not just unit-tested).
   #
-  # BUG-083: the "Save perf-results baseline" step below is `if: always()`
-  # — a genuine regression that reddens THIS job still gets its
-  # measurement written to perf-results.ndjson before AppendResult
-  # returns, and that file is cached regardless of the job's own
-  # pass/fail result. Before BUG-083's fix this meant a caught, red-CI
-  # regression still silently became the next run's comparison point.
-  # It no longer does: cmd/perfci's synth.LoadLatestBaseline
-  # reconstructs the baseline by REPLAYING history and freezing at the
-  # last record that did not regress, rather than trusting whatever was
-  # appended last — so this job can keep unconditionally saving its
-  # cache (needed so a REGRESSED run's number is still visible in
-  # history/graphing, AC-5) without that number ever becoming a future
-  # baseline candidate on its own. See internal/harness/synth/results.go's
-  # LoadLatestBaseline doc comment for the full mechanism, including the
-  # live-verified 30-commit, 13.27x, zero-signal drift this closes and
-  # why the fix needed a SECOND, anchor-based check
-  # (CumulativeRegressionThreshold) alongside the freeze itself.
+  # BUG-083 + ASM-353: the "Save perf-results baseline" step below is
+  # `if: always()`, but it no longer has a poisoned baseline to save.
+  # cmd/perfci's finishGate now refuses to append a genuinely regressed
+  # run AT ALL (ASM-353: a regressed run must never become the new
+  # baseline), and LoadLatestBaseline reconstructs the baseline by
+  # REPLAYING history and freezing at the last record that did not
+  # regress as a read-boundary defence (BUG-083, still needed for legacy
+  # files and the second-writer routes BUG-073/085/095 name). Before
+  # those two fixes a caught, red-CI regression silently became the next
+  # run's comparison point, because it was appended before exit and then
+  # cached regardless of the job's own pass/fail result. The
+  # `if: always()` save is kept so a genuine PASS's record (and the cache
+  # itself) is always persisted even if a later step hiccups. See
+  # internal/harness/synth/results.go's LoadLatestBaseline doc comment
+  # for the full replay mechanism, including the live-verified 30-commit,
+  # 13.27x, zero-signal drift it closes and the SECOND, anchor-based
+  # check (CumulativeRegressionThreshold) alongside the freeze itself.
   #
   # Deliberately -citizens-overridden to a small count (see cmd/perfci's
   # -citizens flag doc comment), NOT the real 1M-citizen preset AC-6 names
@@ -370,13 +370,23 @@ jobs:
       # was a plausible-but-wrong story the bash migration disproved.
       # The fix is the same thing perf-1m-probe already does: BUILD the
       # binary and run it directly, so $? is perfci's own exit code.
+      #
+      # ASM-375: -accepted-regressions is wired here explicitly (same
+      # flag and path as perf-1m-probe below) so perf-smoke has the SAME
+      # deliberate, human-reviewed escape hatch perf-1m-probe does. The
+      # file itself (perf-accepted-regressions.json) is checked out with
+      # the rest of the repo, so a regression acceptance is recorded by a
+      # reviewed commit, never by a value typed into this job — the exact
+      # BUG-095 mechanism. It is safe on this automatic push/PR job
+      # precisely because the registry can only gain an entry via a real
+      # commit, not via a workflow input.
       - name: perfci (1M preset, -citizens smoke override)
         shell: bash
         run: |
           set -e
           go build -o perfci-smoke.exe ./internal/harness/synth/cmd/perfci
           set +e
-          ./perfci-smoke.exe -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }}
+          ./perfci-smoke.exe -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }} -accepted-regressions perf-accepted-regressions.json
           code=$?
           set -e
           if [ "$code" -eq 3 ]; then
@@ -581,9 +591,10 @@ jobs:
       # accept, that acceptance is recorded by committing an entry to
       # perf-accepted-regressions.json (checked out into this job's
       # working directory along with the rest of the repo, and read from
-      # cmd/perfci's default -accepted-regressions path with no extra
-      # flag needed here) BEFORE re-dispatching this job for that commit
-      # -- an ordinary, reviewed PR, not a value typed into this form.
+      # the explicit -accepted-regressions path passed below -- ASM-375
+      # wires it here AND in perf-smoke so both jobs share the same
+      # hatch) BEFORE re-dispatching this job for that commit -- an
+      # ordinary, reviewed PR, not a value typed into this form.
       - name: Measure real 1M-citizen run (wall time + peak memory)
         shell: pwsh
         run: |
@@ -594,6 +605,7 @@ jobs:
           $psi.ArgumentList.Add("-months"); $psi.ArgumentList.Add("3")
           $psi.ArgumentList.Add("-results"); $psi.ArgumentList.Add("perf-results-1m-real.ndjson")
           $psi.ArgumentList.Add("-commit"); $psi.ArgumentList.Add("${{ github.sha }}")
+          $psi.ArgumentList.Add("-accepted-regressions"); $psi.ArgumentList.Add("perf-accepted-regressions.json")
           $psi.RedirectStandardOutput = $true
           $psi.RedirectStandardError = $true
           $psi.UseShellExecute = $false
