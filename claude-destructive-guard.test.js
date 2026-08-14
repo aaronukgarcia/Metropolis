@@ -45,6 +45,19 @@ const {
   noTagDenyMessage,
   verdictDenyMessage,
   isCommitInvocation,
+  getCommitInvocation,
+  isExemptFile,
+  isExemptFileSet,
+  isArgvClassifiable,
+  isExemptCommit,
+  findGitAddInvocations,
+  classifyAddArgs,
+  computeAddedPathsOrAmbiguous,
+  ambiguousAddDenyMessage,
+  failClosedSweep,
+  unparseableGitDenyMessage,
+  shellEscapeAliasDenyMessage,
+  unknownGitVerbDenyMessage,
 } = guard;
 const { recordDestructiveVerdict, latestDestructiveVerdict, findItemByRef } = bow;
 
@@ -1101,6 +1114,348 @@ test('AC-28: the guard never calls recordDestructiveVerdict (grep) and never mut
 });
 
 // ---------------------------------------------------------------------------
+// BUG-224: combined `git add` + `git commit` bypass.
+//
+// ROOT CAUSE. This guard decides codeBearing from `git diff --cached
+// --name-only`, evaluated ONCE, when the PreToolUse hook fires — BEFORE any
+// of the proposed `tool_input.command` string has executed. A command that
+// combines `git add <paths>` and `git commit -m "..."` in ONE Bash
+// invocation (`&&`, `;`, or a bare newline) stages its own files AFTER this
+// guard has already taken its `--cached` snapshot, so a genuinely
+// code-bearing commit (touching cmd/, internal/, data/, tools/) reached
+// history with zero recorded Destructive verdict, silently — no deny, empty
+// stdout, exactly the crash-open shape this file's whole design exists to
+// prevent for every OTHER failure mode.
+//
+// THE FIX. computeAddedPathsOrAmbiguous() scans the command text (reusing
+// authorGuard.gatherScanTexts/buildQuoteMask/parseGitInvocation/resolveAlias,
+// the same primitives isCommitInvocation() already relies on) for `git add`
+// invocations. A SIMPLE one (bare literal paths, no flags/globs/`.`/`..`) has
+// its paths unioned into the classification set before `codeBearing` is
+// decided. An AMBIGUOUS one (a flag, `.`/`..`, a glob, or zero args — none of
+// which can be resolved to concrete paths by reading the command text alone)
+// denies outright, fail-closed, with a message asking the operator to split
+// `git add` and `git commit` into separate tool calls.
+// ---------------------------------------------------------------------------
+
+test('BUG-224 root-cause sanity: `git diff --cached` is genuinely empty at hook-time for the combined command — proves the bypass mechanism this fix closes is real, not hypothetical', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tools', 'bug224.js'), '// scratch\n', 'utf8');
+    // No `git add` has run in this process yet — exactly the guard's own
+    // vantage point when it evaluates `git diff --cached` for a combined
+    // `git add ... && git commit ...` command whose `add` half hasn't
+    // executed yet.
+    const cached = git(dir, ['diff', '--cached', '--name-only']);
+    assert.equal(cached, '', 'the staging area is empty at hook-time — this is the exact root cause BUG-224 reports');
+  });
+});
+
+test('BUG-224 (1) EXACT REPRO: combined `git add tools/bug224.js && git commit` in ONE call, code-bearing, zero BOW tags — now DENIED (pre-fix: silently allowed, empty stdout)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tools', 'bug224.js'), '// scratch\n', 'utf8');
+    const r = runGuard(dir, 'git add tools/bug224.js && git commit -m "no bow tag whatsoever"');
+    assert.equal(r.denied, true, 'the combined add+commit must be recognised as code-bearing and denied for lacking a BOW tag');
+    assert.notEqual(r.stdout, '', 'a decision payload must be emitted — this is the exact bypass symptom (pre-fix: nothing at all)');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+  });
+});
+
+test('BUG-224 (1) EXACT REPRO, newline-separated form (two lines in one Bash call, no `&&`) is caught identically', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'tools', 'bug224b.js'), '// scratch\n', 'utf8');
+    const r = runGuard(dir, 'git add tools/bug224b.js\ngit commit -m "no bow tag whatsoever, newline form"');
+    assert.equal(r.denied, true);
+    assert.notEqual(r.stdout, '');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+  });
+});
+
+test('BUG-224 (1) EXACT REPRO with a real BOW code carrying zero verdicts stays denied (the P0 report\'s precise scenario)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug224-noverdict');
+  try {
+    withTempRepo((dir) => {
+      fs.mkdirSync(path.join(dir, 'tools'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'tools', 'bug224c.js'), '// scratch\n', 'utf8');
+      const r = runGuard(dir, `git add tools/bug224c.js && git commit -m "[${item.code}] change, no verdict recorded"`);
+      assert.equal(r.denied, true, 'a real BOW code with zero recorded Destructive verdicts must still be denied once the code-bearing status is correctly detected');
+      assert.match(r.reason, new RegExp(item.code));
+    });
+  } finally {
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-224 (2): combined add+commit for a genuinely NON-code-bearing path (docs/) is still silently allowed', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add docs/notes.md && git commit -m "docs update, no tag needed"');
+    assert.equal(r.denied, false);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-224 (3a): a bare `git add` tool call, on its own, is still silently allowed (not mistaken for a commit invocation)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'foo.go'), 'package foo\n', 'utf8');
+    const r = runGuard(dir, 'git add internal/foo.go');
+    assert.equal(r.denied, false);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-224 (3b): SEPARATE `git add` then `git commit` tool calls still work — the later commit correctly sees the already-staged file via the normal `--cached` path (existing passing case, unaffected by this fix)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/foo.go', 'package foo\n');
+    const r = runGuard(dir, 'git commit -m "no bow tag whatsoever, separate calls"');
+    assert.equal(r.denied, true, 'a separately-staged code-bearing file with zero tags must still be denied, exactly as before this fix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+  });
+});
+
+test('BUG-224 (3c): SEPARATE `git add` then `git commit` tool calls, with an accepted verdict, still pass — proves the fix does not over-broaden and start denying the legitimate separate-calls flow', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug224-separate-ok');
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/foo.go', 'package foo\n');
+      const r = runGuard(dir, `git commit -m "[${item.code}] change, separate calls"`);
+      assert.equal(r.denied, false, 'a separately-staged, already-verdicted commit must still pass cleanly');
+    });
+  } finally {
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-224 (4a): an AMBIGUOUS `git add -A` combined with commit is denied conservatively, even though the actual paths staged would only have been docs/', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add -A && git commit -m "docs only, but ambiguous add shape"');
+    assert.equal(r.denied, true, 'an ambiguous git add (-A) combined with commit must fail closed rather than guess what it staged');
+    assert.match(r.reason, /ambiguous|split/i);
+    assert.notEqual(r.stdout, '');
+  });
+});
+
+test('BUG-224 (4b): other ambiguous `git add` shapes ("." wildcard, "--all", glob, "-u", zero pathspec) are all caught the same conservative way', () => {
+  const ambiguousCmds = [
+    'git add . && git commit -m "x"',
+    'git add --all && git commit -m "x"',
+    'git add tools/*.js && git commit -m "x"',
+    'git add -u && git commit -m "x"',
+    'git add && git commit -m "x"',
+  ];
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    for (const cmd of ambiguousCmds) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `must deny ambiguous shape: ${cmd}`);
+      assert.match(r.reason, /ambiguous|split/i, `deny reason must explain for: ${cmd}`);
+    }
+  });
+});
+
+test('BUG-224 unit: classifyAddArgs — simple bare paths are OK; flags/glob/dot/empty are ambiguous; a bare "--" separator is skipped, not flagged', () => {
+  assert.deepEqual(classifyAddArgs(' tools/x.js internal/y.go', authorGuard), { ok: true, paths: ['tools/x.js', 'internal/y.go'] });
+  assert.deepEqual(classifyAddArgs(' -- tools/x.js', authorGuard), { ok: true, paths: ['tools/x.js'] });
+  assert.equal(classifyAddArgs(' -A', authorGuard).ok, false);
+  assert.equal(classifyAddArgs(' --all', authorGuard).ok, false);
+  assert.equal(classifyAddArgs(' -u', authorGuard).ok, false);
+  assert.equal(classifyAddArgs(' .', authorGuard).ok, false);
+  assert.equal(classifyAddArgs(' ..', authorGuard).ok, false);
+  assert.equal(classifyAddArgs(' tools/*.js', authorGuard).ok, false);
+  assert.equal(classifyAddArgs('', authorGuard).ok, false);
+});
+
+test('BUG-224 unit: computeAddedPathsOrAmbiguous — no add present, simple add present, ambiguous add present', () => {
+  assert.deepEqual(computeAddedPathsOrAmbiguous('git commit -m "x"', authorGuard), { hasAdd: false, ambiguous: false, paths: [] });
+  assert.deepEqual(
+    computeAddedPathsOrAmbiguous('git add tools/x.js && git commit -m "x"', authorGuard),
+    { hasAdd: true, ambiguous: false, paths: ['tools/x.js'] }
+  );
+  assert.equal(computeAddedPathsOrAmbiguous('git add -A && git commit -m "x"', authorGuard).ambiguous, true);
+});
+
+test('BUG-224: `git add` recognised via the same spellings isCommitInvocation() tolerates for commit (git.exe, quoted full path, bash -c wrapper) — a corpus, empty divergence table', () => {
+  const corpus = [
+    { label: 'bare', command: 'git add tools/x.js && git commit -m "x"' },
+    { label: '.exe suffix', command: 'git.exe add tools/x.js && git commit -m "x"' },
+    { label: 'quoted full path', command: '"C:\\Program Files\\Git\\bin\\git.exe" add tools/x.js && git commit -m "x"' },
+    { label: 'bash -c wrapper', command: 'bash -c "git add tools/x.js && git commit -m \'x\'"' },
+    { label: 'quoted-bare git token', command: '"git" add tools/x.js && "git" commit -m "x"' },
+  ];
+  const divergences = [];
+  for (const row of corpus) {
+    const info = computeAddedPathsOrAmbiguous(row.command, authorGuard);
+    if (!(info.hasAdd === true && info.ambiguous === false && info.paths.includes('tools/x.js'))) {
+      divergences.push({ ...row, info });
+    }
+  }
+  if (divergences.length) console.log('  [BUG-224 divergence table]', JSON.stringify(divergences, null, 2));
+  assert.deepEqual(divergences, []);
+});
+
+test('BUG-224: `git add` mentioned only in commit-message PROSE is not mistaken for a real invocation (quote-aware, same skip logic as isCommitInvocation)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/foo.go', 'package foo\n');
+    const r = runGuard(dir, 'git commit -m "reminder: run git add -A before committing next time, no tag here"');
+    assert.equal(r.denied, true);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i, 'must be denied for the ordinary zero-tag reason');
+    assert.doesNotMatch(r.reason, /ambiguous|split/i, 'prose mentioning "git add -A" must NOT trigger the BUG-224 ambiguous-add deny path');
+  });
+});
+
+test('ambiguousAddDenyMessage names GR#23/BUG-224 and the split-into-separate-calls remedy', () => {
+  const msg = ambiguousAddDenyMessage();
+  assert.match(msg, /GR#23/);
+  assert.match(msg, /BUG-224/);
+  assert.match(msg, /separate/i);
+});
+
+// ---------------------------------------------------------------------------
+// FEAT-077 — GR#23 proportionality tier (docs-only / test-only exemption)
+// ---------------------------------------------------------------------------
+
+test('FEAT-077 unit: isExemptFile matches only *.md / *.test.js / *_test.go, case-sensitively', () => {
+  assert.equal(isExemptFile('docs/notes.md'), true);
+  assert.equal(isExemptFile('README.md'), true);
+  assert.equal(isExemptFile('claude-bow.test.js'), true);
+  assert.equal(isExemptFile('internal/engine/core/pacing_test.go'), true);
+  // Non-exempt shapes.
+  assert.equal(isExemptFile('internal/engine/core/pacing.go'), false);
+  assert.equal(isExemptFile('data/pacing.json'), false);
+  assert.equal(isExemptFile('claude-bow.js'), false);
+  // Case sensitivity (git's own casing — no case-folding anywhere here).
+  assert.equal(isExemptFile('README.MD'), false);
+  assert.equal(isExemptFile('foo.Test.js'), false);
+  assert.equal(isExemptFile('foo_Test.go'), false);
+});
+
+test('FEAT-077 unit: isExemptFileSet requires a NON-EMPTY list where EVERY file is exempt', () => {
+  assert.equal(isExemptFileSet([]), false, 'empty staged diff must be full tier, not exempt (spec, verbatim)');
+  assert.equal(isExemptFileSet(['docs/a.md']), true);
+  assert.equal(isExemptFileSet(['docs/a.md', 'internal/x_test.go']), true);
+  assert.equal(isExemptFileSet(['docs/a.md', 'internal/x.go']), false, 'one non-exempt file anywhere denies the whole set exemption');
+});
+
+/** Builds a real authorGuard.findCommitInvocation() result for `command` —
+ * never a hand-built fixture object — so isArgvClassifiable() is exercised
+ * against the exact shape production main() hands it. */
+function invocationFor(command) {
+  const inv = authorGuard.findCommitInvocation(command);
+  assert.ok(inv && inv.verb === 'commit', `fixture command must resolve to a real commit invocation: ${command}`);
+  return inv;
+}
+
+test('FEAT-077 unit: isArgvClassifiable is true for plain -m commits (any recognised boolean/value flag combo)', () => {
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "docs: x [FEAT-077]"'), authorGuard), true);
+  assert.equal(isArgvClassifiable(invocationFor('git commit --message="docs: x"'), authorGuard), true);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -q -m "x" --no-verify'), authorGuard), true);
+  assert.equal(isArgvClassifiable(invocationFor('git commit --amend -m "x"'), authorGuard), true);
+});
+
+test('FEAT-077 unit: isArgvClassifiable is FALSE for -a / --all in any spelling, including combined short flags', () => {
+  assert.equal(isArgvClassifiable(invocationFor('git commit -a -m "x"'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit --all -m "x"'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -am "x"'), authorGuard), false, 'combined short flag -am hides -a inside one token');
+});
+
+test('FEAT-077 unit: isArgvClassifiable is FALSE for an explicit pathspec or a bare "--" separator', () => {
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" some/file.go'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" --'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" -- some/file.go'), authorGuard), false);
+});
+
+test('FEAT-077 unit: isArgvClassifiable is FALSE for any unrecognised flag (fail-closed default, not fail-open)', () => {
+  assert.equal(isArgvClassifiable(invocationFor('git commit --some-future-flag -m "x"'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -Q -m "x"'), authorGuard), false);
+});
+
+test('FEAT-077 unit: isArgvClassifiable is FALSE when the invocation cannot be classified at all (null/malformed input)', () => {
+  assert.equal(isArgvClassifiable(null, authorGuard), false);
+  assert.equal(isArgvClassifiable({}, authorGuard), false);
+});
+
+test('FEAT-077 unit: isExemptCommit requires BOTH a classifiable argv AND an all-exempt file set', () => {
+  const plainInv = invocationFor('git commit -m "docs only"');
+  const allInv = invocationFor('git commit -a -m "docs only"');
+  assert.equal(isExemptCommit(['docs/a.md'], plainInv, authorGuard), true);
+  assert.equal(isExemptCommit(['docs/a.md'], allInv, authorGuard), false, '-a makes the diff untrustworthy even for an all-md file list');
+  assert.equal(isExemptCommit(['internal/x.go'], plainInv, authorGuard), false, 'non-exempt file even with a classifiable argv');
+  assert.equal(isExemptCommit([], plainInv, authorGuard), false, 'empty file list is never exempt');
+});
+
+test('FEAT-077 end-to-end: a docs-only commit under an ENFORCED dir (data/) is silently allowed with ZERO tags — no verdict lookup', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'data/CHANGES.md', '# changes\n');
+    const r = runGuard(dir, 'git commit -m "docs only, no tag needed"');
+    assert.equal(r.denied, false);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('FEAT-077 end-to-end: a test-only commit (*_test.go) under internal/ is silently allowed with ZERO tags — proves the exemption overrides the pre-existing enforced-dir codeBearing check', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/core/pacing_test.go', 'package core\n');
+    const r = runGuard(dir, 'git commit -m "test only, no tag needed"');
+    assert.equal(r.denied, false);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('FEAT-077 end-to-end: a *.test.js-only commit is silently allowed with ZERO tags', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'claude-bow.test.js', '// test only\n');
+    const r = runGuard(dir, 'git commit -m "test only, no tag needed"');
+    assert.equal(r.denied, false);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('FEAT-077 end-to-end: a MIXED commit (one exempt test file + one ordinary .go file) under internal/ keeps the FULL existing fail-closed behaviour (denied, zero tags)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/core/pacing_test.go', 'package core\n');
+    stageFile(dir, 'internal/engine/core/pacing.go', 'package core\n');
+    const r = runGuard(dir, 'git commit -m "no bow tag whatsoever"');
+    assert.equal(r.denied, true, 'one non-exempt file in the same commit must keep the full tier');
+  });
+});
+
+test('FEAT-077 end-to-end: `git commit -a` on a repo whose ONLY staged file is test-only still gets the FULL tier (denied, zero tags) — -a makes --cached untrustworthy', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/core/pacing_test.go', 'package core\n');
+    const r = runGuard(dir, 'git commit -a -m "no bow tag whatsoever"');
+    assert.equal(r.denied, true, '-a must force the full tier even though the staged snapshot looks all-exempt');
+  });
+});
+
+test('FEAT-077 end-to-end: an explicit pathspec argument on a test-only staged file still gets the FULL tier (denied, zero tags)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/core/pacing_test.go', 'package core\n');
+    const r = runGuard(dir, 'git commit -m "no bow tag whatsoever" internal/engine/core/pacing_test.go');
+    assert.equal(r.denied, true, 'an explicit pathspec must force the full tier even though the staged snapshot looks all-exempt');
+  });
+});
+
+test('FEAT-077 end-to-end: a non-.md/.test.js/_test.go code file (data/pacing.json) stays FULL tier as before (unaffected by the new exemption)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'data/pacing.json', '{}\n');
+    const r = runGuard(dir, 'git commit -m "no bow tag whatsoever"');
+    assert.equal(r.denied, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // claude-bow.js: recordDestructiveVerdict / latestDestructiveVerdict (A)
 // ---------------------------------------------------------------------------
 
@@ -1209,4 +1564,162 @@ test('AC-8: recordDestructiveVerdict/latestDestructiveVerdict are exported from 
   assert.match(src, /module\.exports\s*=\s*\{[\s\S]*recordDestructiveVerdict[\s\S]*\}/);
   assert.match(src, /module\.exports\s*=\s*\{[\s\S]*latestDestructiveVerdict[\s\S]*\}/);
   assert.match(fs.readFileSync(GUARD_PATH, 'utf8'), /require\(['"]\.\/claude-bow\.js['"]\)/);
+});
+
+test('BUG-213 regression: isArgvClassifiable is FALSE for --pathspec-from-file / --pathspec-file-nul (commits working-tree paths outside the index, so --cached is not a truthful preview)', () => {
+  // Attack: stage only exempt .md, then `git commit -m "[TAG]" --pathspec-from-file=paths.txt`
+  // where paths.txt names an unstaged production .go file — git commits that
+  // file's working-tree changes regardless of the index. Must fall to full tier.
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" --pathspec-from-file=paths.txt'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit --pathspec-from-file paths.txt -m "x"'), authorGuard), false, 'two-token form must also be caught');
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" --pathspec-from-file=p --pathspec-file-nul'), authorGuard), false);
+  // And the exempt-tier gate itself must refuse to exempt a docs-only staged set under this argv:
+  const psInv = invocationFor('git commit -m "docs: x [FEAT-013]" --pathspec-from-file=paths.txt');
+  assert.equal(isExemptCommit(['README.md'], psInv, authorGuard), false, 'a docs-only staged set is NOT exempt when --pathspec-from-file can smuggle other paths');
+  // Regression guard: an ordinary -m commit stays classifiable (fix must not over-broaden).
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "docs: x [FEAT-013]"'), authorGuard), true);
+});
+
+test('BUG-224 round-4 unit: getCommitInvocation resolves an inline -c alias override and retains verbWord for alias detection', () => {
+  const inv = getCommitInvocation('git -c alias.ca="commit -a" ca -m "x"', authorGuard);
+  assert.ok(inv, 'inline -c alias must still resolve to a commit invocation (BUG-231)');
+  assert.equal(inv.verb, 'commit');
+  assert.equal(inv.verbWord, 'ca', 'verbWord must be the original (aliased) word, not the resolved verb');
+});
+
+test('BUG-224 round-4: a persistent git alias for commit (body smuggling -a) is DENIED, not silently allowed', () => {
+  withTempRepo((dir) => {
+    // Seed a tracked internal/ file, then modify it WITHOUT staging so the `-a`
+    // smuggled inside the alias body is the only thing that would stage it.
+    fs.mkdirSync(path.join(dir, 'internal'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'foo.go'), 'package foo\n', 'utf8');
+    git(dir, ['add', 'internal/foo.go']);
+    git(dir, ['commit', '-m', 'seed']);
+    fs.writeFileSync(path.join(dir, 'internal', 'foo.go'), 'package foo\n// changed\n', 'utf8');
+    git(dir, ['config', 'alias.ca', 'commit -a']);
+    const r = runGuard(dir, 'git ca -m "no bow tag"');
+    assert.equal(r.denied, true, 'an aliased commit verb must fail closed (alias body flags are invisible)');
+    assert.match(r.reason || '', /alias/i);
+  });
+});
+
+test('BUG-231: an inline -c alias (git -c alias.ca="commit -a" ca) is DENIED, not silently allowed', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'foo.go'), 'package foo\n', 'utf8');
+    git(dir, ['add', 'internal/foo.go']);
+    git(dir, ['commit', '-m', 'seed']);
+    fs.writeFileSync(path.join(dir, 'internal', 'foo.go'), 'package foo\n// changed\n', 'utf8');
+    const r = runGuard(dir, 'git -c alias.ca="commit -a" ca -m "no bow tag"');
+    assert.equal(r.denied, true, 'an inline -c alias must be resolved AND denied (total non-recognition is the bypass)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-232: fail-closed git-recognition sweep (deny unrecognised/unresolvable
+// git invocations — absorbs BUG-224/231/213/214/216/084). Built on
+// claude-author-guard.js's scanGitInvocations primitive (parsed:false /
+// shellEscapeAlias / shell-segment-bounded tail).
+// ---------------------------------------------------------------------------
+
+test('BUG-232 unit: failClosedSweep returns null for benign non-commit verbs, --version/--help, and non-git commands', () => {
+  assert.equal(failClosedSweep('git status', authorGuard), null);
+  assert.equal(failClosedSweep('git add internal/foo.go', authorGuard), null);
+  assert.equal(failClosedSweep('git push origin main', authorGuard), null);
+  assert.equal(failClosedSweep('git --version', authorGuard), null);
+  assert.equal(failClosedSweep('git --help', authorGuard), null);
+  assert.equal(failClosedSweep('npm install', authorGuard), null);
+  assert.equal(failClosedSweep('git commit -m "x"', authorGuard), null);
+});
+
+test('BUG-232 unit (rule 1): failClosedSweep denies a parsed:false git invocation (unrecognised value-taking global option)', () => {
+  assert.notEqual(failClosedSweep('git --config-env=alias.X=EV commit -m "x"', authorGuard), null);
+  assert.notEqual(failClosedSweep('git --exec-path=/tmp commit -m "x"', authorGuard), null);
+});
+
+test('BUG-232 unit (rule 2): failClosedSweep denies a shell-escape alias body via an inline -c override', () => {
+  assert.notEqual(failClosedSweep('git -c alias.ci="!git commit -a" ci -m "x"', authorGuard), null);
+});
+
+test('BUG-232 unit (rule 3): failClosedSweep denies an unrecognised verb (neither a commit verb nor in git --list-cmds)', () => {
+  assert.notEqual(failClosedSweep('git committ -m "x"', authorGuard), null);
+  assert.notEqual(failClosedSweep('git notarealgitverb -m "x"', authorGuard), null);
+});
+
+test('BUG-232: the three deny messages name GR#23 and BUG-232', () => {
+  for (const msg of [unparseableGitDenyMessage(), shellEscapeAliasDenyMessage(), unknownGitVerbDenyMessage('committ')]) {
+    assert.match(msg, /GR#23/);
+    assert.match(msg, /BUG-232/);
+  }
+});
+
+test('BUG-232 unit (trailing-pipe fix): classifyCommitArgv treats a trailing shell chain/redirect as plumbing, not a bare pathspec', () => {
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "docs: x" && git push'), authorGuard), true);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "docs: x" 2>&1 | tail'), authorGuard), true);
+  // Regression guard: a REAL pathspec still fails closed (the fix must not over-broaden).
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "docs: x" some/file.go'), authorGuard), false);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "docs: x" --'), authorGuard), false);
+});
+
+test('BUG-232 trailing-pipe RED (pre-fix): the pre-fix classifier (unbounded suffix) tokenizes the shell-chain tokens as commit argv — proves the fix is load-bearing', () => {
+  const preFixTokens = (cmd) => {
+    const inv = authorGuard.findCommitInvocation(cmd);
+    return authorGuard.tokenize(inv.text.slice(inv.suffixStart)).filter((t) => t !== '');
+  };
+  // The pre-fix (unbounded) token stream includes the shell-chain tokens that
+  // classifyCommitArgv would read as a bare pathspec -> the BUG-214 false deny.
+  assert.ok(preFixTokens('git commit -m "x" && git push').includes('&&'), 'pre-fix: `&&` leaks into the argv token stream');
+  assert.ok(preFixTokens('git commit -m "x" 2>&1 | tail').includes('2>&1'), 'pre-fix: `2>&1` leaks into the argv token stream');
+  // Control: the fixed classifier reads neither shape as a bare pathspec.
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" && git push'), authorGuard), true);
+  assert.equal(isArgvClassifiable(invocationFor('git commit -m "x" 2>&1 | tail'), authorGuard), true);
+});
+
+test('BUG-232 end-to-end (rule 1): a commit hidden behind an unparseable --config-env=... global option is DENIED, even for a docs-only staged set (pre-fix: silently allowed)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    const r = runGuard(dir, 'git --config-env=alias.X=EV commit -m "no tag"');
+    assert.equal(r.denied, true, 'an unparseable git invocation must fail closed, not be treated as a non-commit');
+    assert.match(r.reason || '', /BUG-232|parse|unparseable/i);
+  });
+});
+
+test('BUG-232 end-to-end (rule 2): a shell-escape alias body (!git commit -a) is DENIED, even for a docs-only staged set (pre-fix: silently allowed)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    git(dir, ['config', 'alias.ca', '!git commit -a']);
+    const r = runGuard(dir, 'git ca -m "no tag"');
+    assert.equal(r.denied, true, 'a shell-escape alias must fail closed (its body cannot be enumerated)');
+    assert.match(r.reason || '', /alias|shell/i);
+  });
+});
+
+test('BUG-232 end-to-end (rule 3): an unrecognised git verb (typo, not in git --list-cmds) is DENIED, even for a docs-only staged set (pre-fix: silently allowed)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    const r = runGuard(dir, 'git committ -m "no tag"');
+    assert.equal(r.denied, true, 'an unrecognised verb must fail closed, not be treated as a non-commit');
+    assert.match(r.reason || '', /committ/);
+  });
+});
+
+test('BUG-232 end-to-end: a bare `git --version` / `git --help` is still silently allowed (the benign exception)', () => {
+  withTempRepo((dir) => {
+    for (const cmd of ['git --version', 'git --help']) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `${cmd} must remain allowed`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+test('BUG-232 end-to-end (trailing-pipe fix): a docs-only commit with a trailing `2>&1 | tail` / `&& git push` is silently ALLOWED (pre-fix: falsely denied as a bare pathspec)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of ['git commit -m "docs only" 2>&1 | tail', 'git commit -m "docs only" && git push']) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `must not falsely deny: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
 });

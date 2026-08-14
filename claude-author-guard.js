@@ -210,7 +210,9 @@
  *   2. EMAILS SEEN REPEATEDLY IN THE TRUNK BRANCH'S OWN HISTORY (`main` if it
  *      exists locally, else `master`, else current branch) — as author OR
  *      committer, over HISTORY_THRESHOLD (3) commits, scanned over the most
- *      recent HISTORY_SCAN_LIMIT commits (BUG-052 — see below).
+ *      recent deriveScanLimit() commits — the repo's real commit count,
+ *      capped at HISTORY_SCAN_LIMIT (BUG-052's bound; ASM-226's derivation —
+ *      see claude-author-identity.js).
  *   3. EXTENSION FOR A LEGITIMATE SECOND CONTRIBUTOR —
  *      CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES, operator-set env var, never read
  *      from the proposed command text.
@@ -247,8 +249,10 @@
  * commits — generous for THRESHOLDS.HISTORY_THRESHOLD to be reached by any
  * real, actively-committing identity, bounded against unbounded cost on a
  * large/old history. Logged as ASM-author-guard-history-scan-cap.
- * Unchanged by the demotion (the bound lives in the shared module now, see
- * claude-author-identity.js).
+ * ASM-226 (GR#15): the cap is now DERIVED at guard-run time from the repo's
+ * actual commit count (identity.deriveScanLimit()), still bounded by
+ * HISTORY_SCAN_LIMIT — see claude-author-identity.js. Unchanged by the
+ * demotion (the bound lives in the shared module now).
  *
  * FAIL-OPEN (inverted from v1-v4's fail-closed posture by this demotion —
  * see the block at the top of this header): a false warning costs a human
@@ -612,6 +616,30 @@ function parseGitInvocation(text, pos) {
       i += longOpt[0].length;
       continue;
     }
+    // BUG-224 round-4 bypass #3: benign VALUELESS global options before the
+    // verb (`git -p commit`, `git --no-pager commit`) used to fall out of
+    // this loop unconsumed, so the verb-word regex below hit the option's
+    // leading `-` and returned null — total non-recognition, and every
+    // downstream check (author identity here, GR#23's verdict gate in
+    // claude-destructive-guard.js) was skipped. These options only affect
+    // pager/output/pathspec-matching behaviour — none of them can change
+    // WHAT a commit stages or WHO authors it — so consuming them is safe and
+    // makes the verb resolve normally (a `git -p commit` is now gated like a
+    // plain `git commit`). Deliberately NOT consumed here: any option taking
+    // a value we don't parse (`--config-env=...`, `--exec-path=...`) — those
+    // still fall through to the null return, which callers adopting BUG-232's
+    // fail-closed posture treat as "could not parse", never "not git".
+    // Boundary lookahead (?=\s) so `--no-pagerx` (not a real option) does not
+    // match as a prefix. `-p`/`-P` are case-distinct real git options
+    // (paginate / no-pager).
+    const benignOpt =
+      /^\s+(?:-p|-P|--paginate|--no-pager|--no-replace-objects|--no-optional-locks|--no-advice|--no-lazy-fetch|--literal-pathspecs|--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--bare)(?=\s)/.exec(
+        text.slice(i)
+      );
+    if (benignOpt) {
+      i += benignOpt[0].length;
+      continue;
+    }
     break;
   }
   const ws = /^\s+/.exec(text.slice(i));
@@ -634,21 +662,48 @@ function parseGitInvocation(text, pos) {
  * alias body's own flags/overrides are not re-parsed (see header: NOT
  * HANDLED). Returns the resolved verb string (which may or may not be in
  * KNOWN_COMMIT_VERBS) or the original word if no alias exists / on error. */
-function resolveAlias(word, depth, seen) {
-  if (KNOWN_COMMIT_VERBS.has(word)) return word;
-  if (depth >= MAX_ALIAS_DEPTH) return word;
-  if (seen.has(word)) return word; // cycle guard
+function resolveAlias(word, depth, seen, overrides) {
+  return resolveAliasDetailed(word, depth, seen, overrides).verb;
+}
+
+/** BUG-224 round-4 bypass #1 (shell-escape alias). The exact resolution walk
+ * resolveAlias() has always done, but ALSO reporting whether any alias target
+ * in the chain was a shell-escape body (leading `!`) — git hands such a body
+ * to the SHELL verbatim, so its leading word says nothing reliable about what
+ * runs (`!status; git commit -a` runs a commit even though its leading word
+ * resolves to the innocuous `status`). resolveAlias()'s legacy behaviour —
+ * strip `[!\s]*`, classify by the leading word — is PRESERVED verbatim in
+ * `.verb` (this function is its single implementation; the wrapper above
+ * keeps every existing caller byte-identical, GR#3), while `.shellEscape`
+ * gives fail-closed consumers (claude-destructive-guard.js's BUG-232 sweep)
+ * the honest signal the leading-word heuristic launders away. Returns
+ * { verb, shellEscape }. */
+function resolveAliasDetailed(word, depth, seen, overrides) {
+  if (KNOWN_COMMIT_VERBS.has(word)) return { verb: word, shellEscape: false };
+  if (depth >= MAX_ALIAS_DEPTH) return { verb: word, shellEscape: false };
+  if (seen.has(word)) return { verb: word, shellEscape: false }; // cycle guard
   seen.add(word);
   let target;
-  try {
-    target = git(['config', '--get', `alias.${word}`]);
-  } catch {
-    return word; // no such alias — leave as-is (caller decides safety)
+  // BUG-231: an inline `-c alias.<word>=...` override (parsed into `overrides`
+  // by parseGitInvocation, keys lowercased) takes precedence over persistent
+  // config. Previously only persistent config was read, so `git -c
+  // alias.x='commit -a' x` was never recognised as a commit invocation at all.
+  const inlineKey = `alias.${word.toLowerCase()}`;
+  if (overrides && Object.prototype.hasOwnProperty.call(overrides, inlineKey)) {
+    target = overrides[inlineKey];
+  } else {
+    try {
+      target = git(['config', '--get', `alias.${word}`]);
+    } catch {
+      return { verb: word, shellEscape: false }; // no such alias — leave as-is (caller decides safety)
+    }
   }
-  if (!target) return word;
+  if (!target) return { verb: word, shellEscape: false };
+  const isShellEscape = target.trim().startsWith('!');
   const m = /^[!\s]*([A-Za-z][A-Za-z-]*)/.exec(target.trim());
-  if (!m) return word;
-  return resolveAlias(m[1], depth + 1, seen);
+  if (!m) return { verb: word, shellEscape: isShellEscape };
+  const rest = resolveAliasDetailed(m[1], depth + 1, seen, overrides);
+  return { verb: rest.verb, shellEscape: isShellEscape || rest.shellEscape };
 }
 
 /** Finds the first `git <commit-creating-verb>` invocation across the given
@@ -657,64 +712,191 @@ function resolveAlias(word, depth, seen) {
  * (possibly nested) string the invocation was found in — flags belong to
  * that string, not necessarily the outer command. */
 function findCommitInvocation(cmd) {
-  const candidates = gatherScanTexts(cmd, 0);
-  for (const text of candidates) {
-    GIT_TOKEN_RE.lastIndex = 0;
-    const quoteMask = buildQuoteMask(text);
-    let m;
-    while ((m = GIT_TOKEN_RE.exec(text)) !== null) {
-      // BUG-043 (this guard's instance) / ROUND4-3 (quoted-path token,
-      // sibling-guard finding): the boundary class matched, but whether that
-      // is real shell syntax or prose depends on the SHAPE of the token
-      // (group 1) that GIT_TOKEN_RE actually found:
-      //
-      //   - UNQUOTED token (`git`, `git.exe`, `/usr/bin/git`, ...): if this
-      //     bare text is itself sitting inside someone else's quoted
-      //     argument, the boundary character before it is necessarily inside
-      //     that same quoted region too (quote state only changes on an
-      //     actual quote character, and there is none between the boundary
-      //     and the token — only the optional env-var-assignment run, which
-      //     is itself quote-balanced when real). So checking the position of
-      //     "git" alone is sufficient to know the whole match was prose —
-      //     unchanged from BUG-043's original fix.
-      //   - QUOTED-PATH token (`"C:\...\git.exe"` / `'...'`): the quote
-      //     characters here are THE TOKEN's own syntax, not prose-quoting —
-      //     a real shell strips exactly this pair and executes the path
-      //     inside. Checking the position of "git" inside it would always
-      //     read as "inside a quote" and wrongly skip every legitimately
-      //     quoted path as if it were prose. What actually matters is
-      //     whether the token's OWN opening quote character is itself
-      //     already inside some OUTER quoted region (nested/prose) — that is
-      //     the character immediately BEFORE the token starts, since
-      //     buildQuoteMask always marks a quote's own opening character as
-      //     "inside" the region it just opened (so checking the opening
-      //     quote's own position would always read true and tell us
-      //     nothing).
-      const token = m[1];
-      const tokenStart = m.index + (m[0].length - token.length);
-      const isQuotedPathToken = token[0] === '"' || token[0] === "'";
-      const skip = isQuotedPathToken
-        ? tokenStart > 0 && quoteMask[tokenStart - 1]
-        : quoteMask[tokenStart + token.toLowerCase().lastIndexOf('git')];
-      if (skip) continue;
-      const inv = parseGitInvocation(text, m.index + m[0].length);
-      if (!inv) continue;
-      const resolved = resolveAlias(inv.verbWord, 0, new Set());
-      if (KNOWN_COMMIT_VERBS.has(resolved)) {
-        return {
-          text,
-          verb: resolved,
-          overrides: inv.overrides,
-          prefixEnd: inv.verbEnd, // env-var prefix search bound: up to & incl. verb word
-          suffixStart: inv.verbEnd,
-        };
-      }
-      // Not a commit-creating verb (or rebase, status, etc.) — keep scanning
-      // the rest of this text in case of `git status; git commit ...`-shaped
-      // chains where an earlier `git` token is a red herring.
+  // BUG-232 refactor: this is now a THIN FILTER over scanGitInvocations() —
+  // the one scanner both guards share — rather than its own scan loop.
+  // Return shape and first-match semantics are byte-identical to the
+  // pre-refactor implementation (the regression corpus in the test file
+  // proves it): the first scanned invocation, in gatherScanTexts()/
+  // left-to-right order, whose RESOLVED verb is commit-creating.
+  for (const entry of iterGitInvocations(cmd)) {
+    if (entry.parsed && KNOWN_COMMIT_VERBS.has(entry.resolved)) {
+      return {
+        text: entry.text,
+        verb: entry.resolved,
+        verbWord: entry.verbWord, // original word — callers detect aliasing (BUG-224)
+        overrides: entry.overrides,
+        prefixEnd: entry.verbEnd, // env-var prefix search bound: up to & incl. verb word
+        suffixStart: entry.verbEnd,
+      };
     }
+    // Not a commit-creating verb (or rebase, status, etc.) — keep scanning
+    // the rest in case of `git status; git commit ...`-shaped chains where
+    // an earlier `git` token is a red herring.
   }
   return null;
+}
+
+/** True when a GIT_TOKEN_RE match `m` in `text` is PROSE (inside someone
+ * else's quoted region) rather than a real invocation, per `quoteMask`.
+ *
+ * BUG-043 (this guard's instance) / ROUND4-3 (quoted-path token,
+ * sibling-guard finding): the boundary class matched, but whether that is
+ * real shell syntax or prose depends on the SHAPE of the token (group 1)
+ * that GIT_TOKEN_RE actually found:
+ *
+ *   - UNQUOTED token (`git`, `git.exe`, `/usr/bin/git`, ...): if this bare
+ *     text is itself sitting inside someone else's quoted argument, the
+ *     boundary character before it is necessarily inside that same quoted
+ *     region too (quote state only changes on an actual quote character,
+ *     and there is none between the boundary and the token — only the
+ *     optional env-var-assignment run, which is itself quote-balanced when
+ *     real). So checking the position of "git" alone is sufficient to know
+ *     the whole match was prose — unchanged from BUG-043's original fix.
+ *   - QUOTED-PATH token (`"C:\...\git.exe"` / `'...'`): the quote
+ *     characters here are THE TOKEN's own syntax, not prose-quoting — a
+ *     real shell strips exactly this pair and executes the path inside.
+ *     Checking the position of "git" inside it would always read as
+ *     "inside a quote" and wrongly skip every legitimately quoted path as
+ *     if it were prose. What actually matters is whether the token's OWN
+ *     opening quote character is itself already inside some OUTER quoted
+ *     region (nested/prose) — that is the character immediately BEFORE the
+ *     token starts, since buildQuoteMask always marks a quote's own opening
+ *     character as "inside" the region it just opened (so checking the
+ *     opening quote's own position would always read true and tell us
+ *     nothing). */
+function isProseGitToken(text, quoteMask, m) {
+  const token = m[1];
+  const tokenStart = m.index + (m[0].length - token.length);
+  const isQuotedPathToken = token[0] === '"' || token[0] === "'";
+  return isQuotedPathToken
+    ? tokenStart > 0 && quoteMask[tokenStart - 1]
+    : quoteMask[tokenStart + token.toLowerCase().lastIndexOf('git')];
+}
+
+/** Scans forward from `start` for the first UNQUOTED shell boundary
+ * character (`;`, newline, `|`, `&`, `)`), per `mask`. Returns the substring
+ * from `start` up to (not including) that boundary — the rest of the git
+ * invocation's own command segment. */
+function unquotedTail(text, mask, start) {
+  for (let i = start; i < text.length; i++) {
+    if (mask[i]) continue;
+    const c = text[i];
+    if (c === ';' || c === '\n' || c === '|' || c === '&' || c === ')') {
+      return text.slice(start, i);
+    }
+  }
+  return text.slice(start);
+}
+
+/** BUG-232: finds EVERY git invocation (any verb, any spelling GIT_TOKEN_RE
+ * recognises, including inside recognised wrapper bodies) in `cmd` — the
+ * single scanner this file's findCommitInvocation() and fail-closed
+ * consumers (claude-destructive-guard.js's unrecognised-verb sweep, its
+ * `git add` pathspec union) are all built on, so there is no second
+ * hand-maintained token regex anywhere for this one to drift from (ASM-360's
+ * proven same-day-drift class, closed by construction).
+ *
+ * Returns an array of entries, in gatherScanTexts()/left-to-right order:
+ *   parsed:true  — { text, parsed, verbWord, verbStart, verbEnd, suffixStart,
+ *                    overrides, resolved, shellEscapeAlias, tail }
+ *                  `resolved` is resolveAlias()'s legacy leading-word answer;
+ *                  `shellEscapeAlias` is true when ANY alias target in the
+ *                  resolution chain was a shell-escape (`!...`) body, whose
+ *                  leading word proves nothing about what actually runs —
+ *                  fail-closed consumers must treat it as unclassifiable.
+ *                  `tail` is the invocation's own argument segment (from
+ *                  after the verb to the next unquoted `;`/newline/`|`/`&`/
+ *                  `)`), ready for tokenize().
+ *   parsed:false — { text, parsed, afterToken, tail } — a REAL git token was
+ *                  found but no subcommand word could be parsed after it
+ *                  (an unrecognised global option such as `--config-env=...`
+ *                  or `--exec-path=...`, or a verbless `git --version`).
+ *                  `tail` here starts right after the git token itself.
+ *                  Callers with a fail-closed posture treat this as "could
+ *                  not classify", never "not git".
+ * A git token that is only PROSE inside a quoted argument is excluded
+ * entirely (isProseGitToken). An empty array means `cmd` contains no real
+ * git invocation at all. */
+function scanGitInvocations(cmd) {
+  return Array.from(iterGitInvocations(cmd));
+}
+
+/** Serializes the `alias.*` half of an invocation's `-c` overrides into a
+ * stable cache-key suffix — only alias overrides can change what
+ * resolveAliasDetailed() answers for a given word, so two invocations whose
+ * alias overrides match may share one resolution result. */
+function aliasOverridesKey(overrides) {
+  const keys = Object.keys(overrides || {})
+    .filter((k) => k.startsWith('alias.'))
+    .sort();
+  return keys.map((k) => `${k}=${overrides[k]}`).join(' ');
+}
+
+/** Lazy core behind scanGitInvocations()/findCommitInvocation() — a
+ * GENERATOR, deliberately (BUG-224 Destructive round-5 REJECT). The first
+ * array-building version of this scan eagerly alias-resolved EVERY git token
+ * in the command before findCommitInvocation() could look at the first one —
+ * and resolveAliasDetailed() spawns a synchronous `git config --get
+ * alias.<word>` subprocess (~15ms) for every word not already in
+ * KNOWN_COMMIT_VERBS. Cost was linear in git-token count with no early exit:
+ * a `git commit -m x; ` followed by 3000 `git status; ` tokens took ~43s
+ * INSIDE the PreToolUse hook that fires on every Bash/PowerShell call — an
+ * attacker-triggerable (or just paste-a-CI-script-triggerable) hook freeze.
+ * The pre-refactor findCommitInvocation() returned from inside its own scan
+ * loop, paying nothing past the first commit-verb match; yielding entries
+ * one at a time restores exactly that profile for the first-match consumer,
+ * while full-scan consumers (scanGitInvocations) additionally get:
+ *
+ *   - a PER-SCAN MEMO of alias resolutions keyed on (verbWord, alias.*
+ *     overrides) — `git status` repeated N times costs ONE config subprocess,
+ *     not N. Unique unknown words still cost one lookup each (a full-scan
+ *     consumer genuinely has to classify every one); a fail-closed consumer
+ *     that wants a hard ceiling should cap UNIQUE lookups per scan and treat
+ *     overflow as ambiguous/deny — never silently stop scanning, which would
+ *     be a bypass (token N+1 could be the real commit).
+ *   - a FRESH regex instance per text (never the shared GIT_TOKEN_RE with its
+ *     mutable lastIndex), so two interleaved lazy scans cannot corrupt each
+ *     other's position state. */
+function* iterGitInvocations(cmd) {
+  const aliasMemo = new Map();
+  const candidates = gatherScanTexts(cmd, 0);
+  for (const text of candidates) {
+    const re = new RegExp(GIT_TOKEN_RE.source, GIT_TOKEN_RE.flags);
+    const quoteMask = buildQuoteMask(text);
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (isProseGitToken(text, quoteMask, m)) continue;
+      const afterToken = m.index + m[0].length;
+      const inv = parseGitInvocation(text, afterToken);
+      if (!inv) {
+        yield {
+          text,
+          parsed: false,
+          afterToken,
+          tail: unquotedTail(text, quoteMask, afterToken),
+        };
+        continue;
+      }
+      const memoKey = `${inv.verbWord} ${aliasOverridesKey(inv.overrides)}`;
+      let detail = aliasMemo.get(memoKey);
+      if (!detail) {
+        detail = resolveAliasDetailed(inv.verbWord, 0, new Set(), inv.overrides);
+        aliasMemo.set(memoKey, detail);
+      }
+      yield {
+        text,
+        parsed: true,
+        verbWord: inv.verbWord,
+        verbStart: inv.verbStart,
+        verbEnd: inv.verbEnd,
+        suffixStart: inv.verbEnd,
+        overrides: inv.overrides,
+        resolved: detail.verb,
+        shellEscapeAlias: detail.shellEscape,
+        tail: unquotedTail(text, quoteMask, inv.verbEnd),
+      };
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1298,9 @@ if (require.main === module) {
     // shared module's behaviour, including any THRESHOLDS mutation, exactly
     // as if they had required claude-author-identity.js directly.
     HISTORY_THRESHOLD: identity.THRESHOLDS.HISTORY_THRESHOLD,
+    // ASM-226: HISTORY_SCAN_LIMIT is the resource CEILING; the per-run cap
+    // is derived from the repo's commit count by deriveScanLimit() (also
+    // re-exported below) — see claude-author-identity.js.
     HISTORY_SCAN_LIMIT: identity.THRESHOLDS.HISTORY_SCAN_LIMIT,
     THRESHOLDS: identity.THRESHOLDS,
     normalizeContinuations,
@@ -1123,14 +1308,18 @@ if (require.main === module) {
     unescapeDoubleQuoted,
     buildQuoteMask,
     findCommitInvocation,
+    scanGitInvocations,
+    iterGitInvocations,
     parseGitInvocation,
     resolveAlias,
+    resolveAliasDetailed,
     extractEnvOverrides,
     tokenize,
     extractAuthorFlag,
     hasFlag,
     configuredEmail: identity.configuredEmail,
     trunkBranch: identity.trunkBranch,
+    deriveScanLimit: identity.deriveScanLimit,
     historyEmails: identity.historyEmails,
     extraIdentities: identity.extraIdentities,
     deriveSanctioned: identity.deriveSanctioned,

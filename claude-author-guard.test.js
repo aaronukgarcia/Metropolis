@@ -72,6 +72,19 @@ function git(cwd, args) {
   return r.stdout.trim();
 }
 
+/** Runs `fn` with process.cwd() chdir'd into `dir` (the shared
+ * claude-author-identity.js's git() calls use process.cwd()), restoring cwd
+ * afterward even on throw. Mirrors claude-author-identity.test.js's withCwd. */
+function withCwd(dir, fn) {
+  const prev = process.cwd();
+  process.chdir(dir);
+  try {
+    return fn();
+  } finally {
+    process.chdir(prev);
+  }
+}
+
 /** Real, sanctioned-for-that-repo identity: whatever we configure locally. */
 const SANCTIONED_NAME = 'Sanctioned Contributor';
 const SANCTIONED_EMAIL = 'sanctioned@example.invalid';
@@ -725,7 +738,7 @@ test('BUG-051: an advisory reason never contains any sanctioned email address, b
   });
 });
 
-test('BUG-052: historyEmails() bounds its git log scan — the cap now lives in claude-author-identity.js, re-exported unchanged through guard.THRESHOLDS', () => {
+test('BUG-052/ASM-226: HISTORY_SCAN_LIMIT is the CEILING, and the per-run cap is derived — both re-exported unchanged from claude-author-identity.js, not reimplemented', () => {
   // A repo with thousands of commits is impractical to build inside a fast
   // unit test; the meaningful regression evidence here is that the bound is
   // actually wired into the git invocation, not left as a dangling constant.
@@ -735,6 +748,77 @@ test('BUG-052: historyEmails() bounds its git log scan — the cap now lives in 
   assert.equal(typeof guard.HISTORY_SCAN_LIMIT, 'number');
   assert.ok(guard.HISTORY_SCAN_LIMIT > 0 && Number.isFinite(guard.HISTORY_SCAN_LIMIT));
   assert.equal(guard.THRESHOLDS.HISTORY_SCAN_LIMIT, guard.HISTORY_SCAN_LIMIT);
+  // ASM-226: the derivation is exposed (and shared, not a copy), so the
+  // cap tests below can exercise it directly through the guard.
+  assert.equal(guard.deriveScanLimit, require('./claude-author-identity.js').deriveScanLimit);
+});
+
+test('ASM-226 (GR#15): deriveScanLimit() derives the cap from the repo commit count, not the hardcoded 2000', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 5);
+    withCwd(dir, () => {
+      // 5 commits exist; the ceiling (2000) is far above that. A DERIVED cap
+      // must be 5. A regression back to a hardcoded 2000 (or a broken
+      // derivation that ignores the repo) would return 2000 and fail here.
+      assert.equal(guard.deriveScanLimit(), 5);
+    });
+  });
+});
+
+test('ASM-226: the operator-set ceiling (CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT) still bounds the derived cap — BUG-052 preserved', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 5);
+    const prev = process.env.CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT;
+    process.env.CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT = '2';
+    try {
+      withCwd(dir, () => {
+        assert.equal(guard.deriveScanLimit(), 2, 'a ceiling below the commit count must cap the derived limit to 2');
+      });
+    } finally {
+      if (prev === undefined) delete process.env.CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT;
+      else process.env.CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT = prev;
+    }
+  });
+});
+
+test('ASM-226: the derived cap is ACTUALLY APPLIED — historyEmails() hands git --max-count=<derived>, not the hardcoded 2000', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 5);
+    // Intercept at the child_process.execFileSync boundary (the same seam
+    // claude-author-identity.test.js uses for its BUG-052 test): the shared
+    // module destructures execFileSync ONCE at load, so we patch it on the
+    // cached module object and re-require BOTH modules fresh so the spy is
+    // picked up by the module's own top-level destructuring.
+    const cp = require('child_process');
+    const real = cp.execFileSync;
+    const captured = [];
+    cp.execFileSync = function (file, args, options) {
+      if (file === 'git') captured.push({ args: [...args] });
+      return real.apply(this, arguments);
+    };
+    const idPath = require.resolve('./claude-author-identity.js');
+    const guardPath = require.resolve('./claude-author-guard.js');
+    delete require.cache[idPath];
+    delete require.cache[guardPath];
+    try {
+      const freshGuard = require('./claude-author-guard.js');
+      withCwd(dir, () => {
+        freshGuard.historyEmails();
+      });
+    } finally {
+      cp.execFileSync = real;
+      delete require.cache[idPath];
+      delete require.cache[guardPath];
+      require('./claude-author-identity.js'); // restore a clean cached instance
+      require('./claude-author-guard.js');
+    }
+    const logCall = captured.find((c) => c.args[0] === 'log');
+    assert.ok(logCall, `expected a git log call; captured: ${JSON.stringify(captured)}`);
+    assert.ok(
+      logCall.args.includes('--max-count=5'),
+      `expected --max-count=5 (derived from the repo's actual 5 commits), got: ${JSON.stringify(logCall.args)}`
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1493,4 +1577,202 @@ test('BUG-169 non-regression: BUG-082s exact fixture (heredoc-body-only prose me
       `BUG-169 must not regress BUG-082: expected no advisory for pure heredoc-body prose, got: ${result.reason}`
     );
   });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-224 round-4 residual / BUG-232: recognition semantics.
+//
+// The three round-4 REJECT bypasses all reduced to "findCommitInvocation()
+// returned null for a command that really does commit" — either an
+// unrecognised global option before the verb, or an alias whose body the
+// leading-word heuristic launders. These tests pin the two author-guard-side
+// halves of the fix: (a) benign valueless global options are consumed so the
+// verb resolves (bypass #3 closed OUTRIGHT — the commit is recognised and
+// gated); (b) scanGitInvocations() reports parse-failure and shell-escape
+// aliases honestly so a fail-closed consumer (claude-destructive-guard.js's
+// BUG-232 sweep) can deny instead of allowing silently.
+// ---------------------------------------------------------------------------
+
+test('BUG-224 bypass #3 closed: benign global options before the verb no longer defeat recognition', () => {
+  for (const cmd of [
+    'git -p commit -a -m "no bow tag"',
+    'git -P commit -m "x"',
+    'git --no-pager commit -m "x"',
+    'git --paginate commit -m "x"',
+    'git --no-optional-locks --no-pager commit -m "x"',
+    'git -p -c user.email=x@y.z commit -m "x"', // benign opt mixed with recognised -c
+  ]) {
+    const inv = findCommitInvocation(cmd);
+    assert.ok(inv, `expected recognition for: ${cmd}`);
+    assert.equal(inv.verb, 'commit', cmd);
+    assert.equal(inv.verbWord, 'commit', cmd);
+  }
+});
+
+test('BUG-224: a benign-option PREFIX of a longer word does not match (--no-pagerx is not --no-pager)', () => {
+  // "--no-pagerx" is not a real git option; the option run must stop there,
+  // the verb-word regex must fail on its leading '-', and recognition must
+  // report null (which fail-closed consumers treat as could-not-parse).
+  assert.equal(findCommitInvocation('git --no-pagerx commit -m "x"'), null);
+});
+
+test('BUG-232: scanGitInvocations reports parse-failure (parsed:false) for unrecognised global options, never silence', () => {
+  const { scanGitInvocations } = guard;
+  for (const cmd of [
+    'git --config-env=alias.ca=EV ca -m "no bow tag"', // round-4 bypass #2
+    'git --exec-path=/evil/path commit -m "x"',
+    'git --no-pagerx commit -m "x"',
+  ]) {
+    const entries = scanGitInvocations(cmd);
+    assert.equal(entries.length, 1, `expected exactly one entry for: ${cmd}`);
+    assert.equal(entries[0].parsed, false, `expected parsed:false for: ${cmd}`);
+    assert.ok(entries[0].tail.length > 0, `tail must carry the unparsed segment for: ${cmd}`);
+  }
+});
+
+test('BUG-232: scanGitInvocations resolves ordinary verbs and excludes quoted prose', () => {
+  const { scanGitInvocations } = guard;
+  const entries = scanGitInvocations('git status && git commit -m "run git add first"');
+  // Two real invocations; the "git add" inside the -m string is prose.
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].parsed, true);
+  assert.equal(entries[0].resolved, 'status');
+  assert.equal(entries[1].parsed, true);
+  assert.equal(entries[1].resolved, 'commit');
+  assert.equal(entries[1].shellEscapeAlias, false);
+  assert.equal(scanGitInvocations('echo "please git commit later"').length, 0);
+});
+
+test('BUG-232: scanGitInvocations bounds each invocation tail at its own unquoted shell boundary', () => {
+  const { scanGitInvocations } = guard;
+  const entries = scanGitInvocations('git add tools/x.js && git commit -m "a && b"');
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].resolved, 'add');
+  // The add's tail must stop at the unquoted && — never swallow the commit.
+  assert.equal(entries[0].tail.trim(), 'tools/x.js');
+  // The commit's tail keeps its own quoted && intact.
+  assert.ok(entries[1].tail.includes('"a && b"'));
+});
+
+test('BUG-224 bypass #1: a shell-escape alias is reported as shellEscapeAlias:true, not laundered into its leading word', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 1);
+    git(dir, ['config', 'alias.ca', '!git commit -a']);
+    git(dir, ['config', 'alias.sneak', '!status; git commit -a']);
+    git(dir, ['config', 'alias.st', 'status']);
+    withCwd(dir, () => {
+      const { scanGitInvocations, resolveAliasDetailed } = guard;
+
+      // The round-4 repro: leading word of the '!' body is 'git', which the
+      // legacy resolver returns — but shellEscapeAlias must flag it.
+      const ca = scanGitInvocations('git ca -m "no bow tag"');
+      assert.equal(ca.length, 1);
+      assert.equal(ca[0].parsed, true);
+      assert.equal(ca[0].shellEscapeAlias, true, 'ca (!git commit -a) must be flagged shell-escape');
+
+      // The laundering case: leading word resolves to the innocuous
+      // 'status', yet the body commits. The flag is the only honest signal.
+      const sneak = resolveAliasDetailed('sneak', 0, new Set(), {});
+      assert.equal(sneak.verb, 'status');
+      assert.equal(sneak.shellEscape, true, 'a "!status; git commit" body must be flagged shell-escape');
+
+      // An ordinary (non-!) alias stays unflagged and resolves as before.
+      const st = resolveAliasDetailed('st', 0, new Set(), {});
+      assert.equal(st.verb, 'status');
+      assert.equal(st.shellEscape, false);
+
+      // resolveAlias (the legacy wrapper) is byte-identical to before.
+      assert.equal(guard.resolveAlias('ca', 0, new Set(), {}), 'git');
+      assert.equal(guard.resolveAlias('st', 0, new Set(), {}), 'status');
+    });
+  });
+});
+
+test('BUG-231 + shell-escape: an inline -c alias with a shell-escape body is flagged through the override path too', () => {
+  const { scanGitInvocations } = guard;
+  const entries = scanGitInvocations('git -c alias.zz=\'!git commit -a\' zz');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].parsed, true);
+  assert.equal(entries[0].shellEscapeAlias, true);
+});
+
+test('BUG-232 refactor non-regression: findCommitInvocation corpus is unchanged on top of scanGitInvocations', () => {
+  // Positive corpus — every shape the pre-refactor scanner recognised.
+  for (const cmd of [
+    'git commit -m "x"',
+    'git.exe commit -m "x"',
+    '"C:\\Program Files\\Git\\bin\\git.exe" commit -m "x"',
+    "'git' commit -m \"x\"",
+    'cd repo && git commit -m "x"',
+    'git -c user.email=a@b.c commit -m "x"',
+    'bash -c \'git commit -m "x"\'',
+    'git status; git commit -m "x"', // red-herring earlier token, keep scanning
+  ]) {
+    const inv = findCommitInvocation(cmd);
+    assert.ok(inv, `expected recognition for: ${cmd}`);
+    assert.equal(inv.verb, 'commit', cmd);
+  }
+  // Negative corpus — shapes that must stay unrecognised.
+  for (const cmd of [
+    'git status',
+    'git rebase main',
+    'echo "please git commit later"',
+    'npm install',
+  ]) {
+    assert.equal(findCommitInvocation(cmd), null, `expected null for: ${cmd}`);
+  }
+});
+
+test('BUG-224 round-5 REJECT fix: recognition cost is early-exit + memoized, never one subprocess per git token', () => {
+  // The Destructive round-5 attacker showed the first scanGitInvocations()
+  // shipped as an EAGER array builder: findCommitInvocation() on a command
+  // whose FIRST token is the commit still alias-resolved every one of 3000
+  // trailing `git status` tokens (one synchronous `git config` subprocess
+  // each, ~43s inside a PreToolUse hook that fires on every Bash call).
+  // Wall-clock assertions are banned in this repo's CI (verification
+  // standards), so this asserts the BEHAVIOUR that made it slow instead:
+  // count actual execFileSync('git', ['config', ...]) spawns by patching
+  // child_process BEFORE the guard module is required (it destructures
+  // execFileSync at load time), in a child node process.
+  const script = `
+    const cp = require('child_process');
+    const orig = cp.execFileSync;
+    let configCalls = 0;
+    cp.execFileSync = function (file, args) {
+      if (file === 'git' && Array.isArray(args) && args[0] === 'config') configCalls++;
+      return orig.apply(this, arguments);
+    };
+    const g = require(process.argv[1]);
+    let cmd = 'git commit -m x; ';
+    for (let i = 0; i < 200; i++) cmd += 'git status; ';
+    const inv = g.findCommitInvocation(cmd);
+    if (!inv || inv.verb !== 'commit') { console.log(JSON.stringify({ err: 'recognition broke' })); process.exit(0); }
+    const early = configCalls;
+    configCalls = 0;
+    const entries = g.scanGitInvocations(cmd);
+    console.log(JSON.stringify({ early, scanned: configCalls, entryCount: entries.length }));
+  `;
+  const r = spawnSync(process.execPath, ['-e', script, GUARD_PATH], { encoding: 'utf8', cwd: ROOT });
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout.trim());
+  assert.equal(out.err, undefined, out.err);
+  // commit is the FIRST token and is in KNOWN_COMMIT_VERBS (no alias lookup
+  // needed): the lazy first-match path must spawn ZERO config subprocesses.
+  assert.equal(out.early, 0, `findCommitInvocation spawned ${out.early} config lookups — early exit lost`);
+  // The full scan classifies all 200 `git status` tokens but they share one
+  // memoized resolution: at most ONE config subprocess for the whole scan.
+  assert.ok(out.scanned <= 1, `scanGitInvocations spawned ${out.scanned} config lookups for 200 identical tokens — memoization lost`);
+  assert.equal(out.entryCount, 201);
+});
+
+test('BUG-224 round-5: the memo is per-scan and keyed on alias overrides — different -c alias bodies do not share a result', () => {
+  const { scanGitInvocations } = guard;
+  // Same verb word 'zz', two different inline alias bodies in one command:
+  // the second must NOT inherit the first's resolution.
+  const entries = scanGitInvocations(
+    "git -c alias.zz='commit -a' zz; git -c alias.zz='status' zz"
+  );
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].resolved, 'commit');
+  assert.equal(entries[1].resolved, 'status');
 });
