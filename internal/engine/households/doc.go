@@ -38,15 +38,17 @@
 // citizens owns the household entity and the partnering event; households
 // owns the typology-appeal/demand layer that sits on top of it.
 //
-// # Built-stock seam (engine.build)
+// # Built-stock seam (no engine.build call edge)
 //
-// code.json registers engine.build as an outbound dependency, intended to
-// supply "built-stock counts by typology". engine.build's current BuildAPI
-// exposes the §34 eight-way zone catalogue (Dwelling/Shop/…), not the 17
-// HS typologies, so the per-typology built-stock counts arrive here as the
-// command-based [HouseholdsAPI.ReportStock] mutation, populated by the
-// composition root (FEAT-082) from wherever built housing structure counts
-// live. No HS-typology stock is re-derived from build internals.
+// engine.build's current BuildAPI exposes the §34 eight-way zone catalogue
+// (Dwelling/Shop/…), not the 17 HS typologies, so the per-typology
+// built-stock counts do NOT arrive through a call into engine.build. They
+// arrive here as the command-based [HouseholdsAPI.ReportStock] mutation,
+// populated by the composition root (FEAT-082) from wherever built housing
+// structure counts live. code.json therefore registers no outbound call
+// edge to engine.build (GR#20 — the edge is not a realized call; it was
+// removed as plan drift). No HS-typology stock is re-derived from build
+// internals.
 //
 // # Appeal is a function over stage × wealth × personality (AC-4)
 //
@@ -75,11 +77,12 @@
 // # Numeric safety (GR#16, FEAT-086)
 //
 // Every int64 quantity in this package — wealth aggregates, appeal scores,
-// demand tallies, stock counts, rent/income magnitudes — routes through the
-// saturating helpers in numeric.go (satAdd/satSub/safeMul) and every
-// int64↔float64 conversion routes through clampInt64FromFloat. Numeric
-// inputs are validated at every entry point (constructor, mutator, query):
-// negative rent/income or a negative stock count are rejected with
-// registry-sourced errors rather than wrapped, and a ±MaxInt64 / mixed-sign
-// input can never produce +Inf, NaN, or a wrapped-negative result.
+// demand tallies, stock counts, rent/income magnitudes — routes through
+// foundation/num's saturating helpers (num.SatAdd/num.SatSub/num.SafeMul)
+// and every int64↔float64 conversion routes through
+// num.ClampInt64FromFloat. Numeric inputs are validated at every entry
+// point (constructor, mutator, query): negative rent/income or a negative
+// stock count are rejected with registry-sourced errors rather than
+// wrapped, and a ±MaxInt64 / mixed-sign input can never produce +Inf, NaN,
+// or a wrapped-negative result.
 package households

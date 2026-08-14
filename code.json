@@ -1840,6 +1840,10 @@
         "pattern": "price/availability queries; dynamic-world future hook",
         "consumers": [
           {
+            "key": "engine.build",
+            "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
+          },
+          {
             "key": "engine.chemicals",
             "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
           },
@@ -2353,10 +2357,6 @@
             "outboundGuid": "fd65035a-1204-45e0-bdb7-5b9196c77b4f"
           },
           {
-            "key": "engine.households",
-            "outboundGuid": "d6fe2f65-8d26-46e8-8097-7a55db5e5dbd"
-          },
-          {
             "key": "engine.mining",
             "outboundGuid": "1289259c-6507-4ab1-be71-93de7fc2f787"
           },
@@ -2395,6 +2395,11 @@
             "key": "engine.logistics",
             "moduleGuid": "c59ecb6e-443f-4012-a0f0-b031de444335",
             "inboundGuid": "26abfa77-3b11-43d0-a631-539a04e3a5f8"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
           },
           {
             "key": "foundation.data",
@@ -2511,11 +2516,6 @@
             "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
           },
           {
-            "key": "engine.build",
-            "moduleGuid": "046d98bc-3850-4b7d-b909-a97b7eab0920",
-            "inboundGuid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4"
-          },
-          {
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
@@ -2540,7 +2540,7 @@
         "guid": "0c36bd43-d123-42bd-ab73-be06d33887d3",
         "name": "AttractAPI",
         "format": "Go package API + deltas",
-        "pattern": "term-decomposed A score, every term drill-through",
+        "pattern": "term-decomposed A score, every term drill-through; housingAffordability computed via engine.households + engine.finance (registered edges), reputation internal asymmetric momentum; the other five §11 terms (jobAvailability, serviceCoverage, environment, leisureFit, safety) are pushed TermInputs via SetTermInputs — no outbound call edge (BUG-058/ASM-243)",
         "consumers": [
           {
             "key": "engine.spiral",

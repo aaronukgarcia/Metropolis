@@ -839,8 +839,7 @@
       "guidIn": "5591af37-0157-4e07-a8cf-b4ab87db7466",
       "guidOut": "d6fe2f65-8d26-46e8-8097-7a55db5e5dbd",
       "deps": [
-        "engine.citizens",
-        "engine.build"
+        "engine.citizens"
       ]
     },
     {

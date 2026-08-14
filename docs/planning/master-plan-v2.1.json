@@ -885,6 +885,7 @@
         "engine.world",
         "engine.finance",
         "engine.logistics",
+        "engine.market",
         "foundation.data",
         "engine.season"
       ],
@@ -937,12 +938,10 @@
         "pattern": "typology appeal from buildings.json profiles"
       },
       "deps": [
-        "engine.citizens",
-        "engine.build"
+        "engine.citizens"
       ],
       "calls": [
         "engine.citizens",
-        "engine.build",
         "foundation.data"
       ],
       "sprint": 6
@@ -961,7 +960,7 @@
       "inbound": {
         "name": "AttractAPI",
         "format": "Go package API + deltas",
-        "pattern": "term-decomposed A score, every term drill-through"
+        "pattern": "term-decomposed A score, every term drill-through; housingAffordability computed via engine.households + engine.finance (registered edges), reputation internal asymmetric momentum; the other five §11 terms (jobAvailability, serviceCoverage, environment, leisureFit, safety) are pushed TermInputs via SetTermInputs — no outbound call edge (BUG-058/ASM-243)"
       },
       "deps": [
         "engine.citizens",
