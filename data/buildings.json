@@ -308,7 +308,7 @@
       "catalogueSection": "R",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "high-street-retail",
+      "sourcePack": "retail",
       "unlock": {
         "raw": "M7+DP",
         "milestone": "M7",
@@ -325,7 +325,7 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "high-street retail block; retail appeal++"
+      "notes": "Retail block; retail appeal++"
     },
     {
       "id": "junction_controls_signals_mini_rbt_roundabout_grade_separated",
@@ -2283,7 +2283,7 @@
       "catalogueSection": "PK",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "coastal-shoreline",
+      "sourcePack": "shoreline",
       "unlock": {
         "raw": "M5+DP",
         "milestone": "M5",
@@ -2333,7 +2333,7 @@
       "catalogueSection": "PK",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "coastal-shoreline",
+      "sourcePack": "shoreline",
       "unlock": {
         "raw": "M5",
         "milestone": "M5",
@@ -2383,7 +2383,7 @@
       "catalogueSection": "PK",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M8+DP",
         "milestone": "M8",
@@ -2400,7 +2400,7 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "wealth magnet; waterfront transport group"
+      "notes": "wealth magnet; Waterfront group"
     },
     {
       "id": "city_park_large",
@@ -3308,7 +3308,7 @@
       "catalogueSection": "T",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "rail-stations",
+      "sourcePack": "rail",
       "unlock": {
         "raw": "M5+£",
         "milestone": "M5",
@@ -3333,7 +3333,7 @@
       "catalogueSection": "T",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "rail-stations",
+      "sourcePack": "rail",
       "unlock": {
         "raw": "M8+DP",
         "milestone": "M8",
@@ -3350,7 +3350,7 @@
       "consumptionRef": "stationRailMetro",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "through/terminus variants (rail stations group)"
+      "notes": "through/terminus variants (Rail group)"
     },
     {
       "id": "grand_terminus",
@@ -3358,7 +3358,7 @@
       "catalogueSection": "T",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "rail-stations",
+      "sourcePack": "rail",
       "unlock": {
         "raw": "M9+DP",
         "milestone": "M9",
@@ -3408,7 +3408,7 @@
       "catalogueSection": "T",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "rail-stations",
+      "sourcePack": "rail",
       "unlock": {
         "raw": "M10+DP",
         "milestone": "M10",
@@ -3458,7 +3458,7 @@
       "catalogueSection": "T",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M7+DP",
         "milestone": "M7",
@@ -3608,7 +3608,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M6+DP",
         "milestone": "M6",
@@ -3633,7 +3633,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M7+DP",
         "milestone": "M7",
@@ -3658,7 +3658,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M7+£+ach",
         "milestone": "M7",
@@ -3683,7 +3683,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M9+DP",
         "milestone": "M9",
@@ -3708,7 +3708,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M8+£",
         "milestone": "M8",
@@ -3733,7 +3733,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M9+DP",
         "milestone": "M9",
@@ -3758,7 +3758,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M8+DP",
         "milestone": "M8",
@@ -3783,7 +3783,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M7",
         "milestone": "M7",
@@ -3883,7 +3883,7 @@
       "catalogueSection": "PT",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "coastal-shoreline",
+      "sourcePack": "shoreline",
       "unlock": {
         "raw": "M6+DP",
         "milestone": "M6",
@@ -3900,7 +3900,7 @@
       "consumptionRef": "",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "coastal-shoreline group; premium shore living"
+      "notes": "shoreline group; premium shore living"
     },
     {
       "id": "mobile_home_park",
@@ -4101,7 +4101,7 @@
       "catalogueSection": "HS",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "coastal-shoreline",
+      "sourcePack": "shoreline",
       "unlock": {
         "raw": "M6+DP",
         "milestone": "M6",
@@ -4395,11 +4395,11 @@
     },
     {
       "id": "high_street_retail",
-      "name": "High-street retail",
+      "name": "Retail",
       "catalogueSection": "C-I",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "high-street-retail",
+      "sourcePack": "retail",
       "unlock": {
         "raw": "M3",
         "milestone": "M3",
@@ -4499,7 +4499,7 @@
       "catalogueSection": "C-I",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "office-tiers",
+      "sourcePack": "office",
       "unlock": {
         "raw": "M5",
         "milestone": "M5",
@@ -4516,7 +4516,7 @@
       "consumptionRef": "office",
       "blightClass": "none",
       "appealProfile": [],
-      "notes": "office-tiers group t1"
+      "notes": "office group t1"
     },
     {
       "id": "office_block",
@@ -4524,7 +4524,7 @@
       "catalogueSection": "C-I",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "office-tiers",
+      "sourcePack": "office",
       "unlock": {
         "raw": "M7+DP",
         "milestone": "M7",
@@ -4549,7 +4549,7 @@
       "catalogueSection": "C-I",
       "supplement": "",
       "supplementCategory": "",
-      "sourcePack": "office-tiers",
+      "sourcePack": "office",
       "unlock": {
         "raw": "M9+DP",
         "milestone": "M9",
@@ -7249,7 +7249,7 @@
       "catalogueSection": "SUP2",
       "supplement": "S2",
       "supplementCategory": "destination",
-      "sourcePack": "coastal-shoreline",
+      "sourcePack": "shoreline",
       "unlock": {
         "raw": "M6+DP",
         "milestone": "M6",
@@ -8174,7 +8174,7 @@
       "catalogueSection": "SUP3",
       "supplement": "S3",
       "supplementCategory": "rail",
-      "sourcePack": "waterfront-transport",
+      "sourcePack": "waterfront",
       "unlock": {
         "raw": "M9+DP",
         "milestone": "M9",

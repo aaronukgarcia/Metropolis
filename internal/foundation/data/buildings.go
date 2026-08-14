@@ -50,8 +50,8 @@ var knownBlightClasses = map[string]bool{
 // purely cosmetic regional set, is explicitly skipped per §23's own
 // table, so it has no corresponding tag here).
 var knownSourcePacks = map[string]bool{
-	"waterfront-transport": true, "coastal-shoreline": true, "high-rise": true,
-	"high-street-retail": true, "rail-stations": true, "office-tiers": true,
+	"waterfront": true, "shoreline": true, "high-rise": true,
+	"retail": true, "rail": true, "office": true,
 }
 
 // knownSupplements is the documented supplement enum (AC-3).

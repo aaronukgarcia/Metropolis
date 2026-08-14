@@ -389,13 +389,13 @@ Three currencies, exactly as 'Blue' structures it plus purchase:
 
 | Group | What we take |
 |---|---|
-| Waterfront Transport | Full port ecosystem: cargo & ferry terminals, drawbridges, lighthouses, shipyard, fishing harbour, marina (catalogue §P) |
-| Coastal Shoreline | Beach houses, waterfront leisure strip, promenade assets on shore cells |
+| Waterfront | Full port ecosystem: cargo & ferry terminals, drawbridges, lighthouses, shipyard, fishing harbour, marina (catalogue §P) |
+| Shoreline | Beach houses, waterfront leisure strip, promenade assets on shore cells |
 | High-Rise | High-rise & landmark towers backing tiers 8–12 density |
-| High-Street Retail | Mixed-use streetscape blocks, pedestrianised high street |
-| Rail Stations | Station variants: through/terminus/underground/interchange |
-| Office Tiers | Office tiers: Victorian chambers → glass HQ (sector progression) |
-| Regional Cosmetic Set | Cosmetic — skipped (mechanics-first) |
+| Retail | Mixed-use streetscape blocks, pedestrianised high street |
+| Rail | Station variants: through/terminus/underground/interchange |
+| Office | Office: Victorian chambers → glass HQ (sector progression) |
+| Cosmetic | Cosmetic — skipped (mechanics-first) |
 
 ## 24. Config Data Files
 `consumption.json` · `modes.json` · `buildings.json` (catalogue) · `unlock_trees.json` · `naming_corpus.json` · `seasonal.json` · `external_world.json` — all JSON, all hot-reloadable in debug, all the balance surface for Batch tuning.
@@ -483,9 +483,9 @@ Player zones; firms/households move in per demand: **Dwelling** (low/med/high de
 
 ## 35. Communications, Internet & E-commerce
 
-**Eras of connectivity** (unlock tree, Comms category): telephone exchange → dial-up → **broadband hub** → **fibre backbone** → cellular masts (coverage overlay, 2G→5G by era) → a **submarine cable landing station** (real Kent-coast feature; late-game data-industry magnet). Internet quality gates: office tiers, data centres, university research rate, and the **remote-work share** — good fibre lets a personality/sector-dependent slice work from home, directly cutting commute demand (a traffic tool disguised as telecoms) and boosting the dormitory strategy (§21).
+**Eras of connectivity** (unlock tree, Comms category): telephone exchange → dial-up → **broadband hub** → **fibre backbone** → cellular masts (coverage overlay, 2G→5G by era) → a **submarine cable landing station** (real Kent-coast feature; late-game data-industry magnet). Internet quality gates: Office, data centres, university research rate, and the **remote-work share** — good fibre lets a personality/sector-dependent slice work from home, directly cutting commute demand (a traffic tool disguised as telecoms) and boosting the dormitory strategy (§21).
 
-**Post & parcels:** letters (sorting office, declining volume by era — a managed-decline mini-story) vs **parcels** (growing with wealth, era, and e-commerce share). **E-commerce**: share of retail demand shifts online as connectivity + wealth rise; requires a **fulfilment centre** (the Amazon-scale warehouse: huge shed, thousands of jobs at modest wages, big rates income, serious van + truck traffic) and **last-mile depots** whose vans hit the same roads as everything else. The tension is deliberate: fulfilment convenience raises satisfaction and jobs while **draining high-street retail** — shop vacancies → town-centre vitality ↓ → §12 blight risk in the core. Counterplay: entertainment zoning, markets, pedestrianisation convert the high street from retail to experience. Nothing is free.
+**Post & parcels:** letters (sorting office, declining volume by era — a managed-decline mini-story) vs **parcels** (growing with wealth, era, and e-commerce share). **E-commerce**: share of retail demand shifts online as connectivity + wealth rise; requires a **fulfilment centre** (the Amazon-scale warehouse: huge shed, thousands of jobs at modest wages, big rates income, serious van + truck traffic) and **last-mile depots** whose vans hit the same roads as everything else. The tension is deliberate: fulfilment convenience raises satisfaction and jobs while **draining Retail** — shop vacancies → town-centre vitality ↓ → §12 blight risk in the core. Counterplay: entertainment zoning, markets, pedestrianisation convert the high street from retail to experience. Nothing is free.
 
 ---
 
@@ -1022,7 +1022,7 @@ CREATE VIEW v_blocked AS
 | Motorway extension | M8+DP | 6M | ties into M20 |
 | Bridge (road) | M5+DP | 4M/crossing | span cost × width |
 | Tunnel (road) | M8+DP | 15M/km | escarpment piercer |
-| Pedestrianised high street | M7+DP | 500k | High-street retail group; retail appeal++ |
+| Pedestrianised high street | M7+DP | 500k | Retail group; retail appeal++ |
 | Junction controls: signals / mini-rbt / roundabout / grade-separated | M3/M3/M4/M8 | 80k–8M | §19.2 |
 
 ## E — Electricity
@@ -1131,7 +1131,7 @@ CREATE VIEW v_blocked AS
 | Pier | M7+DP | 8M | leisure landmark |
 | Beach management (lifeguards, cleaning) | M5 | opex | summer leisure driver |
 | Nature reserve | M6+DP | 500k | caps land value, boosts adjacency |
-| Marina | M8+DP | 12M | wealth magnet; waterfront transport group |
+| Marina | M8+DP | 12M | wealth magnet; Waterfront group |
 | City park (large) | M8+DP | 10M | |
 | Zoo | M8+DP | 15M | |
 | Aquarium | M8+DP | 12M | coastal |
@@ -1177,7 +1177,7 @@ CREATE VIEW v_blocked AS
 | Park & Ride | M7+DP | 2.5M | edge parking + shuttle |
 | Tram depot + track | M8+DP | 8M + 3M/km | street-running |
 | **External rail station** | M5+£ | 6M | the dormitory-town unlock (§21) |
-| Rail line + internal station | M8+DP | 5M/km + 4M | through/terminus variants (rail stations group) |
+| Rail line + internal station | M8+DP | 5M/km + 4M | through/terminus variants (Rail group) |
 | Grand terminus | M9+DP | 30M | interchange hub |
 | **Metro (tube) tunnel + station** | M10+DP | 25M/km + 15M | 30k pax/h/dir |
 | Underground interchange | M10+DP | 40M | |
@@ -1189,7 +1189,7 @@ CREATE VIEW v_blocked AS
 | Multi-storey car park | M6+DP | 3M | parking is land (§19.1) |
 | Automated logistics hub | M12+DP | 300M | JIT endgame |
 
-## PT — Port & Coastal (Waterfront Transport)
+## PT — Port & Coastal (Waterfront)
 | Object | Unlock | Cost | Notes |
 |---|---|---|---|
 | Fishing quay | M6+DP | 1M | fresh food source |
@@ -1203,7 +1203,7 @@ CREATE VIEW v_blocked AS
 | Sea wall / storm barrier | M6+DP | 2M/km | storm-surge defence |
 | Land reclamation | M9+DP | 20M/ha | makes flat land — the ultimate answer |
 | Breakwater | M7+DP | 5M | enables harbour siting |
-| Beach house zone | M6+DP | zoning | Coastal shoreline group; premium shore living |
+| Beach house zone | M6+DP | zoning | Shoreline group; premium shore living |
 
 ## HS — Housing Typologies (zoned; appeal profiles §21)
 | Type | Unlock | Density (hh/ha) | Profile sketch |
@@ -1230,11 +1230,11 @@ CREATE VIEW v_blocked AS
 | Object | Unlock | Notes |
 |---|---|---|
 | Corner shop / general store | M1 | |
-| High-street retail | M3 | |
+| Retail | M3 | |
 | Supermarket | M5+DP | JIT anchor customer |
 | Retail park | M7+DP | car-dependent |
 | Market hall | M4+DP | fresh-food distribution |
-| Victorian office chambers | M5 | Office tiers group t1 |
+| Victorian office chambers | M5 | Office group t1 |
 | Office block | M7+DP | t2 |
 | Glass HQ tower | M9+DP | t3; finance sector |
 | Farm plots / market garden | M1/M2 | harvest calendar |
@@ -1315,7 +1315,7 @@ Every requirement raised in planning, traced to its LLD home:
 | Hyperloop & TBM tunnels | §53 |
 | Top-down tax; civil servants as net cost; municipality/planning quality; childcare; benefits, social housing, dentists/opticians; Public Service Pie | §54, Supp.3 |
 | Defence branches (bio, nuclear-eng, air, submarine, surface, tank, infantry), mandates at thresholds, central grants | §55 |
-| 'Blue' expansions content (waterfront transport, coastal shoreline, high-rise, stations, offices) | §23, catalogue |
+| 'Blue' expansions content (Waterfront, Shoreline, high-rise, stations, offices) | §23, catalogue |
 | LHC / SpaceX / Heathrow-class megabuilds; auto-naming of every object | Supp.2 §MP, §20 |
 | Front/back separation, cloud (Blob/Batch/solver offload/AI-surrogate), GPU sidecar, threading, 20GB/i7/RTX budget | §15, M0-ENG §1 |
 | Harness & static-first build; /debug feature switch + info panel (version, logs, memory, modules, on/off) | M0-ENG §2–§3 |
