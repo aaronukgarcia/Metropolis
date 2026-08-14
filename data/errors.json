@@ -57,7 +57,8 @@
       "G200-G299": "reserved for engine.finance (internal/engine/finance: the double-entry money ledger, land pricing, loans/credit-rating/insolvency, investments, and v1 SimpleFirm — MOD-022. Third G-layer engine claim after engine.citizens' G000-G099 and engine.projections' G100-G199; the E layer is fully exhausted and the code format was widened to four digits on 2026-08-14 (BUG-234) so three-digit codes remain the norm here. Checked against this table AND `grep -rn \"MET-G2\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G2xx code existed either place.)",
       "G300-G399": "reserved for engine.consumption (internal/engine/consumption: coefficient-driven demand from data/consumption.json, the four utility networks (water/wastewater/electricity/gas) with sources/edges/storage/losses, the conserved daily solve, the aquifer sustainable-yield ceiling, peak-vs-base load, the all-electric strategy, and household utility billing — MOD-021. Fourth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, and engine.finance's G200-G299; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G3\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G3xx code existed either place.)",
       "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)",
-    "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)"
+    "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)",
+    "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1807,6 +1808,54 @@
       "module": "engine.build",
       "message": "BuildAPI dependency {dependency} is not wired for operation {operation}",
       "remedy": "Wire the missing dependency before using the operation: SetWorld before SubmitZoneCommand/SubmitBuildCommand/SubmitDemolishCommand/PurchasePrice, SetSeason before SubmitBuildCommand, and SetLogistics before Tick. engine.build never silently no-ops a command because a dependency was forgotten (GR#1/GR#17)."
+    },
+    "MET-G600": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "household {household} is not present via CitizensAPI",
+      "remedy": "Form the household first (engine.citizens' ApplyLifeEventCommand with LifeEventPartner) before querying it through HouseholdsAPI, or pass a household id CitizensAPI actually reports. The query is rejected rather than silently zeroed (AC-10)."
+    },
+    "MET-G601": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "housing typology {typology} is not one of the loaded HS catalogue entries",
+      "remedy": "Use a typology id present in data/buildings.json's catalogueSection \"HS\" entries (e.g. terrace, bungalow, penthouse_tower). The appeal/stock lookup is rejected rather than silently zeroed (AC-10)."
+    },
+    "MET-G602": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "negative built-stock count {count} reported for typology {typology}",
+      "remedy": "A stock count is a dwelling-unit quantity and must be non-negative. Report a count >= 0, or 0 to clear the typology's stock (GR#16)."
+    },
+    "MET-G603": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "HS housing-typology catalogue could not be loaded from {dir}: {cause}",
+      "remedy": "Check that data/buildings.json is present, valid, and carries catalogueSection \"HS\" entries with non-empty appealProfile arrays. engine.households never falls back to a silent empty catalogue (GR#15/GR#7)."
+    },
+    "MET-G604": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "HouseholdsAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *HouseholdsAPI pointer Load/LoadDefault/NewFromBuildings returned. A copy carries its own mutex over the same aliased stock map (SEC-020)."
+    },
+    "MET-G605": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "HouseholdsAPI dependency {dependency} is not wired for operation {operation}",
+      "remedy": "Wire the engine.citizens dependency with SetCitizens before querying household membership/composition/overcrowding/rent-burden. engine.households never silently no-ops a query because a dependency was forgotten (GR#1/GR#17)."
+    },
+    "MET-G606": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "household {household} references member {member}, which does not resolve via CitizensAPI",
+      "remedy": "A household's member list must name citizens CitizensAPI actually reports — the conservation invariant's no-orphaned half. Fix the member list (or seed the citizen) rather than silently skipping the orphaned member."
+    },
+    "MET-G607": {
+      "severity": "error",
+      "module": "engine.households",
+      "message": "negative monetary amount (rent {rent}, income {income})",
+      "remedy": "Rent and income are non-negative monetary quantities in micro-pounds. Pass a value >= 0; zero income is valid and reads as rent-burdened via the citizens sentinel (GR#16/FEAT-086)."
     }
   }
 }
