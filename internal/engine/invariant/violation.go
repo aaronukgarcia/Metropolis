@@ -10,7 +10,7 @@ import "fmt"
 //
 // # Downstream sanitisation obligation (AC-11b)
 //
-// InvariantName, EntityIDs, and Message are DISPLAY DATA — opaque text
+// InvariantName, EntityIDs, Terms, and Message are DISPLAY DATA — opaque text
 // this package hands to a caller, never bytes this package itself
 // writes to a terminal or log sink. Whatever renders them next (F12's
 // error-tail, a future log formatter) MUST sanitise or escape them
@@ -52,6 +52,17 @@ type Violation struct {
 	// carries downstream.
 	EntityIDs []string
 
+	// Terms optionally names the individual flow components that sum to
+	// Expected (the tracked delta), for a multi-term stock registered via
+	// RegisterStockWithTerms — e.g. {"generated": 500, "collected": -300,
+	// "composted": -150, "landfilled": -50}. Sign convention: inflow
+	// terms are positive, outflow terms are negative, so Σ(Terms) ==
+	// Expected == Σ(ins) − Σ(outs). nil (or empty) for the four v1 stock
+	// invariants and for a single-term stock that registered no named
+	// ins/outs terms. Carries the same AC-11b sanitisation obligation as
+	// EntityIDs: display data, never interpolated into Message.
+	Terms map[string]int64
+
 	// Message is a human-readable diagnostic naming the invariant, the
 	// tick, and the imbalance amount (AC-8's dev-mode hard-fail
 	// requirement: "diagnostic output naming the invariant, the tick,
@@ -69,7 +80,12 @@ func (v Violation) IsZero() bool { return !v.Detected }
 // TrackedDelta and observed delta respectively; entityIDs is passed
 // through unchanged (never interpolated into Message — AC-11b).
 func newViolation(name string, tick, expected, actual int64, entityIDs []string) Violation {
-	unexplained := actual - expected
+	// SEC-060: expected/actual may themselves already be saturated at the int64
+	// extremes (the SEC-055 fix saturates evalTerms and stockCheck), so the
+	// imbalance must use the same overflow-safe subtraction. Plain int64
+	// subtraction of two opposite-signed saturated extremes wraps — reporting
+	// "unexplained 1" where the true imbalance is on the order of 1.8e19.
+	unexplained, _ := satSub(actual, expected)
 	return Violation{
 		Detected:      true,
 		InvariantName: name,

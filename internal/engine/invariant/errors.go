@@ -41,4 +41,11 @@ const (
 	// silently overwriting the earlier registration (mirrors
 	// foundation.registry.Register's duplicate-key behaviour).
 	ErrDuplicateInvariant = "MET-E304"
+
+	// ErrNilTermFunc: RegisterStock/RegisterStockWithTerms was called with
+	// a nil term function (the single-term snapshot, or an ins/outs entry)
+	// — rejected at registration time rather than panicking in the tick
+	// loop the first time the invariant evaluates the nil func (GR#7: fail
+	// loud at the boundary, not N ticks later).
+	ErrNilTermFunc = "MET-E305"
 )

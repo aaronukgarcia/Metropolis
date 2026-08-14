@@ -1,5 +1,7 @@
 package invariant
 
+import "math"
+
 // stockCheck is the shared conservation-balance logic every v1
 // invariant (people.go, money.go, goods.go, vehicle.go) wraps: given a
 // Snapshot, look up the invariant's own StockName and verify
@@ -24,8 +26,8 @@ func (s stockCheck) Check(state Snapshot) Result {
 		return Result{Ran: false}
 	}
 
-	actualDelta := reading.Closing - reading.Opening
-	if actualDelta == reading.TrackedDelta {
+	actualDelta, overflowed := satSub(reading.Closing, reading.Opening)
+	if !overflowed && actualDelta == reading.TrackedDelta {
 		return Result{Ran: true}
 	}
 
@@ -34,4 +36,37 @@ func (s stockCheck) Check(state Snapshot) Result {
 		Ran:       true,
 		Violation: newViolation(s.name, state.Tick, reading.TrackedDelta, actualDelta, entityIDs),
 	}
+}
+
+// satAdd returns a+b saturated at math.MaxInt64 / math.MinInt64 when the true
+// sum would overflow int64, instead of silently wrapping (SEC-055). overflowed
+// reports whether saturation occurred. The overflow predicate is the same one
+// foundation/det/money.go's Add uses: under two's-complement wrapping, a
+// positive b must not leave the result below a, and a negative b must not
+// leave it above a.
+func satAdd(a, b int64) (int64, bool) {
+	c := a + b
+	if b > 0 && c < a {
+		return math.MaxInt64, true
+	}
+	if b < 0 && c > a {
+		return math.MinInt64, true
+	}
+	return c, false
+}
+
+// satSub returns a-b saturated at math.MaxInt64 / math.MinInt64 when the true
+// difference would overflow int64, instead of silently wrapping (SEC-055).
+// overflowed reports whether saturation occurred. Handled directly (not as
+// satAdd(a, -b)) because negating math.MinInt64 itself overflows int64 — the
+// same reason foundation/det/money.go's Sub does not route through Add.
+func satSub(a, b int64) (int64, bool) {
+	c := a - b
+	if b < 0 && c < a {
+		return math.MaxInt64, true
+	}
+	if b > 0 && c > a {
+		return math.MinInt64, true
+	}
+	return c, false
 }

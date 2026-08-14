@@ -1,6 +1,9 @@
 package invariant
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // Each stock's test follows the same shape: (1) a BALANCED fixture
 // proves the invariant does not cry wolf on legitimate state (weakness
@@ -161,5 +164,27 @@ func TestConservationInvariant_UnregisteredStockSkipped(t *testing.T) {
 		if got.Violation.Detected {
 			t.Errorf("%s: Check reported a Violation for an unregistered stock — false-flagged an assumed zero", inv.Name())
 		}
+	}
+}
+
+// TestStockCheck_OverflowSaturatesNotWraps is SEC-055's twin for the four v1
+// stock invariants: a Closing−Opening subtraction that overflows int64 must
+// saturate and fail the identity, not wrap into a value that equals
+// TrackedDelta and reports "balanced". Closing−Opening = MaxInt64 − (−1)
+// overflows to MinInt64 under wrapping arithmetic, so TrackedDelta is set to
+// that wrapped value: the old code reports balanced, the fixed code must not.
+func TestStockCheck_OverflowSaturatesNotWraps(t *testing.T) {
+	inv := NewPeopleInvariant()
+	state := NewSnapshot(1)
+	state.Readings[StockPeople] = StockReading{
+		Registered: true, Opening: -1, Closing: math.MaxInt64, TrackedDelta: math.MinInt64,
+	}
+
+	got := inv.Check(state)
+	if !got.Ran {
+		t.Fatal("Check.Ran = false, want true (stock was registered)")
+	}
+	if !got.Violation.Detected {
+		t.Fatal("Closing−Opening overflowed and was reported balanced — the invariant silently false-negatived (SEC-055)")
 	}
 }

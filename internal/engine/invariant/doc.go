@@ -51,6 +51,15 @@
 //     RunSuite reports it as skipped (AC-12), never as a false-flagged
 //     zero.
 //
+// For the common "sum some named flow functions" shape, RegisterStock
+// (single-term: one pre-summed tracked-delta func) and RegisterStockWithTerms
+// (multi-term: separate inflow/outflow TermFuncs — BUG-067) are sugar over
+// those two steps: they build the Invariant (a multiTermCheck) and register
+// it via Registry.Register, deriving TrackedDelta = Σ(ins) − Σ(outs) each
+// tick instead of the owning module pre-summing it. A module with a more
+// complex per-tick derivation than "sum some functions" still hand-writes an
+// Invariant directly, as today.
+//
 // # Which phase this checker runs against (ASM-080)
 //
 // §14 says "hard assert in dev... every tick" — read literally, that
