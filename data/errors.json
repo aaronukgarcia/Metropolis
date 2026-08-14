@@ -58,7 +58,8 @@
       "G300-G399": "reserved for engine.consumption (internal/engine/consumption: coefficient-driven demand from data/consumption.json, the four utility networks (water/wastewater/electricity/gas) with sources/edges/storage/losses, the conserved daily solve, the aquifer sustainable-yield ceiling, peak-vs-base load, the all-electric strategy, and household utility billing — MOD-021. Fourth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, and engine.finance's G200-G299; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G3\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G3xx code existed either place.)",
       "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)",
     "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)",
-    "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)"
+    "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)",
+    "G700-G799": "reserved for engine.attract (internal/engine/attract: the §11 attractiveness & migration master dial — the seven-term A score, the signed net-migration response g(A − A_world), the §4 static world pool, per-resident personality-weighted emigration, and the asymmetric reputation-momentum term — MOD-029/FEAT-083. Eighth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, engine.build's G500-G599, and engine.households' G600-G699; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G7\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G7xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1856,6 +1857,54 @@
       "module": "engine.households",
       "message": "negative monetary amount (rent {rent}, income {income})",
       "remedy": "Rent and income are non-negative monetary quantities in micro-pounds. Pass a value >= 0; zero income is valid and reads as rent-burdened via the citizens sentinel (GR#16/FEAT-086)."
+    },
+    "MET-G700": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "invalid §11 attractiveness weight {field}={value} (must be finite, in [0,1], and the seven weights sum to 1)",
+      "remedy": "Fix the weight in the attract config data so each of the seven weights is a finite fraction in [0,1] and they sum to 1 (within 1e-6). engine.attract rejects an invalid weight config rather than silently defaulting to an unweighted or zero-weighted term (AC-10)."
+    },
+    "MET-G701": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "invalid attract config field {field}={value}",
+      "remedy": "Fix the named config field: the migration rate must be finite and non-negative, the reputation rates finite in [0,1] with fallRate strictly greater than riseRate (the Detroit-trap asymmetry, US-2), reputation.max finite and positive, and aWorld finite. A failed config load is surfaced as this code, never a silent zero substitution."
+    },
+    "MET-G702": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "AttractAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *AttractAPI pointer New returned. A copy carries its own mutex over the same aliased state (SEC-020)."
+    },
+    "MET-G703": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "AttractAPI dependency {dependency} is not wired for operation {operation}",
+      "remedy": "Wire the engine.citizens/finance/households dependency with SetCitizens/SetFinance/SetHouseholds before querying the HousingAffordability term or applying migration. engine.attract never silently no-ops because a dependency was forgotten (GR#1/GR#17)."
+    },
+    "MET-G704": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "invalid term input {field}={value} (a §11 term must be finite and in [0,100]; rent must be non-negative)",
+      "remedy": "Pass the five pushed terms as finite values in [0,100] and a non-negative monthly rent in micro-pounds. The input is rejected with no state change (FEAT-086)."
+    },
+    "MET-G705": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "negative migration capacity {field}={value}",
+      "remedy": "Housing vacancy and junction arrival throughput are non-negative quantities. Pass a value >= 0; the migration command is rejected with no state change (FEAT-086)."
+    },
+    "MET-G706": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "the §4 world-pool seam is absent: A_world (the attractiveness comparison baseline) is missing or unloadable",
+      "remedy": "Supply a WorldPool (e.g. NewStaticWorldPool from a config aWorld field). engine.attract refuses to construct rather than silently defaulting to A_world = 0, which would make any positive A read as attractive regardless of world conditions (AC-11). A genuine zero baseline is expressed as StaticWorldPool{0}, not a nil pool."
+    },
+    "MET-G707": {
+      "severity": "error",
+      "module": "engine.attract",
+      "message": "invalid migration month {month} (must be non-negative)",
+      "remedy": "Pass a non-negative simulation month to ApplyMigration. The month keys the per-resident emigration hash stream and the once-per-month reputation advance; a negative value is rejected rather than wrapped into a migrant birth-month or stream key (FEAT-086)."
     }
   }
 }
