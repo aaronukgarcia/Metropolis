@@ -210,6 +210,9 @@ func (c *CitizensAPI) BuildSample(correlationID string) *StratifiedSample {
 
 // ColdParams derives the cold-pass parameters from the sample (AC-8/AC-9).
 func (c *CitizensAPI) ColdParams(correlationID string) ColdPassParams {
+	if err := c.checkNotCopied(correlationID, "ColdParams"); err != nil {
+		return ColdPassParams{}
+	}
 	return DeriveColdPassParams(c.BuildSample(correlationID))
 }
 
@@ -407,6 +410,9 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 // AdvanceMonth advances a full calendar month (30 day-ticks). Convenience
 // for tests and the perf harness.
 func (c *CitizensAPI) AdvanceMonth(correlationID string) error {
+	if err := c.checkNotCopied(correlationID, "AdvanceMonth"); err != nil {
+		return err
+	}
 	for d := 0; d < DaysPerMonth; d++ {
 		if err := c.AdvanceDayTick(correlationID); err != nil {
 			return err

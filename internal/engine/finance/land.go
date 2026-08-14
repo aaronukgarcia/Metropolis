@@ -1,6 +1,10 @@
 package finance
 
-import "math"
+import (
+	"math"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
+)
 
 // Land pricing (§7, AC-4): every cell is continuously priced as
 //
@@ -74,19 +78,19 @@ func BaseTerrainPrice(t TerrainKind) Money {
 // AccessFactor is AC-4's access(junction, roads) component: a per-mille
 // factor that rises with a junction and with each connecting road.
 // PLACEHOLDER magnitudes, monotonic direction only. The roads multiplier
-// uses safeMul + saturating addition so an extreme roads count saturates
+// uses num.SafeMul + saturating addition so an extreme roads count saturates
 // instead of wrapping below the 1.0× baseline (GR#16).
 func AccessFactor(junction bool, roads int) int64 {
 	if roads < 0 {
 		roads = 0
 	}
-	inc, overflowed := safeMul(int64(roads), 50)
+	inc, overflowed := num.SafeMul(int64(roads), 50)
 	if overflowed {
 		inc = math.MaxInt64
 	}
-	f := satAddI64(factorScale, inc)
+	f := num.SatAdd(factorScale, inc)
 	if junction {
-		f = satAddI64(f, 200)
+		f = num.SatAdd(f, 200)
 	}
 	return f
 }
@@ -95,7 +99,7 @@ func AccessFactor(junction bool, roads int) int64 {
 // component: a per-mille factor that rises with service coverage and a
 // coast view, and falls as pollution rises (clamped at a positive
 // floor so a heavily polluted cell still prices above zero). The
-// services multiplier uses safeMul + saturating arithmetic so an extreme
+// services multiplier uses num.SafeMul + saturating arithmetic so an extreme
 // count saturates instead of wrapping below baseline (GR#16).
 func AmenityFactor(services int, coastView bool, pollution int64) int64 {
 	if services < 0 {
@@ -104,15 +108,15 @@ func AmenityFactor(services int, coastView bool, pollution int64) int64 {
 	if pollution < 0 {
 		pollution = 0
 	}
-	inc, overflowed := safeMul(int64(services), 100)
+	inc, overflowed := num.SafeMul(int64(services), 100)
 	if overflowed {
 		inc = math.MaxInt64
 	}
-	f := satAddI64(factorScale, inc)
+	f := num.SatAdd(factorScale, inc)
 	if coastView {
-		f = satAddI64(f, 200)
+		f = num.SatAdd(f, 200)
 	}
-	f = satSubI64(f, minI64(pollution, 90)*10)
+	f = num.SatSub(f, minI64(pollution, 90)*10)
 	if f < 100 {
 		f = 100 // floor: 0.1×
 	}
@@ -127,7 +131,7 @@ func ScarcityFactor(citySize int64) int64 {
 		citySize = 0
 	}
 	// +1 per-mille point per 100 citizens-equivalent, capped.
-	return satAddI64(factorScale, minI64(citySize/100, 9000))
+	return num.SatAdd(factorScale, minI64(citySize/100, 9000))
 }
 
 // LandPrice implements §7's land-price formula by composing the four

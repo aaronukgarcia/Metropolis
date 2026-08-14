@@ -266,6 +266,9 @@ func (f *FinanceAPI) Post(tx Transaction) (TxID, error) {
 // by Post and by ServiceDebt, which needs the same checks atomically with
 // its loan-book reduction.
 func (f *FinanceAPI) validateLocked(tx Transaction) error {
+	if err := f.checkNotCopied("validateLocked"); err != nil {
+		return err
+	}
 	if len(tx.Entries) == 0 {
 		return errs.New(ErrUnbalancedTransaction, f.correlationID, map[string]any{
 			"txid": 0, "debits": 0, "credits": 0,
@@ -326,6 +329,9 @@ func (f *FinanceAPI) validateLocked(tx Transaction) error {
 // conservation invariant and FindConservationViolations exist to catch
 // (AC-10b).
 func (f *FinanceAPI) post(tx Transaction, tracked bool) TxID {
+	if err := f.checkNotCopied("post"); err != nil {
+		return 0
+	}
 	tx.ID = f.nextTxID
 	f.nextTxID++
 	tx.Month = f.month
@@ -355,6 +361,9 @@ func (f *FinanceAPI) post(tx Transaction, tracked bool) TxID {
 // invariant exists to catch (AC-10b), and is unexported for that reason
 // — production callers must use Post.
 func (f *FinanceAPI) postRaw(tx Transaction) TxID {
+	if err := f.checkNotCopied("postRaw"); err != nil {
+		return 0
+	}
 	return f.post(tx, false)
 }
 
@@ -392,6 +401,9 @@ func (f *FinanceAPI) RecomputeMoneyStock() Money {
 // sortedMoneyAccounts returns the RoleMoney account IDs in ascending
 // order (deterministic — never map-iteration order, GR#21).
 func (f *FinanceAPI) sortedMoneyAccounts() []AccountID {
+	if err := f.checkNotCopied("sortedMoneyAccounts"); err != nil {
+		return nil
+	}
 	ids := make([]AccountID, 0, len(f.role))
 	for id, r := range f.role {
 		if r == RoleMoney {
@@ -407,6 +419,9 @@ func (f *FinanceAPI) sortedMoneyAccounts() []AccountID {
 // incrementally-maintained Balance field, so a balance-maintenance bug
 // surfaces here.
 func (f *FinanceAPI) balanceFromScratch(id AccountID) Money {
+	if err := f.checkNotCopied("balanceFromScratch"); err != nil {
+		return 0
+	}
 	var balance Money
 	for _, tx := range f.txns {
 		for _, e := range tx.Entries {
@@ -470,6 +485,9 @@ func (f *FinanceAPI) MoneyStock() MoneyStock {
 // AC-10). Registered is always true — a *FinanceAPI that exists always
 // reports its money stock.
 func (f *FinanceAPI) MoneyStockReading() invariant.StockReading {
+	if err := f.checkNotCopied("MoneyStockReading"); err != nil {
+		return invariant.StockReading{}
+	}
 	s := f.MoneyStock()
 	return invariant.StockReading{
 		Registered:   true,
@@ -497,6 +515,9 @@ func (f *FinanceAPI) Lines(account AccountID) []Entry {
 // one consistent snapshot without recursive read-locking (a recursive
 // RLock can deadlock once a writer is waiting).
 func (f *FinanceAPI) linesLocked(account AccountID) []Entry {
+	if err := f.checkNotCopied("linesLocked"); err != nil {
+		return nil
+	}
 	var out []Entry
 	for _, tx := range f.tickTxns {
 		for _, e := range tx.Entries {

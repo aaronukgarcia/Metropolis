@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // Schema bounds on the float64 config inputs (FEAT-086 — the float64 path).
@@ -28,7 +29,7 @@ const (
 // construction and turns NaN/±Inf/absurd later can never inject a non-finite
 // value into the migration math (defect #2).
 func validateWorldScore(aworld float64, correlationID string) error {
-	if !isFinite(aworld) || aworld < minWorldScore || aworld > maxWorldScore {
+	if !num.IsFinite(aworld) || aworld < minWorldScore || aworld > maxWorldScore {
 		return errs.New(ErrConfigInvalid, correlationID, map[string]any{
 			"field": "aWorld",
 			"value": aworld,
@@ -77,20 +78,20 @@ func (c Config) validate(correlationID string) error {
 	if err := validateWorldScore(c.World.AWorld(), correlationID); err != nil {
 		return err
 	}
-	if !isFinite(c.MigrationRate) || c.MigrationRate < 0 || c.MigrationRate > maxMigrationRate {
+	if !num.IsFinite(c.MigrationRate) || c.MigrationRate < 0 || c.MigrationRate > maxMigrationRate {
 		return errs.New(ErrConfigInvalid, correlationID, map[string]any{
 			"field": "migrationRate",
 			"value": c.MigrationRate,
 		})
 	}
 	r := c.Reputation
-	if !isFinite(r.RiseRate) || r.RiseRate < 0 || r.RiseRate > 1 {
+	if !num.IsFinite(r.RiseRate) || r.RiseRate < 0 || r.RiseRate > 1 {
 		return errs.New(ErrConfigInvalid, correlationID, map[string]any{
 			"field": "reputation.riseRate",
 			"value": r.RiseRate,
 		})
 	}
-	if !isFinite(r.FallRate) || r.FallRate < 0 || r.FallRate > 1 {
+	if !num.IsFinite(r.FallRate) || r.FallRate < 0 || r.FallRate > 1 {
 		return errs.New(ErrConfigInvalid, correlationID, map[string]any{
 			"field": "reputation.fallRate",
 			"value": r.FallRate,
@@ -104,7 +105,7 @@ func (c Config) validate(correlationID string) error {
 			"value": "fallRate must exceed riseRate",
 		})
 	}
-	if !isFinite(r.Max) || r.Max <= 0 || r.Max > maxReputationMagnitude {
+	if !num.IsFinite(r.Max) || r.Max <= 0 || r.Max > maxReputationMagnitude {
 		return errs.New(ErrConfigInvalid, correlationID, map[string]any{
 			"field": "reputation.max",
 			"value": r.Max,

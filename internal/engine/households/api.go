@@ -7,6 +7,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // HouseholdsAPI is code.json's "engine.households" inbound contract
@@ -134,6 +135,9 @@ func (h *HouseholdsAPI) SetCitizens(c *citizens.CitizensAPI) error {
 // citizens returns the wired CitizensAPI (nil until SetCitizens), read under
 // mu so it is safe against a concurrent SetCitizens.
 func (h *HouseholdsAPI) citizensAPI() *citizens.CitizensAPI {
+	if err := h.checkNotCopied("citizensAPI"); err != nil {
+		return nil
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.citizens
@@ -168,6 +172,9 @@ func (h *HouseholdsAPI) ReportStock(cmd StockCommand) error {
 // stockOf returns a typology's current built-stock count (0 when never
 // reported), read under mu.
 func (h *HouseholdsAPI) stockOf(typologyID string) int64 {
+	if err := h.checkNotCopied("stockOf"); err != nil {
+		return 0
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.stock[typologyID]
@@ -208,6 +215,9 @@ func (h *HouseholdsAPI) TypologyCount() int {
 
 // typologySnapshot builds the read-only Typology view of one loaded record.
 func (h *HouseholdsAPI) typologySnapshot(id string) Typology {
+	if err := h.checkNotCopied("typologySnapshot"); err != nil {
+		return Typology{}
+	}
 	rec := h.typologies[id]
 	return Typology{
 		ID:           rec.id,
@@ -240,7 +250,7 @@ func (h *HouseholdsAPI) AppealOf(typologyID string, profile HouseholdProfile) (A
 	}
 	var score int64
 	for _, tag := range rec.tags {
-		score = satAdd(score, appealContribution(tag, profile))
+		score = num.SatAdd(score, appealContribution(tag, profile))
 	}
 	return AppealScore{Value: score}, nil
 }
@@ -291,7 +301,7 @@ func (h *HouseholdsAPI) HouseholdProfile(householdID uint64) (HouseholdProfile, 
 			})
 		}
 		members = append(members, cit)
-		wealth = satAdd(wealth, cit.Wealth)
+		wealth = num.SatAdd(wealth, cit.Wealth)
 	}
 	return HouseholdProfile{
 		Stage:       deriveLifeStage(members),
@@ -387,14 +397,14 @@ func (h *HouseholdsAPI) DemandByType(householdIDs []uint64) (DemandDistribution,
 			return DemandDistribution{}, err
 		}
 		top := h.topTypology(profile)
-		counts[top] = satAdd(counts[top], 1)
+		counts[top] = num.SatAdd(counts[top], 1)
 	}
 
 	entries := make([]DemandEntry, 0, len(h.typologyOrder))
 	var total int64
 	for _, id := range h.typologyOrder {
 		d := counts[id] // 0 for an unreported/preferred-never typology
-		total = satAdd(total, d)
+		total = num.SatAdd(total, d)
 		entries = append(entries, DemandEntry{Typology: id, Demand: d})
 	}
 	return DemandDistribution{Total: total, Entries: entries}, nil
@@ -404,6 +414,9 @@ func (h *HouseholdsAPI) DemandByType(householdIDs []uint64) (DemandDistribution,
 // breaking ties by the ascending-id iteration order (deterministic, GR#21 —
 // no map iteration, no RNG).
 func (h *HouseholdsAPI) topTypology(profile HouseholdProfile) string {
+	if err := h.checkNotCopied("topTypology"); err != nil {
+		return ""
+	}
 	best := ""
 	var bestScore int64
 	for _, id := range h.typologyOrder {
@@ -411,7 +424,7 @@ func (h *HouseholdsAPI) topTypology(profile HouseholdProfile) string {
 		var score int64
 		if !rec.fallback {
 			for _, tag := range rec.tags {
-				score = satAdd(score, appealContribution(tag, profile))
+				score = num.SatAdd(score, appealContribution(tag, profile))
 			}
 		}
 		if best == "" || score > bestScore {
@@ -441,7 +454,7 @@ func (h *HouseholdsAPI) UnhousedByPreference(householdIDs []uint64) (int64, erro
 	for _, e := range d.Entries {
 		stock := h.stock[e.Typology] // 0 when never reported
 		if e.Demand > stock {
-			unhoused = satAdd(unhoused, satSub(e.Demand, stock))
+			unhoused = num.SatAdd(unhoused, num.SatSub(e.Demand, stock))
 		}
 	}
 	return unhoused, nil
@@ -487,21 +500,21 @@ func (h *HouseholdsAPI) HousingAffordability(householdIDs []uint64, monthlyRentM
 			return Affordability{}, err
 		}
 		if oc.Overcrowded {
-			overcrowded = satAdd(overcrowded, 1)
+			overcrowded = num.SatAdd(overcrowded, 1)
 		}
 		rb, err := h.RentBurdenOf(hid, monthlyRentMicroPounds, monthlyIncomeMicroPounds)
 		if err != nil {
 			return Affordability{}, err
 		}
 		if rb.Burdened {
-			rentBurdened = satAdd(rentBurdened, 1)
+			rentBurdened = num.SatAdd(rentBurdened, 1)
 		}
 	}
 	unhoused, err := h.UnhousedByPreference(householdIDs)
 	if err != nil {
 		return Affordability{}, err
 	}
-	stressed := satAdd(satAdd(overcrowded, rentBurdened), unhoused)
+	stressed := num.SatAdd(num.SatAdd(overcrowded, rentBurdened), unhoused)
 	return Affordability{
 		Index:                affordabilityIndex(stressed, total),
 		Overcrowded:          overcrowded,
@@ -522,6 +535,6 @@ func affordabilityIndex(stressed, total int64) int64 {
 	if stressed >= total {
 		return 0
 	}
-	num, _ := safeMul(100, satSub(total, stressed))
+	num, _ := num.SafeMul(100, num.SatSub(total, stressed))
 	return num / total
 }

@@ -385,7 +385,7 @@ func TestDeliverableIsDataDriven(t *testing.T) {
 // Pre-fix, OrderSize(MaxInt64) returned int64(ceil(2^63*1.5)) == MinInt64
 // and Deliverable(MaxInt64, MaxInt64) returned delivered == MinInt64 with
 // shortfall == -1. Each assertion below is therefore a real gate that
-// fails before the saturatingInt64FromFloat choke point.
+// fails before the num.ClampInt64FromFloat choke point.
 
 func TestOrderSizeMaxInt64Saturates(t *testing.T) {
 	api := fixtureAPI(t, 1000, 1.0)

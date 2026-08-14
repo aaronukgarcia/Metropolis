@@ -8,6 +8,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // BufferPolicy is US-10/AC-3's per-commodity, player-tunable
@@ -299,28 +300,6 @@ func snapshotStock(district string, c market.CommodityType, st *stockState) Stoc
 	}
 }
 
-// saturatingInt64FromFloat converts f — a non-negative float64 quantity
-// derived from int64 arithmetic — back to int64, SATURATING rather than
-// wrapping. This is the single choke point for every int64 -> float64 ->
-// int64 round trip in this package (GR#16, Destructive finding on
-// MOD-025): float64(math.MaxInt64) is exactly 2^63 (the 52-bit mantissa
-// cannot represent 2^63-1), so any float result that reaches 2^63 would
-// convert to a NEGATIVE int64 (implementation-defined wrap on amd64)
-// without this clamp. Every float-derived int64 quantity — OrderSize's
-// order, Deliverable's effective throughput — MUST route through here,
-// never through a bare int64(float64(...)) expression.
-func saturatingInt64FromFloat(f float64) int64 {
-	// float64(math.MaxInt64) == 2^63: the first float64 value outside
-	// int64's positive range.
-	if f >= float64(math.MaxInt64) {
-		return math.MaxInt64
-	}
-	if f <= 0 {
-		return 0
-	}
-	return int64(f)
-}
-
 // Provision creates (or resets) the local stock record for
 // (district, commodity) with the given shelf capacity and initial level,
 // seeding its holding cost, shelf life, and default buffer policy from
@@ -513,7 +492,7 @@ func (l *LogisticsAPI) Deliverable(district string, c market.CommodityType, requ
 		localCap = avail.CapacityCeiling
 	}
 
-	effective := saturatingInt64FromFloat(math.Floor(float64(localCap) * cfg.shortfallFactor))
+	effective := num.ClampInt64FromFloat(math.Floor(float64(localCap) * cfg.shortfallFactor))
 	delivered := requested
 	if delivered > effective {
 		delivered = effective
@@ -590,7 +569,7 @@ func (l *LogisticsAPI) OrderSize(district string, c market.CommodityType, foreca
 	l.mu.RUnlock()
 
 	mult := l.cfg.BufferPolicies[string(policy)].SafetyBuffer
-	return saturatingInt64FromFloat(math.Ceil(float64(forecastDemand) * (1 + mult))), nil
+	return num.ClampInt64FromFloat(math.Ceil(float64(forecastDemand) * (1 + mult))), nil
 }
 
 // SubscribeShortfalls registers h to receive a [ShortfallEvent] for every

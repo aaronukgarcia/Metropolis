@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // errNoHousingTypologies is the descriptive error loadTypologies returns
@@ -128,6 +129,6 @@ const (
 // if a future Batch value were enlarged. Both operands are bounded here
 // (band ∈ [0,4], units ≤ 100), so this is defence-in-depth (FEAT-086).
 func satMulSmall(a, b int64) int64 {
-	v, _ := safeMul(a, b)
+	v, _ := num.SafeMul(a, b)
 	return v
 }

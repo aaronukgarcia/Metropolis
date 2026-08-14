@@ -3,6 +3,8 @@ package finance
 import (
 	"math"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // TestOverdraftBypassRejected (Destructive round #1, AC-13/GR#16) proves
@@ -167,25 +169,25 @@ func TestMonthlyPaymentDoesNotWrap(t *testing.T) {
 }
 
 // TestSafeMulMixedSignOverflow (round-3 defect #1, GR#16) proves the
-// mixed-sign branch of safeMul flags and saturates, and does not
+// mixed-sign branch of num.SafeMul flags and saturates, and does not
 // mis-flag small mixed-sign products.
 func TestSafeMulMixedSignOverflow(t *testing.T) {
-	if v, ok := safeMul(math.MaxInt64, -2); !ok || v != math.MinInt64 {
-		t.Fatalf("safeMul(MaxInt64, -2) = (%d, %v), want (MinInt64, true)", v, ok)
+	if v, ok := num.SafeMul(math.MaxInt64, -2); !ok || v != math.MinInt64 {
+		t.Fatalf("num.SafeMul(MaxInt64, -2) = (%d, %v), want (MinInt64, true)", v, ok)
 	}
-	if v, ok := safeMul(math.MinInt64, 2); !ok || v != math.MinInt64 {
-		t.Fatalf("safeMul(MinInt64, 2) = (%d, %v), want (MinInt64, true)", v, ok)
+	if v, ok := num.SafeMul(math.MinInt64, 2); !ok || v != math.MinInt64 {
+		t.Fatalf("num.SafeMul(MinInt64, 2) = (%d, %v), want (MinInt64, true)", v, ok)
 	}
-	if v, ok := safeMul(-5, 3); ok || v != -15 {
-		t.Fatalf("safeMul(-5, 3) = (%d, %v), want (-15, false)", v, ok)
+	if v, ok := num.SafeMul(-5, 3); ok || v != -15 {
+		t.Fatalf("num.SafeMul(-5, 3) = (%d, %v), want (-15, false)", v, ok)
 	}
-	if v, ok := safeMul(5, -3); ok || v != -15 {
-		t.Fatalf("safeMul(5, -3) = (%d, %v), want (-15, false)", v, ok)
+	if v, ok := num.SafeMul(5, -3); ok || v != -15 {
+		t.Fatalf("num.SafeMul(5, -3) = (%d, %v), want (-15, false)", v, ok)
 	}
 	// 2 × -(2^62) = -2^63 = MinInt64 exactly: the representable negative
 	// boundary must NOT be flagged as overflow.
-	if v, ok := safeMul(2, -(1 << 62)); ok || v != math.MinInt64 {
-		t.Fatalf("safeMul(2, -(1<<62)) = (%d, %v), want (MinInt64, false)", v, ok)
+	if v, ok := num.SafeMul(2, -(1 << 62)); ok || v != math.MinInt64 {
+		t.Fatalf("num.SafeMul(2, -(1<<62)) = (%d, %v), want (MinInt64, false)", v, ok)
 	}
 }
 

@@ -3,10 +3,12 @@ package citizens
 import (
 	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 )
 
 // PageStore is the disk-backed LRU paging seam for cold shards (A7, §5.3,
@@ -26,17 +28,44 @@ type PageStore struct {
 	mu       sync.Mutex
 	resident map[int]*ColdShard
 	order    []int // LRU order: index 0 = least recently used
+
+	// self is the SEC-020 copy guard (atomic.Pointer, mirroring
+	// CitizensAPI.self in this package). mu is a sync.Mutex VALUE while
+	// resident (a map) and order (a slice) are reference types a struct
+	// copy ALIASES — a copy gets its own, independently-zeroed mu over the
+	// same referents (the "two locks, one referent" hazard). Stored exactly
+	// once, in NewPageStore, before the value is returned to any caller.
+	self atomic.Pointer[PageStore]
 }
+
+// errPageStoreCopied is returned by Store when called on a struct copy of
+// the *PageStore NewPageStore returned (SEC-020 family). A plain sentinel
+// (errors.New), mirroring internal/foundation/errs.ErrLoggerCopied's
+// precedent for a copy-guard rejection on a type with no registry-sourced
+// error of its own.
+var errPageStoreCopied = errors.New("citizens: PageStore is a struct copy of another PageStore value (construct via NewPageStore and use that same pointer; do not copy the struct)")
 
 // NewPageStore constructs a page store under dir, keeping at most
 // maxResident shards resident. maxResident < 1 means "evict everything"
 // (useful for tests that force the paging path).
 func NewPageStore(dir string, maxResident int) *PageStore {
-	return &PageStore{
+	p := &PageStore{
 		dir:         dir,
 		maxResident: maxResident,
 		resident:    make(map[int]*ColdShard),
 	}
+	// Armed exactly once, before p is returned to any caller (SEC-020).
+	p.self.Store(p)
+	return p
+}
+
+// checkNotCopied reports whether the receiver is a struct copy of some
+// other *PageStore value. Deliberately lock-free (a single
+// atomic.Pointer.Load) so it is safe to call before p.mu is ever touched —
+// see internal/foundation/errs/log.go's Logger.checkNotCopied for the full
+// SEC-016 ordering argument.
+func (p *PageStore) checkNotCopied() bool {
+	return p.self.Load() == p
 }
 
 // coldShardWire is the placeholder gob wire format for a ColdShard: an
@@ -120,6 +149,9 @@ func wireToColdShard(w coldShardWire) *ColdShard {
 
 // pathFor returns the on-disk path for a shard's page file.
 func (p *PageStore) pathFor(shard int) string {
+	if !p.checkNotCopied() {
+		return ""
+	}
 	return filepath.Join(p.dir, fmt.Sprintf("shard-%03d.page", shard))
 }
 
@@ -127,6 +159,9 @@ func (p *PageStore) pathFor(shard int) string {
 // if it is not already resident. Returns (nil, false) if the shard is
 // neither resident nor on disk.
 func (p *PageStore) Load(shard int) (*ColdShard, bool) {
+	if !p.checkNotCopied() {
+		return nil, false
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if s, ok := p.resident[shard]; ok {
@@ -151,6 +186,9 @@ func (p *PageStore) Load(shard int) (*ColdShard, bool) {
 // maxResident. It always persists the shard so a later Load (or a
 // different page store over the same dir) can recover it.
 func (p *PageStore) Store(shard int, s *ColdShard) error {
+	if !p.checkNotCopied() {
+		return errPageStoreCopied
+	}
 	var buf bytes.Buffer
 	if err := gob.NewEncoder(&buf).Encode(s.toWire()); err != nil {
 		return err
@@ -174,6 +212,9 @@ func (p *PageStore) Store(shard int, s *ColdShard) error {
 
 // ResidentCount returns the number of currently resident shards.
 func (p *PageStore) ResidentCount() int {
+	if !p.checkNotCopied() {
+		return 0
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.resident)
@@ -181,6 +222,9 @@ func (p *PageStore) ResidentCount() int {
 
 // makeResidentLocked adds shard to the resident set (caller holds mu).
 func (p *PageStore) makeResidentLocked(shard int, s *ColdShard) {
+	if !p.checkNotCopied() {
+		return
+	}
 	if _, ok := p.resident[shard]; !ok {
 		p.order = append(p.order, shard)
 	}
@@ -189,6 +233,9 @@ func (p *PageStore) makeResidentLocked(shard int, s *ColdShard) {
 
 // touchLocked moves shard to the most-recently-used end (caller holds mu).
 func (p *PageStore) touchLocked(shard int) {
+	if !p.checkNotCopied() {
+		return
+	}
 	for i, v := range p.order {
 		if v == shard {
 			p.order = append(p.order[:i], p.order[i+1:]...)
@@ -202,6 +249,9 @@ func (p *PageStore) touchLocked(shard int) {
 // is already persisted by Store, so eviction only drops the in-memory
 // copy).
 func (p *PageStore) evictOneLocked() error {
+	if !p.checkNotCopied() {
+		return errPageStoreCopied
+	}
 	if len(p.order) == 0 {
 		return nil
 	}

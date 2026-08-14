@@ -4,6 +4,8 @@ import (
 	"math"
 	"reflect"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // This file is the regression suite for the Destructive round's safe-coercion
@@ -145,7 +147,7 @@ func TestHundredPercentLossDeliversZero(t *testing.T) {
 		t.Errorf("conservation violated: %v + %v != %v", res.Delivered, res.ShortfallTotal, res.Demand)
 	}
 	// No non-finite figure may leak out of the solve.
-	if !isFinite(res.Delivered) || !isFinite(res.ShortfallTotal) || !isFinite(res.Produced) || !isFinite(res.Loss) {
+	if !num.IsFinite(res.Delivered) || !num.IsFinite(res.ShortfallTotal) || !num.IsFinite(res.Produced) || !num.IsFinite(res.Loss) {
 		t.Errorf("solve leaked non-finite results: %+v", res)
 	}
 }

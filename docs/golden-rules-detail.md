@@ -844,6 +844,42 @@ The TS type declaration is a hint, not a guarantee. **Coerce, then operate.**
 - [ ] No `.forEach`/`.map`/`.length` on Firestore array fields without `Array.isArray` guard
 - [ ] TypeScript type declarations on Firestore-sourced types reflect ALL real shapes (e.g. `string | { seconds: number }` not just `string`)
 
+### Metropolis profile (2026-08-15): GR#16 numeric-safety standard
+
+Metropolis is a Go engine, not TypeScript/Firestore, so the engine code has
+consistently used "GR#16" to name a different, engine-specific rule: **no
+int64 quantity may wrap, and no float64 may leak +Inf/NaN from a finite
+input.** Before FEAT-086 every engine module re-derived safe arithmetic
+ad-hoc (`satAddMoney`/`safeMul`/`mulDiv` in engine.finance,
+`saturatingInt64FromFloat` in engine.logistics, and near-identical copies
+in engine.build/households/attract), and each Destructive round found a
+different overflow site as a result. The shared helpers now live in
+`internal/foundation/num` — the single source of truth every engine module
+imports (see its package doc comment for the full rule).
+
+The standard that emerged:
+
+- every int64 quantity routes through `num.SatAdd` / `num.SatSub` /
+  `num.SafeMul` — never a raw `+`/`-`/`*` that can wrap negative or
+  invent/destroy units;
+- every int64↔float64 conversion routes through `num.ClampInt64FromFloat`
+  — never a bare `int64(float64(...))` that wraps 2^63 (==
+  `float64(math.MaxInt64)`) into a negative value on amd64;
+- every float64 arithmetic result is `num.IsFinite`-guarded (or checked
+  with `num.GuardFinite`) — never left able to leak +Inf/NaN from a finite
+  input;
+- every public mutator validates like its constructor, and every public
+  query validates like its mutator (defence-in-depth on numeric inputs,
+  exactly as engine.consumption re-validates sources at Solve time).
+
+Compliance checklist:
+
+- [ ] No bare `+`/`-`/`*` on an int64 quantity — `num.SatAdd`/`num.SatSub`/`num.SafeMul` only
+- [ ] No bare `int64(f)` on a float64 — `num.ClampInt64FromFloat` only
+- [ ] Every float64 arithmetic result passes an `num.IsFinite`/`num.GuardFinite` check before it is fed onward
+- [ ] Every public mutator re-validates its numeric inputs exactly as the constructor does
+- [ ] Every public query re-validates its numeric inputs exactly as its mutator does
+
 ---
 
 ## GOLDEN RULE #17: Silent Failure Detection

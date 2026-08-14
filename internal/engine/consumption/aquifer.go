@@ -4,6 +4,7 @@ import (
 	"math"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // AquiferYield models §17's aquifer sustainable-yield ceiling (AC-8): a
@@ -28,7 +29,7 @@ type AquiferYield struct {
 // with ErrInvalidAquiferYield (GR#1/GR#16): an aquifer must never yield a
 // negative draw.
 func NewAquiferYield(sustainable float64, correlationID string) (*AquiferYield, error) {
-	if !isFinite(sustainable) || sustainable < 0 {
+	if !num.IsFinite(sustainable) || sustainable < 0 {
 		return nil, errs.New(ErrInvalidAquiferYield, correlationID, map[string]any{
 			"value": sustainable,
 		})
@@ -62,7 +63,7 @@ func (a *AquiferYield) Current() float64 { return a.current }
 // is out of scope at v1 (a candidate M2 Batch tuning behaviour, not a
 // Sprint-4 requirement).
 func (a *AquiferYield) Abstract(requested float64) (float64, error) {
-	if !isFinite(requested) || requested < 0 {
+	if !num.IsFinite(requested) || requested < 0 {
 		return 0, errs.New(ErrInvalidAbstraction, a.correlationID, map[string]any{
 			"value": requested,
 		})

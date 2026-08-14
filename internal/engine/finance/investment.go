@@ -2,6 +2,7 @@ package finance
 
 import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // Investments (§7, AC-8): surplus is either parked in interest-bearing
@@ -41,11 +42,11 @@ type PaybackPoint struct {
 func (p *InvestmentProgramme) PaybackCurve() []PaybackPoint {
 	out := make([]PaybackPoint, 0, p.PaybackMonths+1)
 	for m := 0; m <= p.PaybackMonths; m++ {
-		// safeMul already saturates to the correct extreme on overflow, so
+		// num.SafeMul already saturates to the correct extreme on overflow, so
 		// a negative MonthlyReturn underflows toward MinInt64 (never jumps
 		// to a positive value) and a positive one saturates toward
 		// MaxInt64 — the curve stays monotonic either way.
-		cum, _ := safeMul(int64(p.MonthlyReturn), int64(m))
+		cum, _ := num.SafeMul(int64(p.MonthlyReturn), int64(m))
 		out = append(out, PaybackPoint{
 			MonthOffset:      m,
 			CumulativeReturn: Money(cum),
@@ -125,6 +126,9 @@ func (f *FinanceAPI) StartInvestment(name string, capex, monthlyReturn Money, pa
 // account (an internal transfer — money stock unchanged). Returns the
 // allocated amount.
 func (f *FinanceAPI) AllocateToReserves(amount Money) (Money, error) {
+	if err := f.checkNotCopied("AllocateToReserves"); err != nil {
+		return 0, err
+	}
 	if amount < 0 {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "reserveAllocation", "amount": int64(amount)})
 	}

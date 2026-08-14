@@ -1,7 +1,5 @@
 package consumption
 
-import "math"
-
 // Utility identifies one of the four §17 utility networks. The underlying
 // string is also data/market.json's commodity key for water/power/gas
 // (wastewater has no Market commodity — it is an internal network that
@@ -139,12 +137,4 @@ func maxFloat(a, b float64) float64 {
 		return a
 	}
 	return b
-}
-
-// isFinite reports whether x is a finite, non-NaN float64 — the guard this
-// package's Solve uses so a malformed demand/supply figure is rejected as
-// an error rather than silently propagating NaN/Inf through the conserved
-// accounting (GR#1/GR#16).
-func isFinite(x float64) bool {
-	return !math.IsNaN(x) && !math.IsInf(x, 0)
 }

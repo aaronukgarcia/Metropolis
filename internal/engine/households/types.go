@@ -7,6 +7,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // LifeStage is a household's derived life stage, the "stage" axis of §21's
@@ -187,7 +188,7 @@ func meanPersonality(members []citizens.Citizen) citizens.Personality {
 	var sum [citizens.NumPersonalityAxes]int64
 	for _, m := range members {
 		for a := 0; a < citizens.NumPersonalityAxes; a++ {
-			sum[a] = satAdd(sum[a], int64(m.Personality[a]))
+			sum[a] = num.SatAdd(sum[a], int64(m.Personality[a]))
 		}
 	}
 	n := int64(len(members))

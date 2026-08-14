@@ -59,13 +59,13 @@
 // # Numeric safety (GR#16, FEAT-086)
 //
 // Every Money/int64 quantity in this package — materials quantities,
-// labour, lead times, and compensation — routes through saturating
-// arithmetic (satAdd/satSub/safeMul in numeric.go) and every
+// labour, lead times, and compensation — routes through foundation/num's
+// saturating arithmetic (num.SatAdd/num.SatSub/num.SafeMul) and every
 // int64↔float64 conversion (the seasonal multiplier applied to lead time)
-// routes through clampInt64FromFloat. A MaxInt64 / MinInt64 / mixed-sign
-// input cannot wrap negative, produce +Inf/NaN, or invent/destroy units.
-// Numeric inputs are validated at every entry point: constructor, mutator,
-// and query.
+// routes through num.ClampInt64FromFloat (see numeric.go's
+// effectiveLeadTime). A MaxInt64 / MinInt64 / mixed-sign input cannot wrap
+// negative, produce +Inf/NaN, or invent/destroy units. Numeric inputs are
+// validated at every entry point: constructor, mutator, and query.
 //
 // # Determinism (AC-12, AC-13)
 //

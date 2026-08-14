@@ -12,6 +12,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // DefaultDistrict is the build-queue materials-draw district used when no
@@ -598,8 +599,8 @@ func (b *BuildAPI) Tick(month int64) error {
 			if drawn > order.materialsRemaining {
 				drawn = order.materialsRemaining // defensive clamp (Draw never over-fills, but never trust the boundary)
 			}
-			order.materialsRemaining = satSub(order.materialsRemaining, drawn)
-			order.materialsDrawn = satAdd(order.materialsDrawn, drawn)
+			order.materialsRemaining = num.SatSub(order.materialsRemaining, drawn)
+			order.materialsDrawn = num.SatAdd(order.materialsDrawn, drawn)
 		}
 
 		// (2) Labour: apply the data-driven placeholder gate (worker-days per
@@ -609,12 +610,12 @@ func (b *BuildAPI) Tick(month int64) error {
 			if applied > order.labourRemaining {
 				applied = order.labourRemaining
 			}
-			order.labourRemaining = satSub(order.labourRemaining, applied)
+			order.labourRemaining = num.SatSub(order.labourRemaining, applied)
 		}
 
 		// (3) Lead time: one simulation day elapses.
 		if order.leadTimeRemaining > 0 {
-			order.leadTimeRemaining = satSub(order.leadTimeRemaining, daysPerTick)
+			order.leadTimeRemaining = num.SatSub(order.leadTimeRemaining, daysPerTick)
 		}
 
 		// (4) Completion: all three requirements met.

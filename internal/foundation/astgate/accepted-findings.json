@@ -566,5 +566,157 @@
   {
     "finding": "internal/ui/keys/palette.go|*Palette|field access chain|Match|p.grammar|*Palette.grammar",
     "reason": "Match's only touch of p.grammar is p.grammar.AllActions() (palette.go:131, guarded by the preceding p.grammar != nil check). AllActions is one of KeyGrammar's exported methods (grammar.go:572) and calls its own g.checkNotCopied() as its first statement (grammar.go:574) before g.mu is ever touched. p.grammar is a *KeyGrammar pointer field (palette.go:88), set once at construction (NewPalette, palette.go:97-98) and never reassigned afterwards (grep-confirmed -- no other assignment to p.grammar anywhere in the package): copying a Palette never copies the KeyGrammar it points at, so the pointee's own guard in AllActions() is the correct and sufficient defence, mirroring the SubscriptionServer/Registry pointer-field reasoning above."
+  },
+  {
+    "finding": "internal/ui/screens/menu/screen.go|*Screen|receiver method|applySession|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded -- checkNotCopied called twice, once before Lock and once after acquiring it) via its view-name switch, on the SAME already-validated *Screen receiver ApplyDelta itself checked. No external holder of a *Screen (copy or not) can call applySession directly -- it is package-private. Mirrors internal/ui/screens/demo/screen.go's applyPopulation/applyLeisure/applyHousing/applyCommute and internal/ui/screens/debug/screen.go's collectRegistry/collectErrorTail/collectPhaseSeries/collectBoW precedent exactly: an unexported helper behind an already-guarded entry point does not need a second, redundant guard. Real per-finding triage, FEAT-021 fix round."
+  },
+  {
+    "finding": "internal/ui/screens/menu/screen.go|*Screen|receiver method|logMalformed|s|*Screen",
+    "reason": "Unexported, called only from applySession (which is reached only through ApplyDelta's already-guarded view-name switch) and reads only s.correlationID -- an immutable string set once in New and never written again, so there is no aliased mutable state here for a struct copy to corrupt even in principle. Mirrors internal/ui/screens/demo/screen.go's logMalformed precedent and debug.Screen.TailEntry's reads-zero-mutable-fields precedent. Real per-finding triage, FEAT-021 fix round."
+  },
+  {
+    "finding": "internal/ui/screens/menu/screen.go|*Screen|receiver method|logUnknownSubscription|s|*Screen",
+    "reason": "Unexported, called only from ApplyDelta (guarded) and reads only s.correlationID -- an immutable string set once in New and never written again, so there is no aliased mutable state here for a struct copy to corrupt even in principle. Mirrors internal/ui/screens/demo/screen.go's logUnknownSubscription precedent. Real per-finding triage, FEAT-021 fix round."
+  },
+  {
+    "finding": "internal/ui/screens/menu/screen.go||function (parameter)|<func literal at line 113>|s|*Screen",
+    "reason": "BUG-141 per-site triage (closing BUG-138's ratchet placeholder): this is New's Option-pattern closure (WithSaveRoot) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside New's own 'for _, opt := range opts { opt(s) }' loop (see New in this file/package), strictly BEFORE s.self.Store(s) runs and BEFORE s is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Screen] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to s to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Screen parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithSaveRoot returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, not the BUG-138 ratchet's generic not-yet-triaged placeholder."
+  },
+  {
+    "finding": "internal/ui/screens/menu/screen.go||function (parameter)|<func literal at line 119>|s|*Screen",
+    "reason": "BUG-141 per-site triage (closing BUG-138's ratchet placeholder): this is New's Option-pattern closure (WithBundleLister) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside New's own 'for _, opt := range opts { opt(s) }' loop (see New in this file/package), strictly BEFORE s.self.Store(s) runs and BEFORE s is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Screen] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to s to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Screen parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithBundleLister returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, not the BUG-138 ratchet's generic not-yet-triaged placeholder."
+  },
+  {
+    "finding": "internal/ui/screens/menu/screen.go||function (parameter)|<func literal at line 126>|s|*Screen",
+    "reason": "BUG-141 per-site triage (closing BUG-138's ratchet placeholder): this is New's Option-pattern closure (WithLayoutEditor) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside New's own 'for _, opt := range opts { opt(s) }' loop (see New in this file/package), strictly BEFORE s.self.Store(s) runs and BEFORE s is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Screen] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to s to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Screen parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithLayoutEditor returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, not the BUG-138 ratchet's generic not-yet-triaged placeholder."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|applyTicker|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded -- checkNotCopied called twice, once before Lock and once after acquiring it) via its view-name switch, on the SAME already-validated *Screen receiver ApplyDelta itself checked. No external holder of a *Screen (copy or not) can call applyTicker directly -- it is package-private. Mirrors internal/ui/screens/demo/screen.go's applyPopulation/applyLeisure/applyHousing/applyCommute and internal/ui/screens/menu/screen.go's applySession precedent exactly: an unexported helper behind an already-guarded entry point does not need a second, redundant guard. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|applyBulletin|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded) via its view-name switch, on the SAME already-validated *Screen receiver. Same reasoning as applyTicker (see that entry). Mirrors demo.Screen's applyPopulation family and menu.Screen.applySession precedent. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|applyAnnual|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded) via its view-name switch, on the SAME already-validated *Screen receiver. Same reasoning as applyTicker (see that entry). Mirrors demo.Screen's applyPopulation family and menu.Screen.applySession precedent. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|applyArchive|s|*Screen",
+    "reason": "Unexported, reachable only from ApplyDelta (guarded) via its view-name switch, on the SAME already-validated *Screen receiver. Same reasoning as applyTicker (see that entry). Mirrors demo.Screen's applyPopulation family and menu.Screen.applySession precedent. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|checkStory|s|*Screen",
+    "reason": "Unexported, called only from applyTicker/applyBulletin/applyAnnual/applyArchive (each reachable only through ApplyDelta's already-guarded view-name switch) and reads only s.correlationID -- an immutable string set once in New and never written again, so there is no aliased mutable state here for a struct copy to corrupt even in principle. Mirrors demo.Screen.logMalformed/logUnknownSubscription and debug.Screen.TailEntry's reads-zero-mutable-fields precedent. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|logMalformed|s|*Screen",
+    "reason": "Unexported, called only from applyTicker/applyBulletin/applyAnnual/applyArchive (behind ApplyDelta's guarded switch) and reads only s.correlationID -- immutable, set once in New. Mirrors demo.Screen.logMalformed and menu.Screen.logMalformed precedent. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/ui/screens/ticker/screen.go|*Screen|receiver method|logUnknownSubscription|s|*Screen",
+    "reason": "Unexported, called only from ApplyDelta (guarded) and reads only s.correlationID -- immutable, set once in New. Mirrors demo.Screen.logUnknownSubscription and menu.Screen.logUnknownSubscription precedent. Real per-finding triage, ticker copyguard completion (SF-5/SF-3 bounce did not cover these)."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|householdExistsLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from already-guarded entry points (ApplyLifeEventCommand/AdvanceDayTick, each of which calls checkNotCopied before touching c.mu) with c.mu already held. It is also passed as a func(uint64) bool callback to ValidateCitizen, so its signature is pinned; it carries no correlationID parameter, which CitizensAPI.checkNotCopied's (correlationID, method) signature requires. Mirrors internal/foundation/errs/log.go's rotateLocked and internal/ui/screens/ticker/screen.go's applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|hotIDSetLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from AdvanceDayTick (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|allColdRecordsLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from BuildSample/AdvanceDayTick/coldParamsLocked (all guarded or reached under held c.mu) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|coldRecord|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from CitizenAt/FidelityOf/HouseholdOf/ApplyFidelityCommand (each guarded -- checkNotCopied before c.mu) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|removeColdLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from ApplyLifeEventCommand's LifeEventDeath case (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|setHouseholdLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from ApplyLifeEventCommand's LifeEventPartner case (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|setColdHouseholdLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from ApplyLifeEventCommand's LifeEventPartner case (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|coldRowLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from ApplyLifeEventCommand's LifeEventEducation case (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|mutateColdLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from ApplyLifeEventCommand's guarded cases (checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|setColdPersonalityLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from ApplyLifeEventCommand's LifeEventEducation case (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|syncHotMonthLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from AdvanceDayTick (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held; no correlationID parameter in scope for CitizensAPI.checkNotCopied's (correlationID, method) signature. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|coldParamsLocked|c|*CitizensAPI",
+    "reason": "Unexported internal CitizensAPI helper, package-private and reachable only from AdvanceDayTick (guarded -- checkNotCopied before c.mu.Lock) with c.mu already held. Mirrors log.go's rotateLocked and ticker applyTicker precedent: an unexported helper behind an already-guarded entry point needs no second, redundant guard."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go||function (parameter)|<func literal at line 55>|p|*ProjectionsAPI",
+    "reason": "BUG-141 per-site triage (closing BUG-138's ratchet placeholder): this is NewProjectionsAPI's Option-pattern closure (WithHorizonProvider) -- safe by construction. It is invoked exactly once, synchronously, from inside NewProjectionsAPI's own 'for _, opt := range opts { opt(p) }' loop, strictly BEFORE p.self.Store(p) runs and BEFORE p is returned to any caller -- the same construction-ordering guarantee projections.go's own doc comment on the self atomic.Pointer[ProjectionsAPI] field already relies on for SEC-020 (no goroutine can hold a reference to p to race a Store or an Option closure against). Genuinely safe by construction, not a generic not-yet-triaged placeholder."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go||function (parameter)|<func literal at line 62>|p|*ProjectionsAPI",
+    "reason": "BUG-141 per-site triage (closing BUG-138's ratchet placeholder): this is NewProjectionsAPI's Option-pattern closure (WithCorrelationID) -- safe by construction, exactly as WithHorizonProvider above: invoked once, synchronously, inside NewProjectionsAPI's opts loop before p.self.Store(p) and before p is reachable by any other goroutine. Genuinely safe by construction, not a generic not-yet-triaged placeholder."
+  },
+  {
+    "finding": "internal/engine/projections/deathwarnings.go|*ProjectionsAPI|field access chain|MarginToInsolvency|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "p.ledger is a *WarningLedger POINTER field (projections.go): copying a *ProjectionsAPI never copies the pointee, so p.ledger always names the SAME live instance regardless of how many ProjectionsAPI copies exist. WarningLedger now carries its own SEC-020 guard (self atomic.Pointer + checkNotCopied, added this sweep) that observe calls before touching l.mu, so the pointee's own guard is the correct and sufficient defence -- exactly the reasoning commands.go's StartSubscriptionPump doc comment (BUG-019) gives for e.subs (*SubscriptionServer): the guard belongs on the pointee, not re-added at every forwarding call site."
+  },
+  {
+    "finding": "internal/engine/projections/deathwarnings.go|*ProjectionsAPI|field access chain|MarginToGhostCity|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "Same pointer-field reasoning as MarginToInsolvency (see that entry): p.ledger is *WarningLedger, and its observe path is guarded by WarningLedger's own checkNotCopied. The pointee's guard is sufficient; a redundant p.ledger.checkNotCopied() at this forwarding call site would double-guard for no gain."
+  },
+  {
+    "finding": "internal/engine/projections/deathwarnings.go|*ProjectionsAPI|field access chain|WarningLedger|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "WarningLedger() returns p.ledger itself (the *WarningLedger pointer) after ProjectionsAPI's own checkNotCopied passes. Returning a pointer does not copy the pointee; any later observe/Query call on the returned *WarningLedger is guarded by WarningLedger's own checkNotCopied (added this sweep). Same pointer-field reasoning as MarginToInsolvency."
+  },
+  {
+    "finding": "internal/engine/projections/decisions.go|*ProjectionsAPI|field access chain|EnqueueDecision|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: EnqueueDecision is declared on ProjectionsAPI (which has a ledger field naming candidate type WarningLedger) but its body contains zero references to p.ledger anywhere -- it touches only p.decisions. There is no field-then-method access chain here to be missing a guard on. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/decisions.go|*ProjectionsAPI|field access chain|CancelDecision|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: CancelDecision's body contains zero references to p.ledger -- it touches only p.decisions. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|RegisterCurveProvider|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: RegisterCurveProvider's body contains zero references to p.ledger -- it touches only p.providers. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|RegisterThreshold|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: RegisterThreshold's body contains zero references to p.ledger -- it touches only p.thresholds. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|Threshold|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: Threshold's body contains zero references to p.ledger -- it touches only p.thresholds. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|SetCurrentMonth|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: SetCurrentMonth's body contains zero references to p.ledger -- it touches only p.currentMonth. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|HorizonMonths|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: HorizonMonths's body contains zero references to p.ledger -- it calls only p.horizonMonths. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|Curve|p.ledger|*ProjectionsAPI.ledger",
+    "reason": "SEC-049's field-access enumeration over-approximates: Curve's body contains zero references to p.ledger -- it touches p.providers/p.decisions/p.currentMonth. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
   }
 ]

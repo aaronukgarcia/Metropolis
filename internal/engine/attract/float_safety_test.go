@@ -3,6 +3,8 @@ package attract
 import (
 	"math"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // TestNonFiniteConfigRejected is the FEAT-086 float64-path regression for
@@ -97,7 +99,7 @@ func TestWorldPoolRevalidationRejectsNonFinite(t *testing.T) {
 		if err == nil {
 			t.Fatalf("ApplyMigration returned Net=%v (err nil) with a poisoned A_world %v", res.Net, poison)
 		}
-		if !isFinite(res.Net) {
+		if !num.IsFinite(res.Net) {
 			t.Fatalf("MigrationResult.Net = %v on the error path, want a finite zero value", res.Net)
 		}
 		isErr(t, err, ErrConfigInvalid)
@@ -122,7 +124,7 @@ func TestFiniteScoreNeverEscapesNonFinite(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ApplyMigration: %v", err)
 		}
-		if !isFinite(res.A) || !isFinite(res.Net) || !isFinite(res.AWorld) || !isFinite(res.Reputation) {
+		if !num.IsFinite(res.A) || !num.IsFinite(res.Net) || !num.IsFinite(res.AWorld) || !num.IsFinite(res.Reputation) {
 			t.Fatalf("non-finite observable escaped a valid config: %+v", res)
 		}
 	}

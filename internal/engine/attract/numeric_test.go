@@ -5,49 +5,11 @@ import (
 	"testing"
 )
 
-// TestSaturatingArithmetic is FEAT-086's core: the saturating helpers never
-// wrap a ±MaxInt64 / mixed-sign operand, and the float64→int64 choke point
-// never wraps NaN/±Inf/2^63 into a negative or a bogus count.
-func TestSaturatingArithmetic(t *testing.T) {
-	// satAdd
-	if got := satAdd(math.MaxInt64, 1); got != math.MaxInt64 {
-		t.Fatalf("satAdd(MaxInt64,1) = %d, want MaxInt64", got)
-	}
-	if got := satAdd(math.MinInt64, -1); got != math.MinInt64 {
-		t.Fatalf("satAdd(MinInt64,-1) = %d, want MinInt64", got)
-	}
-	// satSub
-	if got := satSub(math.MinInt64, 1); got != math.MinInt64 {
-		t.Fatalf("satSub(MinInt64,1) = %d, want MinInt64", got)
-	}
-	if got := satSub(math.MaxInt64, -1); got != math.MaxInt64 {
-		t.Fatalf("satSub(MaxInt64,-1) = %d, want MaxInt64", got)
-	}
-	// safeMul — mixed signs whose magnitude product overflows
-	if v, overflow := safeMul(math.MaxInt64, -2); !overflow || v != math.MinInt64 {
-		t.Fatalf("safeMul(MaxInt64,-2) = %d,%v; want MinInt64,true", v, overflow)
-	}
-	if v, overflow := safeMul(math.MinInt64, 2); !overflow || v != math.MinInt64 {
-		t.Fatalf("safeMul(MinInt64,2) = %d,%v; want MinInt64,true", v, overflow)
-	}
-	if v, overflow := safeMul(math.MaxInt64, 2); !overflow || v != math.MaxInt64 {
-		t.Fatalf("safeMul(MaxInt64,2) = %d,%v; want MaxInt64,true", v, overflow)
-	}
-	// clampInt64FromFloat
-	if got := clampInt64FromFloat(math.NaN()); got != 0 {
-		t.Fatalf("clampInt64FromFloat(NaN) = %d, want 0", got)
-	}
-	if got := clampInt64FromFloat(math.Inf(1)); got != math.MaxInt64 {
-		t.Fatalf("clampInt64FromFloat(+Inf) = %d, want MaxInt64", got)
-	}
-	if got := clampInt64FromFloat(math.Inf(-1)); got != math.MinInt64 {
-		t.Fatalf("clampInt64FromFloat(-Inf) = %d, want MinInt64", got)
-	}
-	// float64(MaxInt64) is exactly 2^63 — a bare int64() conversion wraps.
-	if got := clampInt64FromFloat(float64(math.MaxInt64)); got != math.MaxInt64 {
-		t.Fatalf("clampInt64FromFloat(float64(MaxInt64)) = %d, want MaxInt64", got)
-	}
-}
+// The saturating-arithmetic unit tests that used to live here (satAdd/
+// satSub/safeMul/clampInt64FromFloat) now live in foundation/num's own
+// test suite (FEAT-086 DRY refactor). This file keeps engine.attract's
+// end-to-end numeric fuzz test, which exercises ApplyMigration through the
+// public API rather than the (now shared) helpers directly.
 
 // TestMigrationNumericFuzzing is FEAT-086's end-to-end form: fuzzed capacity
 // and gap inputs to the migration command never wrap a count negative or

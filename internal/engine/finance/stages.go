@@ -28,6 +28,9 @@ func taxOf(base Money, rate BasisPoints) Money { return rate.apply(base) }
 // the posted amount. It is stage (1) of the §7 money-flow chain —
 // wages→spend→tax→budget→opex/imports/debt/construction (AC-3).
 func (f *FinanceAPI) PostWages(total Money) (Money, error) {
+	if err := f.checkNotCopied("PostWages"); err != nil {
+		return 0, err
+	}
 	if total < 0 {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "wages", "amount": int64(total)})
 	}
@@ -50,6 +53,9 @@ func (f *FinanceAPI) PostWages(total Money) (Money, error) {
 // (AC-3's false-pass framing). quantity is in the commodity's own unit
 // (data/market.json's "unit" field); price is micro-pounds per unit.
 func (f *FinanceAPI) PostHouseholdSpend(quantity int64, price Money) (Money, error) {
+	if err := f.checkNotCopied("PostHouseholdSpend"); err != nil {
+		return 0, err
+	}
 	if quantity < 0 {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "spend.quantity", "amount": quantity})
 	}
@@ -76,6 +82,9 @@ func (f *FinanceAPI) PostHouseholdSpend(quantity int64, price Money) (Money, err
 // stage; PostHouseholdSpend remains the price-injected form tests and
 // callers with their own price source use.
 func (f *FinanceAPI) PostHouseholdSpendAtMarket(mkt *market.MarketAPI, commodity market.CommodityType, quantity int64) (Money, error) {
+	if err := f.checkNotCopied("PostHouseholdSpendAtMarket"); err != nil {
+		return 0, err
+	}
 	if mkt == nil {
 		return 0, errs.New(ErrUnknownAccount, f.correlationID, map[string]any{"account": "<nil market>"})
 	}
@@ -114,6 +123,9 @@ func (r TaxReceipts) Total() Money {
 // payer to the city treasury, and returns the receipts. It is stage (3)
 // of the chain. Zero-amount legs are skipped (no empty transactions).
 func (f *FinanceAPI) CollectTax(rates TaxRates, wages, spend, firmProfit Money) (TaxReceipts, error) {
+	if err := f.checkNotCopied("CollectTax"); err != nil {
+		return TaxReceipts{}, err
+	}
 	income := taxOf(wages, rates.IncomeRate)
 	sales := taxOf(spend, rates.SalesRate)
 	corp := taxOf(firmProfit, rates.CorpRate)
@@ -158,6 +170,9 @@ func (f *FinanceAPI) CollectTax(rates TaxRates, wages, spend, firmProfit Money) 
 // SettleOpex posts the service-operating-expenditure outflow: money
 // leaves the treasury for the outside world. Stage (5) outflow.
 func (f *FinanceAPI) SettleOpex(opex Money) (Money, error) {
+	if err := f.checkNotCopied("SettleOpex"); err != nil {
+		return 0, err
+	}
 	if opex < 0 {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "opex", "amount": int64(opex)})
 	}
@@ -222,6 +237,9 @@ func (f *FinanceAPI) ServiceDebt(interest, principal Money) error {
 
 // SettleConstruction posts a construction outflow. Stage (5) outflow.
 func (f *FinanceAPI) SettleConstruction(cost Money) (Money, error) {
+	if err := f.checkNotCopied("SettleConstruction"); err != nil {
+		return 0, err
+	}
 	if cost < 0 {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "construction", "amount": int64(cost)})
 	}
@@ -239,6 +257,9 @@ func (f *FinanceAPI) SettleConstruction(cost Money) (Money, error) {
 
 // SettleImports posts an import-contract outflow. Stage (5) outflow.
 func (f *FinanceAPI) SettleImports(cost Money) (Money, error) {
+	if err := f.checkNotCopied("SettleImports"); err != nil {
+		return 0, err
+	}
 	if cost < 0 {
 		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "imports", "amount": int64(cost)})
 	}
@@ -285,6 +306,9 @@ func (f *FinanceAPI) TaxRevenue() Money {
 // treasuryDebit returns the tick's total treasury debit for one category
 // (the caller holds f.mu RLock).
 func (f *FinanceAPI) treasuryDebit(cat Category) Money {
+	if err := f.checkNotCopied("treasuryDebit"); err != nil {
+		return 0
+	}
 	var total Money
 	for _, e := range f.linesLocked(AcctTreasury) {
 		if e.Side == SideDebit && e.Category == cat {
@@ -376,6 +400,9 @@ func (f *FinanceAPI) SpendPosted() Money {
 // outflow — with imports zero this is exactly the AC's formula).
 // Computed with saturating subtraction so the net never wraps (GR#16).
 func (f *FinanceAPI) BudgetBalance() Money {
+	if err := f.checkNotCopied("BudgetBalance"); err != nil {
+		return 0
+	}
 	b := f.TaxRevenue()
 	b = satSubMoney(b, f.OpexTotal())
 	b = satSubMoney(b, f.DebtServiceTotal())

@@ -16,6 +16,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 const testOwner uint32 = 1
@@ -535,11 +536,11 @@ func TestConservationEveryBuildSpendsExactlyItsBudget(t *testing.T) {
 			t.Errorf("order %d drew %d but its budget was %d — units created/destroyed",
 				id, o.MaterialsDrawn, o.MaterialsBillTotal)
 		}
-		drawnTotal = satAdd(drawnTotal, o.MaterialsDrawn)
-		billTotal = satAdd(billTotal, o.MaterialsBillTotal)
+		drawnTotal = num.SatAdd(drawnTotal, o.MaterialsDrawn)
+		billTotal = num.SatAdd(billTotal, o.MaterialsBillTotal)
 	}
 
-	expected := satAdd(zi.Materials, satAdd(zi.Materials, zi.Materials))
+	expected := num.SatAdd(zi.Materials, num.SatAdd(zi.Materials, zi.Materials))
 	if billTotal != expected {
 		t.Errorf("total budget = %d, want %d", billTotal, expected)
 	}
@@ -552,7 +553,7 @@ func TestConservationEveryBuildSpendsExactlyItsBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stock: %v", err)
 	}
-	wantLevel := satSub(stock, drawnTotal)
+	wantLevel := num.SatSub(stock, drawnTotal)
 	if s.Level != wantLevel {
 		t.Errorf("logistics stock level = %d, want %d (stock - drawn)", s.Level, wantLevel)
 	}

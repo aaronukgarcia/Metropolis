@@ -8,6 +8,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // AttractAPI is code.json's "engine.attract" inbound contract
@@ -185,7 +186,7 @@ func validateTermInputs(in TermInputs, correlationID string) error {
 		{"safety", in.Safety},
 	}
 	for _, f := range fields {
-		if !isFinite(f.value) || f.value < 0 || f.value > 100 {
+		if !num.IsFinite(f.value) || f.value < 0 || f.value > 100 {
 			return errs.New(ErrInvalidTermInput, correlationID, map[string]any{
 				"field": f.name,
 				"value": f.value,
@@ -230,6 +231,9 @@ func (a *AttractAPI) SetTermInputs(in TermInputs) error {
 // JobAvailability returns the §11 job-availability term (pushed input,
 // [0,100]).
 func (a *AttractAPI) JobAvailability() float64 {
+	if err := a.checkNotCopied("JobAvailability"); err != nil {
+		return 0
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.termInputs.JobAvailability
@@ -238,6 +242,9 @@ func (a *AttractAPI) JobAvailability() float64 {
 // ServiceCoverage returns the §11 service-coverage term (pushed input,
 // [0,100]).
 func (a *AttractAPI) ServiceCoverage() float64 {
+	if err := a.checkNotCopied("ServiceCoverage"); err != nil {
+		return 0
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.termInputs.ServiceCoverage
@@ -245,6 +252,9 @@ func (a *AttractAPI) ServiceCoverage() float64 {
 
 // Environment returns the §11 environment term (pushed input, [0,100]).
 func (a *AttractAPI) Environment() float64 {
+	if err := a.checkNotCopied("Environment"); err != nil {
+		return 0
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.termInputs.Environment
@@ -252,6 +262,9 @@ func (a *AttractAPI) Environment() float64 {
 
 // LeisureFit returns the §11 leisure-fit term (pushed input, [0,100]).
 func (a *AttractAPI) LeisureFit() float64 {
+	if err := a.checkNotCopied("LeisureFit"); err != nil {
+		return 0
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.termInputs.LeisureFit
@@ -259,6 +272,9 @@ func (a *AttractAPI) LeisureFit() float64 {
 
 // Safety returns the §11 safety term (pushed input, [0,100]).
 func (a *AttractAPI) Safety() float64 {
+	if err := a.checkNotCopied("Safety"); err != nil {
+		return 0
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.termInputs.Safety
@@ -268,6 +284,9 @@ func (a *AttractAPI) Safety() float64 {
 // momentum value (AC-5). It is advanced only by ApplyMigration, never by a
 // term-accessor query.
 func (a *AttractAPI) Reputation() float64 {
+	if err := a.checkNotCopied("Reputation"); err != nil {
+		return 0
+	}
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.reputation.value
@@ -296,6 +315,9 @@ func (t termsSnapshot) fundamentals() float64 {
 // a.mu while calling into households/finance (they hold their own locks),
 // so it cannot deadlock against a concurrent SetTermInputs/SetHouseholds.
 func (a *AttractAPI) snapshotTerms() (termsSnapshot, error) {
+	if err := a.checkNotCopied("snapshotTerms"); err != nil {
+		return termsSnapshot{}, err
+	}
 	a.mu.RLock()
 	in := cloneTermInputs(a.termInputs)
 	households := a.households
@@ -387,7 +409,7 @@ func (a *AttractAPI) A() (float64, error) {
 	a.mu.RUnlock()
 
 	sum := weightedSum(w, t, rep)
-	if !isFinite(sum) {
+	if !num.IsFinite(sum) {
 		return 0, errs.New(ErrConfigInvalid, a.correlationID, map[string]any{
 			"field": "A",
 			"value": sum,
@@ -405,8 +427,11 @@ func (a *AttractAPI) A() (float64, error) {
 // a registry-sourced error, never returned as +Inf/NaN (FEAT-086 — the
 // float64 path is backstopped exactly like the int64 path).
 func (a *AttractAPI) G(x float64) (float64, error) {
+	if err := a.checkNotCopied("G"); err != nil {
+		return 0, err
+	}
 	g := a.migrationRate * x
-	if !isFinite(g) {
+	if !num.IsFinite(g) {
 		return 0, errs.New(ErrConfigInvalid, a.correlationID, map[string]any{
 			"field": "net",
 			"value": g,
@@ -418,5 +443,8 @@ func (a *AttractAPI) G(x float64) (float64, error) {
 // AWorld returns the comparison baseline attractiveness through the §4
 // WorldPool seam (AC-8).
 func (a *AttractAPI) AWorld() float64 {
+	if err := a.checkNotCopied("AWorld"); err != nil {
+		return 0
+	}
 	return a.world.AWorld()
 }

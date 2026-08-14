@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // CreditScore is a 0–1000 integer rating: 1000 is a clean, low-debt
@@ -43,7 +44,7 @@ func CreditRating(debt, revenue int64, missedPayments int, reserveMonths int64) 
 		debt = 0
 	}
 	// Clamp the miss count like every other input: a negative missedPayments
-	// would otherwise wrap the safeMul product and IMPROVE the score (GR#16).
+	// would otherwise wrap the num.SafeMul product and IMPROVE the score (GR#16).
 	if missedPayments < 0 {
 		missedPayments = 0
 	}
@@ -56,21 +57,21 @@ func CreditRating(debt, revenue int64, missedPayments int, reserveMonths int64) 
 	// never rate better than a low-debt one (GR#16). Deduct 200 points per
 	// 100% of debt/revenue, capped at 600.
 	ratio := mulDiv(debt, 1000, revenue)
-	score = satSubI64(score, minI64(mulDiv(ratio, 200, 1000), 600))
+	score = num.SatSub(score, minI64(mulDiv(ratio, 200, 1000), 600))
 
-	// Payment history: 150 points per missed payment (safeMul so an absurd
+	// Payment history: 150 points per missed payment (num.SafeMul so an absurd
 	// miss count saturates the deduction instead of wrapping).
-	missDeduction, missOverflow := safeMul(int64(missedPayments), 150)
+	missDeduction, missOverflow := num.SafeMul(int64(missedPayments), 150)
 	if missOverflow {
 		missDeduction = math.MaxInt64
 	}
-	score = satSubI64(score, missDeduction)
+	score = num.SatSub(score, missDeduction)
 
 	// Reserve months: +60 per month, up to three months.
 	if reserveMonths < 0 {
 		reserveMonths = 0
 	}
-	score = satAddI64(score, minI64(reserveMonths, 3)*60)
+	score = num.SatAdd(score, minI64(reserveMonths, 3)*60)
 
 	return CreditScore(clampScore(score))
 }
@@ -254,6 +255,9 @@ func (f *FinanceAPI) CreditRatingNow() CreditScore {
 // CurrentInterestRate returns the annual rate the city would pay if it
 // borrowed now, from its current credit score.
 func (f *FinanceAPI) CurrentInterestRate() BasisPoints {
+	if err := f.checkNotCopied("CurrentInterestRate"); err != nil {
+		return 0
+	}
 	return InterestRate(f.CreditRatingNow())
 }
 
@@ -272,6 +276,9 @@ func (f *FinanceAPI) OutstandingDebt() Money {
 // updated incrementally on Borrow/RepayLoan, so no monetary sum depends
 // on map-iteration order (AC-14).
 func (f *FinanceAPI) totalDebtLocked() Money {
+	if err := f.checkNotCopied("totalDebtLocked"); err != nil {
+		return 0
+	}
 	return f.totalDebt
 }
 
@@ -283,6 +290,9 @@ func (f *FinanceAPI) totalDebtLocked() Money {
 // CreditRatingNow() never keep charging interest on already-repaid
 // principal (the ServiceDebt/RepayLoan divergence fix).
 func (f *FinanceAPI) reduceLoanBookLocked(principal Money) {
+	if err := f.checkNotCopied("reduceLoanBookLocked"); err != nil {
+		return
+	}
 	if principal <= 0 {
 		return
 	}
@@ -312,6 +322,9 @@ func (f *FinanceAPI) reduceLoanBookLocked(principal Money) {
 
 // creditScoreLocked derives the credit score from live state (f.mu held).
 func (f *FinanceAPI) creditScoreLocked() CreditScore {
+	if err := f.checkNotCopied("creditScoreLocked"); err != nil {
+		return creditScoreMin
+	}
 	debt := f.totalDebtLocked()
 	revenue := f.taxRevenueLocked()
 	reserves := f.accountBalanceLocked(AcctReserves)
@@ -327,6 +340,9 @@ func (f *FinanceAPI) creditScoreLocked() CreditScore {
 // current tick (f.mu held). Determinism: taxCategories is a slice, not a
 // map, so summation order is fixed (GR#21, AC-14).
 func (f *FinanceAPI) taxRevenueLocked() Money {
+	if err := f.checkNotCopied("taxRevenueLocked"); err != nil {
+		return 0
+	}
 	var total Money
 	for _, tx := range f.tickTxns {
 		for _, e := range tx.Entries {
@@ -340,6 +356,9 @@ func (f *FinanceAPI) taxRevenueLocked() Money {
 
 // accountBalanceLocked returns an account's balance (f.mu held).
 func (f *FinanceAPI) accountBalanceLocked(id AccountID) Money {
+	if err := f.checkNotCopied("accountBalanceLocked"); err != nil {
+		return 0
+	}
 	if acct, ok := f.accounts[id]; ok {
 		return acct.Balance
 	}

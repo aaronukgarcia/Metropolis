@@ -5,6 +5,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // UtilityAPI is code.json's "engine.consumption" inbound interface
@@ -124,7 +125,7 @@ func (a *UtilityAPI) ClassDemand(ref string, occupancy float64, opts DemandOptio
 	if err != nil {
 		return Demand{}, err
 	}
-	if !isFinite(occupancy) || occupancy < 0 {
+	if !num.IsFinite(occupancy) || occupancy < 0 {
 		return Demand{}, errs.New(ErrInvalidOccupancy, a.correlationID, map[string]any{
 			"ref":       ref,
 			"occupancy": occupancy,
@@ -150,7 +151,7 @@ func (a *UtilityAPI) ClassDemand(ref string, occupancy float64, opts DemandOptio
 // §17.1 per-person baseline × population, then the same
 // seasonal/all-electric/wastewater layers as [ClassDemand].
 func (a *UtilityAPI) ResidentialDemand(population float64, opts DemandOptions) (Demand, error) {
-	if !isFinite(population) || population < 0 {
+	if !num.IsFinite(population) || population < 0 {
 		return Demand{}, errs.New(ErrInvalidOccupancy, a.correlationID, map[string]any{
 			"ref":       "residential",
 			"occupancy": population,
@@ -177,8 +178,8 @@ func (a *UtilityAPI) ResidentialDemand(population float64, opts DemandOptions) (
 // non-finite value (GR#1/GR#16): coefficient × occupancy (and the seasonal
 // layer) must never propagate +Inf/NaN out of a public demand query.
 func validateDemand(d Demand, ref, correlationID string) error {
-	if !isFinite(d.Water) || !isFinite(d.Power) || !isFinite(d.Gas) ||
-		!isFinite(d.Wastewater) || !isFinite(d.Waste) {
+	if !num.IsFinite(d.Water) || !num.IsFinite(d.Power) || !num.IsFinite(d.Gas) ||
+		!num.IsFinite(d.Wastewater) || !num.IsFinite(d.Waste) {
 		return errs.New(ErrDemandOverflow, correlationID, map[string]any{"ref": ref})
 	}
 	return nil

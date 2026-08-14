@@ -1,6 +1,9 @@
 package attract
 
-import "github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+import (
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
+)
 
 // Weights holds the seven §11 attractiveness weights (w₁…w₇) — the
 // coefficients of the master-dial formula
@@ -54,14 +57,14 @@ func (w Weights) validate(correlationID string) error {
 		{"reputation", w.Reputation},
 	}
 	for _, f := range fields {
-		if !isFinite(f.value) || f.value < 0 || f.value > 1 {
+		if !num.IsFinite(f.value) || f.value < 0 || f.value > 1 {
 			return errs.New(ErrInvalidWeights, correlationID, map[string]any{
 				"field": f.name,
 				"value": f.value,
 			})
 		}
 	}
-	if s := w.sum(); !isFinite(s) || s < 1-weightSumEpsilon || s > 1+weightSumEpsilon {
+	if s := w.sum(); !num.IsFinite(s) || s < 1-weightSumEpsilon || s > 1+weightSumEpsilon {
 		return errs.New(ErrInvalidWeights, correlationID, map[string]any{
 			"field": "sum",
 			"value": s,

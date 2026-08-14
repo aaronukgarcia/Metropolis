@@ -6,6 +6,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // migrantHouseholdSize is the v1 admitted-migrant household size. It is a
@@ -75,7 +76,7 @@ type MigrationResult struct {
 // NetApplied returns Inflow − Outflow — the signed population change this
 // migration actually applied (the conservation figure).
 func (r MigrationResult) NetApplied() int64 {
-	return satSub(r.Inflow, r.Outflow)
+	return num.SatSub(r.Inflow, r.Outflow)
 }
 
 // ApplyMigration runs one monthly migration step:
@@ -140,7 +141,7 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 	a.mu.Unlock()
 
 	score := weightedSum(w, terms, rep)
-	if !isFinite(score) {
+	if !num.IsFinite(score) {
 		return MigrationResult{}, errs.New(ErrConfigInvalid, a.correlationID, map[string]any{
 			"field": "A",
 			"value": score,
@@ -186,6 +187,9 @@ func (a *AttractAPI) ApplyMigration(cmd MigrationCommand) (MigrationResult, erro
 // of zero therefore caps admission at zero regardless of a large positive
 // gap (AC-7).
 func (a *AttractAPI) applyImmigration(cmd MigrationCommand, net float64) (int64, error) {
+	if err := a.checkNotCopied("applyImmigration"); err != nil {
+		return 0, err
+	}
 	a.mu.RLock()
 	cit := a.citizens
 	a.mu.RUnlock()
@@ -196,14 +200,14 @@ func (a *AttractAPI) applyImmigration(cmd MigrationCommand, net float64) (int64,
 		})
 	}
 
-	raw := clampInt64FromFloat(net)
+	raw := num.ClampInt64FromFloat(net)
 	if raw <= 0 {
 		return 0, nil
 	}
 
 	// Housing vacancy is in dwelling units (households); convert to people
 	// so both capacity terms are comparable. Saturating multiply (FEAT-086).
-	vacancyPeople, _ := safeMul(cmd.HousingVacancy, migrantHouseholdSize)
+	vacancyPeople, _ := num.SafeMul(cmd.HousingVacancy, migrantHouseholdSize)
 	capPeople := minI64(cmd.JunctionThroughput, vacancyPeople)
 	admitPeople := minI64(raw, capPeople)
 	if admitPeople <= 0 {
@@ -234,7 +238,7 @@ func (a *AttractAPI) applyImmigration(cmd MigrationCommand, net float64) (int64,
 		}); err != nil {
 			return admitted, err
 		}
-		admitted = satAdd(admitted, migrantHouseholdSize)
+		admitted = num.SatAdd(admitted, migrantHouseholdSize)
 	}
 	return admitted, nil
 }
@@ -243,6 +247,9 @@ func (a *AttractAPI) applyImmigration(cmd MigrationCommand, net float64) (int64,
 // citizen id (high-bit prefix). Guarded by mu — two sequential calls always
 // yield distinct ids.
 func (a *AttractAPI) mintMigrantID() uint64 {
+	if err := a.checkNotCopied("mintMigrantID"); err != nil {
+		return 0
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.nextMigrantID++
@@ -255,6 +262,9 @@ func (a *AttractAPI) mintMigrantID() uint64 {
 // wealth, unemployed — the world-pool personality distribution is a future
 // hook) and always passes citizens' validation.
 func (a *AttractAPI) birthMigrant(cit *citizens.CitizensAPI, id uint64, month int64) error {
+	if err := a.checkNotCopied("birthMigrant"); err != nil {
+		return err
+	}
 	rec := citizens.Citizen{
 		ID:          id,
 		BirthMonth:  clampBirthMonth(month),
@@ -306,6 +316,9 @@ func neutralMigrantPersonality() citizens.Personality {
 // counter-based hash stream hash(worldSeed, id, month, "emigrate") (AC-12).
 // Returns the number of citizens departed.
 func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64) (int64, error) {
+	if err := a.checkNotCopied("applyEmigration"); err != nil {
+		return 0, err
+	}
 	a.mu.RLock()
 	cit := a.citizens
 	a.mu.RUnlock()
@@ -339,7 +352,7 @@ func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64) (int64, 
 			// silently swallowed (GR#1).
 			return departed, err
 		}
-		departed = satAdd(departed, 1)
+		departed = num.SatAdd(departed, 1)
 	}
 	return departed, nil
 }
@@ -350,6 +363,9 @@ func (a *AttractAPI) applyEmigration(cmd MigrationCommand, net float64) (int64, 
 // decline. The citizen is read via CitizensAPI (a per-id query); an
 // unresolvable id yields hazard 0 (no departure).
 func (a *AttractAPI) emigrationHazardLocked(cit *citizens.CitizensAPI, id uint64, decline float64) float64 {
+	if err := a.checkNotCopied("emigrationHazardLocked"); err != nil {
+		return 0
+	}
 	c, ok := cit.CitizenAt(id, a.correlationID)
 	if !ok {
 		return 0

@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // SourceType names a §17/§2.2 source node class. The list is
@@ -97,7 +98,7 @@ func (n *Network) Kind() Utility { return n.kind }
 // in practice, but AddSource does not enforce that (a network is data, and
 // its builder owns the mix).
 func (n *Network) AddSource(s Source) error {
-	if !isFinite(s.Capacity) || s.Capacity < 0 {
+	if !num.IsFinite(s.Capacity) || s.Capacity < 0 {
 		return errs.New(ErrInvalidSource, n.correlationID, map[string]any{
 			"id":    s.ID,
 			"value": s.Capacity,
@@ -111,7 +112,7 @@ func (n *Network) AddSource(s Source) error {
 // edge whose length is negative or non-finite — a negative length would
 // produce a negative loss fraction (GR#1/GR#16).
 func (n *Network) AddEdge(e Edge) error {
-	if !isFinite(e.LengthKm) || e.LengthKm < 0 {
+	if !num.IsFinite(e.LengthKm) || e.LengthKm < 0 {
 		return errs.New(ErrInvalidEdge, n.correlationID, map[string]any{
 			"from":  e.From,
 			"to":    e.To,
@@ -125,7 +126,7 @@ func (n *Network) AddEdge(e Edge) error {
 // AddStorage appends a storage node to the network, rejecting (without
 // appending) a node whose capacity is negative or non-finite (GR#1/GR#16).
 func (n *Network) AddStorage(st Storage) error {
-	if !isFinite(st.Capacity) || st.Capacity < 0 {
+	if !num.IsFinite(st.Capacity) || st.Capacity < 0 {
 		return errs.New(ErrInvalidStorage, n.correlationID, map[string]any{
 			"id":    st.ID,
 			"value": st.Capacity,
@@ -214,7 +215,7 @@ func (n *Network) Solve(consumers []Consumer) (SolveResult, error) {
 	// caller who ignored those errors (or a future direct-construction path),
 	// exactly as engine.market guards its Load-time invariants at query time.
 	for _, s := range n.sources {
-		if !isFinite(s.Capacity) || s.Capacity < 0 {
+		if !num.IsFinite(s.Capacity) || s.Capacity < 0 {
 			return result, errs.New(ErrInvalidSource, n.correlationID, map[string]any{
 				"id":    s.ID,
 				"value": s.Capacity,
@@ -222,7 +223,7 @@ func (n *Network) Solve(consumers []Consumer) (SolveResult, error) {
 		}
 	}
 	for _, e := range n.edges {
-		if !isFinite(e.LengthKm) || e.LengthKm < 0 {
+		if !num.IsFinite(e.LengthKm) || e.LengthKm < 0 {
 			return result, errs.New(ErrInvalidEdge, n.correlationID, map[string]any{
 				"from":  e.From,
 				"to":    e.To,
@@ -250,7 +251,7 @@ func (n *Network) Solve(consumers []Consumer) (SolveResult, error) {
 	// would silently poison the Delivered + ShortfallTotal == Demand
 	// invariant.
 	for _, c := range ordered {
-		if !isFinite(c.Demand) || c.Demand < 0 {
+		if !num.IsFinite(c.Demand) || c.Demand < 0 {
 			return result, errs.New(ErrInvalidDemand, n.correlationID, map[string]any{
 				"network": string(n.kind),
 				"entity":  c.EntityRef,
@@ -266,7 +267,7 @@ func (n *Network) Solve(consumers []Consumer) (SolveResult, error) {
 	// Re-check the AGGREGATE after summation: two individually-finite
 	// demands can sum to +Inf, which would silently poison the conserved
 	// accounting if it ever reached it (GR#1/GR#16).
-	if !isFinite(totalDemand) {
+	if !num.IsFinite(totalDemand) {
 		return result, errs.New(ErrInvalidDemand, n.correlationID, map[string]any{
 			"network": string(n.kind),
 			"entity":  "(aggregate)",
@@ -292,7 +293,7 @@ func (n *Network) Solve(consumers []Consumer) (SolveResult, error) {
 		gross, loss, postLoss = 0, 0, 0
 	} else {
 		requiredGross := totalDemand / survive
-		if !isFinite(requiredGross) {
+		if !num.IsFinite(requiredGross) {
 			// Degenerate: meeting demand would require more gross supply than
 			// float64 can represent. Reject rather than let gross overflow
 			// into a non-finite loss/postLoss.
@@ -328,7 +329,7 @@ func (n *Network) Solve(consumers []Consumer) (SolveResult, error) {
 		// Defence-in-depth: the draw loop caps gross at requiredGross (both
 		// finite), so these are finite by construction — but guard anyway so
 		// a future edit cannot reintroduce a non-finite result.
-		if !isFinite(loss) || !isFinite(postLoss) {
+		if !num.IsFinite(loss) || !num.IsFinite(postLoss) {
 			return result, errs.New(ErrSolveOverflow, n.correlationID, map[string]any{
 				"network": string(n.kind),
 				"demand":  totalDemand,

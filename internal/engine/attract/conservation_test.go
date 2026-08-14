@@ -2,6 +2,8 @@ package attract
 
 import (
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // TestMigrationConservation is the migration conservation invariant: across
@@ -54,10 +56,10 @@ func TestMigrationConservation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ApplyMigration(month %d): %v", step.month, err)
 		}
-		cumulativeIn = satAdd(cumulativeIn, res.Inflow)
-		cumulativeOut = satAdd(cumulativeOut, res.Outflow)
+		cumulativeIn = num.SatAdd(cumulativeIn, res.Inflow)
+		cumulativeOut = num.SatAdd(cumulativeOut, res.Outflow)
 
-		want := int64(initial) + satSub(cumulativeIn, cumulativeOut)
+		want := int64(initial) + num.SatSub(cumulativeIn, cumulativeOut)
 		got := ca.TotalPopulation("corr-attract")
 		if int64(got) != want {
 			t.Fatalf("conservation violated at month %d: population %d, want %d (inflow %d − outflow %d over initial %d)",
@@ -66,7 +68,7 @@ func TestMigrationConservation(t *testing.T) {
 	}
 
 	final := ca.TotalPopulation("corr-attract")
-	if int64(final) != int64(initial)+satSub(cumulativeIn, cumulativeOut) {
+	if int64(final) != int64(initial)+num.SatSub(cumulativeIn, cumulativeOut) {
 		t.Fatalf("final population %d != initial %d + inflow %d − outflow %d", final, initial, cumulativeIn, cumulativeOut)
 	}
 }
