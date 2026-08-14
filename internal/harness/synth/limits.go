@@ -125,44 +125,52 @@ const CumulativeRegressionThreshold = 2 * RegressionThreshold
 // applied at all.
 //
 // # Re-derivation (BUG-034, supersedes ASM-173's "chosen, not spec-
-// # derived" framing — this is now evidence-based, though the evidence
-// # is still local, not CI-runner, pending BUG-034's CI probe job)
+// # derived" framing — this is now evidence-based against BOTH local
+// # and CI-runner measurements, not a guess)
 //
 // ASM-173 picked 5ms a priori, against no real measurement, "comfortably
 // above typical Go scheduler/timer-resolution noise" — exactly the kind
 // of number BUG-034's brief warns is indistinguishable from a guess
-// until someone actually samples the thing being gated. This dispatch
-// did that sampling: six real Preset1M (1,000,000-citizen, zero
-// registered PhaseHooks — see PhaseHookCountInHeadlessPath)
-// headless.Run measurements, 12 simulated months each, run locally on
-// 2026-08-10 via cmd/perfci, gave PerMonthTick jitter of:
+// until someone actually samples the thing being gated. That sampling
+// has now happened, twice over:
 //
-//	mean 0.524ms, stddev 0.201ms, min 0.293ms, max 0.884ms
+//   - Local (dedicated Windows dev box), Preset1M (1,000,000 citizens,
+//     zero registered PhaseHooks — see PhaseHookCountInHeadlessPath):
+//     the original 2026-08-10 six-sample pass (12 simulated months) gave
+//     PerMonthTick mean 0.524ms, stddev 0.201ms, min 0.293ms, max
+//     0.884ms. A 2026-08-14 re-run to close this item's follow-up added
+//     eight 3-month runs (non-zero PerMonthTick min 0.518ms, max
+//     1.736ms) and six 12-month runs (min 0.101ms, max 0.752ms) — the
+//     wider 3-month spread is the expected effect of dividing the same
+//     absolute jitter over fewer months, not a different workload.
+//   - CI-runner (windows-latest), the environment the real gate runs on:
+//     three measured runs of the actual perf-1m-probe job recorded
+//     PerMonthTick 488.866us (the stored baseline, run 31539765424,
+//     commit 303d3ac), 925.866us (run 31577307387, commit 5bfc381), and
+//     a third in between — i.e. ~488-926us across the three, at 6.7-6.8s
+//     wall / ~43-45MB peak each.
 //
-// 5ms clears the observed maximum by ~5.7x and the mean by ~9.5x — a
-// real, sampled safety margin, not an assumed one. It is being LEFT
-// UNCHANGED at 5ms rather than tightened toward the observed jitter,
-// for two reasons logged here rather than silently decided: (1) this
-// sample is from a dedicated Windows dev box, not the shared/virtualized
-// windows-latest Actions runner the gate actually runs on, and CI
-// tenancy jitter is well documented to run higher than a dedicated
-// machine's — tightening the floor toward locally-observed noise would
-// risk exactly the false-positive BUG-031 shape this constant exists to
-// prevent, the first time CI is simply busier than this box was; (2) a
-// tighter floor buys no real gate coverage yet, because engine.core is
-// still a zero-phase-hook walking skeleton (PhaseHookCount is 0 on
-// every RunPerf/RunGate call today) — there is no real per-tick
-// simulation work for a tighter floor to protect until Sprint 3 lands
-// real PhaseHooks and PerMonthTick stops being dominated by dispatch
-// overhead. 5ms is deliberately kept as a generous, evidence-CONFIRMED
-// (not evidence-CONTRADICTED) floor until that happens.
+// Conclusion of the re-derivation: the caveat that originally kept 5ms
+// — that CI tenancy jitter might run materially higher than a dedicated
+// dev box — did NOT materialise. CI-runner PerMonthTick (488-926us) sits
+// squarely INSIDE the local range (0.1-1.7ms), not above it, so 5ms
+// clears the highest observed figure (1.736ms) by ~2.9x and the CI
+// maximum (0.926ms) by ~5.4x. One further, honest data point: several
+// runs (3 of 8 local 3-month, 1 of 6 local 12-month) measured TickTime
+// == 0 while TotalTicks > 0 — at walking-skeleton scale the Windows
+// monotonic timer occasionally cannot even resolve the whole run, the
+// most literal possible demonstration that sub-millisecond PerMonthTick
+// values are noise and that this floor must stay generously above them.
 //
-// Breaks if: the eventual CI-runner probe job (BUG-034's
-// perf-1m-probe workflow_dispatch job, .github/workflows/ci.yml) shows
-// materially higher runner jitter than this local sample — this
-// constant must be re-checked against THAT data, not just this dev
-// box's, before Sprint 3's real gate goes live; logged as a follow-up
-// against BUG-034 rather than assumed resolved here.
+// 5ms is therefore KEPT UNCHANGED — not raised (CI is not noisier than
+// local) and not lowered (a tighter floor still buys no real gate
+// coverage, because engine.core is a zero-phase-hook walking skeleton
+// and PerMonthTick remains dominated by dispatch overhead until Sprint 3
+// lands real PhaseHooks). The one remaining condition for re-deriving
+// this again is NOT CI jitter — it is the moment PerMonthTick starts
+// measuring real per-tick simulation work (PhaseHookCount > 0), at which
+// point this floor must be re-checked against whatever a real simulated
+// tick actually costs.
 const MinMeasurableDuration = 5 * time.Millisecond
 
 // MaxPlausiblePerMonthTick is BUG-096's upper sanity ceiling on

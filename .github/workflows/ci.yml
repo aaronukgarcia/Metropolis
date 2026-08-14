@@ -440,15 +440,20 @@ jobs:
   # discovering a runner limit via a job timeout rather than a
   # deliberate measurement.
   #
-  # This job is the measurement. It is workflow_dispatch-only (manual),
-  # NOT wired into push/pull_request, for exactly one reason: it has never
-  # been run on this project's actual GitHub-hosted runner as of this
-  # dispatch (BUG-034's brief: "MEASURE IT"), so it must not become a
-  # merge-blocking gate before a human has watched at least one real run
-  # complete and confirmed it fits comfortably inside a CI job's time and
-  # memory budget — repeating that mistake here (shipping an unverified
-  # gate and calling it done) is the exact failure mode BUG-034 exists to
-  # close.
+  # This job is the measurement AND, as of the BUG-034 gate flip (commit
+  # 5bfc381, 2026-08-12 — see the GATE FLIP note further down this
+  # block), the required merge-blocking gate: it runs on every push/PR
+  # and stays workflow-dispatchable. It was originally written
+  # workflow_dispatch-only (manual) for exactly one reason — the real
+  # 1M-citizen headless run had never been measured on windows-latest, so
+  # it could not become a merge-blocking gate before a human had watched
+  # at least one real run complete and confirmed it fits comfortably
+  # inside a CI job's time and memory budget. That first run happened
+  # (run 31539765424, commit 303d3ac: 6.73s wall / 43.2MB peak, well
+  # inside the 20-minute budget), so the flip below was made with
+  # evidence rather than hope — shipping the gate before that measurement
+  # would have been the exact unverified-gate failure mode BUG-034 exists
+  # to close.
   #
   # # What it measures, separately (BUG-034's "record generation cost and
   # # tick cost as SEPARATE figures" instruction)
@@ -641,9 +646,11 @@ jobs:
 
       # BUG-097: identical rationale to perf-smoke's own pruning step —
       # this job's cache key is also unique-per-run and would otherwise
-      # accumulate one entry per manual dispatch forever. This job is
-      # rarer (workflow_dispatch-only) than perf-smoke, so the accumulation
-      # is slower, but the mechanism and the fix are the same.
+      # accumulate one entry per run forever. It was originally rarer
+      # (workflow_dispatch-only) than perf-smoke, but since the BUG-034
+      # gate flip (commit 5bfc381) it runs on every push/PR at the same
+      # cadence as perf-smoke, so the accumulation and the fix are the
+      # same.
       - name: Prune old perf-results-1m-real caches (BUG-097)
         if: always()
         shell: pwsh

@@ -145,16 +145,18 @@
 //     overhead wearing a simulation label" BUG-034 named as the risk to
 //     defend against — check PhaseHookCount before trusting any quoted
 //     tick figure, always.
-//   - DOES NOT yet include a CI-runner-measured baseline. Every result
-//     this package has recorded before BUG-034's perf-1m-probe job
-//     (.github/workflows/ci.yml) is FIRST run on windows-latest is either
-//     a smoke-scale (perf-smoke, -citizens override) or a local dev-box
-//     sanity check — never mistake either for "the 1M baseline is
-//     recorded." See perf-1m-probe's own comment block for the mechanism
-//     that will produce the real one, and limits.go's MinMeasurableDuration
-//     doc comment for the noise-floor re-derivation this dispatch did
-//     against local (not yet CI) data, with the CI re-check logged as an
-//     explicit follow-up rather than assumed already done.
+//   - NOW includes a CI-runner-measured baseline, so the "the 1M baseline
+//     is not recorded" gap is closed. BUG-034's perf-1m-probe job
+//     (.github/workflows/ci.yml) ran for real on windows-latest and
+//     recorded the first 1M baseline (PerMonthTick 488.866us, run
+//     31539765424, commit 303d3ac, 6.73s wall / 43.2MB peak), and the
+//     gate flip (commit 5bfc381, 2026-08-12) then made perf-1m-probe a
+//     REQUIRED push/PR merge check running the real 1M preset. Every one
+//     of those records is still a walking-skeleton measurement
+//     (PhaseHookCount is 0) — see the bullet above — but the baseline is
+//     genuinely recorded and CI-runner-measured now, not pending. See
+//     limits.go's MinMeasurableDuration doc comment for the noise-floor
+//     re-derivation against both local and CI-runner jitter.
 //
 // # Files
 //
