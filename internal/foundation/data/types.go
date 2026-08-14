@@ -4,18 +4,17 @@ import "strconv"
 
 // This file defines the typed struct for each of the §24 config files.
 // Consumption and Seasonal carry the fields spec-stated in §17.1/§17.2
-// and §17.1's seasonal modifiers respectively. Modes, Buildings,
-// UnlockTrees, NamingCorpus, ExternalWorld, and Policies are
+// and §17.1's seasonal modifiers respectively. Modes and Policies are
 // intentionally minimal versioned skeletons — their full schemas firm
 // up alongside the engine module that owns each domain (engine.market/
-// engine.roads for Modes, FEAT-010 for Buildings' full catalogue,
-// MOD-021's consumption coefficients already covered here, engine.
-// unlocks for UnlockTrees, engine.world's naming system for
-// NamingCorpus, engine.extcommute/engine.world for ExternalWorld, and
-// engine.policies for Policies) — see foundation.data.md's Out of scope
-// section. Each skeleton's container field is present and typed so a
-// seed fixture is genuinely schema-conformant, but is expected to be
-// empty until its owning module populates it.
+// engine.roads for Modes, engine.policies for Policies) — see
+// foundation.data.md's Out of scope section. Each skeleton's container
+// field is present and typed so a seed fixture is genuinely
+// schema-conformant, but is expected to be empty until its owning
+// module populates it. The richer types (Buildings, UnlockTrees,
+// NamingCorpus, ExternalWorld) live in their own files — buildings.go,
+// unlock_trees.go, naming_corpus.go, external_world.go — matching the
+// split each owning module's acceptance item introduced.
 
 // --- consumption.json (§17) ---------------------------------------------
 
@@ -194,102 +193,32 @@ func (m *Modes) Validate() error {
 // ownership note) while this file remains MOD-006's shared skeleton
 // set for the other seven §24 files.
 
-// --- unlock_trees.json (§22) — skeleton -----------------------------------
+// --- unlock_trees.json (§22) — in unlock_trees.go --------------------------
 
-// UnlockTrees is a minimal versioned skeleton for the §22 per-category
-// Development Point progression trees (Roads, Electricity, Water & Gas,
-// Health & Deathcare, Education, Fire, Police, Garbage, Parks & Rec,
-// Transport, Communications, Welfare).
-//
-// TODO(engine.unlocks, §22): replace Trees with the full per-category
-// tree schema (nodes, DP costs, prerequisite edges, unlocked building/
-// ability keys, ...).
-type UnlockTrees struct {
-	Version int         `json:"version"`
-	Trees   []TreeEntry `json:"trees"`
-}
+// UnlockTrees/UnlockTree/UnlockNode (the full §22 Development-Point
+// progression-tree schema — twelve per-category trees, each covering all
+// thirteen §4 milestone tiers, with kind/DP-cost/prereq edges) now live
+// in unlock_trees.go, per this file's own former TODO. Kept as a
+// separate file because engine.unlocks owns the unlock economy (§22),
+// matching the buildings.go split for FEAT-010/data.catalogue.
 
-// TreeEntry is a placeholder row; Category is the only field currently
-// enforced.
-type TreeEntry struct {
-	Category string `json:"category"`
-}
+// --- naming_corpus.json (§20) — in naming_corpus.go -----------------------
 
-// Validate implements Validator.
-func (u *UnlockTrees) Validate() error {
-	if err := requireVersion(u.Version); err != nil {
-		return err
-	}
-	for i, e := range u.Trees {
-		if err := requireNonEmptyString("trees["+itoa(i)+"].category", e.Category); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// NamingCorpus/RoadSuffixes (the full §20 deterministic auto-naming
+// corpus schema — Kentish road place-name list, per-road-class suffix
+// table, and the file's notes) now live in naming_corpus.go, per this
+// file's own former TODO. Kept as a separate file because engine.roads
+// owns the naming domain (§20), matching the buildings.go split for
+// FEAT-010/data.catalogue.
 
-// --- naming_corpus.json (§20) — skeleton ----------------------------------
+// --- external_world.json (§21) — in external_world.go ----------------------
 
-// NamingCorpus is a minimal versioned skeleton for §20's deterministic
-// auto-naming word lists (Kentish road-name corpus, class suffixes,
-// civic-building toponym fallbacks, district toponyms, transit letter/
-// colour pools). Categories maps a corpus category key (e.g.
-// "roadNamesKentish", "roadSuffixes") to its word list.
-//
-// TODO(engine.world's naming system, §20): firm up the full set of
-// category keys required by the deterministic seed+id naming algorithm.
-type NamingCorpus struct {
-	Version    int                 `json:"version"`
-	Categories map[string][]string `json:"categories"`
-}
-
-// Validate implements Validator.
-func (n *NamingCorpus) Validate() error {
-	if err := requireVersion(n.Version); err != nil {
-		return err
-	}
-	for cat, words := range n.Categories {
-		for i, w := range words {
-			if w == "" {
-				return fieldErr("categories["+cat+"]["+itoa(i)+"]", "must be non-empty")
-			}
-		}
-	}
-	return nil
-}
-
-// --- external_world.json (§21, §30) — skeleton ----------------------------
-
-// ExternalWorld is a minimal versioned skeleton for off-map conditions:
-// external job pools/wages (§21 out-commuting/in-commuting), and world
-// condition profiles feeding §30's coastal-arrival frequency.
-//
-// TODO(engine.extcommute/engine.world, §21/§30): replace Profiles with
-// the full schema (job pool capacity/wage by destination, arrival-
-// frequency world-condition weights, ...).
-type ExternalWorld struct {
-	Version  int                    `json:"version"`
-	Profiles []ExternalProfileEntry `json:"profiles"`
-}
-
-// ExternalProfileEntry is a placeholder row; Key is the only field
-// currently enforced.
-type ExternalProfileEntry struct {
-	Key string `json:"key"`
-}
-
-// Validate implements Validator.
-func (e *ExternalWorld) Validate() error {
-	if err := requireVersion(e.Version); err != nil {
-		return err
-	}
-	for i, p := range e.Profiles {
-		if err := requireNonEmptyString("profiles["+itoa(i)+"].key", p.Key); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// ExternalWorld/ExternalProfile (the full §21 off-map job-pool schema —
+// the three named pools with era-scaled capacity curves, int64 wages,
+// and transport gating) now live in external_world.go, per this file's
+// own former TODO. Kept as a separate file because engine.extcommute
+// owns the off-map commuting domain (§21), matching the buildings.go
+// split for FEAT-010/data.catalogue.
 
 // --- policies.json (§45 policy library) — skeleton ------------------------
 

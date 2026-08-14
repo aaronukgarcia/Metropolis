@@ -21,6 +21,46 @@ func testCorrelationID() string {
 	return errs.NewCorrelationID()
 }
 
+// validNamingCorpusFixture is a minimal schema-valid naming_corpus.json
+// for the shared happy-path / aggregate tests (all nine non-numbered
+// road classes present, since NamingCorpus.Validate rejects a class
+// with no suffix — data.modes-naming.md AC-10).
+func validNamingCorpusFixture() string {
+	return `{"version":1,"categories":` + validCategoriesFixture + `}`
+}
+
+// validExternalWorldFixture is a minimal schema-valid external_world.json
+// for the shared happy-path / aggregate tests (a single pool whose
+// capacity curve is non-decreasing, wage positive, and transport gated
+// to a valid tier — the invariants ExternalWorld.Validate enforces).
+func validExternalWorldFixture() string {
+	return `{"version":1,"profiles":` + validProfilesFixture + `}`
+}
+
+// validRoadSuffixesFixture is the full valid "roadSuffixes" object body
+// (all nine non-numbered road classes — NamingCorpus.Validate rejects a
+// class with no suffix). Shared by validNamingCorpusFixture and the
+// SEC-056 case-variant-duplicate tests.
+const validRoadSuffixesFixture = `{"alley":["Close"],"gravel":["Lane"],"residential_street":["Road"],"two_lane":["Street"],"one_way_pairs":["Street"],"avenue_2_plus_2":["Avenue"],"bus_lane_variant":["Way"],"tram_track_variant":["Drive"],"dual_carriageway":["Road"]}`
+
+// validCategoriesFixture is the full valid "categories" object body,
+// shared by validNamingCorpusFixture and the SEC-056 tests.
+const validCategoriesFixture = `{"roadPlaceNames":["Cheriton","Seabrook"],"roadSuffixes":` + validRoadSuffixesFixture + `}`
+
+// validProfilesFixture is the minimal schema-valid "profiles" array body,
+// shared by validExternalWorldFixture and the SEC-056 tests.
+const validProfilesFixture = `[{"id":"london","name":"London","capacityByEra":[{"era":1,"capacity":500},{"era":2,"capacity":550}],"wageMicropounds":2900000000,"transportRequirement":[{"channel":"motorway","availableFromTier":1}]}]`
+
+// validUnlockTreesFixture is a minimal schema-valid unlock_trees.json
+// for the shared happy-path / aggregate tests. UnlockTrees.Validate
+// derives its expected category count from meta.categories and requires
+// every tree to cover all thirteen tiers, so the fixture is built
+// programmatically from the helpers in unlock_trees_test.go rather than
+// inlined (a 12-category × 13-tier literal would be hundreds of lines).
+func validUnlockTreesFixture() string {
+	return singleTreeFixture(validRoadNodes()...)
+}
+
 // assertPlaceholderCode checks that err is a registry-sourced *errs.E
 // constructed against wantCode, and resolved as a real registry entry
 // (data/errors.json — BUG-008 closed the gap where this package's
@@ -125,37 +165,46 @@ func TestLoadBuildings_HappyPath(t *testing.T) {
 
 func TestLoadUnlockTrees_HappyPath(t *testing.T) {
 	dir := t.TempDir()
-	writeFixture(t, dir, FileUnlockTrees, `{"version": 1, "trees": [{"category": "roads"}]}`)
+	writeFixture(t, dir, FileUnlockTrees, validUnlockTreesFixture())
 	u, err := LoadUnlockTrees(dir, testCorrelationID())
 	if err != nil {
 		t.Fatalf("LoadUnlockTrees: %v", err)
 	}
-	if len(u.Trees) != 1 {
+	if len(u.Trees) != 1 || u.Trees[0].ID != "roads" {
 		t.Errorf("trees = %+v", u.Trees)
+	}
+	if len(u.Trees[0].Nodes) != 13 {
+		t.Errorf("nodes = %d, want 13", len(u.Trees[0].Nodes))
 	}
 }
 
 func TestLoadNamingCorpus_HappyPath(t *testing.T) {
 	dir := t.TempDir()
-	writeFixture(t, dir, FileNamingCorpus, `{"version": 1, "categories": {"roadNamesKentish": ["Cheriton", "Seabrook"]}}`)
+	writeFixture(t, dir, FileNamingCorpus, validNamingCorpusFixture())
 	n, err := LoadNamingCorpus(dir, testCorrelationID())
 	if err != nil {
 		t.Fatalf("LoadNamingCorpus: %v", err)
 	}
-	if len(n.Categories["roadNamesKentish"]) != 2 {
-		t.Errorf("categories = %+v", n.Categories)
+	if len(n.Categories.RoadPlaceNames) != 2 {
+		t.Errorf("roadPlaceNames = %+v", n.Categories.RoadPlaceNames)
+	}
+	if len(n.Categories.RoadSuffixes.Alley) != 1 {
+		t.Errorf("roadSuffixes.alley = %+v", n.Categories.RoadSuffixes.Alley)
 	}
 }
 
 func TestLoadExternalWorld_HappyPath(t *testing.T) {
 	dir := t.TempDir()
-	writeFixture(t, dir, FileExternalWorld, `{"version": 1, "profiles": [{"key": "london"}]}`)
+	writeFixture(t, dir, FileExternalWorld, validExternalWorldFixture())
 	e, err := LoadExternalWorld(dir, testCorrelationID())
 	if err != nil {
 		t.Fatalf("LoadExternalWorld: %v", err)
 	}
-	if len(e.Profiles) != 1 {
+	if len(e.Profiles) != 1 || e.Profiles[0].ID != "london" {
 		t.Errorf("profiles = %+v", e.Profiles)
+	}
+	if e.Profiles[0].WageMicropounds != 2900000000 {
+		t.Errorf("wageMicropounds = %d, want 2900000000", e.Profiles[0].WageMicropounds)
 	}
 }
 
@@ -414,6 +463,123 @@ func TestFindDuplicateKey_NoDuplicate(t *testing.T) {
 	}
 }
 
+// --- SEC-056: case-variant duplicate keys ----------------------------------
+
+// TestFindDuplicateKey_CaseVariant is SEC-056's walker-level regression
+// test: two keys inside the same object that differ only by case ("b" and
+// "B") must be reported as duplicates, because encoding/json matches
+// struct field names case-insensitively and silently last-write-wins
+// across them.
+func TestFindDuplicateKey_CaseVariant(t *testing.T) {
+	path, found, err := findDuplicateKey([]byte(`{"a":{"b":1,"B":2}}`))
+	if err != nil {
+		t.Fatalf("findDuplicateKey: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a case-variant duplicate to be found")
+	}
+	if path != "a.B" {
+		t.Errorf("path = %q, want %q", path, "a.B")
+	}
+}
+
+// TestFindDuplicateKey_UnicodeFold is SEC-056's class-fix proof at the
+// walker level: encoding/json's foldName/equalFoldRight fold ſ (U+017F
+// long s) ↔ s/S, so "entries"/"entrieſ" (and "Entries"/"entrieſ") are the
+// SAME field and must be reported as a duplicate. strings.EqualFold
+// implements exactly this Unicode simple fold; strings.ToLower does not
+// (it leaves the already-lowercase long-s untouched, so a ToLower-keyed
+// map would see these as distinct and the duplicate would slip through).
+func TestFindDuplicateKey_UnicodeFold(t *testing.T) {
+	cases := []struct {
+		name string
+		json string
+		want string
+	}{
+		{"longS_vs_s", `{"entries":1,"entrieſ":2}`, "entrieſ"},
+		{"longS_vs_S", `{"Entries":1,"entrieſ":2}`, "entrieſ"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path, found, err := findDuplicateKey([]byte(tc.json))
+			if err != nil {
+				t.Fatalf("findDuplicateKey: %v", err)
+			}
+			if !found {
+				t.Fatal("expected a Unicode-fold duplicate to be found")
+			}
+			if path != tc.want {
+				t.Errorf("path = %q, want %q", path, tc.want)
+			}
+		})
+	}
+}
+
+// assertDuplicateKeyNaming checks err is a MET-F609 (CodeDuplicateKey)
+// error and that its rendered message names the offending field, matched
+// case-insensitively (the walker reports the second occurrence's exact
+// spelling, which is the case-variant one).
+func assertDuplicateKeyNaming(t *testing.T, err error, field string) {
+	t.Helper()
+	assertPlaceholderCode(t, err, CodeDuplicateKey, "")
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(field)) {
+		t.Errorf("err.Error() = %q, want it to name the %q field", err.Error(), field)
+	}
+}
+
+// TestLoadNamingCorpus_CaseVariantDuplicateCategoriesRejected proves a
+// naming_corpus.json carrying both "categories" and "Categories" (the
+// same struct field to encoding/json) is rejected with MET-F609, not
+// silently last-write-wins'd.
+func TestLoadNamingCorpus_CaseVariantDuplicateCategoriesRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileNamingCorpus,
+		`{"version":1,"categories":`+validCategoriesFixture+`,"Categories":`+validCategoriesFixture+`}`)
+
+	_, err := LoadNamingCorpus(dir, testCorrelationID())
+	assertDuplicateKeyNaming(t, err, "categories")
+}
+
+// TestLoadNamingCorpus_CaseVariantDuplicateRoadSuffixesRejected proves the
+// same for a nested required field: "roadSuffixes" vs "RoadSuffixes".
+func TestLoadNamingCorpus_CaseVariantDuplicateRoadSuffixesRejected(t *testing.T) {
+	dir := t.TempDir()
+	categoriesWithDup := `{"roadPlaceNames":["Cheriton","Seabrook"],"roadSuffixes":` + validRoadSuffixesFixture + `,"RoadSuffixes":` + validRoadSuffixesFixture + `}`
+	writeFixture(t, dir, FileNamingCorpus, `{"version":1,"categories":`+categoriesWithDup+`}`)
+
+	_, err := LoadNamingCorpus(dir, testCorrelationID())
+	assertDuplicateKeyNaming(t, err, "roadSuffixes")
+}
+
+// TestLoadExternalWorld_CaseVariantDuplicateProfilesRejected proves the
+// same for the external_world.json required field "profiles" vs
+// "Profiles".
+func TestLoadExternalWorld_CaseVariantDuplicateProfilesRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileExternalWorld,
+		`{"version":1,"profiles":`+validProfilesFixture+`,"Profiles":`+validProfilesFixture+`}`)
+
+	_, err := LoadExternalWorld(dir, testCorrelationID())
+	assertDuplicateKeyNaming(t, err, "profiles")
+}
+
+// TestLoadModes_LongSDuplicateEntriesRejected is SEC-056's end-to-end
+// proof: a modes.json carrying both "entries" and "entrieſ" (long-s
+// U+017F) -- which encoding/json folds to the SAME struct field but a
+// strings.ToLower map does NOT -- must be rejected with MET-F609, not
+// silently last-write-wins'd. Both halves decode fine on their own (so a
+// duplicate-free reading would reach Validate and pass), which is what
+// makes the case-fold gap a silent last-write-wins rather than a loud
+// type error.
+func TestLoadModes_LongSDuplicateEntriesRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileModes,
+		`{"version":1,"entries":[{"key":"car"}],"entrieſ":[{"key":"bus"}]}`)
+
+	_, err := LoadModes(dir, testCorrelationID())
+	assertDuplicateKeyNaming(t, err, "entrieſ")
+}
+
 // --- LoadAll (AC-3) --------------------------------------------------------
 
 func seedAllFixtures(t *testing.T, dir string) {
@@ -421,10 +587,10 @@ func seedAllFixtures(t *testing.T, dir string) {
 	writeFixture(t, dir, FileConsumption, `{"version":1,"residential":{"waterLitresPerPersonPerDay":145,"electricityKWhPerPersonPerDay":3.5,"gasKWhPerPersonPerDay":13,"foodStaplesKgPerPersonPerDay":1.4,"foodFreshKgPerPersonPerDay":0.7,"householdWasteKgPerPersonPerDay":1.1,"wastewaterFractionOfWater":0.95},"classes":{}}`)
 	writeFixture(t, dir, FileModes, `{"version":1,"entries":[]}`)
 	writeFixture(t, dir, FileBuildings, `{"version":1,"entries":[]}`)
-	writeFixture(t, dir, FileUnlockTrees, `{"version":1,"trees":[]}`)
-	writeFixture(t, dir, FileNamingCorpus, `{"version":1,"categories":{}}`)
+	writeFixture(t, dir, FileUnlockTrees, validUnlockTreesFixture())
+	writeFixture(t, dir, FileNamingCorpus, validNamingCorpusFixture())
 	writeFixture(t, dir, FileSeasonal, `{"version":1,"curves":{}}`)
-	writeFixture(t, dir, FileExternalWorld, `{"version":1,"profiles":[]}`)
+	writeFixture(t, dir, FileExternalWorld, validExternalWorldFixture())
 	writeFixture(t, dir, FilePolicies, `{"version":1,"entries":[]}`)
 }
 

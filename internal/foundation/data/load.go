@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
@@ -281,10 +282,24 @@ func LoadAll(dir, correlationID string) (*Config, error) {
 // findDuplicateKey walks b's raw JSON token stream (ahead of, and
 // independently from, json.Unmarshal) and reports the dotted field path
 // of the first object key that occurs twice within the same object,
-// anywhere in the document -- BUG-060. Unmarshaling into a Go map or
-// struct has already thrown this information away by the time Validate
-// runs (last occurrence silently wins), so this check has to happen on
-// the raw bytes, before that collapse occurs.
+// anywhere in the document -- BUG-060. The comparison is
+// case-insensitive via strings.EqualFold (SEC-056), the same Unicode
+// simple fold encoding/json uses to match struct field names, so
+// "categories"/"Categories" (and "entries"/"entrieſ") are the same field
+// and would silently last-write-wins if this walk compared them
+// byte-for-byte. Unmarshaling into a Go map or struct has already thrown
+// this information away by the time Validate runs (last occurrence
+// silently wins), so this check has to happen on the raw bytes, before
+// that collapse occurs.
+//
+// Known over-approximation (SEC-056, P3, left as-is): the walker folds
+// EVERY object key, but encoding/json only case-folds struct FIELD names
+// -- map keys and json.RawMessage content are byte-exact. This walker is
+// schema-agnostic (it sees only the raw token stream, never the
+// destination Go type), so it cannot tell a struct field from a map key
+// without a fragile reflection-driven special case; folding everything
+// errs on the safe side (rejects a valid-but-case-variant map rather than
+// accepting an invalid case-variant struct field).
 //
 // Returns ("", false, nil) when no duplicate is found. A non-nil error
 // means the token walk itself failed (e.g. genuinely malformed JSON);
@@ -316,7 +331,7 @@ func walkForDuplicateKey(dec *json.Decoder, path string) (string, bool, error) {
 
 	switch delim {
 	case '{':
-		seen := make(map[string]bool)
+		var seen []string
 		for dec.More() {
 			keyTok, err := dec.Token()
 			if err != nil {
@@ -328,10 +343,29 @@ func walkForDuplicateKey(dec *json.Decoder, path string) (string, bool, error) {
 			if path != "" {
 				childPath = path + "." + key
 			}
-			if seen[key] {
-				return childPath, true, nil
+			// SEC-056: encoding/json matches struct field names
+			// case-insensitively (via its internal foldName /
+			// equalFoldRight), so an object carrying both "categories" and
+			// "Categories" decodes into the SAME field and silently
+			// last-write-wins with no error -- defeating the BUG-060
+			// duplicate-key guard this walk provides.
+			//
+			// Compare pairwise with strings.EqualFold, which implements the
+			// SAME Unicode simple case folding encoding/json's field matcher
+			// uses: it folds ſ (U+017F long s) ↔ s/S and K (U+212A kelvin
+			// sign) ↔ k/K, plus every ASCII case pair. A strings.ToLower map
+			// does NOT -- ToLower maps uppercase→lowercase only, so the
+			// already-lowercase long-s "ſ" is left untouched and a key like
+			// "entrieſ" reads as distinct from "entries" even though
+			// encoding/json folds both to the same struct field and silently
+			// last-write-wins. The prior-key slice is tiny (a handful of keys
+			// per object), so the pairwise scan's cost is negligible.
+			for _, seenKey := range seen {
+				if strings.EqualFold(key, seenKey) {
+					return childPath, true, nil
+				}
 			}
-			seen[key] = true
+			seen = append(seen, key)
 
 			dupPath, found, err := walkForDuplicateKey(dec, childPath)
 			if err != nil {
