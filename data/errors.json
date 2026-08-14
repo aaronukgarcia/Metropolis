@@ -56,7 +56,8 @@
       "G100-G199": "reserved for engine.projections (internal/engine/projections: the projection curve registry, month-query bounds guard, Slow-Fuse decision validation, and ghost-city death-warning provider — MOD-031. Second G-layer engine claim after engine.citizens' G000-G099; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xx code existed either place.)",
       "G200-G299": "reserved for engine.finance (internal/engine/finance: the double-entry money ledger, land pricing, loans/credit-rating/insolvency, investments, and v1 SimpleFirm — MOD-022. Third G-layer engine claim after engine.citizens' G000-G099 and engine.projections' G100-G199; the E layer is fully exhausted and the code format was widened to four digits on 2026-08-14 (BUG-234) so three-digit codes remain the norm here. Checked against this table AND `grep -rn \"MET-G2\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G2xx code existed either place.)",
       "G300-G399": "reserved for engine.consumption (internal/engine/consumption: coefficient-driven demand from data/consumption.json, the four utility networks (water/wastewater/electricity/gas) with sources/edges/storage/losses, the conserved daily solve, the aquifer sustainable-yield ceiling, peak-vs-base load, the all-electric strategy, and household utility billing — MOD-021. Fourth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, and engine.finance's G200-G299; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G3\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G3xx code existed either place.)",
-      "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)"
+      "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)",
+    "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1752,6 +1753,60 @@
       "module": "engine.logistics",
       "message": "LogisticsAPI method {method} called on a struct-copied value, not the one Load/LoadDefault constructed",
       "remedy": "Always use the *LogisticsAPI pointer Load returned. Do not dereference-and-reassign it ('l2 := *l') or pass it by value -- that produces a second value with its own mu but ALIASED stocks/subs/cfg state, so the copy's mu protects nothing shared (SEC-020-class, mirroring engine.finance's MET-G204). If you need a second independent API, call Load again."
+    },
+    "MET-G500": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "data/buildings.json's \"zones\" array could not be loaded or failed validation from {dir}: {cause}",
+      "remedy": "engine.build requires all eight §34 zone types (Dwelling, Shop, Office, Entertainment, Farming, Manufacturing, Heavy Industry, Mining) present in data/buildings.json's top-level \"zones\" array, each with a non-empty materials bill whose quantities are non-negative, a non-negative labour requirement, and a non-negative baseLeadTimeDays. At Baseline One depth the materials bill must name exactly the \"constructionMaterials\" commodity. engine.build never falls back to a silent default substitution (GR#15/GR#7)."
+    },
+    "MET-G501": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "unknown zone type \"{zone}\" submitted to BuildAPI",
+      "remedy": "Submit zone/build/demand commands only with one of the eight §34 zone types (engine.build's ZoneType constants). An unregistered zone type is rejected loudly, never a panic or a silently-accepted no-op (AC-10/GR#7)."
+    },
+    "MET-G502": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "cell reference out of bounds (tile {tile}, local {local})",
+      "remedy": "BuildAPI commands and queries require a tile inside the 30x30 expansion extent and a local cell inside the 200x200 tile grid. An out-of-bounds cell is rejected before any state is touched (AC-10)."
+    },
+    "MET-G503": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "cell (tile {tile}, local {local}) is not owned by owner {owner}",
+      "remedy": "A cell cannot be zoned, built on, or demolished before the issuing player owns its tile (purchase it first — US-3/§7). engine.build enforces this gate at command-acceptance time and mutates no zone/queue state on rejection (AC-3)."
+    },
+    "MET-G504": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "demolish command against cell (tile {tile}, local {local}) with no structure to demolish",
+      "remedy": "SubmitDemolishCommand requires the cell to already carry a structure (a completed build). A demolish against an empty cell is rejected, never a silently-accepted no-op (AC-10/GR#7)."
+    },
+    "MET-G505": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "BuildAPI method {method} called on a struct-copied value, not the one Load/LoadDefault constructed",
+      "remedy": "Always use the *BuildAPI pointer Load returned. Do not dereference-and-reassign it ('b2 := *b') or pass it by value -- that produces a second value with its own mu but ALIASED maps/queue state, so the copy's mu protects nothing shared (SEC-020-class, mirroring engine.finance's MET-G204). If you need a second independent API, call Load again."
+    },
+    "MET-G506": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "engine.season returned an invalid construction-speed multiplier {multiplier} at month {month}",
+      "remedy": "The §9 construction-speed multiplier must be a finite value strictly greater than zero. A NaN/Inf/non-positive multiplier would make effective lead time undefined or infinite; engine.build rejects it rather than wrapping or producing NaN/Inf (GR#16 numeric safety)."
+    },
+    "MET-G507": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "negative month index {month} passed to BuildAPI",
+      "remedy": "BuildAPI accepts only non-negative absolute month indices (0 = world genesis month, matching engine.core's Clock.Month()). A negative month is rejected before any seasonal or tick computation runs (GR#16)."
+    },
+    "MET-G508": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "BuildAPI dependency {dependency} is not wired for operation {operation}",
+      "remedy": "Wire the missing dependency before using the operation: SetWorld before SubmitZoneCommand/SubmitBuildCommand/SubmitDemolishCommand/PurchasePrice, SetSeason before SubmitBuildCommand, and SetLogistics before Tick. engine.build never silently no-ops a command because a dependency was forgotten (GR#1/GR#17)."
     }
   }
 }

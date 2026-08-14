@@ -1,6 +1,83 @@
 {
   "$comment": "Part IV (Appendix A, Building & Object Catalogue) + Catalogue Supplement / Supplement 2 / Supplement 3 of docs/METROPOLIS-MASTER-v2.1.md, transcribed verbatim (unlock/cost/capacity/notes text) into structured entries. FEAT-010 / data.catalogue. Never edit the numeric literals here without updating the spec doc first (GR#15: this file IS the source of truth engine validators read, not a hardcoded Go constant). See docs/design/buildings-schema.md for the field reference and docs/planning/acceptance/data.catalogue.md for acceptance criteria. Every gap the spec itself left unfilled (flat comma-lists with no stated cost/unlock, one-row families split into tiers, interpolated middle tiers) is logged as a BOW ASM- assumption -- see the buildings loader's package doc for the list.",
   "version": 1,
+  "meta": {
+    "section": "zones",
+    "specRefs": "§34 (Zoning — Land Types: the 8-way zone catalogue Dwelling / Shop / Office / Entertainment / Farming / Manufacturing / Heavy Industry / Mining); §13-F3 (Land & Construction: purchase, zone, build queue — materials + labour + lead time — demolition); §9 (Seasonality: construction-speed winter slowdown)",
+    "materialsBillUnit": "tonnes of construction materials — the constructionMaterials commodity, matching engine.logistics's AC-19 unit convention (commodities are accounted in tonnes/day)",
+    "labourUnit": "worker-days",
+    "labourPerTick": 1,
+    "leadTimeUnit": "simulation days (one simulation day elapses per build-queue tick; the §9 constructionSpeedMultiplier lengthens this in winter)",
+    "note": "All numeric magnitudes are PLACEHOLDER pending Aaron's balance pass (the balance-number regime): tests assert direction (heavy industry > manufacturing > farming), never a specific figure. Rebalance by editing the zones[] entries below, never a Go literal.",
+    "zoneTypes": [
+      { "id": "dwelling", "name": "Dwelling" },
+      { "id": "shop", "name": "Shop" },
+      { "id": "office", "name": "Office" },
+      { "id": "entertainment", "name": "Entertainment" },
+      { "id": "farming", "name": "Farming" },
+      { "id": "manufacturing", "name": "Manufacturing" },
+      { "id": "heavy_industry", "name": "Heavy Industry" },
+      { "id": "mining", "name": "Mining" }
+    ]
+  },
+  "zones": [
+    {
+      "id": "dwelling",
+      "name": "Dwelling",
+      "materialsBill": { "constructionMaterials": 100 },
+      "labour": 40,
+      "baseLeadTimeDays": 45
+    },
+    {
+      "id": "shop",
+      "name": "Shop",
+      "materialsBill": { "constructionMaterials": 80 },
+      "labour": 30,
+      "baseLeadTimeDays": 30
+    },
+    {
+      "id": "office",
+      "name": "Office",
+      "materialsBill": { "constructionMaterials": 150 },
+      "labour": 50,
+      "baseLeadTimeDays": 60
+    },
+    {
+      "id": "entertainment",
+      "name": "Entertainment",
+      "materialsBill": { "constructionMaterials": 200 },
+      "labour": 60,
+      "baseLeadTimeDays": 75
+    },
+    {
+      "id": "farming",
+      "name": "Farming",
+      "materialsBill": { "constructionMaterials": 60 },
+      "labour": 20,
+      "baseLeadTimeDays": 20
+    },
+    {
+      "id": "manufacturing",
+      "name": "Manufacturing",
+      "materialsBill": { "constructionMaterials": 250 },
+      "labour": 80,
+      "baseLeadTimeDays": 90
+    },
+    {
+      "id": "heavy_industry",
+      "name": "Heavy Industry",
+      "materialsBill": { "constructionMaterials": 400 },
+      "labour": 120,
+      "baseLeadTimeDays": 150
+    },
+    {
+      "id": "mining",
+      "name": "Mining",
+      "materialsBill": { "constructionMaterials": 300 },
+      "labour": 100,
+      "baseLeadTimeDays": 120
+    }
+  ],
   "entries": [
     {
       "id": "footpath",

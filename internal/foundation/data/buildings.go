@@ -73,6 +73,14 @@ var milestonePattern = regexp.MustCompile(`^M(1[0-3]|[1-9])$`)
 type Buildings struct {
 	Version int             `json:"version"`
 	Entries []BuildingEntry `json:"entries"`
+	// Zones is the §34 eight-way zone catalogue (engine.build / MOD-026),
+	// carried in the same buildings.json file as the building catalogue so
+	// construction-cost rebalancing is one data edit (GR#15). Absent (empty)
+	// for a catalogue that does not carry zone data. See zones.go.
+	Zones []ZoneEntry `json:"zones,omitempty"`
+	// ZoneMeta is the zone-catalogue meta block (engine.build / MOD-026) —
+	// see zones.go. Zero-valued when the file carries no zone meta.
+	ZoneMeta ZoneMeta `json:"meta,omitempty"`
 }
 
 // UnlockGate is one entry's Part IV "Unlock" column, structured rather
@@ -230,6 +238,10 @@ func (b *Buildings) Validate() error {
 				return fieldErr(fmt.Sprintf("%s.appealProfile[%d]", idPrefix, j), fmt.Sprintf("must match %s, got %q", appealTagPattern.String(), tag))
 			}
 		}
+	}
+
+	if err := b.validateZones(); err != nil {
+		return err
 	}
 
 	return nil
