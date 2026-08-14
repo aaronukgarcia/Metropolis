@@ -6,7 +6,7 @@
 // deterministic life-writing, per-person Gompertz-Makeham monthly
 // mortality, and households.
 //
-// Module key: engine.citizens (see code.json)
+// Module key: engine.citizens (see code.json; GUID 99e0d1f5-0214-4b06-bcde-caba0b1e44ad)
 // Spec refs:  §5 Citizens — the Option B Model (all subsections: §5.1 the
 // citizen record, §5.2 adaptive fidelity, §5.3 memory & storage at 100M,
 // §5.4 households & housing); A1 (cold SoA store 60–100B/citizen), A2

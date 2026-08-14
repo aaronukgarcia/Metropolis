@@ -4,7 +4,7 @@
 // through feat.debugmode's (internal/engine/debug, FEAT-008/FEAT-035)
 // existing capability seams.
 //
-// Module key: feat.devmode (see code.json)
+// Module key: feat.devmode (see code.json; GUID 7d49d8f6-f29e-48fe-af76-e67d6b15f501)
 // Spec refs:  §14 (docs/METROPOLIS-MASTER-v2.1.md lines 257-260);
 //
 //	M0-ENG §3; docs/planning/acceptance/feat.devmode.md (this

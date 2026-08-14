@@ -32,7 +32,7 @@
 //   - engine.go       — StubEngine itself: construction, the Run loop,
 //     command dispatch, delta emission.
 //
-// Module key: harness.stub (see code.json)
+// Module key: harness.stub (see code.json; GUID c254728b-4a1c-490f-a1a7-42e08f8605ff)
 // Spec ref:   M0-ENG §2.1; BOW MOD-008; acceptance criteria
 // docs/planning/acceptance/harness.stub.md
 package stub

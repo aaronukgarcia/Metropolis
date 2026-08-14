@@ -5,7 +5,7 @@
 // regression comparison (mode b, [EnginePlayer]). M0-ENG §2.2: "the save
 // format IS the fixture format — one serialisation to rule them all."
 //
-// Module key: harness.replay (see code.json)
+// Module key: harness.replay (see code.json; GUID 8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8)
 // Spec ref:   M0-ENG §2.2; docs/design/protocol.md (Command/Event/Delta
 //
 //	envelope, CorrelationID, Tick); docs/design/save-format.md

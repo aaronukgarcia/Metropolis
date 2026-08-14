@@ -1,3 +1,6 @@
+// Module key: tool.reflection (see code.json; GUID b475594b-c35c-4049-af82-2da246683c82)
+// Spec ref: GR#1; M0-ENG §5 (hooks)
+
 /**
  * PostToolUse hook — fires after every Bash command.
  * When the command was a git commit, outputs a reflection prompt that

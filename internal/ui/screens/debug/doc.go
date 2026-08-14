@@ -3,7 +3,7 @@
 // module registry with guarded toggles, the last-50 error tail, a
 // per-phase µs sparkline, and a read-only BoW tab.
 //
-// Module key: ui.screen.debug (see code.json)
+// Module key: ui.screen.debug (see code.json; GUID 98b0e2b3-169e-4592-b90a-1a2f21b6771a)
 // Spec ref:   M0-ENG §3 (Debug mode & the Info Panel,
 //
 //	docs/METROPOLIS-MASTER-v2.1.md lines 853-865), §1.3 (memory budget

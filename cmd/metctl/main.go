@@ -16,7 +16,7 @@
 // (A3, R2). verify checks the header's format version and rehashes every
 // shard, exiting non-zero with a clear message on any failure.
 //
-// Module key: foundation.repo (see code.json)
+// Module key: tool.metctl (see code.json; GUID abb3d403-7e6b-41f4-adc9-97c34d000bc7)
 // Spec ref:   M0-ENG §5; A8; int.serializer
 package main
 

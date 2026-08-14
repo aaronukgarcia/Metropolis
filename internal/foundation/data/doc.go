@@ -71,6 +71,6 @@
 // the field reference and docs/planning/acceptance/data.catalogue.md
 // for the acceptance criteria.
 //
-// Module key: foundation.data (see code.json)
+// Module key: foundation.data (see code.json; GUID 58dbb120-caed-4e55-99f7-b90894e97794)
 // Spec ref:   §24; GR#15; M0-ENG §3 (debug as a runtime feature switch)
 package data

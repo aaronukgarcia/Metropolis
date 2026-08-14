@@ -6,7 +6,7 @@
 // answering ASM-001) — with no UI, no TUI, and no wall-clock pacing
 // attached.
 //
-// Module key: harness.headless (see code.json)
+// Module key: harness.headless (see code.json; GUID 94fcac3b-a76c-40a8-8bb6-6add9ebc9496)
 // Spec ref:   M0-ENG §2.3 (line 848); §16 Roadmap point 3 (M2 balance
 //
 //	harness, line 272)

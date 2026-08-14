@@ -1,10 +1,13 @@
-// Package metricsdash is feat.metricsdash (module key pending
-// confirmation — see ASM-451/Escalation C,
+// Package metricsdash is feat.metricsdash (FEAT-066; module key
+// confirmed — see ASM-451/Escalation C,
 // docs/planning/acceptance/feat.metricsdash.md): a read-only
 // aggregation/reporting layer over this project's own existing
 // operational data sources, plus a low-friction logging entry point
 // that files a real BOW record for a quick "this looks wrong"/"what is
 // this number" observation.
+//
+// Module key: feat.metricsdash (see code.json; GUID 39653594-e467-4cb1-9819-ddfe8fd29701)
+// Spec ref:   docs/planning/acceptance/feat.metricsdash.md; ASM-476/ASM-477 rulings (Bill, 2026-08-12)
 //
 // # Data sources (AC-1 / AC-14)
 //

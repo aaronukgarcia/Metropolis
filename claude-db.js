@@ -1,3 +1,6 @@
+// Module key: tool.db (see code.json; GUID 4c12a143-9345-4ae9-990d-ac16ee3e2baa)
+// Spec ref: M0-ENG §4 (BOW)
+
 /**
  * claude-db.js — shared metro MariaDB connection helper (BUG-203, GR#3).
  *

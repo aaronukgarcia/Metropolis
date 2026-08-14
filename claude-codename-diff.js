@@ -1,3 +1,6 @@
+// Module key: tool.codenamediff (see code.json; GUID 147cceb9-c50e-4719-9f2e-df80e4b8c806)
+// Spec ref: GR#22
+
 /**
  * claude-codename-diff.js — shared unified-diff line classifier (BUG-182).
  *

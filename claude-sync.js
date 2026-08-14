@@ -1,3 +1,6 @@
+// Module key: tool.sync (see code.json; GUID eae1b5fc-9fc9-46fa-af15-5333c5db21f8)
+// Spec ref: M0-ENG §5 (hooks); session coordination
+
 /**
  * claude-sync.js — Metropolis session coordination (MariaDB backend)
  *

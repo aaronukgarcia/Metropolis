@@ -1,3 +1,6 @@
+// Module key: tool.dispatchlog (see code.json; GUID 2bceac9d-f4f7-46fa-9ece-914a3a98afdd)
+// Spec ref: FEAT-076; M0-ENG §5 (hooks)
+
 /**
  * claude-dispatch-log.js — pure logic for FEAT-076 (BOW mkey: tool.agentlog).
  *

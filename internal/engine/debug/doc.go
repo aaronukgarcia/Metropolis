@@ -2,7 +2,7 @@
 // debug-mode switch and its unlock set (§14 Debug Mode; M0-ENG §3
 // "Debug mode & the Info Panel — a first-class feature").
 //
-// Module key: feat.debugmode (see code.json)
+// Module key: feat.debugmode (see code.json; GUID d46840c1-b7d1-480b-a46d-e93d58fd7aa4)
 // Spec ref:   §14 (docs/METROPOLIS-MASTER-v2.1.md lines 257-260);
 //
 //	M0-ENG §3 (docs/METROPOLIS-MASTER-v2.1.md lines 853-865)

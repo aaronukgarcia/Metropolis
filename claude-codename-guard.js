@@ -1,3 +1,6 @@
+// Module key: tool.codenameguard (see code.json; GUID 7ece8624-f4d5-4883-b359-f39ec5a86a1c)
+// Spec ref: GR#22; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — codename guard (BOW mkey: tool.codenameguard).
  *

@@ -6,7 +6,7 @@
 // hook (T-PERSIST). It is the "heart of the machine" every other engine
 // module (citizens, finance, world, ...) registers against.
 //
-// Module key: engine.core (see code.json)
+// Module key: engine.core (see code.json; GUID 0bef8af8-0883-4604-bf98-71212100fffb)
 // Spec ref:   §3 (Time); M0-ENG §1.1-1.3 (process/thread topology,
 //
 //	deterministic parallelism, memory budget); §9 (month index); A2

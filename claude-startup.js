@@ -1,3 +1,6 @@
+// Module key: tool.startup (see code.json; GUID 7220138c-1822-4cc1-9e5e-b17714e2f42b)
+// Spec ref: M0-ENG §5 (hooks)
+
 // claude-startup.js — SessionStart hook script
 // Runs checkin, validates identity, writes identity file, outputs confirmation for Claude
 //

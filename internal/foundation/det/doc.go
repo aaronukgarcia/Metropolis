@@ -6,7 +6,7 @@
 // package provides the primitives; `engine.core` (POOL-SIM, MOD-012)
 // consumes them to build the actual tick pipeline.
 //
-// Module key: foundation.det (see code.json)
+// Module key: foundation.det (see code.json; GUID 4e1a1a9c-0757-4964-9d4b-74d37584e739)
 // Spec ref:   §1.2 (in full, quoted below); A8 (mechanical enforcement)
 //
 // # §1.2 Deterministic parallelism (the crown rule, spelled out)

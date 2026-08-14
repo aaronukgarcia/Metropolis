@@ -1,3 +1,6 @@
+// Module key: tool.versionchecker (see code.json; GUID 6a16b608-613f-41b3-a6da-6ca1ad1ea000)
+// Spec ref: GR#2
+
 /**
  * GR#2 hand-maintained-version-file checker (BOW mkey: tool.secretguard,
  * BUG-088 remediation, extracted from claude-version-guard.js).

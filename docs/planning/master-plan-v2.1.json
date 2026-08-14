@@ -482,11 +482,8 @@
       "desc": "Release builds carry it, default off; enable via --debug, config, or :debug on; switching ON is recorded in the save header forever (balance data hygiene); unlocks 8x speed, cheats (free money, instant build, force milestone), entity JSON inspector, fidelity-dial exposure, console, fixture record/replay controls.",
       "specRef": "§14; M0-ENG §3",
       "path": "internal/engine/debug/",
-      "deps": [
-        "foundation.registry"
-      ],
+      "deps": [],
       "calls": [
-        "foundation.registry",
         "int.serializer"
       ],
       "sprint": 1
@@ -1066,6 +1063,24 @@
         "engine.finance"
       ],
       "sprint": 4
+    },
+    {
+      "key": "data.unlocktrees",
+      "type": "feature",
+      "seq": 405,
+      "priority": "P2",
+      "milestone": "M1",
+      "layer": "data",
+      "title": "Author unlock_trees.json — full §10/§22 inventory across 12 dev-point categories x 13 tiers",
+      "desc": "Split from engine.unlocks per BA-2: the gate-check MECHANISM is MOD-032; this item is the data-authoring undertaking of populating every category tree from the catalogue + §4 milestone table. GR#15: engine validators derive from this file.",
+      "specRef": "§10; §22; BA-2 escalation 2026-08-09",
+      "path": "data/unlock_trees.json",
+      "deps": [
+        "foundation.data"
+      ],
+      "calls": [
+        "foundation.data"
+      ]
     },
     {
       "key": "engine.services",
@@ -2802,6 +2817,463 @@
         "foundation.errors"
       ],
       "sprint": 3
+    },
+    {
+      "key": "tool.destructiveguard",
+      "type": "feature",
+      "seq": 951,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "GR#23 destructive-guard hook: blocks code-bearing commits whose [mkey]-resolved BOW item(s) lack an accepted Destructive verdict",
+      "desc": "claude-destructive-guard.js (root tooling, layer tooling).",
+      "specRef": "GR#23; GR#24; M0-ENG §5 (hooks)",
+      "path": "claude-destructive-guard.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.versionguard",
+      "type": "feature",
+      "seq": 952,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Version-discipline guard hook (GR#2): denies rogue hand-maintained version files and warns on engine commits",
+      "desc": "claude-version-guard.js (root tooling, layer tooling).",
+      "specRef": "GR#2; M0-ENG §5 (hooks)",
+      "path": "claude-version-guard.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.worktreeguard",
+      "type": "feature",
+      "seq": 953,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Worktree-destruction guard (GR#24): fail-closed block of git checkout --/reset --hard/clean/stash that would revert to HEAD",
+      "desc": "claude-worktree-guard.js (root tooling, layer tooling).",
+      "specRef": "GR#24; M0-ENG §5 (hooks)",
+      "path": "claude-worktree-guard.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.sync",
+      "type": "feature",
+      "seq": 954,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Session coordination harness (metro MariaDB): permits, file claims, dispatch events, wake recovery",
+      "desc": "claude-sync.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks); session coordination",
+      "path": "claude-sync.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.startup",
+      "type": "feature",
+      "seq": 955,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "SessionStart hook: auto checkin + identity + startup summary (BOW/Vestige/git sync)",
+      "desc": "claude-startup.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-startup.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.precommitcheck",
+      "type": "feature",
+      "seq": 956,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Pre-commit hook: blocks Co-Authored-By trailers in commits",
+      "desc": "claude-pre-commit-check.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-pre-commit-check.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.prepushcheck",
+      "type": "feature",
+      "seq": 957,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Pre-push hook: blocks pushes with unbundled function deploys (GR#19)",
+      "desc": "claude-pre-push-check.js (root tooling, layer tooling).",
+      "specRef": "GR#19; M0-ENG §5 (hooks)",
+      "path": "claude-pre-push-check.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.pingcheck",
+      "type": "feature",
+      "seq": 958,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "PostToolUse hook: DHCP-style session permit auto-renewal",
+      "desc": "claude-ping-check.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-ping-check.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.reflection",
+      "type": "feature",
+      "seq": 959,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "PostToolUse hook: post-action Golden Rules reflection",
+      "desc": "claude-reflection.js (root tooling, layer tooling).",
+      "specRef": "GR#1; M0-ENG §5 (hooks)",
+      "path": "claude-reflection.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.statusline",
+      "type": "feature",
+      "seq": 960,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "statusLine hook: identity/status display",
+      "desc": "claude-statusline.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-statusline.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.memoryprefetch",
+      "type": "feature",
+      "seq": 961,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "UserPromptSubmit hook: Vestige recall reminder (GR#14)",
+      "desc": "claude-memory-prefetch.js (root tooling, layer tooling).",
+      "specRef": "GR#14; M0-ENG §5 (hooks)",
+      "path": "claude-memory-prefetch.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.agentstop",
+      "type": "feature",
+      "seq": 962,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Agent dispatch/stop logging for utilisation measurement (FEAT-076)",
+      "desc": "claude-agent-stop.js (root tooling, layer tooling).",
+      "specRef": "FEAT-076; M0-ENG §5 (hooks)",
+      "path": "claude-agent-stop.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.authoridentity",
+      "type": "feature",
+      "seq": 963,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Sanctioned-identity derivation shared by the author guard (runtime-derived, GR#15)",
+      "desc": "claude-author-identity.js (root tooling, layer tooling).",
+      "specRef": "GR#2; BUG-035",
+      "path": "claude-author-identity.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.bowautoref",
+      "type": "feature",
+      "seq": 964,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Post-commit hook: auto-record commit hash refs onto BOW items",
+      "desc": "claude-bow-autoref.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §4",
+      "path": "claude-bow-autoref.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.bowrefcheck",
+      "type": "feature",
+      "seq": 965,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "BOW git-ref integrity check",
+      "desc": "claude-bow-ref-check.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §4",
+      "path": "claude-bow-ref-check.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.codenamecontentscan",
+      "type": "feature",
+      "seq": 966,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Codename content scanner backing the GR#22 guard",
+      "desc": "claude-codename-content-scan.js (root tooling, layer tooling).",
+      "specRef": "GR#22",
+      "path": "claude-codename-content-scan.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.codenamediff",
+      "type": "feature",
+      "seq": 967,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Codename staged-diff scanner backing the GR#22 guard",
+      "desc": "claude-codename-diff.js (root tooling, layer tooling).",
+      "specRef": "GR#22",
+      "path": "claude-codename-diff.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.codenamepatterns",
+      "type": "feature",
+      "seq": 968,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Runtime-assembled codename patterns for the GR#22 guard (never a literal)",
+      "desc": "claude-codename-patterns.js (root tooling, layer tooling).",
+      "specRef": "GR#22",
+      "path": "claude-codename-patterns.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.committhookinstall",
+      "type": "feature",
+      "seq": 969,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Commit-hook installer for the guard suite",
+      "desc": "claude-committhook-install.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-committhook-install.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.db",
+      "type": "feature",
+      "seq": 970,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Shared metro MariaDB connection helper for the claude-*.js scripts",
+      "desc": "claude-db.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §4 (BOW)",
+      "path": "claude-db.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.devfeedbackimport",
+      "type": "feature",
+      "seq": 971,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "In-game feedback importer into the BOW (attribution from the submitting tool’s mkey)",
+      "desc": "claude-devfeedback-import.js (root tooling, layer tooling).",
+      "specRef": "FEAT-065; ASM-477",
+      "path": "claude-devfeedback-import.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.dispatchlog",
+      "type": "feature",
+      "seq": 972,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Agent dispatch/stop event logging (sync_dispatch_events)",
+      "desc": "claude-dispatch-log.js (root tooling, layer tooling).",
+      "specRef": "FEAT-076; M0-ENG §5 (hooks)",
+      "path": "claude-dispatch-log.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.gitcommittrigger",
+      "type": "feature",
+      "seq": 973,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Git commit trigger wrapper for the guard suite",
+      "desc": "claude-git-commit-trigger.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-git-commit-trigger.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.planchecker",
+      "type": "feature",
+      "seq": 974,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Plan-drift checker backing tool.planguard (generate --check + diff)",
+      "desc": "claude-plan-checker.js (root tooling, layer tooling).",
+      "specRef": "GR#3; GR#6",
+      "path": "claude-plan-checker.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.pushverify",
+      "type": "feature",
+      "seq": 975,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Safe-push verification: tree + authorship + origin sync (GR#24)",
+      "desc": "claude-push-verify.js (root tooling, layer tooling).",
+      "specRef": "GR#24",
+      "path": "claude-push-verify.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.quotemask",
+      "type": "feature",
+      "seq": 976,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Portable shell quote-mask primitive shared by the guards",
+      "desc": "claude-quote-mask.js (root tooling, layer tooling).",
+      "specRef": "GR#22 (guards); shell-quoting",
+      "path": "claude-quote-mask.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.secretchecker",
+      "type": "feature",
+      "seq": 977,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Secret/hardcoding checker backing tool.secretguard",
+      "desc": "claude-secret-checker.js (root tooling, layer tooling).",
+      "specRef": "GR#11; GR#15",
+      "path": "claude-secret-checker.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.trailerchecker",
+      "type": "feature",
+      "seq": 978,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Commit-trailer checker backing tool.precommitcheck",
+      "desc": "claude-trailer-checker.js (root tooling, layer tooling).",
+      "specRef": "M0-ENG §5 (hooks)",
+      "path": "claude-trailer-checker.js",
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.versionchecker",
+      "type": "feature",
+      "seq": 979,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Version-file checker backing tool.versionguard (GR#2)",
+      "desc": "claude-version-checker.js (root tooling, layer tooling).",
+      "specRef": "GR#2",
+      "path": "claude-version-checker.js",
+      "deps": [
+        "plan.pipeline"
+      ],
+      "calls": [],
+      "sprint": 0
     }
   ]
 }

@@ -1,3 +1,6 @@
+// Module key: tool.dispatchguard (see code.json; GUID 3432a4da-1784-4a37-9273-45a0af4c075a)
+// Spec ref: GR#3; GR#13; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — dispatch guard (BOW mkey: tool.dispatchguard).
  *

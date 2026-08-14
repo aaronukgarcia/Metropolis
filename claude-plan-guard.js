@@ -1,3 +1,6 @@
+// Module key: tool.planguard (see code.json; GUID 5f71974a-a612-4113-ba75-8e91546b8977)
+// Spec ref: GR#3; GR#6; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — plan-drift guard (BOW mkey: tool.planguard).
  *

@@ -74,7 +74,7 @@
 // Tracked as ASM-001 in the Book of Work; resolve when engine.core
 // actually drives this binary.
 //
-// Module key: feat.skeleton (see code.json)
+// Module key: feat.skeleton (see code.json; GUID aedcd472-ec92-4d21-a0ff-4a5dcc7916f4)
 // Spec ref:   M0-ENG §6.4 (line 997); M0-ENG §2 (lines 842-851)
 // Acceptance: docs/planning/acceptance/feat.skeleton.md (FEAT-006)
 package main

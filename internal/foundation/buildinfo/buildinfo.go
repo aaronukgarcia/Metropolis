@@ -4,7 +4,7 @@
 // build; NEVER hand-maintained"). M0-ENG §3's F12 "Build & code" row also
 // lists the build host machine name (FEAT-034).
 //
-// Module key: foundation.buildinfo (see code.json)
+// Module key: foundation.buildinfo (see code.json; GUID d1961465-562b-4340-af79-2ebc7f6965d7)
 // Spec ref:   M0-ENG §3 (build info); M0-ENG §5; A8
 //
 // The variables below default to "dev" and are overwritten at link time via

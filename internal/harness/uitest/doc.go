@@ -5,7 +5,7 @@
 // per-commit latency budgets in CI. "The UI gets the same regression
 // rigour as the sim" (UI-SPEC §5).
 //
-// Module key: ui.harness (see code.json)
+// Module key: ui.harness (see code.json; GUID 626afaec-ce56-46db-bd7c-b2b45f2b29bb)
 // Spec ref:   UI-SPEC §5; M0-ENG §6 point 5
 //
 // # Latency budgets this package asserts (UI-SPEC §5, transcribed)

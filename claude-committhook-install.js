@@ -1,3 +1,6 @@
+// Module key: tool.committhookinstall (see code.json; GUID 634fa535-7bfd-400c-a773-b6a68722e0b2)
+// Spec ref: M0-ENG §5 (hooks)
+
 /**
  * claude-committhook-install.js — install & verify the tracked commit-msg
  * git hook (FEAT-045, deliverable 3). See githooks/commit-msg for the

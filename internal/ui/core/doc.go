@@ -15,7 +15,7 @@
 // implementation: tcell for terminal I/O and events"), and the standard
 // library.
 //
-// Module key: ui.core (see code.json)
+// Module key: ui.core (see code.json; GUID 0a68ef61-6148-458f-8fa4-722119ba3d44)
 // Spec ref:   UI-SPEC §1, §5; M0-ENG §1.1
 //
 // # Files

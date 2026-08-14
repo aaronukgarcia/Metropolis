@@ -1,3 +1,6 @@
+// Module key: tool.secretguard (see code.json; GUID 1c0a8c46-ba8a-4063-92f8-0bbcdb580753)
+// Spec ref: GR#11; GR#15; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — secret & hardcoding pre-commit guard (BOW mkey: tool.secretguard).
  *

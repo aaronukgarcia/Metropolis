@@ -3,7 +3,7 @@
 // subscription against the running engine (harness.stub in Sprint 1,
 // unchanged against a real engine later — AC-7).
 //
-// Module key: ui.screen.map (see code.json)
+// Module key: ui.screen.map (see code.json; GUID 01272dbc-234b-47a1-a645-f61f538089e9)
 // Spec refs:  §13-F1 (docs/METROPOLIS-MASTER-v2.1.md line 244), UI-SPEC §2
 // (visual language — heatmaps, foreground/background two-layer cells)
 //

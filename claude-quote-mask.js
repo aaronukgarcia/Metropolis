@@ -1,3 +1,6 @@
+// Module key: tool.quotemask (see code.json; GUID 45165319-674a-4415-adc8-f77bab928245)
+// Spec ref: GR#22 (guards); shell-quoting
+
 /**
  * claude-quote-mask.js — the single, canonical, escape-aware shell
  * quote/heredoc scanner (BUG-123 round 6 extraction).

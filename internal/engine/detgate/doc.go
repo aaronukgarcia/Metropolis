@@ -8,6 +8,9 @@
 // =14. A mismatch fails the build. This test is written FIRST, in M1 week
 // one, against the walking-skeleton world.").
 //
+// Module key: feat.detgate (see code.json; GUID fac130bf-4875-417b-88b0-67b83208aaae)
+// Spec ref:   §1.2.5; A8; M0-ENG §6.4
+//
 // # This gate must exist and pass BEFORE any real simulation logic
 //
 // Per M0-ENG §6.4 (docs/METROPOLIS-MASTER-v2.1.md "6. Working agreement

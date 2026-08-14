@@ -4,7 +4,7 @@
 // counts/repeat, undo/redo hooks, 12 map marks, name search, a fuzzy
 // command palette, global bindings, and a remappable keymap JSON profile.
 //
-// Module key: ui.keys (see code.json)
+// Module key: ui.keys (see code.json; GUID 9b4f3509-f2cb-461f-b6ea-f5531b3b55d9)
 // Spec ref:   UI-SPEC §3 (leader-key grammar, which-key HUD, counts/
 //
 //	repeat, marks/search, command palette, globals, mouse-optional);

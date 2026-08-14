@@ -16,6 +16,6 @@
 // AppVersion, the sticky DebugTouched flag (§14, M0-ENG §3), and the shard
 // index (name, kind, count, size, hash, encoding per shard).
 //
-// Module key: int.serializer (see code.json)
+// Module key: int.serializer (see code.json; GUID 8ee49e96-0de9-4326-9b90-e94622874f94)
 // Spec ref:   A3; §5.3; V.2.2; M0-ENG §2.2
 package serialize

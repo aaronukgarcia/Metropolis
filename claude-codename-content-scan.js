@@ -1,3 +1,6 @@
+// Module key: tool.codenamecontentscan (see code.json; GUID 8cb8f51a-eaa8-41b2-bc2e-58b2f658bd3b)
+// Spec ref: GR#22
+
 /**
  * claude-codename-content-scan.js — commit-msg content scan core (FEAT-046,
  * BOW mkey: tool.codenamehook / code.json tool.codenameguard).

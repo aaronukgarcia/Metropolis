@@ -4,7 +4,7 @@
 // job uses to graph tick-time vs. scale per commit and fail a build that
 // regresses monthly-tick time more than 10% at the 1M-citizen synthetic.
 //
-// Module key: harness.synth (see code.json)
+// Module key: harness.synth (see code.json; GUID 2cabd726-8b86-4254-a07d-ab202f6a6a75)
 // Spec ref:   M0-ENG §2.4 ("H-SYNTH — synthetic world generator.
 //
 //	Parametric cities (population, sprawl, network shape) for

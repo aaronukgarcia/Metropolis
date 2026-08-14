@@ -1,3 +1,6 @@
+// Module key: tool.bowautoref (see code.json; GUID b0d29b58-d7d0-411c-9cc1-15bbea5d00ed)
+// Spec ref: M0-ENG §4
+
 /**
  * PostToolUse hook — BOW commit-hash auto-ref (BOW mkey: tool.bow / MOD-007).
  *

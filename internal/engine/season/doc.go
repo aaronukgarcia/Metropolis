@@ -2,7 +2,7 @@
 // curve lookups for every seasonal system §9 names, exposed as a pure
 // SeasonAPI loaded from data/seasonal.json.
 //
-// Module key: engine.season (see code.json)
+// Module key: engine.season (see code.json; GUID 5a348a85-15ba-46d9-aa61-0605f12785f1)
 // Spec ref:   §9 (seasonality: "month index drives: power demand
 // (winter peak), water stress (summer), harvest calendar..., construction
 // speed (winter slowdown), school year (September intake gates)...,

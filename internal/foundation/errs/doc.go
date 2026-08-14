@@ -3,7 +3,7 @@
 // error registry, no exceptions; Golden Rule #1: aggressive error trapping
 // — log, type, correlation ID, selectable display).
 //
-// Module key: foundation.errors (see code.json)
+// Module key: foundation.errors (see code.json; GUID 04773af2-1d23-4b2c-8a19-fd682052091f)
 // Spec ref:   GR#1; GR#7; M0-ENG §3 (log tail)
 //
 // # The contract

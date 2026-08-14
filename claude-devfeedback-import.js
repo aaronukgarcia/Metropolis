@@ -1,3 +1,6 @@
+// Module key: tool.devfeedbackimport (see code.json; GUID 973878d4-d1fc-46e7-a18f-664660db0a00)
+// Spec ref: FEAT-065; ASM-477
+
 /**
  * claude-devfeedback-import.js — FEAT-065 (feat.devmode) DoD #3 companion
  * script: file-drop feedback -> real BOW item.

@@ -1,3 +1,6 @@
+// Module key: tool.bowrefcheck (see code.json; GUID 3ef12808-4e54-439e-b5a3-a9158bb26aa7)
+// Spec ref: M0-ENG §4
+
 /**
  * PreToolUse hook — BOW commit-message ref validation (BOW mkey: tool.bow /
  * MOD-007).

@@ -1,3 +1,6 @@
+// Module key: tool.pingcheck (see code.json; GUID dd3cef45-baf0-4a24-ae8e-67c4c84add1a)
+// Spec ref: M0-ENG §5 (hooks)
+
 /**
  * claude-ping-check.js - PostToolUse hook for DHCP-style permit auto-renewal
  *

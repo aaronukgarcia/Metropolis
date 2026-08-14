@@ -3,7 +3,7 @@
 // panel instead of forty-four bespoke UIs (UI-SPEC §2, "The visual
 // language — block text as a real instrument panel").
 //
-// Module key: ui.widgets (see code.json)
+// Module key: ui.widgets (see code.json; GUID 03496f9c-4e7e-4888-ab13-4f6c46fa87ad)
 // Spec ref:   UI-SPEC §2 (docs/METROPOLIS-MASTER-v2.1.md lines 730-741),
 //
 //	§4 (tables, drill-through); depends on ui.core (MOD-009).

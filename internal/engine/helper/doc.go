@@ -3,6 +3,9 @@
 // player advisor answering exactly two pull-only questions: "what
 // should I do?" (Recommend) and "what if I do X?" (Preview).
 //
+// Module key: feat.helper (see code.json; GUID 5e185ef4-b9b0-4fa3-98ad-9f79079dc015)
+// Spec ref:   docs/planning/acceptance/feat.helper.md; FEAT-063 BOW ruling (Aaron via Bill, 2026-08-12)
+//
 // # The three-member contract (AC-1)
 //
 // Every future player-action feature module implements and registers a

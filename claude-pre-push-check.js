@@ -1,3 +1,6 @@
+// Module key: tool.prepushcheck (see code.json; GUID 53c61c25-b2ac-4ac5-ad15-31f41d9ca9b7)
+// Spec ref: GR#19; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — Prix Six pre-push function-deploy bundling check (GR#19).
  *

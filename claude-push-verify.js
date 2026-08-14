@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// Module key: tool.pushverify (see code.json; GUID 45fbf782-a019-49a9-aec1-ed8d7e7c3e60)
+// Spec ref: GR#24
+
 /**
  * claude-push-verify.js — FEAT-059: post-push CI verification helper.
  *

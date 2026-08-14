@@ -1,3 +1,6 @@
+// Module key: tool.codenamepatterns (see code.json; GUID 31c3389f-87b1-43b1-9cd4-fd711016ef44)
+// Spec ref: GR#22
+
 /**
  * claude-codename-patterns.js — shared GR#22 forbidden-pattern source
  * (FEAT-046 / BOW mkey: tool.codenameguard).

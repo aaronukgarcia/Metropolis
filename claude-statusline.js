@@ -1,3 +1,6 @@
+// Module key: tool.statusline (see code.json; GUID 4886304f-d2ad-4fca-8355-e4c9bc09d1a3)
+// Spec ref: M0-ENG §5 (hooks)
+
 // claude-statusline.js — Status line script
 // Reads identity file + stdin JSON, outputs "name> [Model] dir"
 const fs = require('fs');

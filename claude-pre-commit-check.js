@@ -1,3 +1,6 @@
+// Module key: tool.precommitcheck (see code.json; GUID 99e74615-a772-41ae-9c92-10ba2092b75f)
+// Spec ref: M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — Prix Six commit-style enforcement, DEMOTED TO ADVISORY
  * (BUG-088, 2026-08-11; BOW mkey: tool.secretguard).

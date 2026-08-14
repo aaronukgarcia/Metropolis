@@ -1,3 +1,6 @@
+// Module key: tool.destructiveguard (see code.json; GUID d7fc564e-96ec-4040-a5ea-21cedf3a0aaa)
+// Spec ref: GR#23; GR#24; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — Destructive-verdict commit gate (BOW mkey:
  * tool.destructiveguard, FEAT-040).

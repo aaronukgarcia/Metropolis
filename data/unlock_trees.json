@@ -1,4 +1,285 @@
 {
+  "$comment": "§22 Unlock Economy + §4 Population Scale & the Milestone Ladder of docs/METROPOLIS-MASTER-v2.1.md, authored into the 12 Development-Point progression trees §22 names verbatim (Roads, Electricity, Water & Gas, Health & Deathcare, Education, Fire, Police, Garbage, Parks & Rec, Transport, Communications, Welfare), each covering all 13 milestone tiers (1=Wilderness .. 13=Centopolis). FEAT-029 / data.unlocktrees. Every real node transcribes one §10 Service & Feature Inventory item — its specRef cites §10's literal wording (e.g. '§10: public transport (bus → rail → metro)') and, where §4's ladder gates it, the §4 tier — so nothing here is invented; every dpCost/prereqTier is a placeholder v1 shape, NOT a measured balance value. Node ids are stable lowercase slugs (buildingIDPattern) and are the lookup keys data.catalogue's unlock.dp field may reference (MOD-032 AC-10). See meta for the placeholder disclosure, the ASM-481 no-op-node convention, and the ASM-482 floor rule.",
   "version": 1,
-  "trees": []
+  "meta": {
+    "specCitations": [
+      "§22 Unlock Economy",
+      "§4 Population Scale & the Milestone Ladder",
+      "§10 Service & Feature Inventory"
+    ],
+    "categories": [
+      "Roads",
+      "Electricity",
+      "Water & Gas",
+      "Health & Deathcare",
+      "Education",
+      "Fire",
+      "Police",
+      "Garbage",
+      "Parks & Rec",
+      "Transport",
+      "Communications",
+      "Welfare"
+    ],
+    "placeholderDisclosure": "Every dpCost and prereqTier in this file is a placeholder v1 shape, not a measured balance value: dpCost equals the node's milestone tier (1-13, a monotonic 'costs as many DP as its tier' placeholder) and prereqTier equals that same tier. No §22/§4 figure exists for DP costs or spend order — M2 Batch tuning territory, the same carve-out data.catalogue.md and data.modes-naming.md use.",
+    "noopConvention": "ASM-481 (lead-ACCEPTED): every category tree covers all 13 milestone tiers. Where §10 names no signature content for a category at a tier, the tier is represented by an explicit kind:'none' node whose note explains the absence — never by a silently absent tier, so an authoring gap and a deliberate no-op stay distinguishable.",
+    "floorRule": "ASM-482 (lead-ACCEPTED): every category carries at least 13 nodes (one per tier minimum — 12 categories x 13 tiers, derived from FEAT-029's own title, not an invented constant)."
+  },
+  "trees": [
+    {
+      "id": "roads",
+      "name": "Roads",
+      "nodes": [
+        { "id": "roads_dirt_roads", "name": "Dirt roads", "kind": "unlock", "tier": 1, "specRef": "§10: roads & road maintenance; §4 tier 1 (Wilderness)", "description": "Unpaved track network; 30 km/h, degrades in winter. The first road class.", "dpCost": 1, "prereqTier": 1 },
+        { "id": "roads_gravel_roads", "name": "Gravel roads", "kind": "unlock", "tier": 2, "specRef": "§10: roads & road maintenance", "description": "All-weather surfaced track ahead of paving.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "roads_paved_roads", "name": "Paved roads", "kind": "unlock", "tier": 3, "specRef": "§10: roads & road maintenance; §4 tier 3 (Village)", "description": "Paved residential streets and two-lane roads; on-street parking.", "dpCost": 3, "prereqTier": 3 },
+        { "id": "roads_cycle_lanes", "name": "Cycle lanes", "kind": "unlock", "tier": 4, "specRef": "§10: roads & road maintenance", "description": "Dedicated bike infrastructure; the health-engine road variant.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "roads_avenues", "name": "Avenues (2+2)", "kind": "unlock", "tier": 5, "specRef": "§10: roads & road maintenance", "description": "Wider arterials with parking; higher throughput than two-lane streets.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "roads_bridges", "name": "Road bridges", "kind": "unlock", "tier": 5, "specRef": "§10: roads & road maintenance", "description": "Span crossings priced per crossing width.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "roads_t6_none", "name": "No new Roads content", "kind": "none", "tier": 6, "note": "No §10 signature content for Roads at tier 6 (Large Town, 50,000) — §4's table lists hospital/further education/landfill/leisure for this tier, none of which is a Roads item. Deliberate no-op (ASM-481)." },
+        { "id": "roads_dual_carriageway", "name": "Dual carriageway", "kind": "unlock", "tier": 7, "specRef": "§10: roads & road maintenance", "description": "70 km/h divided arterial.", "dpCost": 7, "prereqTier": 7, "prereqNodeIds": ["roads_avenues"] },
+        { "id": "roads_pedestrianised_high_street", "name": "Pedestrianised high street", "kind": "unlock", "tier": 7, "specRef": "§10: roads & road maintenance", "description": "High-street retail block; retail appeal boost.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "roads_motorway_extension", "name": "Motorway extension", "kind": "unlock", "tier": 8, "specRef": "§10: roads & road maintenance", "description": "Ties into the M20.", "dpCost": 8, "prereqTier": 8, "prereqNodeIds": ["roads_dual_carriageway"] },
+        { "id": "roads_tunnels", "name": "Road tunnels", "kind": "unlock", "tier": 8, "specRef": "§10: roads & road maintenance", "description": "Escarpment piercer.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "roads_grade_separated_junctions", "name": "Grade-separated junctions", "kind": "unlock", "tier": 8, "specRef": "§10: roads & road maintenance", "description": "Highest-capacity junction control.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "roads_t9_none", "name": "No new Roads content", "kind": "none", "tier": 9, "note": "No §10 signature content for Roads at tier 9 (Metropolis, 1,000,000) — §4 names airport/financial sector/reclamation/advanced healthcare for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "roads_t10_none", "name": "No new Roads content", "kind": "none", "tier": 10, "note": "No §10 signature content for Roads at tier 10 (Conurbation, 5,000,000) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "roads_t11_none", "name": "No new Roads content", "kind": "none", "tier": 11, "note": "No §10 signature content for Roads at tier 11 (Megacity, 10,000,000) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "roads_arterial_megastructure_roads", "name": "Arterial megastructure roads", "kind": "unlock", "tier": 12, "specRef": "§10: roads & road maintenance; §4 tier 12 (Megalopolis)", "description": "City-spanning arterial backbone for a 50M megalopolis.", "dpCost": 12, "prereqTier": 12, "prereqNodeIds": ["roads_motorway_extension"] },
+        { "id": "roads_t13_none", "name": "No new Roads content", "kind": "none", "tier": 13, "note": "No §10 signature content for Roads at tier 13 (Centopolis, 100,000,000) — §4's tier-13 entry is the WIN state, with no further Roads unlocks. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "electricity",
+      "name": "Electricity",
+      "nodes": [
+        { "id": "electricity_diesel_gensets", "name": "Diesel gensets", "kind": "unlock", "tier": 1, "specRef": "§10: electricity", "description": "Dirty, dear, noisy early power.", "dpCost": 1, "prereqTier": 1 },
+        { "id": "electricity_t2_none", "name": "No new Electricity content", "kind": "none", "tier": 2, "note": "No §10 signature content for Electricity at tier 2 (Hamlet, 100) — §4 names farm plots/general store/basic clinic for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "electricity_small_wind", "name": "Small wind turbines", "kind": "unlock", "tier": 3, "specRef": "§10: electricity", "description": "Escarpment wind bonus.", "dpCost": 3, "prereqTier": 3 },
+        { "id": "electricity_grid_connection", "name": "Grid connection (Sellindge)", "kind": "unlock", "tier": 4, "specRef": "§10: electricity; §4 tier 4 (Small Town)", "description": "Off-map grid tranche; 10 MW per tranche, import price per MWh.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "electricity_solar_farm", "name": "Solar farm", "kind": "unlock", "tier": 4, "specRef": "§10: electricity", "description": "Seasonal, land-hungry renewable.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "electricity_onshore_wind_farm", "name": "Onshore wind farm", "kind": "unlock", "tier": 5, "specRef": "§10: electricity", "description": "8 MW average; escarpment siting.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "electricity_battery_storage", "name": "Battery storage", "kind": "unlock", "tier": 6, "specRef": "§10: electricity", "description": "Peak shaving.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "electricity_gas_peaker", "name": "Gas peaker", "kind": "unlock", "tier": 6, "specRef": "§10: electricity", "description": "25 MW; needs the gas network.", "dpCost": 6, "prereqTier": 6, "prereqNodeIds": ["water_gas_gas_network"] },
+        { "id": "electricity_ccgt_plant", "name": "CCGT gas plant", "kind": "unlock", "tier": 7, "specRef": "§10: electricity", "description": "150 MW gas-fired base.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "electricity_rooftop_solar_policy", "name": "Rooftop solar policy", "kind": "unlock", "tier": 7, "specRef": "§10: electricity", "description": "Subsidy-driven distributed generation.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "electricity_t8_none", "name": "No new Electricity content", "kind": "none", "tier": 8, "note": "No §10 signature content for Electricity at tier 8 (City, 250,000) — §4 names heavy rail/mass transit/high-rise/stadium for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "electricity_offshore_wind", "name": "Offshore wind array", "kind": "unlock", "tier": 9, "specRef": "§10: electricity", "description": "80 MW average; needs the port.", "dpCost": 9, "prereqTier": 9, "prereqNodeIds": ["transport_port"] },
+        { "id": "electricity_nuclear", "name": "Nuclear station", "kind": "unlock", "tier": 10, "specRef": "§10: electricity", "description": "1,200 MW; decade build time.", "dpCost": 10, "prereqTier": 10 },
+        { "id": "electricity_t11_none", "name": "No new Electricity content", "kind": "none", "tier": 11, "note": "No §10 signature content for Electricity at tier 11 (Megacity, 10,000,000) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "electricity_fusion", "name": "Fusion pilot", "kind": "unlock", "tier": 12, "specRef": "§10: electricity", "description": "Endgame 2,000 MW.", "dpCost": 12, "prereqTier": 12 },
+        { "id": "electricity_t13_none", "name": "No new Electricity content", "kind": "none", "tier": 13, "note": "No §10 signature content for Electricity at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "water_gas",
+      "name": "Water & Gas",
+      "nodes": [
+        { "id": "water_gas_boreholes_wells", "name": "Boreholes & wells", "kind": "unlock", "tier": 1, "specRef": "§10: water/sewage; §4 tier 1 (Wilderness)", "description": "Chalk-aquifer groundwater from turn 1; shared sustainable-yield ceiling.", "dpCost": 1, "prereqTier": 1 },
+        { "id": "water_gas_water_tower", "name": "Water tower", "kind": "unlock", "tier": 2, "specRef": "§10: water/sewage", "description": "Pressure buffer and storage.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "water_gas_t3_none", "name": "No new Water & Gas content", "kind": "none", "tier": 3, "note": "No §10 signature content for Water & Gas at tier 3 (Village, 500) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "water_gas_water_treatment", "name": "Water treatment works", "kind": "unlock", "tier": 4, "specRef": "§10: water/sewage", "description": "Needed as the city scales.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "water_gas_sewage_works", "name": "Sewage works", "kind": "unlock", "tier": 5, "specRef": "§10: water/sewage; §4 tier 5 (Town)", "description": "Wastewater treatment with river/sea outfall rules; small→regional upgrade path.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "water_gas_gas_network", "name": "Gas network", "kind": "unlock", "tier": 5, "specRef": "§10: water/sewage", "description": "Off-map pipeline tranche plus gas mains; the optional second fuel network.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "water_gas_reservoir", "name": "Reservoir (valley dam)", "kind": "unlock", "tier": 6, "specRef": "§10: water/sewage", "description": "Seasonal storage, terrain-sited.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "water_gas_bulk_supply_pipeline", "name": "Bulk supply pipeline (off-map)", "kind": "unlock", "tier": 7, "specRef": "§10: water/sewage", "description": "30k m³/day bulk import.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "water_gas_sewage_regional", "name": "Regional sewage & wastewater", "kind": "unlock", "tier": 8, "specRef": "§10: water/sewage", "description": "200k m³/day regional treatment.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "water_gas_lng_terminal", "name": "LNG terminal", "kind": "unlock", "tier": 9, "specRef": "§10: water/sewage", "description": "Port-fed gas import.", "dpCost": 9, "prereqTier": 9, "prereqNodeIds": ["transport_port"] },
+        { "id": "water_gas_desalination", "name": "Desalination plant", "kind": "unlock", "tier": 10, "specRef": "§10: water/sewage; §4 tier 10 (Conurbation)", "description": "50k m³/day, energy-hungry (§17.2).", "dpCost": 10, "prereqTier": 10, "prereqNodeIds": ["electricity_grid_connection"] },
+        { "id": "water_gas_t11_none", "name": "No new Water & Gas content", "kind": "none", "tier": 11, "note": "No §10 signature content for Water & Gas at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "water_gas_t12_none", "name": "No new Water & Gas content", "kind": "none", "tier": 12, "note": "No §10 signature content for Water & Gas at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "water_gas_t13_none", "name": "No new Water & Gas content", "kind": "none", "tier": 13, "note": "No §10 signature content for Water & Gas at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "health_deathcare",
+      "name": "Health & Deathcare",
+      "nodes": [
+        { "id": "health_deathcare_first_aid_post", "name": "First-aid post", "kind": "unlock", "tier": 1, "specRef": "§10: healthcare & deathcare", "description": "Basic health coverage; 30 visits/day.", "dpCost": 1, "prereqTier": 1 },
+        { "id": "health_deathcare_clinic", "name": "Basic clinic", "kind": "unlock", "tier": 2, "specRef": "§10: healthcare & deathcare; §4 tier 2 (Hamlet)", "description": "150 visits/day; +counselling-room upgrade (mental).", "dpCost": 2, "prereqTier": 2 },
+        { "id": "health_deathcare_cemetery", "name": "Cemetery", "kind": "unlock", "tier": 2, "specRef": "§10: healthcare & deathcare (cemeteries/crematoria)", "description": "Deathcare: fills permanently — land pressure.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "health_deathcare_pharmacy", "name": "Pharmacy", "kind": "unlock", "tier": 3, "specRef": "§10: healthcare & deathcare", "description": "Retail-health hybrid.", "dpCost": 3, "prereqTier": 3 },
+        { "id": "health_deathcare_t4_none", "name": "No new Health & Deathcare content", "kind": "none", "tier": 4, "note": "No §10 signature content for Health & Deathcare at tier 4 (Small Town, 5,000) — §4 names grid connection/secondary school/bus routes/fire & police posts for this tier; elder care (tier 4) belongs to the Welfare tree per §10's own 'elder care & child benefit' split. Deliberate no-op (ASM-481)." },
+        { "id": "health_deathcare_ambulance", "name": "Ambulance station", "kind": "unlock", "tier": 5, "specRef": "§10: healthcare & deathcare", "description": "Response time on real roads.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "health_deathcare_crematorium", "name": "Crematorium", "kind": "unlock", "tier": 5, "specRef": "§10: healthcare & deathcare (hearses, cemeteries/crematoria)", "description": "Deathcare: 12/day.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "health_deathcare_hospital", "name": "Hospital", "kind": "unlock", "tier": 6, "specRef": "§10: healthcare & deathcare; §4 tier 6 (Large Town)", "description": "Small hospital; waiting-list mechanics.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "health_deathcare_memorial_woodland", "name": "Memorial woodland", "kind": "unlock", "tier": 6, "specRef": "§10: healthcare & deathcare (cemeteries/crematoria)", "description": "Deathcare park hybrid.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "health_deathcare_general_hospital", "name": "General hospital", "kind": "unlock", "tier": 7, "specRef": "§10: healthcare & deathcare", "description": "500 beds; +mental-health unit upgrade.", "dpCost": 7, "prereqTier": 7, "prereqNodeIds": ["health_deathcare_hospital"] },
+        { "id": "health_deathcare_air_ambulance", "name": "Air ambulance pad", "kind": "unlock", "tier": 8, "specRef": "§10: healthcare & deathcare", "description": "Beats traffic.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "health_deathcare_teaching_hospital", "name": "Advanced healthcare (teaching hospital)", "kind": "unlock", "tier": 9, "specRef": "§10: healthcare & deathcare; §4 tier 9 (Metropolis)", "description": "1,200 beds; boosts health citywide.", "dpCost": 9, "prereqTier": 9, "prereqNodeIds": ["health_deathcare_general_hospital"] },
+        { "id": "health_deathcare_t10_none", "name": "No new Health & Deathcare content", "kind": "none", "tier": 10, "note": "No §10 signature content for Health & Deathcare at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "health_deathcare_t11_none", "name": "No new Health & Deathcare content", "kind": "none", "tier": 11, "note": "No §10 signature content for Health & Deathcare at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "health_deathcare_t12_none", "name": "No new Health & Deathcare content", "kind": "none", "tier": 12, "note": "No §10 signature content for Health & Deathcare at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "health_deathcare_t13_none", "name": "No new Health & Deathcare content", "kind": "none", "tier": 13, "note": "No §10 signature content for Health & Deathcare at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "education",
+      "name": "Education",
+      "nodes": [
+        { "id": "education_t1_none", "name": "No new Education content", "kind": "none", "tier": 1, "note": "No §10 signature content for Education at tier 1 (Wilderness, 0) — §4 names land purchase/dirt roads/boreholes/road imports/small housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "education_one_room_school", "name": "One-room school", "kind": "unlock", "tier": 2, "specRef": "§10: education (primary → secondary → further → university)", "description": "First schooling; 60 pupils.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "education_primary_school", "name": "Primary school", "kind": "unlock", "tier": 3, "specRef": "§10: education (primary → secondary → further → university); §4 tier 3 (Village)", "description": "September intake; 240 pupils.", "dpCost": 3, "prereqTier": 3 },
+        { "id": "education_nursery", "name": "Nursery", "kind": "unlock", "tier": 3, "specRef": "§10: education", "description": "Enables both-parent work.", "dpCost": 3, "prereqTier": 3 },
+        { "id": "education_secondary_school", "name": "Secondary school", "kind": "unlock", "tier": 4, "specRef": "§10: education (primary → secondary → further → university); §4 tier 4 (Small Town)", "description": "900 pupils.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "education_library", "name": "Library", "kind": "unlock", "tier": 4, "specRef": "§10: education", "description": "Small education + mental boost.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "education_sixth_form", "name": "Sixth-form college", "kind": "unlock", "tier": 5, "specRef": "§10: education (further)", "description": "Further education; 500 places.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "education_technical_college", "name": "Technical college", "kind": "unlock", "tier": 6, "specRef": "§10: education (further → university); §4 tier 6 (Large Town, further education)", "description": "Trade skills → industry.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "education_adult_education", "name": "Adult education centre", "kind": "unlock", "tier": 6, "specRef": "§10: education", "description": "Re-skills the unemployed.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "education_university", "name": "University", "kind": "unlock", "tier": 7, "specRef": "§10: education (primary → secondary → further → university); §4 tier 7 (Small City)", "description": "8k students; research bonus, halls demand.", "dpCost": 7, "prereqTier": 7, "prereqNodeIds": ["education_secondary_school"] },
+        { "id": "education_university_expansion", "name": "University expansion faculties", "kind": "unlock", "tier": 8, "specRef": "§10: education", "description": "+4k places; med/eng/arts flavours.", "dpCost": 8, "prereqTier": 8, "prereqNodeIds": ["education_university"] },
+        { "id": "education_t9_none", "name": "No new Education content", "kind": "none", "tier": 9, "note": "No §10 signature content for Education at tier 9 (Metropolis) — §4 names airport/financial sector/reclamation/advanced healthcare for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "education_t10_none", "name": "No new Education content", "kind": "none", "tier": 10, "note": "No §10 signature content for Education at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "education_t11_none", "name": "No new Education content", "kind": "none", "tier": 11, "note": "No §10 signature content for Education at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "education_t12_none", "name": "No new Education content", "kind": "none", "tier": 12, "note": "No §10 signature content for Education at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "education_t13_none", "name": "No new Education content", "kind": "none", "tier": 13, "note": "No §10 signature content for Education at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "fire",
+      "name": "Fire",
+      "nodes": [
+        { "id": "fire_t1_none", "name": "No new Fire content", "kind": "none", "tier": 1, "note": "No §10 signature content for Fire at tier 1 (Wilderness) — §4 names land purchase/dirt roads/boreholes/road imports/small housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_volunteer_post", "name": "Volunteer fire post", "kind": "unlock", "tier": 2, "specRef": "§10: fire", "description": "Slow response; first fire coverage.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "fire_t3_none", "name": "No new Fire content", "kind": "none", "tier": 3, "note": "No §10 signature content for Fire at tier 3 (Village) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_station", "name": "Fire post / station", "kind": "unlock", "tier": 4, "specRef": "§10: fire; §4 tier 4 (Small Town, fire & police posts)", "description": "4 appliances.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "fire_hydrant_network", "name": "Fire hydrant network", "kind": "unlock", "tier": 4, "specRef": "§10: fire", "description": "Needs water pressure.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "fire_t5_none", "name": "No new Fire content", "kind": "none", "tier": 5, "note": "No §10 signature content for Fire at tier 5 (Town) — §4 names expansion tiles/light industry/logistics depots/sewage works for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_t6_none", "name": "No new Fire content", "kind": "none", "tier": 6, "note": "No §10 signature content for Fire at tier 6 (Large Town) — §4 names hospital/further education/landfill/leisure venues for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_regional_hq", "name": "Regional fire HQ", "kind": "unlock", "tier": 7, "specRef": "§10: fire", "description": "+hazmat (industry).", "dpCost": 7, "prereqTier": 7 },
+        { "id": "fire_t8_none", "name": "No new Fire content", "kind": "none", "tier": 8, "note": "No §10 signature content for Fire at tier 8 (City) — §4 names heavy rail/mass transit/high-rise/stadium for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_t9_none", "name": "No new Fire content", "kind": "none", "tier": 9, "note": "No §10 signature content for Fire at tier 9 (Metropolis) — §4 names airport/financial sector/reclamation/advanced healthcare for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_t10_none", "name": "No new Fire content", "kind": "none", "tier": 10, "note": "No §10 signature content for Fire at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_t11_none", "name": "No new Fire content", "kind": "none", "tier": 11, "note": "No §10 signature content for Fire at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_t12_none", "name": "No new Fire content", "kind": "none", "tier": 12, "note": "No §10 signature content for Fire at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "fire_t13_none", "name": "No new Fire content", "kind": "none", "tier": 13, "note": "No §10 signature content for Fire at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "police",
+      "name": "Police",
+      "nodes": [
+        { "id": "police_t1_none", "name": "No new Police content", "kind": "none", "tier": 1, "note": "No §10 signature content for Police at tier 1 (Wilderness) — §4 names land purchase/dirt roads/boreholes/road imports/small housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_desk", "name": "Police desk", "kind": "unlock", "tier": 2, "specRef": "§10: police & jail", "description": "First policing presence.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "police_t3_none", "name": "No new Police content", "kind": "none", "tier": 3, "note": "No §10 signature content for Police at tier 3 (Village) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_station", "name": "Police post / station", "kind": "unlock", "tier": 4, "specRef": "§10: police & jail; §4 tier 4 (Small Town, fire & police posts)", "description": "Patrol radius on real roads.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "police_t5_none", "name": "No new Police content", "kind": "none", "tier": 5, "note": "No §10 signature content for Police at tier 5 (Town) — §4 names expansion tiles/light industry/logistics depots/sewage works for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_t6_none", "name": "No new Police content", "kind": "none", "tier": 6, "note": "No §10 signature content for Police at tier 6 (Large Town) — §4 names hospital/further education/landfill/leisure venues for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_divisional_hq", "name": "Divisional HQ", "kind": "unlock", "tier": 7, "specRef": "§10: police & jail", "description": "Detectives: cuts crime persistence.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "police_courthouse", "name": "Courthouse", "kind": "unlock", "tier": 7, "specRef": "§10: police & jail", "description": "Required past 100k.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "police_prison", "name": "Jail (prison)", "kind": "unlock", "tier": 8, "specRef": "§10: police & jail", "description": "Or pay off-map remand.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "police_t9_none", "name": "No new Police content", "kind": "none", "tier": 9, "note": "No §10 signature content for Police at tier 9 (Metropolis) — §4 names airport/financial sector/reclamation/advanced healthcare for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_t10_none", "name": "No new Police content", "kind": "none", "tier": 10, "note": "No §10 signature content for Police at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_t11_none", "name": "No new Police content", "kind": "none", "tier": 11, "note": "No §10 signature content for Police at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_t12_none", "name": "No new Police content", "kind": "none", "tier": 12, "note": "No §10 signature content for Police at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "police_t13_none", "name": "No new Police content", "kind": "none", "tier": 13, "note": "No §10 signature content for Police at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "garbage",
+      "name": "Garbage",
+      "nodes": [
+        { "id": "garbage_tip", "name": "Tip (small landfill)", "kind": "unlock", "tier": 1, "specRef": "§10: garbage", "description": "Fills, leaches.", "dpCost": 1, "prereqTier": 1 },
+        { "id": "garbage_t2_none", "name": "No new Garbage content", "kind": "none", "tier": 2, "note": "No §10 signature content for Garbage at tier 2 (Hamlet) — §4 names farm plots/general store/basic clinic for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t3_none", "name": "No new Garbage content", "kind": "none", "tier": 3, "note": "No §10 signature content for Garbage at tier 3 (Village) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_landfill", "name": "Landfill site", "kind": "unlock", "tier": 4, "specRef": "§10: garbage", "description": "50 t/day; land value hit radius.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "garbage_transfer_station", "name": "Transfer station", "kind": "unlock", "tier": 5, "specRef": "§10: garbage", "description": "Routes trucks.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "garbage_composting", "name": "Composting works", "kind": "unlock", "tier": 5, "specRef": "§10: garbage", "description": "Food waste → farm input.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "garbage_recycling", "name": "Recycling centre", "kind": "unlock", "tier": 6, "specRef": "§10: garbage; §4 tier 6 (Large Town, landfill/waste plant)", "description": "40 t/day; sells materials.", "dpCost": 6, "prereqTier": 6, "prereqNodeIds": ["garbage_transfer_station"] },
+        { "id": "garbage_incinerator", "name": "Incinerator w/ energy", "kind": "unlock", "tier": 6, "specRef": "§10: garbage", "description": "80 t/day waste sink.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "garbage_t7_none", "name": "No new Garbage content", "kind": "none", "tier": 7, "note": "No §10 signature content for Garbage at tier 7 (Small City) — §4 names port/university/districts & policies/mid-rise zoning for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t8_none", "name": "No new Garbage content", "kind": "none", "tier": 8, "note": "No §10 signature content for Garbage at tier 8 (City) — §4 names heavy rail/mass transit/high-rise/stadium for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t9_none", "name": "No new Garbage content", "kind": "none", "tier": 9, "note": "No §10 signature content for Garbage at tier 9 (Metropolis) — §4 names airport/financial sector/reclamation/advanced healthcare for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t10_none", "name": "No new Garbage content", "kind": "none", "tier": 10, "note": "No §10 signature content for Garbage at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t11_none", "name": "No new Garbage content", "kind": "none", "tier": 11, "note": "No §10 signature content for Garbage at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t12_none", "name": "No new Garbage content", "kind": "none", "tier": 12, "note": "No §10 signature content for Garbage at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "garbage_t13_none", "name": "No new Garbage content", "kind": "none", "tier": 13, "note": "No §10 signature content for Garbage at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "parks_rec",
+      "name": "Parks & Rec",
+      "nodes": [
+        { "id": "parks_rec_t1_none", "name": "No new Parks & Rec content", "kind": "none", "tier": 1, "note": "No §10 signature content for Parks & Rec at tier 1 (Wilderness) — §4 names land purchase/dirt roads/boreholes/road imports/small housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "parks_rec_pocket_park", "name": "Pocket park", "kind": "unlock", "tier": 2, "specRef": "§10: parks, recreation & leisure venues", "description": "Green-space 400m rule (§18).", "dpCost": 2, "prereqTier": 2 },
+        { "id": "parks_rec_village_green", "name": "Village green", "kind": "unlock", "tier": 2, "specRef": "§10: parks, recreation & leisure venues", "description": "Community events.", "dpCost": 2, "prereqTier": 2 },
+        { "id": "parks_rec_playground", "name": "Playground", "kind": "unlock", "tier": 3, "specRef": "§10: parks, recreation & leisure venues", "description": "Family appeal.", "dpCost": 3, "prereqTier": 3 },
+        { "id": "parks_rec_community_centre", "name": "Community centre", "kind": "unlock", "tier": 4, "specRef": "§10: parks, recreation & leisure venues", "description": "Sociability/isolation counter.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "parks_rec_town_park", "name": "Town park", "kind": "unlock", "tier": 5, "specRef": "§10: parks, recreation & leisure venues", "description": "Larger green space.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "parks_rec_cinema", "name": "Cinema", "kind": "unlock", "tier": 5, "specRef": "§10: parks, recreation & leisure venues", "description": "Novelty leisure; 600 seats.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "parks_rec_leisure_venues_t1", "name": "Leisure venues (tier 1)", "kind": "unlock", "tier": 6, "specRef": "§10: parks, recreation & leisure venues; §4 tier 6 (Large Town, leisure venues tier 1)", "description": "Museum/country park; personality-patronised (§5.1).", "dpCost": 6, "prereqTier": 6 },
+        { "id": "parks_rec_country_park", "name": "Country park (escarpment)", "kind": "unlock", "tier": 6, "specRef": "§10: parks, recreation & leisure venues", "description": "Uses steep land.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "parks_rec_theatre", "name": "Theatre", "kind": "unlock", "tier": 7, "specRef": "§10: parks, recreation & leisure venues", "description": "Aesthetic leisure; 900 seats.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "parks_rec_stadium", "name": "Stadium", "kind": "unlock", "tier": 8, "specRef": "§10: parks, recreation & leisure venues; §4 tier 8 (City, stadium)", "description": "Arena-scale events.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "parks_rec_arena", "name": "Arena", "kind": "unlock", "tier": 9, "specRef": "§10: parks, recreation & leisure venues", "description": "12k-seat events.", "dpCost": 9, "prereqTier": 9 },
+        { "id": "parks_rec_t10_none", "name": "No new Parks & Rec content", "kind": "none", "tier": 10, "note": "No §10 signature content for Parks & Rec at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "parks_rec_t11_none", "name": "No new Parks & Rec content", "kind": "none", "tier": 11, "note": "No §10 signature content for Parks & Rec at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "parks_rec_t12_none", "name": "No new Parks & Rec content", "kind": "none", "tier": 12, "note": "No §10 signature content for Parks & Rec at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "parks_rec_t13_none", "name": "No new Parks & Rec content", "kind": "none", "tier": 13, "note": "No §10 signature content for Parks & Rec at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "transport",
+      "name": "Transport",
+      "nodes": [
+        { "id": "transport_t1_none", "name": "No new Transport content", "kind": "none", "tier": 1, "note": "No §10 signature content for Transport at tier 1 (Wilderness) — walking/cycling are free modes from turn 1, and no public transport exists before tier 4's bus routes. Deliberate no-op (ASM-481)." },
+        { "id": "transport_t2_none", "name": "No new Transport content", "kind": "none", "tier": 2, "note": "No §10 signature content for Transport at tier 2 (Hamlet) — §4 names farm plots/general store/basic clinic for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "transport_t3_none", "name": "No new Transport content", "kind": "none", "tier": 3, "note": "No §10 signature content for Transport at tier 3 (Village) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "transport_bus_routes", "name": "Bus routes", "kind": "unlock", "tier": 4, "specRef": "§10: public transport (bus → rail → metro); §4 tier 4 (Small Town, bus routes)", "description": "Player-drawn fixed routes.", "dpCost": 4, "prereqTier": 4, "prereqNodeIds": ["roads_paved_roads"] },
+        { "id": "transport_bus_depot", "name": "Bus depot / fixed network", "kind": "unlock", "tier": 5, "specRef": "§10: public transport (bus)", "description": "Fixed routes, player-drawn.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "transport_bus_station", "name": "Bus station (interchange)", "kind": "unlock", "tier": 6, "specRef": "§10: public transport (bus)", "description": "Interchange hub.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "transport_port", "name": "Port", "kind": "unlock", "tier": 7, "specRef": "§10: public transport; §4 tier 7 (Small City, port)", "description": "Import artery #2; ferry access.", "dpCost": 7, "prereqTier": 7 },
+        { "id": "transport_heavy_rail", "name": "Heavy rail (internal)", "kind": "unlock", "tier": 8, "specRef": "§10: public transport (rail); §4 tier 8 (City, heavy rail internal)", "description": "Internal rail line + station.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "transport_tram", "name": "Tram", "kind": "unlock", "tier": 8, "specRef": "§10: public transport; §4 tier 8 (City, mass transit)", "description": "Street-running mass transit.", "dpCost": 8, "prereqTier": 8 },
+        { "id": "transport_airport", "name": "Airport", "kind": "unlock", "tier": 9, "specRef": "§10: public transport; §4 tier 9 (Metropolis, airport)", "description": "Regional airport; external only, noise contour.", "dpCost": 9, "prereqTier": 9 },
+        { "id": "transport_metro", "name": "Metro", "kind": "unlock", "tier": 10, "specRef": "§10: public transport (metro); §4 tier 10 (Conurbation, metro)", "description": "Tube tunnel; 30k pax/h/dir.", "dpCost": 10, "prereqTier": 10, "prereqNodeIds": ["transport_heavy_rail"] },
+        { "id": "transport_channel_tunnel_slot", "name": "Channel Tunnel project slot", "kind": "unlock", "tier": 11, "specRef": "§10: public transport; §4 tier 11 (Megacity, Channel Tunnel project slot — future dev)", "description": "Future-dev mega-project slot.", "dpCost": 11, "prereqTier": 11 },
+        { "id": "transport_automated_logistics", "name": "Automated logistics", "kind": "unlock", "tier": 12, "specRef": "§10: public transport; §4 tier 12 (Megalopolis, automated logistics)", "description": "JIT endgame.", "dpCost": 12, "prereqTier": 12, "prereqNodeIds": ["transport_port"] },
+        { "id": "transport_t13_none", "name": "No new Transport content", "kind": "none", "tier": 13, "note": "No §10 signature content for Transport at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "communications",
+      "name": "Communications",
+      "nodes": [
+        { "id": "communications_t1_none", "name": "No new Communications content", "kind": "none", "tier": 1, "note": "No §10 signature content for Communications at tier 1 (Wilderness) — §4 names land purchase/dirt roads/boreholes/road imports/small housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_t2_none", "name": "No new Communications content", "kind": "none", "tier": 2, "note": "No §10 signature content for Communications at tier 2 (Hamlet) — §4 names farm plots/general store/basic clinic for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_t3_none", "name": "No new Communications content", "kind": "none", "tier": 3, "note": "No §10 signature content for Communications at tier 3 (Village) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_post", "name": "Post & parcel depot", "kind": "unlock", "tier": 4, "specRef": "§10: communications/post analogue", "description": "Last-mile freight on real roads.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "communications_telephone", "name": "Telephone exchange", "kind": "unlock", "tier": 5, "specRef": "§10: communications/post analogue", "description": "First tier of telephone → broadband → fibre.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "communications_mast_network", "name": "Mast network (mobile)", "kind": "unlock", "tier": 6, "specRef": "§10: communications/post analogue", "description": "Coverage overlay.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "communications_broadband", "name": "Broadband hub", "kind": "unlock", "tier": 7, "specRef": "§10: communications/post analogue", "description": "Remote-work modifier.", "dpCost": 7, "prereqTier": 7, "prereqNodeIds": ["communications_telephone"] },
+        { "id": "communications_t8_none", "name": "No new Communications content", "kind": "none", "tier": 8, "note": "No §10 signature content for Communications at tier 8 (City) — §4 names heavy rail/mass transit/high-rise/stadium for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_fibre", "name": "Fibre backbone", "kind": "unlock", "tier": 9, "specRef": "§10: communications/post analogue", "description": "Third tier; remote-work modifier.", "dpCost": 9, "prereqTier": 9, "prereqNodeIds": ["communications_broadband"] },
+        { "id": "communications_t10_none", "name": "No new Communications content", "kind": "none", "tier": 10, "note": "No §10 signature content for Communications at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_t11_none", "name": "No new Communications content", "kind": "none", "tier": 11, "note": "No §10 signature content for Communications at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_t12_none", "name": "No new Communications content", "kind": "none", "tier": 12, "note": "No §10 signature content for Communications at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "communications_t13_none", "name": "No new Communications content", "kind": "none", "tier": 13, "note": "No §10 signature content for Communications at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    },
+    {
+      "id": "welfare",
+      "name": "Welfare",
+      "nodes": [
+        { "id": "welfare_t1_none", "name": "No new Welfare content", "kind": "none", "tier": 1, "note": "No §10 signature content for Welfare at tier 1 (Wilderness) — §4 names land purchase/dirt roads/boreholes/road imports/small housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t2_none", "name": "No new Welfare content", "kind": "none", "tier": 2, "note": "No §10 signature content for Welfare at tier 2 (Hamlet) — §4 names farm plots/general store/basic clinic for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t3_none", "name": "No new Welfare content", "kind": "none", "tier": 3, "note": "No §10 signature content for Welfare at tier 3 (Village) — §4 names primary school/paved roads/small warehouse for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_elder_care", "name": "Elder-care home", "kind": "unlock", "tier": 4, "specRef": "§10: elder care & child benefit analogues", "description": "Aging-wave demand.", "dpCost": 4, "prereqTier": 4 },
+        { "id": "welfare_child_benefit", "name": "Child benefit", "kind": "unlock", "tier": 4, "specRef": "§10: elder care & child benefit analogues", "description": "Family support policy; tier matched to elder care per §10's grouping (ASM: child-benefit-tier).", "dpCost": 4, "prereqTier": 4 },
+        { "id": "welfare_office", "name": "Welfare office", "kind": "unlock", "tier": 5, "specRef": "§10: elder care & child benefit analogues", "description": "Unemployment support (mental-health floor).", "dpCost": 5, "prereqTier": 5 },
+        { "id": "welfare_job_centre", "name": "Job centre", "kind": "unlock", "tier": 5, "specRef": "§10: elder care & child benefit analogues", "description": "Matching speed boost.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "welfare_food_bank", "name": "Food bank", "kind": "unlock", "tier": 5, "specRef": "§10: elder care & child benefit analogues", "description": "Shortage shock absorber.", "dpCost": 5, "prereqTier": 5 },
+        { "id": "welfare_home_care", "name": "Home-care service", "kind": "unlock", "tier": 6, "specRef": "§10: elder care & child benefit analogues", "description": "Cheaper than beds.", "dpCost": 6, "prereqTier": 6, "prereqNodeIds": ["welfare_elder_care"] },
+        { "id": "welfare_housing_office", "name": "Housing office", "kind": "unlock", "tier": 6, "specRef": "§10: elder care & child benefit analogues", "description": "Homelessness prevention.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "welfare_citizens_advice", "name": "Citizens advice", "kind": "unlock", "tier": 6, "specRef": "§10: elder care & child benefit analogues", "description": "Satisfaction boost.", "dpCost": 6, "prereqTier": 6 },
+        { "id": "welfare_t7_none", "name": "No new Welfare content", "kind": "none", "tier": 7, "note": "No §10 signature content for Welfare at tier 7 (Small City) — §4 names port/university/districts & policies/mid-rise zoning for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t8_none", "name": "No new Welfare content", "kind": "none", "tier": 8, "note": "No §10 signature content for Welfare at tier 8 (City) — §4 names heavy rail/mass transit/high-rise/stadium for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t9_none", "name": "No new Welfare content", "kind": "none", "tier": 9, "note": "No §10 signature content for Welfare at tier 9 (Metropolis) — §4 names airport/financial sector/reclamation/advanced healthcare for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t10_none", "name": "No new Welfare content", "kind": "none", "tier": 10, "note": "No §10 signature content for Welfare at tier 10 (Conurbation) — §4 names regional expansion/desalination/metro for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t11_none", "name": "No new Welfare content", "kind": "none", "tier": 11, "note": "No §10 signature content for Welfare at tier 11 (Megacity) — §4 names Channel Tunnel slot/very-high-density housing for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t12_none", "name": "No new Welfare content", "kind": "none", "tier": 12, "note": "No §10 signature content for Welfare at tier 12 (Megalopolis) — §4 names automated logistics/vertical farming/arterial roads for this tier. Deliberate no-op (ASM-481)." },
+        { "id": "welfare_t13_none", "name": "No new Welfare content", "kind": "none", "tier": 13, "note": "No §10 signature content for Welfare at tier 13 (Centopolis) — the WIN state. Deliberate no-op (ASM-481)." }
+      ]
+    }
+  ]
 }

@@ -1,3 +1,6 @@
+// Module key: tool.secretchecker (see code.json; GUID 05345166-63fd-40bb-a3ac-b35bfaa38283)
+// Spec ref: GR#11; GR#15
+
 /**
  * Secret / GR#15 hardcoding-smell checker (BOW mkey: tool.secretguard,
  * BUG-088 remediation, extracted from claude-secret-guard.js).

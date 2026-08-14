@@ -1,3 +1,6 @@
+// Module key: tool.trailerchecker (see code.json; GUID 8ecec508-51d0-4930-8281-2cf8af6c2083)
+// Spec ref: M0-ENG §5 (hooks)
+
 /**
  * Co-Authored-By trailer checker (BOW mkey: tool.secretguard, BUG-088
  * remediation, extracted from claude-pre-commit-check.js).

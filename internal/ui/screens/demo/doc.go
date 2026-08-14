@@ -5,7 +5,7 @@
 // sourced entirely from int.protocol view subscriptions against
 // harness.stub (Sprint 8) and, unchanged, a real engine later (SF-4).
 //
-// Module key: ui.screen.demo (see code.json)
+// Module key: ui.screen.demo (see code.json; GUID 447db3ea-ed84-4cca-9ae7-2fd045367cd0)
 // Spec refs:  §13-F6 (docs/METROPOLIS-MASTER-v2.1.md line 251); §42
 //
 //	Leisure Time & Exploration (line 573); §21 external commuting /

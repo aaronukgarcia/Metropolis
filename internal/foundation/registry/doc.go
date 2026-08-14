@@ -44,6 +44,6 @@
 // wall-clock dependency at all: no boot, status, health, or cost value is
 // ever a function of time.Now.
 //
-// Module key: foundation.registry (see code.json)
+// Module key: foundation.registry (see code.json; GUID d6460761-184d-4bee-aac7-5f1408242a0c)
 // Spec ref:   M0-ENG §2; M0-ENG §3
 package registry

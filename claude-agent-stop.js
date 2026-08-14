@@ -1,3 +1,6 @@
+// Module key: tool.agentstop (see code.json; GUID f71c9de6-93de-4d96-81eb-1ccb8651eddb)
+// Spec ref: FEAT-076; M0-ENG §5 (hooks)
+
 /**
  * PostToolUse hook — agent stop logging (FEAT-076, BOW mkey: tool.agentlog).
  *

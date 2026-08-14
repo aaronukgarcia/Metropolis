@@ -1,3 +1,6 @@
+// Module key: tool.versionguard (see code.json; GUID a48cf07f-4071-44a9-b038-c8dbeb778b62)
+// Spec ref: GR#2; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — Golden Rule #2 enforcement (Metropolis Go-monorepo
  * profile; BOW mkey: legacy.versionguard / FEAT-002).

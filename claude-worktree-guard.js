@@ -1,3 +1,6 @@
+// Module key: tool.worktreeguard (see code.json; GUID f50ad32e-8e9b-43f9-9b50-440c69e9c629)
+// Spec ref: GR#24; M0-ENG §5 (hooks)
+
 /**
  * PreToolUse hook — working-tree protection guard (GR#24 "No Code Left Behind",
  * BUG-215). BOW mkey: tool.worktreeguard.

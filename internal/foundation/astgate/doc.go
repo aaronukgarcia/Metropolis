@@ -3,9 +3,7 @@
 // passes by four different agents, all sharing the same blind spot — see
 // below) with a standing, CI-run check.
 //
-// Module key: tool.astgate (see docs/planning/acceptance/tool.astgate.md;
-// code.json registration is Bill's build-dispatch call per that file's
-// own "Escalations" section — this package does not self-register).
+// Module key: tool.astgate (see code.json; GUID 2e729a3d-8bd4-499d-9051-61af3ac23b13)
 // Spec ref:   BUG-024; GR#15 (validators derive from data/the AST itself,
 //
 //	never a hardcoded list); GR#20/#21 posture (mechanical,

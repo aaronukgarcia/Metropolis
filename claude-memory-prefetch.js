@@ -1,3 +1,6 @@
+// Module key: tool.memoryprefetch (see code.json; GUID 4f83f462-e5a9-48b7-9094-8565789fc1e7)
+// Spec ref: GR#14; M0-ENG §5 (hooks)
+
 /**
  * UserPromptSubmit hook — Metropolis memory pre-fetch reminder (GR#14).
  *

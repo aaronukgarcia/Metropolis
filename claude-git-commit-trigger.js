@@ -1,3 +1,6 @@
+// Module key: tool.gitcommittrigger (see code.json; GUID bbca9146-1a3d-448f-bbc9-f556e70a8bb9)
+// Spec ref: M0-ENG §5 (hooks)
+
 /**
  * Shared git-commit/push trigger builder (BOW: BUG-123, tool.secretguard).
  *

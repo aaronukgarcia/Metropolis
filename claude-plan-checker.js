@@ -1,3 +1,6 @@
+// Module key: tool.planchecker (see code.json; GUID 3402d2ad-bd3d-4f04-9166-8e473247263f)
+// Spec ref: GR#3; GR#6
+
 /**
  * Plan-drift / registry-integrity checker (BOW mkey: tool.planguard,
  * BUG-088 remediation, extracted from claude-plan-guard.js).

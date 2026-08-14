@@ -1,3 +1,6 @@
+// Module key: tool.bow (see code.json; GUID 3345f6d6-c82f-46b9-b834-3d73a8ab117b)
+// Spec ref: M0-ENG §4; V.2.3
+
 /**
  * claude-bow.js — Metropolis Book of Work (metro MariaDB backend)
  *
