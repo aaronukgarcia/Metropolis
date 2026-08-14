@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "$comment": "Resource-consumption coefficients (MOD-021 / engine.consumption, §17 'Resource Consumption Model', in full). This file is the sole source for the per-person residential baseline (§17.1 table) and the per-occupied-unit coefficients by building class (§17.2 table) — GR#15: no utility number lives as a Go literal in internal/engine/consumption/*.go outside doc-comment prose transcribing this file's own values. The catalogue (data/buildings.json) references a class here ONLY by its camelCase key via 'consumptionRef' and never carries a raw utility number (§17 'coefficient-driven': the catalogue never hard-codes utility numbers). §17.1 figures: water 145 L/person/day (+25% summer peak; gardens +20 L detached), electricity 3.5 kWh/person/day (household base 2 kWh + 1.5/person; winter +15%), gas 13 kWh/person/day (x2.2 Jan, x0.2 Jul; electric-heated homes shift this to E), food-staples 1.4 kg, food-fresh 0.7 kg, household waste 1.1 kg, wastewater ~138 L (95% rule — see residential.wastewaterFractionOfWater). §17.2 figures: the 20 class rows transcribed verbatim; the three infrastructure classes (waterTreatmentWorks, sewageWorks, desalination) have NO per-occupied-unit water/gas figures (their §17.2 row gives '—') — their 'unit' is 'm3' (cubic metres of throughput treated/produced, not an occupancy count), their only energy figure is the stated kWh/m3, and their waste column is sludge (kg/m3) or, for desalination, brine returned to sea (no kg figure, so wasteKg is 0). Seasonal modifiers (§17 'before seasonal modifiers (§9)') live in data/seasonal.json, NOT here — base coefficients stay pure.",
   "residential": {
     "waterLitresPerPersonPerDay": 145,
     "electricityKWhPerPersonPerDay": 3.5,
@@ -26,6 +27,9 @@
     "swimmingPoolLeisureCentre": { "unit": "visitor", "waterL": 80, "elecKWh": 5, "gasKWh": 6, "wasteKg": 0.2 },
     "park": { "unit": "visitor", "waterL": 4, "elecKWh": 0.1, "gasKWh": 0, "wasteKg": 0.15 },
     "stationRailMetro": { "unit": "boarding", "waterL": 2, "elecKWh": 0.4, "gasKWh": 0, "wasteKg": 0.05 },
-    "airport": { "unit": "passenger", "waterL": 15, "elecKWh": 6, "gasKWh": 2, "wasteKg": 0.7 }
+    "airport": { "unit": "passenger", "waterL": 15, "elecKWh": 6, "gasKWh": 2, "wasteKg": 0.7 },
+    "waterTreatmentWorks": { "unit": "m3", "waterL": 0, "elecKWh": 0.6, "gasKWh": 0, "wasteKg": 0.05 },
+    "sewageWorks": { "unit": "m3", "waterL": 0, "elecKWh": 0.5, "gasKWh": 0, "wasteKg": 0.25 },
+    "desalination": { "unit": "m3", "waterL": 0, "elecKWh": 3.8, "gasKWh": 0, "wasteKg": 0 }
   }
 }
