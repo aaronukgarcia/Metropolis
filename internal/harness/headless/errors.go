@@ -40,4 +40,14 @@ const (
 	// forward via Engine.Snapshot's MergeDebugTouched. Checked before the
 	// engine boots, so a bad -in path never produces a partial run.
 	ErrInputReadFailed = "MET-H204"
+
+	// ErrCommandSendFailed: SendCommand itself failed at the transport
+	// layer (a failed cmd.Validate(), protocol.ErrTransportClosed, or
+	// protocol.ErrCommandQueueFull from InProcTransport.SendCommand), so
+	// the command never reached the engine — there is no engine.core
+	// rejection code to report (distinct from ErrCommandRejected, which
+	// surfaces a real one via result.Error.Code). BUG-220 gave this branch
+	// its own dedicated code instead of stuffing a transport error string
+	// into ErrCommandRejected's {engineErrorCode} placeholder.
+	ErrCommandSendFailed = "MET-H205"
 )

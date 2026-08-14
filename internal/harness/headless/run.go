@@ -248,21 +248,17 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 // racing another caller for the next Results() value.
 func sendAndAwait(t *protocol.InProcTransport, cmd protocol.Command, correlationID string) error {
 	if err := t.SendCommand(cmd); err != nil {
-		// BUG-219: this branch is a transport-layer send failure (a
-		// failed cmd.Validate(), protocol.ErrTransportClosed, or
+		// BUG-219/BUG-220: this branch is a transport-layer send failure
+		// (a failed cmd.Validate(), protocol.ErrTransportClosed, or
 		// protocol.ErrCommandQueueFull from InProcTransport.SendCommand)
 		// -- the command never reached the engine, so there is no
 		// engine.core rejection code to report here (unlike the
 		// !result.Accepted branch below, which surfaces a real one via
-		// result.Error.Code). MET-H202's template still requires
-		// {engineErrorCode} in every render, so err.Error() is supplied
-		// as the best available description of the send failure rather
-		// than leaving the placeholder unresolved -- it is not a
-		// genuine engine.core code, and a future fix should either give
-		// this branch its own registry code or rename the template
-		// placeholder to something transport-neutral (out of scope
-		// here: that touches errors.go/data/errors.json).
-		return errs.Wrap(ErrCommandRejected, correlationID, err, map[string]any{"kind": string(cmd.Kind), "engineErrorCode": err.Error()})
+		// result.Error.Code). It uses its own dedicated code
+		// (ErrCommandSendFailed / MET-H205) with a transport-neutral
+		// {cause} placeholder rather than stuffing err.Error() into
+		// ErrCommandRejected's {engineErrorCode} slot.
+		return errs.Wrap(ErrCommandSendFailed, correlationID, err, map[string]any{"kind": string(cmd.Kind), "cause": err.Error()})
 	}
 	result := <-t.Results()
 	if !result.Accepted {

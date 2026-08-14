@@ -1,7 +1,7 @@
 {
   "version": 1,
   "ranges": {
-    "format": "MET-<layer><NNN> — layer is a single letter, NNN is a zero-padded 3-digit sequence within that layer.",
+    "format": "MET-<layer><NNN> — layer is a single letter, NNN is a zero-padded 3- or 4-digit sequence within that layer. Widened from 3 digits on 2026-08-14 (BUG-234): the 3-digit namespace was exhausted and minting a fresh layer letter per module was the wrong answer; every existing 3-digit code stays valid and new codes may use a 4th digit.",
     "layers": {
       "F": "foundation — internal/foundation/* (registry, correlation IDs, logging, determinism, serialization, solver, build info)",
       "P": "protocol — internal/protocol (engine/UI command/event/delta contract)",
@@ -555,6 +555,12 @@
       "module": "harness.headless",
       "message": "-in prior bundle directory {path} could not be read: {cause}",
       "remedy": "FEAT-035's -in/-resume flag reads a prior headless bundle's header.json to carry its DebugTouched flag forward into this run's header (Engine.Snapshot's MergeDebugTouched carry-forward). Check the -in path points at a real bundle directory previously written by `metropolis -headless -out <dir>` and that header.json is present and well-formed."
+    },
+    "MET-H205": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "command {kind} could not be sent to the engine during a headless run: {cause}",
+      "remedy": "SendCommand failed at the transport layer (a failed cmd.Validate(), protocol.ErrTransportClosed, or protocol.ErrCommandQueueFull from InProcTransport.SendCommand), so the command never reached the engine -- there is no engine.core rejection code to report (distinct from MET-H202, which surfaces a real engine rejection). Inspect {cause} for the transport failure and fix the command or the transport wiring."
     },
     "MET-E100": {
       "severity": "error",
@@ -1539,6 +1545,12 @@
       "module": "engine.projections",
       "message": "ghost-city death-warning provider shape invalid: {detail}",
       "remedy": "The ghost-city provider must supply both current and historic-peak values so the dual-threshold margin is computable; an incomplete shape is rejected, not defaulted (FEAT-068, AC-18)."
+    },
+    "MET-G109": {
+      "severity": "error",
+      "module": "engine.projections",
+      "message": "ProjectionsAPI method {method} called on a copied value, not the one NewProjectionsAPI constructed",
+      "remedy": "Always use the *ProjectionsAPI pointer NewProjectionsAPI returned. Do not dereference-and-reassign it ('p2 := *p') or pass it by value -- that produces a second ProjectionsAPI value with its own mu but ALIASED providers/thresholds/decisions maps and the ledger pointer, so the copy's mu protects nothing shared (SEC-020-class). If you need a second independent API, call NewProjectionsAPI again."
     }
   }
 }

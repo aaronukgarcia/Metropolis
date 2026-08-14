@@ -20,8 +20,12 @@ type registryEntry struct {
 }
 
 // codeFormat is the MET-<layer><NNN> format documented in data/errors.json:
-// a single uppercase layer letter followed by three digits.
-var codeFormat = regexp.MustCompile(`^MET-[A-Z]\d{3}$`)
+// a single uppercase layer letter followed by three or four digits. The
+// format was widened from three digits on 2026-08-14 (BUG-234): the
+// three-digit namespace was exhausted and minting a fresh layer letter
+// per module was the wrong answer, so four-digit codes are now accepted
+// while every existing three-digit code stays valid unchanged.
+var codeFormat = regexp.MustCompile(`^MET-[A-Z]\d{3,4}$`)
 
 var (
 	regOnce    sync.Once
@@ -89,7 +93,7 @@ func doLoadRegistry() (map[string]registryEntry, error) {
 
 	for code, entry := range codes {
 		if !codeFormat.MatchString(code) {
-			return nil, fmt.Errorf("invalid code format %q in %s (want MET-<layer><NNN>)", code, path)
+			return nil, fmt.Errorf("invalid code format %q in %s (want MET-<layer><NNN>, three or four digits)", code, path)
 		}
 		if entry.Severity == "" || entry.Module == "" || entry.Message == "" || entry.Remedy == "" {
 			return nil, fmt.Errorf("code %q in %s is missing a required field (severity/module/message/remedy)", code, path)

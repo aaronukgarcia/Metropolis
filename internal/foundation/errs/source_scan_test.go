@@ -71,13 +71,16 @@ import (
 	"testing"
 )
 
-// metCodeInStringPattern matches a MET-<layer><NNN> code appearing
-// anywhere inside the already-unquoted content of a Go string literal.
+// metCodeInStringPattern matches a MET-<layer><NNN or NNNN> code
+// appearing anywhere inside the already-unquoted content of a Go string
+// literal. The digit count was widened from exactly three to three-or-four
+// in lockstep with codeFormat's BUG-234 widening, so a four-digit code is
+// still caught (and not truncated to a three-digit false positive).
 // It is deliberately applied only to string-literal content (see
 // scanSourceCodes) and never to raw file text, so a code mentioned in a
 // // comment or a doc string is not treated as "raised" — see the
 // "known blind spots" note on scanSourceCodes.
-var metCodeInStringPattern = regexp.MustCompile(`MET-[A-Z][0-9]{3}`)
+var metCodeInStringPattern = regexp.MustCompile(`MET-[A-Z][0-9]{3,4}`)
 
 // dynamicFragmentPattern matches a Go string literal whose ENTIRE
 // (trimmed) content is nothing but a partial MET- code fragment — e.g.
