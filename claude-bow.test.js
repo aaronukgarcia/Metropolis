@@ -2571,6 +2571,79 @@ test('BUG-221 AC-7: `set <CODE> --guid <value>` refuses when the mkey (existing 
   assert.equal(rows[0].guid, guid, 'guid must be UNCHANGED when the mkey has no code.json entry');
 });
 
+test('BUG-221 AC-8 / BUG-223: `set --guid` reconciliation CASCADES to child rows — every row in bow_comments/bow_dependencies (item_guid AND depends_on_guid)/bow_git_refs/bow_destructive_verdicts follows the item to the new guid (no orphans, no stale references)', async () => {
+  // Seed a scratch item linked to a real mkey so the --guid reconcile path is
+  // permitted, plus a second scratch item as the dependency target. The four
+  // child rows are keyed on the item's ORIGINAL (random) guid — exactly the
+  // state the pre-cascade migration could not survive: under a plain RESTRICT
+  // (no ON UPDATE CASCADE) foreign key, MariaDB refuses `UPDATE bow_items SET
+  // guid = ...` the instant any child row references the old guid, stranding
+  // those children on a guid that no longer exists. ON UPDATE CASCADE is what
+  // makes this succeed, and this test is the permanent proof of that cascade.
+  const oldGuid = await insertItem({ code: 'FEAT-9507', mkey: REAL_MKEY });
+  const depTargetGuid = await insertItem({ code: 'FEAT-9508' });
+  // A THIRD scratch item that DEPENDS ON FEAT-9507: its row keys the changed
+  // item's guid in bow_dependencies' OTHER column (`depends_on_guid`), so BOTH
+  // of that table's two foreign keys (fk_bow_dep_item AND fk_bow_dep_on) are
+  // exercised by this one test, not just the item_guid one (BUG-223).
+  const dependentGuid = await insertItem({ code: 'FEAT-9509' });
+
+  const commentBody = 'cascade-regression comment';
+  const commitHash = '0123456789abcdef0123456789abcdef01234567';
+  const verdictAttacker = 'cascade-regression';
+
+  // One row in EACH of the four child tables, all keyed on oldGuid — plus a
+  // second bow_dependencies row keying oldGuid in the depends_on_guid column.
+  await insertComment(oldGuid, commentBody);
+  await insertDep(oldGuid, depTargetGuid);
+  await insertDep(dependentGuid, oldGuid);
+  await db.query('INSERT INTO bow_git_refs (item_guid, commit_hash) VALUES (?, ?)', [oldGuid, commitHash]);
+  await db.query(
+    'INSERT INTO bow_destructive_verdicts (guid, item_guid, verdict, attacker) VALUES (?, ?, ?, ?)',
+    [crypto.randomUUID(), oldGuid, 'accept', verdictAttacker]);
+
+  const r = bowCli(['set', 'FEAT-9507', '--guid', REAL_GUID]);
+  assert.equal(r.status, 0, `a --guid reconcile must succeed even with child rows present (ON UPDATE CASCADE): ${r.stderr}`);
+
+  // The item's own guid is the reconciled value (looked up by `code` — the
+  // guid column itself just changed, so a WHERE guid = <old guid> would
+  // (wrongly) find nothing post-update).
+  const [[itemRow]] = await db.query('SELECT guid FROM bow_items WHERE code = ?', ['FEAT-9507']);
+  assert.equal(itemRow.guid, REAL_GUID, 'bow_items.guid must now equal the reconciled value');
+
+  // Every child row followed the item to the new guid — the SAME row (proven
+  // by its identifying content), now keyed on REAL_GUID...
+  const [commentsNew] = await db.query('SELECT body FROM bow_comments WHERE item_guid = ?', [REAL_GUID]);
+  assert.equal(commentsNew.length, 1, 'exactly one bow_comments row must be keyed on the new guid');
+  assert.equal(commentsNew[0].body, commentBody, 'it must be the same comment, migrated not duplicated');
+
+  const [depsNew] = await db.query('SELECT depends_on_guid FROM bow_dependencies WHERE item_guid = ?', [REAL_GUID]);
+  assert.equal(depsNew.length, 1, 'exactly one bow_dependencies row must be keyed on the new guid (item_guid FK)');
+  assert.equal(depsNew[0].depends_on_guid, depTargetGuid, 'the dependency target (the OTHER item, whose guid did not change) must be untouched');
+
+  const [depsOnNew] = await db.query('SELECT item_guid FROM bow_dependencies WHERE depends_on_guid = ?', [REAL_GUID]);
+  assert.equal(depsOnNew.length, 1, 'the depends_on_guid FK must cascade too: exactly one dependency row must key the new guid as its target');
+  assert.equal(depsOnNew[0].item_guid, dependentGuid, 'it must be the same dependent item, migrated not duplicated');
+
+  const [refsNew] = await db.query('SELECT commit_hash FROM bow_git_refs WHERE item_guid = ?', [REAL_GUID]);
+  assert.equal(refsNew.length, 1, 'exactly one bow_git_refs row must be keyed on the new guid');
+  assert.equal(refsNew[0].commit_hash, commitHash, 'it must be the same git ref, migrated not duplicated');
+
+  const [verdictsNew] = await db.query('SELECT attacker FROM bow_destructive_verdicts WHERE item_guid = ?', [REAL_GUID]);
+  assert.equal(verdictsNew.length, 1, 'exactly one bow_destructive_verdicts row must be keyed on the new guid');
+  assert.equal(verdictsNew[0].attacker, verdictAttacker, 'it must be the same verdict, migrated not duplicated');
+
+  // ...and NO row anywhere still references the OLD guid (no orphans, no
+  // stale references — the exact failure the pre-cascade FK produced).
+  const [oldComments] = await db.query('SELECT COUNT(*) AS n FROM bow_comments WHERE item_guid = ?', [oldGuid]);
+  const [oldDeps] = await db.query('SELECT COUNT(*) AS n FROM bow_dependencies WHERE item_guid = ? OR depends_on_guid = ?', [oldGuid, oldGuid]);
+  const [oldRefs] = await db.query('SELECT COUNT(*) AS n FROM bow_git_refs WHERE item_guid = ?', [oldGuid]);
+  const [oldVerdicts] = await db.query('SELECT COUNT(*) AS n FROM bow_destructive_verdicts WHERE item_guid = ?', [oldGuid]);
+  assert.equal(
+    oldComments[0].n + oldDeps[0].n + oldRefs[0].n + oldVerdicts[0].n, 0,
+    'no child row may still reference the OLD guid after the reconcile (no orphans)');
+});
+
 // ---------------------------------------------------------------------------
 // BUG-115: ensureSchema() (ALTER TABLE / CREATE TABLE / MODIFY COLUMN — all
 // MDL-locking DDL) must NOT run for read-only commands, but MUST still run

@@ -85,7 +85,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const mysql = require('mysql2/promise');
+const { connectCLI } = require('./claude-db.js');
 
 const NAMES = ['Bill', 'Bob', 'Ben'];
 const TTL_MS = 5 * 60 * 1000;             // permit lifetime
@@ -163,19 +163,7 @@ const WINDOW_ID = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSI
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 async function connect() {
-  try {
-    return await mysql.createConnection({
-      host: process.env.METRO_DB_HOST || '127.0.0.1',
-      port: Number(process.env.METRO_DB_PORT || 3306),
-      user: process.env.METRO_DB_USER || 'root',
-      password: process.env.METRO_DB_PASSWORD || '',
-      database: process.env.METRO_DB_NAME || 'metro',
-    });
-  } catch (err) {
-    console.error(`claude-sync: cannot connect to metro MariaDB: ${err.message}`);
-    console.error('Ensure the MariaDB service is running (Get-Service MariaDB) and the metro database exists.');
-    process.exit(1);
-  }
+  return connectCLI('claude-sync');
 }
 
 async function ensureSchema(db) {

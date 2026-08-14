@@ -129,7 +129,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync, spawnSync } = require('child_process');
-const mysql = require('mysql2/promise');
+const { connectCLI } = require('./claude-db.js');
 
 const TYPES = ['module', 'feature', 'bug', 'interface', 'assumption', 'finding'];
 const TYPE_PREFIX = { module: 'MOD', feature: 'FEAT', bug: 'BUG', interface: 'INT', assumption: 'ASM', finding: 'SEC' };
@@ -265,19 +265,7 @@ for (let i = 1; i < argv.length; i++) {
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 async function connect() {
-  try {
-    return await mysql.createConnection({
-      host: process.env.METRO_DB_HOST || '127.0.0.1',
-      port: Number(process.env.METRO_DB_PORT || 3306),
-      user: process.env.METRO_DB_USER || 'root',
-      password: process.env.METRO_DB_PASSWORD || '',
-      database: process.env.METRO_DB_NAME || 'metro',
-    });
-  } catch (err) {
-    console.error(`claude-bow: cannot connect to metro MariaDB: ${err.message}`);
-    console.error('Ensure the MariaDB service is running (Get-Service MariaDB) and the metro database exists.');
-    process.exit(1);
-  }
+  return connectCLI('claude-bow');
 }
 
 // BUG-221 (tool.bowcli): the four `... REFERENCES bow_items(guid) ON DELETE

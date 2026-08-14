@@ -235,17 +235,14 @@ function readStdin() {
 
 // FEAT-076 AC-8: host default fixed from 'localhost' to '127.0.0.1' for
 // parity with claude-sync.js/claude-bow.js (no localhost/::1 divergence).
-// Exported below so claude-agent-stop.js can reuse this exact connection
-// logic instead of standing up a fourth connect() implementation (GR#3).
+// Delegates to the shared claude-db.js helper (BUG-203, GR#3); the require
+// stays lazy inside the function so a load-time failure cannot take the
+// whole (fail-open) guard down at module evaluation. Exported below so
+// claude-agent-stop.js can reuse this exact connection logic instead of
+// standing up a fourth connect() implementation.
 async function connect() {
-  const mysql = require('mysql2/promise');
-  return mysql.createConnection({
-    host: process.env.METRO_DB_HOST || '127.0.0.1',
-    port: Number(process.env.METRO_DB_PORT || 3306),
-    user: process.env.METRO_DB_USER || 'root',
-    password: process.env.METRO_DB_PASSWORD || '',
-    database: process.env.METRO_DB_NAME || 'metro',
-  });
+  const { connect: dbConnect } = require('./claude-db.js');
+  return dbConnect();
 }
 
 /**

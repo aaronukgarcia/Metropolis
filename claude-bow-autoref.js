@@ -47,7 +47,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const mysql = require('mysql2/promise');
+const { connect } = require('./claude-db.js');
 const { findItemByRef } = require('./claude-bow.js');
 
 const ROOT = __dirname;
@@ -73,14 +73,7 @@ function extractTags(message) {
 }
 
 async function connectReadWrite() {
-  return mysql.createConnection({
-    host: process.env.METRO_DB_HOST || '127.0.0.1',
-    port: Number(process.env.METRO_DB_PORT || 3306),
-    user: process.env.METRO_DB_USER || 'root',
-    password: process.env.METRO_DB_PASSWORD || '',
-    database: process.env.METRO_DB_NAME || 'metro',
-    connectTimeout: 4000,
-  });
+  return connect({ connectTimeout: 4000 });
 }
 
 /** Has this (item_guid, commit_hash) pair already been ref'd? */

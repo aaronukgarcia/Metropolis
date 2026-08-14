@@ -51,7 +51,7 @@
 'use strict';
 
 const { execSync } = require('child_process');
-const mysql = require('mysql2/promise');
+const { connect } = require('./claude-db.js');
 const { findItemByRef } = require('./claude-bow.js');
 
 const ROOT = __dirname;
@@ -119,16 +119,9 @@ function extractTags(message) {
   return tags;
 }
 
-/** Read-only mysql2 connection, mirroring claude-bow.js's env-var config. */
+/** Read-only mysql2 connection (shared claude-db.js helper, GR#3/BUG-203). */
 async function connectReadOnly() {
-  return mysql.createConnection({
-    host: process.env.METRO_DB_HOST || '127.0.0.1',
-    port: Number(process.env.METRO_DB_PORT || 3306),
-    user: process.env.METRO_DB_USER || 'root',
-    password: process.env.METRO_DB_PASSWORD || '',
-    database: process.env.METRO_DB_NAME || 'metro',
-    connectTimeout: 4000,
-  });
+  return connect({ connectTimeout: 4000 });
 }
 
 /** Near-miss LIKE suggestions for an unknown tag (best-effort UX, not load-bearing;
