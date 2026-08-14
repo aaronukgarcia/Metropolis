@@ -209,6 +209,16 @@ func LoadMarketFile(dir, correlationID string) (MarketFile, error) {
 	return Load[MarketFile, *MarketFile](filepath.Join(dir, FileMarket), correlationID)
 }
 
+// LoadLogisticsFile loads and validates logistics.json from dir
+// (engine.logistics, MOD-025 — see logistics.go's package-level doc
+// comment). Not part of the eight-file §24 set LoadAll aggregates;
+// engine.logistics.Load calls this directly, matching engine.market/
+// engine.season's precedent for a module-owned loader built on this
+// shared generic Load.
+func LoadLogisticsFile(dir, correlationID string) (LogisticsFile, error) {
+	return Load[LogisticsFile, *LogisticsFile](filepath.Join(dir, FileLogistics), correlationID)
+}
+
 // LoadPacing loads and validates pacing.json from dir (FEAT-030 — see
 // pacing.go's package-level doc comment). Not part of the eight-file
 // §24 set LoadAll aggregates; engine.core's own Load calls this

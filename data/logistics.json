@@ -1,0 +1,112 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "engine.logistics (MOD-025, §8/§II.5) coarse delivery model — the STUB-FOR-BASELINE subset (FEAT-083): a single deterministic throughput/shortfall number per (district, commodity), a capacity-bounded stock shelf, and lean/fat safety-buffer tiers. The full §8 JIT depth (junction slots, truck movements, per-mode lead time, in-queue perishable expiry) is DEFERRED to after Baseline One runs; this file therefore carries none of those fields yet (GR#15: every figure below is balance data read at load time, never a Go literal in internal/engine/logistics/*.go).",
+    "unitConvention": "Every commodity's \"unit\" field states the measure its \"throughput\" and \"holdingCostMicropoundsPerUnitPerTick\" figures are PER, and is DELIBERATELY IDENTICAL to data/market.json's per-commodity \"unit\" field (engine.market AC-16: water/power/gas L/kWh/kWh, foodStaples/foodFresh kg/kg, fuel L, constructionMaterials tonne, consumerGoods kg, waste kg) so a tonnes-vs-slots figure is never ambiguous across the engine.market boundary (ASM-191/ASM-232). \"throughput\" is a plain integer count in that unit per tick (day); \"shortfallFactor\" is a dimensionless delivery-reliability fraction in (0,1] standing in for congestion/loss the full model would compute; \"shelfLifeTicks\" is in ticks/days (0 = non-perishable); \"holdingCostMicropoundsPerUnitPerTick\" is int64 MICRO-POUNDS per unit per tick (1 GBP = 1,000,000 micro-pounds, M0-ENG §1.2).",
+    "balanceNote": "All throughput/shortfallFactor/shelfLife/holdingCost/safetyBuffer figures are COARSE PLACEHOLDERS (ASM-234: unpinned balance data) chosen only to exercise the model — adjust here, never in Go source, and treat the numbers as directional pending the M2 balance pass.",
+    "perCommodityUnits": {
+      "water": "L (litres) — matches engine.market",
+      "power": "kWh — matches engine.market",
+      "gas": "kWh — matches engine.market",
+      "foodStaples": "kg — matches engine.market",
+      "foodFresh": "kg — matches engine.market",
+      "fuel": "L (litres) — matches engine.market",
+      "constructionMaterials": "tonne — matches engine.market",
+      "consumerGoods": "kg — matches engine.market",
+      "waste": "kg — matches engine.market"
+    }
+  },
+  "bufferPolicies": {
+    "lean": {
+      "safetyBuffer": 0.10,
+      "comment": "§8 step 2 lean tier: smaller buffer, lower holding cost, higher stockout risk (AC-3)."
+    },
+    "fat": {
+      "safetyBuffer": 0.50,
+      "comment": "§8 step 2 fat tier: larger buffer, higher holding cost, lower stockout risk (AC-3)."
+    }
+  },
+  "commodities": {
+    "water": {
+      "unit": "L",
+      "throughput": 1000000,
+      "shortfallFactor": 1.0,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Piped utility: reliable (factor 1.0), effectively non-perishable (0)."
+    },
+    "power": {
+      "unit": "kWh",
+      "throughput": 800000,
+      "shortfallFactor": 1.0,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Piped utility: reliable (factor 1.0)."
+    },
+    "gas": {
+      "unit": "kWh",
+      "throughput": 600000,
+      "shortfallFactor": 1.0,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Piped utility (off-map pipeline, §17.1): reliable (factor 1.0)."
+    },
+    "foodStaples": {
+      "unit": "kg",
+      "throughput": 50000,
+      "shortfallFactor": 0.9,
+      "shelfLifeTicks": 30,
+      "holdingCostMicropoundsPerUnitPerTick": 2,
+      "defaultBufferPolicy": "fat",
+      "comment": "Road/port-borne, storable — buffered fat against harvest lumpiness (§9)."
+    },
+    "foodFresh": {
+      "unit": "kg",
+      "throughput": 20000,
+      "shortfallFactor": 0.9,
+      "shelfLifeTicks": 3,
+      "holdingCostMicropoundsPerUnitPerTick": 100,
+      "defaultBufferPolicy": "lean",
+      "comment": "§6/§8 JIT poster child: short shelf life, high holding cost, lean buffer."
+    },
+    "fuel": {
+      "unit": "L",
+      "throughput": 40000,
+      "shortfallFactor": 0.9,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Road/port-borne, import-only v1 (§6)."
+    },
+    "constructionMaterials": {
+      "unit": "tonne",
+      "throughput": 5000,
+      "shortfallFactor": 0.9,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Every build order consumes these (engine.build, US-8/AC-8) — construction competes for the junction."
+    },
+    "consumerGoods": {
+      "unit": "kg",
+      "throughput": 15000,
+      "shortfallFactor": 0.9,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Road/port-borne."
+    },
+    "waste": {
+      "unit": "kg",
+      "throughput": 30000,
+      "shortfallFactor": 0.9,
+      "shelfLifeTicks": 0,
+      "holdingCostMicropoundsPerUnitPerTick": 0,
+      "defaultBufferPolicy": "fat",
+      "comment": "Negative commodity (§6): export channel, never an import — the shortfall factor models export-side congestion."
+    }
+  }
+}

@@ -53,7 +53,10 @@
       "U950-U999": "reserved for ui.alerts (internal/ui/screens/chrome, FEAT-013: Top bar + prioritised alert stack + crisis auto-pause -- alert/crisis construction rejections (missing jump target / missing ID, AC-3/AC-11), struct-copy rejection (SEC-020), malformed chrome.topbar figures patch. Split from the former U900-U999 block on 2026-08-14 per lead arbitration: chrome's four codes moved from MET-U901..U904 to MET-U950..U953 to clear the collision with ui.diagrams' MET-U900/MET-U905, which stay in U900-U949. Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
       "V000-V099": "reserved for ui.screen.proj (internal/ui/screens/proj, FEAT-019: F7 Projections screen — malformed f7.projections patch handling, unknown/stale subscription-ID drops (SF-7/PRJ-6), and the Screen struct-copy guard (SEC-020) — the U layer (U000-U999) is exhausted (ui.core/map/debug/keys/devmode/demo/menu/ticker/dash/alerts), so ui.screen.proj opens a second UI layer block. Checked against both this table AND `grep -rn \"MET-V\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V code existed either place.)",
       "G000-G099": "reserved for engine.citizens (internal/engine/citizens: the Option-B citizen record, columnar cold SoA store, HOT/WARM/COLD dial, amortised cold pass, A7 sampling firewall, life-writing, Gompertz-Makeham mortality, households — MOD-018. The E layer (E000-E999) is fully claimed by eleven earlier engine modules (engine.core/detgate/debug/invariant/world/season/market/helper/saveux/skeleton/mining), and the code format is hard-capped at three digits (^MET-[A-Z]\\d{3}$, internal/foundation/errs/registry.go), so engine.citizens opens a second engine block under the next free single letter G (V is the UI-second-block precedent). Flagged for Bill/Aaron: adding a new layer letter is a registry-schema extension — if they prefer to reallocate an existing E sub-range instead, that is their call.)",
-      "G100-G199": "reserved for engine.projections (internal/engine/projections: the projection curve registry, month-query bounds guard, Slow-Fuse decision validation, and ghost-city death-warning provider — MOD-031. Second G-layer engine claim after engine.citizens' G000-G099; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xx code existed either place.)"
+      "G100-G199": "reserved for engine.projections (internal/engine/projections: the projection curve registry, month-query bounds guard, Slow-Fuse decision validation, and ghost-city death-warning provider — MOD-031. Second G-layer engine claim after engine.citizens' G000-G099; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xx code existed either place.)",
+      "G200-G299": "reserved for engine.finance (internal/engine/finance: the double-entry money ledger, land pricing, loans/credit-rating/insolvency, investments, and v1 SimpleFirm — MOD-022. Third G-layer engine claim after engine.citizens' G000-G099 and engine.projections' G100-G199; the E layer is fully exhausted and the code format was widened to four digits on 2026-08-14 (BUG-234) so three-digit codes remain the norm here. Checked against this table AND `grep -rn \"MET-G2\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G2xx code existed either place.)",
+      "G300-G399": "reserved for engine.consumption (internal/engine/consumption: coefficient-driven demand from data/consumption.json, the four utility networks (water/wastewater/electricity/gas) with sources/edges/storage/losses, the conserved daily solve, the aquifer sustainable-yield ceiling, peak-vs-base load, the all-electric strategy, and household utility billing — MOD-021. Fourth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, and engine.finance's G200-G299; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G3\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G3xx code existed either place.)",
+      "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1551,6 +1554,204 @@
       "module": "engine.projections",
       "message": "ProjectionsAPI method {method} called on a copied value, not the one NewProjectionsAPI constructed",
       "remedy": "Always use the *ProjectionsAPI pointer NewProjectionsAPI returned. Do not dereference-and-reassign it ('p2 := *p') or pass it by value -- that produces a second ProjectionsAPI value with its own mu but ALIASED providers/thresholds/decisions maps and the ledger pointer, so the copy's mu protects nothing shared (SEC-020-class). If you need a second independent API, call NewProjectionsAPI again."
+    },
+    "MET-G200": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "unbalanced transaction rejected at post time: total debits {debits} != total credits {credits} for transaction {txid}",
+      "remedy": "Every ledger transaction must balance (total debit entries equal total credit entries). Fix the caller's entry set so debits equal credits before posting; no plug entry is ever synthesized and no partial transaction is written."
+    },
+    "MET-G201": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "insufficient funds: account {account} balance {balance} cannot cover debit {amount} and no credit is available",
+      "remedy": "An account cannot go negative without an available credit line. The caller must either post a smaller debit, arrange an external inflow, or draw on an approved loan facility before the overdraft is attempted."
+    },
+    "MET-G202": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "unknown ledger account {account} referenced in a post or query",
+      "remedy": "Accounts must be opened (via OpenAccount) before any transaction references them. Check for a misspelled or unregistered AccountID."
+    },
+    "MET-G203": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "duplicate ledger account {account}: an account with this id is already open",
+      "remedy": "Account IDs are unique; reuse the existing account rather than opening a second with the same id, or pick a distinct id."
+    },
+    "MET-G204": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "FinanceAPI method {method} called on a copied value, not the one NewFinanceAPI constructed",
+      "remedy": "Always use the *FinanceAPI pointer NewFinanceAPI returned. Do not dereference-and-reassign it ('f2 := *f') or pass it by value -- that produces a second value with its own mu but ALIASED ledger/account maps, so the copy's mu protects nothing shared (SEC-020-class)."
+    },
+    "MET-G205": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "negative money amount {amount} in field {field}: money is int64 micro-pounds and must never be negative",
+      "remedy": "A transaction entry, loan principal, investment capex, or settlement amount was negative. Validate upstream inputs before posting; there is no valid negative-money flow in this model."
+    },
+    "MET-G206": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "loan facility unavailable: milestone tier {tier} not reached (gate declined)",
+      "remedy": "Loan facilities are gated by milestone tier via the injected MilestoneGate. The requested facility's tier has not been reached; advance the relevant milestone before borrowing."
+    },
+    "MET-G207": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "invalid loan terms: {field} {value} fails {rule}",
+      "remedy": "Loan terms (principal, milestone tier, term months) failed validation. Reject rather than silently default: principal must be positive, the tier must be known, and the term must be positive."
+    },
+    "MET-G208": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "unknown loan {loan} referenced in a repayment or missed-payment operation",
+      "remedy": "Only loans issued by this FinanceAPI (via Borrow) can be repaid or missed. Check the loan id against the API's issued-loan set."
+    },
+    "MET-G209": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "invalid investment programme: {field} {value} fails {rule}",
+      "remedy": "Investment programmes require positive capex and a positive payback horizon. Reject malformed programmes rather than silently substituting a default."
+    },
+    "MET-G210": {
+      "severity": "error",
+      "module": "engine.finance",
+      "message": "invalid firm: {field} {value} fails {rule}",
+      "remedy": "A SimpleFirm's revenue/cost inputs failed validation (negative revenue or cost). Reject the firm rather than opening a firm with an invalid P&L."
+    },
+    "MET-G300": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "data/consumption.json could not be loaded or failed schema validation from {dir}: {cause}",
+      "remedy": "Check that data/consumption.json exists under the resolved data directory and passes foundation.data's schema validation (version present, non-negative residential baseline and class coefficients, non-empty class unit)."
+    },
+    "MET-G301": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "consumptionRef {ref} does not resolve to any class in data/consumption.json",
+      "remedy": "A buildings.json entry's consumptionRef names a class absent from data/consumption.json's classes map. Fix the reference (or add the class) rather than silently defaulting demand to zero — §17 requires the catalogue resolve through the coefficient table end-to-end."
+    },
+    "MET-G302": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "network {network} has no source capable of meeting demand; tick cannot be solved",
+      "remedy": "Register at least one source on the network before solving, or exclude the network from the solve. A network with zero sources is a loud misconfiguration, not a silent 100%-shortfall answer."
+    },
+    "MET-G303": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "occupancy/throughput for {ref} is negative or non-finite: {occupancy}",
+      "remedy": "Occupancy/throughput (and residential population) must be finite and non-negative. Reject negative or NaN/Inf occupancy rather than propagating a negative or NaN demand figure (GR#1/GR#16)."
+    },
+    "MET-G304": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "data/market.json could not be loaded for utility billing from {dir}: {cause}",
+      "remedy": "Check that data/market.json exists under the resolved data directory and passes engine.market's Load validation (pricingMode \"static\", all nine commodities present)."
+    },
+    "MET-G305": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "data/seasonal.json could not be loaded for seasonal modifiers from {dir}: {cause}",
+      "remedy": "Check that data/seasonal.json exists under the resolved data directory and passes engine.season's Load validation (all eight required curves present)."
+    },
+    "MET-G306": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "network {network} solve received a negative or non-finite demand of {value} for entity {entity}",
+      "remedy": "Demand figures must be finite and non-negative before reaching the conserved solve. Reject the figure rather than letting NaN/Inf/negative values poison the delivered + shortfall == demand accounting."
+    },
+    "MET-G307": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "network {network} has no solved tick to query a shortfall for",
+      "remedy": "Run Network.Solve (or UtilityAPI.SolveDailyTick) before querying per-entity shortfall."
+    },
+    "MET-G308": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "entity {entity} was not part of network {network}'s most recent solve",
+      "remedy": "Query shortfall only for entities included in the latest solve's consumer set."
+    },
+    "MET-G309": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "source {id} capacity is negative or non-finite: {value}",
+      "remedy": "Source capacity must be finite and non-negative. Reject the source rather than letting a negative capacity produce a negative delivery (units destroyed) in the conserved solve."
+    },
+    "MET-G310": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "edge {from}->{to} length is negative or non-finite: {value}",
+      "remedy": "Edge length must be finite and non-negative. Reject the edge rather than letting a negative length produce a negative loss fraction."
+    },
+    "MET-G311": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "aquifer sustainable yield is negative or non-finite: {value}",
+      "remedy": "The §17 sustainable-yield ceiling must be finite and non-negative. Reject the aquifer rather than letting a negative yield produce a negative draw."
+    },
+    "MET-G312": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "storage {id} capacity is negative or non-finite: {value}",
+      "remedy": "Storage capacity must be finite and non-negative. Reject the storage node rather than admitting a negative-capacity node."
+    },
+    "MET-G313": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "aquifer abstraction request is negative or non-finite: {value}",
+      "remedy": "AquiferYield.Abstract must be asked to abstract a finite, non-negative amount. Reject a negative or NaN/Inf request rather than returning a negative or NaN draw."
+    },
+    "MET-G314": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "demand for {ref} overflowed to a non-finite value after coefficient x occupancy and seasonal modifiers",
+      "remedy": "A public demand query must never return a non-finite (+Inf/NaN) demand. Reject a coefficient x occupancy (or seasonal-multiplied) result that overflows float64."
+    },
+    "MET-G315": {
+      "severity": "error",
+      "module": "engine.consumption",
+      "message": "network {network} solve arithmetic overflowed (demand {demand}, survival fraction {survive})",
+      "remedy": "The daily-tick solve's supply/loss accumulation overflowed float64. Reject the degenerate configuration rather than masking an Inf-Inf NaN as full delivery."
+    },
+    "MET-G400": {
+      "severity": "error",
+      "module": "engine.logistics",
+      "message": "data/logistics.json (or its engine.market dependency data/market.json) could not be loaded or failed schema validation from {dir}: {cause}",
+      "remedy": "Check that data/logistics.json exists under the resolved data directory and passes foundation.data's schema validation (positive version; each commodity has a non-empty unit, a non-negative throughput, a shortfall factor in (0,1], a non-negative shelf-life and holding-cost, and a defaultBufferPolicy naming a policy present in the file's bufferPolicies map), and that data/market.json passes engine.market's Load. engine.logistics never falls back to a silent default substitution (GR#15/GR#7)."
+    },
+    "MET-G401": {
+      "severity": "error",
+      "module": "engine.logistics",
+      "message": "data/logistics.json is missing required commodity \"{commodity}\"",
+      "remedy": "engine.logistics requires all nine §6 commodities (water, power, gas, foodStaples, foodFresh, fuel, constructionMaterials, consumerGoods, waste) present in data/logistics.json's \"commodities\" map. Add the named commodity — foundation.data's schema validation does not catch this because it has no notion of which commodity keys this consumer needs."
+    },
+    "MET-G402": {
+      "severity": "error",
+      "module": "engine.logistics",
+      "message": "unknown commodity \"{commodity}\" requested from LogisticsAPI",
+      "remedy": "Query LogisticsAPI only with one of the nine registered commodities (engine.market's CommodityType constants). An unregistered commodity is rejected loudly, never a panic or a silently-created zero-value stock/queue entry (AC-13/GR#7)."
+    },
+    "MET-G403": {
+      "severity": "error",
+      "module": "engine.logistics",
+      "message": "unknown district \"{district}\" for commodity \"{commodity}\": the district has never been provisioned",
+      "remedy": "Stateful LogisticsAPI operations (Stock/Draw/Restock/SetBufferPolicy/OrderSize) require the (district, commodity) stock to have been Provisioned first. This is the coarse stub's analogue of an unregistered junction ID (AC-13): rejected loudly, never a silently-created zero-value entry."
+    },
+    "MET-G404": {
+      "severity": "error",
+      "module": "engine.logistics",
+      "message": "unknown buffer policy \"{policy}\" requested from SetBufferPolicy",
+      "remedy": "SetBufferPolicy only accepts a policy name present in data/logistics.json's \"bufferPolicies\" map (lean/fat at baseline). An unknown tier is rejected, never silently fallback to a default (GR#7)."
+    },
+    "MET-G405": {
+      "severity": "error",
+      "module": "engine.logistics",
+      "message": "LogisticsAPI method {method} called on a struct-copied value, not the one Load/LoadDefault constructed",
+      "remedy": "Always use the *LogisticsAPI pointer Load returned. Do not dereference-and-reassign it ('l2 := *l') or pass it by value -- that produces a second value with its own mu but ALIASED stocks/subs/cfg state, so the copy's mu protects nothing shared (SEC-020-class, mirroring engine.finance's MET-G204). If you need a second independent API, call Load again."
     }
   }
 }
