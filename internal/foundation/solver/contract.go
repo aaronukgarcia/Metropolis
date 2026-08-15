@@ -1,5 +1,7 @@
 package solver
 
+import "github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+
 // Solver is the offload seam itself: a stateless request/response contract
 // that lets heavy computation run on CPU (v1, always available), a GPU
 // sidecar, or Azure cloud, with the engine unable to tell the difference
@@ -117,4 +119,53 @@ type SolveStats struct {
 	// use it to seed or gate simulation logic; put user-facing
 	// convergence notes in Response.Warnings instead.
 	Iterations int
+}
+
+// MaxRequestPayloadBytes is the hard ceiling on len(Request.Payload),
+// enforced before any allocation sized from it (weakness pattern #4/#6:
+// bound the attacker-influenced value that sizes memory, and do it before
+// the allocation, not after).
+//
+// Request.Payload is opaque at this layer but, per A4 discipline and the
+// gRPC mapping sketch (docs/design/solver-contract.md), a request carries
+// REFERENCES (shard IDs, snapshot generation numbers, content hashes),
+// never the referenced graph/matrix data — that data can be tens to
+// hundreds of MB and is fetched by the backend through a separate channel.
+// Legitimate payloads are therefore small: the largest real shape is the
+// ColdPassBatch/LifeWriting shard-ref list, a few hundred KB even at
+// pathological shard counts. 1 MiB is ~4 orders of magnitude above any
+// legitimate payload (so a valid request is never rejected) while capping
+// the transient allocation an oversized payload could otherwise drive —
+// solveEcho's make([]byte, len(req.Payload)) today, and the gRPC decode
+// when the sidecar/cloud tiers land — at a trivial, bounded size. It
+// mirrors the 1 MiB maxPatchWireBytes bound ui.screen.demo/proj/menu
+// already apply to the identical wire-supplied-size pattern.
+const MaxRequestPayloadBytes = 1 << 20
+
+// ErrRequestPayloadTooLarge is the registry code returned when
+// len(Request.Payload) exceeds MaxRequestPayloadBytes. It is raised at the
+// shared dispatch entry point (chainSolver.Solve) so every registered
+// backend — present and future — inherits the bound for free (weakness
+// pattern #1: an invariant holds through the shared entry point, not by
+// convention at each backend), and again in CPUBackend.solveEcho before
+// its make, so a caller reaching the backend directly (bypassing a
+// Registry) is still bounded. Registered in data/errors.json under
+// foundation.solver's F400-F499 range as MET-F401.
+const ErrRequestPayloadTooLarge = "MET-F401"
+
+// validateRequestPayload returns a registry-sourced error if req.Payload
+// exceeds MaxRequestPayloadBytes. It is a pure len() comparison — no
+// allocation, no wall-clock read, no map iteration order (GR#21) — so it
+// is safe and cheap to run at every Solve entry point, and it MUST run
+// before any allocation sized from len(req.Payload) (weakness pattern #6:
+// the approach to the guard is part of the guard's attack surface).
+func validateRequestPayload(req Request, correlationID string) error {
+	if len(req.Payload) > MaxRequestPayloadBytes {
+		return errs.New(ErrRequestPayloadTooLarge, correlationID, map[string]any{
+			"problem":      req.Problem.String(),
+			"payloadBytes": len(req.Payload),
+			"maxBytes":     MaxRequestPayloadBytes,
+		})
+	}
+	return nil
 }

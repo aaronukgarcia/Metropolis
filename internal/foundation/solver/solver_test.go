@@ -3,8 +3,11 @@ package solver
 import (
 	"bytes"
 	"errors"
+	"runtime"
 	"sync"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // fixedSolver is a test double that always returns a fixed response (or
@@ -324,4 +327,93 @@ func TestRegistryConcurrentUse(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// --- BUG-012: Request.Payload size bound ---------------------------------
+
+// TestEchoOversizedPayloadRejected proves an over-limit payload is rejected
+// with the registry-sourced ErrRequestPayloadTooLarge and produces no
+// response payload. If MaxRequestPayloadBytes were removed (or the check
+// dropped), Solve would succeed and return a payload — errors.Is(nil, …)
+// is false, so this test fails loudly rather than passing.
+func TestEchoOversizedPayloadRejected(t *testing.T) {
+	cpu := NewCPUBackend()
+	req := Request{
+		Problem: EchoProblem,
+		Payload: make([]byte, MaxRequestPayloadBytes+1),
+	}
+
+	resp, err := cpu.Solve(req)
+	if !errors.Is(err, &errs.E{Code: ErrRequestPayloadTooLarge}) {
+		t.Fatalf("Solve(oversized payload) err = %v, want ErrRequestPayloadTooLarge", err)
+	}
+	if resp.Payload != nil {
+		t.Fatalf("Solve(oversized payload) returned a %d-byte payload, want nil (rejected, never allocated)", len(resp.Payload))
+	}
+}
+
+// TestEchoOversizedPayloadRejectedWithoutAllocating proves the rejection
+// happens on len(req.Payload) BEFORE solveEcho's make([]byte, len(Payload))
+// — i.e. the input is bounded, not the output (weakness pattern #6).
+// Measured via runtime.MemStats' cumulative TotalAlloc delta, the same
+// technique internal/ui/screens/map/sec009_test.go uses for the identical
+// "size reaches an allocation" class (SEC-009). If the make ever ran, it
+// would add MaxRequestPayloadBytes (1 MiB) to the delta; the registry-error
+// construction is a handful of small allocations, orders of magnitude less.
+// The 64 KiB bound is generous headroom for errs.New's per-call overhead
+// while being utterly incompatible with the 1 MiB payload buffer having
+// been allocated.
+func TestEchoOversizedPayloadRejectedWithoutAllocating(t *testing.T) {
+	// Warm the error registry (sync.Once) so the first-load JSON parse —
+	// which allocates on the order of the whole data/errors.json — does not
+	// pollute the TotalAlloc delta measured below.
+	_ = errs.New(ErrRequestPayloadTooLarge, "warmup", nil)
+
+	cpu := NewCPUBackend()
+	req := Request{
+		Problem: EchoProblem,
+		Payload: make([]byte, MaxRequestPayloadBytes+1),
+	}
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	resp, err := cpu.Solve(req)
+	runtime.ReadMemStats(&after)
+
+	if !errors.Is(err, &errs.E{Code: ErrRequestPayloadTooLarge}) {
+		t.Fatalf("Solve(oversized payload) err = %v, want ErrRequestPayloadTooLarge", err)
+	}
+	if resp.Payload != nil {
+		t.Fatalf("Solve(oversized payload) returned a %d-byte payload, want nil", len(resp.Payload))
+	}
+
+	const maxPlausibleRejectionOverheadBytes = 64 * 1024
+	if delta := after.TotalAlloc - before.TotalAlloc; delta > maxPlausibleRejectionOverheadBytes {
+		t.Fatalf("Solve(oversized payload) allocated %d bytes on the rejection path, want < %d — the payload-sized buffer was allocated before the bound check", delta, maxPlausibleRejectionOverheadBytes)
+	}
+}
+
+// TestOversizedPayloadRejectedThroughRegistryPath proves the bound is
+// enforced at the shared dispatch entry point (chainSolver.Solve), not only
+// inside CPUBackend (AC-2). A higher-priority non-CPU backend is registered
+// so that, were the chain-level check missing, the oversized request would
+// reach gpu.fake and succeed — this test would then fail with err = nil.
+func TestOversizedPayloadRejectedThroughRegistryPath(t *testing.T) {
+	r := NewRegistry()
+	mustRegister(t, r, "cpu.v1", NewCPUBackend(), 0)
+	mustRegister(t, r, "gpu.fake", &fixedSolver{
+		problem: EchoProblem,
+		resp:    Response{Payload: []byte("gpu-answer"), Backend: "gpu.fake"},
+	}, 100)
+
+	s, err := r.Get(EchoProblem)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	req := Request{Problem: EchoProblem, Payload: make([]byte, MaxRequestPayloadBytes+1)}
+	_, err = s.Solve(req)
+	if !errors.Is(err, &errs.E{Code: ErrRequestPayloadTooLarge}) {
+		t.Fatalf("chainSolver.Solve(oversized payload) err = %v, want ErrRequestPayloadTooLarge (the bound must hold at the shared entry point, before any backend is dispatched)", err)
+	}
 }

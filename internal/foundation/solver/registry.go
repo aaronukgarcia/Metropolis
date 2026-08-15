@@ -265,7 +265,11 @@ func (c *chainSolver) Supports(problem ProblemKind) bool { return problem == c.p
 // accumulated; if every candidate fails, Solve returns a single joined
 // error covering all of them.
 func (c *chainSolver) Solve(req Request) (Response, error) {
-	var errs []error
+	if err := validateRequestPayload(req, errs.NewCorrelationID()); err != nil {
+		return Response{}, err
+	}
+
+	var errList []error
 	for i, cand := range c.candidates {
 		resp, err := cand.solver.Solve(req)
 		if err == nil {
@@ -273,7 +277,7 @@ func (c *chainSolver) Solve(req Request) (Response, error) {
 		}
 
 		wrapped := fmt.Errorf("solver backend %q failed: %w", cand.name, err)
-		errs = append(errs, wrapped)
+		errList = append(errList, wrapped)
 
 		hasNext := i < len(c.candidates)-1
 		if hasNext && c.onFailover != nil {
@@ -281,7 +285,7 @@ func (c *chainSolver) Solve(req Request) (Response, error) {
 		}
 	}
 	return Response{}, fmt.Errorf("solver: all %d backend(s) failed for problem %s: %w",
-		len(c.candidates), c.problem, errors.Join(errs...))
+		len(c.candidates), c.problem, errors.Join(errList...))
 }
 
 // Default is the process-wide registry that backends register into at

@@ -3,6 +3,8 @@ package solver
 import (
 	"errors"
 	"fmt"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // ErrNotImplemented is returned by CPUBackend.Solve for every
@@ -57,6 +59,9 @@ func (c *CPUBackend) Solve(req Request) (Response, error) {
 // about RNG quality for real simulation use. Real engine code uses the
 // counter-based Philox-style streams specified in M0-ENG §1.2.
 func (c *CPUBackend) solveEcho(req Request) (Response, error) {
+	if err := validateRequestPayload(req, errs.NewCorrelationID()); err != nil {
+		return Response{}, err
+	}
 	out := make([]byte, len(req.Payload))
 	x := req.Seed
 	for i, b := range req.Payload {
