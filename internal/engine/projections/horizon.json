@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "baseHorizonMonths": 72,
+  "rationale": "ASM-237 (escalated to Aaron, still open as of this build): no base/default forecasting horizon N is stated anywhere in the spec for BEFORE any forecasting unlock -- §13 F7 only says N 'grows with unlocked forecasting'. A5's Slow-Fuse Principle requires projecting ANY decision whose effect lands more than 5 game-years out, at any point in the game, with no stated early-game exemption. 72 months (6 game-years) is picked as the base default because it is the smallest whole-year figure that clears A5's 5-year Slow-Fuse threshold with one year of margin -- it is NOT a confirmed balance number and must not be read as one until Aaron/Bill resolve the A5-vs-F7 tension this file's owning acceptance doc (docs/planning/acceptance/engine.projections.md) escalates under ASM-237."
+}

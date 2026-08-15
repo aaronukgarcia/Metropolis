@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "insolvency": {
+    "warningThresholdMonths": 6,
+    "minWarningLeadMonths": 3,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, FEAT-057/AC-20) -- not yet Aaron-confirmed. Chosen only so engine.finance's own AC-29 death-condition gate has a concrete lead-time figure to compare its measured warning lead against; insolvency can move in single-month steps (one missed payment), so its warning window is deliberately shorter than ghost-city's."
+  },
+  "ghostCity": {
+    "warningThresholdMonths": 12,
+    "minWarningLeadMonths": 6,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, FEAT-057/AC-20) -- not yet Aaron-confirmed. Chosen only so engine.spiral's own AC-15 death-condition gate has a concrete lead-time figure to compare its measured warning lead against; ghost-city population decline moves on slower demographic timescales than insolvency, so its warning window is deliberately longer."
+  }
+}
