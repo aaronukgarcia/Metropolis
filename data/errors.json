@@ -59,7 +59,8 @@
       "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)",
     "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)",
     "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)",
-    "G700-G799": "reserved for engine.attract (internal/engine/attract: the §11 attractiveness & migration master dial — the seven-term A score, the signed net-migration response g(A − A_world), the §4 static world pool, per-resident personality-weighted emigration, and the asymmetric reputation-momentum term — MOD-029/FEAT-083. Eighth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, engine.build's G500-G599, and engine.households' G600-G699; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G7\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G7xx code existed either place.)"
+    "G700-G799": "reserved for engine.attract (internal/engine/attract: the §11 attractiveness & migration master dial — the seven-term A score, the signed net-migration response g(A − A_world), the §4 static world pool, per-resident personality-weighted emigration, and the asymmetric reputation-momentum term — MOD-029/FEAT-083. Eighth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, engine.build's G500-G599, and engine.households' G600-G699; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G7\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G7xx code existed either place.)",
+    "G800-G899": "reserved for feat.compositionroot (internal/engine/compose: the composition root wiring the baseline-one hook set — already-composed/double-register rejection, a required module's construction/wiring failure, a silently-absent required module, and wire-after-seal. Ninth G-layer engine claim after engine.attract's G700-G799; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G8\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G8xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1905,6 +1906,30 @@
       "module": "engine.attract",
       "message": "invalid migration month {month} (must be non-negative)",
       "remedy": "Pass a non-negative simulation month to ApplyMigration. The month keys the per-resident emigration hash stream and the once-per-month reputation advance; a negative value is rejected rather than wrapped into a migrant birth-month or stream key (FEAT-086)."
+    },
+    "MET-G800": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "composition root: engine already composed ({correlationId})",
+      "remedy": "compose.Wire was called on a *core.Engine that already has PhaseHooks registered. The composition root is the only real hook registrar, so a non-zero hook count on entry means the engine was already composed; construct a fresh engine instead of wiring a second time (AC-3)."
+    },
+    "MET-G801": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "composition root: required module {module} failed: {cause}",
+      "remedy": "A required module's construction or wiring failed (e.g. market.LoadDefault could not load data/market.json). Check the named module's data file and construction path; compose.Wire returns this without leaving a partially-wired engine (AC-4)."
+    },
+    "MET-G802": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "composition root: required module {module} is missing from the wired set",
+      "remedy": "A required module was silently absent from the composition (registering N-1 of N required modules). Every module in the declared required list must construct and register; a quiet partial wiring is a distinct failure, never a success (AC-4)."
+    },
+    "MET-G803": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "composition root: wiring after engine sealed (module {module})",
+      "remedy": "compose.Wire was invoked after the Engine sealed its hook set (the first AdvanceTicks already ran). Wire hooks before the first AdvanceTicks call; the original core.ErrEngineSealed cause is preserved via errors.Unwrap (AC-6)."
     }
   }
 }

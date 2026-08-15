@@ -1,5 +1,7 @@
 package synth
 
+import "github.com/aaronukgarcia/Metropolis/internal/engine/compose"
+
 // PhaseHookCountInHeadlessPath is the specific defence BUG-034 (this
 // item's driving BOW record) asked for by name: "nothing currently stops
 // someone citing a '10M-citizen tick cost' from today's runs, which
@@ -75,6 +77,20 @@ package synth
 // prove no NEW identifier reference to RegisterPhaseHook, in any
 // syntactic shape, has appeared anywhere in the scanned tree for a human
 // to have missed.
+//
+// # FEAT-082 (2026-08-15): the hand-asserted 0 is gone
+//
+// The composition root (internal/engine/compose) landed and now wires the
+// baseline-one hook set into the engine harness.headless.Run constructs,
+// so the old "the true count, today, is 0" is stale. This function now
+// returns the composition root's DECLARED baseline-one hook count
+// (compose.BaselineOneHookCount()) rather than a hand-asserted literal —
+// so the day a module is added to (or removed from) the composition order,
+// this figure moves with it automatically, the exact drift the file's own
+// doc comment always warned about. The runtime ground truth is
+// core.Engine.HookCount(), surfaced on headless.Result.PhaseHookCount for
+// every real run; this declared figure is what PerfResult carries before a
+// run exists to read the engine from.
 func PhaseHookCountInHeadlessPath() int {
-	return 0
+	return compose.BaselineOneHookCount()
 }

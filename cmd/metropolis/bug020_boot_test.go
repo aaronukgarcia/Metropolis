@@ -11,29 +11,33 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 )
 
-// BUG-020: StubEngine.Run itself already distinguishes a premature
-// Commands() closure (codePrematureCommandsClose, MET-P094) from a clean
-// ctx cancellation (internal/engine/stub/bug020_test.go covers that half).
-// What remained silent was this package: bootCore's goroutine ran
-// `_ = engine.Run(ctx)`, discarding the return value outright, so nothing
-// here ever observed which of the two happened.
+// BUG-020: the engine command loop itself already distinguishes a
+// premature Commands() closure from a clean ctx cancellation. StubEngine
+// raised codePrematureCommandsClose (MET-P094); the real core.Engine's
+// RunCommandLoop raises core.ErrPrematureCommandsClose (MET-E014) — the
+// same shape, now fixed in engine.core itself (internal/engine/core/
+// bug020-era coverage lives in engine/core's own tests). What remained
+// silent was this package: bootCore's goroutine ran `_ = engine.Run(ctx)`,
+// discarding the return value outright, so nothing here ever observed
+// which of the two happened.
 //
-// The fix: skeletonWiring.engineRunErr (boot.go) captures Run's return
-// value, EngineRunErr() exposes it once shutdown() has returned, and
-// run.go's logEngineShutdown reports it distinctly — silent on a clean
-// ctx-cancellation exit, loud on anything else.
+// The fix: skeletonWiring.engineRunErr (boot.go) captures the loop's
+// return value, EngineRunErr() exposes it once shutdown() has returned,
+// and run.go's logEngineShutdown reports it distinctly — silent on a
+// clean ctx-cancellation exit, loud on anything else.
 //
 // These tests exercise skeletonWiring/logEngineShutdown directly (not
 // through run(), which owns its own ctx/cancel internally and offers no
 // seam to force a premature close) so both halves of the distinction are
 // provable without relying on process-lifecycle timing.
 
-// TestSkeletonWiring_CleanShutdown_EngineRunErrIsCtxErr proves the
-// ordinary path — cancel(); wg.Wait(); Close(), exactly what shutdown()
-// does — leaves EngineRunErr() holding ctx.Err() (context.Canceled), and
-// that logEngineShutdown stays silent for it: an intentional quit must
-// never be reported as if something broke.
-func TestSkeletonWiring_CleanShutdown_EngineRunErrIsCtxErr(t *testing.T) {
+// TestSkeletonWiring_CleanShutdown_EngineRunErrIsNil proves the ordinary
+// path — cancel(); wg.Wait(); Close(), exactly what shutdown() does —
+// leaves EngineRunErr() holding nil (core.Engine.RunCommandLoop returns
+// nil on a clean ctx-cancelled shutdown, where StubEngine.Run returned
+// ctx.Err()), and that logEngineShutdown stays silent for it: an
+// intentional quit must never be reported as if something broke.
+func TestSkeletonWiring_CleanShutdown_EngineRunErrIsNil(t *testing.T) {
 	reg := registry.NewRegistry()
 	w, err := bootCore("bug020-clean", reg)
 	if err != nil {
@@ -43,14 +47,14 @@ func TestSkeletonWiring_CleanShutdown_EngineRunErrIsCtxErr(t *testing.T) {
 	w.shutdown()
 
 	got := w.EngineRunErr()
-	if !errors.Is(got, context.Canceled) {
-		t.Fatalf("EngineRunErr() = %v, want context.Canceled (ctx.Err() from a clean shutdown)", got)
+	if got != nil {
+		t.Fatalf("EngineRunErr() = %v, want nil (RunCommandLoop's clean ctx-cancellation return)", got)
 	}
 
 	var buf bytes.Buffer
 	logEngineShutdown(&buf, got)
 	if buf.Len() != 0 {
-		t.Fatalf("logEngineShutdown wrote %q for a clean ctx-cancellation exit, want silence", buf.String())
+		t.Fatalf("logEngineShutdown wrote %q for a clean shutdown, want silence", buf.String())
 	}
 }
 
@@ -72,11 +76,10 @@ func TestSkeletonWiring_PrematureClose_EngineRunErrIsDistinguishable(t *testing.
 	}
 
 	// The premature close: close the transport directly, WITHOUT going
-	// through shutdown()/cancel() first — mirrors
-	// internal/engine/stub/bug020_test.go's
-	// TestStubEngine_Run_PrematureCommandsClose_ReturnsRegistryError,
-	// exercised here through the real boot-time wiring instead of a
-	// hand-built StubEngine/transport pair.
+	// through shutdown()/cancel() first — mirrors the BUG-020 premature-
+	// close shape, exercised here through the real boot-time wiring
+	// (core.Engine.RunCommandLoop) instead of a hand-built engine/transport
+	// pair.
 	if err := w.transport.Close(); err != nil {
 		t.Fatalf("transport.Close: %v", err)
 	}

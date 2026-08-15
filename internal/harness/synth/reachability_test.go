@@ -958,14 +958,19 @@ func reachableFromEntry(nodes []*reachFuncNode, entryFile, entryRecv, entryName 
 	return nil, nil
 }
 
-// TestPhaseHookReachabilityFromHeadlessRun is the new drift guard this
-// dispatch adds (BUG-087/BUG-072). Where TestPhaseHookCountAssertionStillTrue
-// (phasehooks_test.go) asks "does the identifier appear anywhere in the
-// tree outside a known-good FILE", this asks "can headless.Run's own
-// call graph reach it" — the question that closes BUG-072's demonstrated
-// wrapper-inside-an-already-whitelisted-file gap, because reachability
-// does not care which file the identifier's declaration happens to live
-// in, only whether a call chain gets there from the real entry point.
+// TestPhaseHookReachabilityFromHeadlessRun is the drift guard this
+// dispatch added (BUG-087/BUG-072), re-aimed by FEAT-082. Where
+// TestPhaseHookCountAssertionStillTrue (phasehooks_test.go) asks "does the
+// identifier appear anywhere in the tree outside a known-good FILE", this
+// asks "can headless.Run's own call graph reach it". Before the
+// composition root landed, headless.Run could NOT reach RegisterPhaseHook
+// (zero hooks) — the walking-skeleton state BUG-034 exists to forbid. Now
+// it legitimately DOES reach it, but ONLY through the single sanctioned
+// wiring path (compose.Wire, which itself delegates the invariant to
+// invariant.Wire). The guard now asserts that reachability is confined to
+// those two wiring files — a direct call site in headless itself (or
+// anywhere else) would still be the two-implants divergence AC-1 exists to
+// kill, and this test would flag it by finding a different file.
 func TestPhaseHookReachabilityFromHeadlessRun(t *testing.T) {
 	root := repoRoot(t)
 	nodes, err := buildReachabilityGraph(root)
@@ -977,10 +982,19 @@ func TestPhaseHookReachabilityFromHeadlessRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reachableFromEntry: %v", err)
 	}
-	if hit != nil {
-		t.Errorf("headless.Run's call graph now reaches RegisterPhaseHook via %s (recv %q, func %q) — "+
-			"PhaseHookCountInHeadlessPath (phasehooks.go) must be updated in the SAME change, not left "+
-			"asserting a stale 0 (BUG-087/BUG-072)", hit.file, hit.recv, hit.name)
+	if hit == nil {
+		t.Fatal("headless.Run's call graph no longer reaches RegisterPhaseHook at all — " +
+			"the composition root (compose.Wire) should be the single wiring path")
+	}
+	composeRoot := filepath.ToSlash(filepath.Join("internal", "engine", "compose", "compose.go"))
+	invariantWire := filepath.ToSlash(filepath.Join("internal", "engine", "invariant", "wire.go"))
+	switch filepath.ToSlash(hit.file) {
+	case composeRoot, invariantWire:
+		// sanctioned single path
+	default:
+		t.Errorf("headless.Run reaches RegisterPhaseHook via %s (recv %q, func %q) — want the composition root "+
+			"(%s) or the invariant wiring (%s) as the only sanctioned paths", hit.file, hit.recv, hit.name,
+			composeRoot, invariantWire)
 	}
 }
 

@@ -13,14 +13,15 @@
 //   - foundation.errors — every boot-time failure below is a registry-
 //     sourced *errs.E (data/errors.json's MET-E900), never an ad hoc
 //     string (GR#7).
-//   - harness.stub      — StubEngine, H-STUB: drives the real Folkestone-64
-//     fixture over int.protocol's Transport (internal/engine/stub).
-//   - engine.core       — the real tick orchestrator; its own determinism
-//     is verified independently by feat.detgate's gate test
-//     (go test ./internal/engine/detgate/... -run TestDeterminismGate),
-//     which boots its own engine.core.Engine instances rather than this
-//     binary's live StubEngine-driven path — this binary does not
-//     separately boot an engine.core.Engine for rendering (see boot.go).
+//   - harness.stub      — StubEngine, H-STUB: still exists for its own
+//     fixtures/tests, but is NO LONGER the engine this binary boots
+//     (FEAT-082 flipped boot.go off StubEngine onto a real engine.core
+//     wired by internal/engine/compose).
+//   - engine.core       — the real tick orchestrator; FEAT-082 flipped
+//     this binary's boot path off StubEngine onto a real core.Engine wired
+//     by internal/engine/compose (the composition root), so the interactive
+//     binary and the -headless driver now reach the same simulation through
+//     the same compose.Wire.
 //   - feat.detgate      — see engine.core note above; not wired into this
 //     binary's runtime, verified via its own CI-gated test suite.
 //   - ui.core           — RenderLoop/InputLoop/ViewsLoop/ViewStore, the
@@ -51,28 +52,24 @@
 //
 // # What this binary does NOT prove (read before demoing it)
 //
-// Watching this run, you are watching harness.stub's StubEngine render
-// Folkestone-64. You are NOT watching engine.core's tick orchestrator —
-// it is registered in the module registry, but this binary never
-// constructs a core.Engine, and nothing on screen would look any
-// different if it did. The two claims below are both true, both
-// valuable, and NOT the same claim:
+// FEAT-082 flipped this binary off StubEngine, so boot.go now constructs a
+// real core.Engine wired by the composition root (internal/engine/compose)
+// — the same compose.Wire the -headless driver reaches. Two claims are
+// still worth keeping distinct:
 //
-//   - PROVEN end to end, in this binary: int.protocol -> harness.stub ->
-//     ui.core -> ui.screen.map, with the module registry booting clean
-//     (every module stub / health ok).
-//   - PROVEN only in isolation, elsewhere: engine.core's determinism,
-//     via feat.detgate's gate, which builds its own Engine instances and
-//     never enters this package.
+//   - PROVEN end to end, in this binary: int.protocol -> engine.core ->
+//     ui.core -> ui.screen.map, with the module registry booting clean.
+//   - NOT yet proven here: the map screen RENDERING the simulated world.
+//     engine.core v1 serves exactly one view ("engine.status"); the map
+//     screen's "f1.viewport" Subscribe is issued and honestly rejected
+//     (ErrUnknownView) — so what you watch is an empty map, not a canned
+//     Folkestone-64 fixture. The real viewport rendering is the map
+//     screen's own follow-up, not this flip's scope.
 //
-// That is the correct intended state for Sprint 1 — M0-ENG §2's
-// stub-everything discipline says one module goes real at a time, and
-// engine.core is not supposed to drive anything yet. It is recorded
-// here, with its own heading, because "the Sprint 1 exit gate passed"
-// invites a stronger reading than the wiring supports, and a reader who
-// was not there when it was built has no way to see the difference.
-// Tracked as ASM-001 in the Book of Work; resolve when engine.core
-// actually drives this binary.
+// The walking-skeleton doc note that used to live here ("you are watching
+// StubEngine render Folkestone-64, not the tick orchestrator") was true
+// for Sprint 1 and is now resolved by FEAT-082/ASM-001: the tick
+// orchestrator really is wired into this binary.
 //
 // Module key: feat.skeleton (see code.json; GUID aedcd472-ec92-4d21-a0ff-4a5dcc7916f4)
 // Spec ref:   M0-ENG §6.4 (line 997); M0-ENG §2 (lines 842-851)

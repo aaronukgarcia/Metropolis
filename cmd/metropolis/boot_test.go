@@ -5,13 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
-	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
-	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
 // waitFor polls cond every millisecond for up to 2 seconds, failing the
@@ -89,48 +85,66 @@ func TestBootCore_DuplicateModuleRegistration_FailsCleanly(t *testing.T) {
 	}
 }
 
-// --- AC-1a / AC-5a: real protocol -> harness.stub -> ui.core ->
-// ui.screen.map wiring, driven entirely through int.protocol's own API,
-// nothing mocked ---
+// --- AC-1a / AC-5a: real protocol -> engine.core (via compose) ->
+// ui.core -> ui.screen.map wiring, driven entirely through int.protocol's
+// own API, nothing mocked ---
 
-// wellKnownFolkestoneCells mirrors internal/ui/screens/map/map_test.go's
-// own known-fixture assertions (this package deliberately does not import
-// internal/engine/stub outside tests, so it re-derives these facts rather
-// than reusing stub.GenerateFolkestone64 directly — see fixture.go for the
-// source of truth: shore band at y=0, "Folkestone Harbour Arm" at (5,3),
-// "Sandgate Road" at (8,5)).
-func TestIntegration_SubscribeRendersFolkestone64(t *testing.T) {
+// TestIntegration_RealEngineBootsAndServesEngineStatus proves the FEAT-082
+// flip: bootCore now constructs a real *enginecore.Engine wired by the
+// composition root, not harness.stub.StubEngine. The boot-time MapScreen
+// Subscribe ("f1.viewport") is now REJECTED by the real engine — v1 serves
+// only "engine.status" — which is the honest baseline-one state, and the
+// engine.status view IS served.
+func TestIntegration_RealEngineBootsAndServesEngineStatus(t *testing.T) {
 	reg := registry.NewRegistry()
-	w, err := bootCore("integration-render", reg)
+	w, err := bootCore("integration-real-engine", reg)
 	if err != nil {
 		t.Fatalf("bootCore: %v", err)
 	}
 	defer w.shutdown()
 
-	// AC-1a: wait for the real int.protocol Subscribe MapScreen issued in
-	// bootCore to land, via the real harness.stub -> ui.core.ViewsLoop
-	// path — no simulated keystrokes, no fake transport.
-	waitFor(t, func() bool { return len(w.viewStore.Front().Patches) > 0 })
-
-	draw := mapDrawFunc(w.mapScreen)
-	buf := core.NewBuffer(64, 64)
-	draw(buf, w.viewStore.Front())
-
-	waterColor := widgets.DefaultPalette.Color(widgets.TokenWater)
-	wantStyle := tcell.StyleDefault.Background(waterColor)
-
-	if got := buf.Get(10, 0); got.Rune != '~' || got.Style != wantStyle {
-		t.Errorf("cell (10,0) = %+v, want shore rune '~' style %+v", got, wantStyle)
+	if w.engine == nil {
+		t.Fatal("bootCore constructed a nil real engine — the FEAT-082 flip did not take")
 	}
-	if got := buf.Get(5, 3); got.Rune != '#' {
-		t.Errorf("cell (5,3) = %+v, want building rune '#' (Folkestone Harbour Arm)", got)
+
+	// The boot-time MapScreen Subscribe produces exactly one CommandResult;
+	// with the real engine, "f1.viewport" is not yet a served view, so it
+	// is rejected (the stub would have accepted it).
+	select {
+	case res := <-w.transport.Results():
+		if res.Accepted {
+			t.Fatalf("boot MapScreen.Subscribe (f1.viewport) was Accepted, want REJECTED by the real engine (v1 serves only engine.status)")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the boot Subscribe's CommandResult")
 	}
-	if got := buf.Get(8, 5); got.Rune != '+' {
-		t.Errorf("cell (8,5) = %+v, want road rune '+' (Sandgate Road)", got)
+
+	// The real engine serves "engine.status".
+	send := func(kind protocol.Kind, payload protocol.CommandPayload) protocol.CommandResult {
+		t.Helper()
+		cmd := protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   protocol.CorrelationID(errs.NewCorrelationID()),
+			Kind:            kind,
+			Payload:         payload,
+		}
+		if err := w.transport.SendCommand(cmd); err != nil {
+			t.Fatalf("SendCommand(%s): %v", kind, err)
+		}
+		select {
+		case res := <-w.transport.Results():
+			return res
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for a %s result", kind)
+			return protocol.CommandResult{}
+		}
+	}
+	if res := send(protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "engine.status"}); !res.Accepted {
+		t.Fatalf("engine.status Subscribe rejected by the real engine: %+v", res.Error)
 	}
 }
 
-func TestIntegration_CommandsExerciseStubEngineEndToEnd(t *testing.T) {
+func TestIntegration_CommandsExerciseRealEngineEndToEnd(t *testing.T) {
 	reg := registry.NewRegistry()
 	w, err := bootCore("integration-commands", reg)
 	if err != nil {
@@ -138,25 +152,11 @@ func TestIntegration_CommandsExerciseStubEngineEndToEnd(t *testing.T) {
 	}
 	defer w.shutdown()
 
-	// Learn F1's real SubscriptionID from the ViewStore ui.core.ViewsLoop
-	// publishes to (the sole entry — see mapDrawFunc's doc comment) rather
-	// than adding a second, competing reader of transport.Deltas(), which
-	// int.protocol documents as ViewsLoop's exclusive channel.
-	var subID protocol.SubscriptionID
-	waitFor(t, func() bool {
-		for id := range w.viewStore.Front().Patches {
-			subID = id
-		}
-		return subID != ""
-	})
-
 	// bootCore's own internal MapScreen.Subscribe call already produced
 	// exactly one CommandResult that nothing has read yet — drain it
 	// before this test starts correlating its own send()s 1:1 against
 	// Results(), or the very first send() below would receive THIS
-	// leftover result instead of its own (both happen to be Accepted, so
-	// the mismatch would silently desynchronize every following
-	// assertion instead of failing loudly).
+	// leftover result instead of its own.
 	select {
 	case <-w.transport.Results():
 	case <-time.After(2 * time.Second):
@@ -183,7 +183,7 @@ func TestIntegration_CommandsExerciseStubEngineEndToEnd(t *testing.T) {
 		}
 	}
 
-	beforeTick := w.stubEngine.Tick()
+	beforeTick := w.engine.TicksCompleted()
 
 	if res := send(protocol.KindPause, protocol.PausePayload{}); !res.Accepted {
 		t.Fatalf("Pause rejected: %+v", res.Error)
@@ -194,18 +194,14 @@ func TestIntegration_CommandsExerciseStubEngineEndToEnd(t *testing.T) {
 	if res := send(protocol.KindResume, protocol.ResumePayload{}); !res.Accepted {
 		t.Fatalf("Resume rejected: %+v", res.Error)
 	}
-	if got := w.stubEngine.Tick(); got != beforeTick {
+	if got := w.engine.TicksCompleted(); got != beforeTick {
 		t.Fatalf("Pause/SetSpeed/Resume advanced the tick: got %d, want unchanged %d", got, beforeTick)
 	}
 
 	if res := send(protocol.KindAdvanceTicks, protocol.AdvanceTicksPayload{N: 5}); !res.Accepted {
 		t.Fatalf("AdvanceTicks rejected: %+v", res.Error)
 	}
-	if got, want := w.stubEngine.Tick(), beforeTick+5; got != want {
-		t.Fatalf("Tick() after AdvanceTicks(5) = %d, want %d", got, want)
-	}
-
-	if res := send(protocol.KindUnsubscribe, protocol.UnsubscribePayload{SubscriptionID: subID}); !res.Accepted {
-		t.Fatalf("Unsubscribe(%s) rejected: %+v", subID, res.Error)
+	if got, want := w.engine.TicksCompleted(), beforeTick+5; got != want {
+		t.Fatalf("TicksCompleted() after AdvanceTicks(5) = %d, want %d", got, want)
 	}
 }

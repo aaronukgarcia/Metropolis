@@ -199,6 +199,12 @@ func TestPhaseHookCountAssertionStillTrue(t *testing.T) {
 		filepath.Join("internal", "engine", "core", "phase.go"):     true,
 		filepath.Join("internal", "engine", "core", "subscribe.go"): true,
 		filepath.Join("internal", "engine", "invariant", "wire.go"): true,
+		// FEAT-082: the composition root is now the one legitimate caller
+		// of RegisterPhaseHook for the real modules (plus
+		// invariant.WireDaily). It registers the baseline-one hook set into
+		// the SAME engine harness.headless.Run constructs, so it is the
+		// expected, sanctioned reference — not a new walking-skeleton leak.
+		filepath.Join("internal", "engine", "compose", "compose.go"): true,
 	}
 
 	found, err := scanForCallSites(root)

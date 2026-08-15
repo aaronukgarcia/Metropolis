@@ -96,14 +96,14 @@ func TestBootCore_DevConsole_GateAppliesInReleaseBuild(t *testing.T) {
 
 // TestBootCore_DevConsole_PauseWiredThroughRealTransport proves the
 // PauseFunc bootCore wired for devConsole actually issues a real
-// protocol.KindPause Command over the SAME transport StubEngine is
-// listening on (AC-DM2) — not a stub/no-op closure. It drives this
-// directly through debugState/devConsole's wired seams (bypassing the
-// RequireConsole gate, which the two tests above already cover
-// independently) so this test isolates the pause-wiring claim alone:
-// even with debug forced on for this one test, does the Pause command
-// the console's Open path issues actually reach and pause the real
-// StubEngine wired by bootCore?
+// protocol.KindPause Command over the SAME transport the real
+// core.Engine is listening on (AC-DM2) — not a stub/no-op closure. It
+// drives this directly through debugState/devConsole's wired seams
+// (bypassing the RequireConsole gate, which the two tests above already
+// cover independently) so this test isolates the pause-wiring claim
+// alone: even with debug forced on for this one test, does the Pause
+// command the console's Open path issues actually reach and pause the
+// real engine wired by bootCore?
 func TestBootCore_DevConsole_PauseWiredThroughRealTransport(t *testing.T) {
 	reg := registry.NewRegistry()
 	w, err := bootCore("devmode-pause", reg)
@@ -114,7 +114,7 @@ func TestBootCore_DevConsole_PauseWiredThroughRealTransport(t *testing.T) {
 
 	// bootCore's own internal MapScreen.Subscribe call already produced
 	// exactly one CommandResult nothing has read yet — drain it first,
-	// same as boot_test.go's TestIntegration_CommandsExerciseStubEngineEndToEnd,
+	// same as boot_test.go's TestIntegration_CommandsExerciseRealEngineEndToEnd,
 	// so the Pause result read below is unambiguously this test's own.
 	select {
 	case <-w.transport.Results():
@@ -150,9 +150,9 @@ func TestBootCore_DevConsole_PauseWiredThroughRealTransport(t *testing.T) {
 	select {
 	case res := <-w.transport.Results():
 		if !res.Accepted {
-			t.Fatalf("Pause command rejected by the real StubEngine: %+v", res.Error)
+			t.Fatalf("Pause command rejected by the real engine: %+v", res.Error)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the Pause command's CommandResult from the real StubEngine")
+		t.Fatal("timed out waiting for the Pause command's CommandResult from the real engine")
 	}
 }

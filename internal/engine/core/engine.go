@@ -366,6 +366,32 @@ func (e *Engine) WorldSeed() uint64 { return e.worldSeed }
 // PoolSize returns POOL-SIM's configured worker count.
 func (e *Engine) PoolSize() int { return e.poolSize }
 
+// HookCount returns the total number of PhaseHooks currently registered
+// across all phases. It is the runtime hook-count accessor the composition
+// root (internal/engine/compose) and its callers need to prove a run drove
+// real hooks rather than a walking-skeleton zero (BUG-034/ASM-422). This
+// is a boot-time diagnostic, NOT a tick-path call — it takes mu and ranges
+// e.hooks (a map) purely to sum lengths, so its iteration order cannot
+// reach simulation state (GR#21's map-range discipline applies to the tick
+// path, not to this count).
+func (e *Engine) HookCount() int {
+	// SEC-016/SEC-018 ordering: this acquires e.mu, so the identity check
+	// must run BEFORE the lock (a struct copy's mu can read as permanently
+	// locked if captured mid-lock on the original). Degrade to 0 on a copy
+	// rather than return an error, mirroring Tick()/Paused()'s shape — a
+	// copy can never legitimately reach a boot-time diagnostic.
+	if err := e.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "HookCount"}); err != nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	for _, hooks := range e.hooks {
+		n += len(hooks)
+	}
+	return n
+}
+
 // Clock returns a snapshot (copy) of the Engine's current clock state.
 // Safe for concurrent use; briefly takes mu.
 //

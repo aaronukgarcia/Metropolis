@@ -11,14 +11,15 @@ import (
 
 func measuredResult(preset string, perMonth time.Duration) synth.PerfResult {
 	return synth.PerfResult{
-		Preset:       preset,
-		CitizenCount: 1_000_000,
-		Seed:         1,
-		Months:       12,
-		TotalTicks:   360,
-		TickTime:     perMonth * 12,
-		PerMonthTick: perMonth,
-		Measured:     true,
+		Preset:         preset,
+		CitizenCount:   1_000_000,
+		Seed:           1,
+		Months:         12,
+		TotalTicks:     360,
+		TickTime:       perMonth * 12,
+		PerMonthTick:   perMonth,
+		PhaseHookCount: synth.PhaseHookCountInHeadlessPath(),
+		Measured:       true,
 	}
 }
 

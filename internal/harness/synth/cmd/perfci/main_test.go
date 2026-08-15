@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/harness/synth"
 )
 
@@ -189,7 +190,7 @@ func TestRun_AcceptedRegistryRescuesCouldNotEvaluate(t *testing.T) {
 	seed := synth.PerfRecord{
 		CommitHash: "seed",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	if err := synth.AppendResult(results, seed); err != nil {
 		t.Fatalf("seeding baseline: %v", err)
@@ -244,7 +245,7 @@ func TestRun_AcceptedRegistryEntryForADifferentCommitDoesNotRescue(t *testing.T)
 	seed := synth.PerfRecord{
 		CommitHash: "seed",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	if err := synth.AppendResult(results, seed); err != nil {
 		t.Fatalf("seeding baseline: %v", err)
@@ -298,7 +299,7 @@ func TestRun_AcceptedRegistryRescuesBelowNoiseFloorFirstRecordLock(t *testing.T)
 	belowFloorSeed := synth.PerfRecord{
 		CommitHash: "degenerate-seed-commit",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 0, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 0, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	if reason := belowFloorSeed.Result.ImplausibleReason(); reason != "" {
 		t.Fatalf("precondition failed: a below-noise-floor (PerMonthTick=0) record should be plausible, got reason %q", reason)
@@ -401,7 +402,7 @@ func TestFinishGate_RegressedRunIsNeverRecorded(t *testing.T) {
 	rec := synth.PerfRecord{
 		CommitHash: "regressed-commit",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 150 * time.Millisecond, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 150 * time.Millisecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	cmp := synth.BaselineComparison{HasBaseline: true, Regressed: true, Message: "REGRESSED (step): baseline=100ms current=150ms delta=50.0%"}
 
@@ -428,7 +429,7 @@ func TestFinishGate_PassingRunIsRecorded(t *testing.T) {
 	rec := synth.PerfRecord{
 		CommitHash: "pass-commit",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	cmp := synth.BaselineComparison{HasBaseline: true}
 
@@ -462,7 +463,7 @@ func TestRun_AcceptPathUsesDefaultRegistryPathWhenFlagOmitted(t *testing.T) {
 	seed := synth.PerfRecord{
 		CommitHash: "seed",
 		Preset:     "1M",
-		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, Measured: true},
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	if err := synth.AppendResult(results, seed); err != nil {
 		t.Fatalf("seeding baseline: %v", err)
@@ -475,6 +476,13 @@ func TestRun_AcceptPathUsesDefaultRegistryPathWhenFlagOmitted(t *testing.T) {
 	registry := `[{"preset": "1M", "commitHash": "default-path-commit", "reason": "default registry path works for CI jobs that omit the flag (ASM-375)"}]`
 	if err := os.WriteFile(filepath.Join(dir, "perf-accepted-regressions.json"), []byte(registry), 0o644); err != nil {
 		t.Fatalf("writing registry fixture: %v", err)
+	}
+	// FEAT-082: run() now drives a real composition (compose.Wire ->
+	// market.LoadDefault), which resolves the repo's data/ directory.
+	// chdir-ing into the temp dir breaks the cwd-upward search, so pin the
+	// data dir via the env var the resolver already honours BEFORE chdir.
+	if dataDir, err := data.ResolveDataDir("perfci-accept-path-test"); err == nil {
+		t.Setenv("METROPOLIS_DATA_DIR", dataDir)
 	}
 	t.Chdir(dir)
 

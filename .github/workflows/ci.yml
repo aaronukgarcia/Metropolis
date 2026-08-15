@@ -519,21 +519,19 @@ jobs:
   # measurement to a cancel would be its own silent-discard problem, and
   # this job's whole point is to produce a trustworthy measurement, not
   # merely the fastest one.
-  # BUG-034 GATE FLIP (Aaron's ruling, 2026-08-12): this job is no longer
-  # manual-only — it runs on every push/PR AND stays dispatchable, and it
-  # is a REQUIRED merge check. Exit semantics (Aaron's interview ruling,
-  # "warn now, hard-fail at S3"):
+  # BUG-034 GATE FLIP (Aaron's ruling, 2026-08-12; exit-3 hard-fail flipped
+  # by FEAT-082, 2026-08-15): this job is no longer manual-only — it runs on
+  # every push/PR AND stays dispatchable, and it is a REQUIRED merge check.
+  # Exit semantics:
   #   exit 1 (genuine regression)  — FAILS the job, blocks the merge.
   #   exit 2 (system/poisoned data) — FAILS the job, blocks the merge.
-  #   exit 3 (could-not-evaluate)  — passes WITH a loud ::warning::, for
-  #        now: at walking-skeleton scale (PhaseHookCount=0) PerMonthTick
-  #        sits below MinMeasurableDuration, so comparisons cannot
-  #        evaluate until S3's citizens work adds real tick cost. The
-  #        HARD-FAIL flip for exit 3 is a recorded, MANDATORY condition
-  #        of MOD-018's first real tick work landing (ASM-352, BUG-034)
-  #        — the moment there is a cost to protect, skipping becomes
-  #        failing. Do not remove the warning path without making that
-  #        flip.
+  #   exit 3 (could-not-evaluate)  — FAILS the job, blocks the merge.
+  #        FEAT-082 landed the composition root, so real phase hooks now
+  #        exist and there IS a cost to protect; the "warn now, hard-fail
+  #        at S3" interim expired (BUG-034/ASM-352's recorded mandatory
+  #        condition). The ::warning:: retained in the run step is a
+  #        diagnostic on the way to the non-zero exit, never a terminal
+  #        pass. perf-smoke's exit-3 warning is OUT of scope and stays.
   perf-1m-probe:
     runs-on: windows-latest
     timeout-minutes: 20
@@ -635,9 +633,12 @@ jobs:
 
           # BUG-034 gate semantics — see this job's header comment for
           # Aaron's ruling. This step's exit code IS the merge verdict.
+          # FEAT-082 (BUG-034/ASM-352): real phase hooks now exist, so a
+          # gate that cannot evaluate a real cost is a HARD failure, not a
+          # warning — exit 3 propagates as a non-zero job outcome. The
+          # ::warning:: is retained only as a diagnostic on the way down.
           if ($p.ExitCode -eq 3) {
-            Write-Host "::warning title=1M gate could not evaluate::perfci exited 3 (could-not-evaluate) at walking-skeleton scale -- expected until S3's citizens work adds real tick cost (PhaseHookCount is 0, PerMonthTick sits under MinMeasurableDuration). This passes WITH THIS WARNING for now; the hard-fail flip is a mandatory condition of MOD-018's first real tick work (BUG-034/ASM-352)."
-            exit 0
+            Write-Host "::warning title=1M gate could not evaluate::perfci exited 3 (could-not-evaluate). Real phase hooks now exist (FEAT-082), so a gate that cannot evaluate a real cost hard-fails the merge. Diagnostic: see the uploaded perf-results-1m-real.ndjson artifact and perfci stderr above."
           }
           exit $p.ExitCode
 

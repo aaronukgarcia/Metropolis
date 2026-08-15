@@ -27,7 +27,7 @@ func TestAppendResult_ResultSchema(t *testing.T) {
 	rec := PerfRecord{
 		CommitHash: "deadbeef",
 		Preset:     "1M",
-		Result:     PerfResult{Preset: "1M", CitizenCount: OneMillionCitizens, Months: 12, PerMonthTick: 42 * time.Millisecond, Measured: true},
+		Result:     PerfResult{Preset: "1M", CitizenCount: OneMillionCitizens, Months: 12, PerMonthTick: 42 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	if err := AppendResult(path, rec); err != nil {
 		t.Fatalf("AppendResult: %v", err)
@@ -55,8 +55,8 @@ func TestAppendResult_ResultSchema(t *testing.T) {
 func TestAppendResult_Appends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
-	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 110 * time.Millisecond, Measured: true}}
+	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 110 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, older); err != nil {
 		t.Fatalf("AppendResult(older): %v", err)
 	}
@@ -124,7 +124,7 @@ func TestLoadLatestBaseline_MissingFileIsNotAnError(t *testing.T) {
 // fresh scale preset has no prior baseline either, AC-8).
 func TestLoadLatestBaseline_NoMatchingPresetIsNotAnError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
-	if err := AppendResult(path, PerfRecord{CommitHash: "c1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, Measured: true}}); err != nil {
+	if err := AppendResult(path, PerfRecord{CommitHash: "c1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}); err != nil {
 		t.Fatalf("AppendResult: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestLoadLatestBaseline_CorruptFileIsAnError(t *testing.T) {
 func TestLoadLatestBaseline_UnrelatedPresetCorruptionDoesNotBlockFreshPreset(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	other := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	other := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, other); err != nil {
 		t.Fatalf("AppendResult(other): %v", err)
 	}
@@ -253,7 +253,7 @@ func TestLoadLatestBaseline_AmbiguousCorruptLineStillHardErrors(t *testing.T) {
 func TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	other := PerfRecord{CommitHash: "commit1", Preset: "10M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	other := PerfRecord{CommitHash: "commit1", Preset: "10M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, other); err != nil {
 		t.Fatalf("AppendResult(other): %v", err)
 	}
@@ -294,7 +294,7 @@ func TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors(t *test
 func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, older); err != nil {
 		t.Fatalf("AppendResult(older): %v", err)
 	}
@@ -323,7 +323,7 @@ func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 	// see TestLoadLatestBaseline_FreezesOnRegressionInsteadOfRatcheting
 	// below for that dedicated test, which needs a record that DOES
 	// exceed the threshold).
-	newer := PerfRecord{CommitHash: "commit3", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 105 * time.Millisecond, Measured: true}}
+	newer := PerfRecord{CommitHash: "commit3", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 105 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, newer); err != nil {
 		t.Fatalf("AppendResult(newer): %v", err)
 	}
@@ -362,7 +362,7 @@ func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 func TestLoadLatestBaseline_RejectsHandInjectedUnmeasuredRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, legit); err != nil {
 		t.Fatalf("AppendResult(legit): %v", err)
 	}
@@ -434,7 +434,7 @@ func TestLoadLatestBaseline_RecoversPastAnOversizedLine(t *testing.T) {
 	}
 
 	// A genuinely later, valid, Measured record.
-	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 77 * time.Millisecond, Measured: true}}
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 77 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, newer); err != nil {
 		t.Fatalf("AppendResult(newer): %v", err)
 	}
@@ -523,7 +523,7 @@ func TestLoadLatestBaseline_CatchesRatchetByInches(t *testing.T) {
 		rec := PerfRecord{
 			CommitHash: fmt.Sprintf("commit%d", i+1),
 			Preset:     "1M",
-			Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: current, Measured: true},
+			Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: current, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 		}
 		if err := AppendResult(path, rec); err != nil {
 			t.Fatalf("AppendResult(step %d, value=%v): %v", i+1, current, err)
@@ -599,7 +599,7 @@ func TestLoadLatestBaseline_CatchesRatchetByInches(t *testing.T) {
 func TestLoadLatestBaseline_FreezesOnSingleRegressionInsteadOfRatcheting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	good := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	good := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, good); err != nil {
 		t.Fatalf("AppendResult(good): %v", err)
 	}
@@ -609,7 +609,7 @@ func TestLoadLatestBaseline_FreezesOnSingleRegressionInsteadOfRatcheting(t *test
 	// ci.yml's perf-smoke job does today: AppendResult runs before the
 	// exit code is returned, and the `if: always()` cache-save step
 	// persists it regardless of the job's own pass/fail result.
-	regressed := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 150 * time.Millisecond, Measured: true}}
+	regressed := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 150 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, regressed); err != nil {
 		t.Fatalf("AppendResult(regressed): %v", err)
 	}
@@ -639,9 +639,9 @@ func TestAppendResult_RejectsImplausibleNegativeValues(t *testing.T) {
 		name   string
 		result PerfResult
 	}{
-		{"negative CitizenCount", PerfResult{CitizenCount: -1, Months: 3, PerMonthTick: 10 * time.Millisecond, Measured: true}},
-		{"negative Months", PerfResult{CitizenCount: 1000, Months: -5, PerMonthTick: 10 * time.Millisecond, Measured: true}},
-		{"negative PerMonthTick", PerfResult{CitizenCount: 1000, Months: 3, PerMonthTick: -1 * time.Hour, Measured: true}},
+		{"negative CitizenCount", PerfResult{CitizenCount: -1, Months: 3, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}},
+		{"negative Months", PerfResult{CitizenCount: 1000, Months: -5, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}},
+		{"negative PerMonthTick", PerfResult{CitizenCount: 1000, Months: 3, PerMonthTick: -1 * time.Hour, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -664,7 +664,7 @@ func TestAppendResult_RejectsImplausibleNegativeValues(t *testing.T) {
 // AppendResult entirely (Measured=true, so BUG-073's check alone would
 // accept it) but carrying a negative CitizenCount/Months/PerMonthTick —
 // live-verified: PerfResult{CitizenCount: -1, Months: -5,
-// PerMonthTick: -1h, Measured: true} was accepted as the trusted
+// PerMonthTick: -1h, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true} was accepted as the trusted
 // baseline with err == nil and zero CorruptLine entries before this
 // fix. RED against the pre-BUG-085 LoadLatestBaseline (would return
 // the fabricated negative-valued record); GREEN against the fix, which
@@ -673,12 +673,12 @@ func TestAppendResult_RejectsImplausibleNegativeValues(t *testing.T) {
 func TestLoadLatestBaseline_RejectsHandInjectedImplausibleRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: 1000, Months: 3, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: 1000, Months: 3, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, legit); err != nil {
 		t.Fatalf("AppendResult(legit): %v", err)
 	}
 
-	fabricated := PerfRecord{CommitHash: "attacker", Preset: "1M", Result: PerfResult{CitizenCount: -1, Months: -5, PerMonthTick: -1 * time.Hour, Measured: true}}
+	fabricated := PerfRecord{CommitHash: "attacker", Preset: "1M", Result: PerfResult{CitizenCount: -1, Months: -5, PerMonthTick: -1 * time.Hour, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	data, err := json.Marshal(fabricated)
 	if err != nil {
 		t.Fatalf("marshalling fabricated record: %v", err)
@@ -718,7 +718,7 @@ func TestAppendResult_RejectsUnjustifiedAcceptedRegression(t *testing.T) {
 	rec := PerfRecord{
 		CommitHash:         "commit1",
 		Preset:             "1M",
-		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 200 * time.Millisecond, Measured: true},
+		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 200 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 		AcceptedRegression: true,
 		// AcceptedReason deliberately left empty.
 	}
@@ -745,7 +745,7 @@ func TestAppendResult_RejectsUnjustifiedAcceptedRegression(t *testing.T) {
 func TestLoadLatestBaseline_HonorsRegistryCorroboratedAcceptedRegression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	original := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	original := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, original); err != nil {
 		t.Fatalf("AppendResult(original): %v", err)
 	}
@@ -753,7 +753,7 @@ func TestLoadLatestBaseline_HonorsRegistryCorroboratedAcceptedRegression(t *test
 	accepted := PerfRecord{
 		CommitHash:         "commit2",
 		Preset:             "1M",
-		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 300 * time.Millisecond, Measured: true}, // +200%, a genuine regression
+		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 300 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}, // +200%, a genuine regression
 		AcceptedRegression: true,
 		AcceptedReason:     "engine.core gained a real phase hook this commit; the slowdown is expected and reviewed",
 	}
@@ -806,7 +806,7 @@ func TestLoadLatestBaseline_RejectsUncorroboratedAcceptedRegression(t *testing.T
 		rec := PerfRecord{
 			CommitHash: fmt.Sprintf("genuine%d", i+1),
 			Preset:     "1M",
-			Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: ms * time.Millisecond, Measured: true},
+			Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: ms * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 		}
 		if err := AppendResult(path, rec); err != nil {
 			t.Fatalf("AppendResult(genuine %d): %v", i+1, err)
@@ -820,7 +820,7 @@ func TestLoadLatestBaseline_RejectsUncorroboratedAcceptedRegression(t *testing.T
 	forged := PerfRecord{
 		CommitHash:         "attacker-commit",
 		Preset:             "1M",
-		Result:             PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 6 * time.Millisecond, Measured: true},
+		Result:             PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 6 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 		AcceptedRegression: true,
 		AcceptedReason:     "reviewed by aaron, approved cumulative drift",
 	}
@@ -848,7 +848,7 @@ func TestLoadLatestBaseline_RejectsUncorroboratedAcceptedRegression(t *testing.T
 	// shape to the real history — must still compare as NOT regressed
 	// against the reconstructed baseline/anchor, proving the forged
 	// record did not poison future comparisons either.
-	genuineFollowUp := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 19 * time.Millisecond, Measured: true}
+	genuineFollowUp := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 19 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}
 	cmp := CompareToBaseline(got, anchor, genuineFollowUp)
 	if cmp.Regressed {
 		t.Fatalf("CompareToBaseline(reconstructed baseline/anchor, genuine unregressed 19ms run) = %+v, want Regressed=false — BUG-095: a real, unregressed commit must never be forced to fail because of an uncorroborated forged acceptance record", cmp)
@@ -864,7 +864,7 @@ func TestLoadLatestBaseline_RejectsUncorroboratedAcceptedRegression(t *testing.T
 func TestLoadLatestBaseline_RejectsHandInjectedUnjustifiedAcceptedRegression(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, Measured: true}}
+	legit := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, legit); err != nil {
 		t.Fatalf("AppendResult(legit): %v", err)
 	}
@@ -872,7 +872,7 @@ func TestLoadLatestBaseline_RejectsHandInjectedUnjustifiedAcceptedRegression(t *
 	fabricated := PerfRecord{
 		CommitHash:         "attacker",
 		Preset:             "1M",
-		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 999 * time.Millisecond, Measured: true},
+		Result:             PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 999 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 		AcceptedRegression: true,
 		// AcceptedReason deliberately left empty — bypassing
 		// AppendResult's write-boundary check.
@@ -919,8 +919,8 @@ func TestAppendResult_RejectsZeroValuedCitizenCountAndMonths(t *testing.T) {
 		name   string
 		result PerfResult
 	}{
-		{"zero CitizenCount", PerfResult{CitizenCount: 0, Months: 3, PerMonthTick: 10 * time.Millisecond, Measured: true}},
-		{"zero Months", PerfResult{CitizenCount: 1000, Months: 0, PerMonthTick: 10 * time.Millisecond, Measured: true}},
+		{"zero CitizenCount", PerfResult{CitizenCount: 0, Months: 3, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}},
+		{"zero Months", PerfResult{CitizenCount: 1000, Months: 0, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -959,7 +959,7 @@ func TestLoadLatestBaseline_LineOverMaxBytesIsCorruptAndRecoverable(t *testing.T
 		t.Fatalf("writing over-ceiling line: %v", err)
 	}
 
-	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 77 * time.Millisecond, Measured: true}}
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 77 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, newer); err != nil {
 		t.Fatalf("AppendResult(newer): %v", err)
 	}

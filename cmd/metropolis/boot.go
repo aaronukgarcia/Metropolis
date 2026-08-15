@@ -4,8 +4,9 @@ import (
 	"context"
 	"sync"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
+	enginecore "github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
-	"github.com/aaronukgarcia/Metropolis/internal/engine/stub"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -93,7 +94,7 @@ type skeletonWiring struct {
 	correlationID string
 	registry      *registry.Registry
 	transport     *protocol.InProcTransport
-	stubEngine    *stub.StubEngine
+	engine        *enginecore.Engine
 	viewStore     *core.ViewStore
 	viewsLoop     *core.ViewsLoop
 	mapScreen     *mapscreen.MapScreen
@@ -130,8 +131,9 @@ type skeletonWiring struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// engineRunErr is StubEngine.Run's return value (BUG-020). It is
-	// written exactly once, by the Run goroutine started in bootCore,
+	// engineRunErr is core.Engine.RunCommandLoop's return value (the
+	// BUG-020 discipline, carried over from the StubEngine-era boot). It
+	// is written exactly once, by the Run goroutine started in bootCore,
 	// before that goroutine closes engineDone (below). engineDone's
 	// close-then-receive is the happens-before edge that makes this field
 	// safe to read from any goroutine once engineDone has been observed
@@ -141,12 +143,13 @@ type skeletonWiring struct {
 	// engineDone closes). Reading it any earlier is a data race and a
 	// logic error: the Run goroutine may not have exited yet.
 	//
-	// Before BUG-020, this value was discarded outright (`_ =
-	// engine.Run(ctx)`), so nothing distinguished Commands() closing
-	// prematurely (codePrematureCommandsClose, MET-P094) from ctx
-	// cancellation's clean ctx.Err() exit. EngineRunErr (below) is how a
-	// caller — today, run.go's logEngineShutdown, and BUG-020's own
-	// regression test — observes it instead.
+	// RunCommandLoop returns nil on a clean ctx-cancelled shutdown and
+	// core.ErrPrematureCommandsClose (MET-E014) when Commands() closes out
+	// from under it while ctx is still live — the same
+	// clean-shutdown-vs-premature-close distinction BUG-020 first fixed
+	// for StubEngine.Run. EngineRunErr (below) is how a caller — today,
+	// run.go's logEngineShutdown, and BUG-020's own regression test —
+	// observes it instead of discarding it.
 	engineRunErr error
 
 	// engineDone is closed the instant the Run goroutine returns,
@@ -162,10 +165,11 @@ type skeletonWiring struct {
 	engineDone chan struct{}
 }
 
-// EngineRunErr returns the error StubEngine.Run exited with (BUG-020).
-// Only meaningful after engineDone has been observed closed (directly, or
-// via shutdown() having returned) — see engineRunErr's doc comment for why
-// reading it any earlier races the still-running Run goroutine.
+// EngineRunErr returns the error core.Engine.RunCommandLoop exited with
+// (BUG-020, carried over to the real engine). Only meaningful after
+// engineDone has been observed closed (directly, or via shutdown() having
+// returned) — see engineRunErr's doc comment for why reading it any
+// earlier races the still-running Run goroutine.
 func (w *skeletonWiring) EngineRunErr() error { return w.engineRunErr }
 
 // newBootRegistry constructs the registry.Registry bootCore registers
@@ -175,21 +179,24 @@ func (w *skeletonWiring) EngineRunErr() error { return w.engineRunErr }
 // run() itself, not just bootCore directly (see run_test.go).
 var newBootRegistry = func() *registry.Registry { return registry.NewRegistry() }
 
-// bootCore wires int.protocol + harness.stub + ui.core + ui.screen.map +
-// the module registry (AC-1a/AC-2/AC-5a) and starts StubEngine.Run and
-// ui.core.ViewsLoop.Run as background goroutines. It does not touch a
-// tcell.Screen — see run.go's bootScreen/runInteractive for the
-// screen-dependent half, kept separate so a screen-construction failure
-// (AC-7's "e.g. no compatible terminal") never leaves engine/protocol
-// goroutines dangling: callers must call (*skeletonWiring).shutdown() on
-// any returned wiring, whether or not screen construction afterward
-// succeeds.
+// bootCore wires int.protocol + engine.core (via the composition root) +
+// ui.core + ui.screen.map + the module registry (AC-1a/AC-2/AC-5a) and
+// starts core.Engine.RunCommandLoop and ui.core.ViewsLoop.Run as
+// background goroutines. It does not touch a tcell.Screen — see run.go's
+// bootScreen/runInteractive for the screen-dependent half, kept separate
+// so a screen-construction failure (AC-7's "e.g. no compatible terminal")
+// never leaves engine/protocol goroutines dangling: callers must call
+// (*skeletonWiring).shutdown() on any returned wiring, whether or not
+// screen construction afterward succeeds.
 //
-// Any failure here — module registration, StubEngine construction, or
-// MapScreen's initial Subscribe — is returned as a registry-sourced
-// MET-E900 *errs.E (AC-7); bootCore never returns a partially-started
-// skeletonWiring on error (any goroutines it already started are stopped
-// and waited on before returning).
+// FEAT-082: this is the flip off StubEngine onto the real core.Engine,
+// wired by internal/engine/compose (AC-12/AC-13 of
+// feat.compositionroot) — the same compose.Wire the headless driver
+// reaches. Any failure here — module registration, the composition root's
+// wiring (e.g. market.LoadDefault), or MapScreen's initial Subscribe — is
+// returned as a registry-sourced MET-E900 *errs.E (AC-7); bootCore never
+// returns a partially-started skeletonWiring on error (any goroutines it
+// already started are stopped and waited on before returning).
 func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, error) {
 	if err := registerSkeletonModules(reg, correlationID); err != nil {
 		return nil, err
@@ -200,20 +207,33 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
 	)
 
-	engine, err := stub.NewStubEngine(transport)
-	if err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// BUG-122: construct feat.debugmode's State first so its AllowSpeed8x
+	// method can be injected as the real Engine's Speed8xGate (the same
+	// wiring headless.Run uses), then wire feat.devmode's Console against
+	// it — see the debugState/devConsole field doc comment for why no
+	// header is wired and what that means for Enable today.
+	dbgState := debug.NewState()
+
+	// FEAT-082: build the real engine and wire the baseline-one hook set
+	// through the single composition path (AC-12/AC-13). A wiring failure
+	// (e.g. market.LoadDefault cannot resolve data/market.json) is a loud
+	// boot failure, never a partially-wired engine.
+	engine := enginecore.NewEngine(enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x))
+	if _, err := compose.Wire(engine, nil); err != nil {
+		cancel()
+		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
-			"component": "harness.stub",
+			"component": "engine.compose",
 		})
 	}
-
-	ctx, cancel := context.WithCancel(context.Background())
 
 	w := &skeletonWiring{
 		correlationID: correlationID,
 		registry:      reg,
 		transport:     transport,
-		stubEngine:    engine,
+		engine:        engine,
 		viewStore:     core.NewViewStore(),
 		mapScreen:     mapscreen.NewMapScreen(correlationID, widgets.DefaultPalette),
 		ctx:           ctx,
@@ -221,14 +241,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		engineDone:    make(chan struct{}),
 	}
 	w.viewsLoop = core.NewViewsLoop(transport, w.viewStore, correlationID)
-
-	// BUG-122: construct feat.debugmode's State and wire feat.devmode's
-	// Console against it, following the exact seam-injection pattern
-	// console.go documents (each Option closes over one *debug.State
-	// method, never a devmode-local reimplementation) — see the
-	// debugState/devConsole field doc comment above for why no header is
-	// wired and what that means for Enable today.
-	w.debugState = debug.NewState()
+	w.debugState = dbgState
 	w.devConsole = devmode.New(
 		devmode.WithRequireConsole(w.debugState.RequireConsole),
 		devmode.WithEnable(func(cid string) error {
@@ -244,7 +257,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	w.wg.Add(2)
 	go func() {
 		defer w.wg.Done()
-		w.engineRunErr = engine.Run(ctx)
+		w.engineRunErr = engine.RunCommandLoop(ctx, transport)
 		close(w.engineDone)
 	}()
 	go func() { defer w.wg.Done(); w.viewsLoop.Run(ctx.Done()) }()
@@ -252,7 +265,11 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's
 	// real, already-accepted Subscribe method — internal/ui/screens/map's
 	// own public API — never a hand-rolled Command literal standing in
-	// for it).
+	// for it). With the real engine, "f1.viewport" is not yet a served view
+	// (v1 serves "engine.status" only), so this Subscribe is issued and the
+	// engine rejects it — the honest baseline-one state, recorded here: the
+	// map screen's real viewport rendering is its own follow-up, not this
+	// flip's scope.
 	if err := w.mapScreen.Subscribe(transport.SendCommand); err != nil {
 		w.shutdown()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
@@ -270,7 +287,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 // hand-rolled bypass of int.protocol's envelope. It does not wait for or
 // interpret the returned CommandResult: devmode.PauseFunc's contract
 // (console.go) is "report an error if the pause request itself could not
-// be issued," and StubEngine.handlePause (internal/engine/stub/engine.go)
+// be issued," and core.Engine.handlePause (internal/engine/core/commands.go)
 // has no rejection branch for a well-formed Pause — the same
 // fire-and-let-Validate-be-the-only-failure-mode posture bootCore's own
 // mapScreen.Subscribe call above already uses.

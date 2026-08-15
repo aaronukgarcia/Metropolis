@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -92,6 +93,14 @@ type Result struct {
 	// Run returned successfully.
 	TicksAdvanced int64
 
+	// PhaseHookCount is the number of PhaseHooks registered against the
+	// engine this run drove (read from core.Engine.HookCount() after the
+	// composition root wired it). It travels WITH the run so a consumer of
+	// TicksAdvanced never mistakes a walking-skeleton zero for a real
+	// simulation (BUG-034/ASM-422 — the runtime accessor
+	// PhaseHookCountInHeadlessPath's own doc comment recommended).
+	PhaseHookCount int
+
 	// ScenarioCommands is the number of scenario-script commands sent and
 	// accepted before tick advancement began (0 if Config.ScenarioPath
 	// was empty).
@@ -166,6 +175,16 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 	e := core.NewEngine(opts...)
 
+	// FEAT-082 (ASM-001/ASM-421): every headless/perfci/synth run now
+	// drives a REAL simulation through the composition root, not a
+	// zero-hook walking skeleton. compose.Wire is the single wiring path
+	// (AC-1/AC-13 of feat.compositionroot); a wiring failure (e.g.
+	// market.LoadDefault cannot load data/market.json) aborts the run with
+	// a registry-sourced error before any tick advances.
+	if _, err := compose.Wire(e, nil); err != nil {
+		return Result{}, err
+	}
+
 	if cfg.Debug {
 		if err := dbgState.Enable(debug.SourceFlag, correlationID); err != nil {
 			return Result{}, err
@@ -237,6 +256,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		Header:           header,
 		TicksAdvanced:    ticksAdvanced,
 		ScenarioCommands: scenarioCommands,
+		PhaseHookCount:   e.HookCount(),
 		ReportWriteErr:   rw.err,
 	}, nil
 }

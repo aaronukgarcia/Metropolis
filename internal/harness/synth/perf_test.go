@@ -93,7 +93,7 @@ func TestRunPerf_MultipleMonthsAccumulatesTicks(t *testing.T) {
 // (would return "" for a 10s PerMonthTick); GREEN against the fix, which
 // rejects anything over MaxPlausiblePerMonthTick (limits.go).
 func TestImplausibleReason_RejectsGiganticPerMonthTick(t *testing.T) {
-	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 10 * time.Second, Measured: true}
+	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 10 * time.Second, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}
 	if reason := r.ImplausibleReason(); reason == "" {
 		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for a 10s PerMonthTick (BUG-096: no upper sanity ceiling)")
 	}
@@ -106,7 +106,7 @@ func TestImplausibleReason_RejectsGiganticPerMonthTick(t *testing.T) {
 // ceiling — BUG-096's fix must not become BUG-031's mistake in reverse
 // (an absolute ceiling picked too tight for a real, if slow, measurement).
 func TestImplausibleReason_AllowsRealisticPerMonthTick(t *testing.T) {
-	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 500 * time.Millisecond, Measured: true}
+	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 500 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}
 	if reason := r.ImplausibleReason(); reason != "" {
 		t.Fatalf("ImplausibleReason() = %q, want \"\" for a realistic (if slow) 500ms PerMonthTick", reason)
 	}
@@ -192,7 +192,7 @@ func TestLoadLatestBaseline_GiganticFirstRecordNoLongerSilentlySeeds(t *testing.
 	gigantic := PerfRecord{
 		CommitHash: "corrupted-or-planted",
 		Preset:     "1M",
-		Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 10 * time.Second, Measured: true},
+		Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 10 * time.Second, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 	}
 	err := AppendResult(path, gigantic)
 	wantCode(t, err, codeImplausibleResult)
@@ -205,7 +205,7 @@ func TestLoadLatestBaseline_GiganticFirstRecordNoLongerSilentlySeeds(t *testing.
 // plausible and could be persisted as a trusted baseline. RED against the
 // pre-fix ImplausibleReason (returns ""); GREEN against the fix.
 func TestImplausibleReason_RejectsZeroValuedCitizenCount(t *testing.T) {
-	r := PerfResult{CitizenCount: 0, Months: 3, PerMonthTick: 10 * time.Millisecond, Measured: true}
+	r := PerfResult{CitizenCount: 0, Months: 3, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}
 	if reason := r.ImplausibleReason(); reason == "" {
 		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for CitizenCount=0 (ASM-374: zero is as structurally impossible as negative)")
 	}
@@ -213,7 +213,7 @@ func TestImplausibleReason_RejectsZeroValuedCitizenCount(t *testing.T) {
 
 // TestImplausibleReason_RejectsZeroValuedMonths is ASM-374's Months half.
 func TestImplausibleReason_RejectsZeroValuedMonths(t *testing.T) {
-	r := PerfResult{CitizenCount: 1000, Months: 0, PerMonthTick: 10 * time.Millisecond, Measured: true}
+	r := PerfResult{CitizenCount: 1000, Months: 0, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}
 	if reason := r.ImplausibleReason(); reason == "" {
 		t.Fatal("ImplausibleReason() = \"\", want a non-empty reason for Months=0 (ASM-374)")
 	}
@@ -226,7 +226,7 @@ func TestImplausibleReason_RejectsZeroValuedMonths(t *testing.T) {
 // so widening the CitizenCount/Months checks must NOT also reject a zero
 // PerMonthTick.
 func TestImplausibleReason_AllowsZeroPerMonthTick(t *testing.T) {
-	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 0, Measured: true}
+	r := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 0, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}
 	if reason := r.ImplausibleReason(); reason != "" {
 		t.Fatalf("ImplausibleReason() = %q, want \"\" for a zero PerMonthTick (a real, degenerate walking-skeleton measurement)", reason)
 	}

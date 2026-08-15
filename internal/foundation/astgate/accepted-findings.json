@@ -718,5 +718,9 @@
   {
     "finding": "internal/engine/projections/projections.go|*ProjectionsAPI|field access chain|Curve|p.ledger|*ProjectionsAPI.ledger",
     "reason": "SEC-049's field-access enumeration over-approximates: Curve's body contains zero references to p.ledger -- it touches p.providers/p.decisions/p.currentMonth. No field-then-method access chain exists here. Mirrors invariant/hook.go hardFail's h.registry precedent."
+  },
+  {
+    "finding": "internal/engine/core/engine.go|*Engine|field access chain|HookCount|e.subs|*Engine.subs",
+    "reason": "SEC-049's field-access enumeration over-approximates: HookCount (added by FEAT-082's composition-root runtime accessor, ASM-422) contains zero references to e.subs -- it reads e.hooks only. The receiver-method path is already guarded by the e.checkNotCopied(...) pre-lock check, and this field-access-chain entry is the same per-field over-approximation every other Engine method (Registry, WorldSeed, PoolSize, Clock, RegisterPhaseHook, seal, AdvanceTicks) carries for the e.subs chain. No field-then-method access chain exists here."
   }
 ]
