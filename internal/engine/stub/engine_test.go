@@ -101,6 +101,14 @@ func wellFormedPayload(kind protocol.Kind, subID protocol.SubscriptionID) protoc
 		return protocol.InspectEntityPayload{EntityRef: "citizen:1"}
 	case protocol.KindDebug:
 		return protocol.DebugPayload{Op: "noop"}
+	case protocol.KindBuy:
+		return protocol.BuyPayload{Cell: protocol.CellRef{X: 3, Y: 7}}
+	case protocol.KindZone:
+		return protocol.ZonePayload{Cell: protocol.CellRef{X: 4, Y: 9}, ZoneType: "Dwelling"}
+	case protocol.KindBuild:
+		return protocol.BuildPayload{Cell: protocol.CellRef{X: 5, Y: 11}, BuildingType: "house.small"}
+	case protocol.KindDemolish:
+		return protocol.DemolishPayload{Cell: protocol.CellRef{X: 6, Y: 13}}
 	default:
 		panic("wellFormedPayload: unhandled kind " + string(kind))
 	}

@@ -40,6 +40,19 @@ const (
 	KindUnsubscribe   Kind = "Unsubscribe"
 	KindInspectEntity Kind = "InspectEntity"
 	KindDebug         Kind = "Debug"
+
+	// Gameplay command kinds (added per the additive extension rule in the
+	// header): the build-screen vocabulary ui.screen.build (FEAT-015) needs
+	// to issue land purchase, zoning, construction, and demolition. Each
+	// carries only command INTENT — what/where/which — so a future engine
+	// module (engine.build) can act on it; accept/reject, pricing and
+	// compensation are the engine's, out of this package's scope. Do NOT
+	// route gameplay intent through KindDebug's Op/Args — Debug is the
+	// debug-mode escape hatch (F12 panel), not a gameplay catch-all.
+	KindBuy      Kind = "Buy"
+	KindZone     Kind = "Zone"
+	KindBuild    Kind = "Build"
+	KindDemolish Kind = "Demolish"
 )
 
 // AdvanceTicksPayload requests the engine advance the simulation by N
@@ -128,6 +141,73 @@ type DebugPayload struct {
 
 func (DebugPayload) commandKind() Kind { return KindDebug }
 
+// CellRef addresses one map cell by its (x, y) grid coordinates. It is
+// the protocol's cell-addressing primitive for the gameplay commands
+// (Buy, Zone, Build, Demolish) that target a specific cell. Coordinates
+// are zero-based grid offsets, matching the {x, y} cell shape the
+// f1.viewport patch already uses (internal/engine/stub/viewport.go) — the
+// wire shape is repeated here, not imported, because this package is
+// neutral ground (doc.go) and may not depend on engine or UI types.
+// Bounds (negative / out-of-grid) and ownership are NOT validated here —
+// they are the receiving engine module's job, same as every other
+// payload's internal invariants (Command.Validate's scope, envelope.go).
+type CellRef struct {
+	X int `json:"x"`
+	Y int `json:"y"`
+}
+
+// BuyPayload requests the purchase of one map cell (§7: "player buys
+// before building"; §13-F3 land purchase). It carries only WHICH cell —
+// the price is computed and charged by the engine (engine.finance's
+// LandPrice, consumed by engine.build per its AC-9), never by this
+// package, and any outcome is returned in the CommandResult, not carried
+// here. A multi-cell parcel purchase is expressed as one Buy command per
+// cell (the UI's choice — ui.screen.build BLD-1's "cell(s)/parcel").
+type BuyPayload struct {
+	Cell CellRef `json:"cell"`
+}
+
+func (BuyPayload) commandKind() Kind { return KindBuy }
+
+// ZonePayload zones one cell into one of §34's eight land types
+// (Dwelling, Shop, Office, Entertainment, Farming, Manufacturing, Heavy
+// Industry, Mining). ZoneType is an opaque, engine-defined string resolved
+// against engine.build's zone catalogue (loaded from buildings.json) —
+// deliberately a string, not an enum, so this neutral package never has to
+// know the catalogue and adding a zone type is a data edit, not a protocol
+// change (same rationale as InspectEntityPayload.EntityRef and
+// DebugPayload.Op).
+type ZonePayload struct {
+	Cell     CellRef `json:"cell"`
+	ZoneType string  `json:"zoneType"`
+}
+
+func (ZonePayload) commandKind() Kind { return KindZone }
+
+// BuildPayload requests construction of a catalogue building on one cell
+// (§13-F3 build queue). BuildingType is an opaque, engine-defined string
+// resolved against engine.build's buildings.json catalogue, exactly as
+// ZonePayload.ZoneType is resolved against the zone catalogue — the
+// materials bill, labour and lead time are the engine's, not carried here.
+type BuildPayload struct {
+	Cell         CellRef `json:"cell"`
+	BuildingType string  `json:"buildingType"`
+}
+
+func (BuildPayload) commandKind() Kind { return KindBuild }
+
+// DemolishPayload requests demolition of the structure on one cell
+// (§13-F3, §12's costed recovery). It carries only WHICH cell — the
+// compensation figure is computed by the engine (engine.finance, per
+// engine.build's AC-7) and returned in the CommandResult, not carried
+// here; a Demolish against a cell with no structure is the engine's
+// rejection to make, not this package's.
+type DemolishPayload struct {
+	Cell CellRef `json:"cell"`
+}
+
+func (DemolishPayload) commandKind() Kind { return KindDemolish }
+
 // commandRegistry maps every known Kind to a factory that returns a
 // fresh, zero-valued pointer to that Kind's payload type. codec.go uses
 // it to make decoding table-driven: an unrecognized Kind is a typed
@@ -147,6 +227,10 @@ var commandRegistry = map[Kind]func() CommandPayload{
 	KindUnsubscribe:   func() CommandPayload { return &UnsubscribePayload{} },
 	KindInspectEntity: func() CommandPayload { return &InspectEntityPayload{} },
 	KindDebug:         func() CommandPayload { return &DebugPayload{} },
+	KindBuy:           func() CommandPayload { return &BuyPayload{} },
+	KindZone:          func() CommandPayload { return &ZonePayload{} },
+	KindBuild:         func() CommandPayload { return &BuildPayload{} },
+	KindDemolish:      func() CommandPayload { return &DemolishPayload{} },
 }
 
 // KnownKinds returns the registered command Kinds, for diagnostics and

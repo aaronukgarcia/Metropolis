@@ -361,6 +361,8 @@ func (s *StubEngine) handle(cmd protocol.Command) {
 		result = s.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		result = s.handleDebug(cmd)
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish:
+		result = s.handleGameplay(cmd)
 	default:
 		// Defensive: see codes.go's codeUnknownKind doc. Every Kind that
 		// reaches here already passed commandRegistry, so this branch
@@ -608,6 +610,28 @@ func (s *StubEngine) handleDebug(cmd protocol.Command) protocol.CommandResult {
 		CorrelationID: cmd.CorrelationID,
 	})
 	return s.acceptAt(cmd, tick)
+}
+
+// handleGameplay accepts the four gameplay-intent commands (Buy, Zone,
+// Build, Demolish — added to the protocol vocabulary by the ASM-485
+// extension, internal/protocol/commands.go) as no-ops. The stub computes
+// nothing and owns no build/finance/ownership state to accept or reject
+// against, so it cannot adjudicate BLD-7's "engine rejects and the reason
+// surfaces" path — that is engine.build/engine.finance's job when those
+// modules land. Accepting rather than falling through to codeUnknownKind
+// is required by AC-2 (TestStubEngine_AllKnownKindsHandled asserts every
+// protocol.KnownKinds() kind is handled) and is the only response that
+// keeps BUG-039's invariant intact: a no-op accept mutates no engine
+// state and never touches the shared World fixture.
+func (s *StubEngine) handleGameplay(cmd protocol.Command) protocol.CommandResult {
+	// SEC-020 wave 2: identity-checked before accepting — a command-based
+	// entry into s (via handle()'s switch), so it carries the same copy
+	// guard as every other handleXxx method (defence in depth on top of
+	// handle()'s entry-point check and Tick()'s own guard).
+	if err := s.checkNotCopied(string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind)}); err != nil {
+		return errRefResult(cmd, err)
+	}
+	return s.acceptAt(cmd, s.Tick())
 }
 
 // advanceSubscriptionScriptLocked pushes sub's next scripted delta, if

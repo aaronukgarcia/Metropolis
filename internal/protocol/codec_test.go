@@ -75,6 +75,34 @@ func fixtureCommands(t *testing.T) map[Kind]Command {
 			Kind:            KindDebug,
 			Payload:         DebugPayload{Op: "force-unlock-tier", Args: map[string]string{"tier": "7"}},
 		},
+		KindBuy: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    106,
+			Kind:            KindBuy,
+			Payload:         BuyPayload{Cell: CellRef{X: 3, Y: 7}},
+		},
+		KindZone: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    107,
+			Kind:            KindZone,
+			Payload:         ZonePayload{Cell: CellRef{X: 3, Y: 7}, ZoneType: "Dwelling"},
+		},
+		KindBuild: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    108,
+			Kind:            KindBuild,
+			Payload:         BuildPayload{Cell: CellRef{X: 3, Y: 7}, BuildingType: "house.small"},
+		},
+		KindDemolish: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    109,
+			Kind:            KindDemolish,
+			Payload:         DemolishPayload{Cell: CellRef{X: 3, Y: 7}},
+		},
 	}
 }
 

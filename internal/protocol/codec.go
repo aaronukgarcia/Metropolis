@@ -132,6 +132,14 @@ func derefCommandPayload(p CommandPayload) CommandPayload {
 		return *v
 	case *DebugPayload:
 		return *v
+	case *BuyPayload:
+		return *v
+	case *ZonePayload:
+		return *v
+	case *BuildPayload:
+		return *v
+	case *DemolishPayload:
+		return *v
 	default:
 		// Unreachable as long as commandRegistry and this switch are kept
 		// in sync (codec_test.go's TestKnownKindsRoundTrip catches drift).
