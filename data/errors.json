@@ -44,7 +44,7 @@
       "U300-U399": "reserved for ui.keys (internal/ui/keys, MOD-011: mnemonic-path Register conflicts (duplicate/prefix ambiguity), malformed keymap-profile fallback, keymap entries binding to an unregistered mnemonic path, palette parameterised-argument rejection, invalid mark-slot identifiers — third U-layer sub-range, since U000-U099/U100-U199/U200-U299 already belong to ui.core/ui.screen.map/ui.screen.debug). Checked against both this table AND `grep -rn \"MET-U3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U3xx code existed either place.",
       "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place.",
       "U400-U499": "reserved for feat.devmode (internal/ui/screens/devmode, FEAT-065: pause-anywhere dev console gate/open-state rejections — fourth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys). Checked against both this table AND `grep -rn \"MET-U4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U4xx code existed either place.",
-    "U500-U599": "reserved for ui.screen.demo (internal/ui/screens/demo, FEAT-018: F6 Demographics screen — malformed f6.population/f6.leisure/f6.housing/f6.commute patch handling, unknown/stale subscription-ID drops (SF-7/DEMO-9) — fifth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode. Checked against both this table AND `grep -rn \"MET-U5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U5xx code existed either place.",
+      "U500-U599": "reserved for ui.screen.demo (internal/ui/screens/demo, FEAT-018: F6 Demographics screen — malformed f6.population/f6.leisure/f6.housing/f6.commute patch handling, unknown/stale subscription-ID drops (SF-7/DEMO-9) — fifth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode. Checked against both this table AND `grep -rn \"MET-U5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U5xx code existed either place.",
       "H400-H499": "reserved for harness.metricsdash (internal/harness/metricsdash, FEAT-066/feat.metricsdash pending module-key confirmation ASM-451: read-only weakness/gate-status/lint/perf-CI dashboard aggregation and defect/query logging entry-point errors -- fifth H-layer sub-range, since H000-H099/H100-H199/H200-H299/H300-H399 already belong to harness.replay/ui.harness/harness.headless/harness.synth. Checked against both this table AND `grep -rn \"MET-H4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-H4xx code existed either place.",
       "U600-U699": "reserved for ui.screen.menu (internal/ui/screens/menu, FEAT-021: F10 Menu & saves screen -- malformed f10.session patch handling, unknown/stale subscription-ID drops, unrecognised-view rejection, save-root enumeration failure, keymap/layout profile-write failures, layout-editor-unavailable -- sixth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo. Checked against both this table AND `grep -rn \"MET-U6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U6xx code existed either place.",
       "U700-U799": "reserved for ui.screen.ticker (internal/ui/screens/ticker, FEAT-020: F9 Ticker & History screen -- malformed f9.ticker/f9.bulletin/f9.annual/f9.archive patch handling, unknown/stale subscription-ID drops, a story arriving with an empty eventId (TIK-5) -- seventh U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu. Checked against both this table AND `grep -rn \"MET-U7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U7xx code existed either place.",
@@ -57,10 +57,14 @@
       "G200-G299": "reserved for engine.finance (internal/engine/finance: the double-entry money ledger, land pricing, loans/credit-rating/insolvency, investments, and v1 SimpleFirm — MOD-022. Third G-layer engine claim after engine.citizens' G000-G099 and engine.projections' G100-G199; the E layer is fully exhausted and the code format was widened to four digits on 2026-08-14 (BUG-234) so three-digit codes remain the norm here. Checked against this table AND `grep -rn \"MET-G2\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G2xx code existed either place.)",
       "G300-G399": "reserved for engine.consumption (internal/engine/consumption: coefficient-driven demand from data/consumption.json, the four utility networks (water/wastewater/electricity/gas) with sources/edges/storage/losses, the conserved daily solve, the aquifer sustainable-yield ceiling, peak-vs-base load, the all-electric strategy, and household utility billing — MOD-021. Fourth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, and engine.finance's G200-G299; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G3\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G3xx code existed either place.)",
       "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)",
-    "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)",
-    "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)",
-    "G700-G799": "reserved for engine.attract (internal/engine/attract: the §11 attractiveness & migration master dial — the seven-term A score, the signed net-migration response g(A − A_world), the §4 static world pool, per-resident personality-weighted emigration, and the asymmetric reputation-momentum term — MOD-029/FEAT-083. Eighth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, engine.build's G500-G599, and engine.households' G600-G699; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G7\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G7xx code existed either place.)",
-    "G800-G899": "reserved for feat.compositionroot (internal/engine/compose: the composition root wiring the baseline-one hook set — already-composed/double-register rejection, a required module's construction/wiring failure, a silently-absent required module, and wire-after-seal. Ninth G-layer engine claim after engine.attract's G700-G799; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G8\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G8xx code existed either place.)"
+      "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)",
+      "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)",
+      "G700-G799": "reserved for engine.attract (internal/engine/attract: the §11 attractiveness & migration master dial — the seven-term A score, the signed net-migration response g(A − A_world), the §4 static world pool, per-resident personality-weighted emigration, and the asymmetric reputation-momentum term — MOD-029/FEAT-083. Eighth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, engine.build's G500-G599, and engine.households' G600-G699; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G7\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G7xx code existed either place.)",
+      "G800-G899": "reserved for feat.compositionroot (internal/engine/compose: the composition root wiring the baseline-one hook set — already-composed/double-register rejection, a required module's construction/wiring failure, a silently-absent required module, and wire-after-seal. Ninth G-layer engine claim after engine.attract's G700-G799; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G8\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G8xx code existed either place.)",
+      "G900-G999": "reserved for engine.unlocks (internal/engine/unlocks: the §22 four-currency unlock economy — XP, the §4 thirteen-tier milestone ladder, Development-Point trees loaded from data/unlock_trees.json, the money-only Buy path, and the debug force-unlock gate — MOD-032. Tenth G-layer engine claim after feat.compositionroot's G800-G899; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G9\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G9xx code existed either place.)",
+      "G1000-G1099": "reserved for engine.freight (internal/engine/freight: the freight harbour, tonnes accounting and production-chain model — port capacity/customs/smuggling-risk, the five chain families whose stages register as firms, the four storage-site types, modal-capped freight movements, the balance-of-trade breakdown, and the mass-conservation identity — MOD-047. Eleventh G-layer engine claim after engine.unlocks' G900-G999; the G layer's three-digit namespace is exhausted, so this is the first FOUR-DIGIT block (G1000-G1099), per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xxx code existed either place.)",
+      "G1100-G1199": "reserved for engine.spiral (internal/engine/spiral: the Detroit-spiral failure states — abandonment decay, cell-by-cell blight spread, the recovery commands, the insolvency/ghost-city death conditions, and the ghost-city epilogue — MOD-030. Twelfth G-layer engine claim after engine.freight's G1000-G1099; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G11\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G11xx code existed either place.)",
+      "G1200-G1299": "reserved for engine.services (internal/engine/services: the generic §10 service framework — capacity/coverage/funding→quality, §26 shared staffing pools, and the §54 Public Service Pie benchmark ratios — MOD-033. Twelfth G-layer engine claim; engine.unlocks took G900-G999, engine.freight G1000-G1099, and engine.spiral G1100-G1199 in the same wave, so engine.services opens G1200-G1299 under BUG-234's 2026-08-14 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G12\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G12xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1313,6 +1317,12 @@
       "message": "layout editor entry point opened with no ui.dash editor wired: {cause}",
       "remedy": "OpenLayoutEditor was invoked while no layout editor is wired via WithLayoutEditor. The F10 → layouts entry point reports \"unavailable\" rather than silently no-op'ing (MEN-4/MEN-7). Wire ui.dash's (MOD-038) layout editor at construction when it lands."
     },
+    "MET-U607": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "SelectKeymap called with nil {argument}",
+      "remedy": "SelectKeymap was called with a nil keymap or nil grammar. This is a programming error at the call site (LoadKeymapFile parses the profile before selecting, so nil cannot arrive via that path) -- the call is rejected with this registry error rather than a nil-pointer panic inside ui.keys' ApplyKeymap (SEC-079, GR#1). Fix the caller to pass a parsed *keys.Keymap and a constructed *keys.KeyGrammar."
+    },
     "MET-U700": {
       "severity": "warn",
       "module": "ui.screen.ticker",
@@ -1342,6 +1352,12 @@
       "module": "ui.screen.ticker",
       "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
       "remedy": "A *ticker.Screen value was copied (s2 := *s) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs/stale/ticker/bulletin/annual/archive/searchMatches are reference types a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) -- this call is rejected fail-closed instead of racing or corrupting the shared maps/slices. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
+    "MET-U705": {
+      "severity": "error",
+      "module": "ui.screen.ticker",
+      "message": "history archive stopped updating: {view} patch is {bytes} bytes, over the {limit}-byte wire ceiling (archive frozen at last-known-good)",
+      "remedy": "The f9.archive full-snapshot patch grew past this screen's per-patch wire ceiling (maxPatchWireBytes), so the last-known-good archive is frozen and surfaced as stopped (SEC-072/GR#17) rather than silently stale. The archive carries the city's whole atomic-event history (spec 29.4), which outgrows the ceiling long before a century of monthly bulletins would. If history must keep growing, raise maxPatchWireBytes in lockstep with the engine's real archive volume, or switch f9.archive to append/delta updates."
     },
     "MET-U800": {
       "severity": "error",
@@ -1379,6 +1395,12 @@
       "message": "MapResolver method {method} called on a struct-copied value (SEC-020)",
       "remedy": "A *dash.MapResolver value was copied by assignment/passing instead of being used via the single pointer dash.NewMapResolver returned (mu is a sync.RWMutex VALUE and live is an aliased map -- a copy is a second, independent lock racing the original over the same map). The call was rejected fail-closed rather than risking a lock-order hang or a torn map read; construct exactly one MapResolver via NewMapResolver and pass its pointer everywhere instead of a dereferenced copy."
     },
+    "MET-U806": {
+      "severity": "error",
+      "module": "ui.dash",
+      "message": "Dashboard method {method} called on a struct-copied value (SEC-020)",
+      "remedy": "A *dash.Dashboard value was copied by assignment/passing instead of being used via the single pointer dash.NewDashboard returned (mu is a sync.RWMutex VALUE and layout.tiles is an aliased slice -- a copy is a second, independent lock racing the original over the same backing array). The call was rejected fail-closed rather than risking a lock-order hang or a torn layout read; construct exactly one Dashboard via NewDashboard and pass its pointer everywhere instead of a dereferenced copy."
+    },
     "MET-U950": {
       "severity": "error",
       "module": "ui.alerts",
@@ -1408,6 +1430,12 @@
       "module": "ui.diagrams",
       "message": "diagram topology edge {edge} references node {node}, which is not present in the node set",
       "remedy": "An edge's From or To names a node ID absent from the topology's node set (a dangling reference). Fix the topology so every edge endpoint matches a node ID — the layout is rejected outright rather than silently dropping the dangling edge or panicking on the missing lookup (AC-7)."
+    },
+    "MET-U901": {
+      "severity": "error",
+      "module": "ui.diagrams",
+      "message": "network grid node {node} has a raw cell coordinate ({x},{y}) outside the renderable range",
+      "remedy": "A network node's X/Y cell coordinate is too large to render safely: either its magnitude exceeds the maxCoord bound or the span between the furthest nodes exceeds the render buffer's dimensions. The render is rejected rather than traversing an unbounded coordinate span (which hangs at int-max scale and drives a multi-GB snapshot through the Engine cache). Constrain node coordinates to a cell-sized range that fits the buffer."
     },
     "MET-U905": {
       "severity": "error",
@@ -1930,6 +1958,228 @@
       "module": "feat.compositionroot",
       "message": "composition root: wiring after engine sealed (module {module})",
       "remedy": "compose.Wire was invoked after the Engine sealed its hook set (the first AdvanceTicks already ran). Wire hooks before the first AdvanceTicks call; the original core.ErrEngineSealed cause is preserved via errors.Unwrap (AC-6)."
+    },
+    "MET-G900": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "data/unlock_trees.json could not be loaded or failed schema validation from {dir}: {cause}",
+      "remedy": "Check that data/unlock_trees.json exists under the resolved data directory and passes foundation.data's validated-load schema (version present; a non-empty meta.categories matching the tree count; every node id globally unique and matching the building-id pattern; a known node kind; in-range tier and prereqTier; every prereqNodeIds edge resolving; and an acyclic prereq graph). engine.unlocks never falls back to a silent default tree set (GR#15/GR#7)."
+    },
+    "MET-G901": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "gate check or spend command referenced an unregistered {kind} \"{ref}\"",
+      "remedy": "A gate check, node-unlock query, or SpendDevelopmentPoints named a node id, milestone tier, or category that is not present in data/unlock_trees.json (a typo'd node id or an out-of-range tier index). Fix the reference — this is a typed error, deliberately never a silent 'not unlocked' false negative indistinguishable from a genuine gate failure (AC-12)."
+    },
+    "MET-G902": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "spending {cost} Development Points on node {node} exceeds the unspent balance {balance}",
+      "remedy": "The node's dpCost exceeds the current Development-Point balance. Earn more DP (cross a milestone) before spending, or pick a cheaper node (AC-7)."
+    },
+    "MET-G903": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "node {node} requires milestone tier {tier}, but the current tier is {current}",
+      "remedy": "The node's prereqTier has not been reached. Cross the prerequisite milestone (advance population past its §4 threshold) before spending Development Points on this node (AC-7)."
+    },
+    "MET-G904": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "unknown off-map capacity kind \"{kind}\"",
+      "remedy": "BuyOffMapCapacity/OffMapCapacity only accept the five §22 kinds (grid, gas, rail, port, water). Pass one of those, or treat the returned error as a typo at the call site (AC-9)."
+    },
+    "MET-G905": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "operation {operation} requires a wired engine.finance dependency",
+      "remedy": "Wire engine.finance via SetFinance before the operation. This module never silently no-ops a cash award or a capacity purchase just because the dependency was forgotten (GR#1/GR#17)."
+    },
+    "MET-G906": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "ForceUnlock requires debug mode; {capability} is unreachable until debug is enabled",
+      "remedy": "ForceUnlock is debug-gated (M0-ENG §3). Enable debug mode (feat.debugmode) and wire the debug authorizer via SetDebugGate before invoking it; a debug-gated cheat never runs partially or invisibly with debug off (AC-11)."
+    },
+    "MET-G907": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "ForceUnlock target is invalid (tier {tier}, node {node})",
+      "remedy": "A ForceUnlock target must name exactly one of a valid milestone tier (1-13) and a valid tree node id — never neither, never both (AC-11)."
+    },
+    "MET-G908": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "UnlocksAPI method {method} called on a struct-copied value, not the one Load/LoadDefault constructed",
+      "remedy": "Always use the *UnlocksAPI pointer Load returned. Do not dereference-and-reassign it ('u2 := *u') or pass it by value — that produces a second value with its own mu but aliased maps, defeating the concurrency-safety invariant (SEC-020-class). If you need a second independent API, call Load again."
+    },
+    "MET-G909": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "negative {field} {value}",
+      "remedy": "An XP award, Development-Point amount, population, or other quantity was negative where only a non-negative value is meaningful. Fix the caller — negative inputs are rejected rather than silently wrapped (GR#16)."
+    },
+    "MET-G910": {
+      "severity": "error",
+      "module": "engine.unlocks",
+      "message": "tree node {node} is already unlocked",
+      "remedy": "SpendDevelopmentPoints was asked to unlock a node that is already in the unlocked set. The DP balance is left untouched rather than silently drained a second time (GR#1); check the current unlock state before spending."
+    },
+    "MET-G1000": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "freight data invalid: {cause}",
+      "remedy": "data/freight.json (or the data/market.json or data/logistics.json it loads through the registered engine.market/engine.logistics edges) could not be read or failed validation. Inspect the named field and rule in the error context and correct the data file — freight never falls back to a partial config or a silent default."
+    },
+    "MET-G1001": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "port capacity queried with no berths configured",
+      "remedy": "The loaded port config carries zero berths — the port is not yet built, so there is no throughput, customs capacity, or saturation to report. Configure at least one berth in data/freight.json (or build one at runtime once berth construction exists) before querying port figures."
+    },
+    "MET-G1002": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "unknown freight commodity {commodity}",
+      "remedy": "A stage/movement/storage/trade query named a commodity ID that is not one of the loaded data/freight.json commodities. Check the spelling against data/freight.json's \"commodities\" map — freight never silently creates a zero-value commodity entry."
+    },
+    "MET-G1003": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "unknown chain stage {stage}",
+      "remedy": "A chain query named a stage ID that is not one of the loaded data/freight.json chain stages. Check the stage id against data/freight.json's \"chains\" — freight never silently creates a zero-value stage."
+    },
+    "MET-G1004": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "unknown storage site {site}",
+      "remedy": "A storage query or movement named a storage-site type that is not one of the four documented types (quayside/silo/tankFarm/coldStore). Use a documented site type — freight never silently creates a zero-value site."
+    },
+    "MET-G1005": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "storage type mismatch: commodity {commodity} ({commodityClass}) does not match site {site} ({siteClass})",
+      "remedy": "The commodity's storage class does not match the site's commodity class (e.g. grain to a tank farm, fuel to a silo). Route the commodity to its matching site type (or add an explicit override once one exists) — a mismatched store is rejected, never silently accepted."
+    },
+    "MET-G1006": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "movement tonnage {tonnes} exceeds the {mode} modal cap (max {max})",
+      "remedy": "A movement/import/export command declared a tonnage above the mode's documented per-movement bulk cap (road 25t, rail 1,000t, sea 40kt) or below the sea minimum (3kt). Split the movement or choose a higher-capacity mode — over-cap tonnage is rejected, never silently clamped."
+    },
+    "MET-G1007": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "negative tonnage {tonnes} for commodity {commodity}",
+      "remedy": "A movement/import/export/store command declared a negative tonnage. Negative quantities are rejected rather than silently ignored (GR#16) — fix the caller."
+    },
+    "MET-G1008": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "FreightAPI method {method} called on a struct-copied value, not the one Load/LoadDefault constructed",
+      "remedy": "Always use the *FreightAPI pointer Load returned. Do not dereference-and-reassign it ('f2 := *f') or pass it by value — that produces a second value with its own mu but aliased maps/slices, defeating the concurrency-safety invariant (SEC-020-class, mirroring engine.finance's MET-G204). If you need a second independent API, call Load again."
+    },
+    "MET-G1100": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "invalid scripted-scenario definition: field {field} ({got})",
+      "remedy": "The scenario's shock type must be a recognised ShockType (majorEmployerClosure) and any shock target must name an in-extent, in-bounds cell. The malformed field is named and the scenario is rejected outright — never run with a silently-ignored or silently-substituted shock (AC-11)."
+    },
+    "MET-G1101": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "recovery command rejected: no decay state on {cell}",
+      "remedy": "A demolition/investment/tax-relief command targeted a cell (or district) with no decay state. Recovery of a healthy cell/district is rejected via CommandResult/ErrorRef rather than silently succeeding for free (AC-12)."
+    },
+    "MET-G1102": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "ghost-city threshold reached with no qualifying warning on record (population {population}, historic peak {historicPeak})",
+      "remedy": "The ghost-city death condition requires a qualifying MarginToGhostCity entry in engine.projections' WarningLedger, recorded at least MinWarningLeadMonths before the trigger month (FEAT-068, AC-15). Without one the trigger cannot fire — the gate rejects rather than silently declaring game over (AC-17)."
+    },
+    "MET-G1103": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "DecayAPI method {method} called on a struct-copied value, not the one New constructed",
+      "remedy": "Always use the *DecayAPI pointer New returned. Do not dereference-and-reassign it ('d2 := *d') or pass it by value — that produces a second value with its own mu but aliased decay/event/history state, defeating the concurrency-safety invariant (SEC-020-class)."
+    },
+    "MET-G1104": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "negative month {month} rejected",
+      "remedy": "A month before the world's epoch (month 0 = genesis) was supplied. Rejected rather than folded into the append-only history, which would corrupt the population provider and the epilogue timeline (AC-13)."
+    },
+    "MET-G1105": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "required dependency {dependency} not wired for operation {operation}",
+      "remedy": "Set the dependency via SetFinance (insolvency death condition) or SetProjections (ghost-city warning gate) before the operation that needs it. Registry-sourced, never a silent no-op or a nil-pointer panic (GR#1)."
+    },
+    "MET-G1106": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "embedded spiral.json config invalid: {detail}",
+      "remedy": "Fix the embedded spiral.json (malformed JSON, a non-positive coefficient, or an unreachable blight frontier). The package fails loudly rather than defaulting (GR#15/GR#7, ASM-241)."
+    },
+    "MET-G1107": {
+      "severity": "error",
+      "module": "engine.spiral",
+      "message": "negative population {population} rejected at the month boundary",
+      "remedy": "A month's population input was negative — a caller bug. Rejected before it reaches the death evaluator, where a negative value would read as 'below 10% of historic peak' and fire a spurious ghost-city game-over (SEC-087)."
+    },
+    "MET-G1200": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "engine.services data invalid or inconsistent: {cause}",
+      "remedy": "data/services.json could not be loaded or failed schema validation (missing file, malformed JSON, non-positive wage/severity field, empty staffing-pool member list), or a service kind references a Pie benchmark id absent from the pie table. Fix the data file; every failure is registry-sourced, never a silent default substitution (AC-11)."
+    },
+    "MET-G1201": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "service kind {kind} is not registered",
+      "remedy": "RegisterService was called with a ServiceKind that has no KindDef. Register the kind first via ServicesAPI.RegisterKind (the extensible-kind registry, AC-2), or fix the typo — an unregistered kind is rejected rather than treated as an empty service (AC-11)."
+    },
+    "MET-G1202": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "service {service} was never registered",
+      "remedy": "A query or command addressed a ServiceID that RegisterService never registered. Register the instance first, or fix the id — a query for a missing service returns this error, never a zero-value capacity/quality silently presented as an empty service (AC-11)."
+    },
+    "MET-G1203": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "funding level {level} for service {service} is outside [0,1]",
+      "remedy": "SetFunding requires a funding fraction in [0,1]. A value below 0 or above 1 is rejected with this error, never silently clamped without the caller knowing a clamp occurred (AC-12)."
+    },
+    "MET-G1204": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "service {service} enabling building (tier {milestone}) is not unlocked",
+      "remedy": "SetFunding was called for a service whose enabling building's §4 milestone tier has not been reached. The tier gate is the injected UnlockGate (the seam engine.unlocks implements); wire a real gate via SetUnlockGate before funding (AC-7)."
+    },
+    "MET-G1205": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "staffing pool {pool} is not declared in services.json",
+      "remedy": "SetPoolStaff or AllocateStaffing referenced a staffing-pool id absent from data/services.json's staffingPools table. Declare the pool there, or fix the id (AC-4)."
+    },
+    "MET-G1206": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "service {service} has no further upgrade step",
+      "remedy": "Upgrade was called on a service already at the final step of its upgrade path (or with an empty path). Check UpgradePath before upgrading; the ceiling is left unchanged rather than silently advanced (AC-9)."
+    },
+    "MET-G1207": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "service {service} is already registered",
+      "remedy": "RegisterService was called with a ServiceID already present. Registration is rejected rather than silently overwriting the existing instance's capacity/funding/upgrade state (GR#3: no silent last-write-wins)."
+    },
+    "MET-G1208": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "ServicesAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *ServicesAPI pointer New/Load returned. Dereferencing-and-reassigning (a2 := *a) produces a second value with its own mutex but aliased maps, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call New/Load again."
     }
   }
 }
