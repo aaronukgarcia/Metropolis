@@ -299,8 +299,22 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		c.setColdHouseholdLocked(cmd.CitizenID, safeUint32(h.ID), safeUint32(cmd.PartnerID))
 		c.setColdHouseholdLocked(cmd.PartnerID, safeUint32(h.ID), safeUint32(cmd.CitizenID))
 	case LifeEventDeath:
+		// A departure (mortality or emigration) unwires the citizen's
+		// household membership — the inverse of LifeEventPartner's wiring:
+		// the household's Members list is pruned, and if the household drops
+		// below the pairing threshold it is dissolved with every surviving
+		// member's household/partner references cleared. The household id
+		// must be resolved BEFORE the citizen is removed from hot+cold (no
+		// record remains to read it back from afterwards).
+		var householdID uint64
+		if cit, ok := c.hot[cmd.CitizenID]; ok {
+			householdID = cit.Household
+		} else if r, ok := c.coldRecord(cmd.CitizenID); ok {
+			householdID = uint64(r.Household)
+		}
 		delete(c.hot, cmd.CitizenID)
 		c.removeColdLocked(cmd.CitizenID)
+		c.removeHouseholdMemberLocked(cmd.CitizenID, householdID)
 	case LifeEventEducation:
 		// Education drifts the personality (good schooling widens ambition/
 		// novelty-seeking). The cold store is the single source of truth, so
@@ -543,6 +557,47 @@ func (c *CitizensAPI) setHouseholdLocked(citizenID, householdID, partnerID uint6
 		cit.Household = householdID
 		cit.Partner = partnerID
 	}
+}
+
+// removeHouseholdMemberLocked unwires a departed citizen from their
+// household (LifeEventDeath's inverse of LifeEventPartner's wiring). The
+// citizen is dropped from the household's Members list; if the household
+// then falls below pairingThreshold it is dissolved and every surviving
+// member has their household/partner references cleared in both stores.
+func (c *CitizensAPI) removeHouseholdMemberLocked(citizenID, householdID uint64) {
+	if householdID == 0 {
+		return // unpaired citizen: nothing to unwire
+	}
+	h, ok := c.households[householdID]
+	if !ok {
+		return // absent household: nothing to prune
+	}
+	kept := h.Members[:0]
+	for _, m := range h.Members {
+		if m != citizenID {
+			kept = append(kept, m)
+		}
+	}
+	h.Members = kept
+	if len(h.Members) >= pairingThreshold {
+		return // still a pair (or larger): household survives
+	}
+	for _, m := range h.Members {
+		c.clearHouseholdLocked(m)
+	}
+	delete(c.households, householdID)
+}
+
+// clearHouseholdLocked resets a citizen's household/partner references to 0
+// (the "no household" sentinel) in BOTH the hot elevation cache and the cold
+// store (the single source of truth). It is the exact inverse of the
+// setHouseholdLocked/setColdHouseholdLocked wiring LifeEventPartner performs.
+func (c *CitizensAPI) clearHouseholdLocked(citizenID uint64) {
+	if cit, ok := c.hot[citizenID]; ok {
+		cit.Household = 0
+		cit.Partner = 0
+	}
+	c.setColdHouseholdLocked(citizenID, 0, 0)
 }
 
 // setColdHouseholdLocked updates a citizen's household/partner columns in

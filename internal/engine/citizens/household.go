@@ -37,6 +37,14 @@ func (h Household) RentBurdenRatio(monthlyRentMicroPounds, monthlyIncomeMicroPou
 	return ratio
 }
 
+// pairingThreshold is the minimum membership a household retains before it
+// is dissolved back into unpaired citizens (the "no household" sentinel). A
+// household is formed as a pair (2 members — see FormHousehold); when a
+// departure drops it below 2 the surviving member is alone and it is no
+// longer a pair, so it is dissolved. LifeEventPartner forms at this size and
+// LifeEventDeath unwires at this size: one shared pairing rule (GR#3).
+const pairingThreshold = 2
+
 // FormHousehold creates a new household containing both partners and
 // returns it with a shared membership (AC-12: a partnering event creates
 // a shared householdId for both partners — the caller writes that id onto

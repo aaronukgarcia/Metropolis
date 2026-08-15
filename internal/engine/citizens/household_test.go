@@ -40,6 +40,104 @@ func TestPartneringCreatesSharedHousehold(t *testing.T) {
 	}
 }
 
+// TestDeathDissolvesHousehold (BUG-235): a departing citizen (mortality or
+// emigration via LifeEventDeath) must be unwired from their household — the
+// inverse of the partnering wiring — so the household is dissolved once it
+// drops below the pairing threshold and the surviving member's HouseholdOf
+// mapping is cleared. Pre-fix, the dead citizen's id stayed in the
+// household's Members list, orphaning the record so re-querying it failed
+// with ErrOrphanedMember (MET-G606).
+func TestDeathDissolvesHousehold(t *testing.T) {
+	api, err := NewCitizensAPI(2, "corr")
+	if err != nil {
+		t.Fatalf("NewCitizensAPI: %v", err)
+	}
+	if err := api.SeedColdRecords([]ColdRecord{mkRecord(1, 0), mkRecord(2, 0)}, "corr"); err != nil {
+		t.Fatalf("SeedColdRecords: %v", err)
+	}
+	if err := api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventPartner, CitizenID: 1, PartnerID: 2}); err != nil {
+		t.Fatalf("partner: %v", err)
+	}
+	hh, ok := api.HouseholdOf(1, "corr")
+	if !ok {
+		t.Fatal("household not formed")
+	}
+	householdID := hh.ID
+
+	if err := api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventDeath, CitizenID: 1}); err != nil {
+		t.Fatalf("death: %v", err)
+	}
+
+	// The departed citizen is gone from both stores.
+	if _, ok := api.CitizenAt(1, "corr"); ok {
+		t.Fatal("departed citizen 1 still resolves")
+	}
+	// The household dropped below the pairing threshold and is dissolved.
+	if _, ok := api.Household(householdID, "corr"); ok {
+		t.Fatal("household survived a drop below the pairing threshold")
+	}
+	// The surviving member's HouseholdOf mapping is cleared.
+	if _, ok := api.HouseholdOf(2, "corr"); ok {
+		t.Fatal("surviving member 2 still maps to a dissolved household")
+	}
+	surv, ok := api.CitizenAt(2, "corr")
+	if !ok {
+		t.Fatal("surviving member 2 vanished")
+	}
+	if surv.Household != 0 || surv.Partner != 0 {
+		t.Fatalf("surviving member 2 retains household/partner references: household=%d partner=%d", surv.Household, surv.Partner)
+	}
+}
+
+// TestDeathClearsHotSurvivorHousehold (BUG-235, hot path): the surviving
+// member may be elevated (HOT); their household/partner references must be
+// cleared in the hot cache too, not only the cold store — otherwise a hot
+// survivor keeps reporting the dissolved household id.
+func TestDeathClearsHotSurvivorHousehold(t *testing.T) {
+	api, err := NewCitizensAPI(2, "corr")
+	if err != nil {
+		t.Fatalf("NewCitizensAPI: %v", err)
+	}
+	if err := api.SeedColdRecords([]ColdRecord{mkRecord(1, 0), mkRecord(2, 0)}, "corr"); err != nil {
+		t.Fatalf("SeedColdRecords: %v", err)
+	}
+	// Elevate the survivor (2) to HOT so both the hot cache and the cold
+	// store must be cleared by the death unwiring.
+	if err := api.ApplyFidelityCommand(FidelityCommand{CorrelationID: "corr", CitizenID: 2, Target: FidelityHot}); err != nil {
+		t.Fatalf("elevate: %v", err)
+	}
+	if err := api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventPartner, CitizenID: 1, PartnerID: 2}); err != nil {
+		t.Fatalf("partner: %v", err)
+	}
+	if err := api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventDeath, CitizenID: 1}); err != nil {
+		t.Fatalf("death: %v", err)
+	}
+
+	surv, ok := api.CitizenAt(2, "corr")
+	if !ok {
+		t.Fatal("surviving member 2 vanished")
+	}
+	if surv.Household != 0 || surv.Partner != 0 {
+		t.Fatalf("hot survivor 2 retains household/partner references: household=%d partner=%d", surv.Household, surv.Partner)
+	}
+	if _, ok := api.HouseholdOf(2, "corr"); ok {
+		t.Fatal("hot survivor 2 still maps to a dissolved household")
+	}
+
+	// The cold store (single source of truth) is cleared too: demote and
+	// confirm the household reference did not resurrect from cold columns.
+	if err := api.ApplyFidelityCommand(FidelityCommand{CorrelationID: "corr", CitizenID: 2, Target: FidelityCold}); err != nil {
+		t.Fatalf("demote: %v", err)
+	}
+	cold, ok := api.CitizenAt(2, "corr")
+	if !ok {
+		t.Fatal("surviving member 2 vanished after demote")
+	}
+	if cold.Household != 0 || cold.Partner != 0 {
+		t.Fatalf("cold survivor 2 resurrected household/partner references: household=%d partner=%d", cold.Household, cold.Partner)
+	}
+}
+
 // TestOvercrowdingDerived (AC-12): overcrowding is derivable from household
 // composition and dwelling size.
 func TestOvercrowdingDerived(t *testing.T) {
