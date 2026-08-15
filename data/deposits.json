@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "depositRate": 0.02,
+  "offshoreRate": 0.01,
+  "resources": {
+    "copper":   { "class": "ore",         "countWeight": 4, "depthMin": 50,  "depthMax": 900 },
+    "tin":      { "class": "ore",         "countWeight": 3, "depthMin": 80,  "depthMax": 1000 },
+    "iron":     { "class": "ore",         "countWeight": 5, "depthMin": 20,  "depthMax": 600 },
+    "uranium":  { "class": "ore",         "countWeight": 2, "depthMin": 150, "depthMax": 1200 },
+    "rem":      { "class": "ore",         "countWeight": 2, "depthMin": 200, "depthMax": 1600 },
+    "gas":      { "class": "hydrocarbon", "countWeight": 4, "depthMin": 500, "depthMax": 3200, "offshore": true },
+    "oil":      { "class": "hydrocarbon", "countWeight": 3, "depthMin": 400, "depthMax": 2600, "offshore": true },
+    "coal":     { "class": "coal",        "countWeight": 6, "depthMin": 100, "depthMax": 900 },
+    "arcana":   { "class": "fictional",   "countWeight": 1, "depthMin": 300, "depthMax": 1800 }
+  },
+  "sizeCurve":    { "shape": 1.6, "min": 10, "max": 500 },
+  "densityCurve": { "shape": 1.6, "min": 1.0, "max": 40 },
+  "coLocation": {
+    "chalkUraniumFactor": 0.05,
+    "coalGasFactor": 12.0,
+    "coalCoalFactor": 3.0
+  },
+  "eastKentCoalfield": {
+    "generosityMultiplier": 2.0,
+    "coverageFloor": 0.9
+  }
+}
