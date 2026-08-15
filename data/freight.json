@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "engine.freight (MOD-047, §33/§8) — the freight harbour, tonnes accounting and production-chain data contract. Every tunable figure the freight module consumes — port berths/crane-rate/hours, customs throughput, the modal per-movement bulk caps, storage-site capacities, the freight-commodity taxonomy and its market/storage mapping, and the five production-chain families' per-stage input/output rates, jobs, power/water draw and blight class — lives here, never as a Go literal in internal/engine/freight/*.go (GR#15).",
+    "unitConvention": "All freight tonnage is accounted in TONNES per day (int64), matching §33's 'all freight accounted in tonnes/day end-to-end'. A freight commodity whose 'unit' is 'kWh' or 'L' (power, fuel) is tracked for chain completeness and priced via its mapped engine.market commodity, but is EXCLUDED from the tonnes-conservation identity (AC-10) — that identity covers only unit=='tonne' commodities.",
+    "marketMappingConvention": "Every freight commodity carries a 'market' field naming one of the nine engine.market CommodityType keys (data/market.json) it is priced and availability-bounded through (AC-8), and a 'unitsPerTonne' field: the number of market units in one freight tonne (1000 for kg-priced food/consumer goods, 1 for tonne-priced construction materials). Export/import value = tonnes * unitsPerTonne * market.Price(market). MarketAPI exposes no separate non-waste export price (data/market.json prices importable commodities once), so the static market price is the value basis for BOTH directions pending M2 pricing (ASM, see doc.go).",
+    "balanceNote": "All port/customs/storage/chain figures are COARSE PLACEHOLDERS (unpinned balance data pending M2 tuning, per the acceptance doc's Escalations) chosen only to exercise the model. The modal caps (road 25t, rail 1000t, sea 3-40kt) are the spec-stated magnitudes §33/§8 names; everything else is directional.",
+    "storageClassConvention": "Four storage-site types (§33): quayside stacks (general), silos (grain), tank farm (fuel), cold store (fresh/fish). A freight commodity's 'storageClass' must match the site's 'commodityClass'; routing a commodity to a mismatched site is rejected (AC-6)."
+  },
+  "port": {
+    "berths": 2,
+    "craneRateTonnesPerHour": 60,
+    "operatingHoursPerDay": 16,
+    "customsCapacityTonnesPerDay": 1500,
+    "comment": "Port physical throughput = berths * craneRateTonnesPerHour * operatingHoursPerDay (§33, AC-2). Customs throughput is a SEPARATE capacity figure (§33/§28, AC-3); the two saturate independently."
+  },
+  "modalCaps": {
+    "road": { "maxTonnesPerMovement": 25, "leadTimeTicks": 1 },
+    "rail": { "maxTonnesPerMovement": 1000, "leadTimeTicks": 2 },
+    "sea": { "minTonnesPerMovement": 3000, "maxTonnesPerMovement": 40000, "leadTimeTicks": 3 }
+  },
+  "storage": [
+    { "type": "quayside", "commodityClass": "general", "capacityTonnes": 50000, "comment": "§33 quayside stacks — general cargo (any commodity)." },
+    { "type": "silo", "commodityClass": "grain", "capacityTonnes": 20000, "comment": "§33 silos — grain only." },
+    { "type": "tankFarm", "commodityClass": "fuel", "capacityTonnes": 30000, "comment": "§33 tank farm — fuel only." },
+    { "type": "coldStore", "commodityClass": "fresh", "capacityTonnes": 5000, "comment": "§33 cold store — fresh/fish only." }
+  ],
+  "commodities": {
+    "chalk":        { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "cement":       { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "concrete":     { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "clay":         { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "bricks":       { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "timber":       { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "joinery":      { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "coal":         { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "ore":          { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "steel":        { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "fabrication":  { "market": "constructionMaterials", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1 },
+    "machinery":    { "market": "consumerGoods", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1000 },
+    "vehicles":     { "market": "consumerGoods", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1000 },
+    "grain":        { "market": "foodStaples", "storageClass": "grain", "unit": "tonne", "unitsPerTonne": 1000 },
+    "flour":        { "market": "foodStaples", "storageClass": "grain", "unit": "tonne", "unitsPerTonne": 1000 },
+    "bread":        { "market": "foodStaples", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1000 },
+    "milk":         { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "dairy":        { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "livestock":    { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "meat":         { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "processedMeat":{ "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "fish":         { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "processedFish":{ "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "fruit":        { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "packedFruit":  { "market": "foodFresh", "storageClass": "fresh", "unit": "tonne", "unitsPerTonne": 1000 },
+    "wine":         { "market": "consumerGoods", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1000 },
+    "plastics":     { "market": "consumerGoods", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1000 },
+    "lightGoods":   { "market": "consumerGoods", "storageClass": "general", "unit": "tonne", "unitsPerTonne": 1000 },
+    "power":        { "market": "power", "storageClass": "general", "unit": "kWh", "unitsPerTonne": 1 },
+    "fuel":         { "market": "fuel", "storageClass": "fuel", "unit": "L", "unitsPerTonne": 1 },
+    "distributedFuel": { "market": "fuel", "storageClass": "fuel", "unit": "L", "unitsPerTonne": 1 }
+  },
+  "chains": {
+    "construction": {
+      "stages": [
+        { "id": "chalkQuarry", "name": "Chalk Quarry", "inputs": [], "outputs": [ { "commodity": "chalk", "tonnesPerDay": 200 } ], "jobs": 40, "powerKWhPerDay": 5000, "waterLitresPerDay": 3000, "blightClass": 2 },
+        { "id": "cementPlant", "name": "Cement Plant", "inputs": [ { "commodity": "chalk", "tonnesPerDay": 100 } ], "outputs": [ { "commodity": "cement", "tonnesPerDay": 80 } ], "jobs": 30, "powerKWhPerDay": 20000, "waterLitresPerDay": 8000, "blightClass": 3 },
+        { "id": "concretePlant", "name": "Concrete Plant", "inputs": [ { "commodity": "cement", "tonnesPerDay": 50 } ], "outputs": [ { "commodity": "concrete", "tonnesPerDay": 60 } ], "jobs": 25, "powerKWhPerDay": 12000, "waterLitresPerDay": 15000, "blightClass": 3 },
+        { "id": "clayPit", "name": "Clay Pit", "inputs": [], "outputs": [ { "commodity": "clay", "tonnesPerDay": 120 } ], "jobs": 15, "powerKWhPerDay": 3000, "waterLitresPerDay": 2000, "blightClass": 2 },
+        { "id": "brickworks", "name": "Brickworks", "inputs": [ { "commodity": "clay", "tonnesPerDay": 80 } ], "outputs": [ { "commodity": "bricks", "tonnesPerDay": 70 } ], "jobs": 35, "powerKWhPerDay": 15000, "waterLitresPerDay": 5000, "blightClass": 3 },
+        { "id": "timberMill", "name": "Timber Mill", "inputs": [], "outputs": [ { "commodity": "timber", "tonnesPerDay": 150 } ], "jobs": 20, "powerKWhPerDay": 8000, "waterLitresPerDay": 1000, "blightClass": 2 },
+        { "id": "joineryShop", "name": "Joinery Shop", "inputs": [ { "commodity": "timber", "tonnesPerDay": 60 } ], "outputs": [ { "commodity": "joinery", "tonnesPerDay": 50 } ], "jobs": 28, "powerKWhPerDay": 6000, "waterLitresPerDay": 500, "blightClass": 1 }
+      ]
+    },
+    "steelAndMachinery": {
+      "stages": [
+        { "id": "coalMine", "name": "Coal Mine", "inputs": [], "outputs": [ { "commodity": "coal", "tonnesPerDay": 300 } ], "jobs": 80, "powerKWhPerDay": 25000, "waterLitresPerDay": 6000, "blightClass": 4 },
+        { "id": "oreMine", "name": "Ore Mine", "inputs": [], "outputs": [ { "commodity": "ore", "tonnesPerDay": 250 } ], "jobs": 70, "powerKWhPerDay": 22000, "waterLitresPerDay": 5000, "blightClass": 4 },
+        { "id": "steelMill", "name": "Steel Mill", "inputs": [ { "commodity": "coal", "tonnesPerDay": 100 }, { "commodity": "ore", "tonnesPerDay": 150 } ], "outputs": [ { "commodity": "steel", "tonnesPerDay": 180 } ], "jobs": 120, "powerKWhPerDay": 60000, "waterLitresPerDay": 20000, "blightClass": 4 },
+        { "id": "fabricationPlant", "name": "Fabrication Plant", "inputs": [ { "commodity": "steel", "tonnesPerDay": 100 } ], "outputs": [ { "commodity": "fabrication", "tonnesPerDay": 90 } ], "jobs": 90, "powerKWhPerDay": 30000, "waterLitresPerDay": 8000, "blightClass": 3 },
+        { "id": "machineryWorks", "name": "Machinery Works", "inputs": [ { "commodity": "fabrication", "tonnesPerDay": 60 } ], "outputs": [ { "commodity": "machinery", "tonnesPerDay": 50 } ], "jobs": 75, "powerKWhPerDay": 18000, "waterLitresPerDay": 4000, "blightClass": 2 },
+        { "id": "vehiclePlant", "name": "Vehicle Plant", "inputs": [ { "commodity": "fabrication", "tonnesPerDay": 40 } ], "outputs": [ { "commodity": "vehicles", "tonnesPerDay": 30 } ], "jobs": 100, "powerKWhPerDay": 24000, "waterLitresPerDay": 6000, "blightClass": 2 }
+      ]
+    },
+    "food": {
+      "stages": [
+        { "id": "grainFarm", "name": "Grain Farm", "inputs": [], "outputs": [ { "commodity": "grain", "tonnesPerDay": 180 } ], "jobs": 50, "powerKWhPerDay": 4000, "waterLitresPerDay": 50000, "blightClass": 0 },
+        { "id": "flourMill", "name": "Flour Mill", "inputs": [ { "commodity": "grain", "tonnesPerDay": 100 } ], "outputs": [ { "commodity": "flour", "tonnesPerDay": 85 } ], "jobs": 20, "powerKWhPerDay": 10000, "waterLitresPerDay": 2000, "blightClass": 1 },
+        { "id": "bakery", "name": "Bakery", "inputs": [ { "commodity": "flour", "tonnesPerDay": 60 } ], "outputs": [ { "commodity": "bread", "tonnesPerDay": 55 } ], "jobs": 30, "powerKWhPerDay": 8000, "waterLitresPerDay": 3000, "blightClass": 1 },
+        { "id": "dairyFarm", "name": "Dairy Farm", "inputs": [], "outputs": [ { "commodity": "milk", "tonnesPerDay": 160 } ], "jobs": 25, "powerKWhPerDay": 6000, "waterLitresPerDay": 40000, "blightClass": 0 },
+        { "id": "dairyPlant", "name": "Dairy Plant", "inputs": [ { "commodity": "milk", "tonnesPerDay": 100 } ], "outputs": [ { "commodity": "dairy", "tonnesPerDay": 75 } ], "jobs": 22, "powerKWhPerDay": 12000, "waterLitresPerDay": 6000, "blightClass": 1 },
+        { "id": "livestockFarm", "name": "Livestock Farm", "inputs": [], "outputs": [ { "commodity": "livestock", "tonnesPerDay": 140 } ], "jobs": 30, "powerKWhPerDay": 9000, "waterLitresPerDay": 45000, "blightClass": 1 },
+        { "id": "abattoir", "name": "Abattoir", "inputs": [ { "commodity": "livestock", "tonnesPerDay": 80 } ], "outputs": [ { "commodity": "meat", "tonnesPerDay": 60 } ], "jobs": 40, "powerKWhPerDay": 16000, "waterLitresPerDay": 12000, "blightClass": 2 },
+        { "id": "meatProcessing", "name": "Meat Processing", "inputs": [ { "commodity": "meat", "tonnesPerDay": 50 } ], "outputs": [ { "commodity": "processedMeat", "tonnesPerDay": 45 } ], "jobs": 35, "powerKWhPerDay": 10000, "waterLitresPerDay": 8000, "blightClass": 1 },
+        { "id": "fishingFleet", "name": "Fishing Fleet", "inputs": [], "outputs": [ { "commodity": "fish", "tonnesPerDay": 90 } ], "jobs": 45, "powerKWhPerDay": 7000, "waterLitresPerDay": 1000, "blightClass": 0 },
+        { "id": "fishProcessing", "name": "Fish Processing", "inputs": [ { "commodity": "fish", "tonnesPerDay": 60 } ], "outputs": [ { "commodity": "processedFish", "tonnesPerDay": 50 } ], "jobs": 30, "powerKWhPerDay": 9000, "waterLitresPerDay": 7000, "blightClass": 1 },
+        { "id": "orchard", "name": "Orchard", "inputs": [], "outputs": [ { "commodity": "fruit", "tonnesPerDay": 110 } ], "jobs": 40, "powerKWhPerDay": 3000, "waterLitresPerDay": 35000, "blightClass": 0 },
+        { "id": "packhouse", "name": "Packhouse", "inputs": [ { "commodity": "fruit", "tonnesPerDay": 70 } ], "outputs": [ { "commodity": "packedFruit", "tonnesPerDay": 65 } ], "jobs": 25, "powerKWhPerDay": 11000, "waterLitresPerDay": 5000, "blightClass": 1 },
+        { "id": "winery", "name": "Winery", "inputs": [ { "commodity": "fruit", "tonnesPerDay": 40 } ], "outputs": [ { "commodity": "wine", "tonnesPerDay": 30 } ], "jobs": 18, "powerKWhPerDay": 5000, "waterLitresPerDay": 4000, "blightClass": 1 }
+      ]
+    },
+    "consumerGoods": {
+      "stages": [
+        { "id": "plasticsPlant", "name": "Plastics Plant", "inputs": [], "outputs": [ { "commodity": "plastics", "tonnesPerDay": 100 } ], "jobs": 45, "powerKWhPerDay": 28000, "waterLitresPerDay": 9000, "blightClass": 3 },
+        { "id": "lightGoodsFactory", "name": "Light Goods Factory", "inputs": [ { "commodity": "plastics", "tonnesPerDay": 60 }, { "commodity": "fabrication", "tonnesPerDay": 40 } ], "outputs": [ { "commodity": "lightGoods", "tonnesPerDay": 85 } ], "jobs": 65, "powerKWhPerDay": 20000, "waterLitresPerDay": 6000, "blightClass": 2 }
+      ]
+    },
+    "energy": {
+      "stages": [
+        { "id": "coalPowerPlant", "name": "Coal Power Plant", "inputs": [ { "commodity": "coal", "tonnesPerDay": 200 } ], "outputs": [ { "commodity": "power", "tonnesPerDay": 150000 } ], "jobs": 60, "powerKWhPerDay": 0, "waterLitresPerDay": 60000, "blightClass": 3 },
+        { "id": "fuelDistribution", "name": "Fuel Distribution", "inputs": [ { "commodity": "fuel", "tonnesPerDay": 40000 } ], "outputs": [ { "commodity": "distributedFuel", "tonnesPerDay": 38000 } ], "jobs": 15, "powerKWhPerDay": 2000, "waterLitresPerDay": 500, "blightClass": 1 }
+      ]
+    }
+  }
+}
