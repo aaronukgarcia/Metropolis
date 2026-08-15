@@ -1,0 +1,268 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "engine.tax (MOD-052) / FEAT-056 (ASM-283): the UK-today tax-instrument set Aaron named — VAT, import duties, corporation tax, PAYE (income tax + NI), council tax, business rates. This file is the sole data source for these six instruments' names, categories, valid rate ranges, elasticity coefficients, bearer-split weights and zone-scoped overrides (GR#15: no instrument figure lives as a Go literal in internal/engine/tax/*.go). 'Blue 2'-style mechanic, cited for mechanic shape only, no literal feature parity — see mechanicReferenceNote.",
+    "mechanicReferenceNote": "'Blue 2'-style mechanic, per docs/planning/resources-design-brief.md's established GR#22-clean citation form: the pairing of a tax instrument with a zone-differentiated rate lever as a single player-facing control (zoneOverrides per instrument). Cited for mechanic shape only — this file does not attempt literal feature parity with any external game.",
+    "complexityCeiling": "FEAT-056's explicit complexity ceiling: six instruments, one zoneOverrides shape (a map from a closed 8-class enum to a per-zone rate multiplier or relief), and no per-typology/per-behavioural-levy explosion beyond what engine.tax.md's already-committed scope governs. A future editor extending this file checks against this boundary, not against 'however much the last person added'.",
+    "zoneClassEnum": "The closed 8-way zone-class key set (M0 §34): dwelling, shop, office, entertainment, farming, manufacturing, heavyIndustry, mining — the only valid keys in any instrument's zoneOverrides map. No instrument may use a different spelling, casing, or ad-hoc subset.",
+    "specRefs": "§39 (fine-grain tax controls), §54 (the fiscal circuit: income tax per wage band, sales tax/VAT share on local consumption, corporation tax share on firm profits, rates & council tax, duties & levies), §34 (the 8-way zone classes that key zoneOverrides).",
+    "assumptions": "ASM-283 (file location data/tax_instruments.json, lead-ruled ACCEPT), ASM-284 (placeholder-values regime, Aaron-confirmed CLOSED), ASM-287 (per-instrument bearer categories, lead-ruled ACCEPT), and this file's own ASM-415 (UK-today set extends §39's named panel), ASM-416 (zoneOverrides generalised to every instrument), ASM-417 (policy-side zone scoping flagged to Bill, not resolved here), ASM-418 (bearer-category sets for the four new instruments), ASM-423 ('Blue 2' resolved as mechanic-shape citation only).",
+    "placeholderConvention": "Every numeric field in every instrument (rate, threshold, elasticity coefficient, zone-override multiplier, bearer share) carries a sibling comment naming its source category — one of 'literature-grounded placeholder (UK published figure, mapping sanity-check only)', 'derived placeholder (no external anchor, sanity-check the number itself)', or 'spec-transcribed (rare)' — plus pending-Aaron's-balance-pass status, per data/market.json's 'Plausible v1 static price, pending M2 Batch tuning' convention and ASM-284. Monetary amounts are int64 micro-pounds (1 GBP = 1,000,000 micro-pounds, M0-ENG §1.2); percentage rates, elasticity coefficients and bearer shares are legitimately fractional."
+  },
+  "instruments": {
+    "vat": {
+      "name": "VAT (sales tax share)",
+      "category": "consumption",
+      "rateRange": {
+        "minPercent": 0,
+        "maxPercent": 30,
+        "comment": "Valid-rate bounds are placeholder caps. UK standard rate 20% (literature-grounded placeholder — mapping sanity-check only). Pending Aaron's balance pass."
+      },
+      "elasticity": {
+        "coefficient": 0.4,
+        "comment": "Base elasticity of the local-consumption base to the VAT rate: fractional base shrinkage per unit rate rise. Derived placeholder, no external anchor — pending Aaron's balance pass."
+      },
+      "bearerWeights": {
+        "comment": "Rate-dependent incidence split (ASM-287 per-instrument bearer set; §54: VAT share falls on local consumption). Two example rate points; the consumer share rises with the rate because firms pass more through as the rate climbs (standard tax-incidence direction, itself a placeholder).",
+        "ratePoints": [
+          {
+            "ratePercent": 20,
+            "comment": "Lower example point at the UK standard rate. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "consumer", "share": 0.70, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "firm", "share": 0.30, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          },
+          {
+            "ratePercent": 25,
+            "comment": "Higher example point: more of the burden passed through to the consumer. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "consumer", "share": 0.85, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "firm", "share": 0.15, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          }
+        ]
+      },
+      "zoneOverrides": {}
+    },
+    "importDuties": {
+      "name": "Import duties",
+      "category": "import",
+      "rateRange": {
+        "minPercent": 0,
+        "maxPercent": 50,
+        "comment": "Valid-rate bounds are placeholder caps. Import duties vary by commodity class in UK-today practice (literature-grounded placeholder — mapping sanity-check only). Pending Aaron's balance pass."
+      },
+      "elasticity": {
+        "coefficient": 0.5,
+        "comment": "Base elasticity of the imported-goods transaction base to the duty rate. Derived placeholder, no external anchor — pending Aaron's balance pass."
+      },
+      "bearerWeights": {
+        "comment": "Rate-dependent incidence split (ASM-287: importer firm vs downstream consumer; §54 'duties & levies'). Two example rate points; at higher duty the importer passes more through to the downstream consumer. Note: importDuties taxes transactions in data/market.json commodities — it does not restate any commodity price field (GR#3, AC-3).",
+        "ratePoints": [
+          {
+            "ratePercent": 10,
+            "comment": "Lower example point. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "importerFirm", "share": 0.60, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "downstreamConsumer", "share": 0.40, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          },
+          {
+            "ratePercent": 25,
+            "comment": "Higher example point: more of the burden passed through to the downstream consumer. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "importerFirm", "share": 0.45, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "downstreamConsumer", "share": 0.55, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          }
+        ]
+      },
+      "zoneOverrides": {}
+    },
+    "corporationTax": {
+      "name": "Corporation tax",
+      "category": "corporateProfit",
+      "rateRange": {
+        "minPercent": 0,
+        "maxPercent": 35,
+        "comment": "Valid-rate bounds are placeholder caps. UK main rate 25% (small-profits 19%) is a literature-grounded placeholder — mapping sanity-check only. Pending Aaron's balance pass."
+      },
+      "elasticity": {
+        "coefficient": 0.3,
+        "comment": "Base elasticity of the taxable firm-profit base to the corporation-tax rate (profit shifting / relocation). Derived placeholder, no external anchor — pending Aaron's balance pass."
+      },
+      "bearerWeights": {
+        "comment": "Rate-dependent incidence split (ASM-287: shareholders/owners vs employees via wage suppression vs consumers via price pass-through; §54 'corporation tax share on firm profits'). Two example rate points; at higher rates a larger share shifts to employees and consumers as firms suppress wages and raise prices.",
+        "ratePoints": [
+          {
+            "ratePercent": 19,
+            "comment": "Lower example point (UK small-profits rate). Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "shareholders", "share": 0.50, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "employees", "share": 0.20, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "consumers", "share": 0.30, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          },
+          {
+            "ratePercent": 25,
+            "comment": "Higher example point (UK main rate): more shifted to employees and consumers. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "shareholders", "share": 0.35, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "employees", "share": 0.25, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "consumers", "share": 0.40, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          }
+        ]
+      },
+      "zoneOverrides": {}
+    },
+    "paye": {
+      "name": "PAYE (income tax + National Insurance)",
+      "category": "income",
+      "rateRange": {
+        "minPercent": 0,
+        "maxPercent": 60,
+        "comment": "Valid-rate bounds for the headline income-tax lever (placeholder caps). The headline lever scales the band structure uniformly; the band structure and the NI rates are independently settable fields below (AC-2). Pending Aaron's balance pass."
+      },
+      "incomeTaxBands": [
+        {
+          "lowerBoundMicroPounds": 0,
+          "upperBoundMicroPounds": 12570000000,
+          "ratePercent": 0,
+          "comment": "Personal allowance 0–£12,570. Literature-grounded placeholder (UK 2025/26 band) — mapping sanity-check only. Pending Aaron's balance pass."
+        },
+        {
+          "lowerBoundMicroPounds": 12570000000,
+          "upperBoundMicroPounds": 50270000000,
+          "ratePercent": 20,
+          "comment": "Basic rate £12,570–£50,270 at 20%. Literature-grounded placeholder (UK 2025/26 band) — mapping sanity-check only. Pending Aaron's balance pass."
+        },
+        {
+          "lowerBoundMicroPounds": 50270000000,
+          "upperBoundMicroPounds": 125140000000,
+          "ratePercent": 40,
+          "comment": "Higher rate £50,270–£125,140 at 40%. Literature-grounded placeholder (UK 2025/26 band) — mapping sanity-check only. Pending Aaron's balance pass."
+        },
+        {
+          "lowerBoundMicroPounds": 125140000000,
+          "upperBoundMicroPounds": null,
+          "ratePercent": 45,
+          "comment": "Additional rate above £125,140 at 45%. upperBoundMicroPounds null = no upper bound. Literature-grounded placeholder (UK 2025/26 band) — mapping sanity-check only. Pending Aaron's balance pass."
+        }
+      ],
+      "niRates": {
+        "employeePercent": 8,
+        "employerPercent": 13.8,
+        "comment": "National Insurance as two distinct, independently-settable rates (AC-2): the employee leg and the employer leg (the second half of the PAYE incidence split, AC-6). Literature-grounded placeholder (UK 2025/26 main rates) — mapping sanity-check only. Pending Aaron's balance pass."
+      },
+      "elasticity": {
+        "coefficient": 0.45,
+        "comment": "Base elasticity of labour participation/supply to the income-tax rate. Derived placeholder, no external anchor — pending Aaron's balance pass."
+      },
+      "bearerWeights": {
+        "comment": "Rate-dependent incidence split (ASM-287: employee — income tax + employee NI — vs employer — employer NI, AC-2's second leg). Two example points at income-tax headline rates; at higher rates a larger share is absorbed by employers via reduced gross wage offers.",
+        "ratePoints": [
+          {
+            "ratePercent": 20,
+            "comment": "Lower example point (basic rate). Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "employee", "share": 0.80, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "employer", "share": 0.20, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          },
+          {
+            "ratePercent": 45,
+            "comment": "Higher example point (additional rate): a larger share absorbed by the employer. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "employee", "share": 0.65, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "employer", "share": 0.35, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          }
+        ]
+      },
+      "zoneOverrides": {}
+    },
+    "councilTax": {
+      "name": "Council tax",
+      "category": "property",
+      "rateRange": {
+        "minPercent": 0,
+        "maxPercent": 400,
+        "comment": "Valid-rate bounds expressed as a percentage of the band-D baseline liability (100% = baseline). Placeholder caps. §39's band-by-typology detail is engine.tax.md's finer scope, not this file's six-instrument top level. Pending Aaron's balance pass."
+      },
+      "elasticity": {
+        "coefficient": 0.25,
+        "comment": "Base elasticity of the residential-liability base to the council-tax rate (mobility / banding response). Derived placeholder, no external anchor — pending Aaron's balance pass."
+      },
+      "bearerWeights": {
+        "comment": "Rate-dependent incidence split (ASM-287; engine.tax AC-5's named example: owner-occupier vs landlord vs tenant). Two example points; a landlord absorbs more of a low rate but passes more through to rent at a high rate (tenant share rises, landlord share falls).",
+        "ratePoints": [
+          {
+            "ratePercent": 100,
+            "comment": "Lower example point (baseline). Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "ownerOccupier", "share": 0.55, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "landlord", "share": 0.30, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "tenant", "share": 0.15, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          },
+          {
+            "ratePercent": 250,
+            "comment": "Higher example point: the landlord passes more through to rent, so the tenant share rises. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "ownerOccupier", "share": 0.45, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "landlord", "share": 0.10, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "tenant", "share": 0.45, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          }
+        ]
+      },
+      "zoneOverrides": {}
+    },
+    "businessRates": {
+      "name": "Business rates",
+      "category": "property",
+      "rateRange": {
+        "minPercent": 0,
+        "maxPercent": 400,
+        "comment": "Valid-rate bounds expressed as a percentage of the assessed-liability baseline (100% = baseline). Placeholder caps. The zone-class coefficient × land-value mechanism this generalises is engine.tax AC-7's. Pending Aaron's balance pass."
+      },
+      "elasticity": {
+        "coefficient": 0.35,
+        "comment": "Base elasticity of the business-liability base to the rates level (occupancy / relocation response). Derived placeholder, no external anchor — pending Aaron's balance pass."
+      },
+      "bearerWeights": {
+        "comment": "Rate-dependent incidence split (ASM-287; engine.tax AC-5: firm vs pass-through consumer). Two example points; at higher rates the firm passes more through to consumers.",
+        "ratePoints": [
+          {
+            "ratePercent": 100,
+            "comment": "Lower example point (baseline). Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "firm", "share": 0.60, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "consumer", "share": 0.40, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          },
+          {
+            "ratePercent": 300,
+            "comment": "Higher example point: more of the burden passed through to consumers. Derived placeholder, no external anchor — pending Aaron's balance pass.",
+            "bearers": [
+              { "category": "firm", "share": 0.45, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." },
+              { "category": "consumer", "share": 0.55, "comment": "Derived placeholder, no external anchor — pending Aaron's balance pass." }
+            ]
+          }
+        ]
+      },
+      "zoneOverrides": {
+        "heavyIndustry": {
+          "rateMultiplier": 0.7,
+          "comment": "FEAT-056 worked example, tax-side home: an industrial zone giving a discount on EV vans — heavy-industry zone class pays 70% of the citywide business rate. Derived placeholder, no external anchor — pending Aaron's balance pass. (Whether this example is tax relief or a data/policies.json incentive is ASM-417, flagged to Bill; this builds the tax side so the example is checkable either way.)"
+        },
+        "manufacturing": {
+          "rateMultiplier": 0.85,
+          "comment": "Companion industrial-zone discount (15% off) demonstrating the zoneOverrides shape beyond a single key. Derived placeholder, no external anchor — pending Aaron's balance pass."
+        }
+      }
+    }
+  }
+}
