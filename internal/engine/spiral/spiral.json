@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "decay": {
+    "landValueDragPerSeverityMicropounds": 1000,
+    "hazardPressurePerSeverity": 5,
+    "demolitionCostBaseMicropounds": 10000,
+    "demolitionCostPerSeverityMicropounds": 5000,
+    "demolitionCostPerMonthMicropounds": 100,
+    "severityGrowthPerMonth": 1,
+    "abandonSeverityStart": 1,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, ASM-241) -- not yet Aaron-confirmed. The AC-3 effects are checked for SHAPE (monotonic in severity/age, independently queryable) not for these specific magnitudes."
+  },
+  "blight": {
+    "spreadSeverityThreshold": 2,
+    "maxSeverity": 10,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, ASM-241) -- not yet Aaron-confirmed. The blight-spread rate and severity ceiling are shape-only: blight genuinely spreads cell-by-cell via a deterministic frontier, and severity is bounded."
+  },
+  "recovery": {
+    "investmentCostMicropounds": 25000,
+    "investmentSeverityReduction": 3,
+    "taxReliefCostPerCellMicropounds": 8000,
+    "taxReliefSeverityReduction": 2,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime) -- not yet Aaron-confirmed. AC-5 checks that each recovery command costs strictly more than zero and strictly reduces decay severity, never the specific price."
+  },
+  "ghostCity": {
+    "warningThresholdMonths": 12,
+    "minWarningLeadMonths": 6,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, FEAT-057/AC-20) -- not yet Aaron-confirmed. Must agree with engine.projections' embedded deathwarnings.json ghostCity entry (see TestGhostCityConfigDriftsAgainstProjections); ghost-city population decline moves on slower demographic timescales than insolvency, so its warning window is deliberately longer."
+  },
+  "stage": {
+    "emigrationAttractivenessThreshold": 40.0,
+    "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, ASM-241) -- not yet Aaron-confirmed. AC-2 checks that the emigration-onset transition is a threshold on the real attractiveness score, never a hardcoded stage counter; the exact threshold is untuned."
+  }
+}
