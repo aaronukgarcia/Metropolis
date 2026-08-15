@@ -36,6 +36,32 @@ type Event struct {
 
 	Severity Severity `json:"severity"`
 
+	// Crisis marks this event as a crisis: the explicitly-tagged subset of
+	// events that ui.alerts' auto-pause control (FEAT-013 AC-6) must react
+	// to by pausing and redirecting (§3: "Crisis events auto-pause and drop
+	// the camera/speed to the relevant queue"). It is deliberately a plain
+	// bool, INDEPENDENTLY settable from Severity — neither field is derived
+	// from the other, and no code path in this package computes one from the
+	// other (FEAT-042 AC-24). A SeverityCritical event may be Crisis==false
+	// (a P0 "loan payment due" is urgent but not the kind of emergency §3
+	// means — it must not auto-pause), and a SeverityInfo/Warning event may
+	// be Crisis==true (a crisis-tagged alert auto-pauses regardless of its
+	// display tier). Which engine conditions carry the tag is a design call
+	// owned by the engine side (ASM-223), not this field's mechanism.
+	//
+	// Additive + omitempty: when Crisis is false the key is absent from the
+	// wire, so a pre-amendment record and a genuinely non-crisis event both
+	// decode to false with no error (FEAT-042 AC-25) — the absence of the
+	// key is a valid, self-consistent state, not a version-negotiation case.
+	//
+	// The emitter that sets Crisis==true MUST also supply a stable
+	// per-instance crisis identity (FEAT-042 AC-25b) — typically via
+	// EntityRefs, or a dedicated identifier field once one exists — so
+	// ui.alerts can key its edge-triggered dedupe (AC-8) on "one stable ID
+	// per underlying crisis instance", never a per-delta/per-condition-type
+	// value regenerated each time the condition is reported.
+	Crisis bool `json:"crisis,omitempty"`
+
 	// EntityRefs names the entities the event is about (a road, a
 	// citizen, a district), same opaque-reference convention as
 	// InspectEntityPayload.EntityRef — lets the UI's drill-through rule
