@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-08-16) — GR#3 duplicate.** Superseded by `docs/planning/acceptance/feat.securehelpers.md`, the surviving FEAT-135 acceptance file (mkey `feat.securehelpers`); kept in-place per GR#24, not deleted. See ASM-924.
+
 BOW code: FEAT-135
 
 # Acceptance criteria — secure-by-default Go helper primitives (FEAT-135)

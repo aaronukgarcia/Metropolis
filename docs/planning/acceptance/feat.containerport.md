@@ -75,6 +75,7 @@ The deep-sea container terminal as a tier above `container_terminal`: berths × 
 - **Consumes `engine.rail` (MOD-060, open).** The intermodal transfer point is `engine.rail.md` AC-3's tonnes-conservation contract. The `feat.containerport → engine.rail` edge is unregistered.
 - **Inherits `feat.facilitypermits`/`feat.decommission` (FEAT-053/FEAT-054, open).** Permit + day-one liability (AC-7); both edges unregistered (ASM-687).
 - **Overlaps `feat.megafacilities` (FEAT-055).** FEAT-055's US-4/AC-6/AC-7 already scope "the Felixstowe-class container-port tier" as one of its three mega-facility classes, expressed through the same `feat.megafacilities → engine.freight` edge. This is the sharpest cross-module collision in this trio of files — see ES-1/ASM-684.
+- **Ownership split (resolved 2026-08-16).** `feat.containerport.md` (FEAT-099) is authoritative for the Felixstowe deep-sea terminal **mechanics** (this file, AC-1 through AC-12); `feat.megafacilities.md` (FEAT-055) is authoritative for the expert-workforce **gate** (its AC-3/AC-4/AC-5). FEAT-055's AC-6/AC-7 are superseded for mechanics — see that file's container-port section pointer.
 
 ## Escalations
 
