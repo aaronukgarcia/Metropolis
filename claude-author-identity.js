@@ -1,3 +1,6 @@
+// Module key: tool.authoridentity (see code.json; GUID b853fd24-0f59-47c0-96c1-4acd87445d5c)
+// Spec ref: GR#2; BUG-035
+
 /**
  * claude-author-identity.js — shared sanctioned-identity derivation
  * (FEAT-045 / BOW mkey candidate: tool.committhook; see the registry-key
@@ -18,6 +21,11 @@
  * the code, not changing what it decides (see the acceptance file's
  * "Out of scope").
  *
+ * ASM-226 (2026-08-13) IS that fresh BOW item, narrowly scoped: it changes
+ * only the HISTORY-SCAN CAP from a hardcoded 2000 to a value DERIVED at
+ * runtime from the repo's commit count (deriveScanLimit()), per GR#15. The
+ * three trust sources and HISTORY_THRESHOLD are untouched.
+ *
  * THREE SOURCES, IN ORDER OF TRUST (AC-4):
  *
  *   1. THE CURRENTLY CONFIGURED GIT IDENTITY — `git config user.email`,
@@ -25,7 +33,8 @@
  *   2. EMAILS SEEN REPEATEDLY IN THE TRUNK BRANCH'S OWN HISTORY (`main` if
  *      it exists locally, else `master`, else current branch) — as author
  *      OR committer, at or above THRESHOLDS.HISTORY_THRESHOLD times, scanned
- *      over the most recent THRESHOLDS.HISTORY_SCAN_LIMIT commits.
+ *      over the most recent deriveScanLimit() commits (the repo's real
+ *      commit count, capped at THRESHOLDS.HISTORY_SCAN_LIMIT — ASM-226).
  *   3. CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES — an operator-set env var, for a
  *      legitimate second contributor who has no history yet.
  *
@@ -54,6 +63,10 @@
  * observe the SAME change through every consumer that requires this module
  * — there is exactly one copy of these numbers in the process, not one per
  * requiring file.
+ *
+ * The history-scan cap is additionally derived per-invocation from the
+ * repo's commit count (deriveScanLimit()) and operator-overridable via
+ * CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT (ASM-226).
  *
  * WHAT THIS FILE DELIBERATELY DOES NOT DO (AC-4's "lazy implementation"
  * trap, stated so nobody re-adds it later): there is NO embedded fallback
@@ -85,11 +98,17 @@ const path = require('path');
 // ---------------------------------------------------------------------------
 
 const THRESHOLDS = {
-  // BUG-052: bound the history scan instead of leaving it unbounded. 3
-  // occurrences inside the most recent 2000 commits is generous for any
-  // actively-committing identity to be picked up, and bounded against
-  // unbounded cost on a large/old history.
+  // Policy threshold (unchanged): an identity must appear at or above this
+  // many times (as author OR committer) to be sanctioned from history alone.
   HISTORY_THRESHOLD: 3,
+  // BUG-052 + ASM-226 (GR#15): HISTORY_SCAN_LIMIT is now the RESOURCE
+  // CEILING, not a validator's expected count. The actual number of commits
+  // scanned is DERIVED at guard-run time from the repo's real commit count
+  // (deriveScanLimit() below) and capped at this ceiling, so a large/old
+  // history can never drive unbounded cost while a young repo never asks git
+  // for commits that do not exist. Operator-overridable per-invocation via
+  // CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT (a positive integer wins; anything
+  // else falls back to this documented default).
   HISTORY_SCAN_LIMIT: 2000,
 };
 
@@ -248,9 +267,60 @@ function trunkBranch() {
   }
 }
 
+/** ASM-226 (GR#15): resolve the history-scan CEILING. The operator-set env
+ * var CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT (a positive integer) wins; anything
+ * else — unset, non-numeric, or <= 0 — falls back to the documented default
+ * THRESHOLDS.HISTORY_SCAN_LIMIT. This is a resource bound, not a validator's
+ * expected value, so a default is the correct shape (see weakness pattern
+ * "bound anything that sizes work"). */
+function resolveScanLimitCeiling() {
+  const override = Number.parseInt(process.env.CLAUDE_AUTHOR_GUARD_HISTORY_LIMIT, 10);
+  if (Number.isInteger(override) && override > 0) return override;
+  return THRESHOLDS.HISTORY_SCAN_LIMIT;
+}
+
+/** ASM-226 (GR#15): derive the history-scan cap from the repo's ACTUAL
+ * commit count at guard-run time instead of assuming a fixed 2000. The cap
+ * is min(realCommitCount, ceiling): a young repo scans exactly the commits
+ * that exist (never asking git for 2000 of 5), and a large/old repo is
+ * still bounded by the ceiling (BUG-052's resource bound, preserved).
+ *
+ * THE COUNT IS TAKEN FROM THE TRUNK BRANCH BEING SCANNED (ASM-226 reject),
+ * NOT HEAD: `git rev-list --count <trunkBranch()>`. historyEmails() scans
+ * trunkBranch() (main, else master, else current HEAD), so the cap must be
+ * derived from that SAME branch — deriving it from HEAD under-caps the scan
+ * whenever HEAD is not a descendant of the trunk (orphan branch, detached
+ * HEAD, or a branch whose base is behind main), which silently drops a
+ * legitimate repeat committer out of the sanctioned set (a false-DENY
+ * regression vs the pre-ASM-226 hardcoded 2000, which scanned
+ * min(2000, trunk-actual)).
+ *
+ * FAIL-OPEN ON A FAILED DERIVATION: if the trunk cannot be resolved (unborn
+ * HEAD, git failure) this returns the ceiling unchanged — never throws,
+ * never scans zero. This module has no error surface by design (each
+ * consumer decides fail-open vs fail-closed; see the module header), so a
+ * failed derivation degrades to the documented default, not to a registry
+ * error — the MET-* registry in data/errors.json is the Go app's error
+ * path, and this JS hook's own contract is silent fail-open (AC-8 of the
+ * FEAT-045 demotion). */
+function deriveScanLimit() {
+  const ceiling = resolveScanLimitCeiling();
+  const branch = trunkBranch();
+  if (!branch) return ceiling;
+  let count;
+  try {
+    count = Number.parseInt(git(['rev-list', '--count', branch]), 10);
+  } catch {
+    return ceiling;
+  }
+  if (!Number.isInteger(count) || count <= 0) return ceiling;
+  return Math.min(count, ceiling);
+}
+
 /** Source 2: emails appearing >= THRESHOLDS.HISTORY_THRESHOLD times (author
- * or committer) within the most recent THRESHOLDS.HISTORY_SCAN_LIMIT commits
- * of the trunk branch. Empty set on a brand-new repo.
+ * or committer) within the most recent deriveScanLimit() commits of the
+ * trunk branch (the repo's real commit count, capped at
+ * THRESHOLDS.HISTORY_SCAN_LIMIT — ASM-226). Empty set on a brand-new repo.
  *
  * See header: CLAUDE_AUTHOR_IDENTITY_FORCE_ERROR=1 makes this throw instead
  * of catching, for test use only. */
@@ -260,9 +330,10 @@ function historyEmails() {
   }
   const branch = trunkBranch();
   if (!branch) return new Set();
+  const limit = deriveScanLimit();
   let raw;
   try {
-    raw = git(['log', branch, `--max-count=${THRESHOLDS.HISTORY_SCAN_LIMIT}`, '--format=%ae%n%ce']);
+    raw = git(['log', branch, `--max-count=${limit}`, '--format=%ae%n%ce']);
   } catch {
     return new Set();
   }
@@ -311,6 +382,7 @@ module.exports = {
   THRESHOLDS,
   configuredEmail,
   trunkBranch,
+  deriveScanLimit,
   historyEmails,
   extraIdentities,
   deriveSanctioned,

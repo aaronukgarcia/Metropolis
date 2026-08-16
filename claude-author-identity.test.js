@@ -242,11 +242,46 @@ test('CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES is picked up by extraIdentities()', (
 // history scan now lives in THIS file's source, not the guard's).
 // ---------------------------------------------------------------------------
 
-test('BUG-052: historyEmails() bounds its git log scan (source carries a --max-count cap, not unbounded)', () => {
+test('BUG-052/ASM-226: historyEmails() bounds its git log scan (source carries a DERIVED --max-count cap, not unbounded)', () => {
   const src = fs.readFileSync(path.join(__dirname, 'claude-author-identity.js'), 'utf8');
-  assert.match(src, /--max-count=\$\{THRESHOLDS\.HISTORY_SCAN_LIMIT\}/);
+  assert.match(src, /--max-count=\$\{limit\}/);
+  assert.match(src, /'rev-list',\s*'--count'/, 'the cap must be derived from the repo commit count at runtime (GR#15)');
+  assert.doesNotMatch(src, /'rev-list',\s*'--count',\s*'HEAD'/, 'the count must be derived from the trunk branch being scanned, not HEAD (ASM-226 reject)');
   assert.equal(typeof identity.THRESHOLDS.HISTORY_SCAN_LIMIT, 'number');
   assert.ok(identity.THRESHOLDS.HISTORY_SCAN_LIMIT > 0 && Number.isFinite(identity.THRESHOLDS.HISTORY_SCAN_LIMIT));
+  assert.equal(typeof identity.deriveScanLimit, 'function');
+});
+
+test('ASM-226 (GR#15): deriveScanLimit() counts the TRUNK branch, not HEAD — an orphan-HEAD repo still sanctions a repeat trunk committer', () => {
+  withTempRepo((dir) => {
+    // Build the trunk (main) with 8 commits, all authored/committed by a
+    // single repeat identity — 16 history hits, far above HISTORY_THRESHOLD.
+    git(dir, ['init', '-b', 'main']);
+    git(dir, ['config', 'user.name', 'Rich']);
+    git(dir, ['config', 'user.email', 'rich@example.invalid']);
+    for (let i = 0; i < 8; i++) {
+      fs.writeFileSync(path.join(dir, `rich${i}.txt`), `rich ${i}\n`, 'utf8');
+      git(dir, ['add', '-A']);
+      git(dir, ['commit', '-m', `rich commit ${i}`]);
+    }
+
+    // Now switch HEAD onto an ORPHAN branch with exactly one root commit. The
+    // trunk (main) still has all 8 commits, but HEAD's own history is now a
+    // single commit. A HEAD-count derivation would cap the scan at 1 and miss
+    // rich entirely; a trunk-count derivation must return 8 and keep rich in
+    // the sanctioned set.
+    git(dir, ['checkout', '--orphan', 'docs']);
+    git(dir, ['commit', '-m', 'orphan docs root']);
+
+    withCwd(dir, () => {
+      assert.equal(identity.THRESHOLDS.HISTORY_THRESHOLD, 3, 'precondition: default threshold');
+      assert.equal(identity.deriveScanLimit(), 8, 'the derived cap must come from the trunk (main: 8 commits), not HEAD (docs: 1 commit)');
+      assert.ok(
+        identity.historyEmails().has('rich@example.invalid'),
+        'a repeat committer on the trunk must still be sanctioned when HEAD is an orphan branch (HEAD-count derivation would scan only 1 commit and miss it)'
+      );
+    });
+  });
 });
 
 // BUG-052 (behavioural + args-level regression, not just source-grep):
