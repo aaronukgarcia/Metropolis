@@ -1,0 +1,54 @@
+{
+  "$comment": "Balance data for engine.spaceport (MOD-076). §MP (METROPOLIS-MASTER-v2.1.md line 498, 'Space Launch Complex | M11 + research | 3B | launches (events, exports), aerospace sector unlock, noise blight (coastal siting realistic)') and resources-design-brief.md §8 (lines 54-79) name the spaceport's direction and mechanism only — they give NO tuned magnitude for launch cadence, export value, prestige, the FDI/tourism draw, the exclusion radius, or the expert threshold. Every numeric value below is therefore a PLACEHOLDER pending Aaron's balance pass (the balance-number regime, GR#15): tests assert direction/structure only (the exclusion contour degrades land value inside the zone, the draw raises FDI/tourism demand, the gate rejects money-alone), never a specific figure. Units are stated per field, and every numeric value carries a disclosure naming it a placeholder. This file also records the catalogue reconciliation (shape (a), AC-1): the spaceport IS the existing space_launch_complex entry in data/buildings.json, enriched in place — never a second launch-site entry (GR#3).",
+  "meta": {
+    "specRef": "§MP line 498; resources-design-brief.md §8 (lines 54-79)",
+    "balance": "PLACEHOLDER pending Aaron's balance pass — every numeric value below is a placeholder with a disclosure naming it as such"
+  },
+  "version": 1,
+  "catalogueAnchor": "space_launch_complex",
+  "buildMonths": {
+    "value": 60,
+    "unit": "months",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — multi-year build duration (§MP 'multi-year builds')"
+  },
+  "launchCadenceMonths": {
+    "value": 3,
+    "unit": "months",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — months between launches once operational"
+  },
+  "exportValuePerLaunch": {
+    "value": 50000000,
+    "unit": "pounds GBP per launch",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — export value credited per fired launch"
+  },
+  "prestigePerLaunch": {
+    "value": 1000,
+    "unit": "prestige points per launch",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — prestige credited per fired launch"
+  },
+  "fdiDrawAmount": {
+    "value": 100,
+    "unit": "FDI prospect-draw units",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — FDI prospect demand injected when the spaceport is built"
+  },
+  "tourismDrawAmount": {
+    "value": 2500,
+    "unit": "visitor-draw units",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — tourism visitor demand injected when the spaceport is built"
+  },
+  "exclusionRadiusCells": {
+    "value": 5,
+    "unit": "cells",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — launch-exclusion/noise contour radius"
+  },
+  "exclusionLandFactorPerMille": {
+    "value": 700,
+    "unit": "per-mille (1000 = no blight)",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — land-value factor inside the exclusion radius"
+  },
+  "expertThreshold": {
+    "value": 1000,
+    "unit": "research points",
+    "disclosure": "PLACEHOLDER pending Aaron's balance pass — expert gate threshold on engine.education's accumulated research output"
+  }
+}
