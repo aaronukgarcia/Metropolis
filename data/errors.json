@@ -64,7 +64,9 @@
       "G900-G999": "reserved for engine.unlocks (internal/engine/unlocks: the §22 four-currency unlock economy — XP, the §4 thirteen-tier milestone ladder, Development-Point trees loaded from data/unlock_trees.json, the money-only Buy path, and the debug force-unlock gate — MOD-032. Tenth G-layer engine claim after feat.compositionroot's G800-G899; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G9\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G9xx code existed either place.)",
       "G1000-G1099": "reserved for engine.freight (internal/engine/freight: the freight harbour, tonnes accounting and production-chain model — port capacity/customs/smuggling-risk, the five chain families whose stages register as firms, the four storage-site types, modal-capped freight movements, the balance-of-trade breakdown, and the mass-conservation identity — MOD-047. Eleventh G-layer engine claim after engine.unlocks' G900-G999; the G layer's three-digit namespace is exhausted, so this is the first FOUR-DIGIT block (G1000-G1099), per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xxx code existed either place.)",
       "G1100-G1199": "reserved for engine.spiral (internal/engine/spiral: the Detroit-spiral failure states — abandonment decay, cell-by-cell blight spread, the recovery commands, the insolvency/ghost-city death conditions, and the ghost-city epilogue — MOD-030. Twelfth G-layer engine claim after engine.freight's G1000-G1099; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G11\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G11xx code existed either place.)",
-      "G1200-G1299": "reserved for engine.services (internal/engine/services: the generic §10 service framework — capacity/coverage/funding→quality, §26 shared staffing pools, and the §54 Public Service Pie benchmark ratios — MOD-033. Twelfth G-layer engine claim; engine.unlocks took G900-G999, engine.freight G1000-G1099, and engine.spiral G1100-G1199 in the same wave, so engine.services opens G1200-G1299 under BUG-234's 2026-08-14 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G12\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G12xx code existed either place.)"
+      "G1200-G1299": "reserved for engine.services (internal/engine/services: the generic §10 service framework — capacity/coverage/funding→quality, §26 shared staffing pools, and the §54 Public Service Pie benchmark ratios — MOD-033. Twelfth G-layer engine claim; engine.unlocks took G900-G999, engine.freight G1000-G1099, and engine.spiral G1100-G1199 in the same wave, so engine.services opens G1200-G1299 under BUG-234's 2026-08-14 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G12\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G12xx code existed either place.)",
+      "G1400-G1499": "reserved for engine.firms (internal/engine/firms: the firm lifecycle — per-citizen founding, Startup→Small→Medium→Enterprise progression, staff as real CitizenIDs, failure/insolvency/acquisition, entrepreneur-culture index, superlinear professional-services demand, and deposit-bounded credit priced against the off-map base-rate cycle — MOD-058. Fourteenth G-layer engine claim. G1300-G1399 was deliberately left unclaimed at this module's build time (the dispatch brief fixed this module's range at G1400-G1499; a sibling wave item may claim G1300-G1399). Checked against this table AND `grep -rn \"MET-G14\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G14xx code existed either place.)",
+      "G1300-G1399": "reserved for engine.tax (internal/engine/tax: the §39 fine-grain instrument panel — data-defined rates/elasticity/incidence, per-district multipliers, EV-share base erosion, and revenue posting through engine.finance — MOD-052. Thirteenth G-layer engine claim after engine.services' G1200-G1299; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G13\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G13xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -2192,6 +2194,132 @@
       "module": "engine.services",
       "message": "net fiscal cost clawback overflowed (gross {gross}, rate {rate})",
       "remedy": "NetFiscalCost's gross-wage × income-tax-rate intermediate product overflowed int64, so the clawback (and therefore the honest net) cannot be computed. The gross wage bill is too large for the fixed-point arithmetic to represent its tax clawback; reduce the staffing/wage magnitude or surface the figure differently (SEC-094)."
+    },
+    "MET-G1400": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "firms data invalid: {cause}",
+      "remedy": "data/firms.json could not be read or failed this module's schema validation (missing file, malformed JSON, a non-positive or out-of-order stage minStaff, an unknown stage/premise-class slug, a negative founding/credit coefficient, an empty or non-monotone base-rate cycle). Correct the named field and rule in the error context — engine.firms never falls back to a partial config or a silent default."
+    },
+    "MET-G1401": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "founding or hiring referenced an unknown citizen ID {citizen}",
+      "remedy": "The CitizenID does not resolve through CitizensAPI (AC-15). Reject it rather than silently creating a placeholder citizen — the caller must supply a real citizen record that already exists in the population."
+    },
+    "MET-G1402": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "command or query referenced an unknown firm ID {firm}",
+      "remedy": "The FirmID is not registered in this FirmsAPI. Reject it rather than silently creating a zero-value firm — found firms before growing/failing/acquiring/querying them."
+    },
+    "MET-G1403": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "FirmsAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *FirmsAPI pointer Load/LoadDefault returned. Dereferencing-and-reassigning (f2 := *f) produces a second value with its own mutex but aliased maps/slices, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call Load again."
+    },
+    "MET-G1404": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "firm {firm} growth blocked: {reason}",
+      "remedy": "A growth attempt could not advance the firm (staff roster below the target stage floor, or no premises secured — AC-4/AC-7). The firm stays at its current stage; supply the missing real hires or grant premises and retry. Never a silent stage advance."
+    },
+    "MET-G1405": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "firm {firm} is already at Enterprise stage",
+      "remedy": "A growth command targeted a firm already at Enterprise (there is no further stage to advance to, AC-16). Reject rather than silently clamping or ignoring — the command is a no-op and should not be issued."
+    },
+    "MET-G1406": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "staff-count input invalid: {value}",
+      "remedy": "A staff-count query/command carried a non-positive count (AC-16). Supply a positive real-hire list — engine.firms never silently clamps a zero/negative staff count into a plausible one."
+    },
+    "MET-G1407": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "firm {firm} cannot secure premises of class {zone}",
+      "remedy": "The firm's target-stage premises (right zone class, right size) are not available through engine.build, so growth is blocked and the firm enters the stalled/exit state (AC-7, §45's 'dies or leaves'). Zone the required premises through engine.build, then retry growth."
+    },
+    "MET-G1408": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "credit request for {amount} exceeds deposit-backed lending capacity {capacity}",
+      "remedy": "The requested loan principal is larger than the bank's deposit pool can back (AC-13). Reduce the request or grow the deposit base — credit cannot be created beyond what the deposit pool and rate cycle would realistically support."
+    },
+    "MET-G1409": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "operation {operation} invoked before dependency {dependency} was wired",
+      "remedy": "The operation needs a sibling module (engine.citizens/finance/market/build) that has not been wired via SetCitizens/SetFinance/SetMarket/SetBuild. Wire the dependency at composition-root time before running firm lifecycle operations — never a silent no-op (GR#17)."
+    },
+    "MET-G1410": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "credit request carried a non-positive principal {amount}",
+      "remedy": "A firm credit request must carry a positive principal. Reject a non-positive amount rather than silently clamping it to a plausible one — a zero/negative principal is a caller error, not a credit decision."
+    },
+    "MET-G1300": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "data/tax_instruments.json could not be loaded or validated (dir {dir}): {cause}",
+      "remedy": "The six-instrument tax set failed to load. Check that data/tax_instruments.json exists, is valid JSON, and passes foundation/data's schema validation (version, the six accepted instrument IDs, valid categories, rate ranges, elasticity, bearer shares summing to 1.0, zone-override keys inside the 8-way enum). Set METROPOLIS_DATA_DIR to override the resolved data directory."
+    },
+    "MET-G1301": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "tax instrument {instrument} rate {rate} is outside its valid range [{min}, {max}]",
+      "remedy": "SetRate validates the requested rate against the instrument's data-loaded rateRange (data/tax_instruments.json). The rate is rejected — never clamped or silently accepted — and the instrument's current rate is left unchanged. Choose a rate within the declared bounds."
+    },
+    "MET-G1302": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "unknown tax instrument {instrument}",
+      "remedy": "The instrument key is not one of the six loaded from data/tax_instruments.json. Check the key against the loaded set (TaxAPI.Instruments). Never treat an unknown key as a zero-value instrument."
+    },
+    "MET-G1303": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "tax instrument {instrument} rate is not finite (NaN or ±Inf)",
+      "remedy": "A headline rate must be a finite number. NaN or ±Inf would otherwise collapse inside the elasticity/revenue arithmetic; reject it at the boundary rather than storing it."
+    },
+    "MET-G1304": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "tax instrument {instrument} base cannot be negative (got {base})",
+      "remedy": "Money is never negative (M0-ENG §1.2). SetBase rejects a negative full base rather than storing it."
+    },
+    "MET-G1305": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "tax instrument {instrument} EV-share must be a finite number in [0,1] (got {share})",
+      "remedy": "The EV-share (base-erosion) input is the fraction of the base eroded by external substitution (e.g. EV adoption eroding fuel-duty revenue). It must be finite and in [0,1]."
+    },
+    "MET-G1306": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "tax instrument {instrument} district {district} rejected an invalid rate multiplier {multiplier}",
+      "remedy": "A district rate multiplier scales the citywide base rate (1.0 = no change, 0 = a tax-free district). It must be a finite number >= 0 whose effective rate (citywide rate × multiplier) stays within the instrument's data-loaded rateRange, and the district ID must be non-empty. Reject — never store — an invalid multiplier (SEC-098: an unbounded district multiplier would blow the effective-rate cap at district level and make revenue non-monotonic)."
+    },
+    "MET-G1307": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "unknown zone class {zone} in the zone-scoped property-tax computation",
+      "remedy": "BusinessRateRevenue accepts only §34's closed 8-way zone-class enum (dwelling, shop, office, entertainment, farming, manufacturing, heavyIndustry, mining). Reject any other key rather than treating it as a no-discount zone."
+    },
+    "MET-G1308": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "engine.finance is not wired (call SetFinance first) — {operation} requires it",
+      "remedy": "Collect/CollectAll/CollectedRevenue need the wired *finance.FinanceAPI to post ledger transactions or read tax revenue. Wire it via SetFinance; never silently no-op when absent."
+    },
+    "MET-G1309": {
+      "severity": "error",
+      "module": "engine.tax",
+      "message": "TaxAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *TaxAPI pointer Load/LoadDefault returned. Dereferencing-and-reassigning (a2 := *a) produces a second value with its own mutex but aliased maps, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call Load/LoadDefault again."
     }
   }
 }
