@@ -1,0 +1,93 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "feat.farmtypes (FEAT-104) / engine.farming (MOD-045, §31/§17/§25) — the farm-type catalogue. This file is the sole source for every per-type figure (footprint, soil-quality band, terrain/slope preference, BDI term, stocking density, chain handoff) the typed catalogue in internal/engine/farming resolves — GR#15: no per-type figure lives as a Go numeric literal in internal/engine/farming/*.go. Each 'types' entry is a DISTINCT modelled facility with its own parameter set (the load-bearing rule); regime (conventional vs organic) is deliberately orthogonal to type and belongs to engine.farming's AC-8 regime bundle, not this file (ASM-679).",
+    "taxonomy": "Five §31 facility categories (ASM-677): arable (wheat/barley/rapeseed/potatoes), livestock (dairy/beef/sheep/pigs/poultry), orchard (apples/cherries/soft fruit), market garden (field veg/poly-tunnel salads/hops), vineyard/winery (vines). A named §31 crop/livestock is a VARIANT within its category, not its own top-level type.",
+    "balanceRegime": "Every per-type figure in this file is a PLACEHOLDER pending Aaron's balance pass. No figure is a final balance number; each 'types' entry carries a non-empty 'disclosure' field naming it as such (ASM-676). Tests assert shape/direction/distinctness, never a specific magnitude.",
+    "units": {
+      "footprintCells": "cells — the farm's physical footprint in world cells",
+      "soilBand": "the per-type soil-quality requirement band (a closed enum: chalkDownland/pasture/chalkSlope/fertileLoam)",
+      "terrain": "the per-type terrain/slope preference (a closed enum: openDownland/grazingDownland/chalkSlope/shelteredValley — vines/orchard prefer chalk slopes, §31)",
+      "bdiTerm": "the per-type additive contribution into engine.farming's five-factor regional Biodiversity Index (dimensionless; direction is authoritative, magnitude is a placeholder)",
+      "headPerCell": "livestock stocking density, head per cell (livestock type only, per-variant — §31 'with stocking density')",
+      "chain.commodity": "the downstream chain-output commodity name (grain/milk/livestock/fruit/vegetables/grapes)",
+      "chain.destination": "the downstream chain destination enum (mill/dairy/abattoir/packhouse/winery — §31 chains)",
+      "yieldNote": "chain-output tonnage is declared by the commodity+destination handoff, not a t/day figure here — the t/day producer coefficient is engine.farming's AC-11 surface; this catalogue only types the handoff"
+    }
+  },
+  "types": {
+    "arable": {
+      "footprintCells": 6,
+      "soilBand": "chalkDownland",
+      "terrain": "openDownland",
+      "bdiTerm": -0.10,
+      "chain": { "commodity": "grain", "destination": "mill" },
+      "variants": [
+        { "name": "wheat" },
+        { "name": "barley" },
+        { "name": "rapeseed" },
+        { "name": "potatoes" }
+      ],
+      "disclosure": "placeholder pending Aaron's balance pass — footprintCells, soilBand, terrain, bdiTerm and chain handoff are directional placeholders, not final balance figures"
+    },
+    "livestock": {
+      "footprintCells": 4,
+      "soilBand": "pasture",
+      "terrain": "grazingDownland",
+      "bdiTerm": -0.05,
+      "chain": { "commodity": "livestock", "destination": "abattoir" },
+      "variants": [
+        { "name": "dairy", "chain": { "commodity": "milk", "destination": "dairy" } },
+        { "name": "beef" },
+        { "name": "sheep" },
+        { "name": "pigs" },
+        { "name": "poultry" }
+      ],
+      "stocking": [
+        { "variant": "dairy",   "headPerCell": 0.5 },
+        { "variant": "beef",    "headPerCell": 0.4 },
+        { "variant": "sheep",   "headPerCell": 1.5 },
+        { "variant": "pigs",    "headPerCell": 0.8 },
+        { "variant": "poultry", "headPerCell": 12.0 }
+      ],
+      "disclosure": "placeholder pending Aaron's balance pass — footprintCells, soilBand, terrain, bdiTerm, chain handoff and every per-variant stocking density (headPerCell) are directional placeholders, not final balance figures"
+    },
+    "orchard": {
+      "footprintCells": 5,
+      "soilBand": "chalkSlope",
+      "terrain": "chalkSlope",
+      "bdiTerm": 0.15,
+      "chain": { "commodity": "fruit", "destination": "packhouse" },
+      "variants": [
+        { "name": "apples" },
+        { "name": "cherries" },
+        { "name": "softFruit" }
+      ],
+      "disclosure": "placeholder pending Aaron's balance pass — footprintCells, soilBand, terrain, bdiTerm and chain handoff are directional placeholders, not final balance figures"
+    },
+    "marketGarden": {
+      "footprintCells": 2,
+      "soilBand": "fertileLoam",
+      "terrain": "shelteredValley",
+      "bdiTerm": -0.02,
+      "chain": { "commodity": "vegetables", "destination": "packhouse" },
+      "variants": [
+        { "name": "fieldVeg" },
+        { "name": "polyTunnelSalad" },
+        { "name": "hops" }
+      ],
+      "disclosure": "placeholder pending Aaron's balance pass — footprintCells, soilBand, terrain, bdiTerm and chain handoff are directional placeholders, not final balance figures"
+    },
+    "vineyard": {
+      "footprintCells": 3,
+      "soilBand": "chalkSlope",
+      "terrain": "chalkSlope",
+      "bdiTerm": 0.20,
+      "chain": { "commodity": "grapes", "destination": "winery" },
+      "variants": [
+        { "name": "vines" }
+      ],
+      "disclosure": "placeholder pending Aaron's balance pass — footprintCells, soilBand, terrain, bdiTerm and chain handoff are directional placeholders, not final balance figures"
+    }
+  }
+}
