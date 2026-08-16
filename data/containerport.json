@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "$comment": "feat.containerport (FEAT-099, §33/§28/§47; resources-design-brief.md §8-§9) — the Felixstowe-class deep-sea container-terminal tier data contract. Every tunable figure the container-port feature consumes — the port-tier ladder (milestone + cost), and each tier's berths, crane rate, operating hours, customs throughput, ship tonnage and jobs — lives here, never as a Go literal in internal/engine/freight/containerport*.go (GR#15).",
+  "meta": {
+    "units": {
+      "milestone": "milestone tier (M-number; the §4 milestone ladder the tier unlocks at)",
+      "costMillions": "millions of pounds (£M) — placeholder build cost for ladder ordering",
+      "berths": "count of ship berths (dimensionless)",
+      "craneRateTonnesPerHour": "tonnes per hour per crane (t/hr)",
+      "operatingHoursPerDay": "hours of operation per day (hours/day)",
+      "customsCapacityTonnesPerDay": "customs throughput capacity, SEPARATE from physical berth/crane throughput (tonnes/day)",
+      "shipTonnage": "largest ship the tier can berth (tonnes/ship)",
+      "jobs": "direct jobs the tier supports (count)"
+    },
+    "ladderNote": "This file is the PORT-TIER LADDER — cargo_port_small -> container_terminal -> deep_sea_terminal — the same ladder data/buildings.json's PT catalogue names (cargo_port_small M7+£ 40M, container_terminal M9+DP 150M). cargo_port_small and container_terminal mirror those catalogue entries and data/freight.json's active port (berths 2 / crane 60 t/hr / 16 hours / customs 1500 t/day IS the container_terminal tier) so the deep-sea tier can be asserted as a genuine rung ABOVE them (AC-2/AC-3). The deep-sea tier is the new capacity step ('10x bulk' / deep-sea), not a renamed container_terminal.",
+    "balanceNote": "EVERY numeric figure below — milestone, cost, berths, crane rate, hours, customs throughput, ship tonnage, jobs — is a COARSE DIRECTIONAL PLACEHOLDER pending Aaron's balance pass (standing balance-number regime). No junior-invented final figure satisfies any AC; tests check direction/structure only (the deep-sea tier out-thrusts container_terminal; more berths => more capacity; saturating customs raises smuggling risk), never a pinned magnitude."
+  },
+  "deepSeaTier": "deep_sea_terminal",
+  "tiers": [
+    {
+      "key": "cargo_port_small",
+      "name": "Cargo port (small)",
+      "milestone": 7,
+      "costMillions": 40,
+      "berths": 1,
+      "craneRateTonnesPerHour": 30,
+      "operatingHoursPerDay": 12,
+      "customsCapacityTonnesPerDay": 400,
+      "shipTonnage": 3000,
+      "jobs": 200,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass: milestone (7), costMillions (40 £M), berths (1), craneRateTonnesPerHour (30 t/hr), operatingHoursPerDay (12 h/day), customsCapacityTonnesPerDay (400 t/day), shipTonnage (3000 t/ship), jobs (200) — mirrors data/buildings.json cargo_port_small and data/freight.json's lower-tier port."
+    },
+    {
+      "key": "container_terminal",
+      "name": "Container terminal",
+      "milestone": 9,
+      "costMillions": 150,
+      "berths": 2,
+      "craneRateTonnesPerHour": 60,
+      "operatingHoursPerDay": 16,
+      "customsCapacityTonnesPerDay": 1500,
+      "shipTonnage": 3000,
+      "jobs": 600,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass: milestone (9), costMillions (150 £M), berths (2), craneRateTonnesPerHour (60 t/hr), operatingHoursPerDay (16 h/day), customsCapacityTonnesPerDay (1500 t/day), shipTonnage (3000 t/ship), jobs (600) — mirrors data/buildings.json container_terminal (M9+DP 150M '10x bulk') and data/freight.json's active port."
+    },
+    {
+      "key": "deep_sea_terminal",
+      "name": "Deep-sea container terminal",
+      "milestone": 9,
+      "costMillions": 400,
+      "berths": 6,
+      "craneRateTonnesPerHour": 240,
+      "operatingHoursPerDay": 24,
+      "customsCapacityTonnesPerDay": 12000,
+      "shipTonnage": 40000,
+      "jobs": 2000,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass: milestone (9), costMillions (400 £M), berths (6), craneRateTonnesPerHour (240 t/hr), operatingHoursPerDay (24 h/day), customsCapacityTonnesPerDay (12000 t/day), shipTonnage (40000 t/ship = the 40 kt deep-sea container ship), jobs (2000) — the Felixstowe-class rung above container_terminal; figures are directional and distinct-from-and-larger-than container_terminal (AC-3), not a pinned magnitude."
+    }
+  ]
+}

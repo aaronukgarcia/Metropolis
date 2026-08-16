@@ -112,6 +112,49 @@
 // tonne has left the city's books) and sea/rail export transit is deferred
 // to the full logistics movement model.
 
+// # Factory types (feat.factorytypes, FEAT-105)
+//
+// This package also hosts feat.factorytypes alongside the engine.freight
+// module key it shares a package with: the factory-unit catalogue (§33 The
+// Freight Harbour; §46 Multinational Attraction / FDI & Anchor Employers;
+// §34 Zoning; §17 Resource Consumption Model). It surfaces through
+// [FreightAPI.FactoryType]/[FreightAPI.FactoryTypes] with no separate
+// inbound contract (ASM-682).
+//
+// The load-bearing contract (AC-2): each of the eight factory types —
+// assembler, steel mill, electronics, chemicals converter, food processing,
+// textiles, cement, glass — is a DISTINCT modelled facility with its own
+// footprint, input-output pair, jobs, utility draw and blight class, never
+// a generic factory row carrying a type string and defaulted fields. Two
+// same-category types resolve to two different parameter sets.
+//
+// The single-source-of-truth boundary (AC-5, ASM-680): a factory type that
+// corresponds to a §33 chain stage (steel mill ↔ steelMill, cement ↔
+// cementPlant, food processing ↔ flourMill) carries only a stageRef into
+// data/freight.json and re-exports that stage's input-output/jobs/power/
+// water/blight by reference through one code path — there is no second,
+// driftable copy. Footprint (cells) is facility-level and lives in
+// data/factorytypes.json for every type, because the chain stages carry no
+// footprint. The five types with no chain stage carry their params inline.
+// See factorytype.go for the mechanics and the balance-number regime below.
+//
+// Balance-number regime (ASM-683): every per-type figure — footprint,
+// input-output t/day, jobs, utility draw, blight class — is a placeholder
+// in data/factorytypes.json, each carrying a disclosure naming it pending
+// Aaron's balance pass. No AC is satisfied by a final number; tests check
+// shape, direction and distinctness, never a specific magnitude.
+//
+// Cross-references (not restated here): engine.freight.md AC-4/AC-5 own the
+// "stages register as firms" and per-stage input/output/jobs/power-water/
+// blight data this catalogue's stageRef re-exports; engine.fdi.md (MOD-059)
+// owns the prospect/bid/commitment mechanics whose §46 archetypes map onto
+// these per-type params (semiconductor fab → electronics, chemicals complex
+// → chemicals converter, steel process plant → steel mill); engine.firms
+// (MOD-058) hires a chain-stage firm against the resolved per-type jobs.
+// The build-catalogue entries for these structures live in data/buildings.json
+// (FEAT-010) and must reference a type key, never duplicate the numbers
+// (ASM-694).
+
 // # Determinism (AC-14/AC-15)
 //
 // Every tick, throughput, storage, movement and trade-rollup computation is
@@ -131,4 +174,70 @@
 // rates/jobs/power/water/blight — lives in data/freight.json, never as a Go
 // literal in this package (GR#15). Every failure is a registry-sourced
 // *errs.E (MET-G9xx, this package's claimed sub-range — see errors.go).
+
+// # feat.containerport (FEAT-099) — the deep-sea terminal shares this package
+//
+// This package is also the shared home of feat.containerport (key
+// feat.containerport, alongside the engine.freight module key this package
+// already carries — see code.json). The deep-sea container-terminal surface
+// lives here as a file/type set ([ContainerPort], containerport*.go), NOT as
+// a fork or a second package, mirroring how feat.megafacilities shares
+// engine.mining's package and feat.resourcedeposits does the same. code.json's
+// feat.containerport entry (path internal/engine/freight/) has NO inbound
+// contract of its own (inbound name/format/pattern all null) because it
+// surfaces through this package rather than a separate inbound contract
+// (GR#20). Its outbound call set — engine.freight, engine.rail,
+// feat.facilitypermits, feat.decommission — is registered in code.json.
+//
+// The tier relationship (AC-2): the deep-sea terminal is a DISTINCT rung of
+// the §33 port ladder ABOVE container_terminal (and cargo_port_small) —
+// cargo_port_small → container_terminal → deep_sea_terminal — expressed by
+// extending FreightAPI's berths × crane rate × hours capacity model to
+// deep-sea scale (40 kt container ships), never by replacing or forking the
+// existing port entries. See [ContainerPort.PhysicalCapacity] /
+// [ContainerPort.TierPhysicalCapacity], which call FreightAPI's own
+// [FreightAPI.PortCapacityFor] rather than reimplementing the formula.
+//
+// The intermodal reuse commitment (AC-4): the sea↔rail↔road container-transfer
+// point is engine.rail's (engine.rail.md AC-3's tonnes-conservation contract),
+// consumed through the [RailIntermodal] dependency-inversion seam — never a
+// containerport-local parallel transfer ledger. The seam is the same
+// consumer-driven shape freight already uses for engine.firms ([FirmRegistrar]);
+// engine.rail imports this package and implements the seam (the
+// stub-for-baseline stand-in in internal/engine/rail does today). Until the
+// seam is wired, [ContainerPort.IntermodalTransfer] rejects every call as an
+// unregistered intermodal point.
+//
+// The customs reuse commitment (AC-5): the deep-sea tier's customs throughput
+// is tracked separately from its physical berth/crane throughput, and its
+// smuggling-risk indicator rises as customs saturation rises — reusing
+// FreightAPI's own customs model ([FreightAPI.CustomsSaturationFor] /
+// [FreightAPI.SmugglingRiskFor]) rather than a new smuggling model. The two
+// capacities saturate independently.
+//
+// The balance-number regime (AC-13): every figure in data/containerport.json
+// — milestone, cost, berths, crane rate, operating hours, customs throughput,
+// the 40 kt ship tonnage, jobs — is a PLACEHOLDER pending Aaron's balance
+// pass, each carrying a non-empty disclosure naming it. No AC is satisfied by
+// a junior-invented final figure; tests check direction/structure only.
+//
+// The permit/decommission inheritance (AC-7): building the deep-sea terminal
+// is permit-gated through feat.facilitypermits (FEAT-053) and carries a
+// day-one decommission liability through feat.decommission (FEAT-054),
+// consumed through the [PermitAuthority] / [DecommissionRegistrar] seams —
+// neither obligation is reimplemented as a containerport-local permit check or
+// liability ledger, and no permit-state or liability-provision field lives on
+// [ContainerPort].
+//
+// Spec refs: §33 (The Freight Harbour — the port ladder + capacity model this
+// tier extends), §47 (Rail Industry — the intermodal container crane's
+// sea↔rail↔road transfer), §28 (Crime/Policing — the customs house +
+// smuggling-interdiction rate this tier's customs capacity feeds), and
+// resources-design-brief.md §8/§9 (the "genuine deep-sea container terminal"
+// upgrade of the port milestone). Cross-references, not restatements:
+// engine.freight.md (the model extended), engine.rail.md (the intermodal
+// contract consumed), feat.megafacilities.md (FEAT-055 — owns the
+// expert-workforce GATE for the same terminal; this feature owns the
+// mechanics), feat.facilitypermits.md (FEAT-053) and feat.decommission.md
+// (FEAT-054) (the inherited obligations).
 package freight

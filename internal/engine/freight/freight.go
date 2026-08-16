@@ -69,6 +69,18 @@ type FreightAPI struct {
 	stages        map[StageID]*stageState
 	sites         map[SiteType]*siteState
 
+	// factoryTypes/factoryTypeByKey are the feat.factorytypes catalogue
+	// (FEAT-105): the resolved per-type parameter sets in manifest order
+	// plus an O(1) lookup map. They are empty until
+	// [FreightAPI.LoadFactoryTypeCatalogue] attaches the catalogue, resolved
+	// against this API's loaded freight chain-stage config (AC-5 single
+	// source of truth). Load itself does NOT require data/factorytypes.json,
+	// so core freight (MOD-047) loads without the feature — the catalogue is
+	// an explicit, separately-attached surface, the same shape
+	// feat.containerport uses for its own data file.
+	factoryTypes     []FactoryTypeParams
+	factoryTypeByKey map[FactoryType]FactoryTypeParams
+
 	tick int64
 
 	// Per-tick tonnage ledgers (AC-10's independently-sourced terms),
@@ -134,12 +146,13 @@ func Load(dir, correlationID string) (*FreightAPI, error) {
 	}
 
 	api := &FreightAPI{
-		correlationID: correlationID,
-		cfg:           cfg,
-		market:        marketAPI,
-		logistics:     logisticsAPI,
-		stages:        make(map[StageID]*stageState, len(cfg.stageConfigs)),
-		sites:         make(map[SiteType]*siteState, len(cfg.Sites)),
+		correlationID:    correlationID,
+		cfg:              cfg,
+		market:           marketAPI,
+		logistics:        logisticsAPI,
+		stages:           make(map[StageID]*stageState, len(cfg.stageConfigs)),
+		sites:            make(map[SiteType]*siteState, len(cfg.Sites)),
+		factoryTypeByKey: make(map[FactoryType]FactoryTypeParams),
 	}
 	api.self.Store(api) // armed exactly once, before api is returned (SEC-020)
 

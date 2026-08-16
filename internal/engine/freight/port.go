@@ -32,14 +32,24 @@ func (f *FreightAPI) PortCapacity() (PortCapacity, error) {
 			"berths": f.cfg.Port.Berths,
 		})
 	}
-	throughput, _ := num.SafeMul(f.cfg.Port.CraneRateTonnesPerHour, f.cfg.Port.OperatingHoursPerDay)
-	throughput, _ = num.SafeMul(throughput, f.cfg.Port.Berths)
+	return f.PortCapacityFor(f.cfg.Port.Berths, f.cfg.Port.CraneRateTonnesPerHour, f.cfg.Port.OperatingHoursPerDay), nil
+}
+
+// PortCapacityFor computes §33's port throughput — berths × crane rate
+// (t/hr) × operating hours — for EXPLICIT figures, so a consumer can resolve
+// a tier's capacity through FreightAPI's own model rather than reimplementing
+// the multiplicative formula. It is the single source of truth for the
+// formula (GR#3); feat.containerport's deep-sea tier calls it (AC-2/AC-3).
+// Pure: it reads no FreightAPI state, so it needs no lock and no copy-guard.
+func (f *FreightAPI) PortCapacityFor(berths, craneRateTonnesPerHour, operatingHoursPerDay int64) PortCapacity {
+	throughput, _ := num.SafeMul(craneRateTonnesPerHour, operatingHoursPerDay)
+	throughput, _ = num.SafeMul(throughput, berths)
 	return PortCapacity{
-		Berths:                 f.cfg.Port.Berths,
-		CraneRateTonnesPerHour: f.cfg.Port.CraneRateTonnesPerHour,
-		OperatingHoursPerDay:   f.cfg.Port.OperatingHoursPerDay,
+		Berths:                 berths,
+		CraneRateTonnesPerHour: craneRateTonnesPerHour,
+		OperatingHoursPerDay:   operatingHoursPerDay,
 		TonnesPerDay:           throughput,
-	}, nil
+	}
 }
 
 // CustomsCapacity is the customs throughput capacity (§33/§28, AC-3) — a
@@ -93,11 +103,19 @@ func (f *FreightAPI) CustomsSaturation() (CustomsSaturation, error) {
 	}
 	capacity := f.cfg.Port.CustomsCapacityTonnesPerDay
 	demanded := f.customsDemanded
+	return f.CustomsSaturationFor(demanded, capacity), nil
+}
+
+// CustomsSaturationFor computes the demand-vs-capacity saturation for
+// EXPLICIT figures — the §33/§28 customs model's core, so feat.containerport's
+// deep-sea tier reuses it against its own customs capacity rather than a new
+// smuggling model (AC-5). Pure: it reads no FreightAPI state.
+func (f *FreightAPI) CustomsSaturationFor(demanded, capacity int64) CustomsSaturation {
 	var saturation float64
 	if capacity > 0 {
 		saturation = float64(demanded) / float64(capacity)
 	}
-	return CustomsSaturation{Demanded: demanded, Capacity: capacity, Saturation: saturation}, nil
+	return CustomsSaturation{Demanded: demanded, Capacity: capacity, Saturation: saturation}
 }
 
 // SmugglingRisk is the §28 smuggling-risk indicator (AC-3): it rises as
@@ -111,11 +129,21 @@ func (f *FreightAPI) SmugglingRisk() (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return f.SmugglingRiskFor(sat), nil
+}
+
+// SmugglingRiskFor derives the §28 smuggling-risk indicator from a saturation
+// figure — min(1, saturation), the shared customs/smuggling model
+// feat.containerport's deep-sea tier reuses (AC-5). Pure: it reads no
+// FreightAPI state. The returned float64 is the dimensionless [0,1] risk
+// indicator, not a tonnage/monetary field (all tonnage/monetary state stays
+// int64, GR#16).
+func (f *FreightAPI) SmugglingRiskFor(sat CustomsSaturation) float64 {
 	if sat.Saturation < 0 {
-		return 0, nil
+		return 0
 	}
 	if sat.Saturation > 1 {
-		return 1, nil
+		return 1
 	}
-	return sat.Saturation, nil
+	return sat.Saturation
 }

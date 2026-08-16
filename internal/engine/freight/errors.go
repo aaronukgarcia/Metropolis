@@ -75,4 +75,21 @@ const (
 	// LogisticsAPI. Always construct exactly one *FreightAPI via
 	// Load/LoadDefault and pass its pointer everywhere.
 	ErrCopiedValue = "MET-G1008"
+
+	// ErrFactoryTypeDataInvalid: data/factorytypes.json (feat.factorytypes,
+	// FEAT-105) could not be loaded or failed schema validation — a missing/
+	// zero footprint, an absent or non-positive jobs count, an unknown
+	// blight-class enum value, a wrong JSON type, a dangling stageRef into
+	// data/freight.json, an inline input/output referencing an unregistered
+	// freight commodity, or a stageRef entry that also carries a duplicate
+	// inline copy of input-output/jobs/power/water/blight (AC-5). The
+	// factory-type catalogue never falls back to a partial or
+	// default-substituted parameter set (AC-8).
+	ErrFactoryTypeDataInvalid = "MET-G1009"
+
+	// ErrUnknownFactoryType: a factory-type resolve named a key that is not
+	// one of the eight modelled types (assembler/steelMill/electronics/
+	// chemicalsConverter/foodProcessing/textiles/cement/glass). Query-time,
+	// never a silently-created zero-value parameter set (AC-8).
+	ErrUnknownFactoryType = "MET-G1010"
 )
