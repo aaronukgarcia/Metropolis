@@ -54,4 +54,48 @@
 //     BlightAPI machinery consumes them; no siting/extraction/blight AC
 //     belongs here.
 //   - engine.world.md (MOD-017) — the WorldAPI this shuffle consumes.
+//
+// # feat.minetypes — the mine-type catalogue (FEAT-103)
+//
+// The mine-type catalogue is a file/type set in this same package (ASM-672:
+// shared internal/engine/mining, no separate inbound contract — code.json's
+// feat.minetypes entry has a null inbound name/format/pattern and surfaces
+// through engine.mining's eventual MiningAPI, exactly like its two sibling
+// features). It models the six §32 extraction types — chalk quarry, sand &
+// gravel pit, brickworks clay pit, ragstone quarry, deep coal mine, and
+// offshore dredger — each as a DISTINCT modelled facility with its own
+// footprint, output, blight class, jobs and depth band, loaded from
+// data/minetypes.json (minetype.go).
+//
+// # The load-bearing distinct-facility contract (AC-2)
+//
+// A mine type is never one shared "mine" row whose name is stamped onto a
+// single default parameter set. Every type resolves to its own
+// MineTypeParams value whose fields are populated from that type's own data
+// entry, and the type key is a lookup key, not a field of the parameter
+// set. Two same-category types (a chalk quarry and a deep coal mine) must
+// resolve to two different parameter sets — different footprint, output
+// rate, blight class, jobs, and depth band.
+//
+// # Balance-number regime (GR#15)
+//
+// Every per-type figure is a placeholder in data/minetypes.json pending
+// Aaron's balance pass; this package carries no per-type Go numeric literal
+// (ASM-673). A future balance pass on "how blighting is a chalk quarry vs a
+// deep coal mine" is a table edit, never a code change.
+//
+// # Cross-references (not restated)
+//
+//   - engine.mining.md (MOD-046) AC-2 (geology-gated siting) and AC-3
+//     (deep-coal subsidence as a separate risk flag) consume these per-type
+//     parameter sets; this package authors the sets, not the siting/blight
+//     machinery.
+//   - feat.resourcedeposits.md (FEAT-049) AC-1/AC-2 — the Deposit record and
+//     DepositType taxonomy that a deposit-backed type's depositClass gate
+//     references (the "coal" entry).
+//   - feat.extraction.md (FEAT-051) AC-4 — the extraction tier ladder that
+//     multiplies a type's output rate; this package supplies the base rate.
+//   - §32 Mining, Extraction & the Blight Model; §34 Zoning (the Mining
+//     zone, "only on revealed geology, §32"); §17 Resource Consumption
+//     Model (producer coefficients in catalogue).
 package mining

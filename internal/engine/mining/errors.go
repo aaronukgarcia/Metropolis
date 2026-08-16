@@ -44,4 +44,18 @@ const (
 	// while placed is an aliased map, so a copy is a second, independent
 	// lock racing the original over the same map.
 	ErrDepositMapCopied = "MET-E953"
+
+	// ErrMineTypeDataInvalid: data/minetypes.json could not be loaded or
+	// failed schema validation (missing file, malformed JSON, a missing or
+	// non-positive footprint/output rate, a negative jobs count, an unknown
+	// blight-class value, an inverted depth band, a dangling geology or
+	// deposit class ref, a field of the wrong JSON type). The catalogue does
+	// NOT proceed with silent defaults or a partially-populated result
+	// (feat.minetypes AC-7).
+	ErrMineTypeDataInvalid = "MET-E954"
+
+	// ErrUnknownMineType: a mine-type resolve named a key absent from the
+	// loaded catalogue. Returned as an error rather than a silent
+	// default-substituted parameter set (feat.minetypes AC-7).
+	ErrUnknownMineType = "MET-E955"
 )
