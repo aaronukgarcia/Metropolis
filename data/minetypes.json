@@ -1,0 +1,139 @@
+{
+  "$comment": "feat.minetypes (FEAT-103) — the mine-type catalogue. Spec refs: §32 Mining, Extraction & the Blight Model (the six extraction types); §17 Resource Consumption Model (producer coefficients: output/day, input demands, land, seasonal profile); §34 Zoning (the Mining zone, 'only on revealed geology, §32'). Balance-number regime: every per-type figure below (footprint, output rate, blight class, jobs, depth band, spoil tip, subsidence radius) is a PLACEHOLDER pending Aaron's balance pass — no magnitude is final.",
+  "version": 1,
+  "meta": {
+    "specRef": "§32; §17; §34",
+    "units": {
+      "footprint": "cells",
+      "outputRate": "tonnes per day (t/day)",
+      "depthMin": "metres",
+      "depthMax": "metres",
+      "spoilTipFootprint": "cells",
+      "subsidenceRadius": "metres",
+      "jobs": "mining-jobs headcount (workers)",
+      "blightClass": "ordinal — low | moderate | high | severe"
+    },
+    "balanceRegime": "every per-type figure is a placeholder pending Aaron's balance pass; rebalancing is a table edit in this file, never a code change"
+  },
+  "types": [
+    {
+      "key": "chalk",
+      "name": "Chalk quarry",
+      "footprint": 6,
+      "outputCommodity": "chalk",
+      "outputRate": 40,
+      "blightClass": "low",
+      "jobs": 4,
+      "depthMin": 0,
+      "depthMax": 15,
+      "geologyClass": "chalk",
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputRate": "placeholder (t/day) pending Aaron's balance pass",
+        "blightClass": "placeholder (blight ordinal) pending Aaron's balance pass",
+        "jobs": "placeholder (mining-jobs headcount) pending Aaron's balance pass",
+        "depth": "placeholder (metres band) pending Aaron's balance pass"
+      }
+    },
+    {
+      "key": "sand_gravel",
+      "name": "Sand & gravel pit",
+      "footprint": 8,
+      "outputCommodity": "aggregate",
+      "outputRate": 55,
+      "blightClass": "low",
+      "jobs": 6,
+      "depthMin": 0,
+      "depthMax": 25,
+      "geologyClass": "gravel",
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputRate": "placeholder (t/day) pending Aaron's balance pass",
+        "blightClass": "placeholder (blight ordinal) pending Aaron's balance pass",
+        "jobs": "placeholder (mining-jobs headcount) pending Aaron's balance pass",
+        "depth": "placeholder (metres band) pending Aaron's balance pass"
+      }
+    },
+    {
+      "key": "clay_brickworks",
+      "name": "Brickworks clay pit",
+      "footprint": 9,
+      "outputCommodity": "brick_clay",
+      "outputRate": 30,
+      "blightClass": "moderate",
+      "jobs": 8,
+      "depthMin": 0,
+      "depthMax": 12,
+      "geologyClass": "clay",
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputRate": "placeholder (t/day) pending Aaron's balance pass",
+        "blightClass": "placeholder (blight ordinal) pending Aaron's balance pass",
+        "jobs": "placeholder (mining-jobs headcount) pending Aaron's balance pass",
+        "depth": "placeholder (metres band) pending Aaron's balance pass"
+      }
+    },
+    {
+      "key": "ragstone",
+      "name": "Ragstone quarry",
+      "footprint": 10,
+      "outputCommodity": "ragstone",
+      "outputRate": 25,
+      "blightClass": "low",
+      "jobs": 7,
+      "depthMin": 0,
+      "depthMax": 20,
+      "geologyClass": "gravel",
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputRate": "placeholder (t/day) pending Aaron's balance pass",
+        "blightClass": "placeholder (blight ordinal) pending Aaron's balance pass",
+        "jobs": "placeholder (mining-jobs headcount) pending Aaron's balance pass",
+        "depth": "placeholder (metres band) pending Aaron's balance pass"
+      }
+    },
+    {
+      "key": "deep_coal",
+      "name": "Deep coal mine (headgear + spoil tip)",
+      "footprint": 16,
+      "outputCommodity": "coal",
+      "outputRate": 80,
+      "blightClass": "severe",
+      "jobs": 60,
+      "depthMin": 100,
+      "depthMax": 900,
+      "geologyClass": "deep_coal",
+      "depositClass": "coal",
+      "spoilTipFootprint": 5,
+      "subsidenceRadius": 300,
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputRate": "placeholder (t/day) pending Aaron's balance pass",
+        "blightClass": "placeholder (blight ordinal) pending Aaron's balance pass",
+        "jobs": "placeholder (mining-jobs headcount — §32 mining-jobs culture) pending Aaron's balance pass",
+        "depth": "placeholder (metres band — matches the coal deposit band in data/deposits.json) pending Aaron's balance pass",
+        "spoilTipFootprint": "placeholder (cells) pending Aaron's balance pass",
+        "subsidenceRadius": "placeholder (metres) pending Aaron's balance pass"
+      }
+    },
+    {
+      "key": "offshore_dredger",
+      "name": "Offshore aggregate dredger",
+      "footprint": 12,
+      "outputCommodity": "marine_aggregate",
+      "outputRate": 70,
+      "blightClass": "moderate",
+      "jobs": 10,
+      "depthMin": 0,
+      "depthMax": 40,
+      "geologyClass": "gravel",
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputRate": "placeholder (t/day) pending Aaron's balance pass",
+        "blightClass": "placeholder (blight ordinal) pending Aaron's balance pass",
+        "jobs": "placeholder (mining-jobs headcount) pending Aaron's balance pass",
+        "depth": "placeholder (metres band) pending Aaron's balance pass"
+      }
+    }
+  ]
+}
