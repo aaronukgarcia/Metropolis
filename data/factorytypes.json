@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "feat.factorytypes (FEAT-105, §33/§46/§17/§34) — the factory-unit catalogue: every manufacturing type as a DISTINCT modelled facility (assembler, steel mill, electronics, chemicals converter, food processing, textiles, cement, glass), each with its own footprint, input-output pair, jobs, utility draw and blight class. This is a data contract consumed by internal/engine/freight (GR#15): every per-type figure lives here, never as a Go literal in internal/engine/freight/*.go.",
+    "unitConvention": "Per-type field units, stated explicitly for a future editor: footprintCells is in CELLS (a siting footprint, §34); inputs/outputs tonnePerDay are in TONNES per day (matching §33's tonnes/day end-to-end and data/freight.json); jobs is a headcount (the staff a chain-stage firm hires against, §45); powerKWhPerDay is in kWh per day and waterLitresPerDay is in litres per day (the §17 producer-coefficient utility draw, matching data/freight.json's powerKWhPerDay/waterLitresPerDay); blightClass is an ordinal in the documented §32/§34 enum (0=none, 1=low, 2=light, 3=moderate, 4=heavy, 5=severe).",
+    "singleSourceOfTruth": "The input-output/jobs/utility/blight values are OWNED BY data/freight.json's chain stages, never duplicated here (GR#3, AC-5). A factory type that corresponds to a §33 chain stage carries ONLY a 'stageRef' naming that stage (steelMill↔steelMill, cement↔cementPlant, foodProcessing↔flourMill), and the resolver re-exports the stage's input-output/jobs/power/water/blight by reference through one code path — there is no second editable copy, so a future balance edit to data/freight.json flows to the factory type automatically. Footprint (cells) is facility-level and lives HERE for every type, because data/freight.json stages carry no footprint. The five types with no §33 chain stage (assembler, electronics, chemicals converter, textiles, glass) carry their input-output/jobs/power/water/blight inline here, since there is no freight stage to reference. A stageRef entry that ALSO carries inline input-output/jobs/power/water/blight is rejected at load time.",
+    "balanceNote": "Every per-type figure in this file is a COARSE PLACEHOLDER pending Aaron's balance pass (ASM-683) — directional only, chosen to exercise the distinct-facility model. The §33 modal caps and §46 archetype character (utility boss-fight, blight-class-high) are carried as per-type direction, not a final magnitude.",
+    "buildingsBoundary": "data/buildings.json (FEAT-010) holds buildable manufacturing/FDI-anchor entries (semiconductor fab, chemicals complex, steel process plant, EV gigafactory) with unlock/cost/capacity. THIS file holds only the simulation parameters. A future build entry must reference a factory-type key and never re-declare these numbers (ASM-694)."
+  },
+  "factoryTypes": {
+    "assembler": {
+      "name": "Assembler",
+      "footprintCells": 4,
+      "inputs": [ { "commodity": "fabrication", "tonnesPerDay": 30 } ],
+      "outputs": [ { "commodity": "machinery", "tonnesPerDay": 25 } ],
+      "jobs": 40,
+      "powerKWhPerDay": 9000,
+      "waterLitresPerDay": 2000,
+      "blightClass": 2,
+      "disclosure": "placeholder footprint/input-output/jobs/utility/blight pending Aaron's balance pass (ASM-683)."
+    },
+    "steelMill": {
+      "name": "Steel Mill",
+      "footprintCells": 60,
+      "stageRef": "steelMill",
+      "disclosure": "placeholder footprint pending Aaron's balance pass (ASM-683); input-output/jobs/power/water/blight are owned by data/freight.json stage 'steelMill' (AC-5, ASM-680)."
+    },
+    "electronics": {
+      "name": "Electronics Factory",
+      "footprintCells": 12,
+      "inputs": [ { "commodity": "fabrication", "tonnesPerDay": 15 }, { "commodity": "plastics", "tonnesPerDay": 15 } ],
+      "outputs": [ { "commodity": "lightGoods", "tonnesPerDay": 25 } ],
+      "jobs": 60,
+      "powerKWhPerDay": 40000,
+      "waterLitresPerDay": 5000,
+      "blightClass": 1,
+      "disclosure": "placeholder footprint/input-output/jobs/utility/blight pending Aaron's balance pass (ASM-683); power draw carries §46's semiconductor-fab 'utility boss-fight' character as direction only."
+    },
+    "chemicalsConverter": {
+      "name": "Chemicals Converter",
+      "footprintCells": 55,
+      "inputs": [ { "commodity": "fuel", "tonnesPerDay": 30 } ],
+      "outputs": [ { "commodity": "plastics", "tonnesPerDay": 40 } ],
+      "jobs": 55,
+      "powerKWhPerDay": 32000,
+      "waterLitresPerDay": 18000,
+      "blightClass": 4,
+      "disclosure": "placeholder footprint/input-output/jobs/utility/blight pending Aaron's balance pass (ASM-683); blight-class-high carries §46's chemicals-complex character as direction only."
+    },
+    "foodProcessing": {
+      "name": "Food Processing",
+      "footprintCells": 15,
+      "stageRef": "flourMill",
+      "disclosure": "placeholder footprint pending Aaron's balance pass (ASM-683); input-output/jobs/power/water/blight are owned by data/freight.json stage 'flourMill' (AC-5, ASM-680). foodProcessing anchors to one chain stage; the food family spans many stages (ASM-681)."
+    },
+    "textiles": {
+      "name": "Textiles Mill",
+      "footprintCells": 6,
+      "inputs": [ { "commodity": "livestock", "tonnesPerDay": 20 } ],
+      "outputs": [ { "commodity": "lightGoods", "tonnesPerDay": 18 } ],
+      "jobs": 45,
+      "powerKWhPerDay": 8000,
+      "waterLitresPerDay": 3000,
+      "blightClass": 1,
+      "disclosure": "placeholder footprint/input-output/jobs/utility/blight pending Aaron's balance pass (ASM-683)."
+    },
+    "cement": {
+      "name": "Cement Plant",
+      "footprintCells": 40,
+      "stageRef": "cementPlant",
+      "disclosure": "placeholder footprint pending Aaron's balance pass (ASM-683); input-output/jobs/power/water/blight are owned by data/freight.json stage 'cementPlant' (AC-5, ASM-680)."
+    },
+    "glass": {
+      "name": "Glass Works",
+      "footprintCells": 25,
+      "inputs": [ { "commodity": "chalk", "tonnesPerDay": 40 }, { "commodity": "coal", "tonnesPerDay": 15 } ],
+      "outputs": [ { "commodity": "lightGoods", "tonnesPerDay": 20 } ],
+      "jobs": 35,
+      "powerKWhPerDay": 15000,
+      "waterLitresPerDay": 6000,
+      "blightClass": 3,
+      "disclosure": "placeholder footprint/input-output/jobs/utility/blight pending Aaron's balance pass (ASM-683); glass has no dedicated freight commodity yet, so its output maps to lightGoods (glassware/containers) as a placeholder (ASM-681)."
+    }
+  }
+}
