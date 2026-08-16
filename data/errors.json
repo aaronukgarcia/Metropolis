@@ -2180,6 +2180,18 @@
       "module": "engine.services",
       "message": "ServicesAPI method {method} called on a struct-copied value",
       "remedy": "Always use the *ServicesAPI pointer New/Load returned. Dereferencing-and-reassigning (a2 := *a) produces a second value with its own mutex but aliased maps, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call New/Load again."
+    },
+    "MET-G1209": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "command input {field} is not finite (NaN or ±Inf)",
+      "remedy": "A command handler received a NaN or infinite float where only a finite simulation-state value is meaningful (funding level, demand, demand distance, staffing need, or pool availability). Reject the input at the boundary rather than storing it — a non-finite value would otherwise collapse silently inside the quality/staffing arithmetic (SEC-093)."
+    },
+    "MET-G1210": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "net fiscal cost clawback overflowed (gross {gross}, rate {rate})",
+      "remedy": "NetFiscalCost's gross-wage × income-tax-rate intermediate product overflowed int64, so the clawback (and therefore the honest net) cannot be computed. The gross wage bill is too large for the fixed-point arithmetic to represent its tax clawback; reduce the staffing/wage magnitude or surface the figure differently (SEC-094)."
     }
   }
 }
