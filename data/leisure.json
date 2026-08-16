@@ -1,0 +1,36 @@
+{
+  "$comment": "Balance data for engine.leisure (MOD-055). §42/§5.1 describe the 168-hour weekly budget, the personality-weighted venue allocation, novelty decay, the openings pipeline, and the events calendar only by DIRECTION and mechanism — they give NO numeric magnitude for the baseline work/education/sleep/chore hours, the access-time thresholds, the overtime wage rate, the novelty-decay rates, the event crowd sizes, or the match threshold. Every number here is a PLACEHOLDER pending the M2 balance pass (GR#15's balance-number regime: player-felt numbers are placeholders + directional tests until Aaron rules). The one spec-stated magnitude is hoursPerWeek = 168 (transcribed from §42's '168 − work − sleep − chores − commute'). lifeStages is keyed by LifeStage.String() and defaultPopulationTaste is keyed by the venue-category names; both maps are only ever ACCESSED by key (never ranged), so JSON object-key order is irrelevant to determinism (GR#21).",
+  "version": 1,
+  "hoursPerWeek": 168,
+  "lifeStages": {
+    "child":      { "work": 0,  "education": 30, "sleep": 63, "chores": 2 },
+    "student":    { "work": 0,  "education": 35, "sleep": 56, "chores": 7 },
+    "employed":   { "work": 40, "education": 0,  "sleep": 56, "chores": 10 },
+    "unemployed": { "work": 0,  "education": 0,  "sleep": 56, "chores": 10 },
+    "retired":    { "work": 0,  "education": 0,  "sleep": 56, "chores": 10 }
+  },
+  "accessFreeMinutes": 15,
+  "accessBudgetMinutes": 90,
+  "overtimeWageRate": 1.0,
+  "noveltyDecayBase": 0.05,
+  "noveltyDecayPerNovelty": 0.10,
+  "freshnessRecovery": 1.0,
+  "eventCrowd": {
+    "festival": 4000,
+    "food-fair": 2000,
+    "match-day": 8000,
+    "concert": 3000,
+    "christmas-market": 5000
+  },
+  "matchThreshold": 0,
+  "defaultPopulationTaste": {
+    "sport": 50,
+    "arts": 50,
+    "nightlife": 50,
+    "nature": 50,
+    "community": 50,
+    "gaming": 50,
+    "dining": 50,
+    "home": 50
+  }
+}
