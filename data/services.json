@@ -1,0 +1,27 @@
+{
+  "$comment": "engine.services (MOD-033) module-owned balance surface: the §10 service-kind extensibility data is in code, the §26 shared staffing pools and the §54 Public Service Pie benchmark ratios are here. Loaded via internal/engine/services' Load (foundation/data's generic Load[T]), mirroring engine.market's data/market.json and engine.logistics' data/logistics.json precedent of a module-owned data file. GR#15: every ratio/scale below is a placeholder tunable in the M2 Batch; the ONLY figure transcribed from the spec is the police ~2.4 officers per 1,000 (§54) — everything else is a directional placeholder pending the balance pass (see docs/planning/acceptance/engine.services.md AC-5's escalation).",
+  "version": 1,
+  "wagePerStaffPerMonthMicropounds": 2000000000,
+  "staffingPools": [
+    {
+      "id": "nursing",
+      "label": "Nursing",
+      "members": ["healthcare", "elder-care", "home-care"],
+      "specRef": "§26: elder care and home-care draw from the same staffing pool as hospitals — a nurse shortage is one shortage everywhere"
+    }
+  ],
+  "pie": {
+    "specRef": "§54: the default Public Service Pie — per-1,000-population benchmark staffing ratios (police officers ~2.4, teachers per pupil, nurses & GPs, dentists & opticians, firefighters, social workers, refuse crews, council officers). These are default benchmarks, NOT hard requirements: the whole point is the player deviates and feels the consequence (mild at village scale, systemic at city scale).",
+    "severityHalfPointPopulation": 100000,
+    "benchmarks": [
+      { "id": "police", "label": "Police officers", "perThousand": 2.4, "perPupil": 0, "placeholder": false, "specRef": "§54: police officers ~2.4 per 1,000" },
+      { "id": "teachers", "label": "Teachers", "perThousand": 0, "perPupil": 0.04, "placeholder": true, "specRef": "§54: teachers per pupil (ratio untuned, M2 Batch)" },
+      { "id": "nursesGps", "label": "Nurses & GPs", "perThousand": 3.0, "perPupil": 0, "placeholder": true, "specRef": "§54: nurses & GPs (ratio untuned, M2 Batch)" },
+      { "id": "dentistsOpticians", "label": "Dentists & opticians", "perThousand": 0.6, "perPupil": 0, "placeholder": true, "specRef": "§54: dentists & opticians (now in §H; ratio untuned, M2 Batch)" },
+      { "id": "firefighters", "label": "Firefighters", "perThousand": 0.9, "perPupil": 0, "placeholder": true, "specRef": "§54: firefighters (ratio untuned, M2 Batch)" },
+      { "id": "socialWorkers", "label": "Social workers", "perThousand": 1.4, "perPupil": 0, "placeholder": true, "specRef": "§54: social workers (ratio untuned, M2 Batch)" },
+      { "id": "refuseCrews", "label": "Refuse crews", "perThousand": 0.7, "perPupil": 0, "placeholder": true, "specRef": "§54: refuse crews (ratio untuned, M2 Batch)" },
+      { "id": "councilOfficers", "label": "Council officers", "perThousand": 2.8, "perPupil": 0, "placeholder": true, "specRef": "§54: council officers (ratio untuned, M2 Batch)" }
+    ]
+  }
+}
