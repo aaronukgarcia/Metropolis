@@ -3,9 +3,9 @@ BOW code: FEAT-019
 # Acceptance criteria — ui.screen.proj (FEAT-019)
 
 **BOW code:** FEAT-019
-**Spec refs:** §13-F7 (`docs/METROPOLIS-MASTER-v2.1.md` line 252); A5 Slow-Fuse Principle (line 1350, 1365); UI-SPEC §4 Projections pane idiom (lines 763); §36 Service Capacity Export (lines 528-546, contracted-vs-internal demand crossing); §45 Firms (rate outlook, line 621); `int.protocol` (INT-001); `ui.widgets` (MOD-010, `done` — Braille chart, dependency).
+**Spec refs:** §13-F7 (`docs/METROPOLIS-MASTER-v2.1.md` line 254); A5 Slow-Fuse Principle (line 1352, 1367); UI-SPEC §4 Projections pane idiom (line 765); §36 Service Capacity Export (lines 530-548, contracted-vs-internal demand crossing); §45 Firms (rate outlook, line 623); `int.protocol` (INT-001); `ui.widgets` (MOD-010, `done` — Braille chart, dependency).
 **Date:** 2026-08-11
-**Status:** draft-ahead (Sprint 8)
+**Status:** in_progress (Sprint 8)
 **Package under test:** `internal/ui/screens/proj/` (confirm via `node claude-bow.js show FEAT-019` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/ui/screens/proj/...`.
 

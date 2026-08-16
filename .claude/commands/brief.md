@@ -79,20 +79,22 @@ its absence cost a run.
 5. **Golden Rules that bite here** — GR#7 registry errors, GR#15 derived not
    hardcoded, GR#20 contract-first, GR#1 error trapping. Name the ones that
    actually apply; a list of all twenty-one gets skimmed.
-6. **Quality bar**, non-negotiable and stated every time:
+6. **Secure-by-default primitives (FEAT-135)** — Mandate the use of `foundation/num` helpers for any input conversion, type-safe coercion (safeInt64, NaN float checks), and standard copy-guards in `foundation/registry`. Do not allow juniors to hand-roll custom validation regexes or locks.
+7. **Quality bar**, non-negotiable and stated every time:
    - Concurrency tests are **deterministic, not probable**. Construct the
      state; do not race for the timing.
    - **Every regression test must be demonstrated to FAIL against the unfixed
      code.** On this project a test that cannot fail is the *default* outcome,
      not the exception — three drafts of one test scored 0/500 against
      known-buggy code before one bit.
+   - Do not hand-roll quote-scanners or custom regex string parsers to validate Git/shell commands. Use shared, standardized libraries to prevent injection.
    - For DoS-shaped work, **quantify** (bytes, timing). A fix that pays the
      full attacker-controlled cost internally and errors at the end is still
      the vulnerability, and an error-return assertion cannot tell them apart.
-7. **Baseline**, all clean before reporting done:
+8. **Baseline**, all clean before reporting done:
    `gofmt -l .` · `go build ./...` · `go vet ./...` ·
-   `golangci-lint run ./...` · `go test ./... -count=1 -race`
-8. **Assumption mandate (v1.7)** — verbatim:
+   `golangci-lint run ./...` · `go test ./... -count=1 -race` · `node --test`
+9. **Assumption mandate (v1.7)** — verbatim:
    ```
    node claude-bow.js add assumption "<short title, under ~120 chars or the DB rejects it>" \
      --code-path "<file>" --codejson "<mkey>" --desc "<why, and what breaks if wrong>"
@@ -100,9 +102,9 @@ its absence cost a run.
    For a dev: *if the criteria contain unlogged assumptions, REJECT the ask.*
    For a BA: *unlogged assumptions are grounds for the dev to reject your
    criteria outright.*
-9. **Banned commands** — `git stash`, `git reset --hard`, `git checkout --`,
-   `git clean`. Never. Do not commit; the lead commits.
-10. **Report format** — what was built, baseline **verbatim**, ASM numbers,
+10. **Banned commands** — `git stash`, `git reset --hard`, `git checkout --`,
+   `git clean`. Never. Do not commit; the lead commits. (Utilize `/worktree-stage` for safe alternatives).
+11. **Report format** — what was built, baseline **verbatim**, ASM numbers,
     proof each regression test can fail, and anything left undone.
 
 ## GATE 3 — invite disagreement

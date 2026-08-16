@@ -3,9 +3,9 @@ BOW code: FEAT-021
 # Acceptance criteria — ui.screen.menu (FEAT-021)
 
 **BOW code:** FEAT-021
-**Spec refs:** §13-F10 (`docs/METROPOLIS-MASTER-v2.1.md` line 255); UI-SPEC §4 (layouts, line 760: "F10 → layouts"); `int.protocol` (INT-001); `int.serializer` (INT-002 — save/load format, dependency); `ui.keys` (MOD-011 — keymap JSON profile, dependency).
+**Spec refs:** §13-F10 (`docs/METROPOLIS-MASTER-v2.1.md` line 257); UI-SPEC §4 (layouts, line 762: "F10 → layouts"); `int.protocol` (INT-001); `int.serializer` (INT-002 — save/load format, dependency); `ui.keys` (MOD-011 — keymap JSON profile, dependency).
 **Date:** 2026-08-11
-**Status:** draft-ahead (Sprint 8)
+**Status:** done (Sprint 8)
 **Package under test:** `internal/ui/screens/menu/` (confirm via `node claude-bow.js show FEAT-021` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/ui/screens/menu/...`.
 

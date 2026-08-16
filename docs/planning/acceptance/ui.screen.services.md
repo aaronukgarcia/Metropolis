@@ -3,7 +3,7 @@ BOW code: FEAT-016
 # Acceptance criteria — ui.screen.services (FEAT-016)
 
 **BOW code:** FEAT-016
-**Spec refs:** §13-F4 (`docs/METROPOLIS-MASTER-v2.1.md` line 249); §26 Emergency & Care Dispatch Model (lines 408-410); §54 The Fiscal Circuit — Public Service Pie (lines 682); `int.protocol` (INT-001); `ui.dash`/`MOD-038` (drill-through, dependency).
+**Spec refs:** §13-F4 (`docs/METROPOLIS-MASTER-v2.1.md` line 251); §26 Emergency & Care Dispatch Model (lines 410-412); §54 The Fiscal Circuit — Public Service Pie (line 684); `int.protocol` (INT-001); `ui.dash`/`MOD-038` (drill-through, dependency).
 **Date:** 2026-08-11
 **Status:** draft-ahead (Sprint 8)
 **Package under test:** `internal/ui/screens/services/` (confirm via `node claude-bow.js show FEAT-016` at dispatch)
@@ -30,7 +30,7 @@ The F4 screen: per-service funding sliders, capacity-vs-demand, coverage map jum
 
 - **SVC-1.** A funding slider exists per service category (police, fire, health, education, refuse, etc.), driving `engine.services` parameters via `protocol.Command`. Slider ranges are **not** spec-fixed — see **ASM-250**.
 - **SVC-2.** A capacity-vs-demand gauge/chart renders per service, sourced from `engine.services`' view fields, SF-2-traceable.
-- **SVC-3.** A coverage-map jump: `Enter`/an action on a service's coverage figure switches to F1 and selects that service's coverage overlay (per §13-F1's per-service coverage overlay) — this is cross-screen drill-through (SF-5): the jump target is `ui.screen.map`'s existing overlay-cycle state, not a second coverage renderer built here.
+- **SVC-3.** A coverage-map jump: `Enter`/an action on a service's coverage figure switches to F1 and selects that service's coverage overlay (per §13-F1's per-service coverage overlay) — this is cross-screen drill-through (SF-5): the jump target is `ui.screen.map`'s existing overlay-cycle state, not a second coverage renderer built here. Registered as a `dash.DrillTarget{ViewName, EntityID}` — the canonical shape, not a bespoke `WidgetID`+`Target` seam (BUG-239, `ui.screen.demo`).
 - **SVC-4.** Response-time distribution charts (fire, ambulance, air ambulance, police — §26's unified dispatch model) render from `engine.dispatch`'s per-unit response data.
 - **SVC-5.** Waiting-list figures (e.g. hospital non-urgent care, §26) render with a 12-cell sparkline trend.
 - **SVC-6.** The Public Service Pie allocation view (§54: per-1k-population targets — police ~2.4, teachers per pupil, nurses & GPs, firefighters, social workers, refuse crews, council officers) shows the benchmark ratio alongside the player's actual funding level per slice, sourced from `engine.fiscal` if it carries the benchmark data, or `engine.services` if the benchmark is service-owned — **the exact source module is not currently a registered `code.json` outbound edge for this screen; see Escalations (BUG-058 candidate)**, and the owning BA/dev must confirm at dispatch which module actually exposes the Pie's target ratios before wiring SVC-6.

@@ -3,9 +3,9 @@ BOW code: INT-003
 # Acceptance criteria — int.solver (INT-003)
 
 **BOW code:** INT-003
-**Spec refs:** §15 (Architecture — cloud path, solver offload, `docs/METROPOLIS-MASTER-v2.1.md` line 265); A4 (Assignment structure amendment, lines 1346, 1364); A9 (Cloud thresholds, line 1369); M0-ENG §1 (target hardware & resource doctrine, lines 786-840, esp. line 790's "CPU (v1, always works) -> GPU sidecar -> cloud" and line 840's "v1 ships CPU-only... mandatory local-fallback"); code.json `int.solver` entry.
+**Spec refs:** §15 (Architecture — cloud path, solver offload, `docs/METROPOLIS-MASTER-v2.1.md` line 267); A4 (Assignment structure amendment, R3 at line 1348, A4 entry at line 1366); A9 (Cloud thresholds, line 1371); M0-ENG §1 (target hardware & resource doctrine, lines 788-843, esp. line 792's "CPU (v1, always works) -> GPU sidecar -> cloud"); code.json `int.solver` entry.
 **Date:** 2026-08-08
-**Status:** active
+**Status:** done (closed 2026-08-08; MET-F401 payload bound landed post-close 2026-08-15, commit 66c81b9)
 **Package under test:** `internal/foundation/solver/` (path from `node claude-bow.js show INT-003`)
 **Standard gates:** see `README.md` — all apply, package for SG-4/SG-7 is `./internal/foundation/solver/...`.
 
@@ -45,6 +45,10 @@ The stateless request/response solver contract (CPU v1, GPU/cloud interchangeabl
 
 - **AC-18.** `internal/foundation/solver/doc.go` states the module key `int.solver` and cites §15/A4/A9/M0-ENG §1. Check: `grep -n "int.solver" internal/foundation/solver/doc.go` and `grep -n "A4\|A9\|M0-ENG" internal/foundation/solver/doc.go` both match.
 - **AC-19.** `sizing.go` documents the A4/A9 source figures it transcribes (zone counts, OD matrix worked example, local-CPU citizen ceiling) in a comment block, not just as bare constants. Check: `grep -n "A4\|A9\|R3" internal/foundation/solver/sizing.go` finds citations next to the relevant constants/functions.
+
+### Resource bounds
+
+- **AC-20 (MET-F401 payload-size bound — landed 66c81b9).** `Request.Payload` is hard-bounded to `MaxRequestPayloadBytes = 1 << 20` (1 MiB) before any allocation is sized from it, and an oversized payload returns `ErrRequestPayloadTooLarge` (`MET-F401`, registered in `data/errors.json` under `foundation.solver`'s F400-F499 range). The check runs at the shared dispatch entry point (`chainSolver.Solve`) so every registered backend inherits the bound for free (weakness pattern #1 — the invariant holds through the shared seam, not by per-backend convention), and again in `CPUBackend.solveEcho` before its `make([]byte, len(req.Payload))`, so a caller reaching a backend directly (bypassing a `Registry`) is still bounded (weakness pattern #4/#6 — bound the attacker-influenced value that sizes memory, and do it *before* the allocation, not after). Check: `grep -n "MaxRequestPayloadBytes\|ErrRequestPayloadTooLarge" internal/foundation/solver/contract.go` matches and the constant equals `1 << 20`; a passing test (`grep -rn "func Test.*[Oo]versized.*[Pp]ayload" internal/foundation/solver/*_test.go` finds `TestEchoOversizedPayloadRejected`, `TestEchoOversizedPayloadRejectedWithoutAllocating`, `TestOversizedPayloadRejectedThroughRegistryPath`) asserts a payload over 1 MiB is rejected with `MET-F401` and that no allocation is performed — not merely that a matching-named test function exists.
 
 ## Out of scope
 

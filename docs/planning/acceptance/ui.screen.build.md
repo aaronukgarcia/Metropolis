@@ -3,9 +3,9 @@ BOW code: FEAT-015
 # Acceptance criteria — ui.screen.build (FEAT-015)
 
 **BOW code:** FEAT-015
-**Spec refs:** §13-F3 (`docs/METROPOLIS-MASTER-v2.1.md` line 248); §22 Unlock Economy (lines 378-384, catalogue/unlock state); §34 Zoning (lines 478-480); `int.protocol` (INT-001); `ui.widgets` (MOD-010, `done` — queue-lane widget, dependency).
+**Spec refs:** §13-F3 (`docs/METROPOLIS-MASTER-v2.1.md` line 250); §22 Unlock Economy (lines 380-386, catalogue/unlock state); §34 Zoning (lines 480-482); `int.protocol` (INT-001); `ui.widgets` (MOD-010, `done` — queue-lane widget, dependency).
 **Date:** 2026-08-11
-**Status:** draft-ahead (Sprint 8)
+**Status:** in_progress (Sprint 8)
 **Package under test:** `internal/ui/screens/build/` (confirm via `node claude-bow.js show FEAT-015` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/ui/screens/build/...`.
 
@@ -33,7 +33,7 @@ The F3 screen: land purchase, 8-way zoning (§34), build queue (materials/labour
 - **BLD-3.** The build queue reuses `ui.widgets`' queue-lane widget (not reimplemented) to show materials, labour, and lead-time-remaining per queued item, sourced from `engine.build`'s queue view field.
 - **BLD-4.** Demolition requires an explicit confirm step and shows its real cost before the command is issued — a passing test asserts the confirm step is not skippable and the cost shown matches the value the issued `Command` carries.
 - **BLD-5.** The catalogue browser lists `buildings.json` entries with an unlock-state badge (locked / unlocked / in-progress toward next tier — **ASM-258**) sourced from `engine.unlocks`, not computed locally from XP/DP thresholds duplicated in the UI (GR#3 — the UI reads the unlock decision, it does not recompute it).
-- **BLD-6 (SF-5 applied).** Every cost/lead-time/materials figure in the queue and catalogue is Enter-selectable to its source.
+- **BLD-6 (SF-5 applied).** Every cost/lead-time/materials figure in the queue and catalogue is Enter-selectable to its source, registered as a `dash.DrillTarget{ViewName, EntityID}` — the canonical shape, not a bespoke `WidgetID`+`Target` seam (BUG-239, `ui.screen.demo`).
 
 ### Error handling
 

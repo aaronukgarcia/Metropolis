@@ -3,16 +3,22 @@ description: Create a new error code in the Metropolis error registry (data/erro
 allowed-tools: Read, Edit, Bash(node:*)
 ---
 
-## Your task
+# /new-error — register a new error code via automated tools
 
-Add a new error code to the Metropolis error registry. GR#7: **every** error anywhere in the system is constructed from the registry — ad-hoc errors are banned (lint-enforced once `foundation.errors` lands, MOD-002).
+GR#7: **every** error anywhere in the system is constructed from the registry (data/errors.json). Ad-hoc error construction is strictly banned.
 
-**Code format:** `MET-<layer><NNN>` — layers: `F` foundation, `P` protocol, `E` engine, `U` ui, `T` tooling. Example: `MET-E042`.
+## Fast Registering One-Liner
 
-1. **Registry file:** `data/errors.json` (created by `foundation.data`/`foundation.errors` in Sprint 0; until it exists, tooling errors are declared inline in the tool's header comment — see `tools/plan/generate.js` for the current MET-T0xx set, and migrate them into the registry when it lands).
-2. **Entry shape:** code, severity, message template, remediation hint, owning module key (must exist in code.json).
-3. **Check for an existing code first** — near-duplicates get reused, not multiplied.
-4. **Every raise site** must supply a correlation ID and context object (GR#1); errors are logged to NDJSON and stored for review (F12 tail / `metctl errors`), never printed-and-lost.
-5. If the error accompanies new code, run `/register-guid` checks on that code too.
+To bypass the 193KB `errors.json` manual editing and avoid merge conflicts on a parallel wave:
 
-Confirm with the new code, its registry entry, and the module it belongs to.
+1. **Run the Code Generator Tool:**
+   Use the automatic error generator to register the new code, allocate its range reservation, and generate its Go constant in one step:
+   ```bash
+   node tools/plan/add-error.js --layer <layer> --msg "Your descriptive error template with {context} fields" --severity <fatal|error|warn> --module <module_key>
+   ```
+   (Layers: `F` foundation, `P` protocol, `E` engine, `U` ui, `T` tooling. Example: `E` for engine).
+
+2. **Entry shape generated:** Code (`MET-<layer><NNN>`), severity, message template, remediation hint, and owning module key.
+
+3. **Verify:**
+   Check that the constant is cleanly generated inside `internal/foundation/errs/registry.go` and runs green.

@@ -3,9 +3,9 @@ BOW code: MOD-006
 # Acceptance criteria — foundation.data (MOD-006)
 
 **BOW code:** MOD-006
-**Spec refs:** §24 (Config Data Files, `docs/METROPOLIS-MASTER-v2.1.md` line 398 — the named file set: `data/consumption.json`, `modes.json`, `buildings.json`, `unlock_trees.json`, `naming_corpus.json`, `seasonal.json`, `external_world.json`, `policies.json`, `errors.json`); GR#15 (Validators Derive From Data, `CLAUDE.md` line 46); M0-ENG §3 (debug as a runtime feature switch, for the hot-reload trigger's scope, lines 853-855).
+**Spec refs:** §24 (Config Data Files, `docs/METROPOLIS-MASTER-v2.1.md` line 400 — the named file set at line 401: `data/consumption.json`, `modes.json`, `buildings.json`, `unlock_trees.json`, `naming_corpus.json`, `seasonal.json`, `external_world.json`, `policies.json`, `errors.json`); GR#15 (Validators Derive From Data, `CLAUDE.md` line 46); M0-ENG §3 (debug as a runtime feature switch, for the hot-reload trigger's scope, lines 855-857).
 **Date:** 2026-08-09
-**Status:** active
+**Status:** done (closed 2026-08-09)
 **Package under test:** `internal/foundation/data/` (confirm via `node claude-bow.js show MOD-006` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/foundation/data/...`.
 

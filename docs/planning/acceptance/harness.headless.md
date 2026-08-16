@@ -3,9 +3,9 @@ BOW code: MOD-015
 # Acceptance criteria — harness.headless (MOD-015)
 
 **BOW code:** MOD-015
-**Spec refs:** M0-ENG §2.3 (Harness strategy — H-HEADLESS, `docs/METROPOLIS-MASTER-v2.1.md` line 848); §16 Roadmap point 3 (M2 balance harness, line 272); `engine.core` (MOD-012, the orchestrator this wraps).
+**Spec refs:** M0-ENG §2.3 (Harness strategy — H-HEADLESS, `docs/METROPOLIS-MASTER-v2.1.md` line 850); §16 Roadmap point 3 (M2 balance harness, line 274); `engine.core` (MOD-012, the orchestrator this wraps).
 **Date:** 2026-08-08
-**Status:** draft-ahead (Sprint 1)
+**Status:** done (closed 2026-08-10 via PR #1, 77a59f4)
 **Package under test:** `internal/harness/headless/` and its `cmd/` entry point (confirm via `node claude-bow.js show MOD-015` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/harness/headless/...`.
 

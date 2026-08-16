@@ -3,9 +3,9 @@ BOW code: FEAT-020
 # Acceptance criteria — ui.screen.ticker (FEAT-020)
 
 **BOW code:** FEAT-020
-**Spec refs:** §13-F9 (`docs/METROPOLIS-MASTER-v2.1.md` line 254); §29 The News System (lines 426-433); §20 Auto-naming (cited by §29 for real names); `int.protocol` (INT-001); `ui.keys` (MOD-011 — `/` NameIndex search, reused per ASM-254).
+**Spec refs:** §13-F9 (`docs/METROPOLIS-MASTER-v2.1.md` line 256); §29 The News System (lines 428-435); §20 Auto-naming (cited by §29 for real names); `int.protocol` (INT-001); `ui.keys` (MOD-011 — `/` NameIndex search, reused per ASM-254).
 **Date:** 2026-08-11
-**Status:** draft-ahead (Sprint 8)
+**Status:** done (Sprint 8)
 **Package under test:** `internal/ui/screens/ticker/` (confirm via `node claude-bow.js show FEAT-020` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/ui/screens/ticker/...`.
 
@@ -32,7 +32,7 @@ The F9 screen: rolling ticker, monthly bulletin front page (read-on-pause), annu
 - **TIK-2.** A Monthly Bulletin front page renders 3-5 salience-ranked stories at month-end, with read-on-pause behaviour (the bulletin stays visible/readable while the sim is paused) — sourced from `engine.news`.
 - **TIK-3.** An Annual Review renders year-in-numbers plus the year's biggest story, sourced from `engine.news`.
 - **TIK-4.** A searchable full history archive renders, reusing `ui.keys`' `/` `NameIndex` search convention (name-substring match, `n`/`N` stepping) rather than a bespoke query language — see **ASM-254**.
-- **TIK-5 (real-events-only, structural).** Every rendered ticker/bulletin/annual-review story carries a reference back to its originating `engine.news` event ID — a passing test asserts no rendered story exists without a traceable source event ID; this is the drill-through rule (SF-5) applied specifically to news content, and it is the mechanism that makes "no hallucinated news" checkable rather than a promise: a story string with no backing event ID fails the check even if the prose reads plausibly.
+- **TIK-5 (real-events-only, structural).** Every rendered ticker/bulletin/annual-review story carries a reference back to its originating `engine.news` event ID — a passing test asserts no rendered story exists without a traceable source event ID; this is the drill-through rule (SF-5) applied specifically to news content (registered as a `dash.DrillTarget{ViewName, EntityID}` — the canonical shape, not a bespoke `WidgetID`+`Target` seam; BUG-239), and it is the mechanism that makes "no hallucinated news" checkable rather than a promise: a story string with no backing event ID fails the check even if the prose reads plausibly.
 - **TIK-6.** The searchable history archive is also the epilogue's data source (win/death screen) — a single store, not a duplicated one (GR#3): a passing test asserts the epilogue reads from the same archive query path this screen exposes, not a second copy.
 
 ### Error handling

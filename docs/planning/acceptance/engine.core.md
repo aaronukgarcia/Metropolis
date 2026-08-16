@@ -7,9 +7,9 @@ BOW code: MOD-012
 # Acceptance criteria — engine.core (MOD-012)
 
 **BOW code:** MOD-012
-**Spec refs:** §3 (Time, `docs/METROPOLIS-MASTER-v2.1.md` lines 115-136); M0-ENG §1.1-1.3 (process/thread topology, deterministic parallelism, memory budget, lines 792-840); §9 (Seasonality/month index, line 224); `int.protocol` (INT-001, the command surface this orchestrator drives).
+**Spec refs:** §3 (Time, `docs/METROPOLIS-MASTER-v2.1.md` lines 117-135); M0-ENG §1.1-1.3 (process/thread topology, deterministic parallelism, memory budget, lines 794-840); §9 (Seasonality/month index, line 226); `int.protocol` (INT-001, the command surface this orchestrator drives).
 **Date:** 2026-08-08
-**Status:** draft-ahead (Sprint 1)
+**Status:** done — MOD-012 closed 2026-08-09 (Tester-1 PASS 32/32, `-race`; full pipeline; determinism discipline accepted by lead review). **2026-08-16 refresh (BA):** status updated from `draft-ahead`; spec §/line refs re-pointed to current `docs/METROPOLIS-MASTER-v2.1.md`; MOD-004/MOD-005 dependency statuses refreshed (both `done`).
 **Package under test:** `internal/engine/core/` (confirm via `node claude-bow.js show MOD-012` at dispatch)
 **Standard gates:** see `README.md` — package for SG-4/SG-7 is `./internal/engine/core/...`.
 
@@ -63,4 +63,4 @@ The tick orchestrator: two-layer clock (calendar month ⇄ 30 daily ticks), fixe
 
 ## Escalations
 
-- None at draft time. `status: draft-ahead` — refresh at dispatch against `MOD-004` (foundation.det, the 256-shard/counter-RNG core this item depends on) and `MOD-005` (module registry) once those Sprint-0/1 dependencies have landed, since `engine.core`'s exact integration surface with both is not yet frozen as of this writing.
+- **Resolved.** The draft-time escalation is moot: `MOD-004` (foundation.det) and `MOD-005` (module registry) are both `done`, and `MOD-012` itself closed 2026-08-09. No open dependencies remain.

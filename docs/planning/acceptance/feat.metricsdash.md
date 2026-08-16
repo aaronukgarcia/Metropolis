@@ -16,7 +16,7 @@ logged or the work is rejected" section (v1.7) and its weakness-pattern
 write-ups — the dashboard's job is partly to make those patterns visible
 without a human re-running `weakness` by hand.
 **Date:** 2026-08-11
-**Status:** active
+**Status:** done (closed 2026-08-13, Destructively ACCEPTed round 2)
 **Package under test:** proposed `internal/harness/metricsdash/` for the
 dashboard's data-gathering/formatting core, `internal/ui/screens/metrics/`
 for the in-game screen if Escalation A below resolves toward an in-game
@@ -338,6 +338,7 @@ that a shared one exists by dispatch time.
   `tool.*` ones — but this is a judgement call Escalation A's ruling could
   overturn (an out-of-band CLI report might belong in `tool.*` instead).
   Logged as **ASM-451**.
+- **D. For Bill — plan-owned missing edge (routes through master-plan + generate.js, not a hand-edit).** This item's shipped code imports `internal/harness/synth` (`internal/harness/metricsdash/perf.go` calls `synth.LoadLatestBaseline` / `synth.LoadAcceptedRegistry` / `synth.CompareToBaseline` / `synth.PerfRecord`), but `code.json`'s `feat.metricsdash` entry lists only `feat.devmode` and `foundation.errors` in its `outbound.calls` — the `feat.metricsdash → harness.synth` edge is a **phantom import** (a real Go import with no registered edge). It must be added in `master-plan-v2.1.json` and regenerated via `tools/plan/generate.js`; do not hand-edit `code.json` or the BOW. Flagged here so the plan-drift is on record rather than silently absorbed.
 - **Assumptions logged separately (see report to Bill).** ASM-451 (module
   key), ASM-452 (in-game screen vs out-of-band report — this is the load-
   bearing one, since it changes package path and GR#20 applicability), and

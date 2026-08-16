@@ -3,9 +3,9 @@ BOW code: MOD-037
 # Acceptance criteria — ui.diagrams (MOD-037)
 
 **BOW code:** MOD-037
-**Spec refs:** UI-SPEC §2 (`docs/METROPOLIS-MASTER-v2.1.md` line 739: "Block-text diagrams (auto-laid-out): three diagram engines — chain diagrams..., network schematics..., and a text Sankey for the §54 Fiscal Circuit.... These are computed layouts (layered graph drawing, small n), cached until topology changes."); §33/§50 (chain-diagram subject matter — freight/chemical production chains); §54 (the Fiscal Circuit, text-Sankey subject matter); UI-SPEC §4 (dashboards & the drill-through rule — the consumer contract this item must not silently break); `ui.widgets` (MOD-010, the cell-buffer/glyph substrate these engines draw with).
+**Spec refs:** UI-SPEC §2 (`docs/METROPOLIS-MASTER-v2.1.md` line 741: "Block-text diagrams (auto-laid-out): three diagram engines — chain diagrams..., network schematics..., and a text Sankey for the §54 Fiscal Circuit.... These are computed layouts (layered graph drawing, small n), cached until topology changes."); §33/§50 (chain-diagram subject matter — freight/chemical production chains); §54 (the Fiscal Circuit, text-Sankey subject matter); UI-SPEC §4 (dashboards & the drill-through rule — the consumer contract this item must not silently break); `ui.widgets` (MOD-010, the cell-buffer/glyph substrate these engines draw with).
 **Date:** 2026-08-11
-**Status:** active (Sprint 8)
+**Status:** done (Sprint 8)
 **Package under test:** `internal/ui/diagrams/` (path from `node claude-bow.js show MOD-037`)
 **Standard gates:** see `README.md` — all apply, package for SG-4/SG-7 is `./internal/ui/diagrams/...`.
 
