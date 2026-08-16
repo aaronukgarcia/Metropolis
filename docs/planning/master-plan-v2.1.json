@@ -2,7 +2,7 @@
   "planVersion": "1.1.0",
   "project": "Metropolis",
   "source": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
-  "updated": "2026-08-08",
+  "updated": "2026-08-15",
   "authoring": "Hand-authored single source of truth. tools/plan/generate.js derives code.json and tools/plan/bow-import.json from this file — never edit those outputs directly (GR#3). Sequence numbers are gapped by ~10 to allow insertions. v1.1.0 (2026-08-08): sprint assignments S0-S11 added (cloud/future items unscheduled); tool.bow decision enacted; tool.planguard + tool.ready added; engine.comms resequenced after engine.firms.",
   "designNorthStar": {
     "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
@@ -1914,6 +1914,95 @@
       "sprint": 11
     },
     {
+      "key": "engine.maintenance",
+      "type": "module",
+      "seq": 691,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Maintenance system: per-instance aging, efficiency decline, lifetime, multi-fix crews",
+      "desc": "Every placed object carries a per-instance MaintenanceView (engineer-days/year scaled by class/size, age, efficiency, lifetime); efficiency declines monotonically with age, past-lifetime objects flag for refit/rebuild; a maintenance crew's day is a bounded engineer-day budget applied to a multi-job backlog with a conservation invariant; city-wide repair demand surfaced for engine.staffing; maintenance spend settles through engine.finance's OPEX surface. Rates/lifetimes are data placeholders pending Aaron's balance pass.",
+      "specRef": "s20; s12 (decay); s54 (staffing); s26 (shared pool)",
+      "path": "internal/engine/maintenance/",
+      "inbound": {
+        "name": "MaintenanceAPI",
+        "format": "Go package API + deltas",
+        "pattern": "per-instance view keyed to structure identity; backlog conservation; spend settles to finance OPEX"
+      },
+      "deps": [
+        "engine.build",
+        "engine.finance",
+        "foundation.data"
+      ],
+      "calls": [
+        "engine.build",
+        "engine.finance",
+        "foundation.data"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "engine.staffing",
+      "type": "module",
+      "seq": 692,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Staffing: citizens as operators + repair staff; city-wide repair demand",
+      "desc": "Citizens as operators + repair staff: a skilled-staff pool drawn from the population (education/employment-tracked), matched against each service's demand; city-wide repair demand consumed from engine.maintenance; off-map contractor shortfall for un-met demand; pilot staffing for engine.airunits.",
+      "specRef": "s54 (staffing); s26 (shared pool)",
+      "path": "internal/engine/staffing/",
+      "inbound": {
+        "name": "StaffingAPI",
+        "format": "Go package API + deltas",
+        "pattern": "skill pool matched to per-service demand; contractor shortfall"
+      },
+      "deps": [
+        "engine.citizens",
+        "engine.maintenance"
+      ],
+      "calls": [
+        "engine.citizens",
+        "engine.maintenance",
+        "engine.finance",
+        "foundation.data"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "engine.airunits",
+      "type": "module",
+      "seq": 693,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Air units (choppers): police, fire, ambulance, VIP - rotary-wing, traffic-immune",
+      "desc": "Rotary-wing air units in four roles (police/fire/ambulance/VIP-private); expensive purchase + running cost, pilot-skilled, maintenance-heavy; save lives/reach incidents fast (traffic-immune, weather-limited); population approval; the ambulance role IS engine.dispatch's air-ambulance (one merged unit, GR#3); VIP role is non-emergency commercial/prestige.",
+      "specRef": "s26 (dispatch); s10 (air-ambulance pad)",
+      "path": "internal/engine/airunits/",
+      "inbound": {
+        "name": "AirUnitsAPI",
+        "format": "Go package API + deltas",
+        "pattern": "four typed roles; dispatch integration; maintenance/opex fed to finance"
+      },
+      "deps": [
+        "engine.dispatch",
+        "engine.world",
+        "engine.staffing",
+        "engine.maintenance",
+        "engine.finance"
+      ],
+      "calls": [
+        "engine.dispatch",
+        "engine.world",
+        "engine.staffing",
+        "engine.maintenance",
+        "engine.finance",
+        "foundation.data"
+      ],
+      "sprint": 11
+    },
+    {
       "key": "engine.freight",
       "type": "module",
       "seq": 680,
@@ -3273,6 +3362,362 @@
       ],
       "calls": [],
       "sprint": 0
+    },
+    {
+      "key": "engine.airport",
+      "type": "module",
+      "seq": 986,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Airport (Heathrow-class international)",
+      "desc": "Heathrow-scale international airport: runways, terminals, freight apron, air-cargo and passenger connectivity feeding tourism, FDI and freight; thousands of jobs, huge traffic generation, noise blight via the mining blight model. Requires permit, enormous land, and road/rail links. Long-horizon bet: colossal capex, compounding connectivity payoff.",
+      "specRef": "§MP; §44; §46; §33; §32",
+      "path": "internal/engine/airport/",
+      "inbound": {
+        "name": "AirportAPI",
+        "format": "Go package API",
+        "pattern": "component queries (runways/terminals/freight-apron), pax/day, air-cargo tonnage, access-tier, runway-access/adjacency, surface-access status"
+      },
+      "deps": [
+        "feat.facilitypermits",
+        "engine.freight",
+        "engine.rail",
+        "engine.roads",
+        "engine.mining"
+      ],
+      "calls": [
+        "engine.freight",
+        "engine.mining",
+        "feat.facilitypermits",
+        "engine.roads",
+        "engine.rail"
+      ],
+      "sprint": 10
+    },
+    {
+      "key": "feat.containerport",
+      "type": "feature",
+      "seq": 987,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Container port (Felixstowe-class deep-sea terminal)",
+      "desc": "Felixstowe-scale deep-sea container terminal: berths x crane rate x hours, intermodal rail transfer, customs throughput with smuggling risk when saturated; flips the city importer-to-exporter mid-game. Permit + decommission. Upgrades the port milestone to deep-sea terminal tier.",
+      "specRef": "§33; §47; §28; §PT; resources-design-brief.md §8-§9",
+      "path": "internal/engine/freight/",
+      "deps": [
+        "engine.freight",
+        "engine.rail",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ],
+      "calls": [
+        "engine.freight",
+        "engine.rail",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ],
+      "sprint": 10
+    },
+    {
+      "key": "feat.channeltunnel",
+      "type": "feature",
+      "seq": 988,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Channel Tunnel (Chunnel-class mega-tunnel)",
+      "desc": "Channel Tunnel-class cross-water mega-tunnel: TBM-driven (learning curve), road/rail/metro/utility bundling, dig-once; spoil as reclamation fill. Monstrous capex, huge prestige — explicitly a long-horizon prestige bet.",
+      "specRef": "§53; §MP; §47; §32",
+      "path": "internal/engine/tunnels/",
+      "deps": [
+        "engine.tunnels",
+        "engine.rail"
+      ],
+      "calls": [
+        "engine.tunnels",
+        "engine.rail"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "engine.spaceport",
+      "type": "module",
+      "seq": 989,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Spaceport (SpaceX-class launch/landing site)",
+      "desc": "SpaceX-class launch/landing site: end-game science/prestige mega-facility, expert-gated (money alone cannot buy it). Permit + decommission liability. Enormous prestige, FDI/tourism draw, launch-exclusion blight. Extends the buildings.json mega-projects supplement.",
+      "specRef": "§MP; resources-design-brief.md §8",
+      "path": "internal/engine/spaceport/",
+      "inbound": {
+        "name": "SpaceportAPI",
+        "format": "Go package API",
+        "pattern": "launch operations, launch-exclusion blight, FDI/tourism draw, prestige"
+      },
+      "deps": [
+        "feat.facilitypermits",
+        "feat.decommission",
+        "engine.education"
+      ],
+      "calls": [
+        "engine.education",
+        "feat.facilitypermits",
+        "feat.decommission",
+        "engine.fdi",
+        "engine.tourism"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "engine.accelerator",
+      "type": "module",
+      "seq": 990,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Particle accelerator (CERN-class)",
+      "desc": "CERN-class particle accelerator: the ultimate science mega-facility, expert-gated like the spaceport; massive electricity/water draw, permit + decommission. Enormous prestige + FDI anchor + research spillover into education and wellbeing.",
+      "specRef": "§MP; resources-design-brief.md §8",
+      "path": "internal/engine/accelerator/",
+      "inbound": {
+        "name": "AcceleratorAPI",
+        "format": "Go package API",
+        "pattern": "research-rate multiplier, utility draw, FDI anchor, prestige"
+      },
+      "deps": [
+        "feat.facilitypermits",
+        "feat.decommission",
+        "engine.education",
+        "engine.consumption",
+        "engine.wellbeing",
+        "engine.fdi"
+      ],
+      "calls": [
+        "engine.education",
+        "engine.consumption",
+        "engine.wellbeing",
+        "engine.fdi",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "feat.pharmacampus",
+      "type": "feature",
+      "seq": 991,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Pharma/R&D campus (Pfizer-class)",
+      "desc": "Groton-Pfizer-class pharma/R&D campus (Kent tie-in): FDI anchor with thousands of skilled jobs, education/research synergy, supply-chain spawning, exports. Permit + decommission. Long bet: education + FDI compounding into a high-value anchor employer.",
+      "specRef": "§46; §45; §27; §32; §54; resources-design-brief.md §6",
+      "path": "internal/engine/fdi/",
+      "deps": [
+        "engine.fdi",
+        "engine.education",
+        "engine.firms",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ],
+      "calls": [
+        "engine.fdi",
+        "engine.education",
+        "engine.firms"
+      ],
+      "sprint": 10
+    },
+    {
+      "key": "feat.refinery",
+      "type": "feature",
+      "seq": 992,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Oil refinery + integrated chemical works",
+      "desc": "Oil refinery + integrated chemical works: crude by tanker to tank farm to refinery to petrochemical works to plastics. Top blight class, hazmat fire category. Make-vs-buy at largest scale — no refinery means importing refined product at margin. Permit + decommission.",
+      "specRef": "§50; §49; §26; §32; §33; resources-design-brief.md §6",
+      "path": "internal/engine/chemicals/",
+      "deps": [
+        "engine.chemicals",
+        "engine.fuel",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ],
+      "calls": [
+        "engine.chemicals",
+        "engine.fuel"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "feat.minetypes",
+      "type": "feature",
+      "seq": 993,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Mine types — extractive facility catalogue",
+      "desc": "Mine-type catalogue — every extractive type as a distinct modelled facility (chalk, sand/gravel, clay+brickworks, ragstone, deep coal, offshore dredging, quarry). Per-type footprint/output/blight/jobs/depth, geology-gated, deposit-backed, finite depleting.",
+      "specRef": "§32; §34; §17; resources-design-brief.md §2/§9",
+      "path": "internal/engine/mining/",
+      "deps": [
+        "engine.mining",
+        "feat.resourcedeposits"
+      ],
+      "calls": [
+        "engine.mining",
+        "engine.world"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "feat.farmtypes",
+      "type": "feature",
+      "seq": 994,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Farm types — agricultural facility catalogue",
+      "desc": "Farm-type catalogue — every agricultural type as a distinct modelled facility (arable, livestock, orchard, market garden, vineyard/winery). Per-type soil quality/BDI, conventional vs organic, food chains to mill/dairy/abattoir/packhouse/winery.",
+      "specRef": "§31; §17; §25",
+      "path": "internal/engine/farming/",
+      "deps": [
+        "engine.farming"
+      ],
+      "calls": [
+        "engine.farming",
+        "engine.world"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "feat.factorytypes",
+      "type": "feature",
+      "seq": 995,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Factory unit types — manufacturing facility catalogue",
+      "desc": "Factory-unit catalogue — every manufacturing type as a distinct modelled facility (assembler, steel mill, electronics, chemicals converter, food processing, textiles, cement, glass). Per-type footprint/input-output/jobs/utility draw/blight class.",
+      "specRef": "§33; §46; §34; §17; §45",
+      "path": "internal/engine/freight/",
+      "deps": [
+        "engine.freight",
+        "engine.firms"
+      ],
+      "calls": [
+        "engine.freight"
+      ],
+      "sprint": 10
+    },
+    {
+      "key": "engine.census",
+      "type": "module",
+      "seq": 996,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Living city census & life-history: background audit threads + cradle-to-grave object bios + demographics/KPI drill-in",
+      "desc": "Living census + life-history layer: non-blocking background threads (stats generator, auditor, consistency checker, regulator), cradle-to-grave bios for every object (citizens and cars/houses/choppers alike), and demographics/KPI drill-in (splines, GDP, happiness, employment).",
+      "specRef": "§13 F6; §18; §40; §45; §46; UI-SPEC §4/§5.2",
+      "path": "internal/engine/census/",
+      "inbound": {
+        "name": "CensusAPI",
+        "format": "Go package API",
+        "pattern": "stats/history/consistency/findings query surfaces + object bios + splines + KPI drill"
+      },
+      "deps": [
+        "engine.citizens",
+        "engine.education",
+        "engine.crime",
+        "engine.wellbeing",
+        "engine.services",
+        "engine.policies",
+        "engine.finance"
+      ],
+      "calls": [
+        "engine.citizens",
+        "engine.education",
+        "engine.crime",
+        "engine.wellbeing",
+        "engine.services",
+        "engine.policies",
+        "engine.finance"
+      ],
+      "sprint": 11
+    },
+    {
+      "key": "foundation.num",
+      "type": "module",
+      "seq": 997,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "foundation",
+      "title": "foundation.num: type-safe coercion & bounded helpers (saturating + reject-form)",
+      "desc": "Type-safe coercion and bounded helpers for input validation and encapsulation (FEAT-135): reject-form SafeInt64/BoundedFloat alongside the existing saturating helpers, all returning registry-sourced errors; the reusable copy-guard wrapper lands in foundation.registry.",
+      "specRef": "GR#7; SEC-080; SEC-093; FEAT-086",
+      "path": "internal/foundation/num/",
+      "inbound": {
+        "name": "Num",
+        "format": "Go package API",
+        "pattern": "safe coercion: saturating + reject-form helpers; registry-sourced errors on non-finite/overflow"
+      },
+      "deps": [
+        "foundation.errors"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "tool.fileclaimguard",
+      "type": "feature",
+      "seq": 998,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "title": "Concurrent on-disk edit safety: dispatch-time file-claim block + edit-time guard",
+      "desc": "Prevent the concurrent-edit near-miss class: dispatch-time HARD BLOCK when a brief declares a path owned by another live agent + auto-claim on dispatch; an edit-time guard checking sync_file_claims before every Edit/Write; claims keyed by session id (not name).",
+      "specRef": "GR#3; GR#20; M0-ENG §5; dev-team-process v1.6.1/v1.7; BUG-238",
+      "path": "claude-file-claim-guard.js",
+      "deps": [
+        "tool.sync",
+        "tool.dispatchguard",
+        "tool.db"
+      ],
+      "calls": [],
+      "sprint": 0
+    },
+    {
+      "key": "engine.worklife",
+      "type": "module",
+      "seq": 999,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Work schedules & work-life balance: shift patterns, commute, and a 40h-vs-996 working-week policy",
+      "desc": "Work schedules and work-life balance: every job carries a time pattern (9-5 core-hours, 24x7 shift, any-time), every worker commutes (the rush shapes traffic), and the working week is a policy (varied ~40h default vs a 996 9-to-9/6-day option that earns more but costs wellbeing).",
+      "specRef": "§5.1; §18; §19.3; §21; §26; §42; §52; §54; §5.2",
+      "path": "internal/engine/worklife/",
+      "inbound": {
+        "name": "WorkScheduleAPI",
+        "format": "Go package API",
+        "pattern": "pattern vocabulary (core-hours/shift/any-time), at-work, coverage-requirement, commute-demand-by-hour, working-hours"
+      },
+      "deps": [
+        "engine.policies",
+        "engine.wellbeing",
+        "engine.staffing",
+        "engine.traffic"
+      ],
+      "calls": [
+        "engine.policies",
+        "engine.wellbeing"
+      ],
+      "sprint": 11
     }
   ]
 }

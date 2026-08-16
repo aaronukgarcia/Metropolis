@@ -1602,6 +1602,67 @@
       ]
     },
     {
+      "mkey": "engine.maintenance",
+      "type": "module",
+      "title": "Maintenance system: per-instance aging, efficiency decline, lifetime, multi-fix crews",
+      "desc": "Every placed object carries a per-instance MaintenanceView (engineer-days/year scaled by class/size, age, efficiency, lifetime); efficiency declines monotonically with age, past-lifetime objects flag for refit/rebuild; a maintenance crew's day is a bounded engineer-day budget applied to a multi-job backlog with a conservation invariant; city-wide repair demand surfaced for engine.staffing; maintenance spend settles through engine.finance's OPEX surface. Rates/lifetimes are data placeholders pending Aaron's balance pass. [spec: s20; s12 (decay); s54 (staffing); s26 (shared pool)] [path: internal/engine/maintenance/]",
+      "seq": 691,
+      "sprint": 11,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "s20; s12 (decay); s54 (staffing); s26 (shared pool)",
+      "guid": "7fe830e0-c929-416e-adbf-033306925716",
+      "guidIn": "53cbab1a-a4ec-48bb-9ec5-7487d269bef3",
+      "guidOut": "b4052d06-2ad1-4878-a774-2eb5d7e56f68",
+      "deps": [
+        "engine.build",
+        "engine.finance",
+        "foundation.data"
+      ]
+    },
+    {
+      "mkey": "engine.staffing",
+      "type": "module",
+      "title": "Staffing: citizens as operators + repair staff; city-wide repair demand",
+      "desc": "Citizens as operators + repair staff: a skilled-staff pool drawn from the population (education/employment-tracked), matched against each service's demand; city-wide repair demand consumed from engine.maintenance; off-map contractor shortfall for un-met demand; pilot staffing for engine.airunits. [spec: s54 (staffing); s26 (shared pool)] [path: internal/engine/staffing/]",
+      "seq": 692,
+      "sprint": 11,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "s54 (staffing); s26 (shared pool)",
+      "guid": "13eff6db-c51c-4307-b84e-3cfd2ce671af",
+      "guidIn": "8de22d17-1d58-4ca8-995f-89f2c98d4fb5",
+      "guidOut": "d30a438c-0d64-49ff-9af2-1aac60456b45",
+      "deps": [
+        "engine.citizens",
+        "engine.maintenance"
+      ]
+    },
+    {
+      "mkey": "engine.airunits",
+      "type": "module",
+      "title": "Air units (choppers): police, fire, ambulance, VIP - rotary-wing, traffic-immune",
+      "desc": "Rotary-wing air units in four roles (police/fire/ambulance/VIP-private); expensive purchase + running cost, pilot-skilled, maintenance-heavy; save lives/reach incidents fast (traffic-immune, weather-limited); population approval; the ambulance role IS engine.dispatch's air-ambulance (one merged unit, GR#3); VIP role is non-emergency commercial/prestige. [spec: s26 (dispatch); s10 (air-ambulance pad)] [path: internal/engine/airunits/]",
+      "seq": 693,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "s26 (dispatch); s10 (air-ambulance pad)",
+      "guid": "249f9261-4a42-49f4-8498-23f24478b76c",
+      "guidIn": "b9658c5f-1d3b-4830-acd3-f3c6f919e66f",
+      "guidOut": "bba25b12-a2ef-404a-96b4-de6dc739ba49",
+      "deps": [
+        "engine.dispatch",
+        "engine.world",
+        "engine.staffing",
+        "engine.maintenance",
+        "engine.finance"
+      ]
+    },
+    {
       "mkey": "engine.capexport",
       "type": "module",
       "title": "Service capacity export: selling your slack",
@@ -2614,6 +2675,293 @@
       "guidOut": "f07a2f86-bb17-416e-a611-06fe4dd825c6",
       "deps": [
         "plan.pipeline"
+      ]
+    },
+    {
+      "mkey": "engine.airport",
+      "type": "module",
+      "title": "Airport (Heathrow-class international)",
+      "desc": "Heathrow-scale international airport: runways, terminals, freight apron, air-cargo and passenger connectivity feeding tourism, FDI and freight; thousands of jobs, huge traffic generation, noise blight via the mining blight model. Requires permit, enormous land, and road/rail links. Long-horizon bet: colossal capex, compounding connectivity payoff. [spec: §MP; §44; §46; §33; §32] [path: internal/engine/airport/]",
+      "seq": 986,
+      "sprint": 10,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§MP; §44; §46; §33; §32",
+      "guid": "71f98f6a-8f9f-4b3d-bbad-f2d8b8e783b0",
+      "guidIn": "eeb7203d-d22b-4e09-87ce-647e4c9f28a8",
+      "guidOut": "ab6fe1dc-5766-443e-af57-4c80b345a657",
+      "deps": [
+        "feat.facilitypermits",
+        "engine.freight",
+        "engine.rail",
+        "engine.roads",
+        "engine.mining"
+      ]
+    },
+    {
+      "mkey": "feat.containerport",
+      "type": "feature",
+      "title": "Container port (Felixstowe-class deep-sea terminal)",
+      "desc": "Felixstowe-scale deep-sea container terminal: berths x crane rate x hours, intermodal rail transfer, customs throughput with smuggling risk when saturated; flips the city importer-to-exporter mid-game. Permit + decommission. Upgrades the port milestone to deep-sea terminal tier. [spec: §33; §47; §28; §PT; resources-design-brief.md §8-§9] [path: internal/engine/freight/]",
+      "seq": 987,
+      "sprint": 10,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§33; §47; §28; §PT; resources-design-brief.md §8-§9",
+      "guid": "3f6c6641-e6a0-4d49-8238-33257c1dfd12",
+      "guidIn": "07aa4d96-297d-4a74-8be8-59fd308c8f24",
+      "guidOut": "48638972-009e-4cce-8628-49612a88ec0b",
+      "deps": [
+        "engine.freight",
+        "engine.rail",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ]
+    },
+    {
+      "mkey": "feat.channeltunnel",
+      "type": "feature",
+      "title": "Channel Tunnel (Chunnel-class mega-tunnel)",
+      "desc": "Channel Tunnel-class cross-water mega-tunnel: TBM-driven (learning curve), road/rail/metro/utility bundling, dig-once; spoil as reclamation fill. Monstrous capex, huge prestige — explicitly a long-horizon prestige bet. [spec: §53; §MP; §47; §32] [path: internal/engine/tunnels/]",
+      "seq": 988,
+      "sprint": 11,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§53; §MP; §47; §32",
+      "guid": "f945b844-5525-46fd-a22c-407bed21f543",
+      "guidIn": "a21094dc-531f-4da3-bbfd-7714e1054693",
+      "guidOut": "79948617-8202-4a4a-adc4-f52a2c7c068d",
+      "deps": [
+        "engine.tunnels",
+        "engine.rail"
+      ]
+    },
+    {
+      "mkey": "engine.spaceport",
+      "type": "module",
+      "title": "Spaceport (SpaceX-class launch/landing site)",
+      "desc": "SpaceX-class launch/landing site: end-game science/prestige mega-facility, expert-gated (money alone cannot buy it). Permit + decommission liability. Enormous prestige, FDI/tourism draw, launch-exclusion blight. Extends the buildings.json mega-projects supplement. [spec: §MP; resources-design-brief.md §8] [path: internal/engine/spaceport/]",
+      "seq": 989,
+      "sprint": 11,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§MP; resources-design-brief.md §8",
+      "guid": "db11e055-0a3c-40b2-80a3-0e6118a85f9e",
+      "guidIn": "da932e36-b1a5-4e83-84a8-86611a79e99e",
+      "guidOut": "3d022c28-63d4-44ee-b671-a9d2deaf0ff3",
+      "deps": [
+        "feat.facilitypermits",
+        "feat.decommission",
+        "engine.education"
+      ]
+    },
+    {
+      "mkey": "engine.accelerator",
+      "type": "module",
+      "title": "Particle accelerator (CERN-class)",
+      "desc": "CERN-class particle accelerator: the ultimate science mega-facility, expert-gated like the spaceport; massive electricity/water draw, permit + decommission. Enormous prestige + FDI anchor + research spillover into education and wellbeing. [spec: §MP; resources-design-brief.md §8] [path: internal/engine/accelerator/]",
+      "seq": 990,
+      "sprint": 11,
+      "priority": "P3",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§MP; resources-design-brief.md §8",
+      "guid": "fe85f850-f2fc-4552-801f-5580b4da6198",
+      "guidIn": "21c44cd9-cad9-4c35-a98f-44cef0971bfa",
+      "guidOut": "22084081-6b7b-498f-9848-f05f424709f8",
+      "deps": [
+        "feat.facilitypermits",
+        "feat.decommission",
+        "engine.education",
+        "engine.consumption",
+        "engine.wellbeing",
+        "engine.fdi"
+      ]
+    },
+    {
+      "mkey": "feat.pharmacampus",
+      "type": "feature",
+      "title": "Pharma/R&D campus (Pfizer-class)",
+      "desc": "Groton-Pfizer-class pharma/R&D campus (Kent tie-in): FDI anchor with thousands of skilled jobs, education/research synergy, supply-chain spawning, exports. Permit + decommission. Long bet: education + FDI compounding into a high-value anchor employer. [spec: §46; §45; §27; §32; §54; resources-design-brief.md §6] [path: internal/engine/fdi/]",
+      "seq": 991,
+      "sprint": 10,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§46; §45; §27; §32; §54; resources-design-brief.md §6",
+      "guid": "d29caa43-21fc-4b2d-931d-d8f2baa60bfa",
+      "guidIn": "584f2e55-b4fc-43eb-8d01-441f78ffdc1f",
+      "guidOut": "3e067a3a-00e2-44c0-948a-1d78b84ecdf3",
+      "deps": [
+        "engine.fdi",
+        "engine.education",
+        "engine.firms",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ]
+    },
+    {
+      "mkey": "feat.refinery",
+      "type": "feature",
+      "title": "Oil refinery + integrated chemical works",
+      "desc": "Oil refinery + integrated chemical works: crude by tanker to tank farm to refinery to petrochemical works to plastics. Top blight class, hazmat fire category. Make-vs-buy at largest scale — no refinery means importing refined product at margin. Permit + decommission. [spec: §50; §49; §26; §32; §33; resources-design-brief.md §6] [path: internal/engine/chemicals/]",
+      "seq": 992,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§50; §49; §26; §32; §33; resources-design-brief.md §6",
+      "guid": "e46dbe52-b644-41e6-aa28-ab39db78121b",
+      "guidIn": "490225c4-7e09-4df9-84bd-b1116235e8bb",
+      "guidOut": "a8cb5af7-ba36-4680-afbc-f710e5bd6dd4",
+      "deps": [
+        "engine.chemicals",
+        "engine.fuel",
+        "feat.facilitypermits",
+        "feat.decommission"
+      ]
+    },
+    {
+      "mkey": "feat.minetypes",
+      "type": "feature",
+      "title": "Mine types — extractive facility catalogue",
+      "desc": "Mine-type catalogue — every extractive type as a distinct modelled facility (chalk, sand/gravel, clay+brickworks, ragstone, deep coal, offshore dredging, quarry). Per-type footprint/output/blight/jobs/depth, geology-gated, deposit-backed, finite depleting. [spec: §32; §34; §17; resources-design-brief.md §2/§9] [path: internal/engine/mining/]",
+      "seq": 993,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§32; §34; §17; resources-design-brief.md §2/§9",
+      "guid": "5740bc50-fbd1-4378-b82c-2a2d84a331d8",
+      "guidIn": "3b44be1f-d203-4514-812e-e1aaddb679b2",
+      "guidOut": "b66080d0-d838-470c-8a22-b5da93dbf6fc",
+      "deps": [
+        "engine.mining",
+        "feat.resourcedeposits"
+      ]
+    },
+    {
+      "mkey": "feat.farmtypes",
+      "type": "feature",
+      "title": "Farm types — agricultural facility catalogue",
+      "desc": "Farm-type catalogue — every agricultural type as a distinct modelled facility (arable, livestock, orchard, market garden, vineyard/winery). Per-type soil quality/BDI, conventional vs organic, food chains to mill/dairy/abattoir/packhouse/winery. [spec: §31; §17; §25] [path: internal/engine/farming/]",
+      "seq": 994,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§31; §17; §25",
+      "guid": "76d6e2aa-0afd-49a5-a5ce-27fb5c936968",
+      "guidIn": "aaf7120e-c300-41e2-9389-2e6aae0a75c8",
+      "guidOut": "52f0c043-d23f-418a-9768-9b7003199803",
+      "deps": [
+        "engine.farming"
+      ]
+    },
+    {
+      "mkey": "feat.factorytypes",
+      "type": "feature",
+      "title": "Factory unit types — manufacturing facility catalogue",
+      "desc": "Factory-unit catalogue — every manufacturing type as a distinct modelled facility (assembler, steel mill, electronics, chemicals converter, food processing, textiles, cement, glass). Per-type footprint/input-output/jobs/utility draw/blight class. [spec: §33; §46; §34; §17; §45] [path: internal/engine/freight/]",
+      "seq": 995,
+      "sprint": 10,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§33; §46; §34; §17; §45",
+      "guid": "ef1823df-2c8b-4729-9e8b-60bda18fd5c4",
+      "guidIn": "7b1d33a8-88ad-4b61-b01d-93b7327fb8cd",
+      "guidOut": "10549936-e6f3-4d39-b3e8-ce49512a50f3",
+      "deps": [
+        "engine.freight",
+        "engine.firms"
+      ]
+    },
+    {
+      "mkey": "engine.census",
+      "type": "module",
+      "title": "Living city census & life-history: background audit threads + cradle-to-grave object bios + demographics/KPI drill-in",
+      "desc": "Living census + life-history layer: non-blocking background threads (stats generator, auditor, consistency checker, regulator), cradle-to-grave bios for every object (citizens and cars/houses/choppers alike), and demographics/KPI drill-in (splines, GDP, happiness, employment). [spec: §13 F6; §18; §40; §45; §46; UI-SPEC §4/§5.2] [path: internal/engine/census/]",
+      "seq": 996,
+      "sprint": 11,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§13 F6; §18; §40; §45; §46; UI-SPEC §4/§5.2",
+      "guid": "e181626c-f1e0-4bb0-9033-15af7e4ae247",
+      "guidIn": "b1ff934b-5ea2-4ed8-96d4-0a07be8aec28",
+      "guidOut": "2908149e-de4c-4284-a0a3-f6227c84e30e",
+      "deps": [
+        "engine.citizens",
+        "engine.education",
+        "engine.crime",
+        "engine.wellbeing",
+        "engine.services",
+        "engine.policies",
+        "engine.finance"
+      ]
+    },
+    {
+      "mkey": "foundation.num",
+      "type": "module",
+      "title": "foundation.num: type-safe coercion & bounded helpers (saturating + reject-form)",
+      "desc": "Type-safe coercion and bounded helpers for input validation and encapsulation (FEAT-135): reject-form SafeInt64/BoundedFloat alongside the existing saturating helpers, all returning registry-sourced errors; the reusable copy-guard wrapper lands in foundation.registry. [spec: GR#7; SEC-080; SEC-093; FEAT-086] [path: internal/foundation/num/]",
+      "seq": 997,
+      "sprint": 0,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "foundation",
+      "specRef": "GR#7; SEC-080; SEC-093; FEAT-086",
+      "guid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+      "guidIn": "74ff5b3b-bfc6-4376-b461-267f4467a39f",
+      "guidOut": "e7339744-ee44-4976-9c14-93597479c227",
+      "deps": [
+        "foundation.errors"
+      ]
+    },
+    {
+      "mkey": "tool.fileclaimguard",
+      "type": "feature",
+      "title": "Concurrent on-disk edit safety: dispatch-time file-claim block + edit-time guard",
+      "desc": "Prevent the concurrent-edit near-miss class: dispatch-time HARD BLOCK when a brief declares a path owned by another live agent + auto-claim on dispatch; an edit-time guard checking sync_file_claims before every Edit/Write; claims keyed by session id (not name). [spec: GR#3; GR#20; M0-ENG §5; dev-team-process v1.6.1/v1.7; BUG-238] [path: claude-file-claim-guard.js]",
+      "seq": 998,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "GR#3; GR#20; M0-ENG §5; dev-team-process v1.6.1/v1.7; BUG-238",
+      "guid": "e907a3c5-ee1b-4158-a647-414e81e37978",
+      "guidIn": "ee50c00d-744e-4dd7-a156-f207c2344a02",
+      "guidOut": "c75ef86d-4efc-4ada-bf88-97342823d1e0",
+      "deps": [
+        "tool.sync",
+        "tool.dispatchguard",
+        "tool.db"
+      ]
+    },
+    {
+      "mkey": "engine.worklife",
+      "type": "module",
+      "title": "Work schedules & work-life balance: shift patterns, commute, and a 40h-vs-996 working-week policy",
+      "desc": "Work schedules and work-life balance: every job carries a time pattern (9-5 core-hours, 24x7 shift, any-time), every worker commutes (the rush shapes traffic), and the working week is a policy (varied ~40h default vs a 996 9-to-9/6-day option that earns more but costs wellbeing). [spec: §5.1; §18; §19.3; §21; §26; §42; §52; §54; §5.2] [path: internal/engine/worklife/]",
+      "seq": 999,
+      "sprint": 11,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "§5.1; §18; §19.3; §21; §26; §42; §52; §54; §5.2",
+      "guid": "04a588d4-700d-490e-beb0-d3dbc9a66651",
+      "guidIn": "7069c291-d733-4ce3-9204-525be1325267",
+      "guidOut": "79ca5926-0f11-4757-ad1c-726420df08e2",
+      "deps": [
+        "engine.policies",
+        "engine.wellbeing",
+        "engine.staffing",
+        "engine.traffic"
       ]
     }
   ]
