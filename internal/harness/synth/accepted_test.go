@@ -137,3 +137,42 @@ func TestLoadAcceptedRegistry_DuplicateEntryIsAHardError(t *testing.T) {
 		t.Fatal("LoadAcceptedRegistry with a duplicate (preset, commitHash) entry returned nil error, want a hard failure")
 	}
 }
+
+// TestAcceptedLedger_IsCheckedIn is BUG-245's guard on the accepted-
+// regressions ledger itself: the ledger must be a git-tracked, checked-in
+// file whose changes go through PR review like any code — not an untracked
+// file a workstation can create and a local go test/perfci run then
+// silently trusts. A local edit to an UNTRACKED ledger produces no diff,
+// no review, and no record, so the "a human reviewed this acceptance"
+// claim rests on nothing; committing the ledger as a real source file is
+// what makes adding an entry a reviewed PR change rather than a local
+// forgery. This test pins the ledger's presence in the source tree (the
+// checked-in default is an empty registry — nothing accepted) so removing
+// it, or failing to commit it, fails the build exactly like deleting any
+// other fixture.
+//
+// go test runs with this package's directory as its working directory
+// (internal/harness/synth), so ../../.. is the repository root — where
+// perf-accepted-regressions.json is checked in and where cmd/perfci's
+// -accepted-regressions default and .github/workflows/ci.yml both resolve.
+func TestAcceptedLedger_IsCheckedIn(t *testing.T) {
+	path := filepath.Join("..", "..", "..", "perf-accepted-regressions.json")
+
+	// os.ReadFile (not LoadAcceptedRegistry) is the existence check:
+	// LoadAcceptedRegistry deliberately treats a MISSING file as an empty
+	// registry (the "absence is not failure" posture this package's
+	// TestLoadAcceptedRegistry_MissingFileIsEmptyNotError pins), so it
+	// cannot distinguish "checked in and empty" from "never committed" —
+	// which is exactly the distinction BUG-245 exists to enforce.
+	if _, err := os.ReadFile(path); err != nil {
+		t.Fatalf("BUG-245: accepted-regressions ledger %q is not checked in — the ledger must be a git-tracked file reviewed in PR, never an untracked file a local perfci/go test run silently trusts: %v", path, err)
+	}
+
+	registry, err := LoadAcceptedRegistry(path)
+	if err != nil {
+		t.Fatalf("BUG-245: checked-in ledger %q does not parse as an AcceptedRegistry: %v", path, err)
+	}
+	if _, ok := registry.Reason("1M", "anything"); ok {
+		t.Fatalf("BUG-245: the checked-in ledger must default to an empty registry (nothing accepted); it unexpectedly accepts a commit")
+	}
+}

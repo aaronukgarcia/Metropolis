@@ -71,6 +71,19 @@ type acceptedKey struct {
 //     against this INDEPENDENT source before ever honouring it — see
 //     LoadLatestBaseline's doc comment for exactly how that
 //     cross-check works.
+//
+// # BUG-245: the ledger's provenance is the COMMIT, not the workstation
+//
+// The gate itself (cmd/perfci) does NOT call this working-tree reader for
+// its acceptance decision any more. It calls provenance.go's
+// LoadAcceptedRegistryFromWorkingDir, which reads the ledger's COMMITTED
+// content at HEAD via git (git show HEAD:<relPath>) and, for every entry,
+// verifies the named commitHash is a real commit object in the repository —
+// so a local, uncommitted edit to the working-tree file cannot self-vouch a
+// regression, and a committed entry cannot name a fabricated hash. This
+// function remains the pure parser (also used by metricsdash, which is a
+// read-only dashboard, not a gate) and the base primitive the provenance
+// loader reuses via parseAcceptedRegistry.
 type AcceptedRegistry map[acceptedKey]string
 
 // Reason reports whether commitHash's regression for preset was accepted
@@ -122,7 +135,16 @@ func LoadAcceptedRegistry(path string) (AcceptedRegistry, error) {
 		}
 		return nil, fmt.Errorf("synth: opening accepted-regressions registry %q: %w", path, err)
 	}
+	return parseAcceptedRegistry(data, path)
+}
 
+// parseAcceptedRegistry is the shared parser for both LoadAcceptedRegistry
+// (the pure working-tree reader, above) and LoadAcceptedRegistryFromGit
+// (provenance.go — the BUG-245 committed-at-HEAD reader). source is the
+// human-readable origin used in error messages (a file path for the former,
+// "HEAD:<relPath>" for the latter), so a corrupt registry always reports
+// WHERE the bad content came from rather than only that it is bad.
+func parseAcceptedRegistry(data []byte, source string) (AcceptedRegistry, error) {
 	trimmed := strings.TrimSpace(string(data))
 	if trimmed == "" {
 		// An explicitly-created-but-empty file is treated the same as a
@@ -133,7 +155,7 @@ func LoadAcceptedRegistry(path string) (AcceptedRegistry, error) {
 
 	var entries []AcceptedRegressionEntry
 	if err := json.Unmarshal([]byte(trimmed), &entries); err != nil {
-		return nil, fmt.Errorf("synth: parsing accepted-regressions registry %q: %w", path, err)
+		return nil, fmt.Errorf("synth: parsing accepted-regressions registry %q: %w", source, err)
 	}
 
 	registry := make(AcceptedRegistry, len(entries))
@@ -144,14 +166,14 @@ func LoadAcceptedRegistry(path string) (AcceptedRegistry, error) {
 		if preset == "" || commit == "" || reason == "" {
 			return nil, fmt.Errorf(
 				"synth: accepted-regressions registry %q entry %d is incomplete (preset=%q commitHash=%q reason=%q) -- every field is required, this file is the sole evidence BUG-095's acceptance check trusts",
-				path, i, e.Preset, e.CommitHash, e.Reason,
+				source, i, e.Preset, e.CommitHash, e.Reason,
 			)
 		}
 		key := acceptedKey{Preset: preset, CommitHash: commit}
 		if _, dup := registry[key]; dup {
 			return nil, fmt.Errorf(
 				"synth: accepted-regressions registry %q has more than one entry for preset %q commit %q -- ambiguous, refusing to guess which reason is authoritative",
-				path, preset, commit,
+				source, preset, commit,
 			)
 		}
 		registry[key] = reason

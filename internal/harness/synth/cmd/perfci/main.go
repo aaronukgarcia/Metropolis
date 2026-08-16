@@ -155,6 +155,21 @@ func main() {
 // io.Writer (not *os.File) precisely so a test can pass an in-memory
 // buffer rather than juggling real file handles.
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWith(args, stdout, stderr, synth.LoadAcceptedRegistryFromWorkingDir)
+}
+
+// acceptedLoader is the seam through which runWith obtains the
+// accepted-regressions registry. Production (run, above) always passes
+// synth.LoadAcceptedRegistryFromWorkingDir — BUG-245's git-provenance loader
+// that reads the ledger's COMMITTED content at HEAD, so a local working-tree
+// edit cannot self-vouch a regression. Tests substitute
+// synth.LoadAcceptedRegistry (the pure parser) because a temp-dir ledger is,
+// by construction, not a git-committed file, and those tests exercise the
+// accept MECHANISM (rescue, exact-commit match, default path) rather than the
+// provenance of the ledger itself — which provenance_test.go covers directly.
+type acceptedLoader func(path string) (synth.AcceptedRegistry, error)
+
+func runWith(args []string, stdout, stderr io.Writer, loadAccepted acceptedLoader) int {
 	fs := flag.NewFlagSet("perfci", flag.ContinueOnError)
 	preset := fs.String("preset", "1M", `scale preset: "1M" or "10M" (AC-3)`)
 	months := fs.Int("months", 12, "simulated months to run")
@@ -193,12 +208,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	// BUG-095: loaded fresh from the checked-out working tree every run —
-	// see synth/accepted.go's AcceptedRegistry doc comment. A malformed
-	// registry is a hard error (fail closed): this file is the sole
-	// evidence the accept path now trusts, so a corrupt copy of it must
-	// never be silently treated as "nothing accepted".
-	acceptedRegistry, err := synth.LoadAcceptedRegistry(*acceptedRegistryPath)
+	// BUG-095/BUG-245: the accept-regression evidence is loaded by the
+	// injected loader — in production, synth.LoadAcceptedRegistryFromWorkingDir,
+	// which reads the ledger's COMMITTED content at HEAD via git and verifies
+	// every entry names a real commit (see synth/provenance.go). A local,
+	// uncommitted edit to the ledger therefore cannot self-vouch a regression:
+	// the gate never reads the working-tree file. A missing/never-committed
+	// ledger reads as empty ("nothing accepted"); a git failure, a malformed
+	// committed ledger, or an entry naming a non-commit hash is a hard error
+	// (fail closed) — this file is the sole evidence the accept path trusts.
+	acceptedRegistry, err := loadAccepted(*acceptedRegistryPath)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "perfci: reading accepted-regressions registry: %v\n", err)
 		return 2

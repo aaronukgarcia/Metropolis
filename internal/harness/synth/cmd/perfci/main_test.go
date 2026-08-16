@@ -198,11 +198,11 @@ func TestRun_AcceptedRegistryRescuesCouldNotEvaluate(t *testing.T) {
 
 	// (1) No registry file at all -- unrescued.
 	var out1, err1 bytes.Buffer
-	code := run([]string{
+	code := runWith([]string{
 		"-preset", "1M", "-citizens", "500", "-months", "1", "-results", results,
 		"-commit", "human-reviewed-commit",
 		"-accepted-regressions", filepath.Join(t.TempDir(), "no-such-registry.json"),
-	}, &out1, &err1)
+	}, &out1, &err1, synth.LoadAcceptedRegistry)
 	if code != exitCouldNotEvaluate {
 		t.Fatalf("run() without a registry entry = %d, want %d (could-not-evaluate); stderr=%s", code, exitCouldNotEvaluate, err1.String())
 	}
@@ -215,11 +215,11 @@ func TestRun_AcceptedRegistryRescuesCouldNotEvaluate(t *testing.T) {
 	}
 
 	var out2, err2 bytes.Buffer
-	code = run([]string{
+	code = runWith([]string{
 		"-preset", "1M", "-citizens", "500", "-months", "1", "-results", results,
 		"-commit", "human-reviewed-commit",
 		"-accepted-regressions", registryPath,
-	}, &out2, &err2)
+	}, &out2, &err2, synth.LoadAcceptedRegistry)
 	if code != 0 {
 		t.Fatalf("run() with a matching registry entry = %d, want 0 (rescued); stdout=%s stderr=%s", code, out2.String(), err2.String())
 	}
@@ -258,11 +258,11 @@ func TestRun_AcceptedRegistryEntryForADifferentCommitDoesNotRescue(t *testing.T)
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{
+	code := runWith([]string{
 		"-preset", "1M", "-citizens", "500", "-months", "1", "-results", results,
 		"-commit", "the-actual-current-commit",
 		"-accepted-regressions", registryPath,
-	}, &stdout, &stderr)
+	}, &stdout, &stderr, synth.LoadAcceptedRegistry)
 	if code != exitCouldNotEvaluate {
 		t.Fatalf("run() with a registry entry for a DIFFERENT commit = %d, want %d (still unrescued) — BUG-095: acceptance must match the exact commit under test", code, exitCouldNotEvaluate)
 	}
@@ -316,11 +316,11 @@ func TestRun_AcceptedRegistryRescuesBelowNoiseFloorFirstRecordLock(t *testing.T)
 		t.Fatalf("reading results file after seeding: %v", readErr)
 	}
 	var out1, err1 bytes.Buffer
-	code := run([]string{
+	code := runWith([]string{
 		"-preset", "1M", "-citizens", "50", "-months", "1", "-results", results,
 		"-commit", "real-follow-up-commit",
 		"-accepted-regressions", filepath.Join(t.TempDir(), "no-such-registry.json"),
-	}, &out1, &err1)
+	}, &out1, &err1, synth.LoadAcceptedRegistry)
 	if code != exitCouldNotEvaluate {
 		t.Fatalf("run() against a below-noise-floor baseline with no registry entry = %d, want %d (locked, BUG-094); stdout=%s stderr=%s", code, exitCouldNotEvaluate, out1.String(), err1.String())
 	}
@@ -342,11 +342,11 @@ func TestRun_AcceptedRegistryRescuesBelowNoiseFloorFirstRecordLock(t *testing.T)
 		t.Fatalf("writing registry fixture: %v", err)
 	}
 	var out2, err2 bytes.Buffer
-	code = run([]string{
+	code = runWith([]string{
 		"-preset", "1M", "-citizens", "50", "-months", "1", "-results", results,
 		"-commit", "real-follow-up-commit",
 		"-accepted-regressions", registryPath,
-	}, &out2, &err2)
+	}, &out2, &err2, synth.LoadAcceptedRegistry)
 	if code != 0 {
 		t.Fatalf("run() with a matching registry entry against a below-noise-floor lock = %d, want 0 (rescued, BUG-094); stdout=%s stderr=%s", code, out2.String(), err2.String())
 	}
@@ -374,10 +374,10 @@ func TestRun_MalformedAcceptedRegistryIsAUsageError(t *testing.T) {
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{
+	code := runWith([]string{
 		"-preset", "1M", "-citizens", "50", "-months", "1", "-results", results,
 		"-accepted-regressions", registryPath,
-	}, &stdout, &stderr)
+	}, &stdout, &stderr, synth.LoadAcceptedRegistry)
 	if code != 2 {
 		t.Fatalf("run() with a malformed accepted-regressions registry = %d, want 2 (usage/IO error); stderr=%s", code, stderr.String())
 	}
@@ -487,14 +487,76 @@ func TestRun_AcceptPathUsesDefaultRegistryPathWhenFlagOmitted(t *testing.T) {
 	t.Chdir(dir)
 
 	var out, errb bytes.Buffer
-	code := run([]string{
+	code := runWith([]string{
 		"-preset", "1M", "-citizens", "500", "-months", "1", "-results", results,
 		"-commit", "default-path-commit",
-	}, &out, &errb)
+	}, &out, &errb, synth.LoadAcceptedRegistry)
 	if code != 0 {
 		t.Fatalf("run() relying on the default -accepted-regressions path = %d, want 0 (rescued); stdout=%s stderr=%s", code, out.String(), errb.String())
 	}
 	if !bytes.Contains(out.Bytes(), []byte("ACCEPTING")) {
 		t.Fatalf("stdout = %q, want an ACCEPTING banner via the default registry path (ASM-375)", out.String())
+	}
+}
+
+// TestRun_AcceptanceNeverWritesTheAcceptedLedger is BUG-245's second
+// guard: a local perfci run that ACCEPTS a regression via the ledger must
+// still leave the ledger file byte-for-byte unchanged. The ledger is the
+// reviewed, git-tracked evidence; a local run may only READ it. If perfci
+// ever appended to (or rewrote) the ledger, a developer could self-vouch a
+// regression on their own workstation with no PR review at all — the exact
+// forge BUG-245 closes. This is a regression guard rather than a red-on-
+// old-code test: run() already only reads the ledger (LoadAcceptedRegistry
+// uses os.ReadFile, and *acceptedRegistryPath is passed nowhere else), but
+// nothing pinned that read-only property against a future refactor until
+// this test.
+//
+// Uses a -citizens 500 follow-up against a -citizens 50 seed to force a
+// deterministic ScaleMismatch (CouldNotEvaluate) that the ledger entry then
+// rescues — asserting a real wall-clock regression verdict would repeat
+// BUG-031's mistake, so the "accepting" path here is reached without any
+// timing race.
+func TestRun_AcceptanceNeverWritesTheAcceptedLedger(t *testing.T) {
+	dir := t.TempDir()
+	results := filepath.Join(dir, "perf-results.ndjson")
+
+	seed := synth.PerfRecord{
+		CommitHash: "seed",
+		Preset:     "1M",
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 10 * time.Millisecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
+	}
+	if err := synth.AppendResult(results, seed); err != nil {
+		t.Fatalf("seeding baseline: %v", err)
+	}
+
+	registryPath := filepath.Join(dir, "perf-accepted-regressions.json")
+	registry := `[{"preset": "1M", "commitHash": "accepting-commit", "reason": "reviewed acceptance for the BUG-245 ledger-write guard"}]`
+	if err := os.WriteFile(registryPath, []byte(registry), 0o644); err != nil {
+		t.Fatalf("writing registry fixture: %v", err)
+	}
+	before, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("reading registry fixture before run: %v", err)
+	}
+
+	var out, errb bytes.Buffer
+	code := runWith([]string{
+		"-preset", "1M", "-citizens", "500", "-months", "1", "-results", results,
+		"-commit", "accepting-commit",
+		"-accepted-regressions", registryPath,
+	}, &out, &errb, synth.LoadAcceptedRegistry)
+	if code != 0 {
+		t.Fatalf("run() accepting via the ledger = %d, want 0 (rescued); stdout=%s stderr=%s", code, out.String(), errb.String())
+	}
+	if !bytes.Contains(out.Bytes(), []byte("ACCEPTING")) {
+		t.Fatalf("stdout = %q, want an ACCEPTING banner (precondition for the ledger-write guard)", out.String())
+	}
+
+	after, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("reading registry fixture after run: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatalf("BUG-245: a local perfci run modified the accepted-regressions ledger during an accepting run — the ledger must be read-only to the runner (only a reviewed PR change may add an entry)\nbefore=%s\nafter=%s", before, after)
 	}
 }

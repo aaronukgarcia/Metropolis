@@ -210,6 +210,12 @@
 //     that lives OUTSIDE the results file and its cache-persisted,
 //     forgeable-by-a-second-writer channel — see its own doc comment for
 //     why this is the control rather than one more check on the record.
+//   - provenance.go — LoadAcceptedRegistryFromGit /
+//     LoadAcceptedRegistryFromWorkingDir (BUG-245): the gate's
+//     committed-at-HEAD loader — it reads the ledger via git, not the
+//     working-tree file, so a local, uncommitted edit cannot self-vouch a
+//     regression, and it refuses any entry whose commitHash is not a real
+//     commit object in the repository.
 //   - baseline.go — CompareToBaseline: the BUG-031-hardened regression
 //     gate (AC-6, AC-8, AC-10), now with a second, independent check
 //     (CumulativeRegressionThreshold, limits.go) against a FIXED anchor
