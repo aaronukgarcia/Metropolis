@@ -132,6 +132,16 @@
             "command": "node claude-dispatch-guard.js"
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node claude-file-claim-guard.js",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

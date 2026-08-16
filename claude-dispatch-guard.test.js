@@ -104,6 +104,59 @@ test('normalise still preserves original casing (only overlaps() folds)', () => 
   assert.equal(normalise('internal/Foundation/Data/'), 'internal/Foundation/Data');
 });
 
+// ── FEAT-136 reject-fix regressions: canonicalisation + glob-aware overlaps ──
+
+test('normalise collapses ./, ../ and duplicate slashes to one canonical key', () => {
+  assert.equal(normalise('internal/./ui/dash'), 'internal/ui/dash');
+  assert.equal(normalise('internal/ui/../ui/dash'), 'internal/ui/dash');
+  assert.equal(normalise('internal//ui//dash'), 'internal/ui/dash');
+  assert.equal(normalise('./internal/ui/dash'), 'internal/ui/dash');
+});
+
+test('normalise anchors a relative ..-escape to the repo root (FEAT-136 r2 claim-store side)', () => {
+  // The claim-store side of the r2 fix: a claim stored as
+  // `../Metropolis/docs/x.md` must resolve to the same `docs/x.md` key the
+  // edit guard's toRepoRelative() produces, so the two guards never disagree
+  // on a foreign-claim collision.
+  assert.equal(normalise(`../${path.basename(__dirname)}/docs/x.md`), 'docs/x.md');
+  assert.equal(normalise('./docs/x.md'), 'docs/x.md');
+});
+
+test('overlaps collides a ./-spelled spelling with its canonical claim', () => {
+  assert.ok(overlaps('internal/./ui/dash/x.md', 'internal/ui/dash'));
+  // `nope/..` cancels to nothing, leaving internal/ui/dash/x.md.
+  assert.ok(overlaps('internal/ui/nope/../dash/x.md', 'internal/ui/dash'));
+  assert.ok(overlaps('internal/ui/dash/../dash/x.md', 'internal/ui/dash'));
+});
+
+test('overlaps expands a claimed glob to match a concrete path (FEAT-136 glob-claim)', () => {
+  assert.ok(overlaps('internal/engine/consumption/s6_endtoend_test.go', 'internal/engine/consumption/*_test.go'));
+  assert.ok(!overlaps('internal/engine/consumption/s6_endtoend.go', 'internal/engine/consumption/*_test.go'));
+  // Reverse direction: a glob want (the brief's declaration) vs a concrete held claim.
+  assert.ok(overlaps('internal/engine/consumption/*_test.go', 'internal/engine/consumption/s6_endtoend_test.go'));
+});
+
+test('overlaps translates ? to exactly one segment character, not a regex quantifier (FEAT-136 r2)', () => {
+  // `?` is a glob signal (hasGlob matches it) but round-1 globToRegex never
+  // translated it, so it leaked into the regex as a quantifier — a claim on
+  // `dashboard?.md` failed to match `dashboard1.md` (under-protect) and would
+  // have matched `dashboard.md` (zero chars). It must match exactly one
+  // non-slash character.
+  assert.ok(overlaps('internal/ui/dash/dashboard1.md', 'internal/ui/dash/dashboard?.md'));
+  assert.ok(overlaps('internal/ui/dash/dashboard?.md', 'internal/ui/dash/dashboard1.md'));
+  assert.ok(!overlaps('internal/ui/dash/dashboard12.md', 'internal/ui/dash/dashboard?.md'));
+  assert.ok(!overlaps('internal/ui/dash/dashboard.md', 'internal/ui/dash/dashboard?.md'));
+});
+
+test('overlaps lets **/docs/x.md match the root-anchored key docs/x.md (FEAT-136 r2)', () => {
+  // A leading `**/` may match ZERO segments, so a claim on `**/docs/x.md`
+  // protects `docs/x.md` itself (the root-anchored repo-relative key), not
+  // only `a/docs/x.md`.
+  assert.ok(overlaps('docs/x.md', '**/docs/x.md'));
+  assert.ok(overlaps('internal/ui/docs/x.md', '**/docs/x.md'));
+  assert.ok(overlaps('**/docs/x.md', 'docs/x.md'));
+});
+
 test('extractOwnedPaths only claims paths under an ownership declaration', () => {
   const prompt = [
     'Read internal/other/thing.go for context.',

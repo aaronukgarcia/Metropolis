@@ -295,8 +295,38 @@ function extractOwnedPaths(prompt) {
 
 // Trailing glob/slash noise is stripped so `internal/ui/harness/**`,
 // `internal/ui/harness/`, and `internal/ui/harness` are one claim, not three.
+//
+// FEAT-136 reject-fix (path-canonicalisation): ALSO collapses `.`/`..` and
+// duplicate slashes, so every spelling of one file — `internal/./ui/dash`,
+// `internal/ui/../ui/dash`, `internal//ui//dash` — maps to one canonical key
+// before any ownership comparison. `*` globs are preserved except the trailing
+// `/*` form, which is stripped to a directory claim as before.
+//
+// FEAT-136 r2 reject-fix (claim-store side of the relative-`..` escape): the
+// path is anchored to ROOT before collapsing, so a claim stored as
+// `../Metropolis/docs/x.md` resolves to the SAME `docs/x.md` key the edit
+// guard's toRepoRelative() produces — not a distinct `../Metropolis/...` key
+// that overlaps() misses. `path.resolve(ROOT, ...)` anchors a relative path
+// against the repo root and passes an absolute one through, then the ROOT
+// prefix is stripped back off; it is idempotent on the already-repo-relative
+// keys this function is usually handed, and `*`/`**`/`?` globs survive it
+// intact.
 function normalise(p) {
-  return p.replace(/\\/g, '/').replace(/\/+$/, '').replace(/\/\*+$/, '');
+  const root = ROOT.replace(/\\/g, '/').replace(/\/+$/, '');
+  const rootLower = root.toLowerCase();
+  const resolved = path
+    .resolve(ROOT, String(p).replace(/\\/g, '/'))
+    .replace(/\\/g, '/');
+  const lower = resolved.toLowerCase();
+  let rel;
+  if (lower === rootLower) rel = '';
+  else if (lower.startsWith(rootLower + '/')) rel = resolved.slice(root.length + 1);
+  else rel = resolved;
+  if (rel === '') return '';
+  return path.posix
+    .normalize(rel)
+    .replace(/\/+$/, '')
+    .replace(/\/\*+$/, '');
 }
 
 // BUG-135: this repo's filesystem (Windows) is case-insensitive, so two
@@ -307,10 +337,60 @@ function foldPath(p) {
   return p.toLowerCase();
 }
 
+// FEAT-136 reject-fix (glob-claim shape mismatch): a claim stored as a glob —
+// e.g. internal/engine/consumption/*_test.go — must actually protect its files
+// at edit time, not only match itself verbatim. `*` matches within one path
+// segment, `**` crosses segments (the trailing-`/*` directory form is already
+// stripped by normalise()).
+function hasGlob(p) {
+  return /[*?]/.test(p);
+}
+
+function globToRegex(glob) {
+  // Escape regex metacharacters, then translate the shell wildcards **
+  // (crosses segments), * (stays within one segment) and ? (exactly one
+  // non-slash character) into regex. `?` is deliberately NOT in the escape
+  // class above — it must be translated, not passed through, or it leaks into
+  // the regex as a quantifier and under-protects (dashboard?.md would match
+  // dashboard.md and fail to match dashboard1.md).
+  const g = String(glob).replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  let src = '';
+  for (let i = 0; i < g.length; i++) {
+    if (g[i] === '*' && g[i + 1] === '*') {
+      // A `**/` prefix may also match ZERO leading segments, so `**/docs/x.md`
+      // matches the root-anchored key `docs/x.md` — not just `a/docs/x.md`.
+      if (g[i + 2] === '/') {
+        src += '(?:.*/)?';
+        i += 2; // consume the following '/' too
+      } else {
+        src += '.*';
+        i++;
+      }
+    } else if (g[i] === '*') {
+      src += '[^/]*';
+    } else if (g[i] === '?') {
+      src += '[^/]';
+    } else {
+      src += g[i];
+    }
+  }
+  return new RegExp('^' + src + '$');
+}
+
 function overlaps(a, b) {
-  const fa = foldPath(a);
-  const fb = foldPath(b);
-  return fa === fb || fa.startsWith(fb + '/') || fb.startsWith(fa + '/');
+  const na = normalise(a);
+  const nb = normalise(b);
+  const fa = foldPath(na);
+  const fb = foldPath(nb);
+  if (fa === fb || fa.startsWith(fb + '/') || fb.startsWith(fa + '/')) return true;
+  // Glob-aware: a glob claim (or glob want) expands against the concrete side.
+  const ga = hasGlob(na);
+  const gb = hasGlob(nb);
+  if (ga || gb) {
+    if (ga && gb) return globToRegex(fa).test(fb) || globToRegex(fb).test(fa);
+    return ga ? globToRegex(fa).test(fb) : globToRegex(fb).test(fa);
+  }
+  return false;
 }
 
 async function main() {
@@ -547,4 +627,8 @@ module.exports = {
   extractOwnedPaths,
   connect,
   resolveIdentity,
+  // FEAT-136: exported so claude-file-claim-guard.js reuses the SAME claim TTL
+  // rather than redefining a second "live claim" notion (GR#3 SSOT). A claim
+  // older than this is treated as dead by both guards identically.
+  CLAIM_TTL_MS,
 };
