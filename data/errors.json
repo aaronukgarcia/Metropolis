@@ -22,6 +22,7 @@
       "F500-F599": "reserved for foundation.repo (build info, CI)",
       "F600-F699": "reserved for foundation.data (internal/foundation/data: the §24 typed config loaders, data-dir resolution, and hot-reload path — F400-F499 is already claimed by foundation.solver, so this module's delivery report picked the first free F-sub-range instead)",
       "F700-F799": "reserved for tool.astgate (internal/foundation/astgate: the BUG-024 mechanical copy-guard gate — SEC-048's conversion of loadPackages'/resolveRepoRoot's bare fmt.Errorf sites to registry-sourced errors, since astgate physically lives inside the F/foundation layer's own path scope and, unlike SEC-040's dev-only gen/main.go, is a real compiled/CI-gated tool run inside go test ./...'s build-test-vet job. Checked against this table AND `grep -rn \"MET-F7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-F7xx code existed either place.)",
+      "F800-F899": "reserved for foundation.num (internal/foundation/num: the reject-form type-safe coercion helpers — SafeInt64 / BoundedFloat / SafeInt64FromAny / SafeFloat64FromAny non-finite, overflow, out-of-range, and type-mismatch rejections; FEAT-135 feat.securehelpers; GR#7 registry-sourced. Checked against this table AND grep -rn MET-F8 internal/ cmd/ before claiming, per BUG-008's lesson — no prior MET-F8xx code existed either place.)",
       "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
       "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)",
       "U200-U299": "reserved for ui.screen.debug (F12 info panel: pane-unavailable states)",
@@ -35,7 +36,7 @@
       "E700-E799": "reserved for engine.helper (internal/engine/helper: FEAT-063's advisor-metadata Registrant/Registry contract and ask-driven Recommend/Preview panel query surface — no real player-action feature registers yet, per this item's fixture-only-proof scope; the errors below are constructed by the helper package itself AND by its helperfixture package, since the fixture lives inside the same E700-E799 range per BUG-008's per-range, not per-package, ownership rule. Checked against this table AND `grep -rn \"MET-E7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E7xx code existed either place.)",
       "E800-E899": "reserved for feat.saveux (internal/engine/save: FEAT-011's save/load orchestration -- single-save-in-flight rejection, staging/promotion failures, format-version-mismatch and corrupted-load handling, list/enumerate failures, unknown-participant-kind on load. Checked against this table AND `grep -rn \"MET-E8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E8xx code existed either place.)",
       "E900-E949": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path. NARROWED from E900-E999 on 2026-08-13: the E layer's 000-899 blocks were all claimed by earlier engine modules by the time engine.mining landed, and the code format is hard-capped at three digits, so E950-E999 was carved from this reservation's unused tail for engine.mining — feat.skeleton ships exactly one code, MET-E900, which remains in-range. Flagged for Bill/Aaron: any reallocation of a reserved range is their call.)",
-      "E950-E999": "reserved for engine.mining (internal/engine/mining: the deposit-parameter data-file load/schema-validation failure, the geology-not-yet-derived shuffle rejection, and the out-of-bounds deposit query — MOD-046/FEAT-049. Checked against this table AND `grep -rn \"MET-E9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E9xx code existed outside feat.skeleton's MET-E900.)",
+      "E950-E999": "reserved for engine.mining (internal/engine/mining: the deposit-parameter data-file load/schema-validation failure, the geology-not-yet-derived shuffle rejection, and the out-of-bounds deposit query — MOD-046/FEAT-049; plus the mine-type catalogue data-file load/schema-validation failure and the unknown-mine-type resolve rejection — FEAT-103/feat.minetypes. Checked against this table AND `grep -rn \"MET-E9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E9xx code existed outside feat.skeleton's MET-E900.)",
       "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
       "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
       "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)",
@@ -66,7 +67,15 @@
       "G1100-G1199": "reserved for engine.spiral (internal/engine/spiral: the Detroit-spiral failure states — abandonment decay, cell-by-cell blight spread, the recovery commands, the insolvency/ghost-city death conditions, and the ghost-city epilogue — MOD-030. Twelfth G-layer engine claim after engine.freight's G1000-G1099; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G11\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G11xx code existed either place.)",
       "G1200-G1299": "reserved for engine.services (internal/engine/services: the generic §10 service framework — capacity/coverage/funding→quality, §26 shared staffing pools, and the §54 Public Service Pie benchmark ratios — MOD-033. Twelfth G-layer engine claim; engine.unlocks took G900-G999, engine.freight G1000-G1099, and engine.spiral G1100-G1199 in the same wave, so engine.services opens G1200-G1299 under BUG-234's 2026-08-14 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G12\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G12xx code existed either place.)",
       "G1400-G1499": "reserved for engine.firms (internal/engine/firms: the firm lifecycle — per-citizen founding, Startup→Small→Medium→Enterprise progression, staff as real CitizenIDs, failure/insolvency/acquisition, entrepreneur-culture index, superlinear professional-services demand, and deposit-bounded credit priced against the off-map base-rate cycle — MOD-058. Fourteenth G-layer engine claim. G1300-G1399 was deliberately left unclaimed at this module's build time (the dispatch brief fixed this module's range at G1400-G1499; a sibling wave item may claim G1300-G1399). Checked against this table AND `grep -rn \"MET-G14\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G14xx code existed either place.)",
-      "G1300-G1399": "reserved for engine.tax (internal/engine/tax: the §39 fine-grain instrument panel — data-defined rates/elasticity/incidence, per-district multipliers, EV-share base erosion, and revenue posting through engine.finance — MOD-052. Thirteenth G-layer engine claim after engine.services' G1200-G1299; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G13\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G13xx code existed either place.)"
+      "G1500-G1599": "reserved for engine.crime (internal/engine/crime: the §28 crime, policing, gangs, security-services, and justice-chain module — per-district/per-type generation from isolable drivers, the concave deterrence + clearance + prevention triad, the stateful gang lifecycle (sustained-24-month formation, four-effect territory/tax/recruit/uplift, full-stack removal, decapitation-respawn asymmetry), the Constabulary-HQ-gated strategy mix, the MI5-analogue threat dial with its precursor lead window, and the justice-chain conservation identities with the prison intake cross-check — MOD-042. Fifteenth G-layer engine claim after engine.firms' G1400-G1499; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G15\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G15xx code existed either place.)",
+      "G1300-G1399": "reserved for engine.tax (internal/engine/tax: the §39 fine-grain instrument panel — data-defined rates/elasticity/incidence, per-district multipliers, EV-share base erosion, and revenue posting through engine.finance — MOD-052. Thirteenth G-layer engine claim after engine.services' G1200-G1299; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G13\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G13xx code existed either place.)",
+      "G1600-G1699": "reserved for engine.farming (internal/engine/farming: the farm-type catalogue — per-type data-file load/schema-validation failures and unknown farm-type resolution — MOD-045/FEAT-104. The E layer (E000-E999) is fully claimed by eleven earlier engine modules, and the G layer's three-digit blocks plus G1000-G1599 were claimed by engine.citizens through engine.crime by the time this package landed, so engine.farming opens G1600-G1699 as the next free four-digit block under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G16\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G16xx code existed either place.)",
+      "G1800-G1899": "reserved for engine.education (internal/engine/education: the §27 educational lifecycle — stage pipeline gated by the September intake, the secondary-exit three-way fork, quality-weighted attainment, per-stage personality drift, university halls/research points, and the Slow-Fuse funding submission — MOD-041. The E layer is fully exhausted and the G layer's blocks through G1700-G1799 were claimed by earlier engine modules (engine.citizens … engine.firms, engine.crime, engine.farming, engine.rail), so engine.education opens G1800-G1899 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G18\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G18xx code existed either place.)",
+      "G1900-G1999": "reserved for engine.refuse (internal/engine/refuse: the waste-collection module — per-cell typed bin stock (wheelie/trade/skip), collection rounds as engine.logistics movements, the overflow→vermin→health/land-value/fire-risk chain, the three waste streams, the landfill/incinerator/compost disposal lifecycle, and the refuse-tonnage mass-conservation identity — MOD-039. The E layer is fully exhausted and the G layer's blocks through G1800-G1899 were claimed by earlier engine modules (engine.citizens … engine.firms, engine.crime, engine.farming, engine.rail, engine.education), so engine.refuse opens G1900-G1999 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G19\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G19xx code existed either place.)",
+      "G1700-G1799": "reserved for engine.rail (internal/engine/rail: MOD-060's STUB-FOR-BASELINE intermodal container-transfer surface — RailAPI.IntermodalTransfer implementing engine.rail.md AC-3's sea↔rail↔road tonnes-conservation contract, consumed by feat.containerport through the freight.RailIntermodal dependency-inversion seam. The full MOD-060 build (fleet/works accounting, transfer-quality → mode logit, rolling-stock works) will formalize or extend this range when it lands. The G layer's blocks through G1600-G1699 were claimed by engine.citizens … engine.crime and engine.farming by the time this stub landed; checked against this table AND `grep -rn \"MET-G17\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G17xx code existed either place.)",
+      "G2000-G2099": "reserved for feat.containerport (internal/engine/freight: the Felixstowe-class deep-sea container-terminal tier — the §33 port-tier ladder, the berths × crane-rate × hours capacity model read through FreightAPI, the intermodal sea↔rail↔road transfer point consumed from engine.rail, the customs-throughput/smuggling-risk tier, and the importer→exporter balance-of-trade flip — FEAT-099, sharing engine.freight's package. The G layer's blocks through G1900-G1999 were all claimed by the time this feature landed (engine.freight G1000, engine.spiral G1100, engine.services G1200, engine.tax G1300, engine.firms G1400, engine.crime G1500, engine.farming G1600, engine.rail G1700, engine.education G1800, engine.refuse G1900), so feat.containerport opens G2000-G2099. Checked against this table AND `grep -rn \"MET-G20\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G20xx code existed either place.)",
+      "G2100-G2199": "reserved for engine.leisure (internal/engine/leisure: the §42 168-hour weekly discretionary-hours budget, personality-weighted venue patronage with the access-time penalty, per-citizen per-venue novelty decay, the openings/refurbishment pipeline, the events calendar and its crowd-transport push, the unmet-taste-demand query, and the citywide/per-citizen leisure-fit surface — MOD-055. The E layer is fully exhausted and the G layer's blocks through G2000-G2099 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport), so engine.leisure opens G2100-G2199 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G21\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G21xx code existed either place.)",
+      "G2200-G2299": "reserved for engine.wellbeing (internal/engine/wellbeing: the §18 two-track physical/mental health model — driver-decomposed causal attribution over fifteen drivers, the Wellbeing = f(physical, mental, satisfaction) headline composite, and the four downstream-effect modifiers — MOD-034. The E layer is fully exhausted and the G layer's blocks through G2100-G2199 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport, engine.leisure), so engine.wellbeing opens G2200-G2299 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G22\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G22xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -166,6 +175,12 @@
       "module": "foundation.registry",
       "message": "module registry: method called on a struct copy of the Registry NewRegistry returned",
       "remedy": "SEC-020: never dereference-and-copy a *Registry ('r2 := *r'). Pass the *Registry pointer NewRegistry gave you (or that a caller received from it); a copy carries its own independent mutex over the SAME aliased modules map and is rejected outright rather than allowed to corrupt shared state."
+    },
+    "MET-F107": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "CopyGuard: method called on a struct copy of the guarded value (SEC-020)",
+      "remedy": "Every type with shared mutable state embeds registry.CopyGuard[T] and calls Bind() exactly once at the end of its constructor, then Check() before touching its mutex. A struct copy carries the original's stored identity pointer but a different field address, so Check rejects it fail-closed (and a zero value / new(T) / hand-built literal, whose Bind never ran, is rejected the same way). Always use the pointer the constructor returned; never dereference-and-copy it."
     },
     "MET-F200": {
       "severity": "error",
@@ -328,6 +343,30 @@
       "module": "tool.astgate",
       "message": "astgate accepted-findings registry {path} entry {index} has a malformed finding key {finding}: {reason}",
       "remedy": "SEC-051: every \"finding\" value in accepted-findings.json must be shaped exactly like violationKey's own output (gate.go) -- six pipe-delimited fields (file|receiverExpr|kind|funcName|valueName|matchedExpr), a repo-root-relative forward-slash .go file path, and a kind field equal to one of FuncKind.String()'s three known values. A key that does not match this shape cannot have come from a real scan (validateFindingKeyShape, accepted.go) -- it was hand-typed or otherwise fabricated. This is a STRICTER, earlier check than the separate orphan-detection test (enforceNoOrphanedEntries): that one only catches a fabricated entry once it is compared against a live scan's findings; this one rejects an ill-shaped entry at load time, before any scan runs. Fix or remove the offending entry in {path}."
+    },
+    "MET-F800": {
+      "severity": "error",
+      "module": "foundation.num",
+      "message": "coercion rejected a non-finite value ({value}) — NaN or ±Inf must never leak past a numeric boundary",
+      "remedy": "Trace the caller for an upstream NaN/±Inf (a division by zero, sqrt of a negative, or a poisoned fixture/JSON value) before it reaches this boundary. Guard finite inputs with num.IsFinite/num.GuardFinite upstream; this rejection is the fail-closed backstop (SEC-093)."
+    },
+    "MET-F801": {
+      "severity": "error",
+      "module": "foundation.num",
+      "message": "coercion rejected a float64 ({value}) outside the int64 range — it would wrap or overflow",
+      "remedy": "Route only in-range floats through SafeInt64. If saturation is the intended invariant (conserved arithmetic), use num.ClampInt64FromFloat instead — the reject form is the boundary path, the saturating form the conserved-arithmetic path (SEC-080)."
+    },
+    "MET-F802": {
+      "severity": "error",
+      "module": "foundation.num",
+      "message": "bounded float ({value}) is outside the required range [{lo}, {hi}]",
+      "remedy": "The caller supplied lo/hi as parameters (GR#15), so the caller owns the domain: reject or clamp the value into [{lo}, {hi}] upstream. This fires only for finite values — a non-finite value is rejected earlier with MET-F800 (SEC-093)."
+    },
+    "MET-F803": {
+      "severity": "error",
+      "module": "foundation.num",
+      "message": "coercion rejected a value of unexpected type {type} — want a numeric type",
+      "remedy": "Fix the stored value's type at its source (fixture, map, or JSON decode). Do not type-assert blindly; route the value through num.SafeInt64FromAny/SafeFloat64FromAny so a wrong type is rejected, never panicked or mis-trusted (GR#16)."
     },
     "MET-U001": {
       "severity": "fatal",
@@ -1469,6 +1508,18 @@
       "message": "deposit map method called on a struct-copied value (SEC-020)",
       "remedy": "A *mining.DepositMap value was copied by assignment/passing instead of being used via the single pointer NewDepositMap returned (mu is a sync.RWMutex VALUE and placed is an aliased map — a copy is a second, independent lock racing the original over the same placed map). The call was rejected rather than risking a lock-order hang or a torn map read; construct exactly one DepositMap via NewDepositMap and pass its pointer everywhere instead of a dereferenced copy."
     },
+    "MET-E954": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "mine-type catalogue data file could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/minetypes.json is missing, malformed JSON, or failed the loader's schema validation (a missing or non-positive footprint/output rate, a negative jobs count, an unknown blight-class value, an inverted depth band, a dangling geology or deposit class ref, or a field of the wrong JSON type). The catalogue does NOT proceed with silent defaults or a partially-populated result (feat.minetypes AC-7): fix the data file and reload. All-or-nothing — there is no partial load."
+    },
+    "MET-E955": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "unknown mine-type key {key}",
+      "remedy": "A mine-type resolve named a type key absent from the loaded catalogue (feat.minetypes AC-7). The rejection is loud rather than a silent default-substituted parameter set; check the key against the catalogue's canonical keys (Catalogue.Keys) and fix the caller."
+    },
     "MET-V001": {
       "severity": "warn",
       "module": "ui.screen.proj",
@@ -2081,6 +2132,18 @@
       "message": "FreightAPI method {method} called on a struct-copied value, not the one Load/LoadDefault constructed",
       "remedy": "Always use the *FreightAPI pointer Load returned. Do not dereference-and-reassign it ('f2 := *f') or pass it by value — that produces a second value with its own mu but aliased maps/slices, defeating the concurrency-safety invariant (SEC-020-class, mirroring engine.finance's MET-G204). If you need a second independent API, call Load again."
     },
+    "MET-G1009": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "factory-type data invalid: {cause}",
+      "remedy": "data/factorytypes.json (feat.factorytypes, FEAT-105) could not be read or failed schema validation: a missing/zero footprint, an absent or non-positive jobs count, an unknown blight-class enum value, a wrong JSON type, a dangling stageRef into data/freight.json, an inline input/output referencing an unregistered freight commodity, or a stageRef entry that also carries a duplicate inline copy of input-output/jobs/power/water/blight (AC-5/ASM-680). Correct the data file — freight never falls back to a partial or default-substituted factory-type catalogue."
+    },
+    "MET-G1010": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "unknown factory type {type}",
+      "remedy": "A factory-type resolve named a key that is not one of the eight modelled types (assembler/steelMill/electronics/chemicalsConverter/foodProcessing/textiles/cement/glass). Check the key against data/factorytypes.json — freight never silently creates a default-substituted factory-type parameter set."
+    },
     "MET-G1100": {
       "severity": "error",
       "module": "engine.spiral",
@@ -2261,6 +2324,12 @@
       "message": "credit request carried a non-positive principal {amount}",
       "remedy": "A firm credit request must carry a positive principal. Reject a non-positive amount rather than silently clamping it to a plausible one — a zero/negative principal is a caller error, not a credit decision."
     },
+    "MET-G1411": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "hire list contains citizen {citizen} already on firm {firm}'s roster",
+      "remedy": "A firm's staff roster is a SET of real CitizenIDs (AC-4) — the same citizen cannot be hired twice into one firm. Reject the duplicate hire rather than silently deduping it into a smaller headcount (which would let a firm fake its staff floor, SEC-101)."
+    },
     "MET-G1300": {
       "severity": "error",
       "module": "engine.tax",
@@ -2320,6 +2389,318 @@
       "module": "engine.tax",
       "message": "TaxAPI method {method} called on a struct-copied value",
       "remedy": "Always use the *TaxAPI pointer Load/LoadDefault returned. Dereferencing-and-reassigning (a2 := *a) produces a second value with its own mutex but aliased maps, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call Load/LoadDefault again."
+    },
+    "MET-G1500": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "crime config invalid: {field}={value}",
+      "remedy": "crime.json (embedded) is malformed or failed engine.crime's schema validation — a non-positive base rate, a negative driver elasticity, a non-concave deterrence half-saturation, a formation/threshold/lead-window value outside its documented positive range, or a threshold ordering violation. Correct the named field; engine.crime never falls back to a partial config or a silent default."
+    },
+    "MET-G1501": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "district {district} is not registered with engine.crime (no AdvanceMonth or RegisterDistrict has introduced it)",
+      "remedy": "Query or command only districts the composition root has registered (via AdvanceMonth or RegisterDistrict). engine.crime refuses to fabricate a zero-valued district entry, so an unregistered district is an error, not an empty read (AC-14)."
+    },
+    "MET-G1502": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "citywide strategy mix rejected: no Constabulary Headquarters built (a station or Divisional HQ does not unlock the citywide patrol/detective/community mix)",
+      "remedy": "Build the Constabulary Headquarters (the top command-ladder rung) before setting the citywide strategy mix. The gate is a hard rejection, never a silently-dropped or auto-applied command (AC-10)."
+    },
+    "MET-G1503": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "strategy mix invalid: patrol+detective+community weights {sum} do not sum to the documented total {total}",
+      "remedy": "Set the three citywide weights so they sum to the documented total (crime.json mixTotal). The weights are rejected outright, never silently renormalised (AC-15)."
+    },
+    "MET-G1504": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "decapitation rejected: no gang with id {gang} exists",
+      "remedy": "Decapitate only a gang id returned by GangIDs (a formed, tracked gang). A decapitation command against a nonexistent id is a typed error, never silently ignored (AC-15)."
+    },
+    "MET-G1505": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "CrimeAPI method {method} called on a struct-copied value, not the one New constructed",
+      "remedy": "Call methods on the *CrimeAPI returned by New, never a struct copy of it (SEC-020 family). A copied value aliases the original's maps/mutex and would race."
+    },
+    "MET-G1506": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "prison-intake cross-check requested before a PrisonIntake ledger was wired",
+      "remedy": "Wire the (future) engine.prison intake ledger via SetPrisonIntake before calling VerifyPrisonIntake. The cross-check is against an independent ledger, never this module's own say-so (AC-12)."
+    },
+    "MET-G1507": {
+      "severity": "error",
+      "module": "engine.crime",
+      "message": "district {district} input invalid: {field}={value}",
+      "remedy": "Supply finite, non-negative driver/justice inputs for the named district field. engine.crime validates every numeric input at every entry point and rejects a non-finite or negative value with no state change (GR#16)."
+    },
+    "MET-G1600": {
+      "severity": "error",
+      "module": "engine.farming",
+      "message": "data/farmtypes.json could not be loaded or failed schema validation: {field}: {rule}",
+      "remedy": "Check that data/farmtypes.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", contains all five §31 facility types (arable/livestock/orchard/marketGarden/vineyard), and that every entry has a positive footprintCells, a named chain commodity, a recognised chain destination (mill/dairy/abattoir/packhouse/winery), a recognised soil band and terrain, and non-negative per-variant stocking densities (livestock only). The farm-type catalogue never falls back to a silent default or a partially loaded set (GR#15/GR#7/GR#16)."
+    },
+    "MET-G1601": {
+      "severity": "error",
+      "module": "engine.farming",
+      "message": "unknown farm-type key {typeKey} resolved from the farm-type catalogue",
+      "remedy": "Resolve only with one of the five §31 facility category keys (arable, livestock, orchard, marketGarden, vineyard). A named crop/livestock (wheat, dairy, apples, vines, …) is a VARIANT within its category, not a top-level farm-type key — resolve the category and read its variants."
+    },
+    "MET-G1800": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "data/education.json could not be loaded or failed schema validation (dir {dir}): {cause}",
+      "remedy": "Check that data/education.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", declares an entryAgeMonths key for every pipeline stage, and carries finite in-domain baselineQuality/attainmentScale/researchPointsPerGraduate/hallsCapacity/dropoutRate values. The education balance set never falls back to a silent default (GR#15/GR#7)."
+    },
+    "MET-G1801": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "stage {stage} is not registered as a service instance",
+      "remedy": "Call RegisterStages (after wiring engine.services) before issuing a stage-funding command or a stage query. A stage that was never registered is rejected, never answered with a silently zero-valued enrolment/funding figure (AC-12)."
+    },
+    "MET-G1802": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "citizen {citizen} has no valid age/stage-history state",
+      "remedy": "Enrol/transition only citizens that exist in engine.citizens with a non-negative derived age. A citizen with no record or a negative age is rejected rather than silently enrolled with a zero-value record (AC-12)."
+    },
+    "MET-G1803": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "fork command sums to {sixthForm}+{technical}+{leaveAt16}, but the eligible secondary cohort is {eligible}",
+      "remedy": "The three branch counts of an ApplyFork command must sum exactly to the secondary cohort's full eligible size. A mismatch would silently vanish (or invent) a pupil, so it is rejected at the write boundary (AC-13)."
+    },
+    "MET-G1804": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "stage-funding command for {stage} (fuseYears {fuseYears}) has no projected-consequence payload",
+      "remedy": "Every education funding decision's principal effect lands more than five game-years out (A5/§27), so attach a non-empty ProjectedConsequence to the funding command. This module's own pre-submission check rejects an empty payload before it reaches engine.projections (AC-9)."
+    },
+    "MET-G1805": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "stage-funding level {level} for {stage} is outside [0,1]",
+      "remedy": "Set the funding level within the documented [0,1] range. A level outside it is rejected rather than silently clamped (AC-1)."
+    },
+    "MET-G1806": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "EducationAPI method {method} called on a struct-copied value, not the one New constructed",
+      "remedy": "Call methods on the *EducationAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's maps/mutex and would race."
+    },
+    "MET-G1807": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "dependency {dependency} not wired for operation {operation}",
+      "remedy": "Wire the named outbound dependency via its Set* method (SetCitizens/SetServices/SetSeason/SetTraffic/SetProjections) before invoking an operation that consumes it. A missing dependency fails loudly rather than no-op-ing (GR#20)."
+    },
+    "MET-G1808": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "RemovePupil called for citizen {citizen} with out-of-range DepartureReason {reason}",
+      "remedy": "Use one of the three documented departure reasons (deceased, emigrated, dropped out). An unknown/out-of-range reason is rejected at the write boundary before the pupil is removed, so the live enrolled count and the independent ledger replay can never diverge (AC-10)."
+    },
+    "MET-G1809": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "stage-funding command for {stage} has a non-finite or non-positive FuseYears tag {fuseYears}",
+      "remedy": "Set FuseYears to a finite, positive value. A degenerate tag (NaN/±Inf/<=0) is rejected before the Slow-Fuse threshold comparison, where NaN > threshold is false and would otherwise read as \"under threshold\" (AC-9)."
+    },
+    "MET-G1810": {
+      "severity": "error",
+      "module": "engine.education",
+      "message": "stage-funding command for {stage} carries a non-finite projected Series value {series}",
+      "remedy": "Attach a ProjectedConsequence.Series whose rendered values are all finite. A NaN/±Inf value would make the projected delta (last minus first) non-finite and, once enqueued, would poison Curve(education.attainment) with NaN/±Inf permanently; the whole series is finite-checked at the write boundary before the projection is enqueued (AC-9)."
+    },
+    "MET-G1900": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "engine.refuse data invalid or inconsistent: {cause}",
+      "remedy": "data/refuse.json could not be loaded or failed schema validation (missing file, malformed JSON, a non-positive bin capacity, a negative waste rate, a stream-mix fraction outside [0,1], a contamination penalty outside [0,1], a compost conversion ratio outside (0,1], a negative vermin/incineration rate, a funding threshold outside [0,1], or a non-positive truck capacity/crews-per-truck). Fix the data file; every failure is registry-sourced, never a silent default substitution (AC-13)."
+    },
+    "MET-G1901": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "cell {cell} has an unknown or unregistered land-use type",
+      "remedy": "A bin-stock query or cell registration named a land-use type this package does not recognise (not residential/commercial/industrial), or a cell that was never registered and so has no land-use type. Register the cell first (RegisterCell), or fix the land-use value — never a silently-created zero-value bin-stock entry (AC-13)."
+    },
+    "MET-G1902": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "depot {depot} was never registered",
+      "remedy": "A round was scheduled (or a strike set) against a depot ID RegisterDepot never registered. Register the depot first, or fix the id — never a silently-created zero-value round (AC-13)."
+    },
+    "MET-G1903": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "round {round} is unknown or already completed",
+      "remedy": "OverrideRound (or AutoOptimise/ClearOverride/Round) was called on a round that is unknown or has already run. A completed round's history is never silently overridden (AC-14)."
+    },
+    "MET-G1904": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "contamination level {level} is outside [0,1]",
+      "remedy": "SetContamination requires a fraction in [0,1]. A value below 0 or above 1 is rejected with this typed error, never silently clamped (AC-14)."
+    },
+    "MET-G1905": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "funding level {level} is outside [0,1]",
+      "remedy": "SetFunding requires a fraction in [0,1]. Rejected at this package's boundary before delegating to engine.services, never silently clamped (AC-14)."
+    },
+    "MET-G1906": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "disposal site {site} is unavailable (unknown, full, reclaimed, or wrong kind)",
+      "remedy": "General (or food) waste was routed to a site that is unknown, full, reclaimed, or not the right kind for that stream (a compost site cannot take general waste; only a landfill can be reclaimed). Route to a valid site instead — the tonnage is rejected rather than silently dropped (AC-8)."
+    },
+    "MET-G1907": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "RefuseAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *RefuseAPI pointer Load returned. Dereferencing-and-reassigning produces a second value with its own mutex but aliased maps, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call Load again."
+    },
+    "MET-G1908": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "dependency not wired for method {method}",
+      "remedy": "The operation drives the registered outbound edges (engine.logistics/engine.services) before Wire injected them. Wire the dependencies before the first tick — an unwired call is rejected rather than silently treating a nil dependency as empty (GR#20)."
+    },
+    "MET-G1700": {
+      "severity": "error",
+      "module": "engine.rail",
+      "message": "intermodal transfer rejected: {reason}",
+      "remedy": "The intermodal container-transfer point refuses a non-positive tonnage, an unknown transport mode (sea/rail/road), a from==to no-op handoff, or a tonnage exceeding the intermodal modal cap (the smaller of the source and destination modes' per-movement max from data/freight.json). A malformed or over-cap transfer cannot satisfy engine.rail.md AC-3's tonnes-conservation contract; over-cap tonnage is rejected, never clamped."
+    },
+    "MET-G1701": {
+      "severity": "error",
+      "module": "engine.rail",
+      "message": "RailAPI method {method} called on a struct-copied value, not the one NewRailAPI constructed",
+      "remedy": "Call methods on the *RailAPI returned by NewRailAPI, never a struct copy of it (SEC-020 family). A copied value aliases the original's ledgers while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G1702": {
+      "severity": "error",
+      "module": "engine.rail",
+      "message": "rail data invalid: {cause}",
+      "remedy": "data/freight.json's modalCaps could not be read (missing file or malformed JSON) or a mode is missing a positive maxTonnesPerMovement. NewRailAPI fails rather than returning a caps-less surface that would silently accept an over-cap intermodal transfer (GR#7/GR#15)."
+    },
+    "MET-G2000": {
+      "severity": "error",
+      "module": "feat.containerport",
+      "message": "container-port build/operation rejected: {reason}",
+      "remedy": "The deep-sea terminal is permit-gated (feat.facilitypermits), milestone-gated by its data-driven tier milestone, and carries a day-one decommission liability (feat.decommission); an unwired seam, an intermodal transfer through an unregistered point, or a Build that is not a strict upgrade (a downgrade or repeat of an already-built tier) is refused. Wire the permit/decommission/rail seams, meet the milestone, and only ever build a strictly higher tier — no terminal state is mutated on a refused build."
+    },
+    "MET-G2001": {
+      "severity": "error",
+      "module": "feat.containerport",
+      "message": "unknown container-port tier: {tier}",
+      "remedy": "The port-tier ladder loaded from data/containerport.json holds cargo_port_small, container_terminal and deep_sea_terminal. Use one of those keys (or add the tier to the data file) rather than a silently-created zero-value tier."
+    },
+    "MET-G2002": {
+      "severity": "error",
+      "module": "feat.containerport",
+      "message": "container-port data invalid: {cause}",
+      "remedy": "data/containerport.json could not be read or failed schema validation (a tier missing its key/name/disclosure, a non-positive berth count, a non-positive crane rate/operating hours/customs capacity, a non-positive ship tonnage, a negative jobs/milestone/cost figure, an unknown deepSeaTier key, or a port-tier ladder that is not strictly ascending — deep_sea_terminal must sort strictly above container_terminal on the (milestone, cost) key). Correct the data file — the ladder never falls back to a partial config, an inverted ordering, or a silent default (GR#15/GR#7)."
+    },
+    "MET-G2100": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "data/leisure.json could not be read or failed schema validation: {cause}",
+      "remedy": "data/leisure.json must exist, be well-formed JSON, and pass schema validation (a positive version, a positive hoursPerWeek, a lifeStages entry for every life stage, an eventCrowd entry for every event kind, and a defaultPopulationTaste entry for every venue category). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G2101": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "leisure query for unknown citizen {citizenId}",
+      "remedy": "A patronage/unmet-demand/leisure-fit query was issued for a citizen ID with no record in engine.citizens. Query a real citizen ID; the error is returned rather than a silently-zero-valued patronage record (AC-11)."
+    },
+    "MET-G2102": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "leisure query for unknown district {district}",
+      "remedy": "An unmet-demand or venue-mix query named a district (non-zero) that has no registered venues. Use 0 for the citywide aggregate, or query a district that actually holds venues (AC-11)."
+    },
+    "MET-G2103": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "event scheduled with a malformed or missing date/venue reference: {field}",
+      "remedy": "An event on the §42 calendar must carry a day-of-month in [0, 30) and a non-zero venue reference. A malformed or missing field is rejected at schedule time so a UI-promised payoff is never silently dropped (AC-12)."
+    },
+    "MET-G2104": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "leisure operation referenced unknown venue {venueId}",
+      "remedy": "A freshness/visit/refurbish/schedule operation named a venue ID that was never registered via OpenVenue. Register the venue first, or fix the reference."
+    },
+    "MET-G2105": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "venue registration rejected: {reason}",
+      "remedy": "OpenVenue refuses a zero venue ID, a category outside the seven going-out categories (home is not a venue category), or a non-positive weekly capacity. Correct the venue before registering it."
+    },
+    "MET-G2106": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "leisure operation {operation} requires dependency {dependency} to be wired",
+      "remedy": "Wire the missing dependency (citizens via SetCitizens, traffic via SetTraffic, wellbeing via SetWellbeing) before invoking the operation. The operation fails loudly rather than returning a fabricated figure."
+    },
+    "MET-G2107": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "LeisureAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *LeisureAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's maps while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G2108": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "taste distribution invalid: {reason}",
+      "remedy": "LeisureFitAggregate/SetPopulationTaste received a distribution with a non-finite or negative entry, or one that sums to zero. Supply a normalised, non-negative distribution over the eight venue categories."
+    },
+    "MET-G2109": {
+      "severity": "error",
+      "module": "engine.leisure",
+      "message": "leisure numeric input invalid: {reason}",
+      "remedy": "A numeric input (e.g. overtime hours) was non-finite or negative. Supply a finite, non-negative value rather than relying on a silent clamp."
+    },
+    "MET-G2200": {
+      "severity": "error",
+      "module": "engine.wellbeing",
+      "message": "data/wellbeing.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/wellbeing.json must exist, be well-formed JSON, and pass schema validation (a positive version, baselines within [0,100], non-negative per-driver weights, a strictly-increasing age curve with at least two anchors, a commute threshold with the steeper-above shape, a rent-burden threshold in [0,1), and a positive unemployment cap). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G2201": {
+      "severity": "error",
+      "module": "engine.wellbeing",
+      "message": "attribution query supplied an out-of-domain driver input {field}={value}",
+      "remedy": "Every driver input has a documented domain (commute minutes >= 0, personality axes in [0,100], rent burden >= 0, fraction inputs in [0,1], satisfaction in [0,100]). Supply an in-domain value — the out-of-domain value is rejected, never silently clamped and folded into the wellbeing total (AC-13)."
+    },
+    "MET-G2202": {
+      "severity": "error",
+      "module": "engine.wellbeing",
+      "message": "attribution query supplied a non-finite driver input {field}={value}",
+      "remedy": "NaN/±Inf must never propagate into the conserved wellbeing sum. Fix the upstream source (a poisoned fixture, a division by zero, or an unguarded float) before it reaches this boundary (SEC-093)."
+    },
+    "MET-G2203": {
+      "severity": "error",
+      "module": "engine.wellbeing",
+      "message": "operation {operation} requires dependency {dependency} to be wired",
+      "remedy": "AttributeCitizen requires engine.season (the §9/§18 seasonal health wave is a mandatory physical component this module must source from engine.season, AC-10). Wire it via SetSeason before calling — its absence is a wiring error, not a degradable per-driver gap."
+    },
+    "MET-G2204": {
+      "severity": "error",
+      "module": "engine.wellbeing",
+      "message": "WellbeingAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *WellbeingAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex/source fields while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G2205": {
+      "severity": "error",
+      "module": "engine.wellbeing",
+      "message": "wellbeing query for unknown citizen {citizenId}",
+      "remedy": "A query was issued for a citizen ID with no record in the wired CitizensAPI. Query a real citizen ID; the error is returned rather than a silently-zero-valued attribution (AC-11)."
     }
   }
 }
