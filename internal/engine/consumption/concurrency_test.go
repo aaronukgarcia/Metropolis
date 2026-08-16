@@ -22,7 +22,10 @@ func TestConcurrentNetworksNoRace(t *testing.T) {
 			defer wg.Done()
 
 			n := NewNetwork(kind, testCorrelationID())
-			n.AddSource(Source{ID: "source", Capacity: 100})
+			if err := n.AddSource(Source{ID: "source", Capacity: 100}); err != nil {
+				t.Errorf("%s AddSource: %v", kind, err)
+				return
+			}
 			res, err := n.Solve([]Consumer{{EntityRef: "entity-a", Demand: 50}})
 			if err != nil {
 				t.Errorf("%s solve: %v", kind, err)

@@ -12,7 +12,9 @@ import (
 // order (never map-iteration-dependent).
 func TestDeterministicSolve(t *testing.T) {
 	n := NewNetwork(UtilityPower, testCorrelationID())
-	n.AddSource(Source{ID: "grid", Type: SourceSellindgeGrid, Capacity: 60})
+	if err := n.AddSource(Source{ID: "grid", Type: SourceSellindgeGrid, Capacity: 60}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	// Deliberately unordered inputs.
 	consumers := []Consumer{

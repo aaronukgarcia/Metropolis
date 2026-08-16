@@ -42,7 +42,9 @@ func TestNegativeEdgeLengthRejected(t *testing.T) {
 
 	// Defence-in-depth at Solve time.
 	n2 := NewNetwork(UtilityPower, testCorrelationID())
-	n2.AddSource(Source{ID: "g", Capacity: 100})
+	if err := n2.AddSource(Source{ID: "g", Capacity: 100}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 	n2.edges = []Edge{{From: "a", To: "b", LengthKm: -10}}
 	_, err = n2.Solve([]Consumer{{EntityRef: "a", Demand: 10}})
 	assertCode(t, err, ErrInvalidEdge)
@@ -98,7 +100,9 @@ func TestAquiferDoesNotDegradeWithoutDemand(t *testing.T) {
 func TestAquiferDegradesWhenOverAbstractedViaSolve(t *testing.T) {
 	aq := mustAquifer(t, 1000)
 	n := NewNetwork(UtilityWater, testCorrelationID())
-	n.AddSource(Source{ID: "borehole", Type: SourceBorehole, Capacity: 5000, Aquifer: aq})
+	if err := n.AddSource(Source{ID: "borehole", Type: SourceBorehole, Capacity: 5000, Aquifer: aq}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	// Demand 2000 > sustainable 1000, within the borehole's 5000 capacity:
 	// this is genuine over-abstraction and must degrade the yield.
@@ -114,7 +118,9 @@ func TestAquiferDegradesWhenOverAbstractedViaSolve(t *testing.T) {
 // rejected after aggregation, never poison the conserved accounting.
 func TestDemandSumOverflowRejected(t *testing.T) {
 	n := NewNetwork(UtilityPower, testCorrelationID())
-	n.AddSource(Source{ID: "g", Capacity: 1e308})
+	if err := n.AddSource(Source{ID: "g", Capacity: 1e308}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	const big = 1.7e308 // finite, but two of them overflow to +Inf
 	_, err := n.Solve([]Consumer{
@@ -129,9 +135,15 @@ func TestDemandSumOverflowRejected(t *testing.T) {
 // one huge edge drive lossFraction to exactly 1.0.
 func TestHundredPercentLossDeliversZero(t *testing.T) {
 	n := NewNetwork(UtilityWater, testCorrelationID())
-	n.AddSource(Source{ID: "s1", Capacity: 1.7e308})
-	n.AddSource(Source{ID: "s2", Capacity: 1.7e308})
-	n.AddEdge(Edge{From: "s1", To: "city", LengthKm: 1.7e308})
+	if err := n.AddSource(Source{ID: "s1", Capacity: 1.7e308}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
+	if err := n.AddSource(Source{ID: "s2", Capacity: 1.7e308}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
+	if err := n.AddEdge(Edge{From: "s1", To: "city", LengthKm: 1.7e308}); err != nil {
+		t.Fatalf("AddEdge: %v", err)
+	}
 
 	res, err := n.Solve([]Consumer{{EntityRef: "city", Demand: 100}})
 	if err != nil {
@@ -198,14 +210,18 @@ func TestDuplicateEntityRefDeterministic(t *testing.T) {
 	}
 
 	n1 := NewNetwork(UtilityWater, testCorrelationID())
-	n1.AddSource(Source{ID: "s", Capacity: 120})
+	if err := n1.AddSource(Source{ID: "s", Capacity: 120}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 	r1, err := n1.Solve(build())
 	if err != nil {
 		t.Fatalf("Solve (forward): %v", err)
 	}
 
 	n2 := NewNetwork(UtilityWater, testCorrelationID())
-	n2.AddSource(Source{ID: "s", Capacity: 120})
+	if err := n2.AddSource(Source{ID: "s", Capacity: 120}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 	r2, err := n2.Solve(buildReversed())
 	if err != nil {
 		t.Fatalf("Solve (reversed): %v", err)

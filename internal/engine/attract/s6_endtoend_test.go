@@ -97,7 +97,7 @@ func TestS6EndToEnd(t *testing.T) {
 	}
 
 	// --- Step 2: Migrate (positive branch) ------------------------------------
-	att.SetTermInputs(attract.TermInputs{
+	if err := att.SetTermInputs(attract.TermInputs{
 		JobAvailability:        80,
 		ServiceCoverage:        80,
 		Environment:            80,
@@ -105,7 +105,9 @@ func TestS6EndToEnd(t *testing.T) {
 		Safety:                 80,
 		HouseholdIDs:           founderHouseholds,
 		MonthlyRentMicroPounds: 1000,
-	})
+	}); err != nil {
+		t.Fatalf("SetTermInputs (positive): %v", err)
+	}
 
 	pop0 := ca.TotalPopulation(corr)
 	var peakInflow int64
@@ -196,7 +198,7 @@ func TestS6EndToEnd(t *testing.T) {
 	// their members emigrate (engine.citizens' departure command removes the
 	// citizen but not their household membership — a pre-existing citizens
 	// gap), so the affordability aggregation must not re-query them.
-	att.SetTermInputs(attract.TermInputs{
+	if err := att.SetTermInputs(attract.TermInputs{
 		JobAvailability:        0,
 		ServiceCoverage:        0,
 		Environment:            0,
@@ -204,7 +206,9 @@ func TestS6EndToEnd(t *testing.T) {
 		Safety:                 0,
 		HouseholdIDs:           nil,
 		MonthlyRentMicroPounds: 1000,
-	})
+	}); err != nil {
+		t.Fatalf("SetTermInputs (negative): %v", err)
+	}
 	beforeDecline := ca.TotalPopulation(corr)
 	for m := int64(6); m < 12; m++ {
 		if _, err := att.ApplyMigration(attract.MigrationCommand{

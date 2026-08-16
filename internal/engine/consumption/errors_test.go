@@ -31,7 +31,9 @@ func TestDanglingRefReturnsRegistryError(t *testing.T) {
 func TestUnresolvedRefReachesSolve(t *testing.T) {
 	api := realAPI(t)
 	n := NewNetwork(UtilityWater, testCorrelationID())
-	n.AddSource(Source{ID: "s", Capacity: 100})
+	if err := n.AddSource(Source{ID: "s", Capacity: 100}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	_, err := api.SolveDailyTick(n, []DemandEntity{
 		{EntityRef: "e", ClassRef: "thisClassDoesNotExist", Occupancy: 1},

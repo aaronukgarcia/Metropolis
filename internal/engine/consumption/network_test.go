@@ -7,10 +7,14 @@ import "testing"
 // increasing in total edge length).
 func TestNetworkLossByDistance(t *testing.T) {
 	short := NewNetwork(UtilityWater, testCorrelationID())
-	short.AddEdge(Edge{From: "a", To: "b", LengthKm: 1, Corridor: true})
+	if err := short.AddEdge(Edge{From: "a", To: "b", LengthKm: 1, Corridor: true}); err != nil {
+		t.Fatalf("AddEdge (short): %v", err)
+	}
 
 	long := NewNetwork(UtilityWater, testCorrelationID())
-	long.AddEdge(Edge{From: "a", To: "b", LengthKm: 50, Corridor: false})
+	if err := long.AddEdge(Edge{From: "a", To: "b", LengthKm: 50, Corridor: false}); err != nil {
+		t.Fatalf("AddEdge (long): %v", err)
+	}
 
 	if long.LossFraction() <= short.LossFraction() {
 		t.Errorf("longer run loss %v should exceed shorter run loss %v (AC-6)",
@@ -23,7 +27,9 @@ func TestNetworkLossByDistance(t *testing.T) {
 // — for an under-supplied network.
 func TestSolveConserved(t *testing.T) {
 	n := NewNetwork(UtilityWater, testCorrelationID())
-	n.AddSource(Source{ID: "borehole", Type: SourceBorehole, Capacity: 60})
+	if err := n.AddSource(Source{ID: "borehole", Type: SourceBorehole, Capacity: 60}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	// Total demand 150, supply 60, no edges => zero loss.
 	consumers := []Consumer{
@@ -55,8 +61,12 @@ func TestSolveConserved(t *testing.T) {
 // shortfall == demand holds exactly.
 func TestDeliveredPlusShortfallConserved(t *testing.T) {
 	n := NewNetwork(UtilityPower, testCorrelationID())
-	n.AddSource(Source{ID: "grid", Type: SourceSellindgeGrid, Capacity: 1000})
-	n.AddEdge(Edge{From: "grid", To: "city", LengthKm: 10, Corridor: false})
+	if err := n.AddSource(Source{ID: "grid", Type: SourceSellindgeGrid, Capacity: 1000}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
+	if err := n.AddEdge(Edge{From: "grid", To: "city", LengthKm: 10, Corridor: false}); err != nil {
+		t.Fatalf("AddEdge: %v", err)
+	}
 
 	res, err := n.Solve([]Consumer{{EntityRef: "district", Demand: 500}})
 	if err != nil {
@@ -80,7 +90,9 @@ func TestDeliveredPlusShortfallConserved(t *testing.T) {
 // integer-exact floats, so the invariant holds to the last bit).
 func TestTotalDrawEqualsSumOfConsumerDraws(t *testing.T) {
 	n := NewNetwork(UtilityWater, testCorrelationID())
-	n.AddSource(Source{ID: "source", Capacity: 120})
+	if err := n.AddSource(Source{ID: "source", Capacity: 120}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	res, err := n.Solve([]Consumer{
 		{EntityRef: "household-1", Demand: 100},
@@ -119,7 +131,9 @@ func TestTotalDrawEqualsSumOfConsumerDraws(t *testing.T) {
 // gap between demand and delivered supply for the current (last) tick.
 func TestShortfallQuery(t *testing.T) {
 	n := NewNetwork(UtilityWater, testCorrelationID())
-	n.AddSource(Source{ID: "source", Capacity: 50})
+	if err := n.AddSource(Source{ID: "source", Capacity: 50}); err != nil {
+		t.Fatalf("AddSource: %v", err)
+	}
 
 	if _, err := n.Solve([]Consumer{{EntityRef: "entity-a", Demand: 100}}); err != nil {
 		t.Fatalf("Solve: %v", err)
