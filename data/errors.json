@@ -75,7 +75,14 @@
       "G1700-G1799": "reserved for engine.rail (internal/engine/rail: MOD-060's STUB-FOR-BASELINE intermodal container-transfer surface — RailAPI.IntermodalTransfer implementing engine.rail.md AC-3's sea↔rail↔road tonnes-conservation contract, consumed by feat.containerport through the freight.RailIntermodal dependency-inversion seam. The full MOD-060 build (fleet/works accounting, transfer-quality → mode logit, rolling-stock works) will formalize or extend this range when it lands. The G layer's blocks through G1600-G1699 were claimed by engine.citizens … engine.crime and engine.farming by the time this stub landed; checked against this table AND `grep -rn \"MET-G17\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G17xx code existed either place.)",
       "G2000-G2099": "reserved for feat.containerport (internal/engine/freight: the Felixstowe-class deep-sea container-terminal tier — the §33 port-tier ladder, the berths × crane-rate × hours capacity model read through FreightAPI, the intermodal sea↔rail↔road transfer point consumed from engine.rail, the customs-throughput/smuggling-risk tier, and the importer→exporter balance-of-trade flip — FEAT-099, sharing engine.freight's package. The G layer's blocks through G1900-G1999 were all claimed by the time this feature landed (engine.freight G1000, engine.spiral G1100, engine.services G1200, engine.tax G1300, engine.firms G1400, engine.crime G1500, engine.farming G1600, engine.rail G1700, engine.education G1800, engine.refuse G1900), so feat.containerport opens G2000-G2099. Checked against this table AND `grep -rn \"MET-G20\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G20xx code existed either place.)",
       "G2100-G2199": "reserved for engine.leisure (internal/engine/leisure: the §42 168-hour weekly discretionary-hours budget, personality-weighted venue patronage with the access-time penalty, per-citizen per-venue novelty decay, the openings/refurbishment pipeline, the events calendar and its crowd-transport push, the unmet-taste-demand query, and the citywide/per-citizen leisure-fit surface — MOD-055. The E layer is fully exhausted and the G layer's blocks through G2000-G2099 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport), so engine.leisure opens G2100-G2199 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G21\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G21xx code existed either place.)",
-      "G2200-G2299": "reserved for engine.wellbeing (internal/engine/wellbeing: the §18 two-track physical/mental health model — driver-decomposed causal attribution over fifteen drivers, the Wellbeing = f(physical, mental, satisfaction) headline composite, and the four downstream-effect modifiers — MOD-034. The E layer is fully exhausted and the G layer's blocks through G2100-G2199 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport, engine.leisure), so engine.wellbeing opens G2200-G2299 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G22\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G22xx code existed either place.)"
+      "G2200-G2299": "reserved for engine.wellbeing (internal/engine/wellbeing: the §18 two-track physical/mental health model — driver-decomposed causal attribution over fifteen drivers, the Wellbeing = f(physical, mental, satisfaction) headline composite, and the four downstream-effect modifiers — MOD-034. The E layer is fully exhausted and the G layer's blocks through G2100-G2199 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport, engine.leisure), so engine.wellbeing opens G2200-G2299 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G22\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G22xx code existed either place.)",
+      "G2400-G2499": "reserved for engine.accelerator (internal/engine/accelerator: the CERN-class particle accelerator — the expert-gate-verified mega-facility whose massive electricity/water draw posts through engine.consumption's UtilityAPI, whose research-rate multiplier feeds engine.education's research output, whose health spillover posts into engine.wellbeing, whose FDI anchor draw posts into engine.fdi, with permit/decommission inheritance and a saturating prestige output — MOD-077. The E layer is fully exhausted and the G layer's blocks through G2300-G2399 were claimed by engine.news by the time this package landed, so engine.accelerator opens G2400-G2499 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G24\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G24xx code existed either place.)",
+      "G2500-G2599": "reserved for feat.pharmacampus (internal/engine/fdi: the pharma/R&D campus — the Groton-Pfizer-class FDI-anchor facility catalogue (footprint/output/jobs/utility-draw/exports), the education↔FDI compounding-loop wiring (education term into the bid, graduate/research demand out), supply-chain spawning via engine.firms, and the permit/decommission inheritance — FEAT-101, sharing engine.fdi's package. The E layer is fully exhausted and the G layer's blocks through G2400-G2499 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator) by the time this feature landed, so feat.pharmacampus opens G2500-G2599 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G25\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G25xx code existed either place.)",
+      "G2600-G2699": "reserved for feat.refinery (internal/engine/chemicals: the oil refinery + integrated chemical works — the refinery/petrochemical-works facility catalogue, the make-vs-buy build-vs-import decision, the crude-tanker→tank-farm→refinery→petrochemical-works chain head, the fuel-output feed to engine.fuel, the top-blight/hazmat-fire risk wiring, and the permit/decommission inheritance — FEAT-102, sharing engine.chemicals' package. The G layer's blocks through G2400-G2499 were all claimed by the time this feature landed (engine.news G2300, engine.accelerator G2400, engine.fdi G2500 in source), so feat.refinery opens G2600-G2699. Checked against this table AND `grep -rn \"MET-G26\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G26xx code existed either place.)",
+      "G2800-G2899": "reserved for engine.airport (internal/engine/airport: the Heathrow-class international airport — runway/terminal/freight-apron component decomposition, pax/day throughput, air-cargo modal arm, access-tier reach, runway-access/adjacency, noise-contour blight registration, surface-access gate, and the permit/land gate — MOD-075/FEAT-096. The G layer’s blocks through G2600-G2699 were claimed by earlier engine modules (engine.citizens … feat.refinery), and G2700-G2799 carries the in-flight engine.census work, so engine.airport opens G2800-G2899 under BUG-234’s three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G28\" internal/ cmd/` before claiming, per BUG-008’s lesson — no prior MET-G28xx code existed either place.)",
+      "G3000-G3099": "reserved for engine.spaceport (internal/engine/spaceport: the SpaceX-class launch/landing mega-facility — the data-file load/schema failure, the catalogue-anchor reconciliation failure (exactly-one-entry rule), the unknown/out-of-taxonomy facility key, the expert-gate build rejection, the missing-permit rejection, the launch-against-unbuilt rejection, the double-build rejection, the SEC-020 copy guard, the missing-seam dependency rejection, and the invalid-month/invalid-site rejections — MOD-076. The E layer is fully exhausted and the G layer's blocks through G2900-G2999 were claimed by earlier engine modules (engine.citizens … engine.news, engine.accelerator, feat.pharmacampus, feat.refinery, engine.census, engine.airport, engine.worklife), so engine.spaceport opens G3000-G3099 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G30\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G30xx code existed either place.)",
+      "G2700-G2799": "reserved for engine.census (internal/engine/census: the living-city census & life-history module — four non-blocking observation threads (stats generator, auditor, consistency checker, regulator), the cradle-to-grave object-bio assembly, the GUID + least-check-in liveness invariant, the education→crime linkage and reward/penalise-education observation, and the demographics/KPI + drill-in data model — MOD-078. The G layer's blocks through G2600-G2699 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator, engine.fdi, feat.refinery) by the time this module landed, so engine.census opens G2700-G2799 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G27\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G27xx code existed either place.)",
+      "G2900-G2999": "reserved for engine.worklife (internal/engine/worklife: the work-schedule & work-life balance module — three data-driven time patterns (core-hours/shift/any-time), the deterministic at-work derivation, the schedule-driven commute-demand-by-hour distribution, the 40h-vs-996 working-week policy consumption, and the overwork wage-gain/wellbeing-cost trade — MOD-080. The G layer's blocks through G2800-G2899 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator, feat.pharmacampus, feat.refinery, engine.census, engine.airport) by the time this module landed, so engine.worklife opens G2900-G2999 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G29\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G29xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -2701,6 +2708,294 @@
       "module": "engine.wellbeing",
       "message": "wellbeing query for unknown citizen {citizenId}",
       "remedy": "A query was issued for a citizen ID with no record in the wired CitizensAPI. Query a real citizen ID; the error is returned rather than a silently-zero-valued attribution (AC-11)."
+    },
+    "MET-G2400": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "data/accelerator.json could not be loaded or failed schema validation from {dir}: {cause}",
+      "remedy": "Check that data/accelerator.json exists under the resolved data directory and passes schema validation (version present, positive peak multiplier, research multiplier above 1, non-negative health/FDI/prestige/threshold figures)."
+    },
+    "MET-G2401": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "particle-accelerator build rejected: the expert gate verdict is unmet at the current research output (threshold {threshold})",
+      "remedy": "Fund the education pipeline until engine.education's research output reaches data/accelerator.json's expertGateThreshold; money, milestones, and development points alone cannot satisfy the gate (the 'money alone cannot buy it' mechanic)."
+    },
+    "MET-G2402": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "unknown accelerator facility key {key}",
+      "remedy": "Use the registered accelerator catalogue key (data/buildings.json's hadron_research_ring entry, which this module reconciles against in place). An out-of-taxonomy key is rejected rather than silently accepted."
+    },
+    "MET-G2403": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "particle-accelerator build rejected: no valid facility permit is held for {key}",
+      "remedy": "Acquire a facility land-allocation permit (feat.facilitypermits / FEAT-053, the inherited §7 gate) before building. The accelerator delegates permit checking to that feature; it does not own a permit state."
+    },
+    "MET-G2404": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "a draw was requested for an accelerator that has not been built",
+      "remedy": "Build the accelerator first (expert gate + permit + decommission accrual) before resolving or posting its electricity/water draw. A draw for an unbuilt facility is rejected, never silently posted as zero."
+    },
+    "MET-G2405": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "accelerator dependency {dependency} is not wired for {operation}",
+      "remedy": "Wire the missing dependency via its Set* method (education research source, expert gate, consumption UtilityAPI, wellbeing spillover sink, FDI anchor sink, permit source, decommission sink) before calling the operation."
+    },
+    "MET-G2406": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "AcceleratorAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *AcceleratorAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G2407": {
+      "severity": "error",
+      "module": "engine.accelerator",
+      "message": "particle accelerator {key} is already built",
+      "remedy": "The accelerator is a one-each §MP mega-project; a second build of the same key is rejected rather than silently doubling its draw and spillover effects."
+    },
+    "MET-G2600": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "data/refinery.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/refinery.json must exist, be well-formed JSON, and pass schema validation (a positive version, exactly the refinery and petrochemical_works facility keys, a positive footprint/throughput/capex/amortisation, non-negative jobs/power/water/opex, a non-empty input commodity and outputs, non-negative hazmat severity and a positive hazmat period, and a non-empty disclosure per facility plus the import margin). Correct the data file — the feature never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G2601": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "unknown refinery facility {facility}",
+      "remedy": "A facility resolve named a key that is not one of the two modelled facilities (refinery/petrochemical_works). Check the key against data/refinery.json — the feature never silently creates a default-substituted facility profile."
+    },
+    "MET-G2602": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "refinery operation requested before the facility is built",
+      "remedy": "Build the refinery (permit-gated via feat.facilitypermits, decommission-liability via feat.decommission) before operating it or feeding its fuel output. An unbuilt facility emits no fuel, registers no stage, and reports no incident (GR#1)."
+    },
+    "MET-G2603": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "unregistered chain stage {stage}",
+      "remedy": "A chain-stage query or feedstock route named a stage that is not registered against ChemAPI. Register the stage (or route to a registered one) — never a silently-created zero-value stage (GR#1)."
+    },
+    "MET-G2604": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "refinery edge {edge} is not wired",
+      "remedy": "Wire the missing outbound edge via its Wire* method (freight crude-landing, fuel supply, dispatch incident queue, permit authority, decommission registrar) before the operation that needs it. A missing edge is rejected loudly, never silently skipped (GR#20)."
+    },
+    "MET-G2605": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "refinery/chemapi method {method} called on a struct-copied value",
+      "remedy": "Call methods on the pointer returned by the constructor (LoadRefinery/NewChemAPI), never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex/maps while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G2606": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "refinery build rejected: {reason}",
+      "remedy": "The refinery build was refused — the feat.facilitypermits permit authority did not grant it (build is permit-gated, AC-8), or the facility is already built. No facility state is mutated on a rejected build."
+    },
+    "MET-G2500": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "data/pharmacampus.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/pharmacampus.json must exist, be well-formed JSON, and pass schema validation (a positive version, non-empty unique anchor keys, a positive footprint/output/jobs figure, a recognised jobsCharacter name, non-negative utility draw/exports/capex/opex/wages/supply-chain figures, a positive education-term rate and competing floor). Correct the data file — the catalogue never falls back to a partial result or a silent default (GR#15/GR#7)."
+    },
+    "MET-G2501": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "unknown anchor-facility key {key}",
+      "remedy": "A facility resolve named a key absent from data/pharmacampus.json. Check the key (pharma_r_d_campus/chemicals_complex) — the catalogue never substitutes a default profile (GR#1)."
+    },
+    "MET-G2502": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "pharma bid referenced an unavailable education-output term: {reason}",
+      "remedy": "Wire the engine.education edge (and an education system that produces graduates/research) before resolving a pharma bid. A bid against an unregistered education output fails rather than assuming zero education and silently losing the long bet (AC-8)."
+    },
+    "MET-G2503": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "won pharma campus could not emit graduate/research demand: {reason}",
+      "remedy": "The education edge rejected the campus's graduate/research demand. The win is refused rather than registering an anchor whose education-demand term is silently dropped (AC-8)."
+    },
+    "MET-G2504": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "pharma anchor firm registration failed: {reason}",
+      "remedy": "The engine.firms edge rejected the anchor (or supply-chain) firm registration. No anchor is silently left unregistered — the win is refused so the §32 closure path remains reachable through FirmsAPI (AC-6)."
+    },
+    "MET-G2505": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "won pharma campus could not route its export flow through the trade edge: {reason}",
+      "remedy": "The engine.freight trade edge rejected the campus's per-day export tonnage. The win is refused rather than a campus whose exports bypass the balance-of-trade surface (AC-6/AC-8)."
+    },
+    "MET-G2800": {
+      "severity": "error",
+      "module": "engine.airport",
+      "message": "data/airport.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/airport.json must exist, be well-formed JSON, and pass schema validation (a positive version; a tier missing its key/name/disclosure; a non-positive runway/per-runway-rate/gate/per-gate-rate/reach-multiplier/freight-apron/contour-radius/noise-level/land-footprint figure; a negative jobs/cost/milestone figure; an unknown access tier or blight class; a reduced-throughput percentage outside (0,100); or a reach/access ladder that is not monotonic non-decreasing with at least one strict reach increase). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G2801": {
+      "severity": "error",
+      "module": "engine.airport",
+      "message": "airport build/operation rejected: {reason}",
+      "remedy": "The airport is permit-gated (feat.facilitypermits), milestone-gated by its data-driven tier milestone, land-gated by its data-driven footprint, blight-gated through engine.mining’s BlightAPI registration, and its air-cargo arm must be wired to engine.freight. An unwired permit/blight/freight seam, a permit that is not granted, insufficient land, a non-positive air-cargo tonnage, or a Build that is not a strict upgrade is refused — no airport state is mutated on a refused build (AC-10)."
+    },
+    "MET-G2802": {
+      "severity": "error",
+      "module": "engine.airport",
+      "message": "airport tier/component lookup failed — unknown tier key, or a component of an airport that has not been built",
+      "remedy": "The queried airport-tier key is not one of the loaded data/airport.json tiers, or a component was queried before any airport was built. Query an existing tier, or build the airport first — never a silently-created zero-value tier or a silently-zeroed component figure (AC-10)."
+    },
+    "MET-G2803": {
+      "severity": "error",
+      "module": "engine.airport",
+      "message": "AirportAPI method called on a struct-copied *AirportAPI: {method}",
+      "remedy": "A struct-copied *AirportAPI aliases the original’s internal maps but gets its own zeroed mutex and keeps the original’s self pointer, so the copy is rejected before the mutex is ever touched (SEC-020 family). Always construct exactly one *AirportAPI via Load/LoadDefault and pass its pointer everywhere."
+    },
+    "MET-G2700": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "CensusAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *CensusAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex/tracked/history maps while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G2701": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "no tracked object with GUID {guid}",
+      "remedy": "Query the census for a bio or check-in record by a GUID that a tracked object actually carries. No zero-value bio/check-in is fabricated — the caller gets this error instead of a fabricated empty figure (AC-21)."
+    },
+    "MET-G2702": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "no aggregate or KPI with key {key}",
+      "remedy": "Resolve a Source drill-target or query a KPI by one of the census's documented aggregate keys. No zero-value aggregate is fabricated — the caller cannot mistake a fabricated 0 for a real empty figure (AC-21)."
+    },
+    "MET-G2703": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "data/census.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/census.json must exist, be well-formed JSON, and pass schema validation (a positive version, a non-empty meta block, and every numeric entry carrying a finite value, a stated unit, and a non-empty disclosure comment; positive lifespan/retirement figures, happiness weights summing to 1.0, and in-range thresholds). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7, AC-22)."
+    },
+    "MET-G2704": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "operation {operation} requires dependency {dependency} to be wired",
+      "remedy": "Wire the missing source (one of the seven consumed modules — citizens/education/crime/wellbeing/services/policies/finance) via its Wire* method before running the operation. The census fails closed rather than silently reporting a zero aggregate from an absent source (GR#1)."
+    },
+    "MET-G2900": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "data/worklife.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/worklife.json must exist, be well-formed JSON, and pass schema validation (a positive version, exactly the three documented pattern kinds — core-hours/shift/any-time — each once, every pattern's hoursPerDay in (0,24] and daysPerWeek in (0,7], a positive coverage span, a non-empty disclosure comment, a core-hours 0<=startHour<endHour<=24 window, shift rotations that contiguously tile the coverage span, and every working-week policy with positive hours, a finite wage coefficient >= 1, and a finite non-negative wellbeing weight). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7, AC-15)."
+    },
+    "MET-G2901": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "unknown work-life time pattern {kind}",
+      "remedy": "A query referenced a pattern kind that is not one of the three documented kinds (core-hours / shift / any-time) carried in the loaded data. Use a registered kind; the error is returned rather than silently treating the worker as never-at-work (AC-14)."
+    },
+    "MET-G2902": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "out-of-domain work hours input",
+      "remedy": "An hours input (a per-hour demand, a working-week hour figure, or a policy effect's hours) was negative or exceeded the 24-hour day / 168-hour week. Rejected rather than silently clamped and folded into a coverage or hours figure (AC-14)."
+    },
+    "MET-G2903": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "unknown working-week policy reference",
+      "remedy": "An active working-week policy resolved to no known policy in the policy source. Rejected rather than silently falling back to the default week as if the policy were real (AC-14)."
+    },
+    "MET-G2904": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "WorkScheduleAPI method {method} called on a struct-copied value",
+      "remedy": "A *WorkScheduleAPI was copied by value, which would alias its mutex/source fields across two values. Call methods on the value returned by New/Load, never a struct copy of it (SEC-020 family)."
+    },
+    "MET-G2905": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "operation {operation} requires dependency {dependency} to be wired",
+      "remedy": "OverworkWellbeingInput was called before the engine.wellbeing seam was wired. Wire it via SetWellbeing before computing the overwork input; the module fails closed rather than silently skipping the push (AC-12)."
+    },
+    "MET-G2906": {
+      "severity": "error",
+      "module": "engine.worklife",
+      "message": "non-finite work-life boundary value",
+      "remedy": "A wage coefficient or wellbeing weight crossing a module boundary was NaN or ±Inf, or a computed boundary value was non-finite. Rejected at the boundary rather than propagated into a wage or wellbeing figure (SEC-093)."
+    },
+    "MET-G3000": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "data/spaceport.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/spaceport.json must exist, be well-formed JSON, carry a positive version and a non-empty catalogueAnchor, and give every numeric value a unit and a non-empty disclosure (AC-15). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G3001": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "spaceport catalogue anchor {anchor} does not resolve to exactly one data/buildings.json entry ({rule})",
+      "remedy": "The spaceport must resolve to exactly one catalogue entry (AC-1). A missing anchor or a second launch-site entry is a GR#3 violation; correct the anchor or the catalogue so exactly one entry matches, rather than silently defaulting."
+    },
+    "MET-G3002": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "build command facility key {facilityKey} is outside the spaceport taxonomy (anchor {anchor})",
+      "remedy": "Submit a build command whose facilityKey equals the spaceport's catalogue anchor. Any other key is out-of-taxonomy and rejected before any state is touched (AC-10)."
+    },
+    "MET-G3003": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "expert gate unmet: education output {output} below the threshold {threshold}",
+      "remedy": "The shared expert gate (§8) gates the spaceport on engine.education's research output — money, milestones, and development points cannot substitute (AC-3). Fund education until the output reaches the data/spaceport.json threshold, then retry."
+    },
+    "MET-G3004": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "no valid facility permit held for {facilityKey}",
+      "remedy": "A spaceport build is permit-gated via the facility-permit system (FEAT-053). Obtain a valid permit for the facility, then retry the build (AC-8)."
+    },
+    "MET-G3005": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "launch scheduled against an unbuilt or incomplete facility {facilityKey} ({state})",
+      "remedy": "Launches never fire before the multi-year build completes (AC-4). Complete the build (advance buildMonths months, one Tick each) before scheduling or projecting launches."
+    },
+    "MET-G3006": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "a spaceport is already building or built ({anchor})",
+      "remedy": "The spaceport is a one-of-a-kind mega-facility (§MP). A second build command against an already-sited/building/built facility is rejected rather than silently double-building."
+    },
+    "MET-G3007": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "SpaceportAPI method {method} called on a struct-copied value",
+      "remedy": "A copied *SpaceportAPI would alias its mutex across two values (SEC-020). Call methods on the value returned by New/Load, never a struct copy."
+    },
+    "MET-G3008": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "operation {operation} requires seam {dependency} to be wired",
+      "remedy": "Wire the missing seam (education gate / permit gate / decommission liability / FDI draw / tourism draw) via its Set* method before running the operation. The spaceport fails closed rather than no-op-ing on an absent dependency (GR#1)."
+    },
+    "MET-G3009": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "Tick month {month} is negative",
+      "remedy": "Month indices are absolute and non-negative (0 = genesis). Pass a non-negative month to Tick."
+    },
+    "MET-G3010": {
+      "severity": "error",
+      "module": "engine.spaceport",
+      "message": "build command site coordinates ({siteX},{siteY}) must be non-negative",
+      "remedy": "The exclusion-contour centre must be a non-negative cell coordinate. Pass a valid site and retry (AC-10)."
     }
   }
 }
