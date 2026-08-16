@@ -722,5 +722,97 @@
   {
     "finding": "internal/engine/core/engine.go|*Engine|field access chain|HookCount|e.subs|*Engine.subs",
     "reason": "SEC-049's field-access enumeration over-approximates: HookCount (added by FEAT-082's composition-root runtime accessor, ASM-422) contains zero references to e.subs -- it reads e.hooks only. The receiver-method path is already guarded by the e.checkNotCopied(...) pre-lock check, and this field-access-chain entry is the same per-field over-approximation every other Engine method (Registry, WorldSeed, PoolSize, Clock, RegisterPhaseHook, seal, AdvanceTicks) carries for the e.subs chain. No field-then-method access chain exists here."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|removeHouseholdMemberLocked|c|*CitizensAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|clearHouseholdLocked|c|*CitizensAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/conservation.go|*FreightAPI|receiver method|computeAccountLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/conservation.go|*FreightAPI|receiver method|tonneCommodities|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/freight.go|*FreightAPI|receiver method|resetLedgersLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/freight.go|*FreightAPI|receiver method|totalStockLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/freight.go|*FreightAPI|receiver method|advanceTickLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/freight.go|*FreightAPI|receiver method|resolveArrivalsLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/freight.go|*FreightAPI|receiver method|runStagesLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/freight.go|*FreightAPI|receiver method|stageScaleLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/movement.go|*FreightAPI|receiver method|validateModalCap|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/port.go|*FreightAPI|receiver method|SmugglingRisk|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/trade.go|*FreightAPI|receiver method|ledgerLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/freight/trade.go|*FreightAPI|receiver method|valueLocked|f|*FreightAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/gate.go|*UnlocksAPI|receiver method|IsUnlocked|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/gate.go|*UnlocksAPI|receiver method|gatePassesLocked|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/gate.go|*UnlocksAPI|receiver method|IsNodeUnlocked|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/milestone.go|*UnlocksAPI|receiver method|applyMilestoneLocked|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/xp.go|*UnlocksAPI|receiver method|AwardConstructionXP|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/xp.go|*UnlocksAPI|receiver method|AwardPopulationXP|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/xp.go|*UnlocksAPI|receiver method|AwardServiceXP|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/xp.go|*UnlocksAPI|receiver method|AwardMilestoneProgressXP|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/unlocks/force.go||function (parameter)|validForceTarget|u|*UnlocksAPI",
+    "reason": "Sweep wave 2026-08-15/16 (Aaron-approved): validForceTarget is a pure read-only validation predicate taking *UnlocksAPI by value; it performs no mutation and holds no lock, so it needs no copy-guard. Astgate syntactic false positive on a function that takes a guarded type as a parameter."
   }
 ]
