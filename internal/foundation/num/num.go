@@ -1,31 +1,3 @@
-// Package num is the single source of truth for GR#16 numeric safety:
-// saturating int64 arithmetic and the float64→int64 / float64-finiteness
-// choke points every engine module routes its quantity arithmetic through.
-//
-// # GR#16 — the numeric-safety standard
-//
-// Before this package, every engine module re-derived safe arithmetic
-// ad-hoc (satAddMoney / safeMul / mulDiv in engine.finance,
-// saturatingInt64FromFloat in engine.logistics, and near-identical
-// satAdd/satSub/safeMul/clampInt64FromFloat copies in engine.build,
-// engine.households, and engine.attract), and every Destructive round
-// found a different overflow site as a result. The standard that emerged:
-//
-//   - every int64 quantity routes through SatAdd / SatSub / SafeMul —
-//     never a raw + / - / * that can wrap negative, invent, or destroy
-//     units;
-//   - every int64↔float64 conversion routes through ClampInt64FromFloat —
-//     never a bare int64(float64(...)) that wraps 2^63 (==
-//     float64(math.MaxInt64)) into a negative value on amd64;
-//   - every float64 arithmetic result is IsFinite-guarded (or checked with
-//     GuardFinite) — never left able to leak +Inf/NaN from a finite input;
-//   - every public mutator validates like its constructor, and every
-//     public query validates like its mutator (defence-in-depth on the
-//     numeric inputs, exactly as engine.consumption re-validates sources
-//     at Solve time).
-//
-// The rule in one line: never wrap; never leak +Inf/NaN from a finite
-// input.
 package num
 
 import (
