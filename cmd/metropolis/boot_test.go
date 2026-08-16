@@ -10,25 +10,6 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
-// waitFor polls cond every millisecond for up to 2 seconds, failing the
-// test if it never becomes true — the same pattern internal/ui/core's own
-// harness_test.go uses to synchronize against this item's background
-// goroutines (StubEngine.Run, ui.core.ViewsLoop.Run) without a flaky fixed
-// sleep.
-func waitFor(t *testing.T, cond func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if !cond() {
-		t.Fatal("condition not met within timeout")
-	}
-}
-
 // --- AC-2: module registry boots with every module stub/ok ---
 // (this is also AC-3's fallback verification path: "the registry's own
 // API directly," exercised here independent of whether ui.screen.debug

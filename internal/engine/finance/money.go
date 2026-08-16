@@ -65,14 +65,6 @@ func minI64(a, b int64) int64 {
 	return b
 }
 
-// maxI64 returns the larger of a and b.
-func maxI64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 // satAddMoney returns a+b saturated at the int64 extremes, plus whether
 // saturation occurred — used by the ledger's debit/credit summation so an
 // overflowing sum is detectable rather than silently wrapping (GR#16).

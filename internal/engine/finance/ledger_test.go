@@ -161,7 +161,9 @@ func TestTotalMoneyInCirculation(t *testing.T) {
 func TestConservationViolationLocalisesUnbalancedTransaction(t *testing.T) {
 	f := NewFinanceAPI("ac10b")
 	seedTreasury(t, f, gbp(100))
-	f.BeginMonth(1)
+	if err := f.BeginMonth(1); err != nil {
+		t.Fatalf("BeginMonth: %v", err)
+	}
 
 	// A balanced post first (the control: not a violation).
 	if _, err := f.PostWages(gbp(10)); err != nil {
@@ -196,7 +198,9 @@ func TestConservationViolationLocalisesUnbalancedTransaction(t *testing.T) {
 // API exposes is the sum of retrievable ledger lines.
 func TestDrillThroughLinesSumToAggregate(t *testing.T) {
 	f := NewFinanceAPI("ac11")
-	f.BeginMonth(1)
+	if err := f.BeginMonth(1); err != nil {
+		t.Fatalf("BeginMonth: %v", err)
+	}
 	seedTreasury(t, f, gbp(1000))
 
 	wages := gbp(400)

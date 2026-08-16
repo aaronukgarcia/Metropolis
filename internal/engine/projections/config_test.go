@@ -29,7 +29,7 @@ func TestHorizonConfigLoads(t *testing.T) {
 // panic or a silent zero-value default) if the embedded bytes were
 // ever hand-broken — exercised here by temporarily substituting
 // malformed bytes and resetting the sync.Once cache, since the real
-// go:embed bytes can't be corrupted at test time otherwise.
+// embedded bytes can't be corrupted at test time otherwise.
 func TestEmbeddedConfigMalformed(t *testing.T) {
 	origHorizon := embeddedHorizonJSON
 	origDeathWarnings := embeddedDeathWarningsJSON

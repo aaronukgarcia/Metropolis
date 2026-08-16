@@ -290,7 +290,7 @@ func TestBufferPolicyFatOrdersMoreThanLean(t *testing.T) {
 		t.Fatalf("OrderSize fat: %v", err)
 	}
 
-	if !(fat > lean) {
+	if fat <= lean {
 		t.Errorf("fat order %d is not strictly greater than lean order %d for identical demand", fat, lean)
 	}
 }

@@ -43,7 +43,9 @@ func TestHouseholdSpend(t *testing.T) {
 func TestMonthlyFlowFullChain(t *testing.T) {
 	f := NewFinanceAPI("ac3-chain")
 	seedTreasury(t, f, gbp(5000))
-	f.BeginMonth(1)
+	if err := f.BeginMonth(1); err != nil {
+		t.Fatalf("BeginMonth: %v", err)
+	}
 
 	// Known inputs.
 	wages := gbp(1000)        // fixed wage bill

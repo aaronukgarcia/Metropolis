@@ -62,7 +62,9 @@ func TestMoneyConservationOver120Months(t *testing.T) {
 
 	const months = 120
 	for m := 0; m < months; m++ {
-		f.BeginMonth(int64(m))
+		if err := f.BeginMonth(int64(m)); err != nil {
+			t.Fatalf("BeginMonth: %v", err)
+		}
 		runMonth(t, f)
 
 		state := invariant.NewSnapshot(int64(m))
@@ -92,7 +94,9 @@ func TestMoneyConservationOver120Months(t *testing.T) {
 func TestMoneyConservationDetectsCorruption(t *testing.T) {
 	f := NewFinanceAPI("conservation-corrupt")
 	seedTreasury(t, f, gbp(1000))
-	f.BeginMonth(1)
+	if err := f.BeginMonth(1); err != nil {
+		t.Fatalf("BeginMonth: %v", err)
+	}
 
 	// A clean month first.
 	runMonth(t, f)
