@@ -162,16 +162,19 @@ const CumulativeRegressionThreshold = 2 * RegressionThreshold
 // most literal possible demonstration that sub-millisecond PerMonthTick
 // values are noise and that this floor must stay generously above them.
 //
-// 5ms is therefore KEPT UNCHANGED — not raised (CI is not noisier than
-// local) and not lowered (a tighter floor still buys no real gate
-// coverage, because engine.core is a zero-phase-hook walking skeleton
-// and PerMonthTick remains dominated by dispatch overhead until Sprint 3
-// lands real PhaseHooks). The one remaining condition for re-deriving
-// this again is NOT CI jitter — it is the moment PerMonthTick starts
-// measuring real per-tick simulation work (PhaseHookCount > 0), at which
-// point this floor must be re-checked against whatever a real simulated
-// tick actually costs.
-const MinMeasurableDuration = 5 * time.Millisecond
+// FEAT-082 landed the composition root, so PhaseHookCountInHeadlessPath()
+// is now compose.BaselineOneHookCount() (> 0) and PerMonthTick measures
+// real per-tick simulation work, not walking-skeleton dispatch — the exact
+// re-derivation trigger this comment named above. Measured on the CI
+// runner (windows-latest): 1M-real baseline 3.1981ms, current ~3.38-3.47ms;
+// perf-smoke (2000 citizens) ~3.70-4.00ms — the same ~3-4ms regardless of
+// population, confirming tick cost is now hook-work-dominated. The floor is
+// therefore lowered to 2ms: ~1.6x below the lowest real measurement
+// (3.1981ms) so the gate can actually evaluate, ~2.2x above the historical
+// CI jitter max (0.926ms), and just above the historical local
+// walking-skeleton max (1.736ms). Re-derive again if a future change drops
+// real tick cost back below this floor.
+const MinMeasurableDuration = 2 * time.Millisecond
 
 // MaxPlausiblePerMonthTick is BUG-096's upper sanity ceiling on
 // PerfResult.PerMonthTick (see perf.go's ImplausibleReason doc comment
