@@ -1,0 +1,81 @@
+{
+  "$comment": "engine.worklife (MOD-080) module-owned data surface: the three time patterns (core-hours / shift / any-time), and the placeholder working-week policy values. Loaded via internal/engine/worklife's LoadWorklife (foundation/data's generic Load[T]). §42: the 168-hour weekly discretionary-hours budget couples work hours to wellbeing; §52: the working-week policy lever (default ~40h vs 996 9-to-9/6-day); §18: wellbeing, where the 996 cost lands. Aaron 2026-08-16 design (BOW FEAT-137). GR#15 balance-number regime: every hour/wage/wellbeing figure below is a PLACEHOLDER pending Aaron's balance pass (ASM-953) — direction only (996 hours > default; 996 wage > default; 996 wellbeing < default). The workingWeekPolicies block documents the placeholder values MOD-064 will author in policies.json; at runtime engine.worklife reads the ACTIVE effect through its PoliciesAPI seam, never this table.",
+  "version": 1,
+  "meta": {
+    "specRefs": ["§5.1", "§18", "§19.3", "§21", "§26", "§42", "§52", "§54"],
+    "design": "Aaron 2026-08-16 design: time patterns (9-5 core-hours/teacher model, 24x7 shift/nurse model, any-time), schedule-driven commute, a 40h-vs-996 working-week policy, and the overwork trade.",
+    "balance": "PLACEHOLDERS pending Aaron's balance pass (ASM-953). Default working week ~40h (hoursPerDay × daysPerWeek = 8 × 5, per pattern). 996 = 9-to-9 across 6 days = 72h/week. Wage multiplier and wellbeing weight are directional placeholders.",
+    "units": {
+      "hoursPerDay": "hours/day",
+      "daysPerWeek": "days/week",
+      "startHour": "hour of day [0,24)",
+      "endHour": "hour of day [0,24)",
+      "coverageSpanHours": "hours/day the role must be staffed",
+      "rotation.startHour": "hour of day [0,24)",
+      "rotation.endHour": "hour of day [0,24)",
+      "hoursPerWeek": "hours/week",
+      "wageCoefficient": "dimensionless multiplier on the base wage",
+      "wellbeingWeight": "dimensionless overwork cost subtracted from the §42 discretionary-hours balance"
+    }
+  },
+  "patterns": [
+    {
+      "id": "core-hours",
+      "label": "Core hours (9-to-5 teacher model)",
+      "hoursPerDay": 8,
+      "hoursPerDayUnit": "hours/day",
+      "daysPerWeek": 5,
+      "daysPerWeekUnit": "days/week",
+      "startHour": 9,
+      "endHour": 17,
+      "coverageSpanHours": 8,
+      "placeholder": false,
+      "disclosure": "Not a balance placeholder: this is the documented 9-5 core-hours pattern from the Aaron 2026-08-16 design. The 8h/day × 5 days/week = 40h default-week total IS the ~40h default the balance regime names, pending Aaron's balance pass.",
+      "specRef": "Aaron 2026-08-16 design: 9-5 core-hours (teacher model)"
+    },
+    {
+      "id": "shift",
+      "label": "Shift (24x7 nurse model)",
+      "hoursPerDay": 8,
+      "hoursPerDayUnit": "hours/day",
+      "daysPerWeek": 5,
+      "daysPerWeekUnit": "days/week",
+      "coverageSpanHours": 24,
+      "rotations": [
+        { "startHour": 0, "endHour": 8 },
+        { "startHour": 8, "endHour": 16 },
+        { "startHour": 16, "endHour": 24 }
+      ],
+      "placeholder": false,
+      "disclosure": "Not a balance placeholder: this is the documented 24x7 shift pattern from the Aaron 2026-08-16 design (three 8h rotations tiling the day). Rotation length/count are directional placeholders (ASM-954) pending the master-plan sync.",
+      "specRef": "Aaron 2026-08-16 design: 24x7 shift (nurse model), three 8h rotations"
+    },
+    {
+      "id": "any-time",
+      "label": "Any-time (flexible)",
+      "hoursPerDay": 8,
+      "hoursPerDayUnit": "hours/day",
+      "daysPerWeek": 5,
+      "daysPerWeekUnit": "days/week",
+      "coverageSpanHours": 24,
+      "placeholder": false,
+      "disclosure": "Not a balance placeholder: this is the documented any-time pattern from the Aaron 2026-08-16 design. The 8h/day × 5 days/week = 40h default-week total IS the ~40h default the balance regime names. Flexible placement (where in the day the 8h sits) is deterministic per worker, never a balance number.",
+      "specRef": "Aaron 2026-08-16 design: any-time flexible placement within weekly hours"
+    }
+  ],
+  "workingWeekPolicies": [
+    {
+      "id": "996",
+      "label": "996 (9-to-9, 6 days)",
+      "hoursPerWeek": 72,
+      "hoursPerWeekUnit": "hours/week",
+      "wageCoefficient": 1.8,
+      "wageCoefficientUnit": "dimensionless multiplier on the base wage",
+      "wellbeingWeight": 0.25,
+      "wellbeingWeightUnit": "dimensionless overwork cost subtracted from the §42 discretionary-hours balance",
+      "placeholder": true,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (ASM-953): the 72h/week (9-to-9 across 6 days), the 1.8 wage multiplier, and the 0.25 wellbeing weight are directional figures only. MOD-064 will author the real working-week policy in policies.json; these values are what engine.worklife's tests consume until then.",
+      "specRef": "§52 policy lever; Aaron 2026-08-16 design: 996 = 9-to-9, 6 days"
+    }
+  ]
+}
