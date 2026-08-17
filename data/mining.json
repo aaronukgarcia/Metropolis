@@ -1,0 +1,46 @@
+{
+  "$comment": "engine.mining (MOD-046) — the general blight model + extraction siting tunables. Spec refs: §32 Mining, Extraction & the Blight Model (noise dBA-falloff curve shape, elevation-based viewshed, real-earthwork mitigations); §34 Zoning (Mining zone, 'only on revealed geology, §32'). Balance-number regime: every numeric value below is a PLACEHOLDER pending Aaron's balance pass (ASM-316 noise falloff / occlusion scale / per-class profile, ASM-317 extraction capacity) — rebalancing is a table edit in this file, never a code change.",
+  "version": 1,
+  "meta": {
+    "specRef": "§32; §34",
+    "units": {
+      "noiseRadiusM": "metres",
+      "visualHeightM": "metres",
+      "occlusionScaleM": "metres",
+      "eyeHeightM": "metres",
+      "seenFalloffM": "metres",
+      "minDistanceM": "metres",
+      "capacityDays": "simulation days",
+      "growInYears": "simulation years"
+    },
+    "balanceRegime": "every figure is a placeholder pending Aaron's balance pass; rebalancing is a table edit in this file, never a code change"
+  },
+  "noise": {
+    "minDistanceM": 10,
+    "falloffExponent": 2.0,
+    "enclosureReduction": 0.5,
+    "nightBanReduction": 0.3
+  },
+  "viewshed": {
+    "eyeHeightM": 1.5,
+    "occlusionScaleM": 20.0,
+    "seenFalloffM": 300.0
+  },
+  "classProfile": {
+    "low":      { "noiseRadiusM": 100,  "visualHeightM": 5,  "magnitude": 0.2 },
+    "moderate": { "noiseRadiusM": 300,  "visualHeightM": 15, "magnitude": 0.45 },
+    "high":     { "noiseRadiusM": 600,  "visualHeightM": 30, "magnitude": 0.75 },
+    "severe":   { "noiseRadiusM": 1000, "visualHeightM": 50, "magnitude": 1.0 }
+  },
+  "treeBelt": {
+    "growInYears": 5
+  },
+  "spoilTip": {
+    "heightM": 15,
+    "noiseRadiusM": 200,
+    "class": "moderate"
+  },
+  "extraction": {
+    "capacityDays": 100
+  }
+}
