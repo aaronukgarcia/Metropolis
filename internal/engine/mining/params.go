@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // This file is the GR#15 data-file contract (AC-6): DepositParams is the
@@ -43,13 +44,16 @@ var classByName = map[string]ResourceClass{
 }
 
 // maxDataMagnitude is the upper bound on any single float magnitude read
-// from data/deposits.json (countWeight, curve min/max, co-location factors,
-// coalfield generosity). It is an overflow guard, not a balance value: a
-// magnitude far above it (e.g. ~1e308, a valid float64) overflows to
-// +Inf/NaN once shuffle arithmetic multiplies or subtracts it, silently
-// degenerating the draw (Finding 3). A hostile or corrupt data edit is
-// therefore rejected at load time rather than let through to produce
-// +Inf/NaN deposit attributes.
+// from this package's data files (data/deposits.json countWeight/curve
+// min-max/co-location factors/coalfield generosity; data/mining.json
+// extraction capacityDays; data/minetypes.json outputRate). It is an
+// overflow guard, not a balance value: a magnitude far above it (e.g. ~1e308,
+// a valid float64) overflows to +Inf/NaN once arithmetic multiplies or
+// subtracts it — deposit weights overflow the shuffle draw (Finding 3), and
+// the site-capacity product outputRate × capacityDays overflows to +Inf to
+// make a site inexhaustible (SEC-219). A hostile or corrupt data edit is
+// therefore rejected at load time rather than let through to produce +Inf/NaN
+// attributes.
 const maxDataMagnitude = 1e12
 
 // ResourceParams is one resource's tunable column, in canonical enum
@@ -183,24 +187,20 @@ func buildParams(raw rawDepositData, path, correlationID string) (DepositParams,
 		CoverageFloor:        raw.EastKent.CoverageFloor,
 	}
 
-	fail := func(field, rule string) (DepositParams, error) {
-		return DepositParams{}, errs.New(ErrDepositDataInvalid, correlationID, map[string]any{
+	failErr := func(field, rule string) error {
+		return errs.New(ErrDepositDataInvalid, correlationID, map[string]any{
 			"path":  path,
 			"field": field,
 			"rule":  rule,
 		})
 	}
+	fail := func(field, rule string) (DepositParams, error) {
+		return DepositParams{}, failErr(field, rule)
+	}
 
 	if raw.Version <= 0 {
 		return fail("version", "required, must be a positive integer")
 	}
-	if raw.DepositRate < 0 || raw.DepositRate > 1 {
-		return fail("depositRate", "must be in [0,1]")
-	}
-	if raw.OffshoreRate < 0 || raw.OffshoreRate > 1 {
-		return fail("offshoreRate", "must be in [0,1]")
-	}
-
 	// Out-of-taxonomy keys are rejected before the ordered fold (AC-11's
 	// own schema example names this failure): every resource key must
 	// resolve to a known DepositType, and every DepositType must be present.
@@ -234,15 +234,6 @@ func buildParams(raw rawDepositData, path, correlationID string) (DepositParams,
 		if dt.IsMetal() && r.Offshore {
 			return fail("resources."+dt.String()+".offshore", "metallic ores cannot be offshore-capable: ores are never placed on sea cells (AC-3)")
 		}
-		if r.CountWeight < 0 || r.CountWeight > maxDataMagnitude {
-			return fail("resources."+dt.String()+".countWeight", "must be in [0, 1e12]")
-		}
-		if r.DepthMin < 0 {
-			return fail("resources."+dt.String()+".depthMin", "must be >= 0")
-		}
-		if r.DepthMax <= r.DepthMin {
-			return fail("resources."+dt.String()+".depthMax", "must be greater than depthMin (inverted band)")
-		}
 		if r.Offshore {
 			offshoreCount++
 		}
@@ -259,57 +250,103 @@ func buildParams(raw rawDepositData, path, correlationID string) (DepositParams,
 		return fail("resources", "no resource is offshore-capable; sea cells would be permanently empty")
 	}
 
-	if raw.SizeCurve.Shape <= 0 {
-		return fail("sizeCurve.shape", "must be > 0")
-	}
-	if raw.SizeCurve.Min < 0 || raw.SizeCurve.Min > maxDataMagnitude {
-		return fail("sizeCurve.min", "must be in [0, 1e12]")
-	}
-	if raw.SizeCurve.Max > maxDataMagnitude {
-		return fail("sizeCurve.max", "must be <= 1e12")
-	}
-	if raw.SizeCurve.Max <= raw.SizeCurve.Min {
-		return fail("sizeCurve", "must have 0 <= min < max")
-	}
-	if raw.DensityCurve.Shape <= 0 {
-		return fail("densityCurve.shape", "must be > 0")
-	}
-	if raw.DensityCurve.Min < 0 || raw.DensityCurve.Min > maxDataMagnitude {
-		return fail("densityCurve.min", "must be in [0, 1e12]")
-	}
-	if raw.DensityCurve.Max > maxDataMagnitude {
-		return fail("densityCurve.max", "must be <= 1e12")
-	}
-	if raw.DensityCurve.Max <= raw.DensityCurve.Min {
-		return fail("densityCurve", "must have 0 <= min < max")
-	}
-
-	// The four geology-bias factors below each feed chooseType's
-	// `w := countWeight * geologyFactor(...)` (shuffle.go). With only a
-	// lower bound, a hostile magnitude like 1e308 survives validation and
-	// overflows to +Inf the moment it is multiplied — the weight total then
-	// goes +Inf/NaN and every draw falls through to the last candidate
-	// (arcana), silently collapsing coal-measures/chalk geology into one
-	// type (Finding 3's class). They get the same maxDataMagnitude upper
-	// bound as countWeight and the curves, so no factor — and no product of
-	// factors — exceeds 1e12 before the shuffle multiplies it again.
-	if raw.CoLocation.ChalkUraniumFactor < 0 || raw.CoLocation.ChalkUraniumFactor > maxDataMagnitude {
-		return fail("coLocation.chalkUraniumFactor", "must be in [0, 1e12]")
-	}
-	if raw.CoLocation.CoalGasFactor < 0 || raw.CoLocation.CoalGasFactor > maxDataMagnitude {
-		return fail("coLocation.coalGasFactor", "must be in [0, 1e12]")
-	}
-	if raw.CoLocation.CoalCoalFactor < 0 || raw.CoLocation.CoalCoalFactor > maxDataMagnitude {
-		return fail("coLocation.coalCoalFactor", "must be in [0, 1e12]")
-	}
-	if raw.EastKent.GenerosityMultiplier < 1 || raw.EastKent.GenerosityMultiplier > maxDataMagnitude {
-		return fail("eastKentCoalfield.generosityMultiplier", "must be in [1, 1e12]")
-	}
-	if raw.EastKent.CoverageFloor < 0 || raw.EastKent.CoverageFloor > 1 {
-		return fail("eastKentCoalfield.coverageFloor", "must be in [0,1]")
+	// Every numeric-domain check — deposit/offshore rates, per-resource
+	// countWeight and depth bands, the size and density curves, co-location
+	// factors, and coalfield generosity — is delegated to
+	// DepositParams.validate below (SEC-208). It is the single source of
+	// truth for those bounds, shared with the constructor NewDepositMap, so
+	// a caller-constructed DepositParams can no longer bypass the
+	// maxDataMagnitude overflow guard by skipping this loader.
+	if err := p.validate(failErr); err != nil {
+		return DepositParams{}, err
 	}
 
 	return p, nil
+}
+
+// validFloat reports whether f is finite (neither NaN nor ±Inf) and lies in
+// the inclusive range [lo, hi]. It is the single predicate behind every
+// numeric-domain check in validate, using foundation/num's IsFinite so a
+// non-finite value cannot sneak past a bare < / > comparison (NaN compares
+// false against everything and would otherwise sail straight through —
+// GR#16, FEAT-135).
+func validFloat(f, lo, hi float64) bool {
+	return num.IsFinite(f) && f >= lo && f <= hi
+}
+
+// validate reports the first numeric-domain violation in p, if any. It is
+// the SEC-208 overflow/validity guard and the SINGLE source of truth for
+// the bounds both the loader (buildParams) and the exported constructor
+// (NewDepositMap) enforce: a caller-constructed DepositParams is held to
+// exactly the same domain as one read from data/deposits.json, so the
+// loader can never be bypassed to reach the shuffle with a non-finite or
+// overflow-magnitude value. It mirrors buildParams' original inline
+// validation, plus the finite checks the bare comparisons never provided.
+//
+// fail is the caller's error constructor — the loader passes one that also
+// attaches the data-file path, the constructor one that does not. It returns
+// nil when p is valid.
+func (p DepositParams) validate(fail func(field, rule string) error) error {
+	if !validFloat(p.DepositRate, 0, 1) {
+		return fail("depositRate", "must be finite and in [0,1]")
+	}
+	if !validFloat(p.OffshoreRate, 0, 1) {
+		return fail("offshoreRate", "must be finite and in [0,1]")
+	}
+	for _, r := range p.Resources {
+		if !validFloat(r.CountWeight, 0, maxDataMagnitude) {
+			return fail("resources."+r.Type.String()+".countWeight", "must be finite and in [0, 1e12]")
+		}
+		if !num.IsFinite(r.DepthMin) || r.DepthMin < 0 {
+			return fail("resources."+r.Type.String()+".depthMin", "must be finite and >= 0")
+		}
+		if !num.IsFinite(r.DepthMax) || r.DepthMax <= r.DepthMin {
+			return fail("resources."+r.Type.String()+".depthMax", "must be finite and greater than depthMin (inverted band)")
+		}
+	}
+	if err := validateCurve("sizeCurve", p.SizeCurve, fail); err != nil {
+		return err
+	}
+	if err := validateCurve("densityCurve", p.DensityCurve, fail); err != nil {
+		return err
+	}
+	if !validFloat(p.CoLocation.ChalkUraniumFactor, 0, maxDataMagnitude) {
+		return fail("coLocation.chalkUraniumFactor", "must be finite and in [0, 1e12]")
+	}
+	if !validFloat(p.CoLocation.CoalGasFactor, 0, maxDataMagnitude) {
+		return fail("coLocation.coalGasFactor", "must be finite and in [0, 1e12]")
+	}
+	if !validFloat(p.CoLocation.CoalCoalFactor, 0, maxDataMagnitude) {
+		return fail("coLocation.coalCoalFactor", "must be finite and in [0, 1e12]")
+	}
+	if !validFloat(p.EastKentCoalfield.GenerosityMultiplier, 1, maxDataMagnitude) {
+		return fail("eastKentCoalfield.generosityMultiplier", "must be finite and in [1, 1e12]")
+	}
+	if !validFloat(p.EastKentCoalfield.CoverageFloor, 0, 1) {
+		return fail("eastKentCoalfield.coverageFloor", "must be finite and in [0,1]")
+	}
+	return nil
+}
+
+// validateCurve validates one power-shaped curve's domain: a finite positive
+// Shape, a finite Min in [0, maxDataMagnitude], and a finite Max strictly
+// greater than Min and at most maxDataMagnitude. Together with the finite
+// checks this is what rejects SEC-208's SizeCurve{Min:-1e308, Max:1e308},
+// whose (Max-Min) span overflows to +Inf before drawCurve ever samples it.
+func validateCurve(name string, c CurveParams, fail func(field, rule string) error) error {
+	if !num.IsFinite(c.Shape) || c.Shape <= 0 {
+		return fail(name+".shape", "must be finite and > 0")
+	}
+	if !validFloat(c.Min, 0, maxDataMagnitude) {
+		return fail(name+".min", "must be finite and in [0, 1e12]")
+	}
+	if !validFloat(c.Max, 0, maxDataMagnitude) {
+		return fail(name+".max", "must be finite and in [0, 1e12]")
+	}
+	if c.Max <= c.Min {
+		return fail(name, "must have 0 <= min < max")
+	}
+	return nil
 }
 
 // depositTypeByName resolves a data/deposits.json resource key to its

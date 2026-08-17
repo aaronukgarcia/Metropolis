@@ -98,4 +98,59 @@
 //   - §32 Mining, Extraction & the Blight Model; §34 Zoning (the Mining
 //     zone, "only on revealed geology, §32"); §17 Resource Consumption
 //     Model (producer coefficients in catalogue).
+//
+// # The general blight model — engine.mining's core (MOD-046, AC-15)
+//
+// Module key: engine.mining. Spec ref: §32 Mining, Extraction & the Blight
+// Model (the blight model is explicitly general — §32's own wording "applies
+// to mines, heavy industry, abattoir, incinerator, landfill, airport,
+// motorway"). The BlightAPI (blight.go) is the shared registration + effect
+// surface those seven blighting-object classes register against; it is not
+// mining-specific machinery other modules merely cite in prose.
+//
+// Of the seven §32 classes, the ones with a registered BlightAPI consumer
+// edge today are: mines (engine.mining itself — a sited mine registers as its
+// own blighting object), and airport (engine.airport, via its BlightRegistrar
+// seam — RegisterBlightingObject). The other five — heavy industry
+// (engine.build), abattoir (engine.farming), incinerator and landfill
+// (engine.refuse), and motorway (roads/traffic) — have NO registered consumer
+// edge: those four build/farming/refuse/roads edges are UNREGISTERED in
+// code.json, so this package cannot create them (out of scope); they are
+// declared here as prose only, pending the collaborations gate.
+//
+// # Why AC-4 and AC-5 exist as a pair (elevation vs distance)
+//
+// The blight model's two components are mechanically distinct: the SEEN
+// component is a genuine line-of-sight test against WorldAPI.CellAt's real
+// per-cell Elevation along the object→home path, while the HEARD component is
+// a distance-only dBA-falloff curve. The paired test fixture places two home
+// cells at identical straight-line distance from one blighting object, one
+// occluded behind a ridge and one on flat ground, so a radius-only model
+// (which reads distance and nothing else) gives both cells the same answer and
+// must fail the AC-4 assertion while a real-elevation viewshed passes it.
+//
+// # Reclamation: the landfill-void block (AC-9)
+//
+// An exhausted site reclaims to a lake or a country park (ReclaimLake/
+// ReclaimPark). The landfill-void option is BLOCKED: it would hand off to
+// engine.refuse's §25 landfill lifecycle, but no engine.refuse↔engine.mining
+// edge exists in code.json — BUG-058 is CLOSED (c36778b, which registered
+// engine.refuse↔engine.farming, a different pair), and the mining↔refuse pair
+// is now governed by the collaborations gate rather than any pending bug.
+// Reclaim therefore rejects any option other than lake/park with
+// ErrReclaimBlocked.
+//
+// # Outbound edges: what this item's ACs exercise vs what is deferred
+//
+// code.json registers five engine.mining outbound calls: engine.world,
+// engine.build, engine.wellbeing, engine.market and engine.finance. The
+// blight-model/siting/reclamation ACs (AC-1..AC-11) exercise exactly ONE of
+// them — engine.world (the viewshed reads CellAt's real elevation, and the
+// siting gate reads PocketGeology/IsProspected) — so this package consumes
+// *world.WorldAPI directly and no other engine module. The build/wellbeing/
+// market/finance edges belong to FEAT-051 (the extraction ladder: selling
+// output via engine.market, posting through engine.finance, permits via
+// engine.build) and to engine.wellbeing's own heard/seen driver math (which
+// the acceptance doc marks out of scope for this item), so they are left for
+// those items to wire rather than created here as dead imports.
 package mining

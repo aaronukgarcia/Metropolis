@@ -93,7 +93,33 @@ type DepositMap struct {
 // NewDepositMap constructs an empty deposit map for a fixed worldSeed.
 // The world must be the same *world.WorldAPI whose tiles will be shuffled
 // and queried; params must come from LoadDepositParams (AC-6).
-func NewDepositMap(worldSeed uint64, w *world.WorldAPI, p DepositParams) *DepositMap {
+//
+// NewDepositMap is itself a trust boundary (SEC-208): params are validated
+// here, not only in the loader, so a caller-constructed DepositParams can
+// never reach the shuffle with a non-finite or overflow-magnitude curve or
+// weight. On invalid params it returns (nil, ErrDepositDataInvalid) and no
+// map.
+//
+// It is also the nil-world trust boundary (SEC-217): a nil *world.WorldAPI
+// used to sail through — params were valid, so nothing rejected it — and the
+// returned map's first ShuffleTile then dereferenced the nil world in
+// PocketGeology/CellAt, an untyped nil-pointer panic (GR#1 violation).
+// Mirroring NewBlightAPI's nil-world trap, a nil world is rejected here with
+// a registry-sourced error and no map, so a map that would panic is never
+// returned.
+func NewDepositMap(worldSeed uint64, w *world.WorldAPI, p DepositParams) (*DepositMap, error) {
+	if w == nil {
+		return nil, errs.New(ErrDepositDataInvalid, errs.NewCorrelationID(), map[string]any{"cause": "nil world"})
+	}
+	if err := p.validate(func(field, rule string) error {
+		return errs.New(ErrDepositDataInvalid, errs.NewCorrelationID(), map[string]any{
+			"field": field,
+			"rule":  rule,
+		})
+	}); err != nil {
+		return nil, err
+	}
+
 	m := &DepositMap{
 		seed:   worldSeed,
 		world:  w,
@@ -104,7 +130,7 @@ func NewDepositMap(worldSeed uint64, w *world.WorldAPI, p DepositParams) *Deposi
 	// goroutine can have a reference to m to race this Store against (see
 	// self's doc comment above).
 	m.self.Store(m)
-	return m
+	return m, nil
 }
 
 // checkNotCopied reports whether the receiver is a struct copy of some

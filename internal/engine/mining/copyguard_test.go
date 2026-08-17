@@ -21,7 +21,7 @@ import (
 // four guarded entry points, and that none of the rejected calls corrupts
 // the original's map through the aliased reference.
 func TestDepositMapValueCopyRejected(t *testing.T) {
-	m := NewDepositMap(1, newWorld(t), DepositParams{})
+	m := mustNewDepositMap(t, 1, newWorld(t), realParams(t))
 	// Seed one entry directly (same package may touch the unexported map)
 	// so the copy's aliasing is observable, without paying a full 40000-cell
 	// shuffle.
@@ -69,7 +69,7 @@ func TestDepositMapValueCopyRejected(t *testing.T) {
 // hung. The timeout turns a regression into a fast failure rather than a
 // 10-minute test-timeout hang.
 func TestDepositMapCopyWhileLockedRejectedNotHung(t *testing.T) {
-	m := NewDepositMap(1, newWorld(t), DepositParams{})
+	m := mustNewDepositMap(t, 1, newWorld(t), realParams(t))
 
 	m.mu.Lock()
 	cp := depositMapCopy(m) // copy taken while the original holds its write lock
