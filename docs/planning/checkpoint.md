@@ -1,5 +1,41 @@
 # HEAVY CHECKPOINT — session bounce point
 
+## REFRESH #12 — Bob, 2026-08-17 (read this first; supersedes #11)
+
+**Why this bounce:** Aaron said "come to a full stop and prep for bounce." Written mid-wave, two destructive agents still in flight. This section is self-sufficient for recovery.
+
+### State snapshot (2026-08-17 ~17:00)
+
+- **Branch:** `feature/services-astgate`. **The services wave is committed + pushed** (14 commits, noreply authorship verified): firms, menu (ASM-651/SEC-209/212/213/218/224), pharma (FEAT-101), defence (MOD-067), coastal (MOD-044), mining (MOD-046), news (MOD-043), build-screen (FEAT-015), plus doc/data/criteria commits.
+- **Commit-ready (ACCEPT-verdicted, Bill to sweep/commit):** fdi (MOD-059), defence (MOD-067), build-screen (FEAT-015), mining (MOD-046), news (MOD-043, ACCEPT r8 by Bill's session), menu (FEAT-021, ACCEPT r7).
+- **Last two in bounce loop — 2 destructives were running at bounce, check their verdicts FIRST on recovery:**
+  - `node claude-bow.js verdict MOD-044` (coastal) — expect ACCEPT r5 after SEC-210/211/220/221/228/229/233/234 fixes. If REJECT, bounce-fix the new SEC finding.
+  - `node claude-bow.js verdict MOD-024` (roads) — expect ACCEPT r3 after SEC-222/223/225/226/227 fixes. If REJECT, bounce-fix.
+  - **roads (MOD-024) is the ONLY module still fully uncommitted** (`?? internal/engine/roads/`). It is the last thing to sweep after its destructive ACCEPTs.
+- **Recurring pattern (durable):** every module needed 5+ destructive rounds, each finding "one more sibling" of the same class (unbounded numeric / unsaturating accumulator / raw-error path / sign-homoglyph). End the loop by scoping re-attacks to a COMPLETE surface enumeration, not "find the next one."
+
+### spec-lint / GR#25 (the new big thread)
+
+- **GR#25 "Graph-Driven Specification"** (Aaron 2026-08-17) is in CLAUDE.md + `claude-spec-guard.js` + `/spec-lint` skill. Acceptance prose must match `code.json` edges.
+- **TENSION (critical):** a BA classification proved `code.json` is STALE — **292 real Go imports are missing from the graph**, and 131 graph edges have no import. **Regenerate the graph from built code BEFORE enforcing GR#25**, or correct prose will be fail-closed rejected.
+- **spec-lint tool bug:** `tools/plan/spec-lint.js` read `m.calls` but code.json stores `m.outbound.calls` — the "875 findings" were mostly false positives. The field fix is already in the tree (current count 621); the direction-blind regex (can't tell "depends on" from "consumed by"/"out of scope") remains.
+- **Net debt for Bill to action:** ~420 genuine missing outbound edges to REGISTER (master-plan → generate.js, grouped by layer), ~201 to SKIP (invalid directions engine→ui, int.protocol→engine), ~14 real modules missing from code.json (feat.airport/borrowing/compositionroot/policy/etc.), 6 SPEC-LINT-002 method mismatches.
+- **`master-plan-v2.1.json` has a `MET-T024` dependency cycle** (from Bill's graph work) breaking `generate.test.js`. Fix before regenerating.
+
+### Cross-session collision (big process warning)
+
+Bill's and Bob's sessions were BOTH dispatching agents onto the SAME BOW items concurrently (news, mining, defence, coastal, roads). Guards only catch foreign-session overlap, not same-item overlap between two live sessions. Symptoms: juniors found "the fix already in the tree", duplicate findings, SEC-numbering near-collisions, leftover scratch test files, Bill committing early (menu/defence committed pre-ACCEPT). **On recovery: before mass-dispatching onto an item, check `git log --oneline -5 -- <path>` + the item's BOW comments to see if another session is already working it; stand one session down if overlapping.** Dispatch target is now 50 lanes.
+
+### Recovery procedure
+
+1. `metro` → checkin → `node claude-sync.js read` (check Bill/Ben state).
+2. **Check the two in-flight destructives:** `node claude-bow.js verdict MOD-044` and `verdict MOD-024`.
+3. `node claude-bow.js list --by-seq` + `git log -10` + `git status`.
+4. If coastal/roads destructives ACCEPTed → nothing more to build; sweep is Bill's (roads is the last uncommitted module). If REJECTed → bounce-fix + re-attack.
+5. Do NOT redo committed work. Commits + BOW status are the truth.
+
+---
+
 ## REFRESH #11 — Bob, 2026-08-12 late evening (read this section first; refresh #10/#9 and older below)
 
 **Supersedes #10's BUG-119 line and substantially extends its "commit-ready" list — read this before trusting #10's snapshot.** HEAD is still `c40a5ef`, still nothing committed this session (129+ uncommitted files, growing). Written as the docs lane of Bill's 19:48:13 ten-lane crank-up directive, covering the wave since #10 was written. Full narrative detail: `docs/build-log.md`'s 2026-08-12 entry, section "Later in the same wave."
