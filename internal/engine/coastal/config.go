@@ -127,6 +127,34 @@ const maxFrequencyCap int64 = 10_000
 // bound, not a storage-derived one (int64 carries none).
 const maxCasesPerMonth int64 = 1_000_000
 
+// maxCaseworkerThroughputPerMonth is the documented magnitude ceiling on the
+// caseworker throughput (CaseworkerThroughputPerMonth, cases assignable per
+// month). The field was validated only "finite > 0", so a config like 1e308
+// passed Validate while throughput()'s product with the (also unbounded)
+// ProcessingFundingThroughputGainPerUnit reached +Inf — and Advance's bare
+// int64(T) conversion wrapped that to MinInt64 on amd64 (0 cases assigned,
+// every case overflowed) but saturated to MaxInt64 on arm64 (every case
+// assigned): opposite outcomes for the same config across GOOS (SEC-233).
+// It is the same ceiling as maxCasesPerMonth — no config can meaningfully
+// assign more caseworker-slots per month than the maximum number of cases
+// that can be minted in a month — and ~1.7×10⁵ above the shipped 6, so no
+// legitimate future config is refused. GR#15 data-placeholder bound.
+const maxCaseworkerThroughputPerMonth = 1_000_000.0
+
+// maxPolicyCoefficientPerUnit is the documented magnitude ceiling on the two
+// §30 policy per-unit effect coefficients that reach unbounded arithmetic:
+// ProcessingFundingThroughputGainPerUnit (scales the throughput ceiling) and
+// HousingApproachFrictionIncreasePerUnit (scales the satisfaction friction).
+// Each was validated only "finite >= 0", so a config like 1e308 passed
+// Validate while (a) throughput()'s product overflowed to +Inf and Advance's
+// bare int64(T) produced opposite outcomes across GOOS (SEC-233), and (b)
+// effectiveFriction overflowed to +Inf, which satFriction collapsed to zero
+// instead of the ceiling — a catastrophic month reported "no dissatisfaction"
+// (SEC-234). The shipped magnitudes (0.8, 0.5) sit ~10⁶ below it, and the
+// worst-case products it admits stay finite (throughput ≤ ~10¹², friction ≤
+// ~10¹⁸). GR#15 data-placeholder bound.
+const maxPolicyCoefficientPerUnit = 1_000_000.0
+
 // maxSatisfactionFrictionPerCase is the documented magnitude ceiling on the
 // per-overflow-case satisfaction friction (SatisfactionFrictionPerCase). The
 // field is finite ≥ 0 like every coefficient, but a finite value large enough
@@ -327,8 +355,8 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 
 	// Reception (AC-5).
 	r := raw.Reception
-	if !num.IsFinite(r.CaseworkerThroughputPerMonth) || r.CaseworkerThroughputPerMonth <= 0 {
-		return fail("reception.caseworkerThroughputPerMonth", "must be finite and > 0")
+	if !num.IsFinite(r.CaseworkerThroughputPerMonth) || r.CaseworkerThroughputPerMonth <= 0 || r.CaseworkerThroughputPerMonth > maxCaseworkerThroughputPerMonth {
+		return fail("reception.caseworkerThroughputPerMonth", "must be finite and in (0, maxCaseworkerThroughputPerMonth] — the documented throughput ceiling (SEC-233)")
 	}
 	if r.HotelCostPerCase < 0 {
 		return fail("reception.hotelCostPerCase", "must be >= 0")
@@ -364,8 +392,8 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 	if !inUnit(pol.ProcessingFundingDefault) {
 		return fail("policy.processingFundingDefault", "must be in [0,1]")
 	}
-	if !num.IsFinite(pol.ProcessingFundingThroughputGainPerUnit) || pol.ProcessingFundingThroughputGainPerUnit < 0 {
-		return fail("policy.processingFundingThroughputGainPerUnit", "must be finite and >= 0")
+	if !num.IsFinite(pol.ProcessingFundingThroughputGainPerUnit) || pol.ProcessingFundingThroughputGainPerUnit < 0 || pol.ProcessingFundingThroughputGainPerUnit > maxPolicyCoefficientPerUnit {
+		return fail("policy.processingFundingThroughputGainPerUnit", "must be finite and in [0, maxPolicyCoefficientPerUnit] — the documented policy-coefficient ceiling (SEC-233)")
 	}
 	if pol.ProcessingFundingOpexPerUnitPerMonth < 0 {
 		return fail("policy.processingFundingOpexPerUnitPerMonth", "must be >= 0")
@@ -376,8 +404,8 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 	if pol.HousingApproachCostPerUnitPerMonth > 0 {
 		return fail("policy.housingApproachCostPerUnitPerMonth", "must be <= 0 (centres are cheaper — the cost coefficient is non-positive)")
 	}
-	if !num.IsFinite(pol.HousingApproachFrictionIncreasePerUnit) || pol.HousingApproachFrictionIncreasePerUnit < 0 {
-		return fail("policy.housingApproachFrictionIncreasePerUnit", "must be finite and >= 0")
+	if !num.IsFinite(pol.HousingApproachFrictionIncreasePerUnit) || pol.HousingApproachFrictionIncreasePerUnit < 0 || pol.HousingApproachFrictionIncreasePerUnit > maxPolicyCoefficientPerUnit {
+		return fail("policy.housingApproachFrictionIncreasePerUnit", "must be finite and in [0, maxPolicyCoefficientPerUnit] — the documented policy-coefficient ceiling (SEC-234)")
 	}
 	if !num.IsFinite(pol.HousingApproachIntegrationPenaltyPerUnit) || pol.HousingApproachIntegrationPenaltyPerUnit < 0 {
 		return fail("policy.housingApproachIntegrationPenaltyPerUnit", "must be finite and >= 0")
@@ -438,8 +466,8 @@ func (c Config) Validate() error {
 	if c.Rescue.CoastguardServiceID == "" || c.Rescue.LifeboatServiceID == "" {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "rescue", "reason": "service IDs must be non-empty"})
 	}
-	if !num.IsFinite(c.Reception.CaseworkerThroughputPerMonth) || c.Reception.CaseworkerThroughputPerMonth <= 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.caseworkerThroughputPerMonth", "reason": "must be finite and > 0"})
+	if !num.IsFinite(c.Reception.CaseworkerThroughputPerMonth) || c.Reception.CaseworkerThroughputPerMonth <= 0 || c.Reception.CaseworkerThroughputPerMonth > maxCaseworkerThroughputPerMonth {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.caseworkerThroughputPerMonth", "reason": "must be finite and in (0, maxCaseworkerThroughputPerMonth] (SEC-233)"})
 	}
 	if c.Reception.HotelCostPerCase < 0 {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.hotelCostPerCase", "reason": "must be >= 0"})
@@ -469,8 +497,14 @@ func (c Config) Validate() error {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy.housingApproachCostPerUnitPerMonth", "reason": "must be <= 0 (centres are cheaper)"})
 	}
 	if !num.IsFinite(c.Policy.ProcessingFundingThroughputGainPerUnit) || c.Policy.ProcessingFundingThroughputGainPerUnit < 0 ||
-		c.Policy.ProcessingFundingOpexPerUnitPerMonth < 0 ||
-		!num.IsFinite(c.Policy.HousingApproachFrictionIncreasePerUnit) || c.Policy.HousingApproachFrictionIncreasePerUnit < 0 ||
+		c.Policy.ProcessingFundingThroughputGainPerUnit > maxPolicyCoefficientPerUnit {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy.processingFundingThroughputGainPerUnit", "reason": "must be finite and in [0, maxPolicyCoefficientPerUnit] (SEC-233)"})
+	}
+	if !num.IsFinite(c.Policy.HousingApproachFrictionIncreasePerUnit) || c.Policy.HousingApproachFrictionIncreasePerUnit < 0 ||
+		c.Policy.HousingApproachFrictionIncreasePerUnit > maxPolicyCoefficientPerUnit {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy.housingApproachFrictionIncreasePerUnit", "reason": "must be finite and in [0, maxPolicyCoefficientPerUnit] (SEC-234)"})
+	}
+	if c.Policy.ProcessingFundingOpexPerUnitPerMonth < 0 ||
 		!num.IsFinite(c.Policy.HousingApproachIntegrationPenaltyPerUnit) || c.Policy.HousingApproachIntegrationPenaltyPerUnit < 0 ||
 		!num.IsFinite(c.Policy.IntegrationInvestmentGainPerUnit) || c.Policy.IntegrationInvestmentGainPerUnit < 0 ||
 		c.Policy.IntegrationInvestmentOpexPerUnitPerMonth < 0 {

@@ -2,6 +2,7 @@ package coastal
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/news"
@@ -146,7 +147,14 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 	for _, rec := range newCaseRecords {
 		queue = append(queue, rec.ID)
 	}
-	assigned := int64(T)
+	// assigned := int64(T) was a bare float64→int64 conversion: a hostile (or
+	// previously-unbounded) throughput of +Inf/1e308 wrapped to MinInt64 on
+	// amd64 (0 assigned → every case overflowed) but saturated to MaxInt64 on
+	// arm64 (every case assigned) — opposite outcomes for the same config across
+	// GOOS (SEC-233). f64ToInt64 (num.ClampInt64FromFloat) saturates
+	// deterministically on every platform; the two clamps below then bound it to
+	// [0, len(queue)].
+	assigned := f64ToInt64(T)
 	if assigned < 0 {
 		assigned = 0
 	}
@@ -505,10 +513,14 @@ func satArrivalSize(events []ArrivalEvent) int64 {
 
 // satFriction clamps a computed friction figure to the documented finite
 // ceiling (maxSatisfactionFriction), so no config — validated or otherwise —
-// can push a per-month friction delta to +Inf (SEC-221). A non-finite or
-// negative input collapses to 0 (GR#16: never leak +Inf/NaN into the result).
+// can push a per-month friction delta to +Inf (SEC-221). A +Inf input — the
+// catastrophic-overflow month — saturates at maxSatisfactionFriction, never
+// collapses to 0 the way the old non-finite guard did (SEC-234: collapsing
+// +Inf to 0 reported a hostile month as "no dissatisfaction"). NaN and -Inf
+// still collapse to 0 (GR#16: never leak NaN into the result; -Inf is a
+// poisoned, non-physical value).
 func satFriction(f float64) float64 {
-	if !num.IsFinite(f) || f < 0 {
+	if math.IsNaN(f) || f < 0 {
 		return 0
 	}
 	if f > maxSatisfactionFriction {
