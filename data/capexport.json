@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "specRef": "§36",
+  "projectionDemandGrowthPerMonth": 0.02,
+  "services": [
+    {
+      "id": "refuse",
+      "label": "Refuse collection & disposal",
+      "unit": "£/t",
+      "rateMicropounds": 45000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "incineration",
+      "label": "Incineration",
+      "unit": "£/t",
+      "rateMicropounds": 60000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "toxic-waste",
+      "label": "Toxic / hazardous waste processing",
+      "unit": "£/t",
+      "rateMicropounds": 500000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "sewage",
+      "label": "Sewage & water treatment",
+      "unit": "£/m³",
+      "rateMicropounds": 1500000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "hospital-beds",
+      "label": "Hospital beds",
+      "unit": "£/bed-day",
+      "rateMicropounds": 90000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "university-places",
+      "label": "University places",
+      "unit": "£/student-yr",
+      "rateMicropounds": 750000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "crematorium",
+      "label": "Crematorium / cemetery",
+      "unit": "£/service",
+      "rateMicropounds": 180000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "prison-places",
+      "label": "Prison places",
+      "unit": "£/prisoner-yr",
+      "rateMicropounds": 650000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "port-transshipment",
+      "label": "Port transshipment",
+      "unit": "£/t",
+      "rateMicropounds": 3000000,
+      "placeholder": true,
+      "specRef": "§36"
+    },
+    {
+      "id": "mutual-aid",
+      "label": "Fire / ambulance mutual aid",
+      "unit": "standby retainer",
+      "rateMicropounds": 5000000000,
+      "placeholder": true,
+      "specRef": "§36"
+    }
+  ]
+}
