@@ -206,6 +206,20 @@ func newWorld(t *testing.T) *world.WorldAPI {
 	return world.NewWorldAPI(world.TileCoord{X: 15, Y: 15})
 }
 
+// mustNewDepositMap constructs a DepositMap and fails the test on a
+// validation error — the happy-path counterpart to NewDepositMap's
+// fail-closed SEC-208 validation, so the signature change to
+// (*DepositMap, error) stays a one-line call site everywhere a valid map
+// (from realParams) is wanted.
+func mustNewDepositMap(t *testing.T, seed uint64, w *world.WorldAPI, p DepositParams) *DepositMap {
+	t.Helper()
+	m, err := NewDepositMap(seed, w, p)
+	if err != nil {
+		t.Fatalf("NewDepositMap(seed=%d): %v", seed, err)
+	}
+	return m
+}
+
 // capTiles trims a tile slice to at most n entries (kept in discovery
 // order, which is deterministic).
 func capTiles(ts []world.TileCoord, n int) []world.TileCoord {
@@ -289,7 +303,7 @@ func TestOffshoreDepositsOnSeaCells(t *testing.T) {
 	offshoreCount := 0
 	metalOnSea := 0
 	for _, seed := range seeds {
-		m := NewDepositMap(seed, w, p)
+		m := mustNewDepositMap(t, seed, w, p)
 		for _, c := range seaTiles {
 			if err := m.ShuffleTile(c, cid()); err != nil {
 				t.Fatalf("ShuffleTile(sea %v): %v", c, err)
@@ -318,7 +332,7 @@ func TestSizeDensityIndependent(t *testing.T) {
 	w := newWorld(t)
 	fx := fixtures(t)
 
-	m := NewDepositMap(5, w, p)
+	m := mustNewDepositMap(t, 5, w, p)
 	tile := fx.landTiles[0]
 	prospectTiles(t, w, tile)
 	if err := m.ShuffleTile(tile, cid()); err != nil {
@@ -377,7 +391,7 @@ func TestGeologyCoLocation(t *testing.T) {
 	seeds := []uint64{1, 42}
 	var chalkUranium, nonChalkUranium, coalGas, nonCoalGas int
 	for _, seed := range seeds {
-		m := NewDepositMap(seed, w, p)
+		m := mustNewDepositMap(t, seed, w, p)
 		for _, c := range chalkTiles {
 			if err := m.ShuffleTile(c, cid()); err != nil {
 				t.Fatal(err)
@@ -454,11 +468,11 @@ func TestDataDrivenGenerosity(t *testing.T) {
 	prospectTiles(t, w, coalTile)
 
 	const seed = 12345
-	ml := NewDepositMap(seed, w, low)
+	ml := mustNewDepositMap(t, seed, w, low)
 	if err := ml.ShuffleTile(coalTile, cid()); err != nil {
 		t.Fatal(err)
 	}
-	mh := NewDepositMap(seed, w, high)
+	mh := mustNewDepositMap(t, seed, w, high)
 	if err := mh.ShuffleTile(coalTile, cid()); err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +498,7 @@ func TestCoalfieldGenerosityNotStingy(t *testing.T) {
 
 	floor := p.EastKentCoalfield.CoverageFloor
 	for _, seed := range seeds {
-		m := NewDepositMap(seed, w, p)
+		m := mustNewDepositMap(t, seed, w, p)
 		withCoal := 0
 		for _, c := range coalTiles {
 			if err := m.ShuffleTile(c, cid()); err != nil {
@@ -514,14 +528,14 @@ func TestDeterministicDepositShuffle(t *testing.T) {
 	prospectTiles(t, w, tiles...)
 	const seed = 777777
 
-	first := NewDepositMap(seed, w, p)
+	first := mustNewDepositMap(t, seed, w, p)
 	for _, c := range tiles {
 		if err := first.ShuffleTile(c, cid()); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	second := NewDepositMap(seed, w, p)
+	second := mustNewDepositMap(t, seed, w, p)
 	for _, c := range tiles {
 		if err := second.ShuffleTile(c, cid()); err != nil {
 			t.Fatal(err)
@@ -545,11 +559,11 @@ func TestDifferentSeedDifferentDeposits(t *testing.T) {
 	tile := fx.landTiles[0]
 	prospectTiles(t, w, tile)
 
-	m1 := NewDepositMap(1, w, p)
+	m1 := mustNewDepositMap(t, 1, w, p)
 	if err := m1.ShuffleTile(tile, cid()); err != nil {
 		t.Fatal(err)
 	}
-	m2 := NewDepositMap(2, w, p)
+	m2 := mustNewDepositMap(t, 2, w, p)
 	if err := m2.ShuffleTile(tile, cid()); err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +587,7 @@ func TestUnownedTileDepositBeforePurchase(t *testing.T) {
 	// deposits identical in kind/shape to a purchased one (it is never
 	// contingent on ownership — the shuffle reads only geology/surface).
 	seed := uint64(314159)
-	m := NewDepositMap(seed, w, p)
+	m := mustNewDepositMap(t, seed, w, p)
 	for _, c := range []world.TileCoord{unowned, owned} {
 		if err := m.ShuffleTile(c, cid()); err != nil {
 			t.Fatal(err)
@@ -765,7 +779,7 @@ func TestGeologyNotDerived(t *testing.T) {
 	// derived (revealed), so the shuffle must refuse rather than place
 	// deposits against zero-value geology.
 	tile := world.TileCoord{X: 15, Y: 15}
-	m := NewDepositMap(1, w, p)
+	m := mustNewDepositMap(t, 1, w, p)
 	err := m.ShuffleTile(tile, cid())
 	assertErrCode(t, err, ErrGeologyNotDerived)
 
@@ -782,7 +796,7 @@ func TestDepositConcurrentQueriesNoRace(t *testing.T) {
 	w := newWorld(t)
 	fx := fixtures(t)
 
-	m := NewDepositMap(1, w, p)
+	m := mustNewDepositMap(t, 1, w, p)
 	tile := fx.coalTiles[0]
 	prospectTiles(t, w, tile)
 	if err := m.ShuffleTile(tile, cid()); err != nil {

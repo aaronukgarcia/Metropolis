@@ -289,8 +289,12 @@ func buildCatalogue(raw rawMineTypeData, path, correlationID string) (Catalogue,
 		if rt.OutputCommodity == "" {
 			return fail(field("outputCommodity"), "required, must name the output commodity")
 		}
-		if rt.OutputRate <= 0 || math.IsNaN(rt.OutputRate) || math.IsInf(rt.OutputRate, 0) {
-			return fail(field("outputRate"), "required, must be a positive finite t/day rate")
+		// OutputRate is bounded to maxDataMagnitude (SEC-219): it is one factor
+		// of the site-capacity product outputRate × capacityDays, so an
+		// unbounded finite value overflows the product to +Inf and makes the
+		// site inexhaustible.
+		if !validFloat(rt.OutputRate, 0, maxDataMagnitude) || rt.OutputRate <= 0 {
+			return fail(field("outputRate"), "required, must be a positive finite t/day rate at most 1e12")
 		}
 		blight, ok := blightClassByName(rt.BlightClass)
 		if !ok {

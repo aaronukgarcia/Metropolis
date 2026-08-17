@@ -1401,6 +1401,12 @@
       "message": "failed to read profile file {path}: {cause}",
       "remedy": "A keymap or dashboard-layout profile could not be read from disk (file read or JSON/schema parse failure). Nothing was silently invented -- the load failed and reported this registry code; check the path and that the file is valid profile JSON. This one code is shared by keymap and layout profile reads (GR#3), mirroring MET-U605 for writes (SEC-212)."
     },
+    "MET-U609": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "failed to read save-slot header for {slot}",
+      "remedy": "A single save bundle's header.json could not be read (corrupt header.json, an unreadable file, or an incompatible format version). The slot is skipped -- one bad slot must not hide every other save -- and the failure is recorded in SaveListErrors as a registry-sourced error with a correlation ID (SEC-218, GR#7/GR#1). The raw cause (which may carry the save root's absolute filesystem path) is preserved on the error via errors.Unwrap for diagnostics, never surfaced in this message. Re-save or remove the offending slot."
+    },
     "MET-U700": {
       "severity": "warn",
       "module": "ui.screen.ticker",

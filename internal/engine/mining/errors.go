@@ -58,4 +58,55 @@ const (
 	// loaded catalogue. Returned as an error rather than a silent
 	// default-substituted parameter set (feat.minetypes AC-7).
 	ErrUnknownMineType = "MET-E955"
+
+	// The codes below are the general blight model + extraction siting half
+	// of engine.mining (MOD-046 core, AC-11). All in the E950-E999 reserved
+	// range, all registered in data/errors.json (GR#7).
+
+	// ErrSitingNotPermitted: an extraction siting attempt was rejected
+	// because the land is ungeology-gated (the type's geology class does not
+	// match the tile's revealed pocket), unprospected, out of extent, or the
+	// site key is already in use. Loud rejection, never a silent no-op (AC-11).
+	ErrSitingNotPermitted = "MET-E956"
+
+	// ErrBlightProfileInvalid: a blighting-object registration carried an
+	// out-of-extent location, a non-positive noise radius, or a negative/
+	// non-finite visual profile. Loud rejection (AC-11).
+	ErrBlightProfileInvalid = "MET-E957"
+
+	// ErrAlreadyReclaimed: a Reclaim command named a site that was already
+	// reclaimed. Loud rejection (AC-11 — double-reclaim).
+	ErrAlreadyReclaimed = "MET-E958"
+
+	// ErrBlightDataInvalid: data/mining.json could not be loaded or failed
+	// schema validation (missing file, malformed JSON, a non-positive
+	// falloff exponent / occlusion scale / grow-in delay / capacity days, a
+	// missing class-profile entry, a non-finite or out-of-domain value). The
+	// blight model does NOT proceed with silent defaults (GR#15).
+	ErrBlightDataInvalid = "MET-E959"
+
+	// ErrUnknownBlightKey: a query/command named an object or site key absent
+	// from the registry. Loud rejection, never a silent zero.
+	ErrUnknownBlightKey = "MET-E960"
+
+	// ErrBlightCopied: a *BlightAPI method was called on a struct copy
+	// (SEC-020 family, mirroring ErrDepositMapCopied).
+	ErrBlightCopied = "MET-E961"
+
+	// ErrBlightQueryOutOfBounds: a query named a TileCoord/CellLocal outside
+	// the expansion extent. Loud rejection (GR#1).
+	ErrBlightQueryOutOfBounds = "MET-E962"
+
+	// ErrReclaimBlocked: a Reclaim command named an option this package does
+	// not implement — notably the landfill-void outcome, which is BLOCKED
+	// because no engine.refuse↔engine.mining edge exists (see doc.go).
+	ErrReclaimBlocked = "MET-E963"
+
+	// ErrSiteExhausted: an Extract/CloseSite command named a site that is
+	// exhausted, reclaimed, or already closed — no further output.
+	ErrSiteExhausted = "MET-E964"
+
+	// ErrExtractionInvalid: an Extract command carried a non-positive or
+	// non-finite tonnes amount.
+	ErrExtractionInvalid = "MET-E965"
 )
