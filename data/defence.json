@@ -1,0 +1,153 @@
+{
+  "$comment": "Balance data for engine.defence (MOD-067, spec §55 Defence & Central Government). Every numeric magnitude §55 leaves unquantified lives here, never as a Go literal (GR#15): competitive grant pots, the low-tax-capacity formula-support line, the three population-threshold mandates (100k naval / 500k army / 1M air defence) with their choice-within-compliance options and compensation grants, per-facility payroll/personnel/family figures, and the refusal reputation penalty. Placeholder disclosure (per Aaron's standing balance-number regime — see project memory 'Balance number regime'): every figure in this file is a directional placeholder pending the M2 balance pass, NOT a spec-given magnitude. §55 states mechanism and direction only (competitive + match-funded, planning-quality-weighted; refusal costs access + reputation). Directional tests assert direction; row-by-row values await Aaron's approval.",
+  "version": 1,
+  "moneyConvention": "all monetary figures are int64 micro-pounds (1 GBP = 1,000,000 micropounds), matching engine.finance's Money type (M0-ENG §1.2) — never a float.",
+  "grantPots": [
+    {
+      "id": "transport",
+      "name": "Transport",
+      "baseWinProbability": 0.35,
+      "matchFundingWeight": 0.45,
+      "planningQualityWeight": 0.25,
+      "maxMatchMicropounds": 5000000000,
+      "awardMicropounds": 5000000000
+    },
+    {
+      "id": "regeneration",
+      "name": "Regeneration",
+      "baseWinProbability": 0.30,
+      "matchFundingWeight": 0.45,
+      "planningQualityWeight": 0.30,
+      "maxMatchMicropounds": 3000000000,
+      "awardMicropounds": 3000000000
+    },
+    {
+      "id": "culture",
+      "name": "Culture",
+      "baseWinProbability": 0.40,
+      "matchFundingWeight": 0.40,
+      "planningQualityWeight": 0.20,
+      "maxMatchMicropounds": 1000000000,
+      "awardMicropounds": 1000000000
+    }
+  ],
+  "formulaSupport": {
+    "taxCapacityThresholdMicropounds": 10000000000,
+    "formulaAmountMicropounds": 200000000
+  },
+  "mandates": [
+    {
+      "id": "naval-100k",
+      "populationThreshold": 100000,
+      "facilityType": "naval",
+      "compensationMicropounds": 4000000000,
+      "choices": [
+        {
+          "id": "naval-base",
+          "facilityType": "naval",
+          "description": "A full naval base: harbour-depth dredging plus a shipyard contract anchor."
+        },
+        {
+          "id": "naval-patrol-berth",
+          "facilityType": "naval-patrol",
+          "description": "A lighter patrol berth: smaller land take, fewer jobs, no dredging."
+        }
+      ]
+    },
+    {
+      "id": "army-500k",
+      "populationThreshold": 500000,
+      "facilityType": "army",
+      "compensationMicropounds": 6000000000,
+      "choices": [
+        {
+          "id": "infantry-garrison",
+          "facilityType": "army",
+          "description": "An infantry garrison with a training area."
+        },
+        {
+          "id": "armoured-regiment",
+          "facilityType": "army-armoured",
+          "description": "An armoured (tank) regiment with larger ranges and more noise days."
+        }
+      ]
+    },
+    {
+      "id": "airdefence-1m",
+      "populationThreshold": 1000000,
+      "facilityType": "air",
+      "compensationMicropounds": 8000000000,
+      "choices": [
+        {
+          "id": "radar-station",
+          "facilityType": "air-radar",
+          "description": "A radar station: small land take, no noise contour."
+        },
+        {
+          "id": "fast-jet-station",
+          "facilityType": "air",
+          "description": "A fast-jet station: a serious noise contour plus an air-show tourism event."
+        }
+      ]
+    }
+  ],
+  "facilities": {
+    "naval": {
+      "buildZone": "heavy_industry",
+      "payrollMicropounds": 1500000000,
+      "payrollFloorMicropounds": 1500000000,
+      "personnelCount": 400,
+      "marriedQuarters": 120,
+      "childrenPerQuarter": 1,
+      "procurementMicropounds": 900000000
+    },
+    "naval-patrol": {
+      "buildZone": "heavy_industry",
+      "payrollMicropounds": 800000000,
+      "payrollFloorMicropounds": 800000000,
+      "personnelCount": 150,
+      "marriedQuarters": 50,
+      "childrenPerQuarter": 1,
+      "procurementMicropounds": 300000000
+    },
+    "army": {
+      "buildZone": "heavy_industry",
+      "payrollMicropounds": 3000000000,
+      "payrollFloorMicropounds": 3000000000,
+      "personnelCount": 1200,
+      "marriedQuarters": 400,
+      "childrenPerQuarter": 1,
+      "procurementMicropounds": 500000000
+    },
+    "army-armoured": {
+      "buildZone": "heavy_industry",
+      "payrollMicropounds": 3500000000,
+      "payrollFloorMicropounds": 3500000000,
+      "personnelCount": 1500,
+      "marriedQuarters": 500,
+      "childrenPerQuarter": 1,
+      "procurementMicropounds": 800000000
+    },
+    "air": {
+      "buildZone": "heavy_industry",
+      "payrollMicropounds": 2500000000,
+      "payrollFloorMicropounds": 2500000000,
+      "personnelCount": 800,
+      "marriedQuarters": 250,
+      "childrenPerQuarter": 1,
+      "procurementMicropounds": 600000000
+    },
+    "air-radar": {
+      "buildZone": "heavy_industry",
+      "payrollMicropounds": 1200000000,
+      "payrollFloorMicropounds": 1200000000,
+      "personnelCount": 200,
+      "marriedQuarters": 60,
+      "childrenPerQuarter": 1,
+      "procurementMicropounds": 200000000
+    }
+  },
+  "reputation": {
+    "refusalPenaltyPoints": 50
+  }
+}
