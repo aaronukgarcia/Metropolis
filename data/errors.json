@@ -3830,6 +3830,12 @@
       "module": "engine.roads",
       "message": "data/naming_corpus.json could not be loaded or validated (cause={cause})",
       "remedy": "Check that data/naming_corpus.json exists at the resolved data directory and passes foundation.data's validation (non-empty distinct place names and a non-empty suffix list per road class). The naming service fails loudly rather than shipping an empty or placeholder name (AC-13)."
+    },
+    "MET-G3914": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "node {node} cannot be moved: it is referenced by a road",
+      "remedy": "A node already referenced by a road's start/end keeps its registered position. Re-registering it at a different position would desync the road's stored footprint from its endpoints (SEC-236); register the new position under a fresh NodeID instead."
     }
   }
 }
