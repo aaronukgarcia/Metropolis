@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "baseline": {
+    "physical": 62,
+    "mental": 62
+  },
+  "headline": {
+    "physicalWeight": 0.4,
+    "mentalWeight": 0.4,
+    "satisfactionWeight": 0.2
+  },
+  "physical": {
+    "ageCurve": [
+      { "ageYears": 0, "delta": 0 },
+      { "ageYears": 30, "delta": 0 },
+      { "ageYears": 55, "delta": -4 },
+      { "ageYears": 75, "delta": -14 },
+      { "ageYears": 100, "delta": -32 }
+    ],
+    "healthcareAccessWeight": 15,
+    "dietWeight": 10,
+    "activeTravelWeight": 8,
+    "pollutionWeight": 12,
+    "sportParticipationWeight": 10
+  },
+  "mental": {
+    "commuteWeight": 10,
+    "commuteThresholdMinutes": 45,
+    "commuteStressAtThreshold": 0.5,
+    "commuteStressAt100Minutes": 2.0,
+    "jobAmbitionMismatchWeight": 10,
+    "greenSpaceWeight": 8,
+    "leisureFitWeight": 10,
+    "crowdingWeight": 8,
+    "isolationWeight": 10,
+    "noiseWeight": 8,
+    "financialStressWeight": 12,
+    "rentBurdenThreshold": 0.35,
+    "unemploymentWeight": 10,
+    "unemploymentCapMonths": 60
+  },
+  "modifiers": {
+    "mortalitySlope": 0.01,
+    "productivitySlope": 0.01,
+    "satisfactionSlope": 0.01,
+    "emigrationSlope": 0.01
+  }
+}
