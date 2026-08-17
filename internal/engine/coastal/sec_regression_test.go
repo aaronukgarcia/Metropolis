@@ -3,6 +3,9 @@ package coastal
 import (
 	"math"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // rawTestConfig returns a rawCoastalData that passes buildConfig's validation
@@ -164,5 +167,286 @@ func TestSEC211CentresCheaperTradeOffPreserved(t *testing.T) {
 	cfg.Policy.HousingApproachCostPerUnitPerMonth = 0
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("zero (non-positive) housing-approach cost rejected: %v", err)
+	}
+}
+
+// TestSEC220RejectsUnboundedCaseAllocation (SEC-220): the per-month case
+// allocation is driven by MaxArrivalsPerMonth × MaxBoatSize. Each factor is
+// individually capped at maxFrequencyCap, but the product was not, so a
+// Validate-passing config {BaseArrivalRate:10000, MaxBoatSize:10000,
+// MaxArrivalsPerMonth:10000} would drive Advance's make([]Case, 0, 1e8) — a
+// ~5.6 GB single-call backing array (OOM). The product must be bounded at
+// maxCasesPerMonth, and BaseArrivalRate must be bounded at maxFrequencyCap.
+func TestSEC220RejectsUnboundedCaseAllocation(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+	}{
+		{"finding's 1e8 config (base 10000, factors at cap)", func(c *Config) {
+			c.BaseArrivalRate = 10000
+			c.MaxBoatSize = maxFrequencyCap
+			c.MaxArrivalsPerMonth = maxFrequencyCap
+		}},
+		{"product just above ceiling", func(c *Config) {
+			c.MaxBoatSize = 1001
+			c.MaxArrivalsPerMonth = 1000 // 1,001,000 > maxCasesPerMonth
+		}},
+		{"baseArrivalRate above cap", func(c *Config) { c.BaseArrivalRate = float64(maxFrequencyCap + 1) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate accepted an allocation-driving config")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+			if _, err := New(42, cfg, "corr-sec220"); err == nil {
+				t.Fatalf("New accepted an allocation-driving config")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+
+	// The data-file path (buildConfig) rejects the 1e8-case product too.
+	raw := rawTestConfig()
+	raw.Frequency.MaxBoatSize = maxFrequencyCap
+	raw.Frequency.MaxArrivalsPerMonth = maxFrequencyCap
+	if _, err := buildConfig(raw, "corr", "corr-sec220"); err == nil {
+		t.Fatalf("buildConfig accepted a config driving a 1e8-case allocation")
+	} else {
+		assertRegistryCode(t, err, ErrDataInvalid)
+	}
+
+	// The product bound rejects the driver but accepts a legitimate config:
+	// the shipped magnitude (20×50) and the exact ceiling (1000×1000) pass.
+	for _, tc := range []struct {
+		name  string
+		boat  int64
+		month int64
+	}{
+		{"shipped magnitude", 20, 50},
+		{"product at ceiling", 1000, 1000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.MaxBoatSize = tc.boat
+			cfg.MaxArrivalsPerMonth = tc.month
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("Validate rejected a legitimate config (%dx%d): %v", tc.boat, tc.month, err)
+			}
+		})
+	}
+}
+
+// TestSEC221RejectsUnboundedFrictionPerCase (SEC-221): a
+// SatisfactionFrictionPerCase of 1e308 is finite ≥ 0 and passed the old check,
+// yet drives the cumulative friction to +Inf. The magnitude must be bounded at
+// maxSatisfactionFrictionPerCase and rejected at the boundary, never accepted.
+func TestSEC221RejectsUnboundedFrictionPerCase(t *testing.T) {
+	cfg := testConfig()
+	cfg.Reception.SatisfactionFrictionPerCase = 1e308
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate accepted SatisfactionFrictionPerCase = 1e308")
+	} else {
+		assertRegistryCode(t, err, ErrDataInvalid)
+	}
+	if _, err := New(42, cfg, "corr-sec221"); err == nil {
+		t.Fatalf("New accepted SatisfactionFrictionPerCase = 1e308")
+	} else {
+		assertRegistryCode(t, err, ErrDataInvalid)
+	}
+
+	raw := rawTestConfig()
+	raw.Reception.SatisfactionFrictionPerCase = 1e308
+	if _, err := buildConfig(raw, "corr", "corr-sec221"); err == nil {
+		t.Fatalf("buildConfig accepted SatisfactionFrictionPerCase = 1e308")
+	} else {
+		assertRegistryCode(t, err, ErrDataInvalid)
+	}
+}
+
+// TestSEC221FrictionAccumulationStaysFinite (SEC-221): even a VALIDATED config
+// drives a non-finite per-month friction delta through the (unbounded)
+// HousingApproachFrictionIncreasePerUnit coefficient, the accumulated friction
+// and the per-month result must saturate at the finite maxSatisfactionFriction
+// ceiling — never +Inf leaking into SatisfactionFriction() or the AdvanceResult.
+func TestSEC221FrictionAccumulationStaysFinite(t *testing.T) {
+	cfg := testConfig()
+	cfg.BaseArrivalRate = 3.0
+	cfg.MaxBoatSize = 10
+	cfg.Reception.CaseworkerThroughputPerMonth = 1 // overflow guaranteed
+	cfg.Reception.SatisfactionFrictionPerCase = maxSatisfactionFrictionPerCase
+	cfg.Policy.HousingApproachFrictionIncreasePerUnit = 1e308 // finite >= 0, still valid
+	cfg.Policy.HousingApproachDefault = 1.0                   // approach = 1: the coefficient applies
+
+	api := mustAPI(t, cfg, newFakeShore(oneCell))
+	res, err := api.Advance(0)
+	if err != nil {
+		t.Fatalf("Advance(0): %v", err)
+	}
+	if !num.IsFinite(res.SatisfactionFriction) {
+		t.Fatalf("AdvanceResult.SatisfactionFriction leaked a non-finite value: %v", res.SatisfactionFriction)
+	}
+	if _, err := api.Advance(1); err != nil {
+		t.Fatalf("Advance(1): %v", err)
+	}
+	if got := api.SatisfactionFriction(); !num.IsFinite(got) {
+		t.Fatalf("SatisfactionFriction leaked a non-finite value: %v", got)
+	} else if got > maxSatisfactionFriction {
+		t.Fatalf("SatisfactionFriction exceeded the finite ceiling: %v > %v", got, maxSatisfactionFriction)
+	}
+}
+
+// TestSEC228RejectsUnboundedFrequencyMultipliers (SEC-228): the era/season
+// frequency multipliers and WorldConditionsScale were each validated only
+// "finite and >= 0", so {EraMultipliers[0]=1e308, SeasonMultipliers[0]=1e308,
+// WorldConditionsScale=1e308} passed Validate while rateForMonth's product
+// overflowed to +Inf and arrivalCount collapsed it to zero arrivals. Each must
+// now be bounded at maxFrequencyMultiplier and rejected at the boundary.
+func TestSEC228RejectsUnboundedFrequencyMultipliers(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+	}{
+		{"era multiplier 1e308", func(c *Config) { c.EraMultipliers[0] = 1e308 }},
+		{"season multiplier 1e308", func(c *Config) { c.SeasonMultipliers[0] = 1e308 }},
+		{"worldConditionsScale 1e308", func(c *Config) { c.WorldConditionsScale = 1e308 }},
+		{"era multiplier above ceiling", func(c *Config) { c.EraMultipliers[0] = maxFrequencyMultiplier + 1 }},
+		{"season multiplier above ceiling", func(c *Config) { c.SeasonMultipliers[0] = maxFrequencyMultiplier + 1 }},
+		{"worldConditionsScale above ceiling", func(c *Config) { c.WorldConditionsScale = maxFrequencyMultiplier + 1 }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate accepted an unbounded frequency multiplier")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+			if _, err := New(42, cfg, "corr-sec228"); err == nil {
+				t.Fatalf("New accepted an unbounded frequency multiplier")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+
+	rawMut := map[string]func(r *rawCoastalData){
+		"buildConfig era multiplier 1e308":       func(r *rawCoastalData) { r.Frequency.EraMultipliers[0] = 1e308 },
+		"buildConfig season multiplier 1e308":    func(r *rawCoastalData) { r.Frequency.SeasonMultipliers[0] = 1e308 },
+		"buildConfig worldConditionsScale 1e308": func(r *rawCoastalData) { r.Frequency.WorldConditionsScale = 1e308 },
+	}
+	for name, mutate := range rawMut {
+		t.Run(name, func(t *testing.T) {
+			raw := rawTestConfig()
+			mutate(&raw)
+			if _, err := buildConfig(raw, "corr", "corr-sec228"); err == nil {
+				t.Fatalf("buildConfig accepted an unbounded frequency multiplier")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+}
+
+// TestSEC228ArrivalCountNonFiniteRateSaturatesToCeiling (SEC-228, defence in
+// depth): even if a non-finite rate ever reaches arrivalCount, a +Inf rate
+// semantically means "every boat arrives" and must saturate at the maxArrivals
+// ceiling — never collapse to zero the way the old non-finite-first order did.
+// NaN and -Inf still mean "no arrivals".
+func TestSEC228ArrivalCountNonFiniteRateSaturatesToCeiling(t *testing.T) {
+	stream := det.NewStream(42, 0, 0, "coastal.arrival")
+	if got := arrivalCount(stream, math.Inf(1), 50); got != 50 {
+		t.Fatalf("arrivalCount(+Inf, 50) = %d, want 50 (the ceiling)", got)
+	}
+	if got := arrivalCount(stream, math.NaN(), 50); got != 0 {
+		t.Fatalf("arrivalCount(NaN, 50) = %d, want 0", got)
+	}
+	if got := arrivalCount(stream, math.Inf(-1), 50); got != 0 {
+		t.Fatalf("arrivalCount(-Inf, 50) = %d, want 0", got)
+	}
+}
+
+// TestSEC229RejectsUnboundedPipelineMonths (SEC-229): Pipeline.MinMonths and
+// MaxMonths were validated only "> 0"/">= minMonths", so Config{MinMonths=1,
+// MaxMonths=math.MaxInt64} passed Validate while durationFor returned up to
+// MaxInt64 and ResolveMonth = month + dm wrapped negative. The range must now
+// be bounded at maxPipelineMonths and rejected at the boundary.
+func TestSEC229RejectsUnboundedPipelineMonths(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+	}{
+		{"maxMonths MaxInt64", func(c *Config) { c.Pipeline.MaxMonths = math.MaxInt64 }},
+		{"maxMonths above ceiling", func(c *Config) { c.Pipeline.MaxMonths = maxPipelineMonths + 1 }},
+		{"minMonths above ceiling", func(c *Config) {
+			c.Pipeline.MinMonths = maxPipelineMonths + 1
+			c.Pipeline.MaxMonths = maxPipelineMonths + 1
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate accepted an unbounded pipeline duration")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+			if _, err := New(42, cfg, "corr-sec229"); err == nil {
+				t.Fatalf("New accepted an unbounded pipeline duration")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+
+	rawMut := map[string]func(r *rawCoastalData){
+		"buildConfig maxMonths MaxInt64": func(r *rawCoastalData) { r.Pipeline.MaxMonths = math.MaxInt64 },
+	}
+	for name, mutate := range rawMut {
+		t.Run(name, func(t *testing.T) {
+			raw := rawTestConfig()
+			mutate(&raw)
+			if _, err := buildConfig(raw, "corr", "corr-sec229"); err == nil {
+				t.Fatalf("buildConfig accepted an unbounded pipeline duration")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+}
+
+// TestSEC229ResolveMonthSaturates (SEC-229, defence in depth): even a VALIDATED
+// config advanced at a month near math.MaxInt64 must not let ResolveMonth =
+// month + dm wrap negative — a wrapped-negative resolve month reads as
+// "immediately due" and grants the case on the very next Advance. The addition
+// saturates at math.MaxInt64 instead.
+func TestSEC229ResolveMonthSaturates(t *testing.T) {
+	cfg := testConfig()
+	cfg.Pipeline.MinMonths = maxPipelineMonths
+	cfg.Pipeline.MaxMonths = maxPipelineMonths
+	cfg.Pipeline.MaxReductionMonths = 0
+
+	api := mustAPI(t, cfg, newFakeShore(oneCell))
+	res, err := api.Advance(math.MaxInt64)
+	if err != nil {
+		t.Fatalf("Advance(math.MaxInt64): %v", err)
+	}
+	if res.NewCases == 0 {
+		t.Fatalf("Advance(math.MaxInt64) minted no cases; cannot observe ResolveMonth")
+	}
+
+	api.mu.RLock()
+	defer api.mu.RUnlock()
+	for _, id := range api.caseOrder {
+		k := api.cases[id]
+		if k.ResolveMonth != 0 && k.ResolveMonth < 0 {
+			t.Fatalf("ResolveMonth wrapped negative: case %d resolveMonth=%d", uint64(id), k.ResolveMonth)
+		}
 	}
 }

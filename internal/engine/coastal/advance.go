@@ -158,11 +158,16 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 	for i := int64(0); i < assigned; i++ {
 		id := queue[i]
 		dm := durationFor(cfg, seed, id, month, speed)
+		// ResolveMonth saturates at math.MaxInt64 (SEC-229): the raw
+		// month + dm could wrap negative when month is near MaxInt64, and the
+		// due-check (ResolveMonth != 0 && ResolveMonth <= month) would then
+		// resolve the case immediately instead of "months later".
+		resolve := num.SatAdd(month, dm)
 		if i >= int64(len(oldBacklog)) {
 			idx := i - int64(len(oldBacklog))
-			newCaseRecords[idx].ResolveMonth = month + dm
+			newCaseRecords[idx].ResolveMonth = resolve
 		} else {
-			assignMonths[id] = month + dm
+			assignMonths[id] = resolve
 		}
 	}
 	newBacklog := queue[assigned:]
@@ -172,7 +177,7 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 	frictionDelta := float64(0)
 	if overflow > 0 {
 		hotelDelta = satMul(overflow, effectiveHotelCost(cfg, approach))
-		frictionDelta = effectiveFriction(cfg, approach) * float64(overflow)
+		frictionDelta = satFriction(effectiveFriction(cfg, approach) * float64(overflow))
 	}
 	result.HotelRequisitionCost = hotelDelta
 	result.SatisfactionFriction = frictionDelta
@@ -229,7 +234,7 @@ func (c *CoastalAPI) Advance(month int64) (AdvanceResult, error) {
 	c.integrationOpex = num.SatAdd(c.integrationOpex, f64ToInt64(investment*float64(cfg.Policy.IntegrationInvestmentOpexPerUnitPerMonth)))
 	c.hotelCost = num.SatAdd(c.hotelCost, hotelDelta)
 	c.departureCost = num.SatAdd(c.departureCost, departureDelta)
-	c.friction += frictionDelta
+	c.friction = satFrictionAdd(c.friction, frictionDelta)
 	result.Backlog = int64(len(newBacklog))
 	c.mu.Unlock()
 
@@ -257,11 +262,16 @@ func rateForMonth(cfg Config, tier, season int, conditions float64) float64 {
 // fractional part, capped at the data ceiling (weakness pattern #6: bound the
 // work, not just the output).
 func arrivalCount(stream det.Stream, rate float64, maxArrivals int64) int {
-	if !num.IsFinite(rate) || rate <= 0 {
-		return 0
-	}
+	// The ceiling precedes the non-finite guard: a +Inf rate (every factor at
+	// its documented max can overflow the product) semantically means "every
+	// boat arrives", so it saturates at maxArrivals — never collapses to zero
+	// the way the old non-finite-first order did (SEC-228). NaN still falls
+	// through to the non-finite guard below, and -Inf is caught there too.
 	if rate >= float64(maxArrivals) {
 		return int(maxArrivals)
+	}
+	if !num.IsFinite(rate) || rate <= 0 {
+		return 0
 	}
 	whole := int64(rate)
 	frac := rate - float64(whole)
@@ -491,6 +501,34 @@ func satArrivalSize(events []ArrivalEvent) int64 {
 		total = num.SatAdd(total, ev.Size)
 	}
 	return total
+}
+
+// satFriction clamps a computed friction figure to the documented finite
+// ceiling (maxSatisfactionFriction), so no config — validated or otherwise —
+// can push a per-month friction delta to +Inf (SEC-221). A non-finite or
+// negative input collapses to 0 (GR#16: never leak +Inf/NaN into the result).
+func satFriction(f float64) float64 {
+	if !num.IsFinite(f) || f < 0 {
+		return 0
+	}
+	if f > maxSatisfactionFriction {
+		return maxSatisfactionFriction
+	}
+	return f
+}
+
+// satFrictionAdd is the float64 counterpart of num.SatAdd for the cumulative
+// friction ledger: a+b, saturated at maxSatisfactionFriction when the sum is
+// non-finite or past the ceiling. It replaces the bare `c.friction +=
+// frictionDelta` — the one accumulator left unsaturating after every int64
+// ledger sum moved to num.SatAdd (SEC-221) — so SatisfactionFriction() can
+// never return +Inf.
+func satFrictionAdd(a, b float64) float64 {
+	sum := a + b
+	if !num.IsFinite(sum) || sum > maxSatisfactionFriction {
+		return maxSatisfactionFriction
+	}
+	return sum
 }
 
 // f64ToInt64 converts a float64 to int64 with saturation (GR#16) — never a
