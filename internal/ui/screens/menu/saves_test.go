@@ -89,6 +89,47 @@ func TestRefresh_CorruptHeaderSkippedNotFatal(t *testing.T) {
 	}
 }
 
+// TestRefresh_CorruptHeaderErrorIsRegistrySourced is SEC-218's regression
+// check: a bundle whose header.json cannot be read must surface in
+// SaveListErrors as a registry-sourced *errs.E (ErrSaveListEntryReadFailed)
+// with a correlation ID — never the raw serialize *fmt.wrapError, which
+// carries the save root's absolute filesystem path and no registry code
+// (GR#7/GR#1). Mirrors TestLoadKeymapFile_ErrorsAreRegistrySourced (SEC-212).
+func TestRefresh_CorruptHeaderErrorIsRegistrySourced(t *testing.T) {
+	root := t.TempDir()
+	badDir := filepath.Join(root, "bad")
+	if err := serialize.CreateBundleDir(badDir); err != nil {
+		t.Fatal(err)
+	}
+	// Corrupt header.json: not valid JSON.
+	if err := os.WriteFile(serialize.HeaderPath(badDir), []byte("{corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New("corr-corrupt-reg", WithSaveRoot(root))
+	if err := s.Refresh(); err != nil {
+		t.Fatalf("Refresh(): %v", err)
+	}
+	listErrs := s.SaveListErrors()
+	if len(listErrs) != 1 {
+		t.Fatalf("SaveListErrors() = %d entries, want 1", len(listErrs))
+	}
+	e, ok := listErrs[0].(*errs.E)
+	if !ok {
+		t.Fatalf("SaveListErrors()[0] = %T (%v), want *errs.E with code %s (registry-sourced, not the raw serialize error)",
+			listErrs[0], listErrs[0], ErrSaveListEntryReadFailed)
+	}
+	if e.Code != ErrSaveListEntryReadFailed {
+		t.Errorf("SaveListErrors()[0] code = %s, want %s", e.Code, ErrSaveListEntryReadFailed)
+	}
+	if e.CorrelationID == "" {
+		t.Errorf("SaveListErrors()[0] correlation ID is empty (GR#1)")
+	}
+	if got := e.Display(); strings.Contains(got, root) {
+		t.Errorf("SaveListErrors()[0] Display() leaks the absolute save-root path: %q", got)
+	}
+}
+
 // TestLoad_CorruptBundleSurfacesSerializerErrorVerbatim is MEN-6's core
 // check: loading a save whose shards fail ValidateBundle surfaces
 // int.serializer's own error VERBATIM — never genericised into "load

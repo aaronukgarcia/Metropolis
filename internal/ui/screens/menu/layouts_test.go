@@ -77,3 +77,53 @@ func TestLayoutProfile_LoadSelectSave(t *testing.T) {
 		t.Fatalf("saved layout profile is empty")
 	}
 }
+
+// TestLoadLayoutProfile_ErrorsAreRegistrySourced is SEC-212's layout half:
+// a read or parse failure on LoadLayoutProfile's READ path must return a
+// registry-sourced *errs.E (ErrProfileReadFailed) — never a raw
+// *os.PathError or json error — matching SaveLayoutProfile's write-path
+// discipline (ErrProfileWriteFailed).
+func TestLoadLayoutProfile_ErrorsAreRegistrySourced(t *testing.T) {
+	s := New("corr-layout-read")
+
+	if _, err := s.LoadLayoutProfile(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+		t.Fatal("LoadLayoutProfile(missing) returned nil error, want ErrProfileReadFailed")
+	} else if e, ok := err.(*errs.E); !ok || e.Code != ErrProfileReadFailed {
+		t.Fatalf("LoadLayoutProfile(missing) error = %T %v, want *errs.E with code %s", err, err, ErrProfileReadFailed)
+	}
+
+	path := filepath.Join(t.TempDir(), "malformed.json")
+	if err := os.WriteFile(path, []byte(`{not valid json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LoadLayoutProfile(path); err == nil {
+		t.Fatal("LoadLayoutProfile(malformed) returned nil error, want ErrProfileReadFailed")
+	} else if e, ok := err.(*errs.E); !ok || e.Code != ErrProfileReadFailed {
+		t.Fatalf("LoadLayoutProfile(malformed) error = %T %v, want *errs.E with code %s", err, err, ErrProfileReadFailed)
+	}
+}
+
+// TestOpenLayoutEditor_NoSelectedProfileDoesNotCallEditor is SEC-213's
+// regression: with an editor wired but no layout profile selected,
+// OpenLayoutEditor must fail closed with ErrLayoutEditorUnavailable rather
+// than invoking the editor with a nil *LayoutProfile (the documented
+// SelectedLayoutProfile "(nil, false)" unavailable state).
+func TestOpenLayoutEditor_NoSelectedProfileDoesNotCallEditor(t *testing.T) {
+	called := false
+	s := New("corr-layout-noprofile", WithLayoutEditor(func(p *LayoutProfile) error {
+		called = true
+		return nil
+	}))
+	// No SelectLayoutProfile — the selected profile is nil.
+
+	err := s.OpenLayoutEditor()
+	if err == nil {
+		t.Fatal("OpenLayoutEditor() with no selected profile returned nil, want ErrLayoutEditorUnavailable")
+	}
+	if e, ok := err.(*errs.E); !ok || e.Code != ErrLayoutEditorUnavailable {
+		t.Fatalf("OpenLayoutEditor() error = %T %v, want *errs.E with code %s", err, err, ErrLayoutEditorUnavailable)
+	}
+	if called {
+		t.Fatal("OpenLayoutEditor() invoked the editor with no selected profile (nil *LayoutProfile)")
+	}
+}

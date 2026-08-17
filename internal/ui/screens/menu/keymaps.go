@@ -15,19 +15,21 @@ import (
 // the rest of the profile still loads). It returns the per-entry rejection
 // report ([]keys.KeymapEntryError) verbatim from ui.keys — never swallowed
 // and never re-derived — and holds the loaded profile as this screen's
-// selected keymap. A read/parse failure returns the error without touching
-// the selected keymap (the caller decides fallback).
+// selected keymap. A read/parse failure returns ErrProfileReadFailed
+// (MET-U608, GR#7) wrapping the cause — never a raw *os.PathError or
+// keys parse error (SEC-212) — without touching the selected keymap (the
+// caller decides fallback).
 func (s *Screen) LoadKeymapFile(path string, g *keys.KeyGrammar) ([]keys.KeymapEntryError, error) {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "LoadKeymapFile"}); err != nil {
 		return nil, err
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, errs.Wrap(ErrProfileReadFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	km, err := keys.ParseKeymap(raw)
 	if err != nil {
-		return nil, err
+		return nil, errs.Wrap(ErrProfileReadFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	return s.SelectKeymap(km, g)
 }
@@ -83,11 +85,11 @@ func (s *Screen) SaveKeymapFile(path string) error {
 	}
 	encoded, err := json.MarshalIndent(km, "", "  ")
 	if err != nil {
-		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path, "cause": err.Error()})
+		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	encoded = append(encoded, '\n')
 	if err := os.WriteFile(path, encoded, 0o644); err != nil {
-		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path, "cause": err.Error()})
+		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	return nil
 }
