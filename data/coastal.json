@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "frequency": {
+    "basePerMonth": 1.0,
+    "maxBoatSize": 20,
+    "maxArrivalsPerMonth": 50,
+    "eraMultipliers": [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4, 1.45, 1.5, 1.6, 1.7, 1.8],
+    "seasonMultipliers": [0.7, 0.9, 1.2, 1.1],
+    "worldConditionsScale": 1.0
+  },
+  "rescue": {
+    "coastguardServiceID": "coastguard",
+    "lifeboatServiceID": "lifeboat"
+  },
+  "reception": {
+    "caseworkerThroughputPerMonth": 6,
+    "hotelCostPerCase": 2000000000,
+    "satisfactionFrictionPerCase": 0.02
+  },
+  "pipeline": {
+    "minMonths": 3,
+    "maxMonths": 9,
+    "grantRate": 0.6,
+    "departureCostPerCase": 1500000000,
+    "maxReductionMonths": 2
+  },
+  "policy": {
+    "processingFundingDefault": 0.5,
+    "processingFundingThroughputGainPerUnit": 0.8,
+    "processingFundingOpexPerUnitPerMonth": 500000000,
+    "housingApproachDefault": 0.5,
+    "housingApproachCostPerUnitPerMonth": -600000000,
+    "housingApproachFrictionIncreasePerUnit": 0.5,
+    "housingApproachIntegrationPenaltyPerUnit": 0.3,
+    "integrationInvestmentDefault": 0.5,
+    "integrationInvestmentGainPerUnit": 0.6,
+    "integrationInvestmentOpexPerUnitPerMonth": 600000000
+  },
+  "worldProfile": {
+    "skills": {
+      "attainmentMean": 30,
+      "attainmentSpread": 15
+    }
+  }
+}

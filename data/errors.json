@@ -93,7 +93,8 @@
       "V100-V199": "reserved for ui.screen.trade (internal/ui/screens/trade, FEAT-017: F5 Trade & Logistics screen — malformed f5.trade patch handling, unknown/stale subscription-ID drops, unknown-contract/unknown-commodity action rejections, and the Screen struct-copy guard (SEC-020) — second V-layer claim after ui.screen.proj's V000-V099. Checked against both this table AND `grep -rn \"MET-V1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V1xx code existed either place.)",
       "V200-V299": "reserved for ui.screen.build (internal/ui/screens/build, FEAT-015: F3 Land & Construction screen — malformed f3.build patch handling, unknown/stale subscription-ID drops, unknown-zone/unknown-structure/unknown-building action rejections, and the Screen struct-copy guard (SEC-020) — third V-layer claim after ui.screen.proj's V000-V099 and ui.screen.trade's V100-V199. Checked against both this table AND `grep -rn \"MET-V2\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V2xx code existed either place.)",
     "G3700-G3799": "reserved for engine.coastal (internal/engine/coastal: §30 small-boat arrivals, rescue, reception/processing overflow, the granted/not-granted pipeline, policy sliders, and factual reporting — MOD-044. The E layer is fully exhausted and G3000-G3699 were claimed by earlier engine modules, so engine.coastal opens G3700-G3799 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G37\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G37xx code existed either place.)",
-    "G3800-G3899": "reserved for engine.defence (internal/engine/defence: the §55 Defence & Central Government module — competitive grant pots + formula support, population-threshold mandates with choice-within-compliance and a priced refusal, and the integrated facilities (anti-cyclical payroll, personnel-as-citizens, procurement value, closure-as-shock output) — MOD-067. The E layer is fully exhausted and G3000-G3799 were claimed by earlier engine modules, so engine.defence opens G3800-G3899 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G38\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G38xx code existed either place.)"
+    "G3800-G3899": "reserved for engine.defence (internal/engine/defence: the §55 Defence & Central Government module — competitive grant pots + formula support, population-threshold mandates with choice-within-compliance and a priced refusal, and the integrated facilities (anti-cyclical payroll, personnel-as-citizens, procurement value, closure-as-shock output) — MOD-067. The E layer is fully exhausted and G3000-G3799 were claimed by earlier engine modules, so engine.defence opens G3800-G3899 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G38\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G38xx code existed either place.)",
+    "G3900-G3999": "reserved for engine.roads (internal/engine/roads: the §20/§51 roads & auto-naming module — named edges, the eleven-rung class ladder, in-place upgrades with widening/footprint checks, simulated roadworks, per-road maintenance state, and the deterministic seed+id naming registry — MOD-024. The E layer is fully exhausted and G000-G3899 were claimed by earlier engine modules, so engine.roads opens G3900-G3999 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G39\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G39xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -3739,6 +3740,90 @@
       "module": "engine.defence",
       "message": "facility query referenced an unknown or closed facility {facility}",
       "remedy": "Facility IDs are minted only when a mandate is accepted (GR#20). A payroll/procurement/closure query against an ID outside the built-facility set is rejected rather than returning a fabricated zero-value figure (AC-9/AC-11)."
+    },
+    "MET-G3900": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "data/roads.json could not be loaded or failed schema validation (field={field}, reason={reason}, cause={cause})",
+      "remedy": "Check that data/roads.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", and declares exactly the eleven §51 class rungs in canonical order with positive lane counts, positive speed limits within speedMin..speedMax, positive widths, and valid maintenance/upgrade/roadworks/naming blocks. The roads balance set never falls back to a silent default (GR#15/GR#7)."
+    },
+    "MET-G3901": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "RoadsAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *RoadsAPI returned by Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G3902": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "road {road} was not found",
+      "remedy": "Road IDs are minted only by AddRoad. An upgrade/roadworks/query against an ID outside the added-road set is rejected rather than returning a fabricated zero-value road (AC-12)."
+    },
+    "MET-G3903": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "node {node} was not found",
+      "remedy": "Register nodes via AddNode before referencing them from AddRoad. An edge referencing an unregistered endpoint is rejected rather than fabricating a node position."
+    },
+    "MET-G3904": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "road class {class} is not one of the eleven §51 rungs",
+      "remedy": "Pass one of the eleven RoadClass values (alley through motorway). A class outside the ladder is rejected rather than silently mapped to a default (AC-3/AC-12)."
+    },
+    "MET-G3905": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "upgrade target rejected by the compatibility rule",
+      "remedy": "Check the documented compatibility rule in internal/engine/roads/doc.go. Under the provisional any-to-any rule every distinct valid class is compatible, so this code is reserved for the step-through-adjacent alternative if Aaron rules it — the rule is documented, never silently chosen."
+    },
+    "MET-G3906": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "widening road {road} to {target} would overlap {count} occupied cell(s), first at {cell}",
+      "remedy": "Widening into a zoned or structured cell requires purchase/demolition first (AC-5). Clear the obstructing cell via the owning module (engine.build/world) and retry the upgrade; the upgrade is rejected rather than silently demolishing (GR#16)."
+    },
+    "MET-G3907": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "widening footprint check requires engine.world but none is wired",
+      "remedy": "Wire engine.world via SetWorld before applying a widening upgrade. The check fails closed rather than fabricating a footprint-occupancy answer (GR#17)."
+    },
+    "MET-G3908": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "malformed roadworks schedule ({reason})",
+      "remedy": "Phases must be non-empty, time-ordered and non-overlapping, each with a non-negative start month, a positive duration, and an OpenLanes count in [0, steady-state lanes]; a WindowSummer schedule must start phases in calendar summer months (AC-6/AC-17)."
+    },
+    "MET-G3909": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "object kind {kind} is not a known §20 kind",
+      "remedy": "Pass one of the five ObjectKind values (road, civic building, infrastructure, district, transit). An unknown kind is rejected rather than silently returning an empty name (AC-13)."
+    },
+    "MET-G3910": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "speed limit {kph} for road {road} outside its class bounds [{min},{max}]",
+      "remedy": "Set the speed limit within the road class's speedMin..speedMax range (AC-2). An out-of-bounds value is rejected rather than silently clamped (GR#16)."
+    },
+    "MET-G3911": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "Advance target month {target} is before the current month {now}",
+      "remedy": "Simulation time must not run backwards. Advance only to a month at or after the current one (AC-17)."
+    },
+    "MET-G3912": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "invalid input: {reason}",
+      "remedy": "Pass the input within its documented domain (a non-zero RoadID/NodeID, a non-negative repair amount, a non-empty rename, NameRoad for road naming). An out-of-domain value is rejected rather than silently clamped (GR#16)."
+    },
+    "MET-G3913": {
+      "severity": "error",
+      "module": "engine.roads",
+      "message": "data/naming_corpus.json could not be loaded or validated (cause={cause})",
+      "remedy": "Check that data/naming_corpus.json exists at the resolved data directory and passes foundation.data's validation (non-empty distinct place names and a non-empty suffix list per road class). The naming service fails loudly rather than shipping an empty or placeholder name (AC-13)."
     }
   }
 }
