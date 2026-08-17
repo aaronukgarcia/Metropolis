@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "roughSleepingLocation": "town-centre",
+  "caseload": {
+    "familyPerDeprivation": 4.0,
+    "familyPerCrowdingStress": 3.0,
+    "familyPerFinancialStress": 5.0,
+    "crisisFamilyCases": 2.0,
+    "homelessnessPerDeprivation": 3.0,
+    "homelessnessPerUnemploymentMonth": 0.2,
+    "homelessnessPerFinancialStress": 4.0,
+    "disabilityPerDeprivation": 2.0,
+    "fosteringPerCrowdingStress": 1.0,
+    "fosteringPerFinancialStress": 1.0,
+    "addictionPerPressure": 6.0,
+    "unemploymentCapMonths": 60.0
+  },
+  "hostelCapacity": 40,
+  "fosterCapacity": 10,
+  "carersReleasedPerFundingUnit": 60,
+  "interventionHarmThreshold": 0.5
+}

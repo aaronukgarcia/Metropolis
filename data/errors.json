@@ -13,19 +13,6 @@
       "G": "engine (second block) — internal/engine/* overflow once the E layer (E000-E999) is exhausted; engine.citizens (MOD-018) is the first claimant, since every E sub-range was taken by eleven earlier engine modules by the time it landed (see the engine.mining/feat.skeleton range notes)"
     },
     "reserved": {
-      "F000-F009": "reserved for foundation.errors (errs package self-errors: registry load/validation, unregistered code — always available even if the registry fails to load)",
-      "F010-F099": "reserved for foundation.errors (this module: logging, correlation)",
-      "F100-F199": "reserved for foundation.registry (module registry)",
-      "F200-F299": "reserved for foundation.det (determinism/RNG)",
-      "F300-F399": "reserved for foundation.serialize (save/fixture format)",
-      "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
-      "F500-F599": "reserved for foundation.repo (build info, CI)",
-      "F600-F699": "reserved for foundation.data (internal/foundation/data: the §24 typed config loaders, data-dir resolution, and hot-reload path — F400-F499 is already claimed by foundation.solver, so this module's delivery report picked the first free F-sub-range instead)",
-      "F700-F799": "reserved for tool.astgate (internal/foundation/astgate: the BUG-024 mechanical copy-guard gate — SEC-048's conversion of loadPackages'/resolveRepoRoot's bare fmt.Errorf sites to registry-sourced errors, since astgate physically lives inside the F/foundation layer's own path scope and, unlike SEC-040's dev-only gen/main.go, is a real compiled/CI-gated tool run inside go test ./...'s build-test-vet job. Checked against this table AND `grep -rn \"MET-F7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-F7xx code existed either place.)",
-      "F800-F899": "reserved for foundation.num (internal/foundation/num: the reject-form type-safe coercion helpers — SafeInt64 / BoundedFloat / SafeInt64FromAny / SafeFloat64FromAny non-finite, overflow, out-of-range, and type-mismatch rejections; FEAT-135 feat.securehelpers; GR#7 registry-sourced. Checked against this table AND grep -rn MET-F8 internal/ cmd/ before claiming, per BUG-008's lesson — no prior MET-F8xx code existed either place.)",
-      "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
-      "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)",
-      "U200-U299": "reserved for ui.screen.debug (F12 info panel: pane-unavailable states)",
       "E000-E099": "reserved for engine.core (internal/engine/core: tick/command handling, phase hooks, subscriptions, snapshotting — MOD-012)",
       "E100-E199": "reserved for engine.detgate (internal/engine/detgate: the multi-run determinism gate — FEAT-004. NOTE: this range collided with a mistaken E100-E199 registration by feat.debugmode on 2026-08-09 [BUG-008] because detgate's claim existed only in source comments, not here; feat.debugmode was renumbered to E200-E299. This entry is the fix — always check this table AND `grep -rn MET-E internal/ cmd/` before claiming a new sub-range.)",
       "E200-E299": "reserved for feat.debugmode (internal/engine/debug: the runtime debug switch, sticky DebugTouched enable path, and cheat/unlock gate rejections)",
@@ -37,52 +24,73 @@
       "E800-E899": "reserved for feat.saveux (internal/engine/save: FEAT-011's save/load orchestration -- single-save-in-flight rejection, staging/promotion failures, format-version-mismatch and corrupted-load handling, list/enumerate failures, unknown-participant-kind on load. Checked against this table AND `grep -rn \"MET-E8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E8xx code existed either place.)",
       "E900-E949": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path. NARROWED from E900-E999 on 2026-08-13: the E layer's 000-899 blocks were all claimed by earlier engine modules by the time engine.mining landed, and the code format is hard-capped at three digits, so E950-E999 was carved from this reservation's unused tail for engine.mining — feat.skeleton ships exactly one code, MET-E900, which remains in-range. Flagged for Bill/Aaron: any reallocation of a reserved range is their call.)",
       "E950-E999": "reserved for engine.mining (internal/engine/mining: the deposit-parameter data-file load/schema-validation failure, the geology-not-yet-derived shuffle rejection, and the out-of-bounds deposit query — MOD-046/FEAT-049; plus the mine-type catalogue data-file load/schema-validation failure and the unknown-mine-type resolve rejection — FEAT-103/feat.minetypes. Checked against this table AND `grep -rn \"MET-E9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E9xx code existed outside feat.skeleton's MET-E900.)",
-      "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
-      "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
-      "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)",
-      "H100-H199": "reserved for ui.harness (internal/harness/uitest, MOD-014: scripted-key-DSL parse errors, fixture-exhausted-before-script-complete, snapshot load/name errors, Harness copy guard — second H-layer sub-range, since H000-H099 already belongs to harness.replay). Checked against both this table AND `grep -rn \"MET-H1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H1xx code existed either place.",
-      "H200-H299": "reserved for harness.headless (internal/harness/headless, MOD-015: CLI flag validation, scenario-script parse/read errors, -out write failures — third H-layer sub-range, since H000-H099/H100-H199 already belong to harness.replay/ui.harness). Checked against both this table AND `grep -rn \"MET-H2\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H2xx code existed either place.",
-      "U300-U399": "reserved for ui.keys (internal/ui/keys, MOD-011: mnemonic-path Register conflicts (duplicate/prefix ambiguity), malformed keymap-profile fallback, keymap entries binding to an unregistered mnemonic path, palette parameterised-argument rejection, invalid mark-slot identifiers — third U-layer sub-range, since U000-U099/U100-U199/U200-U299 already belong to ui.core/ui.screen.map/ui.screen.debug). Checked against both this table AND `grep -rn \"MET-U3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U3xx code existed either place.",
-      "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place.",
-      "U400-U499": "reserved for feat.devmode (internal/ui/screens/devmode, FEAT-065: pause-anywhere dev console gate/open-state rejections — fourth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys). Checked against both this table AND `grep -rn \"MET-U4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U4xx code existed either place.",
-      "U500-U599": "reserved for ui.screen.demo (internal/ui/screens/demo, FEAT-018: F6 Demographics screen — malformed f6.population/f6.leisure/f6.housing/f6.commute patch handling, unknown/stale subscription-ID drops (SF-7/DEMO-9) — fifth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode. Checked against both this table AND `grep -rn \"MET-U5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U5xx code existed either place.",
-      "H400-H499": "reserved for harness.metricsdash (internal/harness/metricsdash, FEAT-066/feat.metricsdash pending module-key confirmation ASM-451: read-only weakness/gate-status/lint/perf-CI dashboard aggregation and defect/query logging entry-point errors -- fifth H-layer sub-range, since H000-H099/H100-H199/H200-H299/H300-H399 already belong to harness.replay/ui.harness/harness.headless/harness.synth. Checked against both this table AND `grep -rn \"MET-H4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-H4xx code existed either place.",
-      "U600-U699": "reserved for ui.screen.menu (internal/ui/screens/menu, FEAT-021: F10 Menu & saves screen -- malformed f10.session patch handling, unknown/stale subscription-ID drops, unrecognised-view rejection, save-root enumeration failure, keymap/layout profile-write failures, layout-editor-unavailable -- sixth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo. Checked against both this table AND `grep -rn \"MET-U6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U6xx code existed either place.",
-      "U700-U799": "reserved for ui.screen.ticker (internal/ui/screens/ticker, FEAT-020: F9 Ticker & History screen -- malformed f9.ticker/f9.bulletin/f9.annual/f9.archive patch handling, unknown/stale subscription-ID drops, a story arriving with an empty eventId (TIK-5) -- seventh U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu. Checked against both this table AND `grep -rn \"MET-U7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U7xx code existed either place.",
-      "U800-U899": "reserved for ui.dash (internal/ui/dash, MOD-038: Dashboards, layout editor, drill-through rule -- missing/zero DrillTarget at tile construction (AC-4), invalid drill-target view name, malformed/corrupt layout profile fallback (AC-10), vanished drill target at drill time (AC-9), unknown tile ID in editor/navigation operations -- eighth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699/U700-U799 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu/ui.screen.ticker. Checked against both this table AND `grep -rn \"MET-U8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U8xx code existed either place.",
-      "U900-U949": "reserved for ui.diagrams (internal/ui/diagrams, MOD-037: text-Sankey/chain/network diagram engines -- dangling-edge topology rejection (MET-U900, AC-7) and struct-copied diagram-cache Engine rejection (MET-U905, SEC-020). Split from the former U900-U999 block on 2026-08-14 per lead arbitration: ui.diagrams owns U900-U949 and keeps MET-U900/MET-U905, while chrome's four codes moved to U950-U999 (ui.alerts). Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
-      "U950-U999": "reserved for ui.alerts (internal/ui/screens/chrome, FEAT-013: Top bar + prioritised alert stack + crisis auto-pause -- alert/crisis construction rejections (missing jump target / missing ID, AC-3/AC-11), struct-copy rejection (SEC-020), malformed chrome.topbar figures patch. Split from the former U900-U999 block on 2026-08-14 per lead arbitration: chrome's four codes moved from MET-U901..U904 to MET-U950..U953 to clear the collision with ui.diagrams' MET-U900/MET-U905, which stay in U900-U949. Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
-      "V000-V099": "reserved for ui.screen.proj (internal/ui/screens/proj, FEAT-019: F7 Projections screen — malformed f7.projections patch handling, unknown/stale subscription-ID drops (SF-7/PRJ-6), and the Screen struct-copy guard (SEC-020) — the U layer (U000-U999) is exhausted (ui.core/map/debug/keys/devmode/demo/menu/ticker/dash/alerts), so ui.screen.proj opens a second UI layer block. Checked against both this table AND `grep -rn \"MET-V\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V code existed either place.)",
+      "F000-F009": "reserved for foundation.errors (errs package self-errors: registry load/validation, unregistered code — always available even if the registry fails to load)",
+      "F010-F099": "reserved for foundation.errors (this module: logging, correlation)",
+      "F100-F199": "reserved for foundation.registry (module registry)",
+      "F200-F299": "reserved for foundation.det (determinism/RNG)",
+      "F300-F399": "reserved for foundation.serialize (save/fixture format)",
+      "F400-F499": "reserved for foundation.solver (solver gRPC contract)",
+      "F500-F599": "reserved for foundation.repo (build info, CI)",
+      "F600-F699": "reserved for foundation.data (internal/foundation/data: the §24 typed config loaders, data-dir resolution, and hot-reload path — F400-F499 is already claimed by foundation.solver, so this module's delivery report picked the first free F-sub-range instead)",
+      "F700-F799": "reserved for tool.astgate (internal/foundation/astgate: the BUG-024 mechanical copy-guard gate — SEC-048's conversion of loadPackages'/resolveRepoRoot's bare fmt.Errorf sites to registry-sourced errors, since astgate physically lives inside the F/foundation layer's own path scope and, unlike SEC-040's dev-only gen/main.go, is a real compiled/CI-gated tool run inside go test ./...'s build-test-vet job. Checked against this table AND `grep -rn \"MET-F7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-F7xx code existed either place.)",
+      "F800-F899": "reserved for foundation.num (internal/foundation/num: the reject-form type-safe coercion helpers — SafeInt64 / BoundedFloat / SafeInt64FromAny / SafeFloat64FromAny non-finite, overflow, out-of-range, and type-mismatch rejections; FEAT-135 feat.securehelpers; GR#7 registry-sourced. Checked against this table AND grep -rn MET-F8 internal/ cmd/ before claiming, per BUG-008's lesson — no prior MET-F8xx code existed either place.)",
       "G000-G099": "reserved for engine.citizens (internal/engine/citizens: the Option-B citizen record, columnar cold SoA store, HOT/WARM/COLD dial, amortised cold pass, A7 sampling firewall, life-writing, Gompertz-Makeham mortality, households — MOD-018. The E layer (E000-E999) is fully claimed by eleven earlier engine modules (engine.core/detgate/debug/invariant/world/season/market/helper/saveux/skeleton/mining), and the code format is hard-capped at three digits (^MET-[A-Z]\\d{3}$, internal/foundation/errs/registry.go), so engine.citizens opens a second engine block under the next free single letter G (V is the UI-second-block precedent). Flagged for Bill/Aaron: adding a new layer letter is a registry-schema extension — if they prefer to reallocate an existing E sub-range instead, that is their call.)",
       "G100-G199": "reserved for engine.projections (internal/engine/projections: the projection curve registry, month-query bounds guard, Slow-Fuse decision validation, and ghost-city death-warning provider — MOD-031. Second G-layer engine claim after engine.citizens' G000-G099; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xx code existed either place.)",
+      "G1000-G1099": "reserved for engine.freight (internal/engine/freight: the freight harbour, tonnes accounting and production-chain model — port capacity/customs/smuggling-risk, the five chain families whose stages register as firms, the four storage-site types, modal-capped freight movements, the balance-of-trade breakdown, and the mass-conservation identity — MOD-047. Eleventh G-layer engine claim after engine.unlocks' G900-G999; the G layer's three-digit namespace is exhausted, so this is the first FOUR-DIGIT block (G1000-G1099), per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xxx code existed either place.)",
+      "G1100-G1199": "reserved for engine.spiral (internal/engine/spiral: the Detroit-spiral failure states — abandonment decay, cell-by-cell blight spread, the recovery commands, the insolvency/ghost-city death conditions, and the ghost-city epilogue — MOD-030. Twelfth G-layer engine claim after engine.freight's G1000-G1099; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G11\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G11xx code existed either place.)",
+      "G1200-G1299": "reserved for engine.services (internal/engine/services: the generic §10 service framework — capacity/coverage/funding→quality, §26 shared staffing pools, and the §54 Public Service Pie benchmark ratios — MOD-033. Twelfth G-layer engine claim; engine.unlocks took G900-G999, engine.freight G1000-G1099, and engine.spiral G1100-G1199 in the same wave, so engine.services opens G1200-G1299 under BUG-234's 2026-08-14 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G12\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G12xx code existed either place.)",
+      "G1300-G1399": "reserved for engine.tax (internal/engine/tax: the §39 fine-grain instrument panel — data-defined rates/elasticity/incidence, per-district multipliers, EV-share base erosion, and revenue posting through engine.finance — MOD-052. Thirteenth G-layer engine claim after engine.services' G1200-G1299; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G13\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G13xx code existed either place.)",
+      "G1400-G1499": "reserved for engine.firms (internal/engine/firms: the firm lifecycle — per-citizen founding, Startup→Small→Medium→Enterprise progression, staff as real CitizenIDs, failure/insolvency/acquisition, entrepreneur-culture index, superlinear professional-services demand, and deposit-bounded credit priced against the off-map base-rate cycle — MOD-058. Fourteenth G-layer engine claim. G1300-G1399 was deliberately left unclaimed at this module's build time (the dispatch brief fixed this module's range at G1400-G1499; a sibling wave item may claim G1300-G1399). Checked against this table AND `grep -rn \"MET-G14\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G14xx code existed either place.)",
+      "G1500-G1599": "reserved for engine.crime (internal/engine/crime: the §28 crime, policing, gangs, security-services, and justice-chain module — per-district/per-type generation from isolable drivers, the concave deterrence + clearance + prevention triad, the stateful gang lifecycle (sustained-24-month formation, four-effect territory/tax/recruit/uplift, full-stack removal, decapitation-respawn asymmetry), the Constabulary-HQ-gated strategy mix, the MI5-analogue threat dial with its precursor lead window, and the justice-chain conservation identities with the prison intake cross-check — MOD-042. Fifteenth G-layer engine claim after engine.firms' G1400-G1499; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G15\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G15xx code existed either place.)",
+      "G1600-G1699": "reserved for engine.farming (internal/engine/farming: the farm-type catalogue — per-type data-file load/schema-validation failures and unknown farm-type resolution — MOD-045/FEAT-104. The E layer (E000-E999) is fully claimed by eleven earlier engine modules, and the G layer's three-digit blocks plus G1000-G1599 were claimed by engine.citizens through engine.crime by the time this package landed, so engine.farming opens G1600-G1699 as the next free four-digit block under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G16\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G16xx code existed either place.)",
+      "G1700-G1799": "reserved for engine.rail (internal/engine/rail: MOD-060's STUB-FOR-BASELINE intermodal container-transfer surface — RailAPI.IntermodalTransfer implementing engine.rail.md AC-3's sea↔rail↔road tonnes-conservation contract, consumed by feat.containerport through the freight.RailIntermodal dependency-inversion seam. The full MOD-060 build (fleet/works accounting, transfer-quality → mode logit, rolling-stock works) will formalize or extend this range when it lands. The G layer's blocks through G1600-G1699 were claimed by engine.citizens … engine.crime and engine.farming by the time this stub landed; checked against this table AND `grep -rn \"MET-G17\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G17xx code existed either place.)",
+      "G1800-G1899": "reserved for engine.education (internal/engine/education: the §27 educational lifecycle — stage pipeline gated by the September intake, the secondary-exit three-way fork, quality-weighted attainment, per-stage personality drift, university halls/research points, and the Slow-Fuse funding submission — MOD-041. The E layer is fully exhausted and the G layer's blocks through G1700-G1799 were claimed by earlier engine modules (engine.citizens … engine.firms, engine.crime, engine.farming, engine.rail), so engine.education opens G1800-G1899 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G18\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G18xx code existed either place.)",
+      "G1900-G1999": "reserved for engine.refuse (internal/engine/refuse: the waste-collection module — per-cell typed bin stock (wheelie/trade/skip), collection rounds as engine.logistics movements, the overflow→vermin→health/land-value/fire-risk chain, the three waste streams, the landfill/incinerator/compost disposal lifecycle, and the refuse-tonnage mass-conservation identity — MOD-039. The E layer is fully exhausted and the G layer's blocks through G1800-G1899 were claimed by earlier engine modules (engine.citizens … engine.firms, engine.crime, engine.farming, engine.rail, engine.education), so engine.refuse opens G1900-G1999 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G19\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G19xx code existed either place.)",
       "G200-G299": "reserved for engine.finance (internal/engine/finance: the double-entry money ledger, land pricing, loans/credit-rating/insolvency, investments, and v1 SimpleFirm — MOD-022. Third G-layer engine claim after engine.citizens' G000-G099 and engine.projections' G100-G199; the E layer is fully exhausted and the code format was widened to four digits on 2026-08-14 (BUG-234) so three-digit codes remain the norm here. Checked against this table AND `grep -rn \"MET-G2\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G2xx code existed either place.)",
+      "G2000-G2099": "reserved for feat.containerport (internal/engine/freight: the Felixstowe-class deep-sea container-terminal tier — the §33 port-tier ladder, the berths × crane-rate × hours capacity model read through FreightAPI, the intermodal sea↔rail↔road transfer point consumed from engine.rail, the customs-throughput/smuggling-risk tier, and the importer→exporter balance-of-trade flip — FEAT-099, sharing engine.freight's package. The G layer's blocks through G1900-G1999 were all claimed by the time this feature landed (engine.freight G1000, engine.spiral G1100, engine.services G1200, engine.tax G1300, engine.firms G1400, engine.crime G1500, engine.farming G1600, engine.rail G1700, engine.education G1800, engine.refuse G1900), so feat.containerport opens G2000-G2099. Checked against this table AND `grep -rn \"MET-G20\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G20xx code existed either place.)",
+      "G2100-G2199": "reserved for engine.leisure (internal/engine/leisure: the §42 168-hour weekly discretionary-hours budget, personality-weighted venue patronage with the access-time penalty, per-citizen per-venue novelty decay, the openings/refurbishment pipeline, the events calendar and its crowd-transport push, the unmet-taste-demand query, and the citywide/per-citizen leisure-fit surface — MOD-055. The E layer is fully exhausted and the G layer's blocks through G2000-G2099 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport), so engine.leisure opens G2100-G2199 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G21\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G21xx code existed either place.)",
+      "G2200-G2299": "reserved for engine.wellbeing (internal/engine/wellbeing: the §18 two-track physical/mental health model — driver-decomposed causal attribution over fifteen drivers, the Wellbeing = f(physical, mental, satisfaction) headline composite, and the four downstream-effect modifiers — MOD-034. The E layer is fully exhausted and the G layer's blocks through G2100-G2199 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport, engine.leisure), so engine.wellbeing opens G2200-G2299 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G22\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G22xx code existed either place.)",
+      "G2300-G2399": "reserved for engine.news (internal/engine/news: the four-layer news system — ticker / monthly bulletin / annual review / epilogue over one persisted history log, the salience-scoring editor, and the fact-locked optional LLM rewrite seam — MOD-043. The E layer is fully exhausted and the G layer's blocks through G2200-G2299 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport, engine.leisure, engine.wellbeing), so engine.news opens G2300-G2399 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G23\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G23xx code existed either place.)",
+      "G2400-G2499": "reserved for engine.accelerator (internal/engine/accelerator: the CERN-class particle accelerator — the expert-gate-verified mega-facility whose massive electricity/water draw posts through engine.consumption's UtilityAPI, whose research-rate multiplier feeds engine.education's research output, whose health spillover posts into engine.wellbeing, whose FDI anchor draw posts into engine.fdi, with permit/decommission inheritance and a saturating prestige output — MOD-077. The E layer is fully exhausted and the G layer's blocks through G2300-G2399 were claimed by engine.news by the time this package landed, so engine.accelerator opens G2400-G2499 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G24\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G24xx code existed either place.)",
+      "G2500-G2599": "reserved for feat.pharmacampus (internal/engine/fdi: the pharma/R&D campus — the Groton-Pfizer-class FDI-anchor facility catalogue (footprint/output/jobs/utility-draw/exports), the education↔FDI compounding-loop wiring (education term into the bid, graduate/research demand out), supply-chain spawning via engine.firms, and the permit/decommission inheritance — FEAT-101, sharing engine.fdi's package. The E layer is fully exhausted and the G layer's blocks through G2400-G2499 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator) by the time this feature landed, so feat.pharmacampus opens G2500-G2599 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G25\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G25xx code existed either place.)",
+      "G2600-G2699": "reserved for feat.refinery (internal/engine/chemicals: the oil refinery + integrated chemical works — the refinery/petrochemical-works facility catalogue, the make-vs-buy build-vs-import decision, the crude-tanker→tank-farm→refinery→petrochemical-works chain head, the fuel-output feed to engine.fuel, the top-blight/hazmat-fire risk wiring, and the permit/decommission inheritance — FEAT-102, sharing engine.chemicals' package. The G layer's blocks through G2400-G2499 were all claimed by the time this feature landed (engine.news G2300, engine.accelerator G2400, engine.fdi G2500 in source), so feat.refinery opens G2600-G2699. Checked against this table AND `grep -rn \"MET-G26\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G26xx code existed either place.)",
+      "G2700-G2799": "reserved for engine.census (internal/engine/census: the living-city census & life-history module — four non-blocking observation threads (stats generator, auditor, consistency checker, regulator), the cradle-to-grave object-bio assembly, the GUID + least-check-in liveness invariant, the education→crime linkage and reward/penalise-education observation, and the demographics/KPI + drill-in data model — MOD-078. The G layer's blocks through G2600-G2699 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator, engine.fdi, feat.refinery) by the time this module landed, so engine.census opens G2700-G2799 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G27\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G27xx code existed either place.)",
+      "G2800-G2899": "reserved for engine.airport (internal/engine/airport: the Heathrow-class international airport — runway/terminal/freight-apron component decomposition, pax/day throughput, air-cargo modal arm, access-tier reach, runway-access/adjacency, noise-contour blight registration, surface-access gate, and the permit/land gate — MOD-075/FEAT-096. The G layer’s blocks through G2600-G2699 were claimed by earlier engine modules (engine.citizens … feat.refinery), and G2700-G2799 carries the in-flight engine.census work, so engine.airport opens G2800-G2899 under BUG-234’s three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G28\" internal/ cmd/` before claiming, per BUG-008’s lesson — no prior MET-G28xx code existed either place.)",
+      "G2900-G2999": "reserved for engine.worklife (internal/engine/worklife: the work-schedule & work-life balance module — three data-driven time patterns (core-hours/shift/any-time), the deterministic at-work derivation, the schedule-driven commute-demand-by-hour distribution, the 40h-vs-996 working-week policy consumption, and the overwork wage-gain/wellbeing-cost trade — MOD-080. The G layer's blocks through G2800-G2899 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator, feat.pharmacampus, feat.refinery, engine.census, engine.airport) by the time this module landed, so engine.worklife opens G2900-G2999 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G29\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G29xx code existed either place.)",
       "G300-G399": "reserved for engine.consumption (internal/engine/consumption: coefficient-driven demand from data/consumption.json, the four utility networks (water/wastewater/electricity/gas) with sources/edges/storage/losses, the conserved daily solve, the aquifer sustainable-yield ceiling, peak-vs-base load, the all-electric strategy, and household utility billing — MOD-021. Fourth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, and engine.finance's G200-G299; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G3\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G3xx code existed either place.)",
+      "G3000-G3099": "reserved for engine.spaceport (internal/engine/spaceport: the SpaceX-class launch/landing mega-facility — the data-file load/schema failure, the catalogue-anchor reconciliation failure (exactly-one-entry rule), the unknown/out-of-taxonomy facility key, the expert-gate build rejection, the missing-permit rejection, the launch-against-unbuilt rejection, the double-build rejection, the SEC-020 copy guard, the missing-seam dependency rejection, and the invalid-month/invalid-site rejections — MOD-076. The E layer is fully exhausted and the G layer's blocks through G2900-G2999 were claimed by earlier engine modules (engine.citizens … engine.news, engine.accelerator, feat.pharmacampus, feat.refinery, engine.census, engine.airport, engine.worklife), so engine.spaceport opens G3000-G3099 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G30\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G30xx code existed either place.)",
+      "G3100-G3199": "reserved for engine.fiscal (internal/engine/fiscal: the §54 fiscal circuit — whole-economy Sankey topology, tax breakdown, civil-service gross/net pair, municipality-quality funding curves, childcare net line, benefits/social-housing postings)",
+      "G3200-G3299": "reserved for engine.maintenance (internal/engine/maintenance: per-instance aging, efficiency decline, lifetime, and the multi-fix crew backlog - MOD-072. The G layer blocks through G3100-G3199 were claimed by earlier engine modules (engine.citizens ... engine.fiscal, engine.spaceport), so engine.maintenance opens G3200-G3299 under BUG-234 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G32\" internal/ cmd/` before claiming, per BUG-008 - no prior MET-G32xx code existed either place.)",
+      "G3300-G3399": "reserved for engine.comms (internal/engine/comms: the §35 communications, internet & e-commerce module — the six-era connectivity ladder, the four per-era capability gates (office-tier ceiling, data-centre eligibility, research-rate modifier, remote-work-share coefficient), remote-work share by sector, letters-vs-parcels trend, the e-commerce retail-share coefficient gated by fulfilment-centre/last-mile-depot infrastructure, the fulfilment-centre-as-real-firm registration, delivery movements through engine.logistics, the high-street-drain/counterplay pair, and the postal service drawn from engine.services' pool — MOD-048. The E layer is fully exhausted and the G layer's blocks through G3200-G3299 were claimed by earlier engine modules (engine.citizens ... engine.maintenance), so engine.comms opens G3300-G3399 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G33\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G33xx code existed either place.)",
+      "G3400-G3499": "reserved for engine.capexport (internal/engine/capexport: the §36 service-capacity export module — per-service surplus books (capacity − internal demand) sourced through engine.services, contract issuance/cancellation as commands with term/rate/cancellation-penalty, contract-curve registration with engine.projections, the penalty-vs-service-cut choice at the crossing, and trade-tagged ledger posting of contract revenue/penalties through engine.finance — MOD-049. The E layer is fully exhausted and the G layer's blocks through G3300-G3399 were claimed by earlier engine modules (engine.citizens ... engine.maintenance, engine.comms), so engine.capexport opens G3400-G3499 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G34\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G34xx code existed either place.)",
+      "G3500-G3599": "reserved for feat.checkpoint (internal/engine/checkpoint: FEAT-064's whole-state checkpoints with revert-and-fork lineage — invalid checkpoint identifier, in-flight rejection, lineage-sidecar/head-pointer write/read failures, dangling-parent and non-checkpoint revert-target rejection, lineage enumeration failure, atomic prune failure, and invalid fork-config rejection. The E layer is fully exhausted and the G layer's blocks through G3400-G3499 were claimed by earlier engine modules (engine.citizens ... engine.maintenance, engine.comms, engine.capexport), so feat.checkpoint opens G3500-G3599 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G3[5-9]\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G35xx code existed either place.)",
+      "G3600-G3699": "reserved for engine.social (internal/engine/social: caseload/accounting/funding/provision errors — MOD-053. Checked against this table AND grep -rn \"MET-G36\" internal/ cmd/ before claiming, per BUG-008)",
       "G400-G499": "reserved for engine.logistics (internal/engine/logistics: the coarse per-district/per-commodity delivery-and-shortfall model behind a single LogisticsAPI — local stock draw with capacity/holding-cost/shelf-life, lean/fat safety-buffer order sizing, the deterministic throughput/shortfall figure, and the subscribed shortfall hook. Fifth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, and engine.consumption's G300-G399; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G4\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G4xx code existed either place.)",
       "G500-G599": "reserved for engine.build (internal/engine/build: the §34 eight-way zone catalogue and construction economics — zoning commands, the ownership gate, the materials+labour+lead-time build queue with seasonal slowdown, demolition compensation, and the self-explaining demand bar — MOD-026/FEAT-083. Sixth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, and engine.logistics' G400-G499; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G5\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G5xx code existed either place.)",
       "G600-G699": "reserved for engine.households (internal/engine/households: the §21 seventeen-typology HS housing catalogue, per-typology appeal profiles over household stage × wealth × personality, citywide demand as a distribution over typologies, the unhoused-by-preference signal, and overcrowding/rent-burden derivation — MOD-028/FEAT-083. Seventh G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, and engine.build's G500-G599; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G6\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G6xx code existed either place.)",
       "G700-G799": "reserved for engine.attract (internal/engine/attract: the §11 attractiveness & migration master dial — the seven-term A score, the signed net-migration response g(A − A_world), the §4 static world pool, per-resident personality-weighted emigration, and the asymmetric reputation-momentum term — MOD-029/FEAT-083. Eighth G-layer engine claim after engine.citizens' G000-G099, engine.projections' G100-G199, engine.finance's G200-G299, engine.consumption's G300-G399, engine.logistics' G400-G499, engine.build's G500-G599, and engine.households' G600-G699; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G7\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G7xx code existed either place.)",
       "G800-G899": "reserved for feat.compositionroot (internal/engine/compose: the composition root wiring the baseline-one hook set — already-composed/double-register rejection, a required module's construction/wiring failure, a silently-absent required module, and wire-after-seal. Ninth G-layer engine claim after engine.attract's G700-G799; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G8\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G8xx code existed either place.)",
       "G900-G999": "reserved for engine.unlocks (internal/engine/unlocks: the §22 four-currency unlock economy — XP, the §4 thirteen-tier milestone ladder, Development-Point trees loaded from data/unlock_trees.json, the money-only Buy path, and the debug force-unlock gate — MOD-032. Tenth G-layer engine claim after feat.compositionroot's G800-G899; the E layer is fully exhausted. Checked against this table AND `grep -rn \"MET-G9\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G9xx code existed either place.)",
-      "G1000-G1099": "reserved for engine.freight (internal/engine/freight: the freight harbour, tonnes accounting and production-chain model — port capacity/customs/smuggling-risk, the five chain families whose stages register as firms, the four storage-site types, modal-capped freight movements, the balance-of-trade breakdown, and the mass-conservation identity — MOD-047. Eleventh G-layer engine claim after engine.unlocks' G900-G999; the G layer's three-digit namespace is exhausted, so this is the first FOUR-DIGIT block (G1000-G1099), per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G1\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G1xxx code existed either place.)",
-      "G1100-G1199": "reserved for engine.spiral (internal/engine/spiral: the Detroit-spiral failure states — abandonment decay, cell-by-cell blight spread, the recovery commands, the insolvency/ghost-city death conditions, and the ghost-city epilogue — MOD-030. Twelfth G-layer engine claim after engine.freight's G1000-G1099; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G11\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G11xx code existed either place.)",
-      "G1200-G1299": "reserved for engine.services (internal/engine/services: the generic §10 service framework — capacity/coverage/funding→quality, §26 shared staffing pools, and the §54 Public Service Pie benchmark ratios — MOD-033. Twelfth G-layer engine claim; engine.unlocks took G900-G999, engine.freight G1000-G1099, and engine.spiral G1100-G1199 in the same wave, so engine.services opens G1200-G1299 under BUG-234's 2026-08-14 three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G12\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G12xx code existed either place.)",
-      "G1400-G1499": "reserved for engine.firms (internal/engine/firms: the firm lifecycle — per-citizen founding, Startup→Small→Medium→Enterprise progression, staff as real CitizenIDs, failure/insolvency/acquisition, entrepreneur-culture index, superlinear professional-services demand, and deposit-bounded credit priced against the off-map base-rate cycle — MOD-058. Fourteenth G-layer engine claim. G1300-G1399 was deliberately left unclaimed at this module's build time (the dispatch brief fixed this module's range at G1400-G1499; a sibling wave item may claim G1300-G1399). Checked against this table AND `grep -rn \"MET-G14\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G14xx code existed either place.)",
-      "G1500-G1599": "reserved for engine.crime (internal/engine/crime: the §28 crime, policing, gangs, security-services, and justice-chain module — per-district/per-type generation from isolable drivers, the concave deterrence + clearance + prevention triad, the stateful gang lifecycle (sustained-24-month formation, four-effect territory/tax/recruit/uplift, full-stack removal, decapitation-respawn asymmetry), the Constabulary-HQ-gated strategy mix, the MI5-analogue threat dial with its precursor lead window, and the justice-chain conservation identities with the prison intake cross-check — MOD-042. Fifteenth G-layer engine claim after engine.firms' G1400-G1499; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G15\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G15xx code existed either place.)",
-      "G1300-G1399": "reserved for engine.tax (internal/engine/tax: the §39 fine-grain instrument panel — data-defined rates/elasticity/incidence, per-district multipliers, EV-share base erosion, and revenue posting through engine.finance — MOD-052. Thirteenth G-layer engine claim after engine.services' G1200-G1299; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G13\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G13xx code existed either place.)",
-      "G1600-G1699": "reserved for engine.farming (internal/engine/farming: the farm-type catalogue — per-type data-file load/schema-validation failures and unknown farm-type resolution — MOD-045/FEAT-104. The E layer (E000-E999) is fully claimed by eleven earlier engine modules, and the G layer's three-digit blocks plus G1000-G1599 were claimed by engine.citizens through engine.crime by the time this package landed, so engine.farming opens G1600-G1699 as the next free four-digit block under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G16\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G16xx code existed either place.)",
-      "G1800-G1899": "reserved for engine.education (internal/engine/education: the §27 educational lifecycle — stage pipeline gated by the September intake, the secondary-exit three-way fork, quality-weighted attainment, per-stage personality drift, university halls/research points, and the Slow-Fuse funding submission — MOD-041. The E layer is fully exhausted and the G layer's blocks through G1700-G1799 were claimed by earlier engine modules (engine.citizens … engine.firms, engine.crime, engine.farming, engine.rail), so engine.education opens G1800-G1899 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G18\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G18xx code existed either place.)",
-      "G1900-G1999": "reserved for engine.refuse (internal/engine/refuse: the waste-collection module — per-cell typed bin stock (wheelie/trade/skip), collection rounds as engine.logistics movements, the overflow→vermin→health/land-value/fire-risk chain, the three waste streams, the landfill/incinerator/compost disposal lifecycle, and the refuse-tonnage mass-conservation identity — MOD-039. The E layer is fully exhausted and the G layer's blocks through G1800-G1899 were claimed by earlier engine modules (engine.citizens … engine.firms, engine.crime, engine.farming, engine.rail, engine.education), so engine.refuse opens G1900-G1999 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G19\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G19xx code existed either place.)",
-      "G1700-G1799": "reserved for engine.rail (internal/engine/rail: MOD-060's STUB-FOR-BASELINE intermodal container-transfer surface — RailAPI.IntermodalTransfer implementing engine.rail.md AC-3's sea↔rail↔road tonnes-conservation contract, consumed by feat.containerport through the freight.RailIntermodal dependency-inversion seam. The full MOD-060 build (fleet/works accounting, transfer-quality → mode logit, rolling-stock works) will formalize or extend this range when it lands. The G layer's blocks through G1600-G1699 were claimed by engine.citizens … engine.crime and engine.farming by the time this stub landed; checked against this table AND `grep -rn \"MET-G17\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G17xx code existed either place.)",
-      "G2000-G2099": "reserved for feat.containerport (internal/engine/freight: the Felixstowe-class deep-sea container-terminal tier — the §33 port-tier ladder, the berths × crane-rate × hours capacity model read through FreightAPI, the intermodal sea↔rail↔road transfer point consumed from engine.rail, the customs-throughput/smuggling-risk tier, and the importer→exporter balance-of-trade flip — FEAT-099, sharing engine.freight's package. The G layer's blocks through G1900-G1999 were all claimed by the time this feature landed (engine.freight G1000, engine.spiral G1100, engine.services G1200, engine.tax G1300, engine.firms G1400, engine.crime G1500, engine.farming G1600, engine.rail G1700, engine.education G1800, engine.refuse G1900), so feat.containerport opens G2000-G2099. Checked against this table AND `grep -rn \"MET-G20\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G20xx code existed either place.)",
-      "G2100-G2199": "reserved for engine.leisure (internal/engine/leisure: the §42 168-hour weekly discretionary-hours budget, personality-weighted venue patronage with the access-time penalty, per-citizen per-venue novelty decay, the openings/refurbishment pipeline, the events calendar and its crowd-transport push, the unmet-taste-demand query, and the citywide/per-citizen leisure-fit surface — MOD-055. The E layer is fully exhausted and the G layer's blocks through G2000-G2099 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport), so engine.leisure opens G2100-G2199 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G21\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G21xx code existed either place.)",
-      "G2200-G2299": "reserved for engine.wellbeing (internal/engine/wellbeing: the §18 two-track physical/mental health model — driver-decomposed causal attribution over fifteen drivers, the Wellbeing = f(physical, mental, satisfaction) headline composite, and the four downstream-effect modifiers — MOD-034. The E layer is fully exhausted and the G layer's blocks through G2100-G2199 were claimed by earlier engine modules (engine.citizens … engine.refuse, engine.rail, feat.containerport, engine.leisure), so engine.wellbeing opens G2200-G2299 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G22\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G22xx code existed either place.)",
-      "G2400-G2499": "reserved for engine.accelerator (internal/engine/accelerator: the CERN-class particle accelerator — the expert-gate-verified mega-facility whose massive electricity/water draw posts through engine.consumption's UtilityAPI, whose research-rate multiplier feeds engine.education's research output, whose health spillover posts into engine.wellbeing, whose FDI anchor draw posts into engine.fdi, with permit/decommission inheritance and a saturating prestige output — MOD-077. The E layer is fully exhausted and the G layer's blocks through G2300-G2399 were claimed by engine.news by the time this package landed, so engine.accelerator opens G2400-G2499 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G24\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G24xx code existed either place.)",
-      "G2500-G2599": "reserved for feat.pharmacampus (internal/engine/fdi: the pharma/R&D campus — the Groton-Pfizer-class FDI-anchor facility catalogue (footprint/output/jobs/utility-draw/exports), the education↔FDI compounding-loop wiring (education term into the bid, graduate/research demand out), supply-chain spawning via engine.firms, and the permit/decommission inheritance — FEAT-101, sharing engine.fdi's package. The E layer is fully exhausted and the G layer's blocks through G2400-G2499 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator) by the time this feature landed, so feat.pharmacampus opens G2500-G2599 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G25\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G25xx code existed either place.)",
-      "G2600-G2699": "reserved for feat.refinery (internal/engine/chemicals: the oil refinery + integrated chemical works — the refinery/petrochemical-works facility catalogue, the make-vs-buy build-vs-import decision, the crude-tanker→tank-farm→refinery→petrochemical-works chain head, the fuel-output feed to engine.fuel, the top-blight/hazmat-fire risk wiring, and the permit/decommission inheritance — FEAT-102, sharing engine.chemicals' package. The G layer's blocks through G2400-G2499 were all claimed by the time this feature landed (engine.news G2300, engine.accelerator G2400, engine.fdi G2500 in source), so feat.refinery opens G2600-G2699. Checked against this table AND `grep -rn \"MET-G26\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G26xx code existed either place.)",
-      "G2800-G2899": "reserved for engine.airport (internal/engine/airport: the Heathrow-class international airport — runway/terminal/freight-apron component decomposition, pax/day throughput, air-cargo modal arm, access-tier reach, runway-access/adjacency, noise-contour blight registration, surface-access gate, and the permit/land gate — MOD-075/FEAT-096. The G layer’s blocks through G2600-G2699 were claimed by earlier engine modules (engine.citizens … feat.refinery), and G2700-G2799 carries the in-flight engine.census work, so engine.airport opens G2800-G2899 under BUG-234’s three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G28\" internal/ cmd/` before claiming, per BUG-008’s lesson — no prior MET-G28xx code existed either place.)",
-      "G3000-G3099": "reserved for engine.spaceport (internal/engine/spaceport: the SpaceX-class launch/landing mega-facility — the data-file load/schema failure, the catalogue-anchor reconciliation failure (exactly-one-entry rule), the unknown/out-of-taxonomy facility key, the expert-gate build rejection, the missing-permit rejection, the launch-against-unbuilt rejection, the double-build rejection, the SEC-020 copy guard, the missing-seam dependency rejection, and the invalid-month/invalid-site rejections — MOD-076. The E layer is fully exhausted and the G layer's blocks through G2900-G2999 were claimed by earlier engine modules (engine.citizens … engine.news, engine.accelerator, feat.pharmacampus, feat.refinery, engine.census, engine.airport, engine.worklife), so engine.spaceport opens G3000-G3099 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G30\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G30xx code existed either place.)",
-      "G2700-G2799": "reserved for engine.census (internal/engine/census: the living-city census & life-history module — four non-blocking observation threads (stats generator, auditor, consistency checker, regulator), the cradle-to-grave object-bio assembly, the GUID + least-check-in liveness invariant, the education→crime linkage and reward/penalise-education observation, and the demographics/KPI + drill-in data model — MOD-078. The G layer's blocks through G2600-G2699 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator, engine.fdi, feat.refinery) by the time this module landed, so engine.census opens G2700-G2799 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G27\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G27xx code existed either place.)",
-      "G2900-G2999": "reserved for engine.worklife (internal/engine/worklife: the work-schedule & work-life balance module — three data-driven time patterns (core-hours/shift/any-time), the deterministic at-work derivation, the schedule-driven commute-demand-by-hour distribution, the 40h-vs-996 working-week policy consumption, and the overwork wage-gain/wellbeing-cost trade — MOD-080. The G layer's blocks through G2800-G2899 were claimed by earlier engine modules/features (engine.citizens … engine.wellbeing, engine.news, engine.accelerator, feat.pharmacampus, feat.refinery, engine.census, engine.airport) by the time this module landed, so engine.worklife opens G2900-G2999 under BUG-234's three-to-four-digit code-format widening. Checked against this table AND `grep -rn \"MET-G29\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G29xx code existed either place.)"
+      "H000-H099": "reserved for harness.replay (internal/harness/replay, MOD-013: fixture record/replay error codes — first H-layer range; no existing layer fit this package, so the H layer was added. Checked against both this table AND `grep -rn \"MET-[A-Z][0-9]\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H code existed either place.)",
+      "H100-H199": "reserved for ui.harness (internal/harness/uitest, MOD-014: scripted-key-DSL parse errors, fixture-exhausted-before-script-complete, snapshot load/name errors, Harness copy guard — second H-layer sub-range, since H000-H099 already belongs to harness.replay). Checked against both this table AND `grep -rn \"MET-H1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H1xx code existed either place.",
+      "H200-H299": "reserved for harness.headless (internal/harness/headless, MOD-015: CLI flag validation, scenario-script parse/read errors, -out write failures — third H-layer sub-range, since H000-H099/H100-H199 already belong to harness.replay/ui.harness). Checked against both this table AND `grep -rn \"MET-H2\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H2xx code existed either place.",
+      "H300-H399": "reserved for harness.synth (internal/harness/synth, MOD-016: synthetic-city domain-validation rejections (citizen count/sprawl/network-shape), generation I/O failures, perf-run/baseline errors, perf-CI regression detection — fourth H-layer sub-range, since H000-H099/H100-H199/H200-H299 already belong to harness.replay/ui.harness/harness.headless). Checked against both this table AND `grep -rn \"MET-H3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-H3xx code existed either place.",
+      "H400-H499": "reserved for harness.metricsdash (internal/harness/metricsdash, FEAT-066/feat.metricsdash pending module-key confirmation ASM-451: read-only weakness/gate-status/lint/perf-CI dashboard aggregation and defect/query logging entry-point errors -- fifth H-layer sub-range, since H000-H099/H100-H199/H200-H299/H300-H399 already belong to harness.replay/ui.harness/harness.headless/harness.synth. Checked against both this table AND `grep -rn \"MET-H4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-H4xx code existed either place.",
+      "P000-P009": "reserved for protocol (internal/protocol itself: InProcTransport struct-copy rejection guards, SEC-020 wave 1 — first P-layer range claimed by the protocol package's own source, as opposed to a consumer speaking the protocol seam like engine.stub's P090-P099 above; checked against source via `grep -rn MET-P internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current)",
+      "P090-P099": "reserved for engine.stub (internal/engine/stub: StubEngine's command-rejection codes; this package physically lives under internal/engine/stub but speaks the protocol seam, per docs/design/protocol.md's ErrorRef.Code convention, hence the P-layer range rather than an E-layer one)",
+      "U000-U099": "reserved for ui.core (screen init, view-model apply, capability probe)",
+      "U100-U199": "reserved for ui.screen.map (F1 map screen: malformed f1.viewport patch handling)",
+      "U200-U299": "reserved for ui.screen.debug (F12 info panel: pane-unavailable states)",
+      "U300-U399": "reserved for ui.keys (internal/ui/keys, MOD-011: mnemonic-path Register conflicts (duplicate/prefix ambiguity), malformed keymap-profile fallback, keymap entries binding to an unregistered mnemonic path, palette parameterised-argument rejection, invalid mark-slot identifiers — third U-layer sub-range, since U000-U099/U100-U199/U200-U299 already belong to ui.core/ui.screen.map/ui.screen.debug). Checked against both this table AND `grep -rn \"MET-U3\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U3xx code existed either place.",
+      "U400-U499": "reserved for feat.devmode (internal/ui/screens/devmode, FEAT-065: pause-anywhere dev console gate/open-state rejections — fourth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys). Checked against both this table AND `grep -rn \"MET-U4\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U4xx code existed either place.",
+      "U500-U599": "reserved for ui.screen.demo (internal/ui/screens/demo, FEAT-018: F6 Demographics screen — malformed f6.population/f6.leisure/f6.housing/f6.commute patch handling, unknown/stale subscription-ID drops (SF-7/DEMO-9) — fifth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode. Checked against both this table AND `grep -rn \"MET-U5\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-U5xx code existed either place.",
+      "U600-U699": "reserved for ui.screen.menu (internal/ui/screens/menu, FEAT-021: F10 Menu & saves screen -- malformed f10.session patch handling, unknown/stale subscription-ID drops, unrecognised-view rejection, save-root enumeration failure, keymap/layout profile-write failures, layout-editor-unavailable -- sixth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo. Checked against both this table AND `grep -rn \"MET-U6\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U6xx code existed either place.",
+      "U700-U799": "reserved for ui.screen.ticker (internal/ui/screens/ticker, FEAT-020: F9 Ticker & History screen -- malformed f9.ticker/f9.bulletin/f9.annual/f9.archive patch handling, unknown/stale subscription-ID drops, a story arriving with an empty eventId (TIK-5) -- seventh U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu. Checked against both this table AND `grep -rn \"MET-U7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U7xx code existed either place.",
+      "U800-U899": "reserved for ui.dash (internal/ui/dash, MOD-038: Dashboards, layout editor, drill-through rule -- missing/zero DrillTarget at tile construction (AC-4), invalid drill-target view name, malformed/corrupt layout profile fallback (AC-10), vanished drill target at drill time (AC-9), unknown tile ID in editor/navigation operations -- eighth U-layer sub-range, since U000-U099/U100-U199/U200-U299/U300-U399/U400-U499/U500-U599/U600-U699/U700-U799 already belong to ui.core/ui.screen.map/ui.screen.debug/ui.keys/feat.devmode/ui.screen.demo/ui.screen.menu/ui.screen.ticker. Checked against both this table AND `grep -rn \"MET-U8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior MET-U8xx code existed either place.",
+      "U900-U949": "reserved for ui.diagrams (internal/ui/diagrams, MOD-037: text-Sankey/chain/network diagram engines -- dangling-edge topology rejection (MET-U900, AC-7) and struct-copied diagram-cache Engine rejection (MET-U905, SEC-020). Split from the former U900-U999 block on 2026-08-14 per lead arbitration: ui.diagrams owns U900-U949 and keeps MET-U900/MET-U905, while chrome's four codes moved to U950-U999 (ui.alerts). Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
+      "U950-U999": "reserved for ui.alerts (internal/ui/screens/chrome, FEAT-013: Top bar + prioritised alert stack + crisis auto-pause -- alert/crisis construction rejections (missing jump target / missing ID, AC-3/AC-11), struct-copy rejection (SEC-020), malformed chrome.topbar figures patch. Split from the former U900-U999 block on 2026-08-14 per lead arbitration: chrome's four codes moved from MET-U901..U904 to MET-U950..U953 to clear the collision with ui.diagrams' MET-U900/MET-U905, which stay in U900-U949. Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
+      "V000-V099": "reserved for ui.screen.proj (internal/ui/screens/proj, FEAT-019: F7 Projections screen — malformed f7.projections patch handling, unknown/stale subscription-ID drops (SF-7/PRJ-6), and the Screen struct-copy guard (SEC-020) — the U layer (U000-U999) is exhausted (ui.core/map/debug/keys/devmode/demo/menu/ticker/dash/alerts), so ui.screen.proj opens a second UI layer block. Checked against both this table AND `grep -rn \"MET-V\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V code existed either place.)",
+      "V100-V199": "reserved for ui.screen.trade (internal/ui/screens/trade, FEAT-017: F5 Trade & Logistics screen — malformed f5.trade patch handling, unknown/stale subscription-ID drops, unknown-contract/unknown-commodity action rejections, and the Screen struct-copy guard (SEC-020) — second V-layer claim after ui.screen.proj's V000-V099. Checked against both this table AND `grep -rn \"MET-V1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V1xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -374,6 +382,18 @@
       "module": "foundation.num",
       "message": "coercion rejected a value of unexpected type {type} — want a numeric type",
       "remedy": "Fix the stored value's type at its source (fixture, map, or JSON decode). Do not type-assert blindly; route the value through num.SafeInt64FromAny/SafeFloat64FromAny so a wrong type is rejected, never panicked or mis-trusted (GR#16)."
+    },
+    "MET-F804": {
+      "severity": "error",
+      "module": "foundation.num",
+      "message": "event id is empty ({field}) — a non-empty traceable id is required",
+      "remedy": "A traceable event identifier must be non-empty: an anonymous event cannot be attributed, which defeats the per-event traceability the id exists to provide. Pass a caller-supplied id; this is the fail-closed string boundary, never a silent fold into an aggregate (SEC-203)."
+    },
+    "MET-F805": {
+      "severity": "error",
+      "module": "foundation.num",
+      "message": "event id length {length} exceeds the maximum {max} bytes",
+      "remedy": "The traceable-id length is bounded by num.MaxEventIDLength (64 bytes) — a resource ceiling, not a balance number — so a huge caller-supplied id cannot be byte-copied per case into a conserved ledger and retained for the life of the API (SEC-203). Shorten the id; a legitimate traceable id is a short discriminator, orders of magnitude below the ceiling."
     },
     "MET-U001": {
       "severity": "fatal",
@@ -1545,6 +1565,36 @@
       "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
       "remedy": "A *proj.Screen value was copied (`s2 := *s`) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs is a map and curves/crossings are slices a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) — this call is rejected fail-closed instead of racing or corrupting the shared state. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
     },
+    "MET-V100": {
+      "severity": "warn",
+      "module": "ui.screen.trade",
+      "message": "malformed f5.trade patch could not be applied: {cause}",
+      "remedy": "The patch was not valid JSON for the f5.trade view schema (bad JSON, unrecognised schemaVersion, or an oversized payload) and was dropped; the trade screen keeps its last-known-good state (SF-7/TRD-8). If this persists, check the sending engine module's view patch encoding for f5.trade."
+    },
+    "MET-V101": {
+      "severity": "warn",
+      "module": "ui.screen.trade",
+      "message": "delta for unknown or stale subscription {subscriptionId} dropped",
+      "remedy": "ApplyDelta received a protocol.Delta whose SubscriptionID was never bound via BindSubscription (or was bound and since unsubscribed). This is expected transiently around resubscribe/unsubscribe races; if it persists, check the caller's SubscriptionID-to-view routing (SF-7 — never applied, never a panic)."
+    },
+    "MET-V102": {
+      "severity": "error",
+      "module": "ui.screen.trade",
+      "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
+      "remedy": "A *trade.Screen value was copied (`s2 := *s`) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs is a map and the per-surface slices/pointers are reference types a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) — this call is rejected fail-closed instead of racing or corrupting the shared state. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
+    "MET-V103": {
+      "severity": "warn",
+      "module": "ui.screen.trade",
+      "message": "contract {contractId} is not present in the current import-contract view",
+      "remedy": "A cancel-contract action named a contract ID the f5.trade view does not currently carry (or the contracts sub-surface is unavailable). The action is refused loudly rather than silently dropped (TRD-7's 'never a silent rejection'); check the contract ID against the view's contracts[] and that the contracts sub-surface has been delivered."
+    },
+    "MET-V104": {
+      "severity": "warn",
+      "module": "ui.screen.trade",
+      "message": "commodity {commodity} is not present in the current warehouse view",
+      "remedy": "A create-contract or set-buffer action named a commodity (or an empty one) the f5.trade warehouse sub-surface does not currently carry. The action is refused loudly rather than silently creating a row (TRD-3); check the commodity key against the view's warehouse[] and that the warehouse sub-surface has been delivered."
+    },
     "MET-G001": {
       "severity": "error",
       "module": "engine.citizens",
@@ -2709,6 +2759,36 @@
       "message": "wellbeing query for unknown citizen {citizenId}",
       "remedy": "A query was issued for a citizen ID with no record in the wired CitizensAPI. Query a real citizen ID; the error is returned rather than a silently-zero-valued attribution (AC-11)."
     },
+    "MET-G2300": {
+      "severity": "error",
+      "module": "engine.news",
+      "message": "news generation referenced an entity that does not resolve to a name (entityId={entityId}, eventId={eventId}): {cause}",
+      "remedy": "The event's EntityID must resolve through the wired RoadNamer (the engine.roads naming seam). Wire the seam with SetRoadNamer before ingesting events that reference an entity, or ingest only events with an empty entity reference. The story is rejected — never a fabricated placeholder name and never a silently dropped story (AC-8)."
+    },
+    "MET-G2301": {
+      "severity": "error",
+      "module": "engine.news",
+      "message": "the embedded salience weight table could not be loaded or failed schema validation (field={field}, rule={rule}, cause={cause})",
+      "remedy": "The embedded salience.json must be valid JSON carrying a positive, finite weight for every §29 category (death|first|record|crisis|milestone) and a non-empty pending-tuning disclosure. Correct the embedded data file — the module never falls back to a silent default weight table (GR#15/GR#7)."
+    },
+    "MET-G2302": {
+      "severity": "warn",
+      "module": "engine.news",
+      "message": "LLM rewrite of event {eventId} altered an engine fact and was rejected; engine prose retained",
+      "remedy": "The optional LLM soft-layer produced prose that changed a name or number. The engine prose is published unchanged (AC-6/AC-7). The rejection is surfaced and logged (GR#17) so a misbehaving rewriter is visible, never silently absorbed."
+    },
+    "MET-G2303": {
+      "severity": "error",
+      "module": "engine.news",
+      "message": "invalid event rejected: {field} must be {rule}",
+      "remedy": "Ingest rejects an event that cannot become a well-formed story: a non-empty ID after trimming, a non-negative tick and magnitude, a known §29 category present in the salience weight table, and non-empty prose after trimming. Fix the event at its source (GR#1/GR#16)."
+    },
+    "MET-G2304": {
+      "severity": "error",
+      "module": "engine.news",
+      "message": "NewsAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *NewsAPI returned by New, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
     "MET-G2400": {
       "severity": "error",
       "module": "engine.accelerator",
@@ -2889,6 +2969,24 @@
       "message": "operation {operation} requires dependency {dependency} to be wired",
       "remedy": "Wire the missing source (one of the seven consumed modules — citizens/education/crime/wellbeing/services/policies/finance) via its Wire* method before running the operation. The census fails closed rather than silently reporting a zero aggregate from an absent source (GR#1)."
     },
+    "MET-G2705": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "education stage kind {stage} is outside the [0,7] census stage domain (citizen {citizen})",
+      "remedy": "An education source returned a stage kind the census does not model. The snapshot boundary rejects it (SEC-126) rather than indexing a fixed [numStages]int64 array out of range and panicking the observation pipeline; correct the source's stage data."
+    },
+    "MET-G2706": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "object GUID {guid} is malformed or contradicts its declared kind/lifeSpan",
+      "remedy": "TrackObject was called with a GUID that fails the kind:numeric-id parse, or with a kind/lifeSpan that contradicts the GUID's prefix. Use a GUID built by the census constructors (citizenGUID/carGUID/houseGUID/chopperGUID) with its matching kind, and a whole-game life span for a citizen (SEC-127)."
+    },
+    "MET-G2707": {
+      "severity": "error",
+      "module": "engine.census",
+      "message": "source {source} returned non-finite value {value}",
+      "remedy": "A consumed module returned NaN/±Inf where the census stores a finite figure (crime rate, happiness, unfed fraction, or the education-policy coefficient). Rejected at the snapshot boundary so a non-finite value can never silently disable the regulator watchdog — NaN > threshold is false (SEC-130, GR#17)."
+    },
     "MET-G2900": {
       "severity": "error",
       "module": "engine.worklife",
@@ -2996,6 +3094,402 @@
       "module": "engine.spaceport",
       "message": "build command site coordinates ({siteX},{siteY}) must be non-negative",
       "remedy": "The exclusion-contour centre must be a non-negative cell coordinate. Pass a valid site and retry (AC-10)."
+    },
+    "MET-G3100": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "data/fiscal.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/fiscal.json must exist, be well-formed JSON, carry a positive version, and pass schema validation (a positive funding target, ordered zero/full curve anchors, a corruption threshold in (0,1], a positive childcare subsidy and second-earner wage, and an uplift fraction in [0,1]). Correct the data file — the module never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G3101": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "unknown Sankey node/flow category {category}",
+      "remedy": "Query only the fixed whole-economy categories this package defines (budget, exports, tourism, outCommuterWages, fdi, grants, taxRevenue, imports, leakage, interest). An unknown category is rejected — never silently returned as a zero-value node that looks like a real, built producer (AC-10)."
+    },
+    "MET-G3102": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "FiscalAPI method {method} called on a copied value",
+      "remedy": "Hold the *FiscalAPI returned by New/Load; do not copy the struct. A copied value aliases its mutex and state across two values, so the copy guard rejects the call (SEC-020 family)."
+    },
+    "MET-G3103": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "operation {operation} requires {dependency} to be wired",
+      "remedy": "Wire the missing dependency (engine.finance via SetFinance, engine.tax via SetTax) before the operation. The fiscal circuit fails closed rather than fabricating a figure on an absent dependency (GR#17)."
+    },
+    "MET-G3104": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "planning funding level {level} is outside [0,1] or non-finite",
+      "remedy": "SetPlanningFunding accepts a fraction in [0,1]. An out-of-range or non-finite level is rejected, never silently clamped (AC-5)."
+    },
+    "MET-G3105": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "invalid input: {field} = {value}",
+      "remedy": "Money and counts are never negative, and rates must be finite and non-negative. Reject the bad input rather than storing it (GR#16)."
+    },
+    "MET-G3106": {
+      "severity": "error",
+      "module": "engine.fiscal",
+      "message": "monetary intermediate overflow computing {field}",
+      "remedy": "The gross x rate intermediate exceeded int64, so the honest net/clawback figure cannot be computed. It is surfaced rather than returning a net that reads roughly equal to gross at a high rate (SEC-094 class)."
+    },
+    "MET-G3200": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "data/maintenance.json could not be read or failed schema validation",
+      "remedy": "data/maintenance.json must exist, be well-formed JSON, and pass schema validation (at least two classes, each with a positive engineer-days/year rate, a positive simulation-years lifetime, and a non-empty disclosure). Correct the data file - the module never falls back to a partial config or a silent default (GR#15/GR#7)."
+    },
+    "MET-G3201": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "maintenance operation named unknown class {class}",
+      "remedy": "The named class key has no entry in data/maintenance.json. Use a resolvable class key (today engine.build zone types); the error is returned rather than a silently-zero-valued figure (AC-11)."
+    },
+    "MET-G3202": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "maintenance operation named unknown structure {structureId}",
+      "remedy": "The named structure reference was never registered. Query a registered structure; the error is returned rather than a silently-zero-valued view (AC-11)."
+    },
+    "MET-G3203": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "negative crew budget {budget}",
+      "remedy": "A crew daily budget is an engineer-day figure and must be non-negative. Reject the bad budget rather than storing it (AC-11)."
+    },
+    "MET-G3204": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "negative month advance {months}",
+      "remedy": "Age advances by simulation month index only; a negative advance would drive an age negative. Reject rather than mutate (AC-11)."
+    },
+    "MET-G3205": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "invalid maintenance input: {reason}",
+      "remedy": "The input is outside its documented domain (zero/duplicate structure id, non-positive job cost). Reject rather than silently accepting a no-op (AC-11)."
+    },
+    "MET-G3206": {
+      "severity": "error",
+      "module": "engine.maintenance",
+      "message": "MaintenanceAPI method {method} called on a struct-copied value",
+      "remedy": "A *MaintenanceAPI is a mutex-bearing value; a struct copy would alias its state. Construct via New/Load and call methods on that value (SEC-020)."
+    },
+    "MET-G3300": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "engine.comms data file at {path} is invalid: {reason}",
+      "remedy": "data/comms.json must declare exactly the six §35 connectivity eras in order (telephone-exchange, dial-up, broadband-hub, fibre-backbone, cellular-masts, submarine-cable), each with the documented gate values, and a valid sectors/eCommerce/post/drain/fulfilment block. Fix the offending field rather than silently substituting a default (GR#15)."
+    },
+    "MET-G3301": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "CommsAPI method {method} called on a struct-copied value",
+      "remedy": "A *CommsAPI is a mutex-bearing value; a struct copy would alias its state and corrupt the copy guard. Construct via Load/LoadDefault and call methods on that value (SEC-020)."
+    },
+    "MET-G3302": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "era value {era} is outside the six-era connectivity ladder",
+      "remedy": "Only the six §35 eras (telephone exchange through submarine cable) are valid inputs to a capability-gate query or an era advance. Reject an out-of-enum era rather than silently creating a zero-value era state (AC-10)."
+    },
+    "MET-G3303": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "era advance to {target} skips an intermediate era (current {current})",
+      "remedy": "The six-era ladder is monotonic and must be advanced one step at a time — a single advance may not skip an intermediate era (AC-2). Advance through each intermediate era first."
+    },
+    "MET-G3304": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "era {target} is not unlocked (milestone tier {tier} not reached)",
+      "remedy": "This era's §4 milestone tier has not been reached (or no milestone gate is wired — fail closed). Reach the tier via the unlock-tree system, or wire the gate, before advancing."
+    },
+    "MET-G3305": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "fulfilment-centre registration has no firm reference (engine.firms not wired)",
+      "remedy": "A fulfilment centre must register as a real firm through engine.firms (AC-7). Wire engine.firms via SetFirms before registering a fulfilment centre."
+    },
+    "MET-G3306": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "delivery movement has no logistics reference (engine.logistics not wired)",
+      "remedy": "Fulfilment-centre and last-mile-depot delivery trips are real engine.logistics movements (AC-8). Wire engine.logistics via SetLogistics before resolving deliveries."
+    },
+    "MET-G3307": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "postal service has no services reference (engine.services not wired)",
+      "remedy": "The sorting office and parcel hub draw from the generic §10 service pool (US-5). Wire engine.services via SetServices before registering postal infrastructure."
+    },
+    "MET-G3308": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "input {field} = {value} is outside its documented domain",
+      "remedy": "Wealth and counterplay offset are fractions in [0,1] (0-100%); letter/parcel volume inputs are non-negative. Reject an out-of-domain input rather than silently clamping (AC-11)."
+    },
+    "MET-G3309": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "input {field} is non-finite (NaN or ±Inf)",
+      "remedy": "A NaN or ±Inf value reached a numeric boundary. Reject it before any ordered range check, so a non-finite value can never slip through a range gate (SEC-093)."
+    },
+    "MET-G3310": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "sector {sector} is outside the documented sector buckets",
+      "remedy": "Remote-work share is sector-dependent (AC-4); only the five documented sector buckets (none/primary/secondary/tertiary/public) carry a remote-work affinity. Pass a valid sector."
+    },
+    "MET-G3311": {
+      "severity": "error",
+      "module": "engine.comms",
+      "message": "no fulfilment centre is registered",
+      "remedy": "A fulfilment-centre query or e-commerce-infrastructure precondition found no registered fulfilment centre. Register one via RegisterFulfilmentCentre first."
+    },
+    "MET-G3400": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "engine.capexport data invalid or inconsistent: {cause}",
+      "remedy": "data/capexport.json could not be loaded or failed schema validation (missing file, malformed JSON, a non-positive rate, an empty id/label/unit, a non-finite projection growth rate, or a duplicate line id). Fix the data file; every failure is registry-sourced, never a silent default substitution (AC-5)."
+    },
+    "MET-G3401": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "unknown exportable service line {line}",
+      "remedy": "A query or command named an ExportableService id that is not one of the catalogue's registered lines. Use one of the ten §36 in-scope lines (see data/capexport.json); never a zero-value surplus book silently returned for a line that does not exist (AC-5)."
+    },
+    "MET-G3402": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "insufficient surplus: requested {requested}, available {available}",
+      "remedy": "IssueContract was asked to sell more than the line's exportable slack (capacity − internal demand − already committed). Reduce the quantity or free capacity; the contract is rejected at issue time, never a silently-oversold contract that only fails later at the crossing (AC-8)."
+    },
+    "MET-G3403": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "invalid contract {contract}",
+      "remedy": "An operation addressed a contract id that was never issued, is already cancelled, or whose term has ended. Reject rather than silently no-op or return a zero-valued contract (AC-9)."
+    },
+    "MET-G3404": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "dependency not wired: {dependency} required for {operation}",
+      "remedy": "An operation that needs a wired dependency (engine.services / engine.finance / engine.projections) was invoked before that dependency was wired. Wire it via SetServices/SetFinance/SetProjections; fail loudly rather than fabricating a figure (GR#17)."
+    },
+    "MET-G3405": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "method {method} called on a struct-copied CapExportAPI",
+      "remedy": "A CapExportAPI method was called on a struct-copied value. A copied *CapExportAPI would alias its mutex/maps across two values, so the copy guard rejects the call (SEC-020)."
+    },
+    "MET-G3406": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "invalid contract input: {field}",
+      "remedy": "IssueContract/AccrueRevenue/SetMonth/SetDemandGrowth was handed an out-of-domain input — a non-positive quantity/term/rate, a negative rate, a non-monotonic month, or a non-finite quantity. Reject rather than silently clamp (GR#16)."
+    },
+    "MET-G3407": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "no crossing for line {line}",
+      "remedy": "CutInternalService was invoked for a line whose internal demand has not crossed its committed capacity — there is no shortfall to cut, so the choice is not offered. Check Crossing first; never a cut that silently reduces coverage by zero (AC-3)."
+    },
+    "MET-G3408": {
+      "severity": "error",
+      "module": "engine.capexport",
+      "message": "no engine.services instance bound for line {line}",
+      "remedy": "A surplus/coverage query addressed an exportable line with no engine.services instance bound via BindServiceLine. Bind one first; capacity/demand is always sourced through ServicesAPI, never invented (GR#20)."
+    },
+    "MET-G3500": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "checkpoint Manager method called on a struct-copied value, not the one NewManager constructed",
+      "remedy": "Always use the *Manager pointer NewManager returned; a struct copy gets its own independent mu while aliasing the same underlying save.Manager (SEC-020-class). Construct a second independent Manager via NewManager if needed."
+    },
+    "MET-G3501": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "checkpoint identifier \"{id}\" is not a valid single path component: {cause}",
+      "remedy": "A checkpoint ID becomes a bundle directory name under manual/, so it must pass serialize.ValidateShardName (no path separators, \"..\", \".\", drive markers, or trailing dot/space). Choose a plain identifier."
+    },
+    "MET-G3502": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "checkpoint operation rejected: another checkpoint operation is already in flight on the same Manager",
+      "remedy": "CreateCheckpoint/Revert are serialised per Manager; wait for the in-flight operation to complete (or fail) before retrying, mirroring feat.saveux's single-save-in-flight guard."
+    },
+    "MET-G3503": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "writing checkpoint-meta.json lineage sidecar for \"{dir}\" failed: {cause}",
+      "remedy": "The just-saved bundle is rolled back (removed) so no half-recorded checkpoint is left discoverable. Check filesystem permissions/free space and retry."
+    },
+    "MET-G3504": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "writing the active-head pointer (checkpoint-head.json) failed: {cause}",
+      "remedy": "The just-created bundle is rolled back so the on-disk fork tree never disagrees with the recorded active head. Check filesystem permissions/free space and retry."
+    },
+    "MET-G3505": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "reading the active-head pointer (checkpoint-head.json) failed: {cause}",
+      "remedy": "The pointer file exists but is malformed. Restore it from a backup or remove it to reset the active-head tracking (Lineage degrades to 'no active head'; CurrentID surfaces this error)."
+    },
+    "MET-G3506": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "checkpoint parent \"{parent}\" does not name an existing checkpoint",
+      "remedy": "Lineage is recorded explicitly (AC-4) and must not dangle. Create the parent checkpoint first, or pass an empty parent to create a root checkpoint."
+    },
+    "MET-G3507": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "revert target \"{target}\" is not a checkpoint (no checkpoint-meta.json)",
+      "remedy": "Revert requires a checkpoint bundle. Ensure the target was created by CreateCheckpoint/Revert (a regular manual save is not a checkpoint)."
+    },
+    "MET-G3508": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "could not enumerate checkpoints under \"{root}\" / \"{dir}\": {cause}",
+      "remedy": "A filesystem-level failure listing the manual/ checkpoint subdirectory (distinct from a single malformed bundle, which Lineage skips per-entry). Check filesystem permissions and the root path."
+    },
+    "MET-G3509": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "pruning failed partway; the retained set was left unchanged: {cause}",
+      "remedy": "Pruning's rename phase failed and every already-staged branch was renamed back (AC-9). Check filesystem permissions/free space; the extra abandoned branches will be retried on the next prune."
+    },
+    "MET-G3510": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "invalid fork-retention configuration: value {value} is negative",
+      "remedy": "SetMaxRetainedForks requires a non-negative N. Pass 0 to retain no abandoned branches, or MaxRetainedForks for the default."
+    },
+    "MET-G3511": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "checkpoint name \"{name}\" already occupies the manual/ namespace (an existing checkpoint or manual save)",
+      "remedy": "The manual/ namespace is shared with feat.saveux's SaveManual. Re-creating the name would save-over the prior bundle (destroying player data) and, for a checkpoint, could form a lineage cycle. Choose a new name, or Load/Revert the existing checkpoint / save instead."
+    },
+    "MET-G3512": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "fork-name sequence exhausted while deriving a fork off \"{target}\"",
+      "remedy": "The persisted monotonic fork counter saturated (int64 max) while skipping past colliding checkpoint names. Unreachable in normal play; if seen, the checkpoint-head pointer was hand-edited — restore it from a backup."
+    },
+    "MET-G3513": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "revert failed and could not restore the prior active head \"{priorHead}\" (restore error: {restoreCause}; original error: {originalCause})",
+      "remedy": "The revert's fork-save or head-write failed after the target had already been loaded into the live participants, and reloading the prior head to undo it also failed. Live state is left reverted while CurrentID is unchanged; investigate the restore error and reload the prior head manually."
+    },
+    "MET-G3514": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "checkpoint name \"{name}\" is too long ({length} bytes; limit {max}) — a longer name would make its derived fork name exceed the manual-save name limit and become permanently unrevertible",
+      "remedy": "Checkpoint names are bounded to reserve the \".fork<seq>\" suffix budget so every created checkpoint stays revertible at any fork sequence. Shorten the name to maxCheckpointNameLen bytes or fewer."
+    },
+    "MET-G3515": {
+      "severity": "error",
+      "module": "feat.checkpoint",
+      "message": "cannot revert to \"{target}\": the derived fork name \"{forkName}\" is {length} bytes, over the manual-save name limit {max} — a fork-of-fork chain has grown the name past what a further revert could name",
+      "remedy": "Revert derives \"<target>.fork<seq>\", and each fork is itself a valid revert target, so a chain of reverts grows the name by \".fork<seq>\" per level. This checkpoint cannot be reverted again because the next fork's name would exceed the 255-byte manual-save limit; revert to an earlier, shorter-named checkpoint instead. The rejection happens before any state is loaded, so live state is untouched."
+    },
+    "MET-G3600": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "data/social.json could not be loaded or failed schema validation (dir {dir}): {cause}",
+      "remedy": "Check that data/social.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", carries finite non-negative caseload rates, a non-negative hostel/foster capacity and carers figure, and an interventionHarmThreshold in [0,1]. The social-services balance set never falls back to a silent default (GR#15/GR#7)."
+    },
+    "MET-G3601": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "social-services category {category} is not one of the five registered provision categories",
+      "remedy": "Use one of the five §40 categories (family-support, homelessness, disability-carers, fostering, addiction). An unknown category is rejected rather than silently creating a zero-value case (AC-13)."
+    },
+    "MET-G3602": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "case {case} is not in the social-services case ledger",
+      "remedy": "Pass a CaseID minted by this module (AdvanceMonth, InjectCrisis, RecordChildProtectionIntervention, or EscalateCase). An unknown id is rejected rather than silently creating a zero-value case record (AC-13)."
+    },
+    "MET-G3603": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "funding level {level} for category {category} is outside [0,1]",
+      "remedy": "Funding levels are fractions in [0,1]. An out-of-domain level is rejected rather than silently clamped."
+    },
+    "MET-G3604": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "escalation destination {destination} is not a registered social-services category",
+      "remedy": "EscalateCase requires a destination category that exists (AC-14). An escalation is a close-plus-reopen pair, so a phantom destination would unbalance the case-accounting identity."
+    },
+    "MET-G3605": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "case {case} cannot be closed: already closed with status {status}",
+      "remedy": "A case can only be resolved/escalated/lost-to-follow-up once (AC-14). A double close is rejected rather than silently drifting the accounting identity."
+    },
+    "MET-G3606": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "funding cut for category {category} with FuseYears {fuseYears} lacks a projected-consequence payload",
+      "remedy": "A Slow-Fuse funding cut (FuseYears above the A5 threshold) must carry a non-empty projected Series (AC-10). This module rejects it before it reaches engine.projections."
+    },
+    "MET-G3607": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "funding cut for category {category} carried a non-finite or non-positive FuseYears {fuseYears}",
+      "remedy": "FuseYears must be a finite positive number. A degenerate tag is rejected so it can never be misread as under-threshold by a float comparison (AC-10)."
+    },
+    "MET-G3608": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "SocialAPI method {method} called on a struct-copied value",
+      "remedy": "A *SocialAPI is a mutex-bearing value; a struct copy would alias its state. Construct via New/Load and call methods on that value (SEC-020)."
+    },
+    "MET-G3609": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "SocialAPI operation {operation} needs dependency {dependency}, which is not wired",
+      "remedy": "Wire the dependency via SetCitizens/SetServices/SetFamilyStressSource/SetProjections before the operation. A missing dependency fails loudly rather than no-op-ing."
+    },
+    "MET-G3610": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "projected-consequence series for category {category} contains a non-finite value",
+      "remedy": "The projected Series must contain only finite values; a NaN/±Inf would poison the projections curve, so it is rejected at the write boundary (GR#16)."
+    },
+    "MET-G3612": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "case {case} cannot be closed in month {month}: it opened in month {openedMonth}",
+      "remedy": "Pass a month at or after the case's OpenedMonth. A back-dated closure would record a Resolved/Escalated/LostToFollowUp event in a month with no matching Opened, driving the AC-11 conservation identity negative (GR#21)."
+    },
+    "MET-G3613": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "caseload driver input {field} = {value} is outside its documented domain {domain}",
+      "remedy": "Pass driver inputs within their documented domains: Deprivation and NightlifeDensity in [0,1], CrowdingStress and FinancialStress >= 0 (finite), and UnemploymentMonths >= 0. An out-of-domain value is rejected rather than producing an unbounded case-proposal count (SEC-181 resource-exhaustion)."
+    },
+    "MET-G3614": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "caseload proposal count {proposals} exceeds the per-month resource ceiling {max}",
+      "remedy": "The per-month (or per-crisis-event) case-proposal count is bounded by the resource ceiling maxCaseloadProposalsPerMonth, mirroring engine.core's MaxAdvanceTicksPerCall. A driver magnitude or config rate whose product with the data rates would allocate more cases than the ceiling is rejected before any allocation — it is a resource bound on the COUNT, not a balance bound on the driver, so a legitimate balance pass never reaches it (SEC-195)."
+    },
+    "MET-G3615": {
+      "severity": "error",
+      "module": "engine.social",
+      "message": "projected-consequence series carries {points} points, over the resource ceiling {max}",
+      "remedy": "The projected-consequence Series a funding cut carries is bounded by the resource ceiling maxProjectionSeriesPoints, mirroring maxCaseloadProposalsPerMonth. A series over the ceiling is rejected at the write boundary before any O(n) scan or allocation runs over it — it is a resource bound on the LENGTH, not a balance bound on the series values, so a legitimate slow-fuse consequence (a handful of months to a century) never reaches it (SEC-202)."
     }
   }
 }

@@ -36,7 +36,9 @@
 // invent or destroy units, and saturation is the invariant there.
 //
 // The rejecting helpers (SafeInt64 / BoundedFloat / SafeInt64FromAny /
-// SafeFloat64FromAny) are the *boundary-validation* path: module entry
+// SafeFloat64FromAny, plus the string-length boundary SanitizeEventID and
+// the bounded-history primitive BoundedLedger — SEC-203's BoundedString +
+// BoundedLedger pair) are the *boundary-validation* path: module entry
 // points, command handlers, and data loaders, where a bad input must be
 // rejected with a registry-sourced error (GR#7), never silently clamped.
 // This is SEC-093's exact shape — an ordered range check (level < 0 ||
