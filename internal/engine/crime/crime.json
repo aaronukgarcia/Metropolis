@@ -1,0 +1,89 @@
+{
+  "version": 1,
+  "disclosure": "PLACEHOLDER pending M2 Batch tuning (balance-number regime, ASM-327) -- not yet Aaron-confirmed. The ACs check mechanism and SHAPE (per-type driver isolation, concave deterrence, clearance-vs-prevention separation, sustained-formation, full-stack removal, decapitation respawn, threat precursor lead window, justice-chain conservation) never these specific magnitudes.",
+  "generation": {
+    "baseRatesPer100kPerMonth": {
+      "pettyTheft": 120.0,
+      "burglary": 60.0,
+      "vehicleCrime": 45.0,
+      "criminalDamage": 80.0,
+      "violentCrime": 30.0,
+      "drugsSupply": 25.0,
+      "organisedCrime": 8.0,
+      "fraudCyber": 15.0,
+      "smuggling": 5.0
+    },
+    "driverElasticity": {
+      "deprivation": 1.5,
+      "inequality": 2.0,
+      "youthUnemployment": 1.8,
+      "blight": 1.2,
+      "leisureDesert": 1.0,
+      "lowPresence": 0.8,
+      "eraWealth": 2.5,
+      "smugglingPressure": 3.0
+    }
+  },
+  "deterrence": {
+    "halfSaturationCoverage": 5.0,
+    "disclosure": "PLACEHOLDER (balance-number regime) -- AC-4 checks that deterrence is strictly concave in patrol coverage (marginal reduction decreasing), never this half-saturation magnitude."
+  },
+  "clearance": {
+    "ratePerDetective": 0.05,
+    "maxRate": 0.9,
+    "disclosure": "PLACEHOLDER (balance-number regime) -- AC-5 checks that clearance suppresses persistence independently of prevention, never these magnitudes."
+  },
+  "prevention": {
+    "scalePerInfrastructure": 2.0,
+    "disclosure": "PLACEHOLDER (balance-number regime) -- AC-5 checks that prevention cuts generation independently of clearance, never this scale."
+  },
+  "mix": {
+    "defaultPatrol": 0.34,
+    "defaultDetective": 0.33,
+    "defaultCommunity": 0.33,
+    "total": 1.0,
+    "disclosure": "PLACEHOLDER (balance-number regime) -- the pre-HQ default strategy mix and the documented sum-total the three weights must equal (AC-10/AC-15)."
+  },
+  "safety": {
+    "halfSaturationActiveCrime": 500.0,
+    "disclosure": "PLACEHOLDER (balance-number regime) -- the safety term exposed for engine.attract's pushed-input surface (US-6) is a monotonic inversion of per-district active crime; this half-saturation is the shape parameter, never a tuned balance magnitude."
+  },
+  "gangs": {
+    "formationMonths": 24,
+    "youthUnemploymentThreshold": 0.15,
+    "blightThreshold": 0.2,
+    "lowClearanceThreshold": 0.4,
+    "regenerationThreshold": 0.5,
+    "strengthDecayPerMonth": 0.15,
+    "removedStrengthThreshold": 0.05,
+    "crimeUplift": 0.5,
+    "recruitmentRate": 0.2,
+    "respawnWindowMonths": 12,
+    "names": [
+      "The Foundry Crew",
+      "The Dockside Set",
+      "The Hollow Crown",
+      "The Iron Row Boys",
+      "The Cinder Lane Mob"
+    ],
+    "disclosure": "PLACEHOLDER (balance-number regime, ASM-327) -- §28 gives mechanism and direction only. AC-6/AC-8/AC-9 check the persistence/removal/respawn SHAPE, never these thresholds or the respawn window magnitude."
+  },
+  "threat": {
+    "minLeadMonths": 6,
+    "maxLevel": 10.0,
+    "growthPerExposure": 0.3,
+    "dampingPerFunding": 0.4,
+    "dampingPerLiaison": 0.2,
+    "baseTriggerProbability": 0.02,
+    "fundingProbabilityDamping": 0.9,
+    "disclosure": "PLACEHOLDER (balance-number regime) -- AC-11 checks the precursor lead window (no unconditioned per-tick draw) and that funding strictly reduces trigger probability, never the lead-window length or probability magnitudes."
+  },
+  "justice": {
+    "releaseNoChargeRate": 0.15,
+    "convictionRate": 0.8,
+    "prisonSentenceRate": 0.6,
+    "backlogReleaseThreshold": 100,
+    "backlogPressureHalfSaturation": 200,
+    "disclosure": "PLACEHOLDER (balance-number regime, ASM-327) -- AC-12/AC-13 check the conservation identities, independent sourcing, and the release mechanism's causal feedback, never these rates or the release threshold magnitude."
+  }
+}
