@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "engine.comms (MOD-048, §35) balance surface — the six-era connectivity ladder and its four capability gates, remote-work sector affinities, the letters-vs-parcels trend parameters, the e-commerce retail-share curve and its fulfilment-centre/last-mile-depot infrastructure floor, the high-street-drain/counterplay weighting, and the fulfilment/last-mile/postal facility figures. GR#15: every figure below is balance data read at Load time, never a Go literal in internal/engine/comms/*.go. The era ORDER and NAMES are §35's fixed vocabulary (a schema fact); every VALUE attached to them is a directional placeholder pending the M2 balance pass (ASM-logged — see docs/planning/acceptance/engine.comms.md Escalations)."
+  },
+  "eras": [
+    {
+      "id": "telephone-exchange",
+      "name": "Telephone exchange",
+      "tier": 0,
+      "officeTierCeiling": 1,
+      "dataCentreEligible": false,
+      "researchRateModifier": 1.0,
+      "remoteWorkBase": 0.02,
+      "letterFactor": 1.0,
+      "parcelEraFactor": 1.0,
+      "connectivity": 0.05,
+      "cellularSubTier": 0
+    },
+    {
+      "id": "dial-up",
+      "name": "Dial-up",
+      "tier": 2,
+      "officeTierCeiling": 1,
+      "dataCentreEligible": false,
+      "researchRateModifier": 1.1,
+      "remoteWorkBase": 0.05,
+      "letterFactor": 0.95,
+      "parcelEraFactor": 1.1,
+      "connectivity": 0.15,
+      "cellularSubTier": 0
+    },
+    {
+      "id": "broadband-hub",
+      "name": "Broadband hub",
+      "tier": 4,
+      "officeTierCeiling": 2,
+      "dataCentreEligible": false,
+      "researchRateModifier": 1.3,
+      "remoteWorkBase": 0.12,
+      "letterFactor": 0.85,
+      "parcelEraFactor": 1.25,
+      "connectivity": 0.35,
+      "cellularSubTier": 0
+    },
+    {
+      "id": "fibre-backbone",
+      "name": "Fibre backbone",
+      "tier": 6,
+      "officeTierCeiling": 3,
+      "dataCentreEligible": true,
+      "researchRateModifier": 1.6,
+      "remoteWorkBase": 0.25,
+      "letterFactor": 0.7,
+      "parcelEraFactor": 1.5,
+      "connectivity": 0.65,
+      "cellularSubTier": 0
+    },
+    {
+      "id": "cellular-masts",
+      "name": "Cellular masts (2G-5G)",
+      "tier": 8,
+      "officeTierCeiling": 4,
+      "dataCentreEligible": true,
+      "researchRateModifier": 2.0,
+      "remoteWorkBase": 0.4,
+      "letterFactor": 0.55,
+      "parcelEraFactor": 1.9,
+      "connectivity": 0.85,
+      "cellularSubTier": 5
+    },
+    {
+      "id": "submarine-cable",
+      "name": "Submarine cable landing station",
+      "tier": 10,
+      "officeTierCeiling": 5,
+      "dataCentreEligible": true,
+      "researchRateModifier": 3.0,
+      "remoteWorkBase": 0.55,
+      "letterFactor": 0.4,
+      "parcelEraFactor": 2.4,
+      "connectivity": 1.0,
+      "cellularSubTier": 5
+    }
+  ],
+  "sectors": {
+    "none": 0.0,
+    "primary": 0.1,
+    "secondary": 0.3,
+    "tertiary": 0.7,
+    "public": 0.4
+  },
+  "eCommerce": {
+    "shareBase": 0.0,
+    "shareWealthWeight": 1.0,
+    "noInfrastructureFloor": 0.08
+  },
+  "post": {
+    "baseLetters": 100000.0,
+    "baseParcels": 20000.0,
+    "parcelWealthSensitivity": 2.0,
+    "parcelShareSensitivity": 1.5
+  },
+  "drain": {
+    "drainPerShare": 1.0,
+    "maxCounterplayDampening": 0.75
+  },
+  "fulfilment": {
+    "name": "Fulfilment centre",
+    "staff": 2500,
+    "premises": "industrial"
+  },
+  "lastMileDepot": {
+    "name": "Last-mile depot",
+    "staff": 150,
+    "premises": "industrial",
+    "shelfCapacity": 10000
+  },
+  "postalServices": {
+    "kind": "postal",
+    "kindName": "Post & parcels",
+    "sortingOffice": {
+      "id": "comms:sorting-office",
+      "capacityRaw": "200000 items/d",
+      "coverageRadius": 50.0
+    },
+    "parcelHub": {
+      "id": "comms:parcel-hub",
+      "capacityRaw": "50000 parcels/d",
+      "coverageRadius": 30.0
+    }
+  }
+}
