@@ -1,0 +1,28 @@
+{
+  "$comment": "engine.refuse (MOD-039, §25/§31) module-owned balance surface — the waste–health loop's player-felt numbers, loaded via internal/engine/refuse's Load (foundation/data's generic Load[T]), mirroring engine.market's data/market.json, engine.logistics' data/logistics.json, and engine.services' data/services.json precedent of a module-owned data file. GR#15: every figure below is a DIRECTIONAL PLACEHOLDER pending the M2 balance pass (see docs/planning/acceptance/engine.refuse.md Escalations); none is spec-stated. Tonnage is tracked in whole KILOGRAMS (kg) across the module so the AC-11 mass-conservation identity is integer-exact; capacities are therefore kg figures.",
+  "version": 1,
+  "binCapacities": {
+    "residential": { "label": "Wheelie bin", "capacityKg": 240 },
+    "commercial": { "label": "Trade bin", "capacityKg": 1100 },
+    "industrial": { "label": "Skip", "capacityKg": 6000 }
+  },
+  "wasteRates": {
+    "residential": { "perDriverPerTickKg": 0.9 },
+    "commercial": { "perDriverPerTickKg": 2.5 },
+    "industrial": { "perDriverPerTickKg": 4.0 }
+  },
+  "streamMix": { "recycling": 0.30, "food": 0.15 },
+  "contamination": {
+    "resaleValuePerKgMicropounds": 2.0,
+    "penaltyPerContamination": 0.5
+  },
+  "compost": { "conversionRatio": 0.6 },
+  "vermin": {
+    "perKgOverflowPerTick": 0.001,
+    "landValuePenaltyPerVermin": 0.02,
+    "fireRiskPerVermin": 0.01
+  },
+  "incineration": { "energyPerKg": 0.4, "airshedPollutionPerKg": 0.3 },
+  "funding": { "fundingThreshold": 0.5 },
+  "trucks": { "truckCapacityKg": 12000, "crewsPerTruck": 3.0 }
+}
