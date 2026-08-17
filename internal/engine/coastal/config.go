@@ -115,6 +115,63 @@ const numSeasons = 4
 // this cap.
 const maxFrequencyCap int64 = 10_000
 
+// maxCasesPerMonth is the documented ceiling on the per-month case mint —
+// MaxArrivalsPerMonth × MaxBoatSize, the total number of case records a single
+// Advance can allocate. maxFrequencyCap bounds each FACTOR at 10_000, but the
+// product (up to maxFrequencyCap² = 10⁸) is what drives Advance's
+// make([]Case, 0, totalSize) allocation: 10⁸ × 56-byte Case records is a
+// ~5.6 GB single-call backing array — a validated-config OOM (SEC-220).
+// Bounding the product, not just the factors, caps one Advance at ~1M cases
+// (~56 MB), finite and allocatable, while remaining ~1000× the shipped data
+// (50 boats/month × 20 people/boat = 1000 cases/month). GR#15 data-placeholder
+// bound, not a storage-derived one (int64 carries none).
+const maxCasesPerMonth int64 = 1_000_000
+
+// maxSatisfactionFrictionPerCase is the documented magnitude ceiling on the
+// per-overflow-case satisfaction friction (SatisfactionFrictionPerCase). The
+// field is finite ≥ 0 like every coefficient, but a finite value large enough
+// (e.g. 1e308) drives effectiveFriction — and the accumulated friction — to
+// +Inf, leaking into SatisfactionFriction() and the ticker/UI (SEC-221). This
+// ceiling rejects only the +Inf-driving magnitudes (~5×10⁷ × the shipped 0.02)
+// while accepting every legitimate config. GR#15 data-placeholder bound.
+const maxSatisfactionFrictionPerCase = 1_000_000.0
+
+// maxSatisfactionFriction is the finite saturation ceiling for the cumulative
+// friction accumulator (defence in depth, SEC-221). The per-case value is
+// bounded by maxSatisfactionFrictionPerCase, but effectiveFriction also scales
+// by the (unbounded) HousingApproachFrictionIncreasePerUnit coefficient, so a
+// still-valid config can produce a non-finite per-month delta; the accumulator
+// saturates here so SatisfactionFriction() can never return +Inf. Far beyond
+// any legitimate run (~10¹³ months at the shipped 0.02/case × 1000 cases),
+// never reached in practice. GR#15 data-placeholder bound.
+const maxSatisfactionFriction = 1e18
+
+// maxFrequencyMultiplier is the documented sane ceiling on the era/season
+// frequency multipliers and WorldConditionsScale (AC-3). These scale
+// BaseArrivalRate (already bounded at maxFrequencyCap) to the per-month
+// arrival rate. Each was previously validated only "finite and >= 0", so a
+// config like {EraMultipliers[0]=1e308, SeasonMultipliers[0]=1e308,
+// WorldConditionsScale=1e308} passed Validate while rateForMonth's product
+// overflowed to +Inf — and arrivalCount's non-finite branch (ordered before
+// the ceiling) collapsed that +Inf to ZERO arrivals instead of the max
+// (SEC-228). Bounding each factor at maxFrequencyCap keeps the worst-case
+// product (10⁴ × 10⁴ × 10⁴ × ~10⁴ ≈ 1e16) finite, while the shipped
+// magnitudes (≤ 1.8×) sit ~10⁴ below it. GR#15 data-placeholder bound, not a
+// storage-derived one.
+const maxFrequencyMultiplier = 10_000.0
+
+// maxPipelineMonths is the documented sane ceiling on the pipeline duration
+// range (MinMonths/MaxMonths, AC-6/AC-7). Each was previously validated only
+// "> 0"/">= minMonths", so Config{MinMonths=1, MaxMonths=MaxInt64} passed
+// Validate while durationFor returned up to MaxInt64 and ResolveMonth =
+// month + dm wrapped negative — a wrapped-negative resolve month reads as
+// "immediately due", so the due-check granted the case on the very next
+// Advance (SEC-229). Bounding the range here keeps durationFor's base modest
+// (the shipped 3..9 months is ~10³ below it), and Advance saturates the
+// month + dm addition as defence in depth. GR#15 data-placeholder bound, not
+// a storage-derived one.
+const maxPipelineMonths int64 = 10_000
+
 // fileCoastal is data/coastal.json's filename, relative to the resolved
 // data directory (see foundation/data.ResolveDataDir).
 const fileCoastal = "coastal.json"
@@ -221,8 +278,8 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 
 	// Frequency (AC-3).
 	f := raw.Frequency
-	if !num.IsFinite(f.BasePerMonth) || f.BasePerMonth < 0 {
-		return fail("frequency.basePerMonth", "must be finite and >= 0")
+	if !num.IsFinite(f.BasePerMonth) || f.BasePerMonth < 0 || f.BasePerMonth > float64(maxFrequencyCap) {
+		return fail("frequency.basePerMonth", "must be finite and in [0, maxFrequencyCap] — the documented frequency ceiling (SEC-220)")
 	}
 	if f.MaxBoatSize <= 0 || f.MaxBoatSize > maxFrequencyCap {
 		return fail("frequency.maxBoatSize", "must be in (0, maxFrequencyCap] — the documented sane ceiling (SEC-210)")
@@ -230,12 +287,15 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 	if f.MaxArrivalsPerMonth <= 0 || f.MaxArrivalsPerMonth > maxFrequencyCap {
 		return fail("frequency.maxArrivalsPerMonth", "must be in (0, maxFrequencyCap] — the documented sane ceiling (SEC-210)")
 	}
+	if f.MaxBoatSize*f.MaxArrivalsPerMonth > maxCasesPerMonth {
+		return fail("frequency", "maxBoatSize × maxArrivalsPerMonth must be <= maxCasesPerMonth — the documented per-month case-mint ceiling (SEC-220)")
+	}
 	if len(f.EraMultipliers) != numEraTiers {
 		return fail("frequency.eraMultipliers", "must declare exactly 14 multipliers (tier 0..13)")
 	}
 	for i, m := range f.EraMultipliers {
-		if !num.IsFinite(m) || m < 0 {
-			return fail("frequency.eraMultipliers", "each multiplier must be finite and >= 0")
+		if !num.IsFinite(m) || m < 0 || m > maxFrequencyMultiplier {
+			return fail("frequency.eraMultipliers", "each multiplier must be finite and in [0, maxFrequencyMultiplier] — the documented frequency-multiplier ceiling (SEC-228)")
 		}
 		c.EraMultipliers[i] = m
 	}
@@ -243,13 +303,13 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 		return fail("frequency.seasonMultipliers", "must declare exactly 4 multipliers (season 0..3)")
 	}
 	for i, m := range f.SeasonMultipliers {
-		if !num.IsFinite(m) || m < 0 {
-			return fail("frequency.seasonMultipliers", "each multiplier must be finite and >= 0")
+		if !num.IsFinite(m) || m < 0 || m > maxFrequencyMultiplier {
+			return fail("frequency.seasonMultipliers", "each multiplier must be finite and in [0, maxFrequencyMultiplier] — the documented frequency-multiplier ceiling (SEC-228)")
 		}
 		c.SeasonMultipliers[i] = m
 	}
-	if !num.IsFinite(f.WorldConditionsScale) || f.WorldConditionsScale < 0 {
-		return fail("frequency.worldConditionsScale", "must be finite and >= 0")
+	if !num.IsFinite(f.WorldConditionsScale) || f.WorldConditionsScale < 0 || f.WorldConditionsScale > maxFrequencyMultiplier {
+		return fail("frequency.worldConditionsScale", "must be finite and in [0, maxFrequencyMultiplier] — the documented frequency-multiplier ceiling (SEC-228)")
 	}
 	c.BaseArrivalRate = f.BasePerMonth
 	c.MaxBoatSize = f.MaxBoatSize
@@ -273,18 +333,18 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 	if r.HotelCostPerCase < 0 {
 		return fail("reception.hotelCostPerCase", "must be >= 0")
 	}
-	if !num.IsFinite(r.SatisfactionFrictionPerCase) || r.SatisfactionFrictionPerCase < 0 {
-		return fail("reception.satisfactionFrictionPerCase", "must be finite and >= 0")
+	if !num.IsFinite(r.SatisfactionFrictionPerCase) || r.SatisfactionFrictionPerCase < 0 || r.SatisfactionFrictionPerCase > maxSatisfactionFrictionPerCase {
+		return fail("reception.satisfactionFrictionPerCase", "must be finite and in [0, maxSatisfactionFrictionPerCase] — the documented friction magnitude ceiling (SEC-221)")
 	}
 	c.Reception = ReceptionConfig(r)
 
 	// Pipeline (AC-6/AC-7).
 	p := raw.Pipeline
-	if p.MinMonths <= 0 {
-		return fail("pipeline.minMonths", "must be > 0 (months-long pipeline)")
+	if p.MinMonths <= 0 || p.MinMonths > maxPipelineMonths {
+		return fail("pipeline.minMonths", "must be in (0, maxPipelineMonths] — the documented pipeline-duration ceiling (SEC-229)")
 	}
-	if p.MaxMonths < p.MinMonths {
-		return fail("pipeline.maxMonths", "must be >= minMonths")
+	if p.MaxMonths < p.MinMonths || p.MaxMonths > maxPipelineMonths {
+		return fail("pipeline.maxMonths", "must be in [minMonths, maxPipelineMonths] — the documented pipeline-duration ceiling (SEC-229)")
 	}
 	if !num.IsFinite(p.GrantRate) || p.GrantRate < 0 || p.GrantRate > 1 {
 		return fail("pipeline.grantRate", "must be in [0,1]")
@@ -353,24 +413,27 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 // shape's invariant checks; it is deliberately narrow — it only rejects a
 // config whose fields are out-of-domain (GR#15/GR#16).
 func (c Config) Validate() error {
-	if !num.IsFinite(c.BaseArrivalRate) || c.BaseArrivalRate < 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "baseArrivalRate", "reason": "must be finite and >= 0"})
+	if !num.IsFinite(c.BaseArrivalRate) || c.BaseArrivalRate < 0 || c.BaseArrivalRate > float64(maxFrequencyCap) {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "baseArrivalRate", "reason": "must be finite and in [0, maxFrequencyCap] (SEC-220)"})
 	}
 	if c.MaxBoatSize <= 0 || c.MaxBoatSize > maxFrequencyCap || c.MaxArrivalsPerMonth <= 0 || c.MaxArrivalsPerMonth > maxFrequencyCap {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "frequency", "reason": "maxBoatSize and maxArrivalsPerMonth must be in (0, maxFrequencyCap]"})
 	}
+	if c.MaxBoatSize*c.MaxArrivalsPerMonth > maxCasesPerMonth {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "frequency", "reason": "maxBoatSize × maxArrivalsPerMonth must be <= maxCasesPerMonth (SEC-220)"})
+	}
 	for i, m := range c.EraMultipliers {
-		if !num.IsFinite(m) || m < 0 {
-			return errs.New(ErrDataInvalid, "", map[string]any{"field": "eraMultipliers", "reason": "each multiplier must be finite and >= 0", "index": i})
+		if !num.IsFinite(m) || m < 0 || m > maxFrequencyMultiplier {
+			return errs.New(ErrDataInvalid, "", map[string]any{"field": "eraMultipliers", "reason": "each multiplier must be finite and in [0, maxFrequencyMultiplier] (SEC-228)", "index": i})
 		}
 	}
 	for i, m := range c.SeasonMultipliers {
-		if !num.IsFinite(m) || m < 0 {
-			return errs.New(ErrDataInvalid, "", map[string]any{"field": "seasonMultipliers", "reason": "each multiplier must be finite and >= 0", "index": i})
+		if !num.IsFinite(m) || m < 0 || m > maxFrequencyMultiplier {
+			return errs.New(ErrDataInvalid, "", map[string]any{"field": "seasonMultipliers", "reason": "each multiplier must be finite and in [0, maxFrequencyMultiplier] (SEC-228)", "index": i})
 		}
 	}
-	if !num.IsFinite(c.WorldConditionsScale) || c.WorldConditionsScale < 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "worldConditionsScale", "reason": "must be finite and >= 0"})
+	if !num.IsFinite(c.WorldConditionsScale) || c.WorldConditionsScale < 0 || c.WorldConditionsScale > maxFrequencyMultiplier {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "worldConditionsScale", "reason": "must be finite and in [0, maxFrequencyMultiplier] (SEC-228)"})
 	}
 	if c.Rescue.CoastguardServiceID == "" || c.Rescue.LifeboatServiceID == "" {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "rescue", "reason": "service IDs must be non-empty"})
@@ -381,11 +444,11 @@ func (c Config) Validate() error {
 	if c.Reception.HotelCostPerCase < 0 {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.hotelCostPerCase", "reason": "must be >= 0"})
 	}
-	if !num.IsFinite(c.Reception.SatisfactionFrictionPerCase) || c.Reception.SatisfactionFrictionPerCase < 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.satisfactionFrictionPerCase", "reason": "must be finite and >= 0"})
+	if !num.IsFinite(c.Reception.SatisfactionFrictionPerCase) || c.Reception.SatisfactionFrictionPerCase < 0 || c.Reception.SatisfactionFrictionPerCase > maxSatisfactionFrictionPerCase {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.satisfactionFrictionPerCase", "reason": "must be finite and in [0, maxSatisfactionFrictionPerCase] (SEC-221)"})
 	}
-	if c.Pipeline.MinMonths <= 0 || c.Pipeline.MaxMonths < c.Pipeline.MinMonths {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "pipeline", "reason": "minMonths must be > 0 and maxMonths >= minMonths"})
+	if c.Pipeline.MinMonths <= 0 || c.Pipeline.MinMonths > maxPipelineMonths || c.Pipeline.MaxMonths < c.Pipeline.MinMonths || c.Pipeline.MaxMonths > maxPipelineMonths {
+		return errs.New(ErrDataInvalid, "", map[string]any{"field": "pipeline", "reason": "minMonths must be in (0, maxPipelineMonths] and maxMonths in [minMonths, maxPipelineMonths] (SEC-229)"})
 	}
 	if !num.IsFinite(c.Pipeline.GrantRate) || c.Pipeline.GrantRate < 0 || c.Pipeline.GrantRate > 1 {
 		return errs.New(ErrDataInvalid, "", map[string]any{"field": "pipeline.grantRate", "reason": "must be in [0,1]"})

@@ -1398,7 +1398,7 @@
     "MET-U608": {
       "severity": "error",
       "module": "ui.screen.menu",
-      "message": "failed to read profile file {path}",
+      "message": "failed to read profile file",
       "remedy": "A keymap or dashboard-layout profile could not be read from disk (file read or JSON/schema parse failure). Nothing was silently invented -- the load failed and reported this registry code; check the path and that the file is valid profile JSON. This one code is shared by keymap and layout profile reads (GR#3), mirroring MET-U605 for writes (SEC-212)."
     },
     "MET-U609": {
