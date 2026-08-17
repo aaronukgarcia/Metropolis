@@ -1164,3 +1164,32 @@ Two deliberate calibrations:
       (`code.json`, `tools/plan/bow-import.json` — GR#3)
 - [ ] No indirect identification introduced (developer, publisher, distinctive
       product-specific terminology)
+
+## Rule #23 — Nothing Is Committed Un-Attacked (NEW, 2026-08-11)
+
+Every code-bearing commit requires a recorded Destructive verdict on its BOW item(s). A Tester PASS proves the criteria hold; only the Destructive verdict proves the code survives someone actively trying to break it. No exceptions for "small", "obvious", "inherited", or "the lead wrote it".
+
+### Enforcement
+- Sourced mechanically by `claude-destructive-guard.js`.
+- Gated strictly for all engine/UI/data code and tooling/guards.
+- Exempts docs-only and test-only commits per the proportionality tier.
+
+---
+
+## Rule #24 — No Code Left Behind (NEW, 2026-08-13)
+
+Never destroy the working tree. Commit early, commit often, and push in the same session.
+
+### Enforcement
+- `claude-worktree-guard.js` blocks banned destructive commands like `git checkout --`, `git restore`, and `git reset --hard` fail-closed.
+- Encourages safe worktree and branch-isolation strategies via the `/worktree-stage` skill.
+
+---
+
+## Rule #25 — Graph-Driven Specification (NEW, 2026-08-17)
+
+Any acceptance criteria markdown (`docs/planning/acceptance/*.md`) that references cross-module interactions, method calls, or resource transfers MUST strictly conform to the existing graph edges and contracts registered in `code.json` at the time of commit.
+
+### Enforcement
+- Verified mechanically by the pre-commit spec-lint hook `claude-spec-guard.js` calling the static graph parser `tools/plan/spec-lint.js`.
+- Ensures BAs never write unreachable or speculative criteria that mismatch physical Go interfaces or dependency edges.
