@@ -91,6 +91,7 @@
       "U950-U999": "reserved for ui.alerts (internal/ui/screens/chrome, FEAT-013: Top bar + prioritised alert stack + crisis auto-pause -- alert/crisis construction rejections (missing jump target / missing ID, AC-3/AC-11), struct-copy rejection (SEC-020), malformed chrome.topbar figures patch. Split from the former U900-U999 block on 2026-08-14 per lead arbitration: chrome's four codes moved from MET-U901..U904 to MET-U950..U953 to clear the collision with ui.diagrams' MET-U900/MET-U905, which stay in U900-U949. Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
       "V000-V099": "reserved for ui.screen.proj (internal/ui/screens/proj, FEAT-019: F7 Projections screen — malformed f7.projections patch handling, unknown/stale subscription-ID drops (SF-7/PRJ-6), and the Screen struct-copy guard (SEC-020) — the U layer (U000-U999) is exhausted (ui.core/map/debug/keys/devmode/demo/menu/ticker/dash/alerts), so ui.screen.proj opens a second UI layer block. Checked against both this table AND `grep -rn \"MET-V\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V code existed either place.)",
       "V100-V199": "reserved for ui.screen.trade (internal/ui/screens/trade, FEAT-017: F5 Trade & Logistics screen — malformed f5.trade patch handling, unknown/stale subscription-ID drops, unknown-contract/unknown-commodity action rejections, and the Screen struct-copy guard (SEC-020) — second V-layer claim after ui.screen.proj's V000-V099. Checked against both this table AND `grep -rn \"MET-V1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V1xx code existed either place.)",
+      "V200-V299": "reserved for ui.screen.build (internal/ui/screens/build, FEAT-015: F3 Land & Construction screen — malformed f3.build patch handling, unknown/stale subscription-ID drops, unknown-zone/unknown-structure/unknown-building action rejections, and the Screen struct-copy guard (SEC-020) — third V-layer claim after ui.screen.proj's V000-V099 and ui.screen.trade's V100-V199. Checked against both this table AND `grep -rn \"MET-V2\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V2xx code existed either place.)",
     "G3700-G3799": "reserved for engine.coastal (internal/engine/coastal: §30 small-boat arrivals, rescue, reception/processing overflow, the granted/not-granted pipeline, policy sliders, and factual reporting — MOD-044. The E layer is fully exhausted and G3000-G3699 were claimed by earlier engine modules, so engine.coastal opens G3700-G3799 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G37\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G37xx code existed either place.)",
     "G3800-G3899": "reserved for engine.defence (internal/engine/defence: the §55 Defence & Central Government module — competitive grant pots + formula support, population-threshold mandates with choice-within-compliance and a priced refusal, and the integrated facilities (anti-cyclical payroll, personnel-as-citizens, procurement value, closure-as-shock output) — MOD-067. The E layer is fully exhausted and G3000-G3799 were claimed by earlier engine modules, so engine.defence opens G3800-G3899 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G38\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G38xx code existed either place.)"
     },
@@ -1662,6 +1663,42 @@
       "module": "ui.screen.trade",
       "message": "commodity {commodity} is not present in the current warehouse view",
       "remedy": "A create-contract or set-buffer action named a commodity (or an empty one) the f5.trade warehouse sub-surface does not currently carry. The action is refused loudly rather than silently creating a row (TRD-3); check the commodity key against the view's warehouse[] and that the warehouse sub-surface has been delivered."
+    },
+    "MET-V200": {
+      "severity": "warn",
+      "module": "ui.screen.build",
+      "message": "malformed f3.build patch could not be applied: {cause}",
+      "remedy": "The patch was not valid JSON for the f3.build view schema (bad JSON, unrecognised schemaVersion, or an oversized payload) and was dropped; the Land & Construction screen keeps its last-known-good state (SF-7/BLD-8). If this persists, check the sending engine module's view patch encoding for f3.build."
+    },
+    "MET-V201": {
+      "severity": "warn",
+      "module": "ui.screen.build",
+      "message": "delta for unknown or stale subscription {subscriptionId} dropped",
+      "remedy": "ApplyDelta received a protocol.Delta whose SubscriptionID was never bound via BindSubscription (or was bound and since unsubscribed). This is expected transiently around resubscribe/unsubscribe races; if it persists, check the caller's SubscriptionID-to-view routing (SF-7 — never applied, never a panic)."
+    },
+    "MET-V202": {
+      "severity": "error",
+      "module": "ui.screen.build",
+      "message": "method {method} called on a struct-copied Screen (not the *Screen New returned)",
+      "remedy": "A *build.Screen value was copied (`s2 := *s`) and a method was then called on the copy. Screen's mu is a sync.Mutex VALUE while subs is a map and the per-surface slices/pointers are reference types a copy ALIASES, so a copy is a second, independent lock over state meant to be exclusively owned by the original (SEC-020) — this call is rejected fail-closed instead of racing or corrupting the shared state. Fix the caller to hold and pass the single *Screen New returned, never a dereferenced copy of it."
+    },
+    "MET-V203": {
+      "severity": "warn",
+      "module": "ui.screen.build",
+      "message": "zone {zone} is not present in the current f3.build zones view",
+      "remedy": "A ZonePaint action named a zone slug the f3.build zones sub-surface does not currently carry. The action is refused loudly rather than issuing a malformed Zone command (BLD-2/BLD-7); check the zone slug against the view's zones[] and that the zones sub-surface has been delivered."
+    },
+    "MET-V204": {
+      "severity": "warn",
+      "module": "ui.screen.build",
+      "message": "cell ({x},{y}) has no demolition-compensation record in the current f3.build view",
+      "remedy": "A Demolish action named a cell the f3.build demolition sub-surface does not currently report compensation for. The action is refused loudly rather than silently deleting a structure (BLD-4: the cost-showing step cannot be skipped — no reported cost, no demolition command); check the cell against the view's demolition record."
+    },
+    "MET-V205": {
+      "severity": "warn",
+      "module": "ui.screen.build",
+      "message": "building {building} is not present in the current f3.build catalogue view",
+      "remedy": "A BuildOn action named a building ID the f3.build catalogue sub-surface does not currently carry. The action is refused loudly rather than silently creating a build order (BLD-7); check the building ID against the view's catalogue[] and that the catalogue sub-surface has been delivered."
     },
     "MET-G001": {
       "severity": "error",
