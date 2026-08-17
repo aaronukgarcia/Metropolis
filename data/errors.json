@@ -90,7 +90,9 @@
       "U900-U949": "reserved for ui.diagrams (internal/ui/diagrams, MOD-037: text-Sankey/chain/network diagram engines -- dangling-edge topology rejection (MET-U900, AC-7) and struct-copied diagram-cache Engine rejection (MET-U905, SEC-020). Split from the former U900-U999 block on 2026-08-14 per lead arbitration: ui.diagrams owns U900-U949 and keeps MET-U900/MET-U905, while chrome's four codes moved to U950-U999 (ui.alerts). Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
       "U950-U999": "reserved for ui.alerts (internal/ui/screens/chrome, FEAT-013: Top bar + prioritised alert stack + crisis auto-pause -- alert/crisis construction rejections (missing jump target / missing ID, AC-3/AC-11), struct-copy rejection (SEC-020), malformed chrome.topbar figures patch. Split from the former U900-U999 block on 2026-08-14 per lead arbitration: chrome's four codes moved from MET-U901..U904 to MET-U950..U953 to clear the collision with ui.diagrams' MET-U900/MET-U905, which stay in U900-U949. Checked against both this table AND `grep -rn MET-U9 internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current.)",
       "V000-V099": "reserved for ui.screen.proj (internal/ui/screens/proj, FEAT-019: F7 Projections screen — malformed f7.projections patch handling, unknown/stale subscription-ID drops (SF-7/PRJ-6), and the Screen struct-copy guard (SEC-020) — the U layer (U000-U999) is exhausted (ui.core/map/debug/keys/devmode/demo/menu/ticker/dash/alerts), so ui.screen.proj opens a second UI layer block. Checked against both this table AND `grep -rn \"MET-V\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V code existed either place.)",
-      "V100-V199": "reserved for ui.screen.trade (internal/ui/screens/trade, FEAT-017: F5 Trade & Logistics screen — malformed f5.trade patch handling, unknown/stale subscription-ID drops, unknown-contract/unknown-commodity action rejections, and the Screen struct-copy guard (SEC-020) — second V-layer claim after ui.screen.proj's V000-V099. Checked against both this table AND `grep -rn \"MET-V1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V1xx code existed either place.)"
+      "V100-V199": "reserved for ui.screen.trade (internal/ui/screens/trade, FEAT-017: F5 Trade & Logistics screen — malformed f5.trade patch handling, unknown/stale subscription-ID drops, unknown-contract/unknown-commodity action rejections, and the Screen struct-copy guard (SEC-020) — second V-layer claim after ui.screen.proj's V000-V099. Checked against both this table AND `grep -rn \"MET-V1\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-V1xx code existed either place.)",
+    "G3700-G3799": "reserved for engine.coastal (internal/engine/coastal: §30 small-boat arrivals, rescue, reception/processing overflow, the granted/not-granted pipeline, policy sliders, and factual reporting — MOD-044. The E layer is fully exhausted and G3000-G3699 were claimed by earlier engine modules, so engine.coastal opens G3700-G3799 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G37\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G37xx code existed either place.)",
+    "G3800-G3899": "reserved for engine.defence (internal/engine/defence: the §55 Defence & Central Government module — competitive grant pots + formula support, population-threshold mandates with choice-within-compliance and a priced refusal, and the integrated facilities (anti-cyclical payroll, personnel-as-citizens, procurement value, closure-as-shock output) — MOD-067. The E layer is fully exhausted and G3000-G3799 were claimed by earlier engine modules, so engine.defence opens G3800-G3899 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G38\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G38xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -2387,6 +2389,12 @@
       "message": "hire list contains citizen {citizen} already on firm {firm}'s roster",
       "remedy": "A firm's staff roster is a SET of real CitizenIDs (AC-4) — the same citizen cannot be hired twice into one firm. Reject the duplicate hire rather than silently deduping it into a smaller headcount (which would let a firm fake its staff floor, SEC-101)."
     },
+    "MET-G1412": {
+      "severity": "error",
+      "module": "engine.firms",
+      "message": "RemoveFirm targeted an unknown firm ID {firm}",
+      "remedy": "RemoveFirm is the compensating inverse of RegisterFirm — it can only undo a registration that actually happened. Reject an unknown FirmID rather than silently succeeding, or a caller would believe it had unwound a registration it never made and a refused win could leak a firm (SEC-159)."
+    },
     "MET-G1300": {
       "severity": "error",
       "module": "engine.tax",
@@ -2788,6 +2796,12 @@
       "module": "engine.news",
       "message": "NewsAPI method {method} called on a struct-copied value",
       "remedy": "Call methods on the *NewsAPI returned by New, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G2305": {
+      "severity": "error",
+      "module": "engine.news",
+      "message": "the embedded fact-word list could not be loaded or failed schema validation (field={field}, rule={rule}, cause={cause})",
+      "remedy": "The embedded news-facts.json must be valid JSON carrying a non-empty fact-bearing token list (all lowercase letter words, no duplicates) and a non-empty pending-tuning disclosure. Correct the embedded data file — the FactLock fails closed (rejects every rewrite) rather than silently verifying against an empty fact-word set (GR#15/GR#7)."
     },
     "MET-G2400": {
       "severity": "error",
@@ -3490,6 +3504,138 @@
       "module": "engine.social",
       "message": "projected-consequence series carries {points} points, over the resource ceiling {max}",
       "remedy": "The projected-consequence Series a funding cut carries is bounded by the resource ceiling maxProjectionSeriesPoints, mirroring maxCaseloadProposalsPerMonth. A series over the ceiling is rejected at the write boundary before any O(n) scan or allocation runs over it — it is a resource bound on the LENGTH, not a balance bound on the series values, so a legitimate slow-fuse consequence (a handful of months to a century) never reaches it (SEC-202)."
+    },
+    "MET-G3700": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "data/coastal.json could not be loaded or failed schema validation (field={field}, rule={rule}, path={path}, cause={cause})",
+      "remedy": "Check that data/coastal.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", finite non-negative frequency multipliers, a positive caseworker throughput, a finite grant rate in [0,1], and finite non-negative policy gain/cost figures. The coastal balance set never falls back to a silent default (GR#15/GR#7)."
+    },
+    "MET-G3701": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "CoastalAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *CoastalAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G3702": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "pipeline-stage query referenced unknown case ID {case}",
+      "remedy": "Case IDs are minted only by the scheduled Advance path (never a caller-invented ID, GR#20). An ID outside the recorded case set is rejected with this code rather than returning a fabricated zero-value stage (AC-13)."
+    },
+    "MET-G3703": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "policy coefficient {field} set to {value}, outside its documented domain",
+      "remedy": "The three policy sliders (processing funding, housing approach, integration investment) accept finite values in [0,1] only. An out-of-domain value is rejected rather than silently clamped, so a slider can never be set to a value the balance curves do not define (AC-13)."
+    },
+    "MET-G3704": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "arrival scheduled against cell ({x},{y}) which is not classified as shore",
+      "remedy": "Small-boat arrivals are placed only on cells the shore source classifies as shore (§30/§2.1). A drawn cell that fails the shore classification is rejected before any event is placed — never silently relocated to an arbitrary land cell (AC-14)."
+    },
+    "MET-G3705": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "dependency {dependency} required for operation {operation} is not wired",
+      "remedy": "Wire the outbound dependency (engine.citizens for granted-citizen creation, engine.services for rescue capacity, engine.news for factual reporting) via the matching Set* method before the operation that needs it. The operation fails closed rather than fabricating a result (GR#17)."
+    },
+    "MET-G3706": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "a NaN or ±Inf value reached the {field} boundary",
+      "remedy": "Reject the non-finite input before any ordered range check or arithmetic, so NaN/±Inf never leaks into stored case/cost state (GR#16/SEC-093)."
+    },
+    "MET-G3707": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "numeric input {field} = {value} outside its documented range",
+      "remedy": "Pass the input within its documented domain (e.g. month >= 0). An out-of-range value is rejected rather than silently clamped (GR#16)."
+    },
+    "MET-G3708": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "era/milestone tier {tier} outside the documented 0..13 ladder",
+      "remedy": "The arrival-frequency era multiplier table is indexed by the §4 milestone tier (0..13). A tier outside that ladder is rejected rather than indexing out of bounds or wrapping (AC-3/GR#16)."
+    },
+    "MET-G3709": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "season index {season} outside the documented 0..3 ladder",
+      "remedy": "The arrival-frequency season multiplier table is indexed by the four §27 seasons (0..3). A season index outside that ladder is rejected rather than indexing out of bounds (AC-3/GR#16)."
+    },
+    "MET-G3710": {
+      "severity": "error",
+      "module": "engine.coastal",
+      "message": "no shore source wired; arrival generation requires shore-cell membership",
+      "remedy": "Wire the shore-cell membership source via SetShore before Advance. Without it the module cannot know which cells are shore (§30/§2.1), so arrival generation fails closed rather than placing events on invented cells (AC-14)."
+    },
+    "MET-G3800": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "data/defence.json could not be loaded or failed schema validation (field={field}, rule={rule}, cause={cause})",
+      "remedy": "Check that data/defence.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", at least one competitive grant pot with finite in-[0,1] win-probability anchors, a positive formula-support threshold/amount, at least one mandate with a positive population threshold and at least two compliant choices, and a facility table covering every referenced facility type. The defence balance set never falls back to a silent default (GR#15/GR#7)."
+    },
+    "MET-G3801": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "DefenceAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *DefenceAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G3802": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "grant bid named an undeclared pot {pot}",
+      "remedy": "A grant bid must name one of data/defence.json's competitive pots (transport/regeneration/culture). An unknown pot is rejected loudly rather than silently accepted as a no-op a caller could mistake for a bid (AC-11)."
+    },
+    "MET-G3803": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "facility-siting command named an ineligible cell {site} (cause={cause})",
+      "remedy": "A facility site must fall inside the world grid and pass engine.build's ownership gate. An out-of-bounds or unowned cell is rejected before any facility is recorded — never a silently-accepted no-op (AC-11)."
+    },
+    "MET-G3804": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "mandate {mandate} already responded to",
+      "remedy": "A mandate can be accepted or refused exactly once. A second response is rejected rather than silently overwriting the first decision (AC-12)."
+    },
+    "MET-G3805": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "mandate-response command named unknown mandate {mandate}",
+      "remedy": "Mandate IDs come only from data/defence.json's mandate events (GR#20). An ID outside that set is rejected rather than fabricating a response for a mandate that was never issued (AC-11)."
+    },
+    "MET-G3806": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "mandate {mandate} choice {choice} is not one of the compliant choices",
+      "remedy": "A mandate's compliant choices are exactly those data/defence.json lists for it (AC-5). An out-of-set choice is rejected rather than auto-mapped to a default — the player's decision must be a real, recorded choice within compliance."
+    },
+    "MET-G3807": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "grant bid rejected because a mandate refusal is in effect",
+      "remedy": "Refusing a mandate revokes central-grant access (AC-6) — the priced cost of the libertarian-city path. This refusal-specific rejection is distinct from an undeclared-pot or bad-bid rejection so a caller can tell the two apart."
+    },
+    "MET-G3808": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "dependency {dependency} required for operation {operation} is not wired",
+      "remedy": "Wire the outbound dependency (engine.build for siting, engine.finance for compensation/grants, engine.citizens for personnel settlement) via the matching Set* method before the operation that needs it. The operation fails closed rather than fabricating a result (GR#17)."
+    },
+    "MET-G3809": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "numeric input {field} = {value} outside its documented domain",
+      "remedy": "Pass the input within its documented domain (e.g. month >= 0, match funding >= 0, planning quality in [0,1], wage-bill factor in [0,1]). An out-of-domain value is rejected rather than silently clamped (GR#16)."
+    },
+    "MET-G3810": {
+      "severity": "error",
+      "module": "engine.defence",
+      "message": "facility query referenced an unknown or closed facility {facility}",
+      "remedy": "Facility IDs are minted only when a mandate is accepted (GR#20). A payroll/procurement/closure query against an ID outside the built-facility set is rejected rather than returning a fabricated zero-value figure (AC-9/AC-11)."
     }
   }
 }

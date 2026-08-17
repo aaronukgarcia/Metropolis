@@ -572,6 +572,79 @@ func (f *FirmsAPI) RegisterFirm(name string, staff int64, premises string) (frei
 	return freight.Firm{ID: uint64(id), Staff: staff, Premises: premises}, nil
 }
 
+// RemoveFirm is the genuine compensating inverse of [RegisterFirm] (SEC-140,
+// SEC-159): it deletes a previously registered firm from the registry,
+// decrements foundedCount, and retracts BOTH the EventFounded lifecycle event
+// and the foundedEvents culture-index entry [RegisterFirm] emitted — with NO
+// EventFailed, NO failedCount++, and NO insolvency/unemployment processing. A
+// caller that needs the §32 closure shock (staff unemployed, failedCount++,
+// EventFailed) must use [Fail]; this method is the exact "undo a registration"
+// shape, so a refused win leaves the churn ledger as if the firm had never been
+// registered.
+//
+// An unknown FirmID is rejected with [ErrFirmNotFound] — never a silent no-op
+// (GR#1), because a compensating inverse that silently succeeds against an
+// unknown id would let a caller believe it unwound a registration it never made.
+//
+// Known limitation (accepted, not a defect): [RegisterFirm] fans EventFounded
+// out to subscriber channels at registration time, and a compensating removal
+// can retract the events slice but NOT an event already delivered to a
+// subscriber. A lifecycle subscriber that received the EventFounded before the
+// rollback will have observed a founding for a firm that never existed — this is
+// an accepted property of the best-effort event fan-out, not a defect to chase.
+func (f *FirmsAPI) RemoveFirm(id FirmID) error {
+	if err := f.checkNotCopied("RemoveFirm"); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.firms[id]; !ok {
+		return errs.New(ErrFirmNotFound, f.correlationID, map[string]any{"firm": uint64(id)})
+	}
+	delete(f.firms, id)
+	// GR#16: the decrement must not underflow. foundedCount is a non-negative
+	// invariant (a live firm implies at least one founding), but guard rather
+	// than trust — a compensating removal must never drive the count negative.
+	if f.foundedCount > 0 {
+		f.foundedCount--
+	}
+	f.retractFoundedEventLocked(id)
+	f.retractFoundedCultureEntryLocked(id)
+	return nil
+}
+
+// retractFoundedEventLocked removes the EventFounded lifecycle event
+// [RegisterFirm] emitted for id — the inverse of its most recent emit. The
+// caller holds f.mu. A FirmID is NOT registered at most once: Fail and
+// Acquire delete the firm without retracting its founding events, so a later
+// RegisterFirm at the same month can re-derive the now-free id (SEC-204).
+// Retracting the LAST EventFounded for the id — not the first — keeps the log
+// in emission order: the original [EventFounded, EventFailed] survives, never
+// [EventFailed, EventFounded] with a trailing founding for a firm that no
+// longer exists.
+func (f *FirmsAPI) retractFoundedEventLocked(id FirmID) {
+	for i := len(f.events) - 1; i >= 0; i-- {
+		if f.events[i].Kind == EventFounded && f.events[i].FirmID == id {
+			f.events = append(f.events[:i], f.events[i+1:]...)
+			return
+		}
+	}
+}
+
+// retractFoundedCultureEntryLocked removes the foundedEvents culture-index
+// entry [RegisterFirm] appended for id — the inverse of its most recent
+// append. The caller holds f.mu. As with the lifecycle log (SEC-204), a
+// reused FirmID can contribute more than one entry, so the LAST is retracted
+// to match the inverse of the most recent RegisterFirm.
+func (f *FirmsAPI) retractFoundedCultureEntryLocked(id FirmID) {
+	for i := len(f.foundedEvents) - 1; i >= 0; i-- {
+		if f.foundedEvents[i].FirmID == id {
+			f.foundedEvents = append(f.foundedEvents[:i], f.foundedEvents[i+1:]...)
+			return
+		}
+	}
+}
+
 // clampPerMille clamps v into [0, 1000] (GR#16).
 func clampPerMille(v int64) int64 {
 	if v < 0 {
