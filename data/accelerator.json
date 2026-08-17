@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "$comment": "Particle-accelerator balance data (MOD-077 / engine.accelerator, FEAT-098 / feat.particleaccelerator — spec: resources-design-brief.md §8 'End-game and mega-facilities'; METROPOLIS-MASTER-v2.1.md §MP 'Hadron Research Ring'). GR#15: every magnitude this feature leaves unquantified lives here, never as a Go literal in internal/engine/accelerator/*.go. GR#3: the electricity/water DRAW magnitudes themselves are NOT duplicated here — they are the product of data/consumption.json's 'accelerator' class coefficients (§17.2 coefficient row) and this file's facilityThroughput; this file carries only the throughput, the peak/base split, and the research/health/FDI/prestige/threshold figures. Every numeric value below is a placeholder pending Aaron's balance pass (balance-number regime) and carries a non-empty disclosure in 'disclosures' naming it as such.",
+  "meta": {
+    "specRef": "resources-design-brief.md §8; METROPOLIS-MASTER-v2.1.md §MP",
+    "balanceRegime": "every numeric value is a placeholder pending Aaron's balance pass; acceptance tests assert direction/structure, never a specific magnitude",
+    "drawUnits": "electricity draw = data/consumption.json 'accelerator' class elecKWh (kWh per facility per day) x facilityThroughput; peak = base x electricityPeakMultiplier. Water draw = the same class's waterL (litres per facility per day) x facilityThroughput; 1000 L = 1 m3. So the draw is expressed in kWh/day (electricity) and m3/day (water) with an explicit peak/base split carried by electricityPeakMultiplier."
+  },
+  "consumptionRef": "accelerator",
+  "facilityThroughput": 1,
+  "electricityPeakMultiplier": 1.5,
+  "researchRateMultiplier": 2.0,
+  "healthSpillover": 2.0,
+  "fdiAnchorDraw": 500,
+  "prestigeBase": 100,
+  "prestigePerTick": 5,
+  "expertGateThreshold": 1000,
+  "units": {
+    "facilityThroughput": "facility count (occupancy scaling the consumptionRef class coefficients; 1 = one accelerator)",
+    "electricityPeakMultiplier": "dimensionless ratio (peak electricity / base electricity)",
+    "researchRateMultiplier": "dimensionless multiplier applied to engine.education's research output",
+    "healthSpillover": "wellbeing-track points added per tick (0-100 track scale)",
+    "fdiAnchorDraw": "prospect-figure points added to engine.fdi's queryable prospect figure",
+    "prestigeBase": "prestige points granted once the facility is operational (integer)",
+    "prestigePerTick": "prestige points accumulated per tick while operational (integer)",
+    "expertGateThreshold": "research points (engine.education research-output units) required to pass the expert gate"
+  },
+  "disclosures": {
+    "facilityThroughput": "placeholder pending Aaron's balance pass — a CERN-class facility is modelled as a single unit; throughput is the occupancy knob, not a spec figure",
+    "electricityPeakMultiplier": "placeholder pending Aaron's balance pass — §8 gives no peak/base ratio for a CERN-class facility",
+    "researchRateMultiplier": "placeholder pending Aaron's balance pass — §MP's 'research rate xx' is unquantified",
+    "healthSpillover": "placeholder pending Aaron's balance pass — §8 gives no research-to-health spillover magnitude",
+    "fdiAnchorDraw": "placeholder pending Aaron's balance pass — §46 gives no anchor-prospect draw magnitude",
+    "prestigeBase": "placeholder pending Aaron's balance pass — §MP's 'prestige' is unquantified",
+    "prestigePerTick": "placeholder pending Aaron's balance pass — §MP's 'prestige' is unquantified",
+    "expertGateThreshold": "placeholder pending Aaron's balance pass — §8's 'large workforce of highly trained experts' is unquantified"
+  }
+}
