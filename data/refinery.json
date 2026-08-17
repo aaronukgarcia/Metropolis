@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "$comment": "feat.refinery (FEAT-102, §50/§49/§26/§32/§33; resources-design-brief.md §6) — the oil refinery + integrated chemical works data contract. Every tunable figure the refinery feature consumes — footprint, throughput, jobs, utility draw, capex/opex/amortisation, the chain input/output pair, the hazmat-fire risk, and the import-at-margin cost — lives here, never as a Go numeric literal in internal/engine/chemicals/refinery*.go (GR#15, AC-2).",
+  "meta": {
+    "units": {
+      "footprintCells": "cells (a siting footprint, §34)",
+      "throughputTonnesPerDay": "tonnes per day — the facility's primary input throughput (crude for the refinery, feedstock for the works)",
+      "jobs": "headcount",
+      "powerKWhPerDay": "kWh per day",
+      "waterLitresPerDay": "litres per day",
+      "capexMicropounds": "micro-pounds (M0-ENG §1.2: 1 GBP = 1,000,000 micro-pounds) — one-time build cost",
+      "opexMicropoundsPerDay": "micro-pounds per day — operating cost",
+      "capexAmortisationDays": "days — the placeholder payback horizon capex is spread over for the make-vs-buy unit cost",
+      "hazmatSeverity": "ordinal severity of a hazmat-fire incident reported to engine.dispatch (§26)",
+      "hazmatFirePeriodDays": "mean days between hazmat-fire incidents — a placeholder risk figure",
+      "marginMicropoundsPerTonne": "micro-pounds per tonne — the import-at-margin unit cost of refined product"
+    },
+    "singleSourceOfTruth": "blightClass (max/high), unlock and section for these two facilities stay SINGLE-SOURCED in data/buildings.json (GR#3) — this file deliberately does NOT re-declare them. This file adds only the per-type behavioural parameters (footprint, throughput, jobs, utility draw, capex/opex, chain IO, hazmat risk) that data/buildings.json does not carry.",
+    "chainNote": "The refinery is the head of the §50 chain: crude_oil (tanker/freight tonnage) -> refinery (fuel + feedstock) -> petrochemical_works (feedstock -> plastics). The refinery's feedstock output equals the works' feedstock input (6,000 t/day), so the works' input is bounded by the refinery's routed output (tonnage conserved, engine.chemicals.md AC-3).",
+    "balanceNote": "EVERY numeric figure below is a COARSE DIRECTIONAL PLACEHOLDER pending Aaron's balance pass (ASM-704). No junior-invented final figure satisfies any AC; tests check direction/structure only (the refinery's throughput/jobs differ from the works' — AC-1; make-vs-buy admits both directions — AC-3; fuel output scales with crude input — AC-4; chain tonnage conserved — AC-5).",
+    "marginNote": "marginMicropoundsPerTonne is ASM-321's import-at-margin figure (MOD-063's data, engine.chemicals.md AC-4), MIRRORED here as a stub placeholder until MOD-063's data file lands. feat.refinery CONSUMES it through the ChemAPI import surface — it is NOT owned or re-specified by this feature (ASM-703)."
+  },
+  "facilities": {
+    "refinery": {
+      "name": "Refinery",
+      "footprintCells": 120,
+      "throughputTonnesPerDay": 20000,
+      "jobs": 4500,
+      "powerKWhPerDay": 4000000,
+      "waterLitresPerDay": 80000000,
+      "capexMicropounds": 300000000000000,
+      "opexMicropoundsPerDay": 500000000000,
+      "capexAmortisationDays": 3650,
+      "inputCommodity": "crude_oil",
+      "outputs": [
+        { "commodity": "fuel", "tonnesPerDay": 10000 },
+        { "commodity": "feedstock", "tonnesPerDay": 6000 }
+      ],
+      "hazmatSeverity": 5,
+      "hazmatFirePeriodDays": 1000,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (ASM-704): footprintCells (120), throughputTonnesPerDay (20000), jobs (4500), powerKWhPerDay (4000000), waterLitresPerDay (80000000), capexMicropounds (300000000000000 = £300M), opexMicropoundsPerDay (500000000000 = £500k/day), capexAmortisationDays (3650 = 10y), hazmatSeverity (5), hazmatFirePeriodDays (1000) — chosen so the domestic refined path undercuts import at full throughput but import stays rational at low throughput (AC-3's bidirectional make-vs-buy), never a pinned magnitude."
+    },
+    "petrochemical_works": {
+      "name": "Petrochemical works",
+      "footprintCells": 80,
+      "throughputTonnesPerDay": 6000,
+      "jobs": 1800,
+      "powerKWhPerDay": 1800000,
+      "waterLitresPerDay": 40000000,
+      "capexMicropounds": 150000000000000,
+      "opexMicropoundsPerDay": 220000000000,
+      "capexAmortisationDays": 3650,
+      "inputCommodity": "feedstock",
+      "outputs": [
+        { "commodity": "plastics", "tonnesPerDay": 5000 }
+      ],
+      "hazmatSeverity": 3,
+      "hazmatFirePeriodDays": 2000,
+      "disclosure": "PLACEHOLDER pending Aaron's balance pass (ASM-704): footprintCells (80), throughputTonnesPerDay (6000), jobs (1800), powerKWhPerDay (1800000), waterLitresPerDay (40000000), capexMicropounds (150000000000000 = £150M), opexMicropoundsPerDay (220000000000 = £220k/day), capexAmortisationDays (3650 = 10y), hazmatSeverity (3), hazmatFirePeriodDays (2000) — a distinct downstream chain stage (feedstock -> plastics), smaller and lower-blight than the refinery, never a renamed refinery row."
+    }
+  },
+  "import": {
+    "commodity": "refined_product",
+    "marginMicropoundsPerTonne": 200000000,
+    "disclosure": "PLACEHOLDER: ASM-321's import-at-margin figure (MOD-063's data), mirrored here as a stub (ASM-703) — £200/tonne. Consumed through ChemAPI.ImportMargin/ImportRefined, never re-owned by feat.refinery; MOD-063's data file will own this when it lands."
+  }
+}
