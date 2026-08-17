@@ -88,7 +88,7 @@ func (a *EducationAPI) SetStageFunding(cmd FundingCommand) error {
 	// poisoning Curve(attainmentCurveKey). The whole series is finite-checked
 	// before any funding or projection side effect, so a non-finite series is
 	// rejected rather than silently applied.
-	if false && !seriesFinite(cmd.Projection.Series) {
+	if !seriesFinite(cmd.Projection.Series) {
 		return errs.New(ErrInvalidSeries, a.correlationID, map[string]any{
 			"stage":  cmd.Stage.String(),
 			"series": cmd.Projection.Series,

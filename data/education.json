@@ -1,0 +1,20 @@
+{
+  "$comment": "Balance data for engine.education (MOD-041). §27 describes the education lifecycle's direction and mechanism only — it gives NO numeric magnitude for drift-per-quality-unit, attainment weighting, research-points-per-graduate, halls capacity, or the fork/university/adult/U3A age gates. Every number here is a PLACEHOLDER pending the M2 balance pass (GR#15's balance-number regime: player-felt numbers are placeholders + directional tests until Aaron rules). The only spec-stated magnitudes are the primary (5y = 60 months) and secondary (11y = 132 months) entry ages, transcribed from §27; leave-at-16 pins the fork gate at 16y = 192 months. entryAgeMonths is keyed by the stage names Stage.String() renders and is an age in MONTHS of the citizen (birthMonth-derived, matching engine.citizens' derived Age()).",
+  "version": 1,
+  "entryAgeMonths": {
+    "nursery": 0,
+    "primary": 60,
+    "secondary": 132,
+    "sixth-form": 192,
+    "technical-college": 192,
+    "leave-at-16": 192,
+    "university": 216,
+    "adult-education": 300,
+    "u3a": 720
+  },
+  "baselineQuality": 0.5,
+  "attainmentScale": 100.0,
+  "researchPointsPerGraduate": 1.0,
+  "hallsCapacity": 100.0,
+  "dropoutRate": 0.0
+}
