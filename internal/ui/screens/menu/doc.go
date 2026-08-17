@@ -78,11 +78,18 @@
 //
 // # SF-5/MEN drill-through, consumed not reimplemented
 //
-// DrillTargets (render.go) produces this screen's (widget, source) pairs
-// — one per save slot's summary and the current-session figures — for a
-// caller with the real ui.dash (MOD-038) registration API to register.
-// This package implements no navigation, dead-end detection, or graph
-// storage itself (MOD-038's job).
+// DrillTargets (render.go) produces this screen's drill-through source
+// identities — one canonical dash.DrillTarget (ViewName, EntityID) for the
+// current-session figures and one per save slot — for a caller with
+// ui.dash's (MOD-038) registration API to register. This package
+// implements no navigation, dead-end detection, or graph storage itself
+// (MOD-038's job). It consumes dash.DrillTarget directly (GR#3: no
+// bespoke parallel type): the session figure's ViewName is ViewSession
+// ("f10.session", whole view), and each save slot's ViewName is
+// drillViewSaveSlot ("f1.viewport", whole view) — the registered F1
+// view a loaded save lands on, never a fabricated scope (ASM-651:
+// "serializer.bundle" was a dead end — int.serializer is a disk-format
+// module, not a view publisher).
 //
 // # SF-6: alert-jump landing anchor
 //

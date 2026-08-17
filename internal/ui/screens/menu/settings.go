@@ -23,7 +23,7 @@ func (s *Screen) SetSettingsSchema(schema []SettingSpec) {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetSettingsSchema"}); err != nil {
 		return
 	}
-	s.settings = append([]SettingSpec(nil), schema...)
+	s.settings = cloneSettingsSchema(schema)
 	s.haveSettings = true
 }
 
@@ -38,7 +38,7 @@ func (s *Screen) SettingsSchema() (schema []SettingSpec, have bool) {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SettingsSchema"}); err != nil {
 		return nil, false
 	}
-	return append([]SettingSpec(nil), s.settings...), s.haveSettings
+	return cloneSettingsSchema(s.settings), s.haveSettings
 }
 
 // SetSettingValue records the current value for one settings key (MEN-2's
@@ -164,4 +164,22 @@ func boolDisplay(value string) string {
 	default:
 		return "off"
 	}
+}
+
+// cloneSettingsSchema returns a defensive copy of schema (GR#16): a fresh
+// slice where each entry's Choices backing array is copied too, so a caller
+// mutating its input after SetSettingsSchema — or the returned schema from
+// SettingsSchema — cannot corrupt the screen's stored state. Matches
+// cloneKeymap/cloneLayoutProfile, the copy convention SEC-066 established
+// for this package's reference-type fields.
+func cloneSettingsSchema(schema []SettingSpec) []SettingSpec {
+	if schema == nil {
+		return nil
+	}
+	out := make([]SettingSpec, len(schema))
+	for i, spec := range schema {
+		out[i] = spec
+		out[i].Choices = append([]string(nil), spec.Choices...)
+	}
+	return out
 }

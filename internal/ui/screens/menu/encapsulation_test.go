@@ -85,3 +85,42 @@ func TestSelectKeymap_SelectedExcludesRejectedBindings(t *testing.T) {
 		t.Fatalf("the screen's selected keymap still holds the REJECTED binding %q: SaveKeymapFile will silently re-persist a binding ui.keys refused to apply (SSOT/GR#3 divergence)", "x")
 	}
 }
+
+func TestSetSettingsSchema_DoesNotAliasInputChoices(t *testing.T) {
+	s := New("corr-alias-settings-in")
+	in := []SettingSpec{
+		{Key: "video.mode", Label: "Video mode", Kind: SettingChoice, Choices: []string{"low", "high"}, Default: "high"},
+	}
+	s.SetSettingsSchema(in)
+
+	// A caller mutating its own input AFTER SetSettingsSchema must NOT
+	// change the screen's stored schema.
+	in[0].Choices[0] = "corrupted"
+
+	got, have := s.SettingsSchema()
+	if !have {
+		t.Fatal("SettingsSchema() have = false after SetSettingsSchema")
+	}
+	if got[0].Choices[0] == "corrupted" {
+		t.Fatalf("SetSettingsSchema() holds the caller's input by reference: mutating the input's Choices leaked into the screen's stored schema (encapsulation leak)")
+	}
+}
+
+func TestSettingsSchema_DoesNotAliasReturnedChoices(t *testing.T) {
+	s := New("corr-alias-settings-out")
+	s.SetSettingsSchema([]SettingSpec{
+		{Key: "video.mode", Label: "Video mode", Kind: SettingChoice, Choices: []string{"low", "high"}, Default: "high"},
+	})
+
+	got, have := s.SettingsSchema()
+	if !have {
+		t.Fatal("SettingsSchema() have = false after SetSettingsSchema")
+	}
+	// A caller mutating the returned value must NOT change the screen's state.
+	got[0].Choices[0] = "corrupted"
+
+	again, _ := s.SettingsSchema()
+	if again[0].Choices[0] == "corrupted" {
+		t.Fatalf("SettingsSchema() returns the screen's LIVE internal Choices: a caller mutation leaked into the screen's stored state (encapsulation leak)")
+	}
+}
