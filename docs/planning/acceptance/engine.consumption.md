@@ -60,7 +60,7 @@ Coefficient-driven demand computation (§17.1/§17.2, resolving `data/buildings.
 ## Out of scope
 
 - The actual generation-asset build/upgrade mechanics (building a wind farm, a CCGT plant) — that is `engine.build`/`engine.finance`'s job; this item only models the network's demand/supply/loss arithmetic once sources exist.
-- Firm-level power-hungry demand (data centres, chemical plants — §50/§63) — those are later modules' (`engine.chemicals`, `engine.fdi`) specific consumers of this API, not built here.
+- Firm-level power-hungry demand (data centres — §35, chemical plants — §50) — those are later modules' (`engine.chemicals`, `engine.fdi`) specific consumers of this API, not built here.
 - Land reclamation / desalination's own build-mechanics — this item only needs desalination as a water-source *option* with its documented coefficient (3.8kWh/m³ per §17.2), not the tier-10 unlock mechanics around it.
 - Fuel (petrol/diesel/EV charging, §49) as a utility network — fuel is a `Market` commodity (this BA's `engine.market.md`), not one of the four §17 utility networks.
 - Pollution-from-generation modelling feeding land value/wellbeing — that's a later cross-cutting concern (§18/§32); this item exposes generation-source identity/type, not pollution radius computation.
