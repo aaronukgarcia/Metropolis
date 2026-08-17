@@ -1,0 +1,89 @@
+{
+  "$comment": "engine.census balance/thread configuration (FEAT-133 / feat.citycensus). Every numeric value below is a PLACEHOLDER pending Aaron's row-by-row balance pass — the balance-number regime, same convention as feat.maintenance AC-16 and engine.finance AC-21. Units are stated per entry; tests check direction and structure, never a pinned magnitude.",
+  "version": 1,
+  "meta": {
+    "module": "engine.census",
+    "featureKey": "feat.citycensus",
+    "specRefs": ["§13 F6", "§18", "§40", "§45", "§46", "UI-SPEC §4", "§5.2"],
+    "balanceRegime": "Every numeric entry below is a disclosed placeholder pending Aaron's row-by-row balance pass (the balance-number regime). Units are stated per entry; a downstream consumer never has to guess whether a figure is years, miles, points, or a fraction."
+  },
+  "bellCurves": {
+    "lifespanMeanYears": {
+      "value": 75,
+      "unit": "years",
+      "disclosure": "placeholder — mean citizen lifespan, pending Aaron's balance pass (§18). Used only as an observation benchmark, never a census-side mutation."
+    },
+    "lifespanSpreadYears": {
+      "value": 10,
+      "unit": "years",
+      "disclosure": "placeholder — lifespan spread (±), pending Aaron's balance pass (§18). Observation benchmark only."
+    },
+    "retirementAgeYears": {
+      "value": 68,
+      "unit": "years",
+      "disclosure": "placeholder — retirement age, pending Aaron's balance pass (§18). The bio's retirement month = birth month + this value (ASM-646)."
+    },
+    "annualMileage": {
+      "value": 10000,
+      "unit": "miles/year",
+      "disclosure": "placeholder — car annual mileage, pending Aaron's balance pass (AC-11's short-lived car life-history benchmark)."
+    },
+    "crimeEducationElasticity": {
+      "value": -0.5,
+      "unit": "points",
+      "disclosure": "placeholder — education→crime elasticity, pending Aaron's balance pass. AC-14 checks the direction is data-derived, never this specific slope."
+    },
+    "blueWhiteCollarBaselineBlue": {
+      "value": 0.6,
+      "unit": "fraction",
+      "disclosure": "placeholder — §45 blue-collar baseline. Observation benchmark only: the blue/white split is EMERGENT from sector data (AC-17), never applied as a hardcoded ratio."
+    },
+    "blueWhiteCollarBaselineWhite": {
+      "value": 0.4,
+      "unit": "fraction",
+      "disclosure": "placeholder — §45 white-collar baseline. Observation benchmark only; see blueWhiteCollarBaselineBlue."
+    },
+    "happinessWeightPhysical": {
+      "value": 0.34,
+      "unit": "weight",
+      "disclosure": "placeholder — §18 wellbeing=f(physical,mental,satisfaction) weight composition, pending Aaron's balance pass."
+    },
+    "happinessWeightMental": {
+      "value": 0.33,
+      "unit": "weight",
+      "disclosure": "placeholder — §18 wellbeing weight composition, pending Aaron's balance pass."
+    },
+    "happinessWeightSatisfaction": {
+      "value": 0.33,
+      "unit": "weight",
+      "disclosure": "placeholder — §18 wellbeing weight composition, pending Aaron's balance pass."
+    }
+  },
+  "thresholds": {
+    "consistencyCheckInLagTicks": {
+      "value": 2,
+      "unit": "ticks",
+      "disclosure": "placeholder — CC least-check-in lag beyond which an object is flagged lost, pending Aaron's balance pass (ASM-646)."
+    },
+    "crimeRate": {
+      "value": 0.05,
+      "unit": "rate",
+      "disclosure": "placeholder — regulator crime-too-high alarm level, pending Aaron's balance pass (§28)."
+    },
+    "unfedFraction": {
+      "value": 0.10,
+      "unit": "fraction",
+      "disclosure": "placeholder — regulator unfed alarm level, pending Aaron's balance pass (§40/§18)."
+    },
+    "uneducatedFraction": {
+      "value": 0.20,
+      "unit": "fraction",
+      "disclosure": "placeholder — regulator uneducated alarm level, pending Aaron's balance pass (§27)."
+    },
+    "uneducatedAttainmentFloor": {
+      "value": 30,
+      "unit": "attainment points",
+      "disclosure": "placeholder — attainment floor below which a citizen counts as 'uneducated', pending Aaron's balance pass (§27)."
+    }
+  }
+}
