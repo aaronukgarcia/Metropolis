@@ -250,6 +250,12 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 // NewRegistry, so an unset self is itself a misuse this same error
 // correctly names, and rejecting it here also means such a value's
 // nil modules map is never reached either.
+//
+// This hand-rolled guard is the pre-existing implementation that the
+// reusable CopyGuard[T] wrapper generalises for NEW modules — see
+// copyguard.go, which also carries the defensive-copy helpers
+// (CloneMap/CloneSlice) closing SEC-066, alongside SEC-080/SEC-093's
+// safe-coercion siblings in foundation.num (feat.securehelpers, FEAT-135).
 func (r *Registry) checkNotCopied(correlationID string, ctx map[string]any) error {
 	if r.self.Load() != r {
 		return errs.New(codeRegistryCopied, correlationID, ctx)
