@@ -1374,13 +1374,13 @@
     "MET-U604": {
       "severity": "error",
       "module": "ui.screen.menu",
-      "message": "failed to enumerate the save root: {cause}",
+      "message": "failed to enumerate the save root",
       "remedy": "The injected BundleLister (or the default save-root walk) returned an I/O error reading the save root directory. The save browser renders \"unavailable\" rather than a stale or empty list (SF-7/MEN-7). Check the configured save root path and the BundleLister wiring."
     },
     "MET-U605": {
       "severity": "error",
       "module": "ui.screen.menu",
-      "message": "failed to write profile file {path}: {cause}",
+      "message": "failed to write profile file",
       "remedy": "A keymap or dashboard-layout profile could not be durably written to disk (encode or write failure). Nothing was silently discarded — the write failed and reported; retry with a writable path. This one code is shared by keymap and layout profile writes (GR#3)."
     },
     "MET-U606": {
@@ -1398,7 +1398,7 @@
     "MET-U608": {
       "severity": "error",
       "module": "ui.screen.menu",
-      "message": "failed to read profile file {path}: {cause}",
+      "message": "failed to read profile file {path}",
       "remedy": "A keymap or dashboard-layout profile could not be read from disk (file read or JSON/schema parse failure). Nothing was silently invented -- the load failed and reported this registry code; check the path and that the file is valid profile JSON. This one code is shared by keymap and layout profile reads (GR#3), mirroring MET-U605 for writes (SEC-212)."
     },
     "MET-U609": {

@@ -127,6 +127,39 @@ func mustReadFile(t *testing.T, path string) []byte {
 	return b
 }
 
+// TestLoadKeymapFile_ErrorsAreRegistrySourced is SEC-212's keymap half: a
+// read or parse failure on LoadKeymapFile's READ path must return a
+// registry-sourced *errs.E (ErrProfileReadFailed) — never a raw
+// *os.PathError or keys parse error — matching SaveKeymapFile's write-path
+// discipline (ErrProfileWriteFailed) and ui.keys' own MET-U302 wrapping.
+func TestLoadKeymapFile_ErrorsAreRegistrySourced(t *testing.T) {
+	g := newTestGrammar("corr-km-read")
+	s := New("corr-km-read")
+
+	// Read failure: a nonexistent path surfaces ErrProfileReadFailed, not
+	// a raw *os.PathError, and selects nothing.
+	if _, err := s.LoadKeymapFile(filepath.Join(t.TempDir(), "missing.json"), g); err == nil {
+		t.Fatal("LoadKeymapFile(missing) returned nil error, want ErrProfileReadFailed")
+	} else if e, ok := err.(*errs.E); !ok || e.Code != ErrProfileReadFailed {
+		t.Fatalf("LoadKeymapFile(missing) error = %T %v, want *errs.E with code %s", err, err, ErrProfileReadFailed)
+	}
+	if _, have := s.SelectedKeymap(); have {
+		t.Fatal("LoadKeymapFile(missing) selected a keymap; want none")
+	}
+
+	// Parse failure: malformed JSON surfaces ErrProfileReadFailed, not the
+	// raw json error from keys.ParseKeymap.
+	path := filepath.Join(t.TempDir(), "malformed.json")
+	if err := os.WriteFile(path, []byte(`{not valid json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LoadKeymapFile(path, g); err == nil {
+		t.Fatal("LoadKeymapFile(malformed) returned nil error, want ErrProfileReadFailed")
+	} else if e, ok := err.(*errs.E); !ok || e.Code != ErrProfileReadFailed {
+		t.Fatalf("LoadKeymapFile(malformed) error = %T %v, want *errs.E with code %s", err, err, ErrProfileReadFailed)
+	}
+}
+
 // TestSelectKeymap_NilArgsRejected is SEC-079's regression: a nil keymap or
 // nil grammar must be rejected with a registry-sourced error (fail-closed),
 // never a nil-pointer panic inside keys.ApplyKeymap. Against the unguarded

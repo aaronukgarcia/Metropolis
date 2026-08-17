@@ -58,9 +58,12 @@ func (s *Screen) Refresh() error {
 	}
 	dirs, err := lister(root)
 	if err != nil && !os.IsNotExist(err) {
-		wrapped := errs.Wrap(ErrSaveListFailed, s.correlationID, err, map[string]any{"cause": err.Error()})
+		wrapped := errs.Wrap(ErrSaveListFailed, s.correlationID, err, map[string]any{})
 		s.mu.Lock()
-		s.listFailed = err.Error()
+		// SEC-224: the "unavailable" reason rendered for the player is the
+		// registry message (sanitized), never err.Error() — which would leak
+		// the save root's absolute path (GR#1).
+		s.listFailed = wrapped.Msg
 		s.saveEntries = nil
 		s.saveListErrs = nil
 		s.mu.Unlock()
@@ -76,7 +79,16 @@ func (s *Screen) Refresh() error {
 	for _, dir := range dirs {
 		h, err := serialize.ReadHeader(dir)
 		if err != nil {
-			readErrs = append(readErrs, err)
+			// SEC-218 (GR#7/GR#1): wrap the per-entry read failure in a
+			// registry-sourced error with the screen's correlation ID,
+			// mirroring the SEC-212 profile-read wrapping. serialize's raw
+			// error embeds the bundle's absolute filesystem path (via %q on
+			// dir) and no registry code; the raw cause is preserved on the
+			// error via errors.Unwrap, but the rendered message carries only
+			// the slot's base name — never the absolute path.
+			readErrs = append(readErrs, errs.Wrap(ErrSaveListEntryReadFailed, s.correlationID, err, map[string]any{
+				"slot": filepath.Base(dir),
+			}))
 			continue
 		}
 		entries = append(entries, saveEntryFromHeader(dir, h))

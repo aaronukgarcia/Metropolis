@@ -11,20 +11,22 @@ import (
 // LayoutProfile (MEN-4, UI-SPEC §4 "F10 → layouts"). The profile's JSON
 // schema and mechanics are ui.dash's (MOD-038) — this screen treats the
 // profile as a named, opaque document it loads/selects/saves; Data is
-// passed through to the layout editor uninterpreted.
+// passed through to the layout editor uninterpreted. A read/parse failure
+// returns ErrProfileReadFailed (MET-U608, GR#7) wrapping the cause — never
+// a raw *os.PathError or json error (SEC-212).
 func (s *Screen) LoadLayoutProfile(path string) (*LayoutProfile, error) {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "LoadLayoutProfile"}); err != nil {
 		return nil, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, errs.Wrap(ErrProfileReadFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	var raw struct {
 		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, err
+		return nil, errs.Wrap(ErrProfileReadFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	p := &LayoutProfile{Name: raw.Name, Data: data}
 	s.SelectLayoutProfile(p)
@@ -59,10 +61,10 @@ func (s *Screen) SaveLayoutProfile(path string, p *LayoutProfile) error {
 		})
 	}
 	if _, err := json.Marshal(p); err != nil {
-		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path, "cause": err.Error()})
+		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	if err := os.WriteFile(path, p.Data, 0o644); err != nil {
-		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path, "cause": err.Error()})
+		return errs.Wrap(ErrProfileWriteFailed, s.correlationID, err, map[string]any{"path": path})
 	}
 	return nil
 }
@@ -96,9 +98,10 @@ func cloneLayoutProfile(p *LayoutProfile) *LayoutProfile {
 
 // OpenLayoutEditor invokes the wired ui.dash layout editor (MEN-4: this
 // screen hosts the F10 → layouts entry point; the editor's mechanics are
-// MOD-038's). With no editor wired (the default), it reports
-// ErrLayoutEditorUnavailable (MEN-7: "unavailable", not a silent no-op)
-// rather than fabricating an editor.
+// MOD-038's). It fails closed with ErrLayoutEditorUnavailable (MEN-7:
+// "unavailable", not a silent no-op) when no editor is wired (the default)
+// OR when no layout profile has been loaded/selected — it never invokes
+// the editor with a nil profile (SEC-213).
 func (s *Screen) OpenLayoutEditor() error {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "OpenLayoutEditor"}); err != nil {
 		return err
@@ -110,6 +113,11 @@ func (s *Screen) OpenLayoutEditor() error {
 	if editor == nil {
 		return errs.New(ErrLayoutEditorUnavailable, s.correlationID, map[string]any{
 			"cause": "no ui.dash layout editor wired",
+		})
+	}
+	if profile == nil {
+		return errs.New(ErrLayoutEditorUnavailable, s.correlationID, map[string]any{
+			"cause": "no layout profile selected",
 		})
 	}
 	return editor(profile)
