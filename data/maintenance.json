@@ -1,0 +1,54 @@
+{
+  "$comment": "engine.maintenance balance data (MOD-072, mkey engine.maintenance). Cites §20 (per-object maintenance state generalised from roads to every placed object), §12 (the Detroit-spiral decay state / end-of-life precedent a past-lifetime object feeds), and the BOW MOD-072 design (per-instance MaintenanceView; a crew's day is a bounded engineer-day budget applied to a multi-job backlog). EVERY per-class engineerDaysPerYear and lifetimeYears below, and both cost-per-engineer-day figures, are PLACEHOLDERS pending Aaron's balance pass — the tested invariants are DIRECTION and STRUCTURE (new < old; distinct classes; a past-lifetime object is flagged), never a specific magnitude (balance-number regime, engine.finance.md AC-21 precedent). Rebalancing is a data edit, never a code change.",
+  "version": 1,
+  "meta": {
+    "note": "Placeholders pending Aaron's balance pass. Units: engineerDaysPerYear is ENGINEER-DAYS PER SIMULATION-YEAR; lifetimeYears is SIMULATION-YEARS; crewCostPerEngineerDay and contractorCostPerEngineerDay are MICRO-POUNDS (1 GBP = 1,000,000 micro-pounds, matching engine.finance's Money type).",
+    "rateUnit": "engineer-days per year",
+    "lifetimeUnit": "simulation-years",
+    "costUnit": "micro-pounds per engineer-day"
+  },
+  "crewCostPerEngineerDay": 1000000,
+  "contractorCostPerEngineerDay": 3000000,
+  "classes": {
+    "dwelling": {
+      "engineerDaysPerYear": 5,
+      "lifetimeYears": 60,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "shop": {
+      "engineerDaysPerYear": 8,
+      "lifetimeYears": 40,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "office": {
+      "engineerDaysPerYear": 12,
+      "lifetimeYears": 50,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "entertainment": {
+      "engineerDaysPerYear": 10,
+      "lifetimeYears": 35,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "farming": {
+      "engineerDaysPerYear": 6,
+      "lifetimeYears": 100,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "manufacturing": {
+      "engineerDaysPerYear": 25,
+      "lifetimeYears": 45,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "heavy_industry": {
+      "engineerDaysPerYear": 40,
+      "lifetimeYears": 50,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "mining": {
+      "engineerDaysPerYear": 30,
+      "lifetimeYears": 30,
+      "disclosure": "placeholder pending Aaron's balance pass"
+    }
+  }
+}
