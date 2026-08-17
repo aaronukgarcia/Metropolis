@@ -64,9 +64,9 @@ func (s *Screen) CancellationPenalty(contractID string) (penaltyMicropounds int6
 // CreateContract issues the create-contract action (TRD-1) for a new
 // import contract on commodity with the given term and £/unit price.
 // Price is in micropounds (M0-ENG §1.2). It returns a registry-sourced
-// error (MET-V103) if commodity is empty — the engine remains the
-// authority on whether the contract is accepted, but an empty commodity
-// is rejected here rather than sent as a malformed command.
+// error (MET-V104, ErrUnknownCommodity) if commodity is empty — the engine
+// remains the authority on whether the contract is accepted, but an empty
+// commodity is rejected here rather than sent as a malformed command.
 func (s *Screen) CreateContract(send SendCommandFunc, commodity string, termMonths int, pricePerUnitMicropounds int64) error {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "CreateContract"}); err != nil {
 		return err
