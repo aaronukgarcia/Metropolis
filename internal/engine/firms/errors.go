@@ -78,4 +78,11 @@ const (
 	// real citizens (AC-4), so a duplicate is rejected, never silently
 	// deduped into a smaller headcount.
 	ErrDuplicateStaff = "MET-G1411"
+
+	// ErrFirmNotFound: RemoveFirm (the compensating inverse of RegisterFirm)
+	// targeted a FirmID not registered in this FirmsAPI. Rejected, never a
+	// silent no-op — a caller that unwound a registration it never made must
+	// be told, or a refused win would believe it had cleaned up a firm it
+	// actually leaked (SEC-159).
+	ErrFirmNotFound = "MET-G1412"
 )
