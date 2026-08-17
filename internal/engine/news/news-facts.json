@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "tokens": [
+    "death",
+    "deaths",
+    "birth",
+    "births",
+    "recovery",
+    "recoveries",
+    "injured",
+    "record",
+    "records",
+    "before",
+    "after",
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december"
+  ],
+  "disclosure": "Placeholder fact-bearing token list pending Aaron's balance pass (the balance-number regime: player-felt numbers are placeholder + directional tests + delegated proposal + row-by-row approval). SEC-148 (engine.news FactLock): the fact-lock must reject a rewrite that silently swaps the prose's meaning even when the numbers and the named entity survive — '2 deaths' to '2 births', 'record set in March' to 'record set in April'. §29 names the five categories but not the prose vocabulary that carries a story's meaning, so this token list is data (GR#15) rather than a code literal; the binding property today is that a rewrite whose set of fact-bearing tokens differs from the original is rejected. The list is deliberately a conservative starter set (event-type words + their plurals, month names, before/after); it is NOT the §29 category vocabulary ('first'/'crisis'/'milestone' are excluded to avoid colliding with road names like 'First Street'), and adding or removing tokens is a data edit, never a code change."
+}
