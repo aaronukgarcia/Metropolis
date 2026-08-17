@@ -5540,7 +5540,7 @@
       },
       "costRaw": "2B",
       "capacityRaw": "",
-      "consumptionRef": "",
+      "consumptionRef": "accelerator",
       "blightClass": "none",
       "appealProfile": [],
       "notes": "research rate xx, science tourism, prestige"
