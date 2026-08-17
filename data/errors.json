@@ -23,7 +23,7 @@
       "E700-E799": "reserved for engine.helper (internal/engine/helper: FEAT-063's advisor-metadata Registrant/Registry contract and ask-driven Recommend/Preview panel query surface — no real player-action feature registers yet, per this item's fixture-only-proof scope; the errors below are constructed by the helper package itself AND by its helperfixture package, since the fixture lives inside the same E700-E799 range per BUG-008's per-range, not per-package, ownership rule. Checked against this table AND `grep -rn \"MET-E7\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E7xx code existed either place.)",
       "E800-E899": "reserved for feat.saveux (internal/engine/save: FEAT-011's save/load orchestration -- single-save-in-flight rejection, staging/promotion failures, format-version-mismatch and corrupted-load handling, list/enumerate failures, unknown-participant-kind on load. Checked against this table AND `grep -rn \"MET-E8\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E8xx code existed either place.)",
       "E900-E949": "reserved for feat.skeleton (cmd/metropolis composition-root boot wiring — AC-7's registry-sourced, non-zero-exit boot failure path. NARROWED from E900-E999 on 2026-08-13: the E layer's 000-899 blocks were all claimed by earlier engine modules by the time engine.mining landed, and the code format is hard-capped at three digits, so E950-E999 was carved from this reservation's unused tail for engine.mining — feat.skeleton ships exactly one code, MET-E900, which remains in-range. Flagged for Bill/Aaron: any reallocation of a reserved range is their call.)",
-      "E950-E999": "reserved for engine.mining (internal/engine/mining: the deposit-parameter data-file load/schema-validation failure, the geology-not-yet-derived shuffle rejection, and the out-of-bounds deposit query — MOD-046/FEAT-049; plus the mine-type catalogue data-file load/schema-validation failure and the unknown-mine-type resolve rejection — FEAT-103/feat.minetypes. Checked against this table AND `grep -rn \"MET-E9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E9xx code existed outside feat.skeleton's MET-E900.)",
+      "E950-E999": "reserved for engine.mining (internal/engine/mining: the deposit-parameter data-file load/schema-validation failure, the geology-not-yet-derived shuffle rejection, and the out-of-bounds deposit query — MOD-046/FEAT-049; plus the mine-type catalogue data-file load/schema-validation failure and the unknown-mine-type resolve rejection — FEAT-103/feat.minetypes; plus the general blight model + extraction siting errors (siting-not-permitted, blight-profile-invalid, already-reclaimed, blight-data-invalid, unknown-key, blight-copied, query-out-of-bounds, reclaim-blocked, site-exhausted, extraction-invalid) — MOD-046 core. Checked against this table AND `grep -rn \"MET-E9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-E9xx code existed outside feat.skeleton's MET-E900.)",
       "F000-F009": "reserved for foundation.errors (errs package self-errors: registry load/validation, unregistered code — always available even if the registry fails to load)",
       "F010-F099": "reserved for foundation.errors (this module: logging, correlation)",
       "F100-F199": "reserved for foundation.registry (module registry)",
@@ -1384,14 +1384,20 @@
     "MET-U606": {
       "severity": "error",
       "module": "ui.screen.menu",
-      "message": "layout editor entry point opened with no ui.dash editor wired: {cause}",
-      "remedy": "OpenLayoutEditor was invoked while no layout editor is wired via WithLayoutEditor. The F10 → layouts entry point reports \"unavailable\" rather than silently no-op'ing (MEN-4/MEN-7). Wire ui.dash's (MOD-038) layout editor at construction when it lands."
+      "message": "layout editor entry point unavailable: {cause}",
+      "remedy": "OpenLayoutEditor could not open the F10 → layouts editor: either no ui.dash editor is wired via WithLayoutEditor, or no layout profile has been loaded/selected. The entry point reports \"unavailable\" rather than silently no-op'ing or invoking the editor with no profile (MEN-4/MEN-7/SEC-213). Wire ui.dash's (MOD-038) layout editor at construction when it lands, and select/load a profile before opening the editor."
     },
     "MET-U607": {
       "severity": "error",
       "module": "ui.screen.menu",
       "message": "SelectKeymap called with nil {argument}",
       "remedy": "SelectKeymap was called with a nil keymap or nil grammar. This is a programming error at the call site (LoadKeymapFile parses the profile before selecting, so nil cannot arrive via that path) -- the call is rejected with this registry error rather than a nil-pointer panic inside ui.keys' ApplyKeymap (SEC-079, GR#1). Fix the caller to pass a parsed *keys.Keymap and a constructed *keys.KeyGrammar."
+    },
+    "MET-U608": {
+      "severity": "error",
+      "module": "ui.screen.menu",
+      "message": "failed to read profile file {path}: {cause}",
+      "remedy": "A keymap or dashboard-layout profile could not be read from disk (file read or JSON/schema parse failure). Nothing was silently invented -- the load failed and reported this registry code; check the path and that the file is valid profile JSON. This one code is shared by keymap and layout profile reads (GR#3), mirroring MET-U605 for writes (SEC-212)."
     },
     "MET-U700": {
       "severity": "warn",
@@ -1548,6 +1554,66 @@
       "module": "engine.mining",
       "message": "unknown mine-type key {key}",
       "remedy": "A mine-type resolve named a type key absent from the loaded catalogue (feat.minetypes AC-7). The rejection is loud rather than a silent default-substituted parameter set; check the key against the catalogue's canonical keys (Catalogue.Keys) and fix the caller."
+    },
+    "MET-E956": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "extraction siting rejected: {rule}",
+      "remedy": "An extraction siting attempt was rejected because the land is ungeology-gated (the mine type's geology class does not match the tile's revealed pocket geology), unprospected, out of extent, the mine-type catalogue is not wired, or the site key is already in use. Prospect the tile first (world.Prospect), site on a matching geology pocket, and use a fresh site key (AC-2/AC-11)."
+    },
+    "MET-E957": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "blighting-object profile invalid: {field} {rule}",
+      "remedy": "A blighting-object registration carried an out-of-extent location, a non-positive noise contour radius, or a negative/non-finite visual height/magnitude. Fix the profile and re-register (AC-11)."
+    },
+    "MET-E958": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "site {key} already reclaimed as {option}",
+      "remedy": "A Reclaim command named a site that was already reclaimed to a lake/park. A reclaimed site is no longer a blighting object and cannot be reclaimed again (AC-9/AC-11)."
+    },
+    "MET-E959": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "blight-model data file could not be loaded or failed schema validation: {cause}",
+      "remedy": "data/mining.json is missing, malformed JSON, or failed the loader's schema validation (a non-positive falloff exponent/occlusion scale/grow-in delay/capacity days, a missing class-profile entry, or a non-finite/out-of-domain value). The blight model does NOT proceed with silent defaults (GR#15); fix the data file and reload. All-or-nothing — there is no partial load."
+    },
+    "MET-E960": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "unknown blight object or site key {key}",
+      "remedy": "A query/command named an object or site key absent from the BlightAPI registry. The rejection is loud rather than a silent zero; check the key against the sites/objects registered through SiteExtraction, RegisterBlightingObject or PlaceBlightingObject."
+    },
+    "MET-E961": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "blight API method {method} called on a struct-copied value (SEC-020)",
+      "remedy": "A *mining.BlightAPI value was copied by assignment/passing instead of being used via the single pointer NewBlightAPI returned (mu is a sync.RWMutex VALUE and objects/occluders/sites are aliased maps — a copy is a second, independent lock racing the original over the same maps). The call was rejected rather than risking a lock-order hang or a torn map read; construct exactly one BlightAPI via NewBlightAPI and pass its pointer everywhere."
+    },
+    "MET-E962": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "blight query rejected: out of expansion extent",
+      "remedy": "A query named a TileCoord outside the 30x30 expansion extent or a CellLocal outside the 200x200 tile-local domain (GR#1). Fix the coordinate."
+    },
+    "MET-E963": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "reclamation option blocked: {option}",
+      "remedy": "A Reclaim command named an option this package does not implement — notably the landfill-void outcome, which is BLOCKED because no engine.refuse↔engine.mining edge exists (BUG-058 closed with engine.refuse↔engine.farming; the mining↔refuse pair is now governed by the collaborations gate). Use ReclaimLake or ReclaimPark."
+    },
+    "MET-E964": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "site {key} exhausted or closed: {rule}",
+      "remedy": "An Extract or CloseSite command named a site that has reached its data-sourced capacity (exhausted), been reclaimed, or already closed — it can no longer produce output (AC-9). Reclaim the exhausted site or query SiteInfo instead."
+    },
+    "MET-E965": {
+      "severity": "error",
+      "module": "engine.mining",
+      "message": "extraction amount invalid: {rule}",
+      "remedy": "An Extract command carried a non-positive or non-finite tonnes amount. Pass a finite, positive amount."
     },
     "MET-V001": {
       "severity": "warn",
