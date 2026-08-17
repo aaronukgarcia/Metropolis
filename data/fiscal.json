@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "engine.fiscal (MOD-066) balance data: the municipality-quality funding curves and the childcare-subsidy parameters §54 leaves unquantified. Every numeric coefficient lives here, never as a Go literal in internal/engine/fiscal/*.go (GR#15). Monetary amounts are int64 micro-pounds (1 GBP = 1,000,000 micro-pounds, M0-ENG §1.2).",
+    "placeholderConvention": "Every numeric field carries a sibling comment naming its source category — 'spec-transcribed' (the spec states the number), 'derived placeholder (no external anchor)', or 'literature-grounded placeholder' — plus pending-Aaron's-balance-pass status, per data/tax_instruments.json's convention and ASM-284. The municipality curve anchors are linear interpolations between a zero-funding and a full-funding value; corruption is a threshold shape (zero at/above the threshold, rising linearly below it).",
+    "specRefs": "§54 (municipality quality: planning & administration funding sets permit speed, build-cost error rate, layout bonuses, corruption risk; childcare subsidy as a net line); Supp.3 civic (council offices → planning department → city administration)."
+  },
+  "municipality": {
+    "fundingTargetPerMonthMicroPounds": 10000000000,
+    "permitSpeedAtZeroFunding": 0.5,
+    "permitSpeedAtFullFunding": 2.0,
+    "buildCostErrorAtZeroFunding": 0.15,
+    "buildCostErrorAtFullFunding": 0.0,
+    "layoutBonusAtZeroFunding": 0.0,
+    "layoutBonusAtFullFunding": 1.0,
+    "corruptionThreshold": 0.3,
+    "corruptionMax": 0.5
+  },
+  "childcare": {
+    "subsidyPerPlacePerMonthMicroPounds": 300000000,
+    "secondEarnerUpliftPerPlace": 0.8,
+    "secondEarnerAvgWagePerMonthMicroPounds": 1800000000
+  }
+}
