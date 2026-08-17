@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "weights": {
+    "death": 3.0,
+    "first": 2.0,
+    "record": 1.5,
+    "crisis": 2.5,
+    "milestone": 2.0
+  },
+  "disclosure": "Placeholder salience weights pending Aaron's balance pass (the balance-number regime: player-felt numbers are placeholder + directional tests + delegated proposal + row-by-row approval). §29 names the five categories but gives no relative weighting between them, so this table is data (GR#15) rather than a code literal; the only binding property today is that salience is category-weight × magnitude, so a higher-magnitude event of the same category ranks above a lower one (AC-2)."
+}
