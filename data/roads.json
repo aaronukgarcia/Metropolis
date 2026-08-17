@@ -1,0 +1,38 @@
+{
+  "$comment": "engine.roads (MOD-024) class ladder + maintenance/upgrade/roadworks parameter set, transcribed from §20 Roads & Auto-Naming and §51 Roads v2 of docs/METROPOLIS-MASTER-v2.1.md. Every tunable number here is a PLACEHOLDER pending Aaron's balance pass (GR#15 — expected values come from data, never Go literals; but the values themselves are not yet balanced, only directionally correct: more lanes = more cost, wider footprint = more cells, higher rung = faster). The 11 class slugs are schema facts, NOT balance numbers: they are §51's fixed vocabulary and must match data/naming_corpus.json's categories.roadSuffixes field names for the 9 non-numbered classes (held by TestClassSlugsMatchNamingCorpus in internal/engine/roads/drift_test.go), and the two numbered classes (urban_expressway, motorway) use §20's M-/A- numbering scheme, not a place-name+suffix pairing.",
+  "version": 1,
+  "classes": [
+    { "id": "alley", "name": "Alley", "lanes": 1, "speedLimit": 20, "speedMin": 10, "speedMax": 30, "parking": true, "treeVerge": false, "widthCells": 1, "baseCostPounds": 500 },
+    { "id": "gravel", "name": "Gravel", "lanes": 1, "speedLimit": 30, "speedMin": 20, "speedMax": 40, "parking": false, "treeVerge": false, "widthCells": 1, "baseCostPounds": 800 },
+    { "id": "residential_street", "name": "Residential Street", "lanes": 2, "speedLimit": 30, "speedMin": 20, "speedMax": 40, "parking": true, "treeVerge": true, "widthCells": 1, "baseCostPounds": 2000 },
+    { "id": "two_lane", "name": "Two-Lane", "lanes": 2, "speedLimit": 40, "speedMin": 30, "speedMax": 60, "parking": true, "treeVerge": true, "widthCells": 1, "baseCostPounds": 4000 },
+    { "id": "one_way_pairs", "name": "One-Way Pairs", "lanes": 2, "speedLimit": 40, "speedMin": 30, "speedMax": 60, "parking": true, "treeVerge": true, "widthCells": 1, "baseCostPounds": 5000 },
+    { "id": "avenue_2_plus_2", "name": "Avenue 2+2", "lanes": 4, "speedLimit": 40, "speedMin": 30, "speedMax": 60, "parking": false, "treeVerge": true, "widthCells": 3, "baseCostPounds": 12000 },
+    { "id": "bus_lane_variant", "name": "Bus-Lane Variant", "lanes": 4, "speedLimit": 40, "speedMin": 30, "speedMax": 60, "parking": false, "treeVerge": true, "widthCells": 3, "baseCostPounds": 14000 },
+    { "id": "tram_track_variant", "name": "Tram-Track Variant", "lanes": 4, "speedLimit": 40, "speedMin": 30, "speedMax": 60, "parking": false, "treeVerge": true, "widthCells": 3, "baseCostPounds": 16000 },
+    { "id": "dual_carriageway", "name": "Dual Carriageway", "lanes": 4, "speedLimit": 60, "speedMin": 50, "speedMax": 70, "parking": false, "treeVerge": true, "widthCells": 3, "baseCostPounds": 20000 },
+    { "id": "urban_expressway", "name": "Urban Expressway", "lanes": 4, "speedLimit": 70, "speedMin": 60, "speedMax": 110, "parking": false, "treeVerge": true, "widthCells": 5, "baseCostPounds": 50000 },
+    { "id": "motorway", "name": "Motorway", "lanes": 6, "speedLimit": 110, "speedMin": 90, "speedMax": 120, "parking": false, "treeVerge": true, "widthCells": 5, "baseCostPounds": 80000 }
+  ],
+  "maintenance": {
+    "conditionDecayPerMonth": 0.02,
+    "speedPenaltyPerConditionBelow": 0.4,
+    "costMultiplierPerConditionBelow": 1.5,
+    "repairConditionPerPound": 0.001
+  },
+  "upgrade": {
+    "rungDistanceCostPermille": 150,
+    "rebuildDisruptionPermille": 250,
+    "landCostPerCellPounds": 1000
+  },
+  "roadworks": {
+    "phaseDurationMonths": 2,
+    "laneReductionFraction": 0.5
+  },
+  "naming": {
+    "$comment": "Vocabulary for the non-road object kinds §20 names (civic buildings, infrastructure, transit). The Kentish toponyms and road suffixes live in data/naming_corpus.json (foundation.data) and are reused here for roads and districts; these lists are the placeholder civic-type / infrastructure-type / transit-colour vocabularies §20 names by example but does not enumerate authoritatively. All are PLACEHOLDER vocabulary pending Aaron's balance pass (GR#15 — the lists are data-sourced, never Go literals; their contents are provisional).",
+    "civicTypes": ["Primary School", "Library", "Town Hall", "Community Centre", "Fire Station", "Hospital", "Museum", "Theatre"],
+    "infrastructureTypes": ["Pumping Station", "Substation", "Water Tower", "Treatment Works", "Depot"],
+    "transitColours": ["Red", "Blue", "Green", "Yellow", "Purple", "Orange", "Cyan", "Magenta"]
+  }
+}
