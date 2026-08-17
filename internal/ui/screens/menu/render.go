@@ -6,6 +6,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 )
 
 // drawText writes s left-to-right starting at (x, y), clipped to rect's
@@ -72,17 +73,41 @@ func RenderNewGameForm(buf *core.Buffer, rect core.Rect, req NewGameRequest, sty
 	drawText(buf, rect, rect.X, rect.Y, line, style)
 }
 
-// DrillTargets returns the (widget, source) registration pairs this screen
-// supplies to ui.dash's (MOD-038) drill-through graph, per SF-5: one entry
-// per save slot's summary and one for the current-session figures.
-// Registration itself (Enter opening the target, dead-end detection) is
-// MOD-038's job — this screen only produces the pair list.
-func DrillTargets(entries []SaveEntry, session Session) []DrillTarget {
-	out := []DrillTarget{
-		{WidgetID: "menu.session", Target: "engine.core.session"},
+// drillViewSaveSlot is the drill-through destination view this screen names
+// for every save slot (SF-5/MEN): the F1 map viewport ("f1.viewport"), the
+// registered F-screen-key view a loaded save lands on. "Enter on a save
+// slot" loads it and returns the player to the live game, which is F1's
+// map viewport — a real view ui.screen.map actually subscribes to
+// (mapscreen.ViewSubscriptionName), not a fabricated scope. The previous
+// "serializer.bundle" name was a dead end (ASM-651): int.serializer
+// (INT-002) is a disk-format foundation module, not a view publisher, and
+// "serializer" is neither an F-screen key nor an engine-domain noun per
+// int.protocol's view-naming scheme.
+//
+// EntityID is deliberately empty (whole view): f1.viewport has no
+// bundle-named sub-entity, and the specific bundle being loaded is carried
+// by the Load action's path (Screen.Load), not by a DrillTarget sub-entity.
+// drill_test.go asserts this constant equals mapscreen.ViewSubscriptionName
+// (drift test — if F1's view is ever renamed, this fails and forces
+// reconciliation), so the destination provably exists rather than merely
+// being grammar-valid.
+const drillViewSaveSlot = "f1.viewport"
+
+// DrillTargets returns the drill-through source identities this screen
+// supplies for registration into ui.dash's (MOD-038) drill-through graph,
+// per SF-5: one for the current-session figures and one per save slot.
+// Each is the canonical dash.DrillTarget (ViewName, EntityID) shape —
+// GR#3 forbids a parallel bespoke copy — with the session figure's
+// ViewName ViewSession ("f10.session", whole view) and each save slot's
+// ViewName drillViewSaveSlot ("f1.viewport", whole view). Registration,
+// navigation and dead-end detection remain MOD-038's job; this screen only
+// produces the source list.
+func DrillTargets(entries []SaveEntry, session Session) []dash.DrillTarget {
+	out := []dash.DrillTarget{
+		{ViewName: ViewSession},
 	}
-	for _, e := range entries {
-		out = append(out, DrillTarget{WidgetID: "menu.save." + e.Name, Target: "serializer.bundle." + e.Name})
+	for range entries {
+		out = append(out, dash.DrillTarget{ViewName: drillViewSaveSlot})
 	}
 	return out
 }

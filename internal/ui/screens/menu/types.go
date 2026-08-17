@@ -101,15 +101,3 @@ type NewGameRequest struct {
 	// Debug requests a debug-touched new game (§14).
 	Debug bool
 }
-
-// DrillTarget is one (widget, source) registration pair this screen
-// supplies to ui.dash's (MOD-038) drill-through graph, per SF-5. This
-// package only produces the pair list — registration, navigation, and
-// dead-end detection are MOD-038's job (consumed, not reimplemented).
-type DrillTarget struct {
-	// WidgetID identifies the on-screen figure (stable across renders).
-	WidgetID string
-	// Target is the drill-through destination MOD-038's registration API
-	// expects (an opaque string in this screen's scope).
-	Target string
-}
