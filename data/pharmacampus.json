@@ -1,0 +1,105 @@
+{
+  "$comment": "feat.pharmacampus (FEAT-101) — the FDI-anchor facility catalogue for the pharma/R&D campus (Groton-Pfizer-class, §46 archetype; Pfizer's real UK campus was Sandwich, Kent) and the chemicals_complex comparison anchor. Spec refs: §46 Multinational Attraction & Anchor Employers (the archetype table: pharma R&D campus = 'university, graduates, clean utilities | labs: high-wage white collar, low freight'); §45 (supply-chain demand injection); §27 (the education lifecycle); §32 (closure shock / blight); §54 (money entering via FDI); resources-design-brief.md §6 (the Groton-Pfizer-class archetype). Balance-number regime: EVERY numeric figure below (footprint, output, jobs, utility draw, exports, capex, opex, wages, supply-chain counts, and the bid curve) is a PLACEHOLDER pending Aaron's balance pass — no magnitude is final, and no AC may pin a specific number (feat.pharmacampus AC-2). This file extends the existing thin pharma_r_d_campus row in data/buildings.json (supplementCategory 'fdi-anchors', section SUP3, blightClass none, unlock M7) with per-type BEHAVIOURAL modelling only; blightClass/unlock/section stay single-sourced in data/buildings.json (GR#3).",
+  "version": 1,
+  "meta": {
+    "specRef": "§46; §45; §27; §32; §54; resources-design-brief.md §6",
+    "units": {
+      "footprint": "cells",
+      "outputTPerDay": "tonnes per day (t/day) of high-value output",
+      "jobs": "skilled headcount (workers)",
+      "jobsCharacter": "ordinal — white-collar-skilled | industrial | mixed",
+      "utilityPowerKW": "kilowatts (clean-utility electricity draw)",
+      "utilityWaterLitresPerDay": "litres per day (clean-utility water draw)",
+      "exportsTPerDay": "tonnes per day exported",
+      "capexMicroPounds": "micro-pounds (int64, finance.Money)",
+      "opexMicroPoundsPerWorkerPerMonth": "micro-pounds per worker per month",
+      "wagesMicroPoundsPerWorkerPerMonth": "micro-pounds per worker per month",
+      "supplyChainFirms": "base count of supply-chain firms spawned on win",
+      "supplyChainPerWorkers": "one extra supply-chain firm per this many workers",
+      "bid.qualityBase": "base bid-quality points (education-independent)",
+      "bid.educationTermPerGraduate": "bid-quality points contributed per unit of education output",
+      "bid.competingFloor": "off-map competing region's bid-quality floor",
+      "bid.jitterMax": "seeded bid jitter half-range (points, symmetric)",
+      "bid.graduateDemandPerWorker": "graduate/research demand emitted per worker"
+    },
+    "balanceRegime": "every figure is a placeholder pending Aaron's balance pass; rebalancing is a table edit in this file, never a code change (AC-2). Tests check direction/structure only, never a numeric target."
+  },
+  "anchors": [
+    {
+      "key": "pharma_r_d_campus",
+      "name": "Pharma R&D campus",
+      "footprint": 24,
+      "outputTPerDay": 12,
+      "jobs": 3500,
+      "jobsCharacter": "white-collar-skilled",
+      "utilityPowerKW": 8000,
+      "utilityWaterLitresPerDay": 1200000,
+      "exportsTPerDay": 9,
+      "capexMicroPounds": 2400000000000000,
+      "opexMicroPoundsPerWorkerPerMonth": 900000,
+      "wagesMicroPoundsPerWorkerPerMonth": 4200000,
+      "supplyChainFirms": 6,
+      "supplyChainPerWorkers": 500,
+      "bid": {
+        "qualityBase": 40,
+        "educationTermPerGraduate": 6,
+        "competingFloor": 100,
+        "jitterMax": 8,
+        "graduateDemandPerWorker": 2
+      },
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputTPerDay": "placeholder (t/day, high-value low-mass pharma output) pending Aaron's balance pass",
+        "jobs": "placeholder (skilled white-collar headcount, §46 'thousands of direct jobs') pending Aaron's balance pass",
+        "jobsCharacter": "placeholder (white-collar-skilled per §46 'labs: high-wage white collar') pending Aaron's balance pass",
+        "utilityPowerKW": "placeholder (clean-utility power draw, 'low freight' §46) pending Aaron's balance pass",
+        "utilityWaterLitresPerDay": "placeholder (clean-utility water draw) pending Aaron's balance pass",
+        "exportsTPerDay": "placeholder (t/day export flow) pending Aaron's balance pass",
+        "capexMicroPounds": "placeholder (micro-pounds) pending Aaron's balance pass",
+        "opexMicroPoundsPerWorkerPerMonth": "placeholder (micro-pounds) pending Aaron's balance pass",
+        "wagesMicroPoundsPerWorkerPerMonth": "placeholder (micro-pounds, high-wage white collar §46) pending Aaron's balance pass",
+        "supplyChainFirms": "placeholder (§45 demand-injection base) pending Aaron's balance pass",
+        "supplyChainPerWorkers": "placeholder (spawn scaling) pending Aaron's balance pass",
+        "bid": "placeholder (bid curve shape, competing floor, jitter) pending Aaron's balance pass"
+      }
+    },
+    {
+      "key": "chemicals_complex",
+      "name": "Chemicals complex",
+      "footprint": 30,
+      "outputTPerDay": 60,
+      "jobs": 1200,
+      "jobsCharacter": "industrial",
+      "utilityPowerKW": 40000,
+      "utilityWaterLitresPerDay": 5000000,
+      "exportsTPerDay": 45,
+      "capexMicroPounds": 1800000000000000,
+      "opexMicroPoundsPerWorkerPerMonth": 1500000,
+      "wagesMicroPoundsPerWorkerPerMonth": 2600000,
+      "supplyChainFirms": 3,
+      "supplyChainPerWorkers": 1000,
+      "bid": {
+        "qualityBase": 40,
+        "educationTermPerGraduate": 1,
+        "competingFloor": 100,
+        "jitterMax": 8,
+        "graduateDemandPerWorker": 1
+      },
+      "disclosure": {
+        "footprint": "placeholder (cells) pending Aaron's balance pass",
+        "outputTPerDay": "placeholder (t/day, bulk chemical output) pending Aaron's balance pass",
+        "jobs": "placeholder (industrial headcount) pending Aaron's balance pass",
+        "jobsCharacter": "placeholder (industrial per §46 heavy-industry sheet) pending Aaron's balance pass",
+        "utilityPowerKW": "placeholder (heavy-industry power draw, §46 'blight class high') pending Aaron's balance pass",
+        "utilityWaterLitresPerDay": "placeholder (heavy-industry water draw) pending Aaron's balance pass",
+        "exportsTPerDay": "placeholder (t/day export flow) pending Aaron's balance pass",
+        "capexMicroPounds": "placeholder (micro-pounds) pending Aaron's balance pass",
+        "opexMicroPoundsPerWorkerPerMonth": "placeholder (micro-pounds) pending Aaron's balance pass",
+        "wagesMicroPoundsPerWorkerPerMonth": "placeholder (micro-pounds) pending Aaron's balance pass",
+        "supplyChainFirms": "placeholder (§45 demand-injection base) pending Aaron's balance pass",
+        "supplyChainPerWorkers": "placeholder (spawn scaling) pending Aaron's balance pass",
+        "bid": "placeholder (bid curve shape, competing floor, jitter) pending Aaron's balance pass"
+      }
+    }
+  ]
+}
