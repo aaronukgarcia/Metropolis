@@ -268,19 +268,21 @@ func TestSEC221RejectsUnboundedFrictionPerCase(t *testing.T) {
 	}
 }
 
-// TestSEC221FrictionAccumulationStaysFinite (SEC-221): even a VALIDATED config
-// drives a non-finite per-month friction delta through the (unbounded)
-// HousingApproachFrictionIncreasePerUnit coefficient, the accumulated friction
-// and the per-month result must saturate at the finite maxSatisfactionFriction
-// ceiling — never +Inf leaking into SatisfactionFriction() or the AdvanceResult.
+// TestSEC221FrictionAccumulationStaysFinite (SEC-221): with the maximum-valid
+// satisfaction friction (maxSatisfactionFrictionPerCase) and the maximum-valid
+// friction-increase coefficient (maxPolicyCoefficientPerUnit — the coefficient
+// is bounded by SEC-234, which closed the 1e308 escape hatch this test used to
+// exploit), the accumulated friction and the per-month result stay finite and
+// bounded by the maxSatisfactionFriction ceiling — never +Inf leaking into
+// SatisfactionFriction() or the AdvanceResult.
 func TestSEC221FrictionAccumulationStaysFinite(t *testing.T) {
 	cfg := testConfig()
 	cfg.BaseArrivalRate = 3.0
 	cfg.MaxBoatSize = 10
 	cfg.Reception.CaseworkerThroughputPerMonth = 1 // overflow guaranteed
 	cfg.Reception.SatisfactionFrictionPerCase = maxSatisfactionFrictionPerCase
-	cfg.Policy.HousingApproachFrictionIncreasePerUnit = 1e308 // finite >= 0, still valid
-	cfg.Policy.HousingApproachDefault = 1.0                   // approach = 1: the coefficient applies
+	cfg.Policy.HousingApproachFrictionIncreasePerUnit = maxPolicyCoefficientPerUnit
+	cfg.Policy.HousingApproachDefault = 1.0 // approach = 1: the coefficient applies
 
 	api := mustAPI(t, cfg, newFakeShore(oneCell))
 	res, err := api.Advance(0)
@@ -448,5 +450,163 @@ func TestSEC229ResolveMonthSaturates(t *testing.T) {
 		if k.ResolveMonth != 0 && k.ResolveMonth < 0 {
 			t.Fatalf("ResolveMonth wrapped negative: case %d resolveMonth=%d", uint64(id), k.ResolveMonth)
 		}
+	}
+}
+
+// TestSEC233RejectsUnboundedThroughputConfig (SEC-233): an unbounded
+// CaseworkerThroughputPerMonth or ProcessingFundingThroughputGainPerUnit — the
+// values that drive throughput() to +Inf/1e308 and Advance's bare int64(T) to
+// GOOS-divergent outcomes (0 assigned on amd64, all assigned on arm64) — must be
+// rejected at the boundary (Validate, the New entry point, and buildConfig),
+// never silently accepted.
+func TestSEC233RejectsUnboundedThroughputConfig(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+	}{
+		{"caseworkerThroughputPerMonth 1e308", func(c *Config) { c.Reception.CaseworkerThroughputPerMonth = 1e308 }},
+		{"caseworkerThroughputPerMonth above ceiling", func(c *Config) {
+			c.Reception.CaseworkerThroughputPerMonth = maxCaseworkerThroughputPerMonth + 1
+		}},
+		{"throughputGainPerUnit 1e308", func(c *Config) { c.Policy.ProcessingFundingThroughputGainPerUnit = 1e308 }},
+		{"throughputGainPerUnit above ceiling", func(c *Config) {
+			c.Policy.ProcessingFundingThroughputGainPerUnit = maxPolicyCoefficientPerUnit + 1
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate accepted an unbounded throughput config")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+			if _, err := New(42, cfg, "corr-sec233"); err == nil {
+				t.Fatalf("New accepted an unbounded throughput config")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+
+	rawMut := map[string]func(r *rawCoastalData){
+		"buildConfig caseworkerThroughputPerMonth 1e308": func(r *rawCoastalData) { r.Reception.CaseworkerThroughputPerMonth = 1e308 },
+		"buildConfig throughputGainPerUnit 1e308":        func(r *rawCoastalData) { r.Policy.ProcessingFundingThroughputGainPerUnit = 1e308 },
+	}
+	for name, mutate := range rawMut {
+		t.Run(name, func(t *testing.T) {
+			raw := rawTestConfig()
+			mutate(&raw)
+			if _, err := buildConfig(raw, "corr", "corr-sec233"); err == nil {
+				t.Fatalf("buildConfig accepted an unbounded throughput config")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+}
+
+// TestSEC233AssignedDeterministicUnderHostileThroughput (SEC-233, defence in
+// depth): the assignment conversion must be platform-independent even when a
+// hostile throughput reaches it. The Validate/buildConfig bounds reject the
+// hostile config at the boundary, so this exercises the arithmetic directly via
+// a same-package-constructed API (New would refuse the config). The bare
+// int64(T) this replaces wrapped a 1e308 throughput to MinInt64 on amd64 — 0
+// assigned, every case overflowed — but saturated to MaxInt64 on arm64 — every
+// case assigned: opposite outcomes for the same config across GOOS (GR#21).
+// f64ToInt64 (num.ClampInt64FromFloat) saturates deterministically to MaxInt64
+// on every platform, and the clamp bounds assigned to the queue length.
+func TestSEC233AssignedDeterministicUnderHostileThroughput(t *testing.T) {
+	cfg := testConfig()
+	cfg.Reception.CaseworkerThroughputPerMonth = 1e308 // finite, hostile
+
+	api := &CoastalAPI{
+		seed:          42,
+		cfg:           cfg,
+		cases:         make(map[CaseID]Case),
+		nextCaseID:    1,
+		nextArrivalID: 1,
+	}
+	api.self.Store(api) // arm the copy guard (New does this for real APIs)
+	if err := api.SetShore(newFakeShore(oneCell)); err != nil {
+		t.Fatalf("SetShore: %v", err)
+	}
+
+	res, err := api.Advance(0)
+	if err != nil {
+		t.Fatalf("Advance(0): %v", err)
+	}
+	if res.NewCases == 0 {
+		t.Fatalf("Advance minted no cases; cannot observe assignment")
+	}
+	if got := api.Backlog(); got != 0 {
+		t.Fatalf("Backlog = %d, want 0: a hostile throughput must saturate to assign-everything deterministically, not wrap to 0 on amd64", got)
+	}
+	if got := res.Backlog; got != 0 {
+		t.Fatalf("AdvanceResult.Backlog = %d, want 0", got)
+	}
+}
+
+// TestSEC234RejectsUnboundedFrictionCoefficient (SEC-234): an unbounded
+// HousingApproachFrictionIncreasePerUnit — a 1e308 coefficient drives
+// effectiveFriction to +Inf, which satFriction collapsed to 0 (a catastrophic
+// month reports "no dissatisfaction") — must be rejected at the boundary
+// (Validate, New, and buildConfig), never silently accepted.
+func TestSEC234RejectsUnboundedFrictionCoefficient(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(c *Config)
+	}{
+		{"frictionIncreasePerUnit 1e308", func(c *Config) { c.Policy.HousingApproachFrictionIncreasePerUnit = 1e308 }},
+		{"frictionIncreasePerUnit above ceiling", func(c *Config) {
+			c.Policy.HousingApproachFrictionIncreasePerUnit = maxPolicyCoefficientPerUnit + 1
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			tc.mutate(&cfg)
+			if err := cfg.Validate(); err == nil {
+				t.Fatalf("Validate accepted an unbounded friction coefficient")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+			if _, err := New(42, cfg, "corr-sec234"); err == nil {
+				t.Fatalf("New accepted an unbounded friction coefficient")
+			} else {
+				assertRegistryCode(t, err, ErrDataInvalid)
+			}
+		})
+	}
+
+	raw := rawTestConfig()
+	raw.Policy.HousingApproachFrictionIncreasePerUnit = 1e308
+	if _, err := buildConfig(raw, "corr", "corr-sec234"); err == nil {
+		t.Fatalf("buildConfig accepted an unbounded friction coefficient")
+	} else {
+		assertRegistryCode(t, err, ErrDataInvalid)
+	}
+}
+
+// TestSEC234SatFrictionSaturatesNonFiniteToCeiling (SEC-234, defence in depth):
+// a +Inf friction delta must saturate at maxSatisfactionFriction — never
+// collapse to 0 the way the old non-finite guard did (a catastrophic-overflow
+// month would report "no dissatisfaction"). NaN and -Inf still collapse to 0.
+func TestSEC234SatFrictionSaturatesNonFiniteToCeiling(t *testing.T) {
+	if got := satFriction(math.Inf(1)); got != maxSatisfactionFriction {
+		t.Fatalf("satFriction(+Inf) = %v, want maxSatisfactionFriction (%v)", got, maxSatisfactionFriction)
+	}
+	if got := satFriction(math.NaN()); got != 0 {
+		t.Fatalf("satFriction(NaN) = %v, want 0", got)
+	}
+	if got := satFriction(math.Inf(-1)); got != 0 {
+		t.Fatalf("satFriction(-Inf) = %v, want 0", got)
+	}
+	if got := satFriction(maxSatisfactionFriction * 2); got != maxSatisfactionFriction {
+		t.Fatalf("satFriction(finite-above-ceiling) = %v, want %v", got, maxSatisfactionFriction)
+	}
+	if got := satFriction(7.5); got != 7.5 {
+		t.Fatalf("satFriction(7.5) = %v, want 7.5 (in-range passes through)", got)
 	}
 }
