@@ -79,6 +79,15 @@ If the summary shows git NOT SYNCED or a Vestige problem, surface that to the us
 
 **EVERY response MUST start with your assigned name prefix** (`bill> `, `bob> `, or `ben> `). Every 5 responses, mentally verify you are still using it. If you drop it: add it immediately and apologise.
 
+### 👥 Inter-Session Coordination (Bill & Bob Division of Labor)
+
+* **Bob is a live dispatcher session running in a second active shell.** Bill must NOT write basic development code himself. Bill must delegate all acceptance criteria drafting, agent dispatches, board maintenance, and queue tracking to Bob, saving Bill's capacity for architecture, briefs, and final review.
+* **The Communication Channel:** Bill and Bob must communicate exclusively via the directed database message queue:
+  * To message Bob: `node claude-sync.js message --to Bob`
+  * To message Bill: `node claude-sync.js message --to Bill`
+  * To read pending messages: `node claude-sync.js read` (Bill and Bob must poll this queue on every sweep).
+* **Mandatory Role Confirmation:** Upon checking in, both Bill and Bob must say their mandatory roles aloud verbatim in their very next response to establish discipline.
+
 ### Permit auto-renewal, polling, session end
 
 - Permits have a 5-minute TTL; the `PostToolUse` hook (`claude-ping-check.js`) auto-renews — no manual pings needed.
