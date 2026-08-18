@@ -2306,7 +2306,8 @@
       "calls": [
         "engine.traffic",
         "engine.market",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "engine.citizens"
       ],
       "sprint": 10
     },
