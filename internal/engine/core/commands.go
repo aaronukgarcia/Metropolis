@@ -26,6 +26,59 @@ type DeltaSink interface {
 	SendDelta(protocol.Delta) bool
 }
 
+// GameplayCommandHandler is the injected seam HandleCommand consults for
+// the four gameplay-intent commands (Buy, Zone, Build, Demolish — the
+// build screen's vocabulary, internal/protocol/commands.go). engine.core
+// neither owns nor imports the modules that adjudicate those commands
+// (engine.build, engine.finance, engine.world); the composition root
+// (internal/engine/compose) — the one package permitted to know all
+// concrete modules (GR#20) — injects a handler that maps each command to
+// its owning module's command surface. The seam mirrors Speed8xGate's
+// "inject a func, deny by default" shape exactly.
+//
+// A nil return means the command was accepted; a non-nil error means it
+// was rejected and is surfaced on the CommandResult (via e.reject, so the
+// error's registry code reaches the caller). Unset (nil handler) means
+// deny-by-default: the four gameplay kinds are rejected with
+// ErrUnhandledCommandKind, never silently accepted.
+type GameplayCommandHandler func(cmd protocol.Command) error
+
+// WithGameplayCommandHandler installs the gameplay-command handler
+// handleGameplay consults before accepting KindBuy/KindZone/KindBuild/
+// KindDemolish. Unset (the default an Engine boots with — e.g. a bare
+// NewEngine() in a test, or a caller that forgot to wire the composition
+// root) means deny-by-default: those kinds are refused, never silently
+// permitted. See GameplayCommandHandler's doc comment for why the handler
+// lives at the composition root rather than here.
+func WithGameplayCommandHandler(h GameplayCommandHandler) Option {
+	return func(e *Engine) { e.gameplayHandler = h }
+}
+
+// SetGameplayCommandHandler installs the gameplay-command handler on an
+// already-constructed Engine. It exists for the composition root, which
+// receives a *core.Engine (not an Option list) and must route the four
+// gameplay kinds to the build/world modules it composes — the handler is a
+// closure over those modules, so it cannot be built at NewEngine time the
+// way Speed8xGate (a plain method value) can. Same boot-time-only
+// discipline as RegisterPhaseHook: must be called before the first
+// AdvanceTicks (before the engine seals), rejected with ErrEngineSealed
+// afterward, never silently ignored.
+func (e *Engine) SetGameplayCommandHandler(h GameplayCommandHandler) error {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	if e.sealed {
+		return errs.New(ErrEngineSealed, errs.NewCorrelationID(), map[string]any{"handler": "gameplay"})
+	}
+	e.gameplayHandler = h
+	return nil
+}
+
 // HandleCommand processes one Command synchronously and returns the
 // CommandResult to send back to the caller. It never blocks on
 // anything slower than an Engine method call or a phase-pipeline run
@@ -71,9 +124,30 @@ func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
 		return e.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		return e.handleDebug(cmd)
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish:
+		return e.handleGameplay(cmd, correlationID)
 	default:
 		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))
 	}
+}
+
+// handleGameplay dispatches the four gameplay-intent commands (Buy, Zone,
+// Build, Demolish) to the injected GameplayCommandHandler. It is the
+// deny-by-default counterpart to handleSetSpeed's checkSpeed8xAllowed:
+// with no handler wired (the bare-NewEngine case) every gameplay kind is
+// rejected with ErrUnhandledCommandKind rather than silently accepted,
+// and with a handler wired, the handler's error (nil or registry-sourced)
+// decides accept/reject. engine.core never adjudicates the gameplay
+// itself — that is engine.build/engine.finance/engine.world's job, reached
+// only through the composition root's handler (GR#20).
+func (e *Engine) handleGameplay(cmd protocol.Command, correlationID string) protocol.CommandResult {
+	if e.gameplayHandler == nil {
+		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))
+	}
+	if err := e.gameplayHandler(cmd); err != nil {
+		return e.reject(cmd, err)
+	}
+	return e.accept(cmd)
 }
 
 func (e *Engine) accept(cmd protocol.Command) protocol.CommandResult {

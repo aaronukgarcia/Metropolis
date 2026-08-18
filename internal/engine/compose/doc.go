@@ -15,8 +15,9 @@
 // package defines which real modules register, in what order, driven
 // headlessly. It does not reimplement the phase pipeline, the invariant
 // hook, or the registry — it composes the existing core.Engine, the
-// existing invariant.WireDaily, and the existing world/citizens/market
-// APIs, plus four stub PhaseHooks (M0-ENG §2, module-stubbing).
+// existing invariant.WireDaily, and the existing world/citizens/market/
+// consumption/build/attract APIs (plus a coarse finance stub PhaseHook),
+// M0-ENG §2's module-stubbing discipline.
 //
 // GR#20 (Contract-First, Stub-Forever): the composition root is the only
 // package that imports engine.core together with all the wired modules.
@@ -43,8 +44,8 @@
 // add, remove, or reorder phases. The chosen mapping, following the BA's
 // proposed table in docs/planning/acceptance/feat.compositionroot.md:
 //
-//	build  -> PhaseLandValueDecay  (land-value decay slot; MOD-026 stub)
-//	attract -> PhasePopulation     (after citizens; MOD-029 stub)
+//	build  -> PhaseLandValueDecay  (land-value decay slot; MOD-026 real hook)
+//	attract -> PhasePopulation     (after citizens; MOD-029 real hook)
 //
 // Both are scheduling decisions the spec does not pin (the same class
 // engine.invariant.md AC-7 flagged as ASM-080); recorded here so the lead
@@ -53,17 +54,31 @@
 // # STUB-FOR-BASELINE policy
 //
 // Baseline one (FEAT-083) wires the must-have spine and leaves the rest
-// coarse. world/citizens/market/invariant are REAL (world is the terrain/
-// ownership store, citizens the cold citizen store, market the price
-// registry, invariant the conservation checker). consumption/finance/
-// build/attract are STUB PhaseHooks with coarse, directional behaviour
-// sufficient to keep the loop alive: citizens + attract move the people
-// stock, finance moves the money stock (a budget-closing wage/tax
-// transfer), consumption and build are no-op slots that keep their phase
-// position wired for the real modules to fill one at a time. roads/
-// traffic/logistics/services/wellbeing/unlocks/education/crime are DEFERRED
-// ENTIRELY — no stub hooks are registered for them (a stub that occupies a
-// phase slot and does nothing is dead weight, not a composition).
+// coarse. world/citizens/market/consumption/build/attract/invariant are
+// REAL: world is the terrain/ownership store, citizens the cold citizen
+// store, market the price registry, consumption the utility-network draw
+// (MOD-021's SolveDailyTick against coarse single-source networks), build
+// the build-queue advance (MOD-026's BuildAPI.Tick) plus the Buy/Zone/
+// Build/Demolish command surface (routed through engine.core's
+// GameplayCommandHandler seam), attract the attractiveness-driven
+// migration step (MOD-029's ApplyMigration — g(A − A_world), never a
+// hardcoded +N), invariant the conservation checker. finance remains a
+// STUB PhaseHook with coarse, directional behaviour sufficient to keep
+// the loop alive: a budget-closing wage/tax transfer that moves the money
+// stock. roads/traffic/logistics/services/wellbeing/unlocks/education/
+// crime are DEFERRED ENTIRELY — no stub hooks are registered for them (a
+// stub that occupies a phase slot and does nothing is dead weight, not a
+// composition).
+//
+// # Gameplay command seam (engine.core GameplayCommandHandler)
+//
+// engine.core's HandleCommand does not itself adjudicate the four
+// gameplay-intent kinds (Buy/Zone/Build/Demolish); it delegates them to an
+// injected GameplayCommandHandler, deny-by-default when unset. This
+// package injects the one handler (simState.handleGameplay) that maps those
+// kinds onto engine.world.PurchaseTile and engine.build's Submit*Command
+// surfaces — the same single-wiring-path discipline (AC-1/GR#20) as the
+// phase hooks, so no runnable path routes gameplay intent around compose.
 //
 // # Error sub-range
 //

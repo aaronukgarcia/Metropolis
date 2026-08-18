@@ -2181,6 +2181,12 @@
       "message": "composition root: wiring after engine sealed (module {module})",
       "remedy": "compose.Wire was invoked after the Engine sealed its hook set (the first AdvanceTicks already ran). Wire hooks before the first AdvanceTicks call; the original core.ErrEngineSealed cause is preserved via errors.Unwrap (AC-6)."
     },
+    "MET-G804": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "{display}",
+      "remedy": "A gameplay-command rejection pass-through: another module (e.g. engine.world's PurchaseTile) already rendered its own registry-sourced Display string. compose re-wraps it under this code, whose template is exactly {display}, rather than re-rendering it under the foreign module's own code with mismatched ctx keys (BUG-267)."
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",

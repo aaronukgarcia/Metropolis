@@ -274,6 +274,17 @@ type Engine struct {
 	// (commands.go), never as "no gate configured, allow it".
 	speed8xGate Speed8xGate
 
+	// gameplayHandler is the injected gameplay-command handler (see
+	// GameplayCommandHandler's doc comment in commands.go). nil until
+	// WithGameplayCommandHandler wires it — nil is read as "no handler
+	// configured, deny KindBuy/KindZone/KindBuild/KindDemolish"
+	// (ErrUnhandledCommandKind, MET-E009), never as "no handler
+	// configured, accept them". The composition root injects the one
+	// handler that maps those four kinds onto engine.build/engine.world's
+	// command surfaces (GR#20 — engine.core neither owns nor imports the
+	// modules that adjudicate gameplay intent).
+	gameplayHandler GameplayCommandHandler
+
 	registry *registry.Registry
 	hooks    map[PhaseKind][]PhaseHook
 
