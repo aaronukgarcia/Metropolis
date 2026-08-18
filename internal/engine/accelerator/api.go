@@ -317,6 +317,9 @@ func (a *AcceleratorAPI) Operate(tick int64) error {
 // double-counted (AC-4/AC-6). The cfg is immutable after New, so this read
 // needs no lock.
 func (a *AcceleratorAPI) DemandEntity() consumption.DemandEntity {
+	if err := a.checkNotCopied("DemandEntity"); err != nil {
+		return consumption.DemandEntity{}
+	}
 	return consumption.DemandEntity{
 		EntityRef: CatalogueKey,
 		ClassRef:  a.cfg.ConsumptionRef,
@@ -349,6 +352,9 @@ func (a *AcceleratorAPI) ResolvedDemand(opts consumption.DemandOptions) (consump
 // electricity scaled by the data-sourced peak multiplier (> 1), so the peak
 // electricity figure sits above the base figure (AC-5 — peak-load-aware).
 func (a *AcceleratorAPI) PeakDemand(opts consumption.DemandOptions) (consumption.Demand, error) {
+	if err := a.checkNotCopied("PeakDemand"); err != nil {
+		return consumption.Demand{}, err
+	}
 	d, err := a.ResolvedDemand(opts)
 	if err != nil {
 		return consumption.Demand{}, err
@@ -379,6 +385,9 @@ func (a *AcceleratorAPI) ResearchMultiplier() float64 {
 // (GR#16). The accelerator exposes the multiplier; the wiring of it into
 // engine.education's production is the unregistered edge AC-7 notes.
 func (a *AcceleratorAPI) AppliedResearch(base int64) int64 {
+	if err := a.checkNotCopied("AppliedResearch"); err != nil {
+		return 0
+	}
 	return num.ClampInt64FromFloat(float64(base) * a.ResearchMultiplier())
 }
 
