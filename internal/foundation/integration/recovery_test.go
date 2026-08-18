@@ -133,7 +133,9 @@ func TestRecover_CrashRecovery_ByteIdenticalToPreCrashState(t *testing.T) {
 		if _, err := wal.Append(tick, cmd); err != nil {
 			t.Fatalf("Append(%d): %v", i, err)
 		}
-		applyLive(cmd)
+		if err := applyLive(cmd); err != nil {
+			t.Fatalf("applyLive: %v", err)
+		}
 	}
 	sumAtCheckpoint := live.Sum() // 1+2+3+4+5 = 15
 
@@ -156,7 +158,9 @@ func TestRecover_CrashRecovery_ByteIdenticalToPreCrashState(t *testing.T) {
 		if _, err := wal.Append(tick, cmd); err != nil {
 			t.Fatalf("Append(pending %d): %v", i, err)
 		}
-		applyLive(cmd) // the live run DOES apply these — it just never gets to checkpoint them
+		if err := applyLive(cmd); err != nil { // the live run DOES apply these — it just never gets to checkpoint them
+			t.Fatalf("applyLive(pending): %v", err)
+		}
 		pending = append(pending, cmd)
 	}
 
@@ -536,7 +540,9 @@ func TestWAL_PruneOnCheckpoint_RecoverStillCorrectAfterPrune(t *testing.T) {
 		if _, err := wal.Append(int64(i), cmd); err != nil {
 			t.Fatalf("Append(%d): %v", i, err)
 		}
-		applyLive(cmd)
+		if err := applyLive(cmd); err != nil {
+			t.Fatalf("applyLive: %v", err)
+		}
 	}
 	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID)
 	cp, err := mgr.CreateCheckpoint(fixtureCtx(5), "cp-5", "")
@@ -550,7 +556,9 @@ func TestWAL_PruneOnCheckpoint_RecoverStillCorrectAfterPrune(t *testing.T) {
 		if _, err := wal.Append(int64(i), cmd); err != nil {
 			t.Fatalf("Append(%d): %v", i, err)
 		}
-		applyLive(cmd)
+		if err := applyLive(cmd); err != nil {
+			t.Fatalf("applyLive: %v", err)
+		}
 	}
 
 	// Prune at the checkpoint's tick (5): entries 1..5 (tick<=5) pruned,
