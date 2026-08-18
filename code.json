@@ -3571,6 +3571,21 @@
             "inboundGuid": "5591af37-0157-4e07-a8cf-b4ab87db7466"
           },
           {
+            "key": "engine.crime",
+            "moduleGuid": "67dd9b63-91fc-4ce1-8332-ec52009c9f3f",
+            "inboundGuid": "ec4eb047-5101-496f-b9c4-760e21846954"
+          },
+          {
+            "key": "engine.leisure",
+            "moduleGuid": "47447aee-f985-470a-9e8f-b25dbb571743",
+            "inboundGuid": "d7d01c42-212d-48f4-b9b9-984bf33bd1ce"
+          },
+          {
+            "key": "engine.refuse",
+            "moduleGuid": "93cadd89-ef03-4b29-b1b8-1b35c44788b7",
+            "inboundGuid": "877d2b29-6055-4ec4-9be2-b60b2d53fcf3"
+          },
+          {
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
@@ -4932,6 +4947,10 @@
           {
             "key": "engine.farming",
             "outboundGuid": "8dd0b14d-7989-4a7c-92ea-758af8ef3516"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -5158,6 +5177,10 @@
           {
             "key": "engine.prison",
             "outboundGuid": "e14d1948-9f54-4da0-9463-4509c5bf4f27"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -6383,6 +6406,10 @@
           {
             "key": "engine.tourism",
             "outboundGuid": "698b7f3d-b93b-47e5-b9bd-c06ddc6eec87"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "ui.screen.demo",

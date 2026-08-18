@@ -890,7 +890,10 @@
         "engine.invariant",
         "engine.logistics",
         "engine.season",
-        "engine.households"
+        "engine.households",
+        "engine.crime",
+        "engine.leisure",
+        "engine.refuse"
       ]
     },
     {
