@@ -2,7 +2,17 @@
 
 When Aaron types `update` (or `/update`), it means: **check whether anything needs updating to reflect what has happened since the last update check, and do it.** It is a call to sync the project's memory surfaces with reality — not a request for a status report.
 
-## Checklist — assess each, update only where stale
+## ⚠️ WHO MAY RUN WHICH VERSION (2026-08-18 — parallel-team rule)
+
+**The FULL checklist below is LEAD-ONLY (Bev, or whichever session Aaron designates lead).** CLAUDE.md, skills, hooks, planning SSOT, auto-memory, and Vestige are lead-owned surfaces; broad "commit everything that changed" is only safe in the lead's checkout.
+
+**Coder sessions (Ben, Bill, Bob, or any lane session): run the SCOPED variant instead —**
+1. **Your BOW items only** — statuses current (done work flipped with refs? verdicts recorded? decisions from your chat captured as comments)? New work you discovered in YOUR lane gets an item.
+2. **Your worktree** — on your `lane/<name>` branch; fresh vs origin/main (`git fetch origin main` + rebase your OWN branch); everything committed + pushed (no local-only commits).
+3. **Your acceptance docs** — if reality in your modules drifted from `docs/planning/acceptance/engine.<name>.md`, update THOSE files (they're in your lane) and note it.
+4. **Everything else you noticed stale** (CLAUDE.md, skills, hooks, code.json, other lanes, shared tooling) — **REPORT it to Aaron/the lead; do NOT edit it.** No CLAUDE.md/skills/hooks/master-plan/code.json edits, no auto-memory/Vestige writes (those are Claude-lead surfaces your CLI may not even have), no broad staging — exact paths only, as always.
+
+## Checklist (LEAD-ONLY) — assess each, update only where stale
 
 1. **CLAUDE.md** — do the session protocol, Golden Rules table, dev-team process section, skills list, or environment facts lag behind decisions made this session?
 2. **Skills** (`.claude/commands/*.md`) — do any reference retired workflows, old field names, or miss new commands/flags? Are new recurring behaviours worth a new skill?
