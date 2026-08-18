@@ -45,3 +45,22 @@ Each integration gets an ICD (a structured doc + a code.json registration) cover
 4. **THEN FEAT-169** (citizens cold pass — mortality + fertility live) and **FEAT-167** (real attractiveness terms) as the first two real integrations on the new substrate.
 
 Determinism, GR#20/25 contracts, and the balance-number regime apply throughout; all thresholds/cadences are placeholders.
+
+## 7. Concrete architecture (grounded in the real seams, 2026-08-18 audit)
+
+The design maps cleanly onto existing machinery — we extend, not replace:
+
+- **Location-transparent executor = a `det.RunPhase` variant.** `det.RunPhase[T,M](corrID, workers, zero, ShardFunc, combine, applyMsg)` already fans 256 shards across workers and merges via `MergeInOrder` (shard order) + `ApplyBarrier` ((shard,sequence) order), byte-identical regardless of worker count. The executor parameterises the *worker* behind a `WorkerPool` interface: a local goroutine today, a remote/cloud worker later. `ShardFunc` stays a pure seeded function (`det.Stream` is position-independent Philox — safe across goroutines/nodes). The BUG-269 `SingleShardHook` fast-path carries over for T0 light hooks.
+- **Queue/overflow layer wraps `protocol.Transport`.** `Transport{SendCommand, Results, Events, Deltas, Close}` is *already* documented as the gRPC/out-of-process/cloud swap point, and `SendCommand` already returns `ErrCommandQueueFull` (existing backpressure). The integration queue is a `Transport` implementation that, on full, **spills to a disk-backed FIFO priority-tiered segment** instead of failing, then drains back as capacity frees. Every caller (headless `driveTicks`, interactive `boot`, tests) goes through `Transport` uniformly, so this is a single clean insertion point — and the same seam the cloud transport uses.
+- **The overflow queue doubles as the durable command log → crash recovery.** Today `save`/`checkpoint` can rewind to the last *completed* checkpoint but cannot replay forward (the replay `Recorder` is in-memory only, ASM-442/470 blocked). The disk-backed, append-only, FIFO overflow queue IS the missing durable command log: on crash/reboot, load the last checkpoint (`checkpoint.Manager.Load`/`CurrentID`, byte-deterministic) then **replay the persisted command log to the crash tick** → rebuilt state == pre-crash state. This closes the crash-recovery gap as a by-product.
+- **ICD extends `code.json`, not a parallel registry.** Each module's `inbound`/`outbound`/`consumers`/`calls` GUID-pinned edges gain contract fields: request/response types, update class (T0/T1/T2), shard scope, determinism (seed key + merge order), queue semantics, resilience policy, monitoring signals. GR#25's edge-first rule already governs it.
+- **Monitoring taps existing hooks + the BOW-server pattern.** `core.WithPhaseObserver(kind,tick,month)` gives per-phase timing; `invariant.WithLogSink` gives conservation/violation events. The dashboard is a zero-dependency local Node `http` server (mirroring `tools/bow-server.js` + a template) reading those signals — debug-gated, front-end-agnostic.
+- **Home:** a new `internal/foundation/integration/` package, built incrementally, formally registered via the register-guid/master-plan flow once its core stabilises.
+
+## 8. Build increments (each ships with determinism + resilience + contract tests)
+1. **Executor core** — `Integration` contract + `WorkerPool`-parameterised `RunPhase` variant + determinism test (local == simulated-remote worker, byte-identical across worker counts). *(smallest solid core — first)*
+2. **Queue layer** — `Transport`-wrapping FIFO priority-tiered queue with disk overflow + backpressure + catch-up.
+3. **Resilience + crash-recovery** — retry/catch-up/reconnect state machine + command-log replay from last checkpoint.
+4. **ICD template + code.json extension** + the day-one regression harness.
+5. **Monitoring dashboard.**
+6. **ICD stubs for the 31 dormant modules → wire each into the tick → then FEAT-169/167.**
