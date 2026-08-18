@@ -1,5 +1,5 @@
 // Package compose is the composition root (FEAT-082, module key
-// feat.compositionroot, GUID dbdaf1f1-d096-4bf8-8b3a-964084e93ea9) — the
+// feat.compositionroot, GUID fae40226-71d0-4836-be99-854c7b41eb4a) — the
 // ONE place in the codebase permitted to import engine.core AND every
 // wired module. It exists to close the gap every runnable path carried
 // before it landed: `cmd/metropolis`, `-headless`, `harness/replay` and

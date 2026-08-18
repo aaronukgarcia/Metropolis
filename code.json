@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 160,
+  "moduleCount": 161,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -95,6 +95,10 @@
           {
             "key": "engine.world",
             "outboundGuid": "d9ef1d5a-9436-4f25-a1db-a426d407efc1"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.detgate",
@@ -521,6 +525,10 @@
           {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.debugmode",
@@ -1652,6 +1660,10 @@
             "outboundGuid": "d9ef1d5a-9436-4f25-a1db-a426d407efc1"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "feat.detgate",
             "outboundGuid": "f3b59855-9e6a-4fd0-8a6a-4fcca269e7a9"
           },
@@ -2120,6 +2132,11 @@
             "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
           },
           {
+            "key": "feat.compositionroot",
+            "moduleGuid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+            "inboundGuid": "542d181a-9253-4392-9cdb-be59f10d8913"
+          },
+          {
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
@@ -2183,6 +2200,11 @@
             "key": "harness.headless",
             "moduleGuid": "94fcac3b-a76c-40a8-8bb6-6add9ebc9496",
             "inboundGuid": "19f100f8-a43d-4571-a940-304eec18235f"
+          },
+          {
+            "key": "feat.compositionroot",
+            "moduleGuid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+            "inboundGuid": "542d181a-9253-4392-9cdb-be59f10d8913"
           },
           {
             "key": "foundation.buildinfo",
@@ -2313,6 +2335,10 @@
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "feat.disasters",
             "outboundGuid": "0cc95f4c-a850-4b26-b366-97ac2214dd3a"
           },
@@ -2435,6 +2461,10 @@
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "ui.screen.demo",
             "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
           },
@@ -2505,6 +2535,10 @@
           {
             "key": "engine.traffic",
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -2590,6 +2624,10 @@
           {
             "key": "feat.commoditymarket",
             "outboundGuid": "878aa1b8-9b5b-411e-b405-182a7734560b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -2664,6 +2702,10 @@
           {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -2802,6 +2844,10 @@
           {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.decommission",
@@ -3067,6 +3113,10 @@
             "outboundGuid": "f4f37400-9913-4c53-b2eb-675921b8dc99"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "feat.disasters",
             "outboundGuid": "0cc95f4c-a850-4b26-b366-97ac2214dd3a"
           },
@@ -3162,6 +3212,10 @@
           {
             "key": "engine.tunnels",
             "outboundGuid": "2b5739de-8802-4887-8a6a-d0305a27c900"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.facilitypermits",
@@ -3269,6 +3323,10 @@
           {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -3310,6 +3368,10 @@
           {
             "key": "engine.attract",
             "outboundGuid": "7c3d420c-3d6e-48de-9c21-f46ff1b38ead"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "ui.screen.demo",
@@ -3369,6 +3431,10 @@
           {
             "key": "engine.tourism",
             "outboundGuid": "698b7f3d-b93b-47e5-b9bd-c06ddc6eec87"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -3404,6 +3470,116 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+      "key": "feat.compositionroot",
+      "bowType": "feature",
+      "seq": 375,
+      "sprint": 6,
+      "title": "FEAT-082: Composition root — wires baseline-one modules into the live tick",
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "M0-ENG §1.1-1.3; M0-ENG §2; ASM-001; FEAT-082; FEAT-083",
+      "path": "internal/engine/compose/",
+      "inbound": {
+        "guid": "542d181a-9253-4392-9cdb-be59f10d8913",
+        "name": "Wire",
+        "format": "Go package API (func Wire(*core.Engine, *Deps) (*Composition, error))",
+        "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind — never a silent partial wire",
+        "consumers": [
+          {
+            "key": "harness.headless",
+            "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
+          },
+          {
+            "key": "harness.synth",
+            "outboundGuid": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "ccb71e33-e413-4de2-afc2-4a453beec322",
+        "calls": [
+          {
+            "key": "engine.core",
+            "moduleGuid": "0bef8af8-0883-4604-bf98-71212100fffb",
+            "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
+          },
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
+          },
+          {
+            "key": "engine.consumption",
+            "moduleGuid": "1d4d4bf6-67c7-46c8-8158-089bf3ce1e3c",
+            "inboundGuid": "3300a878-d938-4236-b138-dbb5e081674a"
+          },
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          },
+          {
+            "key": "engine.build",
+            "moduleGuid": "046d98bc-3850-4b7d-b909-a97b7eab0920",
+            "inboundGuid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4"
+          },
+          {
+            "key": "engine.attract",
+            "moduleGuid": "9d64e78b-30aa-443d-b9aa-e49f11f054ac",
+            "inboundGuid": "0c36bd43-d123-42bd-ab73-be06d33887d3"
+          },
+          {
+            "key": "engine.invariant",
+            "moduleGuid": "3abafe05-7606-4067-8ab0-54007248b802",
+            "inboundGuid": "4a4b44ab-9ed0-4322-8a2a-ad4b0178302f"
+          },
+          {
+            "key": "engine.logistics",
+            "moduleGuid": "c59ecb6e-443f-4012-a0f0-b031de444335",
+            "inboundGuid": "26abfa77-3b11-43d0-a631-539a04e3a5f8"
+          },
+          {
+            "key": "engine.season",
+            "moduleGuid": "5a348a85-15ba-46d9-aa61-0605f12785f1",
+            "inboundGuid": "a85f49a1-4a31-44a1-9a7d-08defdad3011"
+          },
+          {
+            "key": "engine.households",
+            "moduleGuid": "2ddd5954-c28f-46c3-8a87-7705b1b1c109",
+            "inboundGuid": "5591af37-0157-4e07-a8cf-b4ab87db7466"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
       },
@@ -8754,6 +8930,10 @@
           {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
