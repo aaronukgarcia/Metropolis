@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Metropolis Integration Map</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dfe3e8;
+    --text: #1b1f24;
+    --muted: #6b7280;
+    --up: #1a7f37;
+    --up-bg: #e6f6ea;
+    --degraded: #9a6700;
+    --degraded-bg: #fff3d6;
+    --down: #b62324;
+    --down-bg: #fde8e8;
+    --bar: #3b6fd6;
+    --bar-disk: #d68a3b;
+    --bar-track: #eceff3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171c;
+      --panel: #1c2028;
+      --border: #2c313b;
+      --text: #e6e9ef;
+      --muted: #9aa3b1;
+      --up: #4ecb71;
+      --up-bg: #163420;
+      --degraded: #e0b542;
+      --degraded-bg: #3a2f10;
+      --down: #f2696b;
+      --down-bg: #3a1414;
+      --bar: #6f9bf0;
+      --bar-disk: #e0a75f;
+      --bar-track: #262b34;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 18px;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  #meta { color: var(--muted); font-size: 12px; }
+  #status-line { color: var(--muted); font-size: 12px; margin-bottom: 16px; }
+  #status-line.error { color: var(--down); }
+  #grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .name { font-weight: 600; font-size: 14px; word-break: break-word; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    white-space: nowrap;
+  }
+  .chip::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .chip.up { color: var(--up); background: var(--up-bg); }
+  .chip.degraded { color: var(--degraded); background: var(--degraded-bg); }
+  .chip.down { color: var(--down); background: var(--down-bg); }
+  .chip.unknown { color: var(--muted); background: var(--bar-track); }
+  .tier-row { display: grid; grid-template-columns: 28px 1fr 46px; align-items: center; gap: 8px; margin: 5px 0; }
+  .tier-label { font-size: 11px; color: var(--muted); font-weight: 600; }
+  .tier-track { background: var(--bar-track); border-radius: 5px; height: 8px; overflow: hidden; position: relative; }
+  .tier-fill { background: var(--bar); height: 100%; border-radius: 5px 0 0 5px; }
+  .tier-fill.disk { background: var(--bar-disk); }
+  .tier-value { font-size: 11px; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+  .stats {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 14px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .stat { display: flex; justify-content: space-between; font-size: 12px; }
+  .stat .k { color: var(--muted); }
+  .stat .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .last-error {
+    margin-top: 10px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--down-bg);
+    color: var(--down);
+    font-size: 11px;
+    word-break: break-word;
+  }
+  #empty { color: var(--muted); padding: 30px 0; text-align: center; }
+  footer { margin-top: 22px; color: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Metropolis &middot; Integration Map</h1>
+  <div id="meta"></div>
+</header>
+<div id="status-line">connecting&hellip;</div>
+<div id="grid"></div>
+<div id="empty" style="display:none">No integrations registered yet.</div>
+<footer>Polls /metrics.json every ~2s. Debug-gated, local-only.</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var POLL_MS = 2000;
+  var grid = document.getElementById('grid');
+  var empty = document.getElementById('empty');
+  var statusLine = document.getElementById('status-line');
+  var meta = document.getElementById('meta');
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function stateClass(state) {
+    switch (state) {
+      case 'up': return 'up';
+      case 'degraded': return 'degraded';
+      case 'down': return 'down';
+      default: return 'unknown';
+    }
+  }
+
+  // A tier bar's width is relative to the LARGEST depth across every
+  // tier IN THIS CARD (not a fixed constant), so a single card's bars
+  // stay readable whether its queues run in the tens or the thousands.
+  function tierRow(tier) {
+    var maxDepth = Math.max(1, tier._max || 1);
+    var pct = Math.min(100, Math.round((tier.depth / maxDepth) * 100));
+    var fillClass = 'tier-fill' + (tier.onDisk ? ' disk' : '');
+    var label = tier.onDisk
+      ? tier.depth + ' (' + tier.onDisk + ' on disk)'
+      : String(tier.depth);
+    return (
+      '<div class="tier-row">' +
+        '<span class="tier-label">' + escapeHtml(tier.tier) + '</span>' +
+        '<span class="tier-track"><span class="' + fillClass + '" style="width:' + pct + '%"></span></span>' +
+        '<span class="tier-value">' + escapeHtml(label) + '</span>' +
+      '</div>'
+    );
+  }
+
+  function card(integration) {
+    var tiers = (integration.queueDepth || []).slice();
+    var maxDepth = 1;
+    for (var i = 0; i < tiers.length; i++) maxDepth = Math.max(maxDepth, tiers[i].depth);
+    for (var j = 0; j < tiers.length; j++) tiers[j]._max = maxDepth;
+
+    var tiersHtml = tiers.map(tierRow).join('');
+    var errHtml = integration.lastError
+      ? '<div class="last-error">' + escapeHtml(integration.lastError) + '</div>'
+      : '';
+
+    return (
+      '<div class="card">' +
+        '<div class="card-head">' +
+          '<span class="name">' + escapeHtml(integration.name) + '</span>' +
+          '<span class="chip ' + stateClass(integration.state) + '">' + escapeHtml(integration.state) + '</span>' +
+        '</div>' +
+        tiersHtml +
+        '<div class="stats">' +
+          '<div class="stat"><span class="k">delivered</span><span class="v">' + integration.delivered + '</span></div>' +
+          '<div class="stat"><span class="k">errors</span><span class="v">' + integration.errors + '</span></div>' +
+          '<div class="stat"><span class="k">peak depth</span><span class="v">' + integration.peakDepth + '</span></div>' +
+          '<div class="stat"><span class="k">peak throughput</span><span class="v">' + integration.peakThroughput + '</span></div>' +
+        '</div>' +
+        errHtml +
+      '</div>'
+    );
+  }
+
+  function render(snapshot) {
+    var integrations = snapshot.integrations || [];
+    if (integrations.length === 0) {
+      grid.innerHTML = '';
+      empty.style.display = '';
+    } else {
+      empty.style.display = 'none';
+      grid.innerHTML = integrations.map(card).join('');
+    }
+
+    if (snapshot.lastPhase) {
+      meta.textContent = 'last phase: ' + snapshot.lastPhase.kind +
+        ' (tick ' + snapshot.lastPhase.tick + ', month ' + snapshot.lastPhase.month + ')';
+    } else {
+      meta.textContent = '';
+    }
+  }
+
+  function poll() {
+    fetch('/metrics.json', { cache: 'no-store' })
+      .then(function (res) {
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function (snapshot) {
+        statusLine.textContent = 'live — updated ' + new Date().toLocaleTimeString();
+        statusLine.classList.remove('error');
+        render(snapshot);
+      })
+      .catch(function (err) {
+        statusLine.textContent = 'poll failed: ' + err.message;
+        statusLine.classList.add('error');
+      })
+      .then(function () {
+        setTimeout(poll, POLL_MS);
+      });
+  }
+
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -1606,5 +1606,13 @@
   {
     "finding": "internal/foundation/integration/queue.go|*QueuedTransport|receiver method|commitTier|q|*QueuedTransport",
     "reason": "FEAT-188 increment 2 (internal/foundation/integration/queue.go): unexported helper reached only through an already-guarded entry point -- commitTier is called exclusively from Drain (same file, line ~664), which calls q.checkNotCopied(...) before ever touching q.drainMu or committing any tier's dequeue. astgate's syntactic, no-call-graph analysis cannot see that the only caller is already guarded (doc.go's known blind spots; mirrors the *tierQueue *Locked-helper precedent already accepted above -- depthLocked/compactMemoryLocked/enqueueLocked/peekLocked/commitLocked -- just one layer up, at the QueuedTransport level instead of tierQueue). commitTier delegates each tier's actual dequeue-commit to that tier's own already-guarded commit()/Commit() methods."
+  },
+  {
+    "finding": "internal/foundation/integration/metrics_server.go||function (parameter)|NewMetricsHandler|reg|*Registry",
+    "reason": "FEAT-191 increment 5 (internal/foundation/integration/metrics_server.go): SEC-049's parameter-typed-candidate enumeration (KindParameterFunc) flags NewMetricsHandler because it declares a *Registry-typed parameter, but the function's own body never locks, reads, or writes any field on reg directly -- reg is only captured by the returned handler's /metrics.json closure, which calls reg.Snapshot(), a method that is ALREADY guarded by Registry.checkNotCopied (metrics.go) before it ever touches r.mu or r.entries. This is the same 'guard enforced one hop further in' shape already accepted for internal/foundation/integration/queue.go's QueuedTransport field-access-chain findings (e.g. SendCommand|q.t0|*QueuedTransport.t0), one hop further out again: a function PARAMETER deferred into a closure rather than a struct field accessed inline. Body read in full; the only Registry-typed identifier reg ever touches is the deferred reg.Snapshot() call inside the /metrics.json handler."
+  },
+  {
+    "finding": "internal/foundation/integration/metrics_server.go||function (parameter)|ServeMetrics|reg|*Registry",
+    "reason": "FEAT-191 increment 5 (internal/foundation/integration/metrics_server.go): same shape and same reasoning as this file's NewMetricsHandler|reg finding immediately above -- ServeMetrics never touches any field on reg directly; it passes reg straight through to NewMetricsHandler(reg), whose own already-reviewed acceptance covers the one place reg is actually used (the deferred, already-guarded reg.Snapshot() call inside the /metrics.json closure). ServeMetrics' own body only nil-checks reg (a plain pointer comparison, not a field/method access) before that hand-off."
   }
 ]
