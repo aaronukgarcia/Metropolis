@@ -310,6 +310,22 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		if err := ValidateCitizen(cmd.Citizen, c.householdExistsLocked, cmd.CorrelationID); err != nil {
 			return err
 		}
+		// FEAT-169 destructive-review REJECT, defense-in-depth: a
+		// LifeEventBirth whose id already exists (cold OR hot) must never
+		// be appended as a silent second row. engine.attract's migrant ids
+		// and this package's own fertility-child ids partition the same
+		// high-bit id space by CONVENTION (fertilityChildIDBase's doc
+		// comment), not by a shared allocator, so this is the last-resort
+		// catch if that convention is ever violated: TotalPopulation's
+		// row-count-based conservation view cannot see an aliased id (the
+		// row count stays right; only per-id lookups silently start
+		// returning the wrong citizen from then on).
+		if _, ok := c.hot[cmd.Citizen.ID]; ok {
+			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "hot"})
+		}
+		if _, ok := c.coldRecord(cmd.Citizen.ID); ok {
+			return errs.New(ErrDuplicateCitizenID, cmd.CorrelationID, map[string]any{"id": cmd.Citizen.ID, "fidelity": "cold"})
+		}
 		r := hotToColdRecord(cmd.Citizen, districtOf(cmd.Citizen.Home))
 		c.cold[det.ShardForEntity(cmd.Citizen.ID)].append(r)
 		if cmd.Citizen.Fidelity != FidelityCold {
@@ -440,9 +456,25 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 // advances the day. When 30 day-ticks elapse, the month increments and the
 // next month's sample-derived parameters are computed. Wall-clock time is
 // never read (AC-20); the day/month are internal sim state.
-func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
+//
+// Returns THIS CALL's own births/deaths (FEAT-169) — not the cumulative
+// month-to-date or completed-month totals VitalEvents reports. This is the
+// live-tick composition root's (internal/engine/compose) T0 conservation
+// seam: the ICD (docs/planning/icd/engine.citizens-coldpass.md §5) requires
+// a births/deaths delta land in the caller's own conservation ledger the
+// SAME TICK it is computed, but this pass's mortality/fertility mutations
+// land on the cold store incrementally, one amortised shard-slice per
+// day-tick — VitalEvents' monthly-completed-totals granularity would defer
+// that credit past the tick the mutation actually happened on (a real
+// conservation violation the daily invariant check WOULD catch, and did,
+// during FEAT-169's build: same-tick per-day totals were added precisely
+// because the deferred-batch design failed that check). VitalEvents is
+// unchanged and still reports the completed-month totals for any consumer
+// that wants a monthly view; it is simply no longer the compose-side
+// conservation seam.
+func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, err error) {
 	if err := c.checkNotCopied(correlationID, "AdvanceDayTick"); err != nil {
-		return err
+		return 0, 0, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -475,12 +507,10 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 	// scheduled shards, run only after the parallel mortality/education/job
 	// pass above has fully completed — see applyFertilityLocked's doc
 	// comment for why a couple's cross-shard partner read cannot safely run
-	// inside runShardsParallel's goroutines. births accumulates into
-	// curMonthBirths (birthChildLocked increments it directly) so
-	// VitalEvents can report the completed month's totals the same way
-	// migration admits are tracked at the composition root (see
-	// invariant/people.go's TrackedDelta identity).
-	c.applyFertilityLocked(seed, month, shards, correlationID)
+	// inside runShardsParallel's goroutines. dayBirths is THIS call's own
+	// count (also accumulated into curMonthBirths -- birthChildLocked
+	// increments it directly -- for VitalEvents' completed-month view).
+	dayBirths := c.applyFertilityLocked(seed, month, shards, correlationID)
 
 	c.dayTick++
 	if c.dayTick == DaysPerMonth {
@@ -499,7 +529,7 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 		c.curMonthBirths = 0
 		c.curMonthDeaths = 0
 	}
-	return nil
+	return dayBirths, tot.deaths, nil
 }
 
 // VitalEvents returns the fertility births and mortality deaths tallied
@@ -528,7 +558,7 @@ func (c *CitizensAPI) AdvanceMonth(correlationID string) error {
 		return err
 	}
 	for d := 0; d < DaysPerMonth; d++ {
-		if err := c.AdvanceDayTick(correlationID); err != nil {
+		if _, _, err := c.AdvanceDayTick(correlationID); err != nil {
 			return err
 		}
 	}

@@ -81,6 +81,66 @@
 // bytes, and the reconstruction is consistent with the district aggregates
 // it was drawn from — it is what happened, already accounted for.
 //
+// # Live-tick wiring and the citizen-id namespace seam (FEAT-169)
+//
+// [CitizensAPI.AdvanceDayTick] is called once per simulation day-tick from
+// the composition root (internal/engine/compose), registered against
+// core.PhaseDailyTick alongside build (BUG-268) — see
+// docs/planning/icd/engine.citizens-coldpass.md, the ICD this integration
+// was built against. AdvanceDayTick's own internal parallel
+// mortality/education/job pass and sequential fertility pass (FEAT-160) are
+// entirely self-contained; from compose's point of view this is one opaque
+// call per day-tick, single-shard (SingleShardHook).
+//
+// AdvanceDayTick RETURNS this call's own (births, deaths) — the tick's own
+// totals, not a monthly aggregate — which compose folds into its own
+// people-conservation ledger (simState.peopleDelta) every single day-tick,
+// the same role migration admits play there (just at daily rather than
+// monthly granularity). This is an ICD deviation from §4's "pull
+// VitalEvents at the month boundary" option, with reason: the cold pass's
+// mortality/fertility mutations land on the cold store incrementally, one
+// amortised shard-slice per day-tick (the paragraph above), so batching the
+// conservation credit to month-end would defer it past the tick the
+// population actually changed on — a same-tick violation of the ICD's own
+// §5 T0 requirement. This was caught for real during FEAT-169's build (the
+// daily invariant conservation check flagged it), not merely reasoned
+// about. [CitizensAPI.VitalEvents] is UNCHANGED and still reports the most
+// recently COMPLETED calendar month's totals for any consumer that wants a
+// monthly view; it is simply not compose's conservation seam.
+//
+// Fertility-born child ids are minted from [FertilityChildIDBase] (2^63,
+// corrected 2026-08-18 — see below), the THIRD of three disjoint id ranges
+// three packages independently mint from, by CONVENTION, not a shared
+// allocator:
+//
+//	[1,                 attract.MigrantIDBase)      internal/engine/compose: seed population + direct seeding (simState.nextCitizenID)
+//	[attract.MigrantIDBase, FertilityChildIDBase)    internal/engine/attract: admitted-migrant ids (migration.go's migrantIDHighBit)
+//	[FertilityChildIDBase, ...)                      this package: fertility-born child ids (fertilityChildIDBase)
+//
+// FertilityChildIDBase was ORIGINALLY 1<<62 — the same value
+// attract.MigrantIDBase independently chose — so once FEAT-169 wired both
+// the citizens cold-pass tick and the attract migration hook into the same
+// live composition, a duplicate citizen id was reachable within months of
+// simulated play, invisible to TotalPopulation's row-count-based
+// conservation view (a duplicate id silently ALIASES an existing citizen
+// rather than changing the row count). Destructive-review REJECT
+// (2026-08-18) moved this package's base to 1<<63 and added THREE
+// independent defenses, none a substitute for the others: compose's
+// spawnCitizens rejects any mint at or past attract.MigrantIDBase
+// (compose's OWN range guard, ErrCitizenIDNamespaceSeam); compose's Wire
+// additionally asserts FertilityChildIDBase >= 2*attract.MigrantIDBase at
+// construction time (the boundary BETWEEN attract's and this package's
+// ranges, ErrIDNamespaceRangesOverlap — compose's own guard above cannot
+// see this boundary); and THIS package independently rejects a
+// LifeEventBirth whose id already exists in its own cold or hot store
+// ([ErrDuplicateCitizenID]) — the only one of the three that would catch
+// an ACTUAL runtime collision rather than a range-check on constants. See
+// compose/doc.go's "Citizen id namespace map" section (the mirror of this
+// one) and compose/errors.go. This is the ICD's §12 open-decision-2
+// resolution, amended: an explicit, checked, verified-disjoint contract
+// across all three id spaces, not a single shared allocator (unifying them
+// is a larger refactor flagged as a follow-up, not done here).
+//
 // # NVMe and paging (A7, §5.3)
 //
 // NVMe SSD is a stated hardware requirement for very large cities: beyond

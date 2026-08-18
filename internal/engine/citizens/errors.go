@@ -87,4 +87,21 @@ const (
 	// allowed to corrupt the cold store (GR#1) — the birth is skipped for
 	// that couple this month rather than crashing the monthly pass.
 	ErrFertilityBirthRejected = "MET-G009"
+
+	// ErrDuplicateCitizenID (FEAT-169 cross-module ID-collision finding,
+	// destructive-review REJECT): a LifeEventBirth command's Citizen.ID
+	// already exists in this CitizensAPI's cold or hot store.
+	// ApplyLifeEventCommand rejects it outright rather than silently
+	// appending a second row under the same id (which would ALIAS two
+	// logically-distinct citizens — invisible to TotalPopulation's
+	// row-count-based conservation view, since the row count would still
+	// balance while one citizen's identity silently overwrote another's on
+	// every subsequent per-id lookup). This is DEFENSE IN DEPTH: the real
+	// fix is the disjoint id-range convention documented in doc.go's "Live
+	// tick wiring" section (compose seeds/migrants [1, 2^62), attract
+	// migrants [2^62, 2^63), fertility children [2^63, ...)) plus the
+	// Wire-time assertion compose runs against it; this check is the
+	// last-resort catch if that convention is ever violated by a future
+	// caller.
+	ErrDuplicateCitizenID = "MET-G010"
 )

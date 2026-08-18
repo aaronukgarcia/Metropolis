@@ -267,18 +267,52 @@ func CoupleBirth(seed uint64, householdID uint64, month int64, hazard float64) b
 
 // fertilityChildIDBase is the disjoint high-bit namespace fertility-born
 // child ids are allocated from (CitizensAPI.nextFertilityChildID starts
-// here). Migration/seed citizen ids are minted sequentially from a low
-// counter owned by the COMPOSITION ROOT (internal/engine/compose's
-// simState.nextCitizenID, well outside this package — see
-// spawnCitizens/spawnHook), which this package has no visibility into and
-// must not collide with. Starting organic-birth ids at 2^62 makes a
-// collision with any plausible sequential migrant/seed count
-// astronomically unreachable. This is a DOCUMENTED INTEGRATION SEAM, not a
-// coordinated allocator: if a future change makes the composition root's
-// counter also range this high (never expected — no plausible population
-// reaches 2^62), the two id spaces would need explicit reconciliation.
-// Flagged for Bill/Aaron rather than silently assumed safe.
-const fertilityChildIDBase = uint64(1) << 62
+// here). THIS IS 2^63, NOT 2^62 (destructive-review REJECT, FEAT-169):
+// engine.attract independently mints admitted-migrant citizen ids from its
+// OWN high-bit prefix, migrantIDHighBit = 1<<62 (migration.go), starting a
+// separate counter at 1 — the ORIGINAL 1<<62 choice here collided with
+// that same range, so with both compose's citizens cold-pass tick AND
+// attract's migration hook live in the same composition (FEAT-169), a
+// duplicate citizen id was reachable within months of simulated play, and
+// TotalPopulation's row-count-based conservation view could not see it
+// (LifeEventBirth appended unconditionally — see ErrDuplicateCitizenID's
+// doc comment for why that is now also independently guarded).
+//
+// The full disjoint id map (documented identically in compose/doc.go):
+//
+//	[1,        2^62)  compose-minted ids: baseline-one seed population +
+//	                   any future direct compose seeding (simState.nextCitizenID)
+//	[2^62,     2^63)  engine.attract-minted admitted-migrant ids
+//	                   (migrantIDHighBit, migration.go)
+//	[2^63,     ...)    engine.citizens fertility-born child ids (this const)
+//
+// This is a DOCUMENTED INTEGRATION SEAM enforced by convention across THREE
+// packages (compose/attract/citizens) plus TWO independent defenses: a
+// Wire-time assertion in compose (FertilityChildIDBase >=
+// 2*attract.MigrantIDBase, ErrCitizenIDNamespaceSeam) and this package's
+// own per-mint ErrDuplicateCitizenID rejection — not a single shared
+// allocator across all three (that unification is a larger refactor,
+// flagged as a follow-up, not done here). Changing this base changes the
+// determinism regime (a fertility child's id, hence its InitPersonality
+// draw, depends on this constant) — acceptable pre-release (no persisted
+// saves to preserve compatibility with yet), but any test asserting a
+// literal fertility-child id must be re-verified against the new base (the
+// fertility hazard/CoupleBirth stream itself keys on householdID+month, NOT
+// child id, so guaranteed-birth-month test fixtures are unaffected — only
+// the resulting child's own id/personality changed).
+const fertilityChildIDBase = uint64(1) << 63
+
+// FertilityChildIDBase exports fertilityChildIDBase's value (unchanged) as
+// the ID-SEAM CONTRACT boundary a consumer's own sequential id allocator
+// must stay strictly below (FEAT-169's compose-side guard,
+// compose.go's simState.nextCitizenID / ErrCitizenIDNamespaceSeam, and the
+// Wire-time attract.MigrantIDBase cross-check). This is the ICD-preferred
+// resolution of the FEAT-160/FEAT-169 open decision
+// (docs/planning/icd/engine.citizens-coldpass.md §12.2): an explicit,
+// checked, verified-disjoint contract between the id spaces — not a single
+// shared allocator (that unification is a larger refactor, flagged as a
+// follow-up, not done here).
+const FertilityChildIDBase = fertilityChildIDBase
 
 // applyFertilityLocked runs the monthly fertility pass over every citizen
 // whose cold shard is scheduled on this day-tick (the same amortised

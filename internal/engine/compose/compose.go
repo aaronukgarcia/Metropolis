@@ -33,7 +33,6 @@ const (
 	defaultStartCoordY = 15
 
 	seedCitizenCount = 64 // baseline-one seed population (AC-8's non-zero seed)
-	monthlyBirths    = 8  // citizens hook, per month
 
 	initialTreasury      = 10_000_000 // micropounds (10 pounds)
 	initialCitizenWealth = 5_000_000  // micropounds (5 pounds)
@@ -138,14 +137,24 @@ type moduleRegistration struct {
 // is a slice, NEVER a map: iteration order IS the contract, and nothing in
 // this package ranges over a registration map (GR#21). The order is:
 // world, citizens, market, consumption, finance, build, attract, then the
-// invariant on PhaseDailyTick. Three modules share a phase in three places —
-// market then consumption (both PhaseConsumptionShortfall), citizens then
-// attract (both PhasePopulation), and build then invariant (both
-// PhaseDailyTick, BUG-268) — and this slice order is what determines their
-// intra-phase run order.
+// invariant on PhaseDailyTick. Two modules share a phase in two places —
+// market then consumption (both PhaseConsumptionShortfall), and citizens,
+// build, then invariant (all three PhaseDailyTick — FEAT-169 moved citizens
+// onto the daily tick alongside build/invariant, see below) — this slice
+// order is what determines their intra-phase run order. attract remains
+// alone on PhasePopulation now that citizens has moved off it.
 var registrationOrder = []moduleRegistration{
 	{name: "world", phase: core.PhaseProduction, hook: func(st *simState) core.PhaseHook { return noopHook{name: "world", st: st} }},
-	{name: "citizens", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &spawnHook{st: st, name: "citizens", count: monthlyBirths} }},
+	// FEAT-169: citizens registers on the DAILY tick (not PhasePopulation)
+	// because CitizensAPI.AdvanceDayTick is itself a once-per-day-tick call
+	// (its own amortised 1/30-shards-per-day cold pass) and the ICD's T0
+	// update class requires the resulting births/deaths land in peopleDelta
+	// the SAME tick they are computed — never queued past it. Registered
+	// BEFORE build/invariant in this slice so citizens' births/deaths are
+	// folded into peopleDelta before invariant's same-tick conservation
+	// check observes it (the same ordering discipline BUG-268 established
+	// for build -> invariant).
+	{name: "citizens", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &coldPassHook{st: st} }},
 	{name: "market", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return noopHook{name: "market", st: st} }},
 	{name: "consumption", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return &consumptionHook{st: st} }},
 	{name: "finance", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &financeHook{st: st} }},
@@ -240,6 +249,21 @@ func (c *Composition) NetMigration() int64 {
 	return c.state.netMigration
 }
 
+// VitalBirths returns the cumulative real fertility births (FEAT-160) the
+// citizens cold pass has produced and folded into peopleDelta so far — the
+// "births are real, not the old flat-8/month fake" observable. Zero is a
+// legitimate value (no eligible couples yet), unlike the old spawnHook
+// fake, which was never zero after the first month.
+func (c *Composition) VitalBirths() int64 {
+	return c.state.vitalBirths
+}
+
+// VitalDeaths returns the cumulative real per-citizen mortality deaths the
+// citizens cold pass has produced and folded into peopleDelta so far.
+func (c *Composition) VitalDeaths() int64 {
+	return c.state.vitalDeaths
+}
+
 // Wire registers the full baseline-one hook set against e in the fixed,
 // documented order (world -> citizens -> market -> consumption -> finance
 // -> build -> attract, invariant on PhaseDailyTick). It is the single
@@ -275,6 +299,26 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	// Reject rather than silently append duplicates.
 	if e.HookCount() > 0 {
 		return nil, errs.New(ErrAlreadyComposed, cid, nil)
+	}
+
+	// FEAT-169 id-namespace-seam Wire-time assertion (destructive-review
+	// REJECT finding): the ORIGINAL FEAT-169 build only guarded compose's
+	// own counter against citizens.FertilityChildIDBase (spawnCitizens'
+	// per-mint check below) — that defends compose's [1, 2^62) range but
+	// says nothing about the boundary between engine.attract's migrant
+	// range [2^62, 2^63) and citizens' fertility range [2^63, ...), which
+	// independently collided (both started life at 1<<62). Both sides are
+	// compile-time constants today, so this can never actually fail unless
+	// a future edit to either package's base breaks the convention — but a
+	// silent overlap there is exactly the class of bug that shipped once
+	// already, so this checks it explicitly, every Wire call, rather than
+	// leaving it to a comment nobody re-reads. See citizens/doc.go and
+	// this package's doc.go for the full three-range id map.
+	if !idNamespaceRangesDisjoint(citizens.FertilityChildIDBase, attract.MigrantIDBase) {
+		return nil, errs.New(ErrIDNamespaceRangesOverlap, cid, map[string]any{
+			"fertilityChildIDBase": citizens.FertilityChildIDBase,
+			"migrantIDBase":        attract.MigrantIDBase,
+		})
 	}
 
 	// Resolve every required dependency BEFORE the first registration, so
@@ -451,6 +495,23 @@ func wrapSeal(cid string, err error, module string) error {
 	return errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": module})
 }
 
+// idNamespaceRangesDisjoint is Wire's id-namespace-seam cross-check (FEAT-169
+// destructive-review REJECT finding), extracted as a pure function so it is
+// independently unit-testable against synthetic values — the real
+// constants (citizens.FertilityChildIDBase, attract.MigrantIDBase) cannot
+// be overridden to exercise the REJECTING branch of this check any other
+// way. Reports whether the fertility child-id range starts at least twice
+// as far out as the migrant-id range starts, which — given both ranges
+// extend to infinity and migrantBase is itself compose's own lower-range
+// boundary starting at 1 — is exactly the condition that keeps
+// [migrantBase, fertilityBase) and [fertilityBase, ...) disjoint from
+// [1, migrantBase) AND from each other. The historical bug (both bases
+// independently at 1<<62) fails this: with migrantBase=2^62,
+// fertilityBase(2^62) is NOT >= 2*migrantBase(2^63).
+func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool {
+	return fertilityChildIDBase >= 2*migrantIDBase
+}
+
 // simState is the composition's shared state. The people/money ledgers
 // implement the conservation accounting the invariant checks every tick:
 // each ledger records the opening total at the last daily check plus the
@@ -509,6 +570,16 @@ type simState struct {
 	netMigration         int64
 
 	nextCitizenID uint64
+
+	// vitalBirths/vitalDeaths are the cumulative real fertility/mortality
+	// totals folded into peopleDelta so far (liveness evidence, mirrors
+	// consumptionDelivered/netMigration above) — the "births/deaths are
+	// real, not the old flat-8 fake" observable (FEAT-169). Folded one
+	// day-tick's own totals at a time, straight from AdvanceDayTick's
+	// return values — see coldPassHook.ApplyEffect's doc comment for why
+	// this is NOT batched to the month boundary via VitalEvents.
+	vitalBirths int64
+	vitalDeaths int64
 }
 
 // snapshot implements invariant.SnapshotProvider: it builds this tick's
@@ -555,6 +626,28 @@ func (st *simState) snapshot(tick int64) invariant.Snapshot {
 func (st *simState) spawnCitizens(month int64, count int) error {
 	for i := 0; i < count; i++ {
 		id := st.nextCitizenID
+		// FEAT-169 ID-SEAM GUARD: id must stay inside compose's own range
+		// of the three-way disjoint id map — [1, attract.MigrantIDBase) —
+		// never reaching either engine.attract's migrant range
+		// [MigrantIDBase, FertilityChildIDBase) or engine.citizens'
+		// fertility range [FertilityChildIDBase, ...). Bounded against
+		// MigrantIDBase (2^62), NOT FertilityChildIDBase (2^63):
+		// destructive-review REJECT found the ORIGINAL guard here checked
+		// only the fertility boundary, which would have let compose's
+		// counter silently drift into attract's migrant range first
+		// without ever tripping. The three id spaces are a documented,
+		// verified-disjoint CONTRACT (ICD §12 open decision 2, amended),
+		// not a shared allocator. Checked on every mint (cheap: one uint64
+		// comparison), including the seed population minted at Wire time —
+		// so this single check doubles as both the "startup check" and the
+		// "every mint" assertion the ICD calls for, rather than two
+		// separate code paths.
+		if id >= attract.MigrantIDBase {
+			return errs.New(ErrCitizenIDNamespaceSeam, st.cid, map[string]any{
+				"id":   id,
+				"base": attract.MigrantIDBase,
+			})
+		}
 		st.nextCitizenID++
 		cit := citizens.Citizen{
 			ID:          id,
@@ -590,52 +683,83 @@ func (noopHook) ApplyEffect(core.Effect)                   {}
 // on shard 0 (none at all).
 func (noopHook) SingleShard() bool { return true }
 
-// spawnEffect carries a citizens/attract monthly spawn instruction from
-// RunShard (shard 0) to ApplyEffect (the single-goroutine barrier).
-type spawnEffect struct {
-	month int64
-	count int
+// coldPassEffect is the daily citizens cold-pass tick marker (FEAT-169).
+// Carries no payload data of its own — AdvanceDayTick/VitalEvents derive
+// everything they need from citizens' own internal state — it exists only
+// to move the "run the cold pass" instruction from RunShard (shard 0) to
+// ApplyEffect (the single-goroutine barrier), the same shape every other
+// hook in this file uses.
+type coldPassEffect struct{}
+
+// coldPassHook is the PhaseHook for citizens' REAL cold pass — per-citizen
+// mortality plus FEAT-160 fertility, via CitizensAPI.AdvanceDayTick — REPLACING
+// the old spawnHook fake (a flat monthlyBirths=8 births/month with no
+// connection to demographics, mortality, or eligibility). Registered
+// against core.PhaseDailyTick (see registrationOrder's comment and
+// doc.go's "Live-tick wiring" section): AdvanceDayTick already runs
+// unconditionally once per day-tick internally to citizens (its own
+// amortised 1/30-shards-per-day schedule), and the ICD's T0 update class
+// requires the resulting births/deaths land in peopleDelta the SAME tick
+// they are computed. Only shard 0 emits the effect; ApplyEffect drives the
+// cold pass and folds THAT TICK's own births/deaths (AdvanceDayTick's
+// return values, not VitalEvents' monthly-completed totals — see
+// ApplyEffect's doc comment for why) into the people conservation ledger
+// every day-tick — exactly the role attractHook plays for migration
+// admits, just at daily rather than monthly granularity.
+type coldPassHook struct {
+	st *simState
 }
 
-// spawnHook is the PhaseHook for citizens (births). Only shard 0 emits the
-// effect; ApplyEffect births the citizens and records the tracked people
-// delta. Deterministic for a given seed + month (AC-19).
-type spawnHook struct {
-	st    *simState
-	name  string
-	count int
-}
-
-func (h *spawnHook) RunShard(shard int) ([]core.Effect, error) {
+func (h *coldPassHook) RunShard(shard int) ([]core.Effect, error) {
 	if shard != 0 {
 		return nil, nil
 	}
-	clock, err := h.st.e.Clock()
-	if err != nil {
-		return nil, err
-	}
-	return []core.Effect{{Sequence: 0, Payload: spawnEffect{month: clock.Month(), count: h.count}}}, nil
+	return []core.Effect{{Sequence: 0, Payload: coldPassEffect{}}}, nil
 }
 
-func (h *spawnHook) ApplyEffect(eff core.Effect) {
-	p, ok := eff.Payload.(spawnEffect)
-	if !ok {
+func (h *coldPassHook) ApplyEffect(eff core.Effect) {
+	if _, ok := eff.Payload.(coldPassEffect); !ok {
 		return
 	}
-	if err := h.st.spawnCitizens(p.month, p.count); err != nil {
-		// A valid baseline-one spawn cannot fail; log loudly rather than
-		// swallow (GR#1). ApplyEffect has no error return, so the failure
-		// is surfaced through the error registry's log sink.
-		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": h.name, "cause": err.Error()})
+	st := h.st
+	births, deaths, err := st.citizens.AdvanceDayTick(st.cid)
+	if err != nil {
+		// AdvanceDayTick's only real failure mode is a copied-handle
+		// rejection (MET-G004), which cannot happen given compose's
+		// single-owner st.citizens field; log loudly rather than swallow
+		// (GR#1) instead of a silent no-op.
+		_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "cause": err.Error()})
 		return
 	}
-	h.st.peopleDelta = num.SatAdd(h.st.peopleDelta, int64(p.count))
+
+	// Fold THIS TICK's own births/deaths into peopleDelta immediately — NOT
+	// batched to the month boundary via VitalEvents. ICD deviation, with
+	// reason (docs/planning/icd/engine.citizens-coldpass.md §4/§5): the
+	// ICD's own §4 floated "pull VitalEvents at the month boundary" as one
+	// option, but AdvanceDayTick's mortality/fertility mutations land on
+	// the cold store incrementally, one amortised shard-slice per day-tick
+	// (A2's amortised cold pass) — so batching the peopleDelta credit to
+	// month-end would defer it past the tick the population actually
+	// changed on, violating §5's T0 same-tick requirement. This was not
+	// theoretical: the deferred-batch design was built first and the
+	// invariant's daily conservation check (WithLogSink) caught real
+	// violations on every day a death/birth landed outside the last day of
+	// the month. AdvanceDayTick's return values (this call's own totals)
+	// fix that at the source — see its doc comment.
+	st.peopleDelta = num.SatAdd(st.peopleDelta, int64(births))
+	st.peopleDelta = num.SatSub(st.peopleDelta, int64(deaths))
+	st.vitalBirths = num.SatAdd(st.vitalBirths, int64(births))
+	st.vitalDeaths = num.SatAdd(st.vitalDeaths, int64(deaths))
 }
 
 // SingleShard implements core.SingleShardHook (BUG-269): RunShard
 // returns (nil, nil) for every shard except 0 (see above) — the only
-// Effect ever emitted comes from shard 0.
-func (h *spawnHook) SingleShard() bool { return true }
+// Effect ever emitted comes from shard 0. This matches the ICD's §6 Shard
+// Scope: AdvanceDayTick is single-call/opaque from compose's point of
+// view even though citizens fans its own internal parallel mortality pass
+// and sequential fertility pass across many cold shards INSIDE that one
+// call — entirely invisible to this hook.
+func (h *coldPassHook) SingleShard() bool { return true }
 
 // financeEffect is the monthly finance stub's tick marker.
 type financeEffect struct{}

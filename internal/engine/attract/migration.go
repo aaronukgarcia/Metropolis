@@ -21,7 +21,26 @@ const migrantHouseholdSize = int64(2)
 // migrantIDHighBit is the high-bit prefix on admitted-migrant citizen ids,
 // keeping them clear of the small ids a seeded population uses. A schema
 // constant (id-space partitioning), not a balance number.
+//
+// Part of a THREE-PACKAGE disjoint id map (FEAT-169, destructive-review
+// REJECT finding): compose mints seed/direct ids from [1, 2^62), this
+// package mints admitted-migrant ids from [2^62, 2^63) (this constant),
+// and engine.citizens mints fertility-born child ids from
+// [2^63, ...) (citizens.FertilityChildIDBase). The three counters are
+// independent — not a shared allocator — so the disjointness is a
+// convention, not a structural guarantee; internal/engine/compose asserts
+// it at Wire time via [MigrantIDBase] (ErrCitizenIDNamespaceSeam), and
+// engine.citizens independently rejects a duplicate-id birth as
+// defense-in-depth (ErrDuplicateCitizenID). See citizens/doc.go's "Live-tick
+// wiring" section for the full map, documented identically in
+// compose/doc.go.
 const migrantIDHighBit = uint64(1) << 62
+
+// MigrantIDBase exports migrantIDHighBit's value (unchanged) so
+// internal/engine/compose can assert the id-namespace-seam contract at
+// Wire time (FEAT-169) without hand-duplicating the literal 1<<62 — see
+// migrantIDHighBit's doc comment for the full three-package id map.
+const MigrantIDBase = migrantIDHighBit
 
 // emigrationBaseRate is the ambition-independent floor of the per-resident
 // emigration hazard: hazard = decline · (base + (1−base)·ambitionScale).
