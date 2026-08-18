@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 
@@ -172,6 +173,35 @@ type PhaseHook interface {
 	ApplyEffect(Effect)
 }
 
+// SingleShardHook is an OPTIONAL interface a PhaseHook may implement to
+// declare that ALL of its real work happens on shard 0 — i.e. RunShard
+// for shards 1..255 unconditionally returns (nil, nil), and ApplyEffect
+// only ever needs to process effects RunShard(0) produced, applied in
+// that call's own Sequence order.
+//
+// This is BUG-269's fast path (see runPhaseForHookFast below): a hook
+// that opts in skips det.RunPhase's 256-shard goroutine-pool dispatch
+// entirely and runs inline on the calling goroutine instead, which is
+// how the report traced 65.8% of BUG-268's regression back to paying a
+// full pool dispatch for hooks that only ever touch shard 0.
+//
+// SingleShard() must be a compile-time-constant promise (return a
+// literal true) — never state- or config-dependent — because
+// runPhaseForHook decides which path to take once per hook per phase
+// call, with no per-shard fallback. A hook that implements this
+// interface and returns true but DOES do real work on shard != 0
+// silently loses that work: it is checked by WithSingleShardAssert's
+// dev-mode safety net and by this package's own SingleShardHook
+// conformance tests (phase_test.go), never at production runtime.
+type SingleShardHook interface {
+	PhaseHook
+	// SingleShard reports whether this hook only ever produces
+	// shard-local work and Effects for shard 0. See the interface's
+	// doc comment above — this must always return the same literal
+	// value.
+	SingleShard() bool
+}
+
 // hookError pairs a RunShard failure with the shard that produced it,
 // so runPhaseForHook can pick a deterministic (lowest-shard) error to
 // surface regardless of which worker goroutine happened to finish
@@ -189,6 +219,15 @@ type hookError struct {
 // serialized and canonically ordered without runPhaseForHook needing
 // its own lock around them.
 func (e *Engine) runPhaseForHook(correlationID string, hook PhaseHook) error {
+	// BUG-269 fast path: a hook that has opted into SingleShardHook
+	// promises shards 1..255 never do real work, so the full
+	// det.RunPhase 256-shard goroutine-pool dispatch below is provably
+	// unnecessary for it — see runPhaseForHookFast's doc comment for the
+	// determinism argument.
+	if ssh, ok := hook.(SingleShardHook); ok && ssh.SingleShard() {
+		return e.runPhaseForHookFast(correlationID, hook)
+	}
+
 	var errMu sync.Mutex
 	var hookErrs []hookError
 
@@ -227,6 +266,69 @@ func (e *Engine) runPhaseForHook(correlationID string, hook PhaseHook) error {
 	return errs.Wrap(ErrPhaseHookFailed, correlationID, first.err, map[string]any{
 		"shard": first.shard,
 	})
+}
+
+// runPhaseForHookFast is BUG-269's fast path for a hook that has opted
+// into SingleShardHook: it calls RunShard exactly once, for shard 0,
+// inline on the calling goroutine — no worker pool, no channel, no
+// det.RunPhase — then applies the resulting Effects directly, in the
+// same order det.ApplyBarrier would have.
+//
+// # Why this is byte-identical to the pooled path
+//
+// det.RunPhase (foundation/det/phase.go) does two things with a hook's
+// per-shard output that matter here:
+//
+//  1. Merges the 256 per-shard T values via det.MergeInOrder. For every
+//     caller in this file T is struct{} (see the combine func below in
+//     the pooled branch) and runPhaseForHook discards the merged value
+//     outright (`if _, err := det.RunPhase[...]`) — it exists only to
+//     assert exactly 256 shards ran, an invariant that is unconditionally
+//     true for det.RunPhase's own fixed shard-queue loop and carries no
+//     information for this hook. Skipping it changes nothing observable.
+//  2. Applies every emitted det.Message[Effect] via det.ApplyBarrier, in
+//     canonical (Shard, Sequence) ascending order (barrier.go). A
+//     SingleShardHook's promise is that shard 0 is the ONLY shard that
+//     ever emits an Effect, so every message's Shard component is the
+//     same constant value — the (Shard, Sequence) sort degenerates to a
+//     Sequence-only sort, which is exactly what sorting hook.RunShard(0)'s
+//     own returned []Effect slice by Sequence produces. Applying that
+//     sorted slice via hook.ApplyEffect, in order, is therefore the same
+//     sequence of ApplyEffect calls det.RunPhase would have produced.
+//
+// If a hook's SingleShard() promise is false — real work happens on a
+// shard other than 0 — this silently drops that work. WithSingleShardAssert
+// (engine.go) is the opt-in dev-mode check that catches a lying hook by
+// paying for the other 255 shards anyway and asserting they are empty;
+// phase_test.go additionally proves the failure is observable at all via
+// a hook that opts in and then breaks its own promise.
+func (e *Engine) runPhaseForHookFast(correlationID string, hook PhaseHook) error {
+	effects, err := hook.RunShard(0)
+	if err != nil {
+		return errs.Wrap(ErrPhaseHookFailed, correlationID, err, map[string]any{
+			"shard": 0,
+		})
+	}
+
+	if e.assertSingleShard {
+		for shard := 1; shard < det.NumShards; shard++ {
+			extra, sErr := hook.RunShard(shard)
+			if sErr != nil || len(extra) != 0 {
+				panic(fmt.Sprintf(
+					"BUG-269 SingleShardHook promise broken: shard %d returned effects=%d err=%v (correlationID=%s)",
+					shard, len(extra), sErr, correlationID,
+				))
+			}
+		}
+	}
+
+	if len(effects) > 1 {
+		sort.Slice(effects, func(i, j int) bool { return effects[i].Sequence < effects[j].Sequence })
+	}
+	for _, eff := range effects {
+		hook.ApplyEffect(eff)
+	}
+	return nil
 }
 
 // runPhase runs every hook registered against kind, in registration

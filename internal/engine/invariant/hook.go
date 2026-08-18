@@ -103,6 +103,16 @@ func (h *Hook) RunShard(shard int) ([]core.Effect, error) {
 	return []core.Effect{{Sequence: 0, Payload: result}}, nil
 }
 
+// SingleShard implements core.SingleShardHook (BUG-269): as documented
+// above, RunShard does real work only for shard 0 and returns (nil,
+// nil) immediately for every other shard, so this hook qualifies for
+// the SingleShardHook fast path — det.RunPhase's 256-shard
+// goroutine-pool dispatch is provably unnecessary for a whole-tick
+// conservation verdict that was never shard-parallel work to begin
+// with. This hook is one of the two BUG-269's regression report named
+// directly (the other is compose.go's buildHook).
+func (h *Hook) SingleShard() bool { return true }
+
 // ApplyEffect implements core.PhaseHook. Called single-goroutine, at
 // the phase barrier, exactly once per tick (see Hook's doc comment).
 func (h *Hook) ApplyEffect(eff core.Effect) {
