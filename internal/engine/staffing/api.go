@@ -289,7 +289,7 @@ func (s *StaffingAPI) HireContractors(buildingID uint64, count int) error {
 		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"field": "count", "value": count})
 	}
 
-	if s.contractorsHired+count > s.cfg.ContractorCapacity {
+	if count > s.cfg.ContractorCapacity || s.contractorsHired > s.cfg.ContractorCapacity-count {
 		return errs.New(ErrContractorPoolExhausted, s.correlationID, map[string]any{"capacity": s.cfg.ContractorCapacity})
 	}
 

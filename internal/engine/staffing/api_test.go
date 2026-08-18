@@ -218,6 +218,34 @@ func TestStaffing_AC10_OffMapContractors(t *testing.T) {
 	}
 }
 
+func TestStaffing_AC10_ContractorsIntOverflow(t *testing.T) {
+	api := New()
+	_ = api.RegisterBuilding(101, "hospital", 15)
+
+	// Step 1: Hire a valid amount
+	err := api.HireContractors(101, 1)
+	if err != nil {
+		t.Fatalf("unexpected hire error: %v", err)
+	}
+
+	// Step 2: Attempt to trigger integer overflow with a massive count.
+	// Int overflow would make contractorsHired + count negative, bypassing a simple
+	// contractorsHired + count > capacity check.
+	// Since max int is architecture dependent (int32 or int64), we can just use a large positive integer
+	// that when added to 1 overflows positive bounds if possible, or just tests the checked add logic.
+	// Actually, passing `int(^uint(0) >> 1)` which is MaxInt.
+	maxInt := int(^uint(0) >> 1)
+
+	err = api.HireContractors(101, maxInt)
+	if err == nil {
+		t.Error("expected error for exceeding contractor capacity via overflow")
+	}
+	var re *errs.E
+	if !errors.As(err, &re) || re.Code != ErrContractorPoolExhausted {
+		t.Errorf("expected contractor pool exhausted code, got: %v", err)
+	}
+}
+
 func TestStaffing_AC11_WagesFiscalPosting(t *testing.T) {
 	api := New()
 
