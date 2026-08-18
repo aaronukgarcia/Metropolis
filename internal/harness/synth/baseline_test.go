@@ -5,11 +5,21 @@ import (
 	"time"
 )
 
+// safeAllocCount/safeAllocBytes are fixture helpers: a value comfortably
+// above MinMeasurableAllocs (BUG-272's primary noise floor), so tests
+// that want the PRIMARY allocation-based check to actually run (rather
+// than being skipped as BelowNoiseFloor) can build realistic fixtures
+// without each test re-deriving its own "big enough" number.
+const (
+	safeAllocCount uint64 = 100_000
+	safeAllocBytes uint64 = 10_000_000
+)
+
 // TestCompareToBaseline_NoBaseline is AC-8: a missing baseline does not
 // fail the build — it reports "no prior baseline to compare" rather
 // than treating "no baseline" as a 10% regression.
 func TestCompareToBaseline_NoBaseline(t *testing.T) {
-	current := PerfResult{PerMonthTick: 50 * time.Millisecond}
+	current := PerfResult{PerMonthTick: 50 * time.Millisecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes}
 	cmp := CompareToBaseline(nil, nil, current)
 
 	if cmp.HasBaseline {
@@ -24,68 +34,178 @@ func TestCompareToBaseline_NoBaseline(t *testing.T) {
 }
 
 // TestCompareToBaseline_NoRegressionWithinThreshold and
-// TestCompareToBaseline_RegressionOverThreshold together prove the
-// RegressionThreshold boundary is exercised on both sides.
+// TestCompareToBaseline_RegressionOverThreshold together prove
+// RegressionThreshold's boundary is exercised on both sides of the
+// PRIMARY, allocation-based signal (BUG-272) — not wall-clock, which is
+// now advisory-only (see TestCompareToBaseline_WallClockNoiseAloneDoesNotRegress
+// below for the fix this item actually exists to prove).
 func TestCompareToBaseline_NoRegressionWithinThreshold(t *testing.T) {
-	// Months is set (BUG-254) so the measured tick window (PerMonthTick x
-	// Months) clears MinMeasurableDuration and the percentage check runs.
-	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}
-	// +9% growth: under the 10% threshold.
-	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 109 * time.Millisecond}
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond, AllocBytes: 1_000_000, AllocCount: 100_000}
+	// +9% growth on both alloc metrics: under the 10% threshold.
+	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond, AllocBytes: 1_090_000, AllocCount: 109_000}
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.HasBaseline {
 		t.Fatal("HasBaseline should be true")
 	}
+	if cmp.BelowNoiseFloor {
+		t.Fatalf("both sides clear MinMeasurableAllocs, the primary check should have run: %s", cmp.Message)
+	}
 	if cmp.Regressed {
-		t.Fatalf("a %.1f%% growth should not regress at a %.0f%% threshold", cmp.DeltaFraction*100, RegressionThreshold*100)
+		t.Fatalf("a %.1f%% alloc-bytes growth / %.1f%% alloc-count growth should not regress at a %.0f%% threshold: %s", cmp.AllocBytesDeltaFraction*100, cmp.AllocCountDeltaFraction*100, RegressionThreshold*100, cmp.Message)
 	}
 }
 
 func TestCompareToBaseline_RegressionOverThreshold(t *testing.T) {
-	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}
-	// +25% growth: comfortably over the 10% threshold.
-	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 125 * time.Millisecond}
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond, AllocBytes: 1_000_000, AllocCount: 100_000}
+	// +25% growth on both alloc metrics: comfortably over the 10% threshold.
+	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond, AllocBytes: 1_250_000, AllocCount: 125_000}
 
 	cmp := CompareToBaseline(&baseline, nil, current)
+	if !cmp.StepRegressed {
+		t.Fatalf("a %.1f%% alloc-bytes growth / %.1f%% alloc-count growth should step-regress at a %.0f%% threshold: %s", cmp.AllocBytesDeltaFraction*100, cmp.AllocCountDeltaFraction*100, RegressionThreshold*100, cmp.Message)
+	}
 	if !cmp.Regressed {
-		t.Fatalf("a %.1f%% growth should regress at a %.0f%% threshold", cmp.DeltaFraction*100, RegressionThreshold*100)
+		t.Fatal("StepRegressed must imply the overall Regressed verdict")
 	}
 }
 
-// TestCompareToBaseline_BelowNoiseFloorSkipsRegressionCheck is the
-// BUG-031-avoidance property this item's dispatch brief specifically
-// asked for: a huge PERCENTAGE regression against a near-zero absolute
-// baseline (the walking-skeleton common case, see doc.go) must not fail
-// the gate — it must be reported as "below the noise floor", never as a
-// regression.
-func TestCompareToBaseline_BelowNoiseFloorSkipsRegressionCheck(t *testing.T) {
-	// Both windows (PerMonthTick x Months) sit far under
-	// MinMeasurableDuration — the walking-skeleton shape.
-	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 1 * time.Microsecond}
-	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 3 * time.Microsecond} // +200%, but both are noise
-
-	cmp := CompareToBaseline(&baseline, nil, current)
-	if !cmp.BelowNoiseFloor {
-		t.Fatal("BelowNoiseFloor should be true when both measurements are under MinMeasurableDuration")
-	}
-	if cmp.Regressed {
-		t.Fatal("a below-noise-floor comparison must never be reported as Regressed — this is exactly the BUG-031 trap this gate is designed to avoid")
+// TestCompareToBaseline_RegressionThresholdUnchanged pins RegressionThreshold
+// at its spec-mandated 10% (M0-ENG §6 point 5) — BUG-272 moved WHAT the
+// threshold is applied to (allocations instead of wall-clock), never the
+// figure itself. A future edit that quietly raises this constant to make
+// noisy signals pass more easily is the exact "gate-weakening" move this
+// project bans; this test fails loudly if that ever happens.
+func TestCompareToBaseline_RegressionThresholdUnchanged(t *testing.T) {
+	if RegressionThreshold != 0.10 {
+		t.Fatalf("RegressionThreshold must stay at the spec-mandated 10%% (M0-ENG §6 point 5) — got %.4f", RegressionThreshold)
 	}
 }
 
-// TestCompareToBaseline_OneSideBelowNoiseFloorAlsoSkips proves the floor
-// applies if EITHER side is below it, not only when both are.
-func TestCompareToBaseline_OneSideBelowNoiseFloorAlsoSkips(t *testing.T) {
-	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 1 * time.Microsecond} // window 12us: below floor
-	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 50 * time.Millisecond} // window 600ms: above floor, huge absolute jump
+// TestCompareToBaseline_AllocBytesAloneCanRegress and
+// TestCompareToBaseline_AllocCountAloneCanRegress prove EITHER alloc
+// metric crossing the threshold is sufficient — a regression that grows
+// one without moving the other must not slip through by only checking
+// the other (BaselineComparison.StepRegressed's doc comment).
+func TestCompareToBaseline_AllocBytesAloneCanRegress(t *testing.T) {
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocBytes: 1_000_000, AllocCount: 100_000}
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocBytes: 1_500_000, AllocCount: 100_500} // bytes +50%, count +0.5%
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if !cmp.StepRegressed {
+		t.Fatalf("an AllocBytes-only regression must still trip StepRegressed: %s", cmp.Message)
+	}
+}
+
+func TestCompareToBaseline_AllocCountAloneCanRegress(t *testing.T) {
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocBytes: 1_000_000, AllocCount: 100_000}
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocBytes: 1_005_000, AllocCount: 150_000} // bytes +0.5%, count +50%
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if !cmp.StepRegressed {
+		t.Fatalf("an AllocCount-only regression must still trip StepRegressed: %s", cmp.Message)
+	}
+}
+
+// TestCompareToBaseline_WallClockNoiseAloneDoesNotRegress is BUG-272's
+// headline fix, reproduced directly: the live-verified CI failure was a
+// docs-only PR, byte-identical engine code, reporting a 45% wall-clock
+// "regression" purely from shared-runner jitter. With allocation counts
+// UNCHANGED (as a genuinely identical build would measure) and only
+// PerMonthTick moved by 45%, the gate must NOT regress — this is the
+// exact scenario that used to fail every PR before this fix.
+func TestCompareToBaseline_WallClockNoiseAloneDoesNotRegress(t *testing.T) {
+	baseline := PerfResult{
+		CitizenCount: OneMillionCitizens, Months: 500,
+		PerMonthTick: 172825 * time.Nanosecond, // BUG-272's own cited baseline figure
+		AllocBytes:   safeAllocBytes, AllocCount: safeAllocCount,
+	}
+	current := PerfResult{
+		CitizenCount: OneMillionCitizens, Months: 500,
+		PerMonthTick: 250552 * time.Nanosecond,                   // BUG-272's own cited "regressed" figure: +45%
+		AllocBytes:   safeAllocBytes, AllocCount: safeAllocCount, // IDENTICAL allocations — same code
+	}
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if cmp.Regressed {
+		t.Fatalf("BUG-272: a 45%% wall-clock delta with IDENTICAL allocation counts must not regress the gate (this is the exact false-positive that blocked every PR): %s", cmp.Message)
+	}
+	if cmp.StepRegressed {
+		t.Fatal("the primary allocation-based step check must not fire when allocations did not change")
+	}
+	if cmp.BelowNoiseFloor {
+		t.Fatalf("both sides clear MinMeasurableAllocs, the primary check should have run and passed: %s", cmp.Message)
+	}
+	if cmp.WallClockGrossRegressed {
+		t.Fatalf("a 45%% wall-clock delta must not trip the advisory GROSS check (threshold is %.0f%%, i.e. >2x): %s", WallClockGrossRegressionThreshold*100, cmp.Message)
+	}
+	// The advisory delta is still recorded (informational), just not gating.
+	if cmp.DeltaFraction <= 0 {
+		t.Fatalf("DeltaFraction should still report the observed advisory wall-clock delta, got %.4f", cmp.DeltaFraction)
+	}
+}
+
+// TestCompareToBaseline_WallClockGrossRegressionStillCatchesCatastrophicSlowdown
+// is the safety-net half of BUG-272's design: a slowdown that does NOT
+// show up in allocation counts at all (e.g. a busy-wait, a lock
+// contention regression) must still be caught if it is gross enough
+// (>WallClockGrossRegressionThreshold, i.e. more than doubling) — the
+// advisory check is demoted, not deleted.
+func TestCompareToBaseline_WallClockGrossRegressionStillCatchesCatastrophicSlowdown(t *testing.T) {
+	baseline := PerfResult{
+		CitizenCount: OneMillionCitizens, Months: 500,
+		PerMonthTick: 172825 * time.Nanosecond,
+		AllocBytes:   safeAllocBytes, AllocCount: safeAllocCount,
+	}
+	current := PerfResult{
+		CitizenCount: OneMillionCitizens, Months: 500,
+		PerMonthTick: 3 * 172825 * time.Nanosecond,               // 3x — well over the gross threshold
+		AllocBytes:   safeAllocBytes, AllocCount: safeAllocCount, // allocations UNCHANGED
+	}
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if !cmp.WallClockGrossRegressed {
+		t.Fatalf("a 3x wall-clock slowdown must trip the advisory GROSS check even with unchanged allocations: %s", cmp.Message)
+	}
+	if !cmp.Regressed {
+		t.Fatal("WallClockGrossRegressed must still contribute to the overall Regressed verdict — it is a safety net, not a no-op")
+	}
+	if cmp.StepRegressed {
+		t.Fatal("the primary allocation-based check must not have fired (allocations were unchanged) — only the advisory gross check should have")
+	}
+}
+
+// TestCompareToBaseline_BelowAllocNoiseFloorSkipsRegressionCheck is
+// BUG-272's re-scoped analogue of the original BUG-031-avoidance
+// property: a huge PERCENTAGE regression against a near-zero absolute
+// allocation count must not fail the gate — it must be reported as
+// "below the (allocation) noise floor", never as a regression.
+func TestCompareToBaseline_BelowAllocNoiseFloorSkipsRegressionCheck(t *testing.T) {
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 5, AllocBytes: 400}
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 15, AllocBytes: 1200} // +200%, but both are noise-scale
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.BelowNoiseFloor {
-		t.Fatal("BelowNoiseFloor should be true when the BASELINE alone is under MinMeasurableDuration, even if current is not")
+		t.Fatal("BelowNoiseFloor should be true when both AllocCounts are under MinMeasurableAllocs")
 	}
 	if cmp.Regressed {
-		t.Fatal("must not report Regressed while BelowNoiseFloor is true")
+		t.Fatal("a below-noise-floor comparison must never be reported as Regressed — this is exactly the BUG-031-class trap this gate is designed to avoid, now re-scoped to allocations (BUG-272)")
+	}
+}
+
+// TestCompareToBaseline_OneSideBelowAllocNoiseFloorAlsoSkips proves the
+// allocation floor applies if EITHER side is below it, not only when
+// both are.
+func TestCompareToBaseline_OneSideBelowAllocNoiseFloorAlsoSkips(t *testing.T) {
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 5, AllocBytes: 400}                        // below floor
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes} // above floor, huge absolute jump
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if !cmp.BelowNoiseFloor {
+		t.Fatal("BelowNoiseFloor should be true when the BASELINE alone is under MinMeasurableAllocs, even if current is not")
+	}
+	if cmp.Regressed {
+		t.Fatal("must not report Regressed (from the primary signal) while BelowNoiseFloor is true")
 	}
 }
 
@@ -97,8 +217,8 @@ func TestCompareToBaseline_OneSideBelowNoiseFloorAlsoSkips(t *testing.T) {
 // files operationally. A huge, entirely scale-driven jump must be
 // reported as ScaleMismatch, never as Regressed.
 func TestCompareToBaseline_CitizenCountMismatchSkipsRegressionCheck(t *testing.T) {
-	baseline := PerfResult{CitizenCount: 2000, Months: 3, PerMonthTick: 5 * time.Millisecond}
-	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 500 * time.Millisecond}
+	baseline := PerfResult{CitizenCount: 2000, Months: 3, PerMonthTick: 5 * time.Millisecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes}
+	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 500 * time.Millisecond, AllocCount: safeAllocCount * 100, AllocBytes: safeAllocBytes * 100}
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.ScaleMismatch {
@@ -114,8 +234,8 @@ func TestCompareToBaseline_CitizenCountMismatchSkipsRegressionCheck(t *testing.T
 // makes a percentage comparison meaningless even at the same
 // CitizenCount.
 func TestCompareToBaseline_MonthsMismatchSkipsRegressionCheck(t *testing.T) {
-	baseline := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 5 * time.Millisecond}
-	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 12, PerMonthTick: 5 * time.Millisecond}
+	baseline := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 5 * time.Millisecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes}
+	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 12, PerMonthTick: 5 * time.Millisecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes}
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.ScaleMismatch {
@@ -126,10 +246,38 @@ func TestCompareToBaseline_MonthsMismatchSkipsRegressionCheck(t *testing.T) {
 	}
 }
 
+// TestCompareToBaseline_CumulativeAllocDriftCaught is BUG-083's
+// anchor-based sustained-drift check, re-based onto allocations
+// (BUG-272): a current run that is under RegressionThreshold against the
+// immediately-prior baseline (so StepRegressed is false) but far over
+// CumulativeRegressionThreshold against the FIXED anchor must still be
+// caught.
+func TestCompareToBaseline_CumulativeAllocDriftCaught(t *testing.T) {
+	anchor := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 100_000, AllocBytes: 1_000_000}
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 200_000, AllocBytes: 2_000_000} // already 100% over anchor (pre-existing, e.g. accepted)
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 205_000, AllocBytes: 2_050_000}  // +2.5% over baseline (step OK) but +105% over anchor (cumulative threshold is 20%)
+
+	cmp := CompareToBaseline(&baseline, &anchor, current)
+	if cmp.StepRegressed {
+		t.Fatalf("the step check (vs baseline) should NOT fire: %s", cmp.Message)
+	}
+	if !cmp.CumulativeChecked {
+		t.Fatal("CumulativeChecked should be true — anchor is same-scale and above MinMeasurableAllocs")
+	}
+	if !cmp.CumulativeRegressed {
+		t.Fatalf("a %.1f%%/%.1f%% cumulative drift over anchor should trip CumulativeRegressionThreshold (%.0f%%): %s", cmp.CumulativeAllocBytesDeltaFraction*100, cmp.CumulativeAllocCountDeltaFraction*100, CumulativeRegressionThreshold*100, cmp.Message)
+	}
+	if !cmp.Regressed {
+		t.Fatal("CumulativeRegressed must still drive the overall Regressed verdict")
+	}
+}
+
 // TestCouldNotEvaluate_TrueForScaleMismatchAndBelowNoiseFloor is BUG-071's
 // unit-level check on the exact predicate cmd/perfci gates its exit code
 // and baseline-write decision on: both skip reasons must report
-// CouldNotEvaluate() true.
+// CouldNotEvaluate() true. BelowNoiseFloor is now the PRIMARY
+// (allocation-based) floor (BUG-272) — CouldNotEvaluate()'s own logic is
+// unchanged.
 func TestCouldNotEvaluate_TrueForScaleMismatchAndBelowNoiseFloor(t *testing.T) {
 	scaleMismatch := BaselineComparison{HasBaseline: true, ScaleMismatch: true}
 	if !scaleMismatch.CouldNotEvaluate() {
@@ -149,7 +297,7 @@ func TestCouldNotEvaluate_TrueForScaleMismatchAndBelowNoiseFloor(t *testing.T) {
 // the common "first run on a fresh preset" case as an alarming
 // could-not-evaluate.
 func TestCouldNotEvaluate_FalseWhenNoBaseline(t *testing.T) {
-	noBaseline := CompareToBaseline(nil, nil, PerfResult{PerMonthTick: 3 * time.Microsecond})
+	noBaseline := CompareToBaseline(nil, nil, PerfResult{PerMonthTick: 3 * time.Microsecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes})
 	if noBaseline.CouldNotEvaluate() {
 		t.Fatal("CouldNotEvaluate() should be false when HasBaseline is false — AC-8's missing-baseline case records a new baseline, it is not a skipped comparison")
 	}
@@ -158,12 +306,20 @@ func TestCouldNotEvaluate_FalseWhenNoBaseline(t *testing.T) {
 // TestCouldNotEvaluate_FalseForGenuinePassAndRegression proves the
 // predicate does not over-fire on the two outcomes it must leave alone.
 func TestCouldNotEvaluate_FalseForGenuinePassAndRegression(t *testing.T) {
-	pass := CompareToBaseline(&PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}, nil, PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 105 * time.Millisecond})
+	pass := CompareToBaseline(
+		&PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 100_000, AllocBytes: 1_000_000},
+		nil,
+		PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 105_000, AllocBytes: 1_050_000},
+	)
 	if pass.CouldNotEvaluate() {
 		t.Fatal("CouldNotEvaluate() should be false for a genuine within-threshold pass")
 	}
 
-	regressed := CompareToBaseline(&PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}, nil, PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 200 * time.Millisecond})
+	regressed := CompareToBaseline(
+		&PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 100_000, AllocBytes: 1_000_000},
+		nil,
+		PerfResult{CitizenCount: 1000, Months: 12, AllocCount: 200_000, AllocBytes: 2_000_000},
+	)
 	if !regressed.Regressed {
 		t.Fatal("test setup: expected this pair to regress")
 	}
@@ -172,61 +328,56 @@ func TestCouldNotEvaluate_FalseForGenuinePassAndRegression(t *testing.T) {
 	}
 }
 
-// TestCompareToBaseline_WindowFloorBoundaryDerivesFromConstant pins
-// BUG-254's re-scoped noise floor at its exact boundary, with every
-// figure DERIVED from MinMeasurableDuration rather than hardcoded
-// (GR#15): a measured tick window (PerMonthTick x Months) exactly AT the
-// floor is evaluated; one even a hair below it is BelowNoiseFloor. If
-// the constant's value or scope (window vs per-month) ever changes, this
-// test moves with the constant or fails loudly — it cannot silently keep
+// TestCompareToBaseline_AllocFloorBoundaryDerivesFromConstant pins
+// BUG-272's re-scoped noise floor at its exact boundary, with every
+// figure DERIVED from MinMeasurableAllocs rather than hardcoded
+// (GR#15): an AllocCount exactly AT the floor is evaluated; one even one
+// below it is BelowNoiseFloor. If the constant's value ever changes,
+// this test moves with it or fails loudly — it cannot silently keep
 // asserting a stale figure.
-func TestCompareToBaseline_WindowFloorBoundaryDerivesFromConstant(t *testing.T) {
-	// months chosen so MinMeasurableDuration divides exactly and the
-	// at-floor window reconstructs to precisely MinMeasurableDuration
-	// with no integer-division loss.
-	const months = 10
-	if MinMeasurableDuration%months != 0 {
-		t.Fatalf("test fixture assumption broken: MinMeasurableDuration (%s) is not divisible by %d months — pick a divisor so the boundary is exact", MinMeasurableDuration, months)
-	}
-	perMonthAtFloor := MinMeasurableDuration / months
-
-	atFloor := PerfResult{CitizenCount: 1000, Months: months, PerMonthTick: perMonthAtFloor}
+func TestCompareToBaseline_AllocFloorBoundaryDerivesFromConstant(t *testing.T) {
+	atFloor := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: MinMeasurableAllocs, AllocBytes: safeAllocBytes}
 	cmpAt := CompareToBaseline(&atFloor, nil, atFloor)
 	if cmpAt.BelowNoiseFloor {
-		t.Fatalf("a window exactly at MinMeasurableDuration (%s) must be evaluated, got BelowNoiseFloor: %s", MinMeasurableDuration, cmpAt.Message)
+		t.Fatalf("an AllocCount exactly at MinMeasurableAllocs (%d) must be evaluated, got BelowNoiseFloor: %s", MinMeasurableAllocs, cmpAt.Message)
 	}
 	if cmpAt.Regressed {
 		t.Fatalf("identical at-floor measurements must not regress: %s", cmpAt.Message)
 	}
 
-	below := PerfResult{CitizenCount: 1000, Months: months, PerMonthTick: perMonthAtFloor - time.Nanosecond}
+	below := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: MinMeasurableAllocs - 1, AllocBytes: safeAllocBytes}
 	cmpBelow := CompareToBaseline(&below, nil, below)
 	if !cmpBelow.BelowNoiseFloor {
-		t.Fatalf("a window below MinMeasurableDuration (%s) must be BelowNoiseFloor, got: %s", MinMeasurableDuration, cmpBelow.Message)
+		t.Fatalf("an AllocCount below MinMeasurableAllocs (%d) must be BelowNoiseFloor, got: %s", MinMeasurableAllocs, cmpBelow.Message)
 	}
 	if cmpBelow.Regressed {
 		t.Fatal("a below-floor comparison must never be Regressed")
 	}
 }
 
-// TestCompareToBaseline_QuantumScaleWindowIsRefusedNotJudged is BUG-254's
-// direct reproduction: the exact pre-fix CI shape — a real ~3.3ms/month
-// hook-work measurement over only 3 months (a ~10ms window, a single-digit
-// multiple of the ~1ms Windows timer quantum) showing an 18.9% delta that
-// was pure runner noise — must be refused as BelowNoiseFloor, never
-// reported as REGRESSED. RED against the pre-fix 2ms PER-MONTH floor
-// (both sides cleared 2ms, the 18.9% delta compared as a genuine step
-// regression over the 10% threshold, and the required perf gate went red
-// on a zero-change commit); GREEN against the window-scoped floor.
-func TestCompareToBaseline_QuantumScaleWindowIsRefusedNotJudged(t *testing.T) {
-	baseline := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 3320 * time.Microsecond} // ~9.96ms window
-	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 3947 * time.Microsecond}  // +18.9% — the live-verified CI noise figure
+// TestCompareToBaseline_QuantumScaleWindowIsAdvisoryOnly is BUG-254's
+// direct reproduction, re-verified under BUG-272's new regime: the exact
+// pre-BUG-254 CI shape — a real ~3.3ms/month hook-work measurement over
+// only 3 months (a ~10ms window, a single-digit multiple of the ~1ms
+// Windows timer quantum) showing an 18.9% wall-clock delta that was pure
+// runner noise — must never be treated as a REGRESSED verdict on its
+// own. Since BUG-272, the wall-clock window floor (MinMeasurableDuration)
+// only governs the now-ADVISORY check, so with a healthy, above-floor
+// allocation count on both sides this comparison runs on the (unaffected)
+// primary allocation signal and reports WallClockBelowNoiseFloor for the
+// advisory side, not BelowNoiseFloor (which is alloc-only since BUG-272).
+func TestCompareToBaseline_QuantumScaleWindowIsAdvisoryOnly(t *testing.T) {
+	baseline := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 3320 * time.Microsecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes} // ~9.96ms window
+	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 3947 * time.Microsecond, AllocCount: safeAllocCount, AllocBytes: safeAllocBytes}  // +18.9% wall-clock — the live-verified CI noise figure; allocations unchanged
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if cmp.Regressed {
-		t.Fatalf("BUG-254: a quantum-scale (%s) window's noise delta was judged as a regression: %s", measuredTickWindow(baseline), cmp.Message)
+		t.Fatalf("BUG-254/BUG-272: a quantum-scale (%s) wall-clock window's noise delta must not be judged as a regression when allocations are unchanged: %s", measuredTickWindow(baseline), cmp.Message)
 	}
-	if !cmp.BelowNoiseFloor {
-		t.Fatalf("BUG-254: a quantum-scale window must be refused as BelowNoiseFloor (honest exit 3 in cmd/perfci), got: %s", cmp.Message)
+	if !cmp.WallClockBelowNoiseFloor {
+		t.Fatalf("BUG-254: a quantum-scale wall-clock window must be refused by the advisory check's own floor, got: %s", cmp.Message)
+	}
+	if cmp.BelowNoiseFloor {
+		t.Fatalf("BUG-272: the PRIMARY (allocation) floor is independent of the wall-clock window and both sides clear MinMeasurableAllocs here — BelowNoiseFloor should be false: %s", cmp.Message)
 	}
 }

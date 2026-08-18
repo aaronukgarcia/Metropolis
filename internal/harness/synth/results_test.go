@@ -55,8 +55,14 @@ func TestAppendResult_ResultSchema(t *testing.T) {
 func TestAppendResult_Appends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
-	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 110 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	// AllocBytes/AllocCount (BUG-272's PRIMARY signal) are set to a
+	// realistic, above-MinMeasurableAllocs figure with +9% growth (under
+	// RegressionThreshold) so this test's "does baseline advance to the
+	// most recently appended record" property is exercised on the
+	// signal the gate now actually judges, not skipped as
+	// BelowNoiseFloor.
+	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, AllocBytes: safeAllocBytes, AllocCount: safeAllocCount, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	newer := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 110 * time.Millisecond, AllocBytes: safeAllocBytes * 109 / 100, AllocCount: safeAllocCount * 109 / 100, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, older); err != nil {
 		t.Fatalf("AppendResult(older): %v", err)
 	}
@@ -294,7 +300,7 @@ func TestLoadLatestBaseline_TamperedRequestedPresetRecordStillHardErrors(t *test
 func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	older := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, AllocBytes: safeAllocBytes, AllocCount: safeAllocCount, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, older); err != nil {
 		t.Fatalf("AppendResult(older): %v", err)
 	}
@@ -323,7 +329,11 @@ func TestLoadLatestBaseline_RecoversPastATornLine(t *testing.T) {
 	// see TestLoadLatestBaseline_FreezesOnRegressionInsteadOfRatcheting
 	// below for that dedicated test, which needs a record that DOES
 	// exceed the threshold).
-	newer := PerfRecord{CommitHash: "commit3", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 105 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	// +5% on allocs too (BUG-272's primary signal), matching the +5%
+	// wall-clock growth so this stays under RegressionThreshold and the
+	// torn-line recovery path (not a regression freeze) is what's
+	// exercised.
+	newer := PerfRecord{CommitHash: "commit3", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 105 * time.Millisecond, AllocBytes: safeAllocBytes * 105 / 100, AllocCount: safeAllocCount * 105 / 100, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, newer); err != nil {
 		t.Fatalf("AppendResult(newer): %v", err)
 	}
@@ -518,17 +528,25 @@ func TestLoadLatestBaseline_CatchesRatchetByInches(t *testing.T) {
 	// stepping..."), so 30 GROWTH STEPS happen after the starting
 	// point — 1.09^30 ≈ 13.27x, matching the live-verified figure
 	// exactly.
+	// AllocCount/AllocBytes (BUG-272's PRIMARY signal) compound by the
+	// SAME 9%-per-step growth as PerMonthTick, starting well above
+	// MinMeasurableAllocs, so this fixture exercises the cumulative-
+	// anchor mechanism on the signal the gate now actually gates on,
+	// not only via the demoted advisory wall-clock check.
+	const startAllocs = safeAllocCount
 	current := start
+	currentAllocs := startAllocs
 	for i := 0; i < steps+1; i++ {
 		rec := PerfRecord{
 			CommitHash: fmt.Sprintf("commit%d", i+1),
 			Preset:     "1M",
-			Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: current, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
+			Result:     PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: current, AllocBytes: currentAllocs * 10, AllocCount: currentAllocs, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true},
 		}
 		if err := AppendResult(path, rec); err != nil {
 			t.Fatalf("AppendResult(step %d, value=%v): %v", i+1, current, err)
 		}
 		current = time.Duration(float64(current) * growth)
+		currentAllocs = uint64(float64(currentAllocs) * growth)
 	}
 
 	// Sanity-check the fixture actually reproduces the live-verified
@@ -599,17 +617,19 @@ func TestLoadLatestBaseline_CatchesRatchetByInches(t *testing.T) {
 func TestLoadLatestBaseline_FreezesOnSingleRegressionInsteadOfRatcheting(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "perf-results.ndjson")
 
-	good := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	good := PerfRecord{CommitHash: "commit1", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 100 * time.Millisecond, AllocBytes: safeAllocBytes, AllocCount: safeAllocCount, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, good); err != nil {
 		t.Fatalf("AppendResult(good): %v", err)
 	}
-	// +50%: comfortably over RegressionThreshold. Still appended (AC-5
+	// +50% on BOTH the advisory wall-clock figure AND the PRIMARY alloc
+	// metrics (BUG-272): comfortably over RegressionThreshold on the
+	// signal the gate now actually gates on. Still appended (AC-5
 	// history/graphing is unaffected by this fix — only what becomes
 	// the reconstructed BASELINE changes), simulating exactly what
 	// ci.yml's perf-smoke job does today: AppendResult runs before the
 	// exit code is returned, and the `if: always()` cache-save step
 	// persists it regardless of the job's own pass/fail result.
-	regressed := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 150 * time.Millisecond, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
+	regressed := PerfRecord{CommitHash: "commit2", Preset: "1M", Result: PerfResult{CitizenCount: MinSyntheticCitizens, Months: 1, PerMonthTick: 150 * time.Millisecond, AllocBytes: safeAllocBytes * 3 / 2, AllocCount: safeAllocCount * 3 / 2, PhaseHookCount: PhaseHookCountInHeadlessPath(), Measured: true}}
 	if err := AppendResult(path, regressed); err != nil {
 		t.Fatalf("AppendResult(regressed): %v", err)
 	}
