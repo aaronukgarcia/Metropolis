@@ -98,11 +98,17 @@ func (s LifeStage) String() string {
 // Children (EmploymentNone + under 18) get school hours; students get
 // education hours; the employed get firm hours; the retired/unemployed have
 // no productive obligation. Pure and deterministic — never the wall clock.
+//
+// EmploymentOffMap (FEAT-198, citizens.EmploymentState=5) is bucketed
+// identically to EmploymentEmployed: an off-map worker has a real job, just
+// outside the map — the same productive-obligation stage/hours apply, never
+// the fall-through age check below (which would otherwise wrongly bucket an
+// off-map-employed adult as StageUnemployed).
 func lifeStageFor(cit citizens.Citizen) LifeStage {
 	switch cit.Employment.State {
 	case citizens.EmploymentStudent:
 		return StageStudent
-	case citizens.EmploymentEmployed:
+	case citizens.EmploymentEmployed, citizens.EmploymentOffMap:
 		return StageEmployed
 	case citizens.EmploymentRetired:
 		return StageRetired
