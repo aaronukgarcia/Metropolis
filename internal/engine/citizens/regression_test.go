@@ -331,8 +331,9 @@ func TestHotColdLeisureConsistentAfterClockAdvance(t *testing.T) {
 
 // TestEmploymentCommandRejectsOutOfRangeEnum (round-3 entry point 3): the
 // command path must validate employment enums exactly like birth — 255/255
-// (would pack to 15,15) and 5 (outside the 0-4 domain) are both rejected,
-// and nothing is persisted.
+// (would pack to 15,15) and 6 (outside the 0-5 domain, EmploymentOffMap=5
+// being the widened extension's new legal top value — FEAT-198) are both
+// rejected, and nothing is persisted.
 func TestEmploymentCommandRejectsOutOfRangeEnum(t *testing.T) {
 	api, err := NewCitizensAPI(1, "corr")
 	if err != nil {
@@ -346,7 +347,7 @@ func TestEmploymentCommandRejectsOutOfRangeEnum(t *testing.T) {
 	err = api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventEmployment, CitizenID: 1, Employment: EmploymentState(255), Sector: Sector(255)})
 	assertRegistryCode(t, err, ErrFieldOutOfRange)
 
-	err = api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventEmployment, CitizenID: 1, Employment: EmploymentState(5), Sector: SectorTertiary})
+	err = api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventEmployment, CitizenID: 1, Employment: EmploymentState(6), Sector: SectorTertiary})
 	assertRegistryCode(t, err, ErrFieldOutOfRange)
 
 	got, _ := api.CitizenAt(1, "corr")
