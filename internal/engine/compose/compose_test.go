@@ -86,7 +86,10 @@ func TestWire_RegistersAllHooksInDocumentedOrder(t *testing.T) {
 	// The monthly phases must appear in the fixed engine.core order,
 	// proving the hooks landed on the documented phases (world->production,
 	// market/consumption->consumption-shortfall, citizens/attract->population,
-	// build->land-value-decay, finance->finance).
+	// finance->finance). PhaseLandValueDecay still fires here — the phase
+	// observer runs once per phase regardless of hook count — but build no
+	// longer has a hook registered against it since BUG-268 moved build to
+	// PhaseDailyTick (asserted separately by TestBUG268_BuildAdvancesDaily).
 	var monthly []core.PhaseKind
 	for _, p := range phases {
 		if p != core.PhaseDailyTick {
@@ -474,7 +477,7 @@ func TestGameplay_DemolishCreditsCompensation(t *testing.T) {
 	}
 
 	// Advance the build queue directly (same *build.BuildAPI the buildHook
-	// drives monthly via BuildAPI.Tick) until the order completes. compose's
+	// drives daily via BuildAPI.Tick, BUG-268) until the order completes. compose's
 	// own test file has package-level access to simState's unexported
 	// fields, same as build's own tests loop Tick against a provisioned
 	// logistics stock.
@@ -519,6 +522,208 @@ func TestGameplay_DemolishCreditsCompensation(t *testing.T) {
 	gotTreasuryDelta := treasuryBefore - comp.Treasury()
 	if gotTreasuryDelta != wantCompensation {
 		t.Fatalf("treasury delta after demolish = %d, want exactly %d (the compensation)", gotTreasuryDelta, wantCompensation)
+	}
+}
+
+// --- BUG-268: build must advance per sim-DAY, not per sim-MONTH -----------
+
+// dwellingBaseLeadTimeDays is data/buildings.json's
+// zones[dwelling].baseLeadTimeDays (45), mirrored here ONLY as a sanity
+// floor for the test's tolerance arithmetic below — never as the expected
+// per-order lead time itself. The ACTUAL per-order lead time
+// (effectiveLeadTime = ceil(base/seasonalMultiplier), build/numeric.go) is
+// read back from the real BuildAPI's queue after submission, because §9's
+// winter construction-speed multiplier can lengthen it beyond the raw data
+// value depending on the submission month — asserting against the raw
+// data constant would be asserting a value the real engine never promises.
+const dwellingBaseLeadTimeDays = 45
+
+// wireBuildTestEngine builds a real composed engine with a generously
+// provisioned logistics stock (so the materials gate never blocks — the
+// test isolates the lead-time cadence, not the materials draw) and submits
+// Buy->Zone->Build for a dwelling at cell, exactly through the real
+// gameplay-command seam (e.HandleCommand), the same path every runnable top
+// uses. Returns the engine/composition, the (tile, local) key to poll
+// BuildAPI.Structure with, and the order's ACTUAL initial leadTimeRemaining
+// (post seasonal multiplier) so callers assert against ground truth rather
+// than the raw data constant.
+func wireBuildTestEngine(t *testing.T, seed uint64, cell protocol.CellRef) (e *core.Engine, comp *Composition, tile world.TileCoord, local world.CellLocal, initialLeadTime int64) {
+	t.Helper()
+	cid := errs.NewCorrelationID()
+	logisticsAPI, err := logistics.LoadDefault(cid)
+	if err != nil {
+		t.Fatalf("logistics.LoadDefault: %v", err)
+	}
+	if _, err := logisticsAPI.Provision(build.DefaultDistrict, market.ConstructionMaterials, 1_000_000, 1_000_000); err != nil {
+		t.Fatalf("Provision: %v", err)
+	}
+
+	e = core.NewEngine(core.WithWorldSeed(seed), core.WithPoolSize(1))
+	comp, err = Wire(e, &Deps{CorrelationID: cid, Logistics: logisticsAPI})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	if res := e.HandleCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion, CorrelationID: protocol.CorrelationID("bug268-buy"),
+		Kind: protocol.KindBuy, Payload: protocol.BuyPayload{Cell: cell},
+	}); !res.Accepted {
+		t.Fatalf("Buy rejected: %+v", res.Error)
+	}
+	if res := e.HandleCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion, CorrelationID: protocol.CorrelationID("bug268-zone"),
+		Kind: protocol.KindZone, Payload: protocol.ZonePayload{Cell: cell, ZoneType: "dwelling"},
+	}); !res.Accepted {
+		t.Fatalf("Zone rejected: %+v", res.Error)
+	}
+	if res := e.HandleCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion, CorrelationID: protocol.CorrelationID("bug268-build"),
+		Kind: protocol.KindBuild, Payload: protocol.BuildPayload{Cell: cell, BuildingType: "dwelling"},
+	}); !res.Accepted {
+		t.Fatalf("Build rejected: %+v", res.Error)
+	}
+
+	tile = world.TileCoord{X: defaultStartCoordX, Y: defaultStartCoordY}
+	local = world.CellLocal{Row: cell.Y, Col: cell.X}
+
+	orders := comp.state.buildAPI.Queue()
+	if len(orders) != 1 {
+		t.Fatalf("build queue has %d orders right after Build, want 1", len(orders))
+	}
+	initialLeadTime = orders[0].LeadTimeRemaining
+	if initialLeadTime < dwellingBaseLeadTimeDays {
+		// The seasonal multiplier only ever LENGTHENS the lead time
+		// (winter < 1.0 -> longer, §9); a value below the raw data floor
+		// would mean effectiveLeadTime's math went the wrong way.
+		t.Fatalf("dwelling initial leadTimeRemaining = %d, want >= %d (base data value; seasonal multiplier only lengthens)", initialLeadTime, dwellingBaseLeadTimeDays)
+	}
+	return e, comp, tile, local, initialLeadTime
+}
+
+// TestBUG268_BuildAdvancesDaily is the core regression: it drives Buy->
+// Zone->Build for a dwelling (baseLeadTimeDays=45) through the REAL
+// composed engine, then calls the REAL e.AdvanceTicks day by day (the
+// exact entry point cmd/metropolis and the headless harness use — not a
+// direct BuildAPI.Tick loop, which would bypass the phase-hook cadence
+// this bug is about). Before the fix, the build hook was wired against
+// PhaseLandValueDecay (a monthly phase), so the queue only advanced once
+// per 30 daily ticks — a ~45-day dwelling would still be lead-time-pending
+// after far more than 45 daily ticks (it would need leadTime*30). The fix
+// re-wires the hook onto PhaseDailyTick so one day of lead/labour/materials
+// elapses per AdvanceTicks(...,1) call, and the dwelling completes within
+// its actual per-order lead time (materials complete in a single tick given
+// the generous provision above).
+func TestBUG268_BuildAdvancesDaily(t *testing.T) {
+	e, comp, tile, local, leadTime := wireBuildTestEngine(t, 11, protocol.CellRef{X: 2, Y: 2})
+
+	// Proof #1: the structure must NOT exist before the lead time can
+	// possibly have elapsed (leadTime-1 daily ticks). If the hook cadence
+	// were wrong in the OTHER direction (firing faster than once/day) this
+	// would catch it.
+	if err := e.AdvanceTicks(errs.NewCorrelationID(), leadTime-1); err != nil {
+		t.Fatalf("AdvanceTicks(%d): %v", leadTime-1, err)
+	}
+	if _, ok := comp.state.buildAPI.Structure(tile, local); ok {
+		t.Fatalf("dwelling structure already exists after %d daily ticks, want not-yet (leadTime=%d)", leadTime-1, leadTime)
+	}
+
+	// Proof #2 (the BUG-268 assertion): a handful more daily ticks — days,
+	// not months — completes it. A small tolerance (+3 ticks beyond the
+	// exact lead time) absorbs legitimate off-by-one framing, but nothing
+	// close to the old bug's leadTime*30 daily ticks (leadTime months).
+	completedAtTick := int64(-1)
+	for i := int64(0); i < 5; i++ {
+		if err := e.AdvanceTicks(errs.NewCorrelationID(), 1); err != nil {
+			t.Fatalf("AdvanceTicks(1) at day %d: %v", leadTime-1+i+1, err)
+		}
+		if _, ok := comp.state.buildAPI.Structure(tile, local); ok {
+			completedAtTick = leadTime - 1 + i + 1
+			break
+		}
+	}
+	if completedAtTick < 0 {
+		t.Fatalf("dwelling structure did not complete within %d daily ticks of its %d-day lead time — build queue is not advancing per sim-day (BUG-268 regressed)", leadTime-1+5, leadTime)
+	}
+	t.Logf("dwelling (leadTime=%d days) completed at daily tick %d", leadTime, completedAtTick)
+
+	// Sanity ceiling: the old (monthly-phase) bug would need ~leadTime
+	// MONTHS (leadTime*30 daily ticks). Completing this early proves the
+	// daily cadence, independent of the exact tick this build's
+	// labour/materials gates happen to clear on.
+	if completedAtTick >= leadTime*int64(core.DailyTicksPerMonth) {
+		t.Fatalf("dwelling took %d daily ticks to complete, which is monthly-cadence territory (>= %d) — BUG-268 regressed", completedAtTick, leadTime*int64(core.DailyTicksPerMonth))
+	}
+}
+
+// TestBUG268_BuildHookOnDailyPhase asserts, mechanically rather than via
+// timing, that Wire() no longer registers the build hook against the
+// monthly PhaseLandValueDecay slot: it drives a phase observer over exactly
+// one daily tick (no month boundary crossed) and requires the build hook's
+// effect to have already applied — i.e. PhaseDailyTick fired with build's
+// hook attached — which is only possible if build is registered on
+// PhaseDailyTick (monthly phases do not run mid-month).
+func TestBUG268_BuildHookOnDailyPhase(t *testing.T) {
+	e, comp, tile, local, leadTime := wireBuildTestEngine(t, 23, protocol.CellRef{X: 3, Y: 3})
+
+	// One single daily tick — deliberately NOT a month boundary (30 would
+	// trip monthlyPhaseOrder too, which would mask a regression back onto
+	// a monthly phase for a lead time short enough to complete in one
+	// month). leadTimeRemaining must have decremented by exactly one day,
+	// which can only happen if BuildAPI.Tick ran on this very tick.
+	if err := e.AdvanceTicks(errs.NewCorrelationID(), 1); err != nil {
+		t.Fatalf("AdvanceTicks(1): %v", err)
+	}
+	orders := comp.state.buildAPI.Queue()
+	if len(orders) != 1 {
+		t.Fatalf("build queue has %d orders after Build, want 1", len(orders))
+	}
+	if orders[0].LeadTimeRemaining != leadTime-1 {
+		t.Fatalf("leadTimeRemaining after 1 daily tick = %d, want %d (BuildAPI.Tick must fire once per daily tick, not once per month)", orders[0].LeadTimeRemaining, leadTime-1)
+	}
+	if _, ok := comp.state.buildAPI.Structure(tile, local); ok {
+		t.Fatalf("dwelling completed after just 1 daily tick — leadTime=%d days cannot have elapsed", leadTime)
+	}
+}
+
+// TestBUG268_Determinism proves the daily-phase build hook is still
+// deterministic run-over-run (AC-2/GR#21's concern, re-verified because
+// this bug moved a hook's phase registration): two same-seeded engines
+// driven through the identical Buy/Zone/Build/AdvanceTicks sequence must
+// produce byte-identical population hashes and money state, and the
+// dwelling must complete on the exact same daily tick in both runs.
+func TestBUG268_Determinism(t *testing.T) {
+	run := func() (uint64, [32]byte, int64, int64) {
+		e, comp, tile, local, leadTime := wireBuildTestEngine(t, 31, protocol.CellRef{X: 4, Y: 4})
+		completedAtTick := int64(-1)
+		for i := int64(1); i <= leadTime+5; i++ {
+			if err := e.AdvanceTicks(errs.NewCorrelationID(), 1); err != nil {
+				t.Fatalf("AdvanceTicks(1) at day %d: %v", i, err)
+			}
+			if _, ok := comp.state.buildAPI.Structure(tile, local); ok {
+				completedAtTick = i
+				break
+			}
+		}
+		if completedAtTick < 0 {
+			t.Fatalf("dwelling never completed within %d daily ticks", leadTime+5)
+		}
+		return e.TicksCompleted(), comp.PopulationHash(), comp.MoneyFlows(), completedAtTick
+	}
+
+	ticks1, hash1, flows1, day1 := run()
+	ticks2, hash2, flows2, day2 := run()
+
+	if ticks1 != ticks2 {
+		t.Fatalf("TicksCompleted differs across same-seed runs: %d vs %d", ticks1, ticks2)
+	}
+	if hash1 != hash2 {
+		t.Fatalf("population hash differs across same-seed runs:\n%x\n%x", hash1, hash2)
+	}
+	if flows1 != flows2 {
+		t.Fatalf("money flows differ across same-seed runs: %d vs %d", flows1, flows2)
+	}
+	if day1 != day2 {
+		t.Fatalf("dwelling completed on different daily ticks across same-seed runs: %d vs %d", day1, day2)
 	}
 }
 
