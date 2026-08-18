@@ -2445,6 +2445,10 @@
             "outboundGuid": "47f5426b-85c0-4bce-a70e-621762f9f8f3"
           },
           {
+            "key": "engine.shopping",
+            "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
+          },
+          {
             "key": "engine.social",
             "outboundGuid": "a5ae75cf-b566-4ae4-a521-112d48426ef3"
           },
@@ -6165,6 +6169,11 @@
             "key": "engine.wellbeing",
             "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
             "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
+          },
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
           }
         ]
       },
