@@ -2,8 +2,12 @@
 
 When a coder session (or Aaron) types `/dev-help`, print this guidance, adapted to the caller's assigned lane if known. Full authority: `docs/planning/parallel-coder-brief.md` (read it in full once per session; this skill is the quick reference).
 
+## Worktrees (2026-08-18): work in YOUR OWN directory
+- **Ben → `E:\git\metropolis-ben`** (branch `lane/ben`) · **Bill → `E:\git\metropolis-bill`** (branch `lane/bill`) · Bev → main checkout.
+- `cd` there at session start; verify `git branch --show-current` = your lane. PR per module from `lane/<name>` → main; keep fresh via `git fetch origin main && git rebase origin/main` (your branch only). The main checkout `E:\git\Metropolis` is now a NO-GO for coders.
+
 ## The one rule that keeps everyone safe
-**You share ONE git checkout with other live sessions.** Stage only your exact file paths; never run a git command that reverts the tree. Concretely:
+**Treat the repo as shared even in your worktree** (worktrees share the same object store). Stage only your exact file paths; never run a git command that reverts the tree. Concretely:
 - BANNED always: `git checkout -- <path>` / `checkout .` / `checkout -f`, `git reset --hard|--keep`, `git restore` (non-`--staged`), `git clean -f/-d/-x`, `git stash`, `git add -A` / `add .` / `add -u` / `commit -am`.
 - To undo your own change: `cp file file.bak` first, restore from the copy — never from git.
 - Files you didn't create that show modified/untracked in `git status` are **another session's live work — frozen, invisible, not yours to fix or clean**.
