@@ -90,3 +90,73 @@ code.json, memory, git, and the working tree.
   A-list scorecard §1, red-flag delta R1-R8 §2, 6 recommendations §3), 08-17 baseline
   retained as appendix. NOTE sitrep.md + this file are UNTRACKED — include in next
   docs commit (Tester-tier, GR#23). Session total subagent cost ~350k Sonnet tokens.
+
+## Commit sweep (08-18, Bev has Aaron's commit authority this session)
+
+- COMMITTED+PUSHED: e23cf5f (docs: overnight acceptance wave + checkpoint #13 + FEAT-084
+  prep, [BUG-246] docs-only tier) and fe756e8 (docs: 08-18 sitrep, [BUG-265]). Branch synced,
+  noreply verified, refs recorded.
+- VERDICT STATES (latest per item, checked before committing code):
+  - MOD-077 ACCEPT 23:25 16-Aug → data/accelerator.json (today's balance edit) COMMITTABLE.
+  - BUG-253 NO verdict row → claude-sync.js rebuild BLOCKED until a destructive round (it's
+    in the commit/push path = full tier). Do NOT commit sync.js yet.
+  - BUG-246 REJECT 22:51, FEAT-107/149/150 REJECT 22:51 → the audit-tooling +
+    those feature Go units are REJECTED, uncommittable. (The BUG-246 DOCS commit above is
+    fine — docs-only exempt; only the codejson-audit.js CODE is blocked.)
+  - → Confirms the frozen Go/tooling tree is largely reject/unverdicted. Awaiting the
+    commit-plan scout (a4c7619) for the per-file map before touching any .go / code.json.
+- 10:3x — Scout COMPLETE. Frozen tree compiles/vets/gofmt-clean end-to-end; blockers are
+  verdict-provenance only, not code quality. COMMITTED+PUSHED this batch (all ACCEPT-latest):
+    cd13d3f fix: accelerator copyguard + balance [MOD-077]
+    c6a5738 fix: copyguard rollout across 15 services modules [engine.crime] (each own ACCEPT)
+    4534938 fix: households remove dead stockOf (lint) [MOD-028]
+  Debris deleted (5 tools/plan/_tmp_* + _baseline_audit.json). Tree now 25 dirty (was 121),
+  all HELD items. Guard gotcha: destructive-guard is fail-closed and CANNOT read -F/heredoc
+  commit messages — must use -m with inline [mkey]; and it blocks the whole compound `add &&
+  commit` so re-run add+commit together with `;` not `&&`.
+- HELD (need fresh verdict or rework, NOT committed):
+    * compose/core spine (feat.compositionroot/FEAT-083) — DESTRUCTIVE ROUND DISPATCHED
+      (a2ed419): FEAT-082 ACCEPT is stale, real consumption/build/attract wiring is new =
+      FEAT-083 unverdicted. Highest-value unit. → VERDICT: REJECT (recorded on FEAT-083).
+      Spine FOUNDATIONS held under hard attack (determinism byte-identical dual 24mo run,
+      panic-safety, phase-order, copyguard, 240mo long-run) — but 2 real bugs the stale
+      FEAT-082 ACCEPT would have hidden: BUG-266 (P1, demolish discards compensation =
+      money leak, compose.go:899) + BUG-267 (P2, MET-E404 re-wrap leaves {tile}/{cause}
+      literal, compose.go:861). Fix junior dispatched (a1241d0); re-attack before commit +
+      before FEAT-083 close. Non-scored follow-ups: finance stub makes insolvency
+      unreachable in baseline one; build.Tick monthly cadence vs 1-day tick means a 45-day
+      lead time = ~45 sim MONTHS to finish a dwelling (balance/cadence note for FEAT-083).
+    * claude-sync.js/startup.js (FEAT-107 REJECT — SEC-002 spec-drift unaddressed; needs
+      rework not just re-attack)
+    * code.json + master-plan-v2.1.json (BUG-058 graph, no verdict ever for plan.pipeline)
+    * harness/synth *.go + ci.yml (MOD-016 no verdict; these are the BUG-254 fix material —
+      belong to the next phase)
+    * codejson-audit.js/spec-lint.js (BUG-246 REJECT), bow-server.js/bow-ui-template (FEAT-149
+      REJECT), .gitignore (touches 3 rejected streams)
+  Test-only files (baseline_test.go/perf_test.go/claude-bow.test.js/*.test.js) are Tester-tier
+  exempt but held with their code for tree consistency.
+- 11:xx — COMPOSE SPINE LANDED. Fix junior (a1241d0) fixed BUG-266+267 clean (build/vet/-race
+  green, no tests weakened; added MET-G804 registry code + nil-safe Deps.Logistics). Re-attack
+  round 2 (a071f0f) ACCEPT — specifically disproved the SatSub/SatAdd money-creation worry
+  (num doesn't floor at zero; exact conservation proved with drained-treasury test, invariant
+  no false fire); determinism byte-identical, double/unowned-demolish + registry-collision +
+  nil/shared-Logistics all clean. Recorded FEAT-083 ACCEPT (r2). Committed 4002140
+  "feat: wire composition-root spine [FEAT-083]" (7 files), pushed, build clean, BUG-266/267
+  DONE+ref'd. Tree now 20 dirty = all held items.
+- FEAT-083 stays OPEN per Aaron ruling #5 (closes after green CI + watchable capstone run),
+  but its spine CODE is now committed with a fresh ACCEPT — the biggest single loss-surface
+  is cleared.
+
+## Sweep result (end of Bev session leg)
+- COMMITTED+PUSHED (6 commits this session): e23cf5f docs wave, fe756e8 sitrep, cd13d3f
+  accelerator, c6a5738 copyguard×15, 4534938 households lint, 4002140 compose spine.
+- REMAINING 20 DIRTY = HELD, each needs its own cycle (NOT loss — documented):
+  * BUG-254 phase (Aaron seq next): .github/workflows/ci.yml + internal/harness/synth/*.go
+    (MOD-016 no verdict) + claude-bow.test.js. The CI-red fix material.
+  * claude-sync.js/startup.js/sync.test.js — FEAT-107 REJECT, SEC-002 spec-drift unaddressed
+    = needs REWORK (write docs/planning/acceptance/tool.sync.md) then re-attack, not just a round.
+  * code.json + master-plan-v2.1.json — BUG-058 graph, needs a first verdict on plan.pipeline.
+  * codejson-audit.js/spec-lint.js (+tests) — BUG-246 REJECT (rework). bow-server.js/
+    bow-ui-template.html — FEAT-149 REJECT. .gitignore — touches 3 rejected streams.
+- NEXT (Aaron's sequence): BUG-254 fix lanes → re-run PR #8 CI → rebase-merge on green
+  (Bev authorised) → FEAT-084 fold → FEAT-083 capstone run + close.
