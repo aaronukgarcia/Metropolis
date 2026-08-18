@@ -34,6 +34,9 @@ git commit -m "feat: ... [engine.<name>]" → node claude-bow.js ref <CODE> <has
 ```
 Verify before commit: `gofmt -l`, `go build ./internal/engine/<name>/...`, `go vet`, `go test -race -count=2 ./internal/engine/<name>/...`. Never `go build ./...` (others' in-flight work may not compile — expected, not yours).
 
+## Status reports — write a file, don't make Aaron relay
+When asked for status (or after any significant stint), write/overwrite `E:\git\metropolis-status\<your-name>.status.md` (e.g. `ben.status.md`) with the 9 standard sections (identity/role, completed work with hashes+verdicts, in-progress, next, blockers, environment incl. `git worktree list`/branch/status output, policies, memory systems, anything else). Verbose, facts-as-they-are, overwrite whole file each time. Bev polls the directory — no relay needed. (The directory is outside every checkout on purpose: writing there can never collide with a working tree. See its README.)
+
 ## Coordination cribs
 - Start: `node claude-sync.js checkin` → `node claude-sync.js claim internal/engine/<name>` per module → poll `node claude-sync.js read` every few actions.
 - Before starting an item: `git log -10` + `node claude-bow.js show <CODE>` (has anyone touched it?).
