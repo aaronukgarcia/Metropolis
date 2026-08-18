@@ -4364,6 +4364,36 @@
       "module": "engine.destination",
       "message": "an operation that needs a registered outbound dependency (tourism for regional draw, mining for reclamation/blight, parking for demand) was issued before that seam was wired",
       "remedy": "Fail closed, never a silent zero (GR#17)."
+    },
+    "MET-G4101": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "citizen lacks required qualification for role",
+      "remedy": "Ensure the citizen has completed the educational stage matching the role requirements (university for nurses/teachers, trades/technical-college for repair staff) before assignment."
+    },
+    "MET-G4102": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "target object has no staffing demand",
+      "remedy": "Verify that the target building demands real operators or repair staff of the specified kind before making an assignment."
+    },
+    "MET-G4103": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "finite contractor pool exhausted",
+      "remedy": "Hiring off-map contractors is finite and era-scaled. Manage your local labour pool and training programs to ensure local citizen supply."
+    },
+    "MET-G4104": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "invalid staffing input parameter: {value}",
+      "remedy": "Verify input parameters are non-negative and positive where required."
+    },
+    "MET-G4199": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "staffing method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *StaffingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
     }
   }
 }
