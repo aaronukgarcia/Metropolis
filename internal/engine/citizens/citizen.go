@@ -241,7 +241,10 @@ func validateStage(id uint64, v Stage, correlationID string) error {
 }
 
 func validateEmploymentState(id uint64, v EmploymentState, correlationID string) error {
-	return validateFieldRange(id, "employmentState", int64(v), 0, int64(EmploymentRetired), correlationID)
+	// Domain widened to include EmploymentOffMap (5) — FEAT-198, ICD
+	// docs/planning/icd/engine.citizens-offmap.md §8: still MET-G007 via
+	// the same generic fieldOutOfRange path, only the upper bound moved.
+	return validateFieldRange(id, "employmentState", int64(v), 0, int64(EmploymentOffMap), correlationID)
 }
 
 func validateSector(id uint64, v Sector, correlationID string) error {
