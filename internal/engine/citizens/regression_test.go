@@ -468,3 +468,89 @@ func TestSatisfactionDriftPromotedNoOverflow(t *testing.T) {
 		t.Fatalf("housing satisfaction after +200 drift = %d, want 100 (clamped, no int8 wrap)", s.satHousing[0])
 	}
 }
+
+// --- FEAT-169 destructive-review REJECT: duplicate citizen id rejection ---
+//
+// An independent destructive round found that engine.attract's admitted-
+// migrant ids and this package's own fertility-born child ids partitioned
+// the SAME high-bit id range (both `1<<62`) by convention, not by a shared
+// allocator — with FEAT-169 wiring both live into one composition, a
+// duplicate citizen id was reachable within months of simulated play, and
+// LifeEventBirth appended it unconditionally, silently ALIASING an
+// existing citizen (invisible to TotalPopulation's row-count-based
+// conservation view: the row count stays right, only per-id lookups start
+// returning the wrong citizen). fertilityChildIDBase moved to `1<<63`
+// (fixing the range collision itself — see fertility.go/errors.go), and
+// these two tests are the DEFENSE-IN-DEPTH regression coverage for the
+// remaining case: a LifeEventBirth whose id already exists must be
+// rejected outright, regardless of how it got there.
+
+// TestBirthRejectsDuplicateColdID: a second LifeEventBirth at an id already
+// present in the cold store must be rejected with ErrDuplicateCitizenID,
+// not silently appended as a second row under the same id.
+func TestBirthRejectsDuplicateColdID(t *testing.T) {
+	api, err := NewCitizensAPI(1, "corr")
+	if err != nil {
+		t.Fatalf("NewCitizensAPI: %v", err)
+	}
+	c := testCitizen()
+	c.ID = 42
+	c.Fidelity = FidelityCold
+	if err := api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventBirth, Citizen: c}); err != nil {
+		t.Fatalf("first birth: %v", err)
+	}
+	before := api.TotalPopulation("corr")
+
+	// A structurally different record (different personality) at the SAME
+	// id — proving this is an id check, not a duplicate-content check.
+	dup := testCitizen()
+	dup.ID = 42
+	dup.Fidelity = FidelityCold
+	dup.Personality[0] = 99
+	err = api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventBirth, Citizen: dup})
+	if err == nil {
+		t.Fatal("expected a duplicate birth at an existing cold id to be rejected, got nil")
+	}
+	assertRegistryCode(t, err, ErrDuplicateCitizenID)
+	if after := api.TotalPopulation("corr"); after != before {
+		t.Fatalf("duplicate birth persisted: population %d -> %d, want unchanged", before, after)
+	}
+	// The ORIGINAL record must be intact (not overwritten/aliased).
+	got, ok := api.CitizenAt(42, "corr")
+	if !ok {
+		t.Fatal("original citizen 42 vanished after the rejected duplicate birth")
+	}
+	if got.Personality[0] == 99 {
+		t.Fatal("original citizen 42 was overwritten by the rejected duplicate birth")
+	}
+}
+
+// TestBirthRejectsDuplicateHotID: same as above, but the existing citizen
+// is HOT (elevated), proving the duplicate check covers both tiers — a
+// cold-only check would miss a collision against a currently-elevated
+// citizen.
+func TestBirthRejectsDuplicateHotID(t *testing.T) {
+	api, err := NewCitizensAPI(2, "corr")
+	if err != nil {
+		t.Fatalf("NewCitizensAPI: %v", err)
+	}
+	c := testCitizen()
+	c.ID = 77
+	c.Fidelity = FidelityHot
+	if err := api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventBirth, Citizen: c}); err != nil {
+		t.Fatalf("first birth: %v", err)
+	}
+	before := api.TotalPopulation("corr")
+
+	dup := testCitizen()
+	dup.ID = 77
+	dup.Fidelity = FidelityCold
+	err = api.ApplyLifeEventCommand(LifeEventCommand{CorrelationID: "corr", Kind: LifeEventBirth, Citizen: dup})
+	if err == nil {
+		t.Fatal("expected a duplicate birth at an existing hot id to be rejected, got nil")
+	}
+	assertRegistryCode(t, err, ErrDuplicateCitizenID)
+	if after := api.TotalPopulation("corr"); after != before {
+		t.Fatalf("duplicate birth persisted: population %d -> %d, want unchanged", before, after)
+	}
+}

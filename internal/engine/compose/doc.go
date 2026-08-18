@@ -27,27 +27,30 @@
 // # Registration order (the composition contract)
 //
 // The baseline-one module set is registered in this fixed order, with
-// build and invariant both on the daily tick (invariant last, BUG-268):
+// citizens, build and invariant all on the daily tick (invariant last,
+// BUG-268/FEAT-169):
 //
 //	world -> citizens -> market -> consumption -> finance -> build -> attract
-//	                                                          build -> invariant  (PhaseDailyTick, every tick)
+//	         citizens ------------------------------------> build -> invariant  (PhaseDailyTick, every tick)
 //
 // This order is held in a fixed slice (registrationOrder), never a Go map,
 // so registration is deterministic run-over-run (GR#21). The order is what
-// determines intra-phase hook order where two modules share a phase:
-// market before consumption (both PhaseConsumptionShortfall), citizens
-// before attract (both PhasePopulation), and build before invariant (both
-// PhaseDailyTick) so the build queue advances before that day's
-// conservation check observes it.
+// determines intra-phase hook order where modules share a phase: market
+// before consumption (both PhaseConsumptionShortfall), and citizens before
+// build before invariant (all three PhaseDailyTick) so citizens'
+// births/deaths and the build queue both advance before that day's
+// conservation check observes them. attract is now alone on
+// PhasePopulation (see below).
 //
-// # Phase-kind mapping (the two flagged-ambiguous modules)
+// # Phase-kind mapping (the flagged-ambiguous modules)
 //
 // The fixed phase set is engine.core's contract; this package does not
 // add, remove, or reorder phases. The chosen mapping, following the BA's
 // proposed table in docs/planning/acceptance/feat.compositionroot.md:
 //
-//	build  -> PhaseDailyTick       (daily tick, alongside invariant; MOD-026 real hook — BUG-268)
-//	attract -> PhasePopulation     (after citizens; MOD-029 real hook)
+//	citizens -> PhaseDailyTick     (daily tick, before build/invariant; MOD-018 real cold pass — FEAT-169)
+//	build    -> PhaseDailyTick     (daily tick, alongside citizens/invariant; MOD-026 real hook — BUG-268)
+//	attract  -> PhasePopulation    (monthly; MOD-029 real hook)
 //
 // build was originally mapped onto the monthly PhaseLandValueDecay slot
 // (a scheduling decision the spec does not pin, the same class
@@ -59,6 +62,57 @@
 // the only daily phase this package's fixed phase set offers — so the
 // queue advances once per sim-day, matching data/buildings.json's own
 // day-denominated documentation.
+//
+// citizens was originally mapped onto the monthly PhasePopulation slot via
+// spawnHook, a flat monthlyBirths=8/month fake with no connection to real
+// demographics (compose's only citizens integration before FEAT-169).
+// FEAT-169 (Aaron, "childbearing on day one") replaced it with
+// coldPassHook, which calls CitizensAPI.AdvanceDayTick — itself already a
+// once-per-day-tick call internally to citizens (its own amortised
+// 1/30-shards-per-day cold pass covering per-citizen mortality and the new
+// FEAT-160 fertility) — so it moved onto the daily PhaseDailyTick slot for
+// the same reason build did: a monthly phase call cadence would have been
+// 30x out of step with AdvanceDayTick's own daily contract. See
+// docs/planning/icd/engine.citizens-coldpass.md (the ICD this integration
+// was built against) for the full Update Class / Determinism / Shard Scope
+// reasoning, and compose.go's coldPassHook doc comment for the per-tick
+// (not month-boundary) peopleDelta fold — the ICD's §4 floated pulling
+// VitalEvents at the month boundary, but that would defer the
+// conservation credit past the tick the population actually changed on
+// (caught for real by the daily invariant check during FEAT-169's build).
+// See the "Citizen id namespace map" section below for the
+// ErrCitizenIDNamespaceSeam guard — the ICD's §12 open decision 2.
+//
+// # Citizen id namespace map (FEAT-169, corrected by destructive review)
+//
+// Three packages independently mint citizen ids from disjoint high-bit
+// ranges, by CONVENTION (not a shared allocator):
+//
+//	[1,                    attract.MigrantIDBase)      compose: seed population + any direct seeding (simState.nextCitizenID)
+//	[attract.MigrantIDBase, citizens.FertilityChildIDBase)  engine.attract: admitted-migrant ids (migration.go's migrantIDHighBit)
+//	[citizens.FertilityChildIDBase, ...)                engine.citizens: fertility-born child ids (fertility.go's fertilityChildIDBase)
+//
+// This convention FAILED once already: both attract's migrantIDHighBit and
+// citizens' original fertilityChildIDBase independently chose 1<<62, so
+// with FEAT-169 wiring both the citizens cold-pass tick and the attract
+// migration hook live in the same composition, a duplicate citizen id
+// (and a silently aliased citizen — TotalPopulation's row-count view
+// cannot detect it) was reachable within months of simulated play. Fixed
+// 2026-08-18 (destructive-review REJECT): citizens' base moved to 1<<63,
+// and the convention is now defended THREE ways: (1) compose's
+// spawnCitizens rejects any mint at or past attract.MigrantIDBase
+// (ErrCitizenIDNamespaceSeam), checked on every mint including the Wire-
+// time seed population; (2) Wire itself asserts
+// citizens.FertilityChildIDBase >= 2*attract.MigrantIDBase before
+// constructing anything (ErrIDNamespaceRangesOverlap) — the boundary
+// BETWEEN attract's and citizens' ranges, which (1) does not cover; (3)
+// engine.citizens independently rejects a LifeEventBirth whose id already
+// exists in its own cold or hot store (ErrDuplicateCitizenID), defense in
+// depth for the case the convention is violated by some future caller
+// neither (1) nor (2) can see. None of the three is a substitute for the
+// others: (1)/(2) are compose-side range checks that can never fire once
+// the constants are correct; (3) is the only one that would catch an
+// actual runtime collision.
 //
 // # STUB-FOR-BASELINE policy
 //

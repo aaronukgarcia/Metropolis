@@ -6,7 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
@@ -85,11 +87,13 @@ func TestWire_RegistersAllHooksInDocumentedOrder(t *testing.T) {
 
 	// The monthly phases must appear in the fixed engine.core order,
 	// proving the hooks landed on the documented phases (world->production,
-	// market/consumption->consumption-shortfall, citizens/attract->population,
+	// market/consumption->consumption-shortfall, attract->population,
 	// finance->finance). PhaseLandValueDecay still fires here — the phase
-	// observer runs once per phase regardless of hook count — but build no
-	// longer has a hook registered against it since BUG-268 moved build to
-	// PhaseDailyTick (asserted separately by TestBUG268_BuildAdvancesDaily).
+	// observer runs once per phase regardless of hook count — but neither
+	// build nor citizens has a hook registered against it any more: BUG-268
+	// moved build to PhaseDailyTick (asserted separately by
+	// TestBUG268_BuildAdvancesDaily) and FEAT-169 moved citizens there too
+	// (asserted separately below).
 	var monthly []core.PhaseKind
 	for _, p := range phases {
 		if p != core.PhaseDailyTick {
@@ -327,7 +331,7 @@ func TestStubHooks_ShardSafetyAndDeterminism(t *testing.T) {
 
 	hooks := []core.PhaseHook{
 		noopHook{name: "world", st: st},
-		&spawnHook{st: st, name: "citizens", count: monthlyBirths},
+		&coldPassHook{st: st},
 		noopHook{name: "market", st: st},
 		&consumptionHook{st: st},
 		&financeHook{st: st},
@@ -777,4 +781,384 @@ func TestGameplay_BuyRejectionDisplayHasNoLiteralPlaceholders(t *testing.T) {
 	if !strings.Contains(res.Error.Display, "already owned") {
 		t.Fatalf("rejected Buy Display = %q, want it to contain the underlying cause %q", res.Error.Display, "already owned")
 	}
+}
+
+// --- FEAT-169: citizens cold pass (real mortality + FEAT-160 fertility) wired into the live tick ---
+
+// advanceInChunks drives e for n total ticks, split into
+// core.MaxAdvanceTicksPerCall-sized chunks (AdvanceTicks itself rejects a
+// single call above that bound, AC-11) — a plain test-harness convenience,
+// not a new production code path.
+func advanceInChunks(t *testing.T, e *core.Engine, n int64) {
+	t.Helper()
+	for n > 0 {
+		chunk := n
+		if chunk > core.MaxAdvanceTicksPerCall {
+			chunk = core.MaxAdvanceTicksPerCall
+		}
+		if err := e.AdvanceTicks(errs.NewCorrelationID(), chunk); err != nil {
+			t.Fatalf("AdvanceTicks(%d): %v", chunk, err)
+		}
+		n -= chunk
+	}
+}
+
+// mkFertilityColdRecord builds a minimal valid ColdRecord for the compose
+// package's black-box seeding (SeedColdRecords is citizens' own bulk-load
+// command path, exported for exactly this — see registry.go). Every field
+// besides ID/BirthMonth is left at its zero value, which is a valid
+// ColdRecord per ValidateColdRecord (zero is within every enum/range
+// domain checked there).
+func mkFertilityColdRecord(id uint64, birthMonth int64) citizens.ColdRecord {
+	return citizens.ColdRecord{ID: id, BirthMonth: birthMonth}
+}
+
+// feat169CoupleSeed/feat169CoupleBirthMonth/feat169CoupleRunMonths are a
+// fixed, VERIFIED-deterministic (seed, household, month) triple (mirrors
+// citizens/fertility_test.go's TestFertilityBirthOccursForEligibleCouple's
+// own "verified" pattern): household 1 is the FIRST household
+// LifeEventPartner ever forms on a fresh CitizensAPI (nextHouseholdID
+// starts at 1), and month 334 is where
+// citizens.CoupleBirth(feat169CoupleSeed, 1, month,
+// citizens.FertilityHazard(month, month, cfg)) draws true for
+// data/fertility.json's CURRENT placeholder rates — a couple both born at
+// sim month 0 has age-in-months == the current sim month, so
+// FertilityHazard's two age arguments are just `month` here. This is
+// deterministic, not flaky: it either always passes or always fails for
+// this data file's rates, exactly like the citizens-package test it
+// mirrors (found by direct search over citizens.FertilityHazard/CoupleBirth,
+// the same exported functions the production fertility pass itself calls —
+// not a hand-picked guess).
+const (
+	feat169CoupleSeed       uint64 = 1
+	feat169CoupleBirthMonth int64  = 334
+	feat169CoupleRunMonths  int64  = feat169CoupleBirthMonth + 1
+)
+
+// buildFertilityCoupleAPI constructs a fresh CitizensAPI seeded with one
+// partnered couple (ids 90000/90001, both born at sim month 0 so their age
+// in months tracks the sim month 1:1) at feat169CoupleSeed — the FIRST
+// household LifeEventPartner ever forms, so it lands on household id 1,
+// matching the verified (seed, household, month) triple above.
+func buildFertilityCoupleAPI(t *testing.T) *citizens.CitizensAPI {
+	t.Helper()
+	cid := errs.NewCorrelationID()
+	api, err := citizens.NewCitizensAPI(feat169CoupleSeed, cid)
+	if err != nil {
+		t.Fatalf("NewCitizensAPI: %v", err)
+	}
+	a := mkFertilityColdRecord(90000, 0)
+	b := mkFertilityColdRecord(90001, 0)
+	if err := api.SeedColdRecords([]citizens.ColdRecord{a, b}, cid); err != nil {
+		t.Fatalf("SeedColdRecords: %v", err)
+	}
+	if err := api.ApplyLifeEventCommand(citizens.LifeEventCommand{
+		CorrelationID: cid, Kind: citizens.LifeEventPartner, CitizenID: 90000, PartnerID: 90001,
+	}); err != nil {
+		t.Fatalf("ApplyLifeEventCommand(LifeEventPartner): %v", err)
+	}
+	if hh, ok := api.HouseholdOf(90000, cid); !ok || hh.ID != 1 {
+		t.Fatalf("couple household = %+v (ok=%v), want household id 1 (the verified triple assumes this)", hh, ok)
+	}
+	return api
+}
+
+// TestFEAT169_LiveBirths_RealFertility drives the REAL engine through the
+// couple's guaranteed-birth month (the verified triple above) and asserts
+// a birth actually happened via CitizensAPI.VitalEvents — real fertility,
+// not the old spawnHook fake (which births exactly 8/month, every month,
+// regardless of demographics; see TestFEAT169_NoFakeFlatBirths for the
+// contrasting zero-eligible-couples case).
+func TestFEAT169_LiveBirths_RealFertility(t *testing.T) {
+	api := buildFertilityCoupleAPI(t)
+	var violations atomic.Int64
+	e := core.NewEngine(core.WithWorldSeed(feat169CoupleSeed), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{
+		Citizens: api,
+		InvariantOpts: []invariant.HookOption{
+			invariant.WithLogSink(func(*errs.E) { violations.Add(1) }),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	advanceInChunks(t, e, feat169CoupleRunMonths*int64(core.DailyTicksPerMonth))
+
+	if got := comp.VitalBirths(); got <= 0 {
+		t.Fatalf("VitalBirths() = %d after %d months, want > 0 (the couple's verified guaranteed-birth month %d has completed)", got, feat169CoupleRunMonths, feat169CoupleBirthMonth)
+	}
+	if got := violations.Load(); got != 0 {
+		t.Fatalf("conservation suite reported %d violations while a real birth landed, want 0", got)
+	}
+	// The child must be a real, addressable citizen — not just a counter
+	// bump — proving VitalEvents reflects an actual cold-store mutation.
+	childID := citizens.FertilityChildIDBase
+	if _, ok := comp.state.citizens.CitizenAt(childID, comp.state.cid); !ok {
+		t.Fatalf("expected fertility child %d to exist in the cold store", childID)
+	}
+}
+
+// TestFEAT169_NoFakeFlatBirths is the contrasting case: the DEFAULT
+// baseline-one seed population (64 singles, no partners — see
+// simState.spawnCitizens) has zero fertility-eligible couples, so real
+// fertility must report exactly zero births over a run the old spawnHook
+// fake would have birthed 8*testMonths citizens over. This is the
+// behavioural proof the flat-8 fake is gone: births now vary with
+// demographics (0 here, >0 in TestFEAT169_LiveBirths_RealFertility above)
+// rather than being a hardcoded constant.
+func TestFEAT169_NoFakeFlatBirths(t *testing.T) {
+	e, comp := newTestEngine(t, 7)
+	advanceInChunks(t, e, testTicks)
+
+	if got := comp.VitalBirths(); got != 0 {
+		t.Fatalf("VitalBirths() = %d over %d months with zero partnered couples in the seed population, want exactly 0 (a real fertility model, not the old flat monthlyBirths=8/month fake)", got, testMonths)
+	}
+}
+
+// TestFEAT169_LiveDeaths_RealMortality seeds the citizens cold pass with an
+// already-ancient population (age pre-advanced to ~200 sim years, WELL
+// past the point Gompertz-Makeham's hazard clamps to 1.0 — see
+// mortality.go's MortalityHazard) BEFORE wiring it into compose: every
+// citizen the composition root then seeds (spawnCitizens always passes
+// BirthMonth=0) is therefore already at that clamped age the moment the
+// cold pass first runs, so death is not merely likely but GUARANTEED,
+// deterministically, within the very first sim month — no probabilistic
+// flake risk.
+func TestFEAT169_LiveDeaths_RealMortality(t *testing.T) {
+	cid := errs.NewCorrelationID()
+	api, err := citizens.NewCitizensAPI(3, cid)
+	if err != nil {
+		t.Fatalf("NewCitizensAPI: %v", err)
+	}
+	// Advance 2400 empty-store months (~200 sim years) so the hazard curve
+	// is already clamped to 1.0 (MortalityHazard's doc comment: "clamped
+	// to [0, 1]") before compose ever seeds a single citizen into it. The
+	// store is empty throughout this loop (no cold records yet), so it
+	// costs nothing beyond 2400*30 no-op day-ticks (~0.3s measured).
+	const preAgeMonths = 2400
+	for i := 0; i < preAgeMonths; i++ {
+		if err := api.AdvanceMonth(cid); err != nil {
+			t.Fatalf("pre-age AdvanceMonth: %v", err)
+		}
+	}
+
+	var violations atomic.Int64
+	e := core.NewEngine(core.WithWorldSeed(3), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{
+		Citizens: api,
+		InvariantOpts: []invariant.HookOption{
+			invariant.WithLogSink(func(*errs.E) { violations.Add(1) }),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	if before := comp.Population(); before != seedCitizenCount {
+		t.Fatalf("seed population = %d, want %d", before, seedCitizenCount)
+	}
+
+	// One month is enough: ColdPassSchedule guarantees every cold shard is
+	// processed exactly once per calendar month (AC-6/AC-7), so all
+	// seedCitizenCount ancient citizens are scheduled and die within it.
+	advanceInChunks(t, e, int64(core.DailyTicksPerMonth))
+
+	if got := comp.VitalDeaths(); got != int64(seedCitizenCount) {
+		t.Fatalf("VitalDeaths() = %d after 1 month with a guaranteed (hazard-clamped) death for every one of the %d ancient seed citizens, want exactly %d", got, seedCitizenCount, seedCitizenCount)
+	}
+	if got := violations.Load(); got != 0 {
+		t.Fatalf("conservation suite reported %d violations while %d real deaths landed, want 0", got, seedCitizenCount)
+	}
+}
+
+// TestFEAT169_DeterministicAcrossPoolSizes proves the live-wired cold pass
+// carries determinism through the composition (mirrors
+// TestHeadless_DeterministicAcrossRuns, but at pool sizes 1 and 4, and with
+// a real birth-bearing population rather than the default all-young seed
+// set): two runs at the same seed, one at pool size 1 and one at pool size
+// 4, must produce byte-identical PopulationHash and identical VitalEvents
+// totals.
+func TestFEAT169_DeterministicAcrossPoolSizes(t *testing.T) {
+	run := func(poolSize int) ([32]byte, int64, int64) {
+		api := buildFertilityCoupleAPI(t)
+		e := core.NewEngine(core.WithWorldSeed(feat169CoupleSeed), core.WithPoolSize(poolSize))
+		comp, err := Wire(e, &Deps{Citizens: api})
+		if err != nil {
+			t.Fatalf("Wire (pool %d): %v", poolSize, err)
+		}
+		advanceInChunks(t, e, feat169CoupleRunMonths*int64(core.DailyTicksPerMonth))
+		return comp.PopulationHash(), comp.VitalBirths(), comp.VitalDeaths()
+	}
+
+	hash1, births1, deaths1 := run(1)
+	hash4, births4, deaths4 := run(4)
+
+	if hash1 != hash4 {
+		t.Fatalf("population hash differs across pool sizes 1/4:\n%x\n%x", hash1, hash4)
+	}
+	if births1 != births4 {
+		t.Fatalf("VitalBirths differs across pool sizes 1/4: %d vs %d", births1, births4)
+	}
+	if deaths1 != deaths4 {
+		t.Fatalf("VitalDeaths differs across pool sizes 1/4: %d vs %d", deaths1, deaths4)
+	}
+	if births1 <= 0 {
+		t.Fatalf("VitalBirths = %d, want > 0 (the determinism check needs a real birth in play)", births1)
+	}
+}
+
+// TestFEAT169_IDNamespaceSeamGuard proves the ID-SEAM guard (ICD §12 open
+// decision 2, amended by destructive review) actually fires rather than
+// being an inert comment: it drives simState.nextCitizenID to sit exactly
+// at attract.MigrantIDBase (compose's OWN range boundary — NOT
+// citizens.FertilityChildIDBase; destructive review found the ORIGINAL
+// guard here was bounded against the wrong constant, which would have let
+// compose's counter silently drift into attract's migrant range first) and
+// asserts the very next mint is rejected with ErrCitizenIDNamespaceSeam
+// rather than silently minting a colliding id.
+func TestFEAT169_IDNamespaceSeamGuard(t *testing.T) {
+	_, comp := newTestEngine(t, 5)
+	comp.state.nextCitizenID = attract.MigrantIDBase
+
+	err := comp.state.spawnCitizens(0, 1)
+	if err == nil {
+		t.Fatal("spawnCitizens at the migrant id namespace boundary returned nil, want ErrCitizenIDNamespaceSeam")
+	}
+	var e2 *errs.E
+	if !errors.As(err, &e2) {
+		t.Fatalf("spawnCitizens error %v is not a *errs.E", err)
+	}
+	if e2.Code != ErrCitizenIDNamespaceSeam {
+		t.Fatalf("spawnCitizens error code = %q, want %q (ErrCitizenIDNamespaceSeam)", e2.Code, ErrCitizenIDNamespaceSeam)
+	}
+	// The guard must fire BEFORE the counter is bumped or the citizen is
+	// minted — no partial mutation on a rejected mint.
+	if comp.state.nextCitizenID != attract.MigrantIDBase {
+		t.Fatalf("nextCitizenID = %d after a rejected mint, want unchanged at %d", comp.state.nextCitizenID, attract.MigrantIDBase)
+	}
+}
+
+// TestFEAT169_WireRejectsOverlappingIDRanges proves the Wire-time
+// cross-check (ErrIDNamespaceRangesOverlap) actually REJECTS the historical
+// bug's exact values, and ACCEPTS the shipped ones — the destructive-review
+// finding's SECOND defense (distinct from the per-mint guard, which only
+// defends compose's own range). Exercises idNamespaceRangesDisjoint
+// directly (the pure function Wire's check is built from) since the real
+// constants cannot be overridden to drive Wire itself down the rejecting
+// branch.
+func TestFEAT169_WireRejectsOverlappingIDRanges(t *testing.T) {
+	const buggyFertilityBase = uint64(1) << 62 // FEAT-169's ORIGINAL (pre-fix) value
+	const buggyMigrantBase = uint64(1) << 62   // engine.attract's real, unchanged value — the actual collision
+	if idNamespaceRangesDisjoint(buggyFertilityBase, buggyMigrantBase) {
+		t.Fatalf("idNamespaceRangesDisjoint(%d, %d) = true, want false (this is the historical bug's exact overlapping values)", buggyFertilityBase, buggyMigrantBase)
+	}
+
+	// The REAL, shipped constants must satisfy the same check (the
+	// regression guarantee: this is what actually ships, and it is what
+	// Wire actually calls this function with).
+	if !idNamespaceRangesDisjoint(citizens.FertilityChildIDBase, attract.MigrantIDBase) {
+		t.Fatalf("idNamespaceRangesDisjoint(citizens.FertilityChildIDBase=%d, attract.MigrantIDBase=%d) = false, want true (the shipped constants must be disjoint)", citizens.FertilityChildIDBase, attract.MigrantIDBase)
+	}
+
+	// End-to-end: Wire itself must succeed against the real, shipped
+	// constants (proving the check is actually wired in, not just present
+	// as a standalone function nothing calls).
+	if _, err := Wire(core.NewEngine(core.WithPoolSize(1)), nil); err != nil {
+		t.Fatalf("Wire with the real (disjoint) id-range constants: %v", err)
+	}
+}
+
+// TestFEAT169_CrossModuleIDCollisionRegression is the destructive-review
+// finding's regression test proper: it drives the REAL wired engine with
+// BOTH real attractiveness-driven migration admits (engine.attract) AND a
+// real fertility birth (engine.citizens, FEAT-160) live in the same run —
+// exactly the combination that collided under the pre-fix 1<<62/1<<62
+// bases — and proves every id involved is unique and correctly ranged.
+func TestFEAT169_CrossModuleIDCollisionRegression(t *testing.T) {
+	// Structural precondition: the shipped constants must actually be
+	// disjoint (re-verifies Wire's own Wire-time assertion directly against
+	// the exported constants, not merely trusting Wire didn't error below).
+	if citizens.FertilityChildIDBase < 2*attract.MigrantIDBase {
+		t.Fatalf("citizens.FertilityChildIDBase (%d) < 2*attract.MigrantIDBase (%d): the three id ranges are not disjoint", citizens.FertilityChildIDBase, attract.MigrantIDBase)
+	}
+
+	api := buildFertilityCoupleAPI(t)
+	var violations atomic.Int64
+	e := core.NewEngine(core.WithWorldSeed(feat169CoupleSeed), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{
+		Citizens: api,
+		InvariantOpts: []invariant.HookOption{
+			invariant.WithLogSink(func(*errs.E) { violations.Add(1) }),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	// Drive long enough for BOTH: the couple's verified guaranteed birth
+	// (sim month 334, feat169CoupleBirthMonth) AND real attractiveness-
+	// driven migration admits — the baseline-one attract config keeps
+	// A > A_world from month 0 (see TestHeadless_MigrationIsAttractivenessDriven),
+	// so migration admits happen essentially every month of this run.
+	advanceInChunks(t, e, feat169CoupleRunMonths*int64(core.DailyTicksPerMonth))
+
+	if got := comp.NetMigration(); got <= 0 {
+		t.Fatalf("NetMigration() = %d, want > 0 (this regression needs REAL migrant ids in play, not just fertility)", got)
+	}
+	if got := comp.VitalBirths(); got <= 0 {
+		t.Fatalf("VitalBirths() = %d, want > 0 (this regression needs a REAL fertility child id in play)", got)
+	}
+	if got := violations.Load(); got != 0 {
+		t.Fatalf("conservation suite reported %d violations while both migration admits and a fertility birth were live, want 0", got)
+	}
+
+	// The fertility child must exist, addressable, and distinct.
+	childID := citizens.FertilityChildIDBase
+	child, ok := comp.state.citizens.CitizenAt(childID, comp.state.cid)
+	if !ok {
+		t.Fatalf("expected fertility child %d to exist", childID)
+	}
+
+	// Walk attract's sequential migrant-id counter space directly
+	// (attract.MigrantIDBase+1, +2, ...) and collect every id that
+	// resolves to a REAL citizen — proving actual migrant ids exist in
+	// this run (not just that NetMigration is positive) and that none of
+	// them collides with the fertility child id or each other.
+	seen := map[uint64]bool{childID: true}
+	migrantsFound := 0
+	const probeBound = 20000 // must exceed the true migrant-id count with headroom — checked below, not merely assumed
+	for i := uint64(1); i <= probeBound; i++ {
+		id := attract.MigrantIDBase + i
+		if _, ok := comp.state.citizens.CitizenAt(id, comp.state.cid); !ok {
+			continue
+		}
+		migrantsFound++
+		if seen[id] {
+			t.Fatalf("migrant id %d collides with an id already seen (the fertility child id or another migrant)", id)
+		}
+		seen[id] = true
+		// Every migrant id found must fall strictly inside attract's own
+		// range, never reaching into citizens' fertility range.
+		if id >= citizens.FertilityChildIDBase {
+			t.Fatalf("migrant id %d falls at or past citizens.FertilityChildIDBase (%d) — range collision", id, citizens.FertilityChildIDBase)
+		}
+	}
+	if migrantsFound == 0 {
+		t.Fatalf("no migrant citizen found in attract.MigrantIDBase+[1,%d] after %d months with NetMigration=%d — cannot prove disjointness against a REAL migrant id", probeBound, feat169CoupleRunMonths, comp.NetMigration())
+	}
+	// Fail loudly rather than silently under-count: hitting the probe
+	// ceiling means the true migrant-id count may exceed it, which would
+	// make "zero collisions found" an unproven claim, not a verified one
+	// (a gate that cannot evaluate the full range must not report success).
+	if migrantsFound >= probeBound-10 {
+		t.Fatalf("migrantsFound=%d is within 10 of probeBound=%d — the probe range is too small to trust a full scan; raise probeBound", migrantsFound, probeBound)
+	}
+
+	// The fertility child id itself must never fall inside attract's
+	// migrant range.
+	if childID >= attract.MigrantIDBase && childID < citizens.FertilityChildIDBase {
+		t.Fatalf("fertility child id %d falls inside attract's migrant range [%d, %d) — collision", childID, attract.MigrantIDBase, citizens.FertilityChildIDBase)
+	}
+	_ = child
+	t.Logf("cross-module regression: %d unique migrant ids + 1 fertility child id, zero collisions, zero conservation violations", migrantsFound)
 }
