@@ -160,3 +160,39 @@ code.json, memory, git, and the working tree.
     bow-ui-template.html — FEAT-149 REJECT. .gitignore — touches 3 rejected streams.
 - NEXT (Aaron's sequence): BUG-254 fix lanes → re-run PR #8 CI → rebase-merge on green
   (Bev authorised) → FEAT-084 fold → FEAT-083 capstone run + close.
+
+## BUG-254 CLOSED-OUT + speed design (08-18 cont.)
+- BUG-254 four causes all fixed: (1) lint dead stockOf = 4534938; (2) node-test defence AC-9
+  membership tripwire + (3+4) perf-gate floor 2ms->50ms/median-of-5/-months 96 = fd95d8a.
+  The overnight in-flight fixes were COMPLETE+correct, just uncommitted — reviewed not rewritten.
+  Perf-gate destructive round ACCEPT on MOD-016 (three-outcome integrity traced end-to-end, no
+  BUG-071 fold, RegressionThreshold untouched, 2.5-4x headroom at real 1M/96mo). AC-9 doc side
+  was already committed e23cf5f. node 193/193, go build/vet/gofmt/-race green.
+- PR #8 CI: the 4 previously-red jobs (node-test/lint/perf-smoke/perf-1m-probe) + determinism
+  all PASS on fd95d8a; pushed doc commit c58b499, fresh run in flight; rebase-merge on green
+  (Aaron authorised) then verify noreply on origin/main.
+- SPEED DESIGN (Aaron ruled, docs/planning/proposals/game-speed-and-dev-fasttime.md):
+  * BUG-268 (P1) build cadence — RULED: move build hook to DAILY phase group (day-lead-times
+    behave as written). Global sim-math change.
+  * FEAT-157 (P2) production game-speed pacing driver: build the missing wall-clock tick-pump,
+    ship pause/1x/2x/4x/8x with 8x PROMOTED out of debug gate as 'fastest'. Pure pacing.
+  * FEAT-158 (P3) dev watch-speed ladder >8x (16x/32x/uncapped, devmode-gated). Pure pacing.
+  * FEAT-159 (P2) debug-only per-class fast-build: debug prereq, per building-type lead-time
+    scale (dwellings 1/10th, CERN/Heathrow weeks-not-years), individually enableable; changes
+    numbers so seed-regime-tracked + dev-tainted flag + CI asserts OFF.
+  Determinism pivot: pacing = safe; sim-math (cadence/duration) = global constant or
+  debug-gated+taint-flagged. Loop runs flat-out today (no pacing exists yet).
+
+## BUG-268 + FEAT-084 fold (08-18 cont., Aaron: fix BUG-268 for watchable baseline + launch fold devs)
+- Git topology: PR #8 merged to main, so opened fresh branch feat/bug268-build-cadence off
+  origin/main (fa1a01c), carrying the 13 held dirty files (snapshotted to scratch first, GR#24).
+- BUG-268 impl: junior dispatched to move build hook monthly->daily phase + tests. In flight.
+- FEAT-084 fold: launched 4 Sonnet fold devs by DISJOINT acceptance file (wellbeing / citizens+
+  staffing+comms / freight / CC-BAL Part A remainder). KEY FINDING: Part A/B "ready" content was
+  ALREADY EXECUTED overnight by Bob's batch-1 (wellbeing 100% done 20:53; citizens 100% incl ST
+  items -> FEAT-152/153/154). Devs verify-first, changed nothing. So Part A/B is DONE; the real
+  remaining fold work is the BULK: 885 open ASM (was ~1031 at plan; 319 closed since 08-17,
+  only 38 have comments) = the CC(~570)/SF(~260) module-cluster sweep needing asm-disposition.md
+  re-pulled to the live count. Next fold wave = bulk by module cluster, NOT more Part A/B.
+- Edge-blocked ASMs still open (need master-plan edge reg by lead, GR#25): ASM-999, 1021 (wellbeing);
+  ASM-908, 1174 (freight); ASM-1004 (minetypes). FIX-flag: ASM-1295 (unbounded maintenance config).
