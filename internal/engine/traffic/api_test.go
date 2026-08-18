@@ -44,14 +44,14 @@ func TestTraffic_AC11_CommuteAccounting(t *testing.T) {
 		t.Errorf("expected default hours 5.0, got %f", h)
 	}
 
-	// Verify un-registered citizen ID 0 returns error code MET-G4601 (AC-9)
+	// Verify un-registered citizen ID 0 returns error code MET-G4501 (AC-9)
 	_, err = api.CommuteHours(0, "test-error")
 	if err == nil {
 		t.Error("expected error for citizen ID 0")
 	}
 	var re *errs.E
 	if !errors.As(err, &re) || re.Code != ErrUnknownCitizen {
-		t.Errorf("expected unknown citizen error MET-G4601, got: %v", err)
+		t.Errorf("expected unknown citizen error MET-G4501, got: %v", err)
 	}
 }
 
@@ -67,14 +67,14 @@ func TestTraffic_AC11_LeisureAccessMinutes(t *testing.T) {
 		t.Errorf("expected default minutes 15.0, got %f", m)
 	}
 
-	// Verify un-registered citizen ID 0 returns error code MET-G4601 (AC-9)
+	// Verify un-registered citizen ID 0 returns error code MET-G4501 (AC-9)
 	_, err = api.AccessMinutes(0, leisure.Category(1), "test-error")
 	if err == nil {
 		t.Error("expected error for citizen ID 0")
 	}
 	var re *errs.E
 	if !errors.As(err, &re) || re.Code != ErrUnknownCitizen {
-		t.Errorf("expected unknown citizen error MET-G4601, got: %v", err)
+		t.Errorf("expected unknown citizen error MET-G4501, got: %v", err)
 	}
 }
 
@@ -121,7 +121,7 @@ func TestTraffic_TripFiling(t *testing.T) {
 func TestTraffic_AC9_InvalidInputValidation(t *testing.T) {
 	api := New()
 
-	// Register negative count leisure trip should fail with MET-G4602
+	// Register negative count leisure trip should fail with MET-G4502
 	err := api.AddTripDemand(leisure.TripDemand{
 		District: 12,
 		Count:    -50,
@@ -131,7 +131,7 @@ func TestTraffic_AC9_InvalidInputValidation(t *testing.T) {
 	}
 	var re *errs.E
 	if !errors.As(err, &re) || re.Code != ErrInvalidInput {
-		t.Errorf("expected invalid input error MET-G4602, got: %v", err)
+		t.Errorf("expected invalid input error MET-G4502, got: %v", err)
 	}
 }
 
