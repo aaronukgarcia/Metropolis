@@ -44,6 +44,9 @@ func accessMinutesFor(traffic TrafficAPI, citizenID uint64, correlationID string
 // proportion to their own taste weights, each reduced by an access-time
 // penalty from engine.traffic. An unknown citizen returns ErrUnknownCitizen.
 func (a *LeisureAPI) VenueHours(citizenID uint64, correlationID string) ([NumCategories]float64, error) {
+	if err := a.checkNotCopied("VenueHours"); err != nil {
+		return [NumCategories]float64{}, err
+	}
 	p, err := a.Patronage(citizenID, correlationID)
 	if err != nil {
 		return [NumCategories]float64{}, err

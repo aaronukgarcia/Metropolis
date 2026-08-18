@@ -160,19 +160,7 @@ func buildContainerPortConfig(raw rawContainerPortData, path, correlationID stri
 			return fail(field+".jobs", "must be >= 0")
 		}
 
-		c.byKey[rt.Key] = PortTier{
-			Key:                         rt.Key,
-			Name:                        rt.Name,
-			Milestone:                   rt.Milestone,
-			CostMillions:                rt.CostMillions,
-			Berths:                      rt.Berths,
-			CraneRateTonnesPerHour:      rt.CraneRateTonnesPerHour,
-			OperatingHoursPerDay:        rt.OperatingHoursPerDay,
-			CustomsCapacityTonnesPerDay: rt.CustomsCapacityTonnesPerDay,
-			ShipTonnage:                 rt.ShipTonnage,
-			Jobs:                        rt.Jobs,
-			Disclosure:                  rt.Disclosure,
-		}
+		c.byKey[rt.Key] = PortTier(rt)
 	}
 
 	if _, ok := c.byKey[raw.DeepSeaTier]; !ok {

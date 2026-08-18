@@ -351,12 +351,18 @@ func (b *BlightAPI) AddTreeBelt(tile world.TileCoord, local world.CellLocal, hei
 // SetEnclosure toggles the enclosure-building mitigation (AC-8): it reduces
 // the HEARD component specifically and leaves the viewshed untouched.
 func (b *BlightAPI) SetEnclosure(objectKey string, enclosed bool) error {
+	if err := b.checkNotCopied("SetEnclosure"); err != nil {
+		return err
+	}
 	return b.setNoiseMitigation("SetEnclosure", objectKey, func(o *blightingObject) { o.enclosure = enclosed })
 }
 
 // SetNightBan toggles the night-working-ban mitigation (AC-8): it reduces the
 // HEARD component specifically and leaves the viewshed untouched.
 func (b *BlightAPI) SetNightBan(objectKey string, banned bool) error {
+	if err := b.checkNotCopied("SetNightBan"); err != nil {
+		return err
+	}
 	return b.setNoiseMitigation("SetNightBan", objectKey, func(o *blightingObject) { o.nightBan = banned })
 }
 

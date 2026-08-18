@@ -46,6 +46,9 @@ func yearOf(month int64) int64 { return month / monthsPerYear }
 // (AC-10): the same log and Config always produce the same story set and
 // order, tie-broken by EventID ascending.
 func Bulletin(h *History, month int64, cfg Config) []BulletinStory {
+	if !h.checkNotCopied() {
+		return nil
+	}
 	records := h.SnapshotWhere(func(r record) bool { return monthOf(r.ev.Tick) == month })
 	return buildBulletin(records, cfg)
 }
@@ -76,6 +79,9 @@ func buildBulletin(records []record, cfg Config) []BulletinStory {
 // aggregateNumbers over the year's events, so the annual review's totals
 // reconcile with what the bulletin's events independently total.
 func AnnualReview(h *History, year int64, cfg Config) AnnualReport {
+	if !h.checkNotCopied() {
+		return AnnualReport{}
+	}
 	records := h.SnapshotWhere(func(r record) bool { return yearOf(monthOf(r.ev.Tick)) == year })
 	return buildAnnualReview(year, records, cfg)
 }
@@ -101,6 +107,9 @@ func buildAnnualReview(year int64, records []record, cfg Config) AnnualReport {
 // fact the log does not support. Removing (redacting) a milestone record
 // from the log removes that milestone's claim from the output.
 func Epilogue(h *History, cfg Config) EpilogueReport {
+	if !h.checkNotCopied() {
+		return EpilogueReport{}
+	}
 	return buildEpilogue(h.Snapshot(), cfg)
 }
 

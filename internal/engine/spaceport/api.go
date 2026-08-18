@@ -430,15 +430,30 @@ func (a *SpaceportAPI) InjectDraws() error {
 
 // Anchor returns the data/buildings.json entry id the spaceport resolves to
 // (AC-1). Immutable after New.
-func (a *SpaceportAPI) Anchor() string { return a.cfg.CatalogueAnchor }
+func (a *SpaceportAPI) Anchor() string {
+	if err := a.checkNotCopied("Anchor"); err != nil {
+		return ""
+	}
+	return a.cfg.CatalogueAnchor
+}
 
 // BlightClass returns the catalogue anchor's blight class (AC-5 — the
 // contour reflects it). Immutable after New.
-func (a *SpaceportAPI) BlightClass() string { return a.cfg.BlightClass }
+func (a *SpaceportAPI) BlightClass() string {
+	if err := a.checkNotCopied("BlightClass"); err != nil {
+		return ""
+	}
+	return a.cfg.BlightClass
+}
 
 // ExclusionRadius returns the data-sourced exclusion radius in cells.
 // Immutable after New.
-func (a *SpaceportAPI) ExclusionRadius() int64 { return a.cfg.ExclusionRadius }
+func (a *SpaceportAPI) ExclusionRadius() int64 {
+	if err := a.checkNotCopied("ExclusionRadius"); err != nil {
+		return 0
+	}
+	return a.cfg.ExclusionRadius
+}
 
 // BlightFactor returns the per-mille land-value factor (1000 = no blight) a
 // cell at (cellX, cellY) experiences from the launch-exclusion contour.

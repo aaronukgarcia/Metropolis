@@ -229,16 +229,25 @@ func (r *RefuseAPI) RecyclingResaleValue() int64 {
 // GeneralLevel returns a cell's in-bin general-waste level (kg) — the
 // first of the three named per-stream accessors (AC-3).
 func (r *RefuseAPI) GeneralLevel(cellID string) (int64, error) {
+	if err := r.checkNotCopied("GeneralLevel"); err != nil {
+		return 0, err
+	}
 	return r.streamLevel(cellID, 0)
 }
 
 // RecyclingLevel returns a cell's in-bin recycling level (kg).
 func (r *RefuseAPI) RecyclingLevel(cellID string) (int64, error) {
+	if err := r.checkNotCopied("RecyclingLevel"); err != nil {
+		return 0, err
+	}
 	return r.streamLevel(cellID, 1)
 }
 
 // FoodLevel returns a cell's in-bin food-waste level (kg).
 func (r *RefuseAPI) FoodLevel(cellID string) (int64, error) {
+	if err := r.checkNotCopied("FoodLevel"); err != nil {
+		return 0, err
+	}
 	return r.streamLevel(cellID, 2)
 }
 

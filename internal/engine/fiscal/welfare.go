@@ -22,6 +22,9 @@ const (
 // internal transfer (money delta zero — conserved). Returns the posted
 // transaction ID.
 func (f *FiscalAPI) PostUnemploymentSupport(amount finance.Money) (finance.TxID, error) {
+	if err := f.checkNotCopied("PostUnemploymentSupport"); err != nil {
+		return 0, err
+	}
 	return f.postBenefit("PostUnemploymentSupport", amount, catBenefitUnemployment, "unemployment support")
 }
 
@@ -29,6 +32,9 @@ func (f *FiscalAPI) PostUnemploymentSupport(amount finance.Money) (finance.TxID,
 // double-entry ledger (AC-7): a treasury → households transfer, a balanced
 // internal transfer (money delta zero — conserved).
 func (f *FiscalAPI) PostHousingBenefit(amount finance.Money) (finance.TxID, error) {
+	if err := f.checkNotCopied("PostHousingBenefit"); err != nil {
+		return 0, err
+	}
 	return f.postBenefit("PostHousingBenefit", amount, catBenefitHousing, "housing benefit")
 }
 

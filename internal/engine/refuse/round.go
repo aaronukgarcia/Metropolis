@@ -201,6 +201,9 @@ func (r *RefuseAPI) SetStrike(depotID string, active bool) error {
 // [0,1] at this package's boundary (ErrInvalidFunding, AC-14) before
 // delegating to engine.services' generic SetFunding.
 func (r *RefuseAPI) SetFunding(level float64) error {
+	if err := r.checkNotCopied("SetFunding"); err != nil {
+		return err
+	}
 	if err := r.requireWired("SetFunding"); err != nil {
 		return err
 	}
@@ -239,6 +242,9 @@ func (r *RefuseAPI) registerService(sv *services.ServicesAPI) error {
 // throughput shortfall stays open so a later RunRound drains the stranded
 // in-transit tonnage.
 func (r *RefuseAPI) RunRound(roundID string) (RoundResult, error) {
+	if err := r.checkNotCopied("RunRound"); err != nil {
+		return RoundResult{}, err
+	}
 	if err := r.requireWired("RunRound"); err != nil {
 		return RoundResult{}, err
 	}

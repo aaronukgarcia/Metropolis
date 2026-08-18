@@ -102,6 +102,9 @@ func (a *EducationAPI) PupilStage(citizenID uint64) (Stage, bool) {
 // a DISTINCT capacity input from teaching capacity. Enrolment above it is
 // rejected/queued even when teaching capacity has headroom.
 func (a *EducationAPI) HallsCapacity() float64 {
+	if err := a.checkNotCopied("HallsCapacity"); err != nil {
+		return 0
+	}
 	return a.cfg.HallsCapacity
 }
 

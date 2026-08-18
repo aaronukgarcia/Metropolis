@@ -272,6 +272,9 @@ func (a *SocialAPI) OpenCaseIDs(cat Category) []CaseID {
 // (the per-category query surface AC-1 names). An unregistered category is
 // rejected with ErrUnknownCategory.
 func (a *SocialAPI) Caseload(cat Category, month int64) (int64, error) {
+	if err := a.checkNotCopied("Caseload"); err != nil {
+		return 0, err
+	}
 	s, err := a.Accounting(cat, month)
 	if err != nil {
 		return 0, err

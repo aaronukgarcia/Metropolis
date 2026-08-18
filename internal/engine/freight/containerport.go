@@ -155,6 +155,9 @@ func (c *ContainerPort) checkNotCopied(method string) error {
 // WireRail wires the engine.rail intermodal seam (AC-4). Call before
 // IntermodalTransfer; nil leaves the point unregistered (rejected loudly).
 func (c *ContainerPort) WireRail(rail RailIntermodal) {
+	if err := c.checkNotCopied("WireRail"); err != nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rail = rail
@@ -163,6 +166,9 @@ func (c *ContainerPort) WireRail(rail RailIntermodal) {
 // WirePermit wires the feat.facilitypermits permit authority seam (AC-7).
 // Call before Build; nil rejects every build as unpermitted.
 func (c *ContainerPort) WirePermit(permit PermitAuthority) {
+	if err := c.checkNotCopied("WirePermit"); err != nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.permit = permit
@@ -172,6 +178,9 @@ func (c *ContainerPort) WirePermit(permit PermitAuthority) {
 // (AC-7). Call before Build; nil rejects every build (a day-one liability
 // that cannot be recorded is never silently dropped).
 func (c *ContainerPort) WireDecommission(decom DecommissionRegistrar) {
+	if err := c.checkNotCopied("WireDecommission"); err != nil {
+		return
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.decom = decom
@@ -212,6 +221,9 @@ func (c *ContainerPort) Tier(key string) (PortTier, error) {
 // DeepSeaTier returns the deep-sea tier config — the feature's distinct
 // accessor (AC-1), a rung above container_terminal in the ladder.
 func (c *ContainerPort) DeepSeaTier() (PortTier, error) {
+	if err := c.checkNotCopied("DeepSeaTier"); err != nil {
+		return PortTier{}, err
+	}
 	return c.Tier(c.cfg.deepSeaTier)
 }
 
@@ -237,6 +249,9 @@ func (c *ContainerPort) TierPhysicalCapacity(key string) (PortCapacity, error) {
 // PhysicalCapacity returns the deep-sea tier's physical throughput capacity,
 // read through FreightAPI's berths × crane rate × hours model (AC-2/AC-3).
 func (c *ContainerPort) PhysicalCapacity() (PortCapacity, error) {
+	if err := c.checkNotCopied("PhysicalCapacity"); err != nil {
+		return PortCapacity{}, err
+	}
 	return c.TierPhysicalCapacity(c.cfg.deepSeaTier)
 }
 
@@ -277,6 +292,9 @@ func (c *ContainerPort) CustomsSaturation() (CustomsSaturation, error) {
 // the dimensionless [0,1] risk indicator — every tonnage/monetary state stays
 // int64 (GR#16).
 func (c *ContainerPort) SmugglingRisk() (float64, error) {
+	if err := c.checkNotCopied("SmugglingRisk"); err != nil {
+		return 0, err
+	}
 	sat, err := c.CustomsSaturation()
 	if err != nil {
 		return 0, err

@@ -179,6 +179,9 @@ func (r *RefuseAPI) ensureSiteShelf(lg *logistics.LogisticsAPI, siteID string, c
 // keeping AC-11's mass-conservation identity balanced on this path (see
 // [RefuseAPI.TonnesGenerated]).
 func (r *RefuseAPI) RouteGeneralToSite(siteID string, tonnage int64) (int64, error) {
+	if err := r.checkNotCopied("RouteGeneralToSite"); err != nil {
+		return 0, err
+	}
 	if err := r.requireWired("RouteGeneralToSite"); err != nil {
 		return 0, err
 	}
@@ -269,6 +272,9 @@ func (r *RefuseAPI) RouteGeneralToSite(siteID string, tonnage int64) (int64, err
 // the accepted tonnage is credited to `generated` as well as `collected`
 // (AC-11).
 func (r *RefuseAPI) RouteFoodToCompost(siteID string, tonnage int64) (int64, error) {
+	if err := r.checkNotCopied("RouteFoodToCompost"); err != nil {
+		return 0, err
+	}
 	if err := r.requireWired("RouteFoodToCompost"); err != nil {
 		return 0, err
 	}
@@ -338,6 +344,9 @@ func (r *RefuseAPI) throughputAccepted(lg *logistics.LogisticsAPI, siteID string
 // processed tonnage alongside ErrDisposalSiteUnavailable — the un-processed
 // remainder stays queued rather than being silently dropped (AC-8).
 func (r *RefuseAPI) ProcessDisposal(siteID string) (int64, error) {
+	if err := r.checkNotCopied("ProcessDisposal"); err != nil {
+		return 0, err
+	}
 	if err := r.requireWired("ProcessDisposal"); err != nil {
 		return 0, err
 	}
@@ -446,6 +455,9 @@ func (r *RefuseAPI) CapAndReclaim(siteID string) error {
 // (AC-8): the shelf is only ever Restocked, never Drawn from. Only a
 // landfill has a capacity.
 func (r *RefuseAPI) RemainingCapacity(siteID string) (int64, error) {
+	if err := r.checkNotCopied("RemainingCapacity"); err != nil {
+		return 0, err
+	}
 	if err := r.requireWired("RemainingCapacity"); err != nil {
 		return 0, err
 	}
@@ -475,6 +487,9 @@ func (r *RefuseAPI) RemainingCapacity(siteID string) (int64, error) {
 // blights (AC-8/§32 reclamation mechanic). A reclaimed landfill blights
 // nothing (it has become parkland).
 func (r *RefuseAPI) BlightedCells(siteID string) ([]string, error) {
+	if err := r.checkNotCopied("BlightedCells"); err != nil {
+		return nil, err
+	}
 	if err := r.requireWired("BlightedCells"); err != nil {
 		return nil, err
 	}

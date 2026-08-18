@@ -424,46 +424,73 @@ func (a *CrimeAPI) typeAccessor(id DistrictID, t CrimeType) (float64, error) {
 
 // PettyTheft returns the petty-theft generation figure for the district.
 func (a *CrimeAPI) PettyTheft(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("PettyTheft"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimePettyTheft)
 }
 
 // Burglary returns the burglary generation figure for the district.
 func (a *CrimeAPI) Burglary(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("Burglary"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeBurglary)
 }
 
 // VehicleCrime returns the vehicle-crime generation figure for the district.
 func (a *CrimeAPI) VehicleCrime(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("VehicleCrime"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeVehicleCrime)
 }
 
 // CriminalDamage returns the criminal-damage generation figure.
 func (a *CrimeAPI) CriminalDamage(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("CriminalDamage"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeCriminalDamage)
 }
 
 // ViolentCrime returns the violent-crime generation figure.
 func (a *CrimeAPI) ViolentCrime(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("ViolentCrime"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeViolent)
 }
 
 // DrugsSupply returns the drugs-supply generation figure.
 func (a *CrimeAPI) DrugsSupply(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("DrugsSupply"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeDrugsSupply)
 }
 
 // OrganisedCrime returns the organised-crime generation figure.
 func (a *CrimeAPI) OrganisedCrime(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("OrganisedCrime"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeOrganised)
 }
 
 // FraudCyber returns the fraud/cyber generation figure.
 func (a *CrimeAPI) FraudCyber(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("FraudCyber"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeFraudCyber)
 }
 
 // Smuggling returns the smuggling generation figure.
 func (a *CrimeAPI) Smuggling(id DistrictID) (float64, error) {
+	if err := a.checkNotCopied("Smuggling"); err != nil {
+		return 0, err
+	}
 	return a.typeAccessor(id, CrimeSmuggling)
 }
 
