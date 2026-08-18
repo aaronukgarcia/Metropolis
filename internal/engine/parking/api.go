@@ -31,16 +31,16 @@ type DistrictConfig struct {
 
 // Facility represents the state of a standalone or allocated parking lot (AC-1/AC-2).
 type Facility struct {
-	ID                  uint64
-	Tile                world.TileCoord
-	Local               world.CellLocal
-	Spaces              int
-	Occupied            int
-	Type                InstrumentType
-	District            uint16
-	SustainedLowPeriod  int // counter for sustained low-occupancy (AC-9)
-	AutonomyShrunk      bool
-	IsRedeveloped       bool
+	ID                 uint64
+	Tile               world.TileCoord
+	Local              world.CellLocal
+	Spaces             int
+	Occupied           int
+	Type               InstrumentType
+	District           uint16
+	SustainedLowPeriod int // counter for sustained low-occupancy (AC-9)
+	AutonomyShrunk     bool
+	IsRedeveloped      bool
 }
 
 // WorkplaceAllocation represents an internal allocated workplace site (AC-4).
@@ -56,14 +56,14 @@ type WorkplaceAllocation struct {
 
 // ParkingAPI represents the space accounting per destination module (MOD-051).
 type ParkingAPI struct {
-	mu           sync.RWMutex
-	self         atomic.Pointer[ParkingAPI]
-	world        *world.WorldAPI
-	traffic      any // local interface/any for traffic dependency
-	facilities   map[uint64]*Facility
-	allocations  map[uint64]*WorkplaceAllocation
-	districts    map[uint16]*DistrictConfig
-	autonomyEra  bool // M12 autonomy-driven demand shrinkage toggle (AC-9)
+	mu          sync.RWMutex
+	self        atomic.Pointer[ParkingAPI]
+	world       *world.WorldAPI
+	traffic     any // local interface/any for traffic dependency
+	facilities  map[uint64]*Facility
+	allocations map[uint64]*WorkplaceAllocation
+	districts   map[uint16]*DistrictConfig
+	autonomyEra bool // M12 autonomy-driven demand shrinkage toggle (AC-9)
 }
 
 // New constructs a new ParkingAPI.
