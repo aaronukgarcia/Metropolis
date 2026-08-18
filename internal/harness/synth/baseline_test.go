@@ -27,9 +27,11 @@ func TestCompareToBaseline_NoBaseline(t *testing.T) {
 // TestCompareToBaseline_RegressionOverThreshold together prove the
 // RegressionThreshold boundary is exercised on both sides.
 func TestCompareToBaseline_NoRegressionWithinThreshold(t *testing.T) {
-	baseline := PerfResult{PerMonthTick: 100 * time.Millisecond}
+	// Months is set (BUG-254) so the measured tick window (PerMonthTick x
+	// Months) clears MinMeasurableDuration and the percentage check runs.
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}
 	// +9% growth: under the 10% threshold.
-	current := PerfResult{PerMonthTick: 109 * time.Millisecond}
+	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 109 * time.Millisecond}
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.HasBaseline {
@@ -41,9 +43,9 @@ func TestCompareToBaseline_NoRegressionWithinThreshold(t *testing.T) {
 }
 
 func TestCompareToBaseline_RegressionOverThreshold(t *testing.T) {
-	baseline := PerfResult{PerMonthTick: 100 * time.Millisecond}
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}
 	// +25% growth: comfortably over the 10% threshold.
-	current := PerfResult{PerMonthTick: 125 * time.Millisecond}
+	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 125 * time.Millisecond}
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.Regressed {
@@ -58,8 +60,10 @@ func TestCompareToBaseline_RegressionOverThreshold(t *testing.T) {
 // the gate — it must be reported as "below the noise floor", never as a
 // regression.
 func TestCompareToBaseline_BelowNoiseFloorSkipsRegressionCheck(t *testing.T) {
-	baseline := PerfResult{PerMonthTick: 1 * time.Microsecond}
-	current := PerfResult{PerMonthTick: 3 * time.Microsecond} // +200%, but both are noise
+	// Both windows (PerMonthTick x Months) sit far under
+	// MinMeasurableDuration — the walking-skeleton shape.
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 1 * time.Microsecond}
+	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 3 * time.Microsecond} // +200%, but both are noise
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.BelowNoiseFloor {
@@ -73,8 +77,8 @@ func TestCompareToBaseline_BelowNoiseFloorSkipsRegressionCheck(t *testing.T) {
 // TestCompareToBaseline_OneSideBelowNoiseFloorAlsoSkips proves the floor
 // applies if EITHER side is below it, not only when both are.
 func TestCompareToBaseline_OneSideBelowNoiseFloorAlsoSkips(t *testing.T) {
-	baseline := PerfResult{PerMonthTick: 1 * time.Microsecond} // below floor
-	current := PerfResult{PerMonthTick: 50 * time.Millisecond} // above floor, huge absolute jump
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 1 * time.Microsecond} // window 12us: below floor
+	current := PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 50 * time.Millisecond} // window 600ms: above floor, huge absolute jump
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.BelowNoiseFloor {
@@ -154,16 +158,75 @@ func TestCouldNotEvaluate_FalseWhenNoBaseline(t *testing.T) {
 // TestCouldNotEvaluate_FalseForGenuinePassAndRegression proves the
 // predicate does not over-fire on the two outcomes it must leave alone.
 func TestCouldNotEvaluate_FalseForGenuinePassAndRegression(t *testing.T) {
-	pass := CompareToBaseline(&PerfResult{PerMonthTick: 100 * time.Millisecond}, nil, PerfResult{PerMonthTick: 105 * time.Millisecond})
+	pass := CompareToBaseline(&PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}, nil, PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 105 * time.Millisecond})
 	if pass.CouldNotEvaluate() {
 		t.Fatal("CouldNotEvaluate() should be false for a genuine within-threshold pass")
 	}
 
-	regressed := CompareToBaseline(&PerfResult{PerMonthTick: 100 * time.Millisecond}, nil, PerfResult{PerMonthTick: 200 * time.Millisecond})
+	regressed := CompareToBaseline(&PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 100 * time.Millisecond}, nil, PerfResult{CitizenCount: 1000, Months: 12, PerMonthTick: 200 * time.Millisecond})
 	if !regressed.Regressed {
 		t.Fatal("test setup: expected this pair to regress")
 	}
 	if regressed.CouldNotEvaluate() {
 		t.Fatal("CouldNotEvaluate() should be false for a genuine regression — it has a real verdict, it was not skipped")
+	}
+}
+
+// TestCompareToBaseline_WindowFloorBoundaryDerivesFromConstant pins
+// BUG-254's re-scoped noise floor at its exact boundary, with every
+// figure DERIVED from MinMeasurableDuration rather than hardcoded
+// (GR#15): a measured tick window (PerMonthTick x Months) exactly AT the
+// floor is evaluated; one even a hair below it is BelowNoiseFloor. If
+// the constant's value or scope (window vs per-month) ever changes, this
+// test moves with the constant or fails loudly — it cannot silently keep
+// asserting a stale figure.
+func TestCompareToBaseline_WindowFloorBoundaryDerivesFromConstant(t *testing.T) {
+	// months chosen so MinMeasurableDuration divides exactly and the
+	// at-floor window reconstructs to precisely MinMeasurableDuration
+	// with no integer-division loss.
+	const months = 10
+	if MinMeasurableDuration%months != 0 {
+		t.Fatalf("test fixture assumption broken: MinMeasurableDuration (%s) is not divisible by %d months — pick a divisor so the boundary is exact", MinMeasurableDuration, months)
+	}
+	perMonthAtFloor := MinMeasurableDuration / months
+
+	atFloor := PerfResult{CitizenCount: 1000, Months: months, PerMonthTick: perMonthAtFloor}
+	cmpAt := CompareToBaseline(&atFloor, nil, atFloor)
+	if cmpAt.BelowNoiseFloor {
+		t.Fatalf("a window exactly at MinMeasurableDuration (%s) must be evaluated, got BelowNoiseFloor: %s", MinMeasurableDuration, cmpAt.Message)
+	}
+	if cmpAt.Regressed {
+		t.Fatalf("identical at-floor measurements must not regress: %s", cmpAt.Message)
+	}
+
+	below := PerfResult{CitizenCount: 1000, Months: months, PerMonthTick: perMonthAtFloor - time.Nanosecond}
+	cmpBelow := CompareToBaseline(&below, nil, below)
+	if !cmpBelow.BelowNoiseFloor {
+		t.Fatalf("a window below MinMeasurableDuration (%s) must be BelowNoiseFloor, got: %s", MinMeasurableDuration, cmpBelow.Message)
+	}
+	if cmpBelow.Regressed {
+		t.Fatal("a below-floor comparison must never be Regressed")
+	}
+}
+
+// TestCompareToBaseline_QuantumScaleWindowIsRefusedNotJudged is BUG-254's
+// direct reproduction: the exact pre-fix CI shape — a real ~3.3ms/month
+// hook-work measurement over only 3 months (a ~10ms window, a single-digit
+// multiple of the ~1ms Windows timer quantum) showing an 18.9% delta that
+// was pure runner noise — must be refused as BelowNoiseFloor, never
+// reported as REGRESSED. RED against the pre-fix 2ms PER-MONTH floor
+// (both sides cleared 2ms, the 18.9% delta compared as a genuine step
+// regression over the 10% threshold, and the required perf gate went red
+// on a zero-change commit); GREEN against the window-scoped floor.
+func TestCompareToBaseline_QuantumScaleWindowIsRefusedNotJudged(t *testing.T) {
+	baseline := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 3320 * time.Microsecond} // ~9.96ms window
+	current := PerfResult{CitizenCount: OneMillionCitizens, Months: 3, PerMonthTick: 3947 * time.Microsecond}  // +18.9% — the live-verified CI noise figure
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if cmp.Regressed {
+		t.Fatalf("BUG-254: a quantum-scale (%s) window's noise delta was judged as a regression: %s", measuredTickWindow(baseline), cmp.Message)
+	}
+	if !cmp.BelowNoiseFloor {
+		t.Fatalf("BUG-254: a quantum-scale window must be refused as BelowNoiseFloor (honest exit 3 in cmd/perfci), got: %s", cmp.Message)
 	}
 }

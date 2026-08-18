@@ -119,62 +119,126 @@ const CumulativeRegressionThreshold = 2 * RegressionThreshold
 // MinMeasurableDuration is the perf gate's noise floor (see baseline.go's
 // CompareToBaseline doc comment for the full BUG-031 rationale this
 // constant exists to avoid repeating): a percentage regression computed
-// against a near-zero absolute duration is dominated by GC/scheduler
-// jitter, not real simulated work, so both the baseline and the current
-// measurement must clear this floor before RegressionThreshold is
-// applied at all.
+// against a near-zero absolute duration is dominated by timer
+// quantization and GC/scheduler jitter, not real simulated work.
 //
-// # Re-derivation (BUG-034, supersedes ASM-173's "chosen, not spec-
-// # derived" framing — this is now evidence-based against BOTH local
-// # and CI-runner measurements, not a guess)
+// # BUG-254: this floor applies to the measured tick WINDOW, not the
+// # per-month figure
 //
-// ASM-173 picked 5ms a priori, against no real measurement, "comfortably
-// above typical Go scheduler/timer-resolution noise" — exactly the kind
-// of number BUG-034's brief warns is indistinguishable from a guess
-// until someone actually samples the thing being gated. That sampling
-// has now happened, twice over:
+// Since BUG-254 the floor is compared against the total measured tick
+// span a record's PerMonthTick was derived from — PerMonthTick x Months
+// (baseline.go's measuredTickWindow) — NOT against PerMonthTick itself.
+// Both the baseline's and the current run's windows must clear this
+// floor before RegressionThreshold is applied at all; a sub-floor window
+// is BelowNoiseFloor (could-not-evaluate, exit 3 in cmd/perfci), never a
+// Regressed verdict and never a silent pass (BUG-071).
 //
-//   - Local (dedicated Windows dev box), Preset1M (1,000,000 citizens,
-//     zero registered PhaseHooks — see PhaseHookCountInHeadlessPath):
-//     the original 2026-08-10 six-sample pass (12 simulated months) gave
-//     PerMonthTick mean 0.524ms, stddev 0.201ms, min 0.293ms, max
-//     0.884ms. A 2026-08-14 re-run to close this item's follow-up added
-//     eight 3-month runs (non-zero PerMonthTick min 0.518ms, max
-//     1.736ms) and six 12-month runs (min 0.101ms, max 0.752ms) — the
-//     wider 3-month spread is the expected effect of dividing the same
-//     absolute jitter over fewer months, not a different workload.
-//   - CI-runner (windows-latest), the environment the real gate runs on:
-//     three measured runs of the actual perf-1m-probe job recorded
-//     PerMonthTick 488.866us (the stored baseline, run 31539765424,
-//     commit 303d3ac), 925.866us (run 31577307387, commit 5bfc381), and
-//     a third in between — i.e. ~488-926us across the three, at 6.7-6.8s
-//     wall / ~43-45MB peak each.
+// Why the window and not the per-month figure: the harness times ONE
+// span (headless_seam.go's runHeadless wraps the whole months-long run
+// in a single time.Since), so the measurement error — the ~1ms Windows
+// timer quantum plus scheduler jitter — attaches to that span ONCE.
+// Dividing by Months rescales the signal and the error identically,
+// which means the per-month figure's RELATIVE error is quantum/window
+// no matter what Months is, and no fixed per-month constant can be
+// simultaneously above the noise and below the real signal:
 //
-// Conclusion of the re-derivation: the caveat that originally kept 5ms
-// — that CI tenancy jitter might run materially higher than a dedicated
-// dev box — did NOT materialise. CI-runner PerMonthTick (488-926us) sits
-// squarely INSIDE the local range (0.1-1.7ms), not above it, so 5ms
-// clears the highest observed figure (1.736ms) by ~2.9x and the CI
-// maximum (0.926ms) by ~5.4x. One further, honest data point: several
-// runs (3 of 8 local 3-month, 1 of 6 local 12-month) measured TickTime
-// == 0 while TotalTicks > 0 — at walking-skeleton scale the Windows
-// monotonic timer occasionally cannot even resolve the whole run, the
-// most literal possible demonstration that sub-millisecond PerMonthTick
-// values are noise and that this floor must stay generously above them.
+//   - The real hook-work per-month tick cost is ~1.9-3.5ms (measured —
+//     see the history below), i.e. only 2-3x the 1ms quantum. A
+//     per-month floor ABOVE that signal (ASM-173's original 5ms) makes
+//     the gate permanently could-not-evaluate against real
+//     measurements; a per-month floor BELOW it (the 2ms this constant
+//     briefly held after FEAT-082) admits quantum-dominated
+//     measurements and fabricates REGRESSED verdicts — BUG-254's
+//     live-verified failure: at the old -months 3 (a ~10ms window,
+//     only ~10x the quantum), CI history showed 18.9% peak-to-peak
+//     spread on identical code against a 10% threshold, local repeat
+//     runs spread 4.0-13.4ms on the window (238% on the per-month
+//     figure), and LoadLatestBaseline froze a lucky-fast minimum
+//     (2.9968ms/month) as the baseline, guaranteeing the next ordinary
+//     run tripped the gate with zero code change.
+//   - The window is the one quantity the run length CAN grow: at the
+//     .github/workflows/ci.yml perf jobs' -months 96, the real window
+//     measures ~176-180ms locally (median-of-TickSampleCount, see
+//     below) — so a window floor separates real measurements from
+//     collapsed ones where no per-month constant could.
 //
-// FEAT-082 landed the composition root, so PhaseHookCountInHeadlessPath()
-// is now compose.BaselineOneHookCount() (> 0) and PerMonthTick measures
-// real per-tick simulation work, not walking-skeleton dispatch — the exact
-// re-derivation trigger this comment named above. Measured on the CI
-// runner (windows-latest): 1M-real baseline 3.1981ms, current ~3.38-3.47ms;
-// perf-smoke (2000 citizens) ~3.70-4.00ms — the same ~3-4ms regardless of
-// population, confirming tick cost is now hook-work-dominated. The floor is
-// therefore lowered to 2ms: ~1.6x below the lowest real measurement
-// (3.1981ms) so the gate can actually evaluate, ~2.2x above the historical
-// CI jitter max (0.926ms), and just above the historical local
-// walking-skeleton max (1.736ms). Re-derive again if a future change drops
-// real tick cost back below this floor.
-const MinMeasurableDuration = 2 * time.Millisecond
+// # Value: 50ms (BUG-254, evidence-based)
+//
+//   - Noise arithmetic at the floor boundary: 50ms = 50x the ~1ms
+//     Windows timer quantum, so pure quantization contributes at most
+//     ~2x1ms/50ms = 4% to a baseline-vs-current delta — a 2.5x margin
+//     under RegressionThreshold (10%) in the WORST admissible case. At
+//     the actual -months 96 operating point (~176-290ms windows) the
+//     quantization bound is 0.7-1.1%. Empirically, 6 back-to-back
+//     median-of-TickSampleCount runs at months=96 spread only 2.8%
+//     peak-to-peak on the per-month figure (worst single step +2.2%,
+//     worst cumulative-vs-anchor +1.6%) vs 9.7% peak-to-peak at
+//     months=48 single-machine-under-load — which is why the jobs run
+//     96, not 48.
+//   - Old-regime measurements stay excluded: at the old -months 3 this
+//     floor is equivalent to a 16.7ms/month requirement — strictly
+//     above both ASM-173's 5ms and the real ~3-4.5ms signal — so every
+//     measurement of the shape that flapped exits 3 rather than being
+//     judged. (The floor is a NOISE bar, not a regime detector: a
+//     future collapse of per-tick cost back toward walking-skeleton
+//     levels at months=96 could still produce a measurable >=50ms
+//     window near the top of the historical skeleton range — that
+//     reads as a large improvement, which this gate, like any
+//     regression gate, deliberately does not block.)
+//   - Real windows clear it with margin: local months=96 windows
+//     measured 175.6-180.4ms (3.5x the floor) at ~1.83-1.88ms/month —
+//     the amortised per-month cost is LOWER than the ~3.3ms months=3
+//     figure because the fixed first-tick warmup spreads over more
+//     months, and the floor keeps real headroom even against that
+//     amortisation (the window clears the floor down to ~0.52ms/month
+//     at months=96).
+//
+// Re-derive if a future change drops the real window at the configured
+// -months below ~2x this floor (raise -months or re-measure), or if the
+// perf jobs' -months is ever lowered (the floor's per-month equivalent
+// rises as months shrink — that direction is safe; raising -months
+// without re-checking the floor is also safe).
+//
+// # Measurement history (kept because each revision cites it)
+//
+//   - Walking-skeleton era (zero PhaseHooks): local 12-month runs
+//     0.101-0.884ms/month, 3-month runs up to 1.736ms/month, several
+//     runs with TickTime == 0 while TotalTicks > 0 (the Windows
+//     monotonic timer could not resolve the whole run); CI-runner
+//     perf-1m-probe 488-926us/month. ASM-173/BUG-034 set a 5ms
+//     PER-MONTH floor against this data.
+//   - FEAT-082 (composition root, real hooks): CI 1M-real
+//     ~3.2-3.5ms/month, perf-smoke (2000 citizens) ~3.7-4.0ms/month at
+//     -months 3 — hook-work-dominated, population-independent. The
+//     per-month floor was lowered to 2ms to sit under that signal,
+//     which is what let quantum noise through (BUG-254, above).
+//   - BUG-254 (2026-08-17, this revision): local 1M runs — months=3
+//     windows 3.98-13.45ms (1.33-4.48ms/month); months=24 windows
+//     41.4-56.2ms (1.73-2.34ms/month); months=48 windows 88.4-94.7ms
+//     (1.84-1.97ms/month); months=96 median-sampled windows
+//     175.6-180.4ms (1.83-1.88ms/month, 2.8% peak-to-peak over 6
+//     runs). Floor re-scoped to the window at 50ms; CI jobs moved to
+//     -months 96 with TickSampleCount-median sampling.
+const MinMeasurableDuration = 50 * time.Millisecond
+
+// TickSampleCount is how many times RunPerf (perf.go) repeats the
+// months-long headless tick run and takes the MEDIAN window as the
+// recorded TickTime (BUG-254). One window at -months 96 already bounds
+// quantization noise (see MinMeasurableDuration's arithmetic above), but
+// single windows still carry occasional multi-millisecond scheduler
+// outliers (local months=24 evidence: 4 of 5 windows within 41-50ms, one
+// at 56.2ms — a +14% tail on an otherwise-tight cluster); a median of
+// five discards up to two such outliers per side entirely, at a cost of
+// ~4x one window's wall time (~0.8s at months=96), negligible next to
+// the ~4-7s world generation the same run already pays once.
+//
+// Deliberately a package constant, not a cmd/perfci flag: a sampling
+// count that a CI job (or a local reproduction) could dial down
+// per-invocation would be a quiet way to weaken the gate's noise
+// behaviour without a reviewed code change — the same reasoning that
+// removed the -accept-regression flag (BUG-095). Odd on purpose so the
+// median is a real observed window, never an average of two.
+const TickSampleCount = 5
 
 // MaxPlausiblePerMonthTick is BUG-096's upper sanity ceiling on
 // PerfResult.PerMonthTick (see perf.go's ImplausibleReason doc comment
