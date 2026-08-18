@@ -38,6 +38,30 @@ type CitizensAPI struct {
 	households      map[uint64]*Household
 	nextHouseholdID uint64
 
+	// fertilityCfg is the loaded data/fertility.json balance config
+	// (FEAT-160), read once at construction (GR#15: every magnitude lives
+	// in data, never a Go literal).
+	fertilityCfg FertilityConfig
+	// nextFertilityChildID is the monotonic counter fertility-born child
+	// ids are minted from (fertilityChildIDBase + this), disjoint from the
+	// composition root's own sequential migrant/seed id counter — see
+	// fertility.go's fertilityChildIDBase doc comment.
+	nextFertilityChildID uint64
+
+	// curMonthBirths/curMonthDeaths accumulate the current (in-progress)
+	// calendar month's fertility births and mortality deaths across its 30
+	// day-ticks; lastMonthBirths/lastMonthDeaths hold the totals for the
+	// most recently COMPLETED month, snapshotted at the month boundary
+	// (mirrors monthParams's own per-month recompute). VitalEvents exposes
+	// the completed-month totals — the conservation accounting surface a
+	// future composition-root wiring feeds into invariant.PeopleInvariant's
+	// TrackedDelta exactly the way migration admits already are (see
+	// registry.go's AdvanceDayTick and compose.go's peopleDelta).
+	curMonthBirths  int
+	curMonthDeaths  int
+	lastMonthBirths int
+	lastMonthDeaths int
+
 	// monthParams is the sample-derived cold-pass parameter set, computed
 	// once at the start of each month and applied across its 30 day-ticks.
 	monthParams ColdPassParams
@@ -55,12 +79,17 @@ type CitizensAPI struct {
 // seed. correlationID is attached to every error this (and the returned
 // API's methods) construct (GR#1).
 func NewCitizensAPI(seed uint64, correlationID string) (*CitizensAPI, error) {
+	fertilityCfg, err := LoadDefaultFertilityConfig(correlationID)
+	if err != nil {
+		return nil, err
+	}
 	c := &CitizensAPI{
 		seed:            seed,
 		workers:         1,
 		hot:             make(map[uint64]*Citizen),
 		households:      make(map[uint64]*Household),
 		nextHouseholdID: 1, // 0 is the "no household" sentinel
+		fertilityCfg:    fertilityCfg,
 		monthParams:     ColdPassParams{MortalityMultiplier: 1.0},
 	}
 	for i := range c.cold {
@@ -289,6 +318,35 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 			c.hot[cmd.Citizen.ID] = &cp
 		}
 	case LifeEventPartner:
+		// Round-3 fix (P1 data-integrity, post-F1): a citizen re-partnering
+		// after a prior pairing dissolved (e.g. a widowed survivor, F1's
+		// scenario) still carries a stale, non-zero Household reference to
+		// their OLD household -- F1 deliberately leaves it intact on death
+		// so the survivor keeps living there. FormHousehold below mints a
+		// BRAND NEW household and setHouseholdLocked/setColdHouseholdLocked
+		// overwrite each citizen's Household field to the new id, but never
+		// touched the OLD household's Members list -- so the old household
+		// kept listing the citizen as a member forever (a leaked household,
+		// and the citizen double-counted: once via the stale Members entry,
+		// once via their own Household field pointing elsewhere). A citizen
+		// must belong to exactly ONE household at a time, so BOTH incoming
+		// partners are detached from any prior household FIRST.
+		//
+		// Orphan rule (documented per the fix's requirement): detachment
+		// only prunes the DEPARTING citizen from their old household's
+		// Members (mirroring removeHouseholdMemberLocked's F1 prune-then-
+		// maybe-delete pattern) -- it does NOT carry their children along
+		// into the new pairing. If the old household still holds other
+		// members (e.g. the survivor's children from the dissolved
+		// marriage), it persists exactly as F1 already established a
+		// household persists "as long as ANY member remains" -- it simply
+		// now holds only the children (a childless-adult orphan household),
+		// and is deleted only once fully empty. This is the coherent
+		// extension of the existing F1 invariant, not a new rule: no
+		// household is ever left listing a member who no longer belongs.
+		c.detachFromHouseholdLocked(cmd.CitizenID)
+		c.detachFromHouseholdLocked(cmd.PartnerID)
+
 		h := FormHousehold(c.nextHouseholdID, cmd.CitizenID, cmd.PartnerID, 2)
 		c.nextHouseholdID++
 		c.households[h.ID] = &h
@@ -300,21 +358,26 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		c.setColdHouseholdLocked(cmd.PartnerID, safeUint32(h.ID), safeUint32(cmd.CitizenID))
 	case LifeEventDeath:
 		// A departure (mortality or emigration) unwires the citizen's
-		// household membership — the inverse of LifeEventPartner's wiring:
-		// the household's Members list is pruned, and if the household drops
-		// below the pairing threshold it is dissolved with every surviving
-		// member's household/partner references cleared. The household id
-		// must be resolved BEFORE the citizen is removed from hot+cold (no
-		// record remains to read it back from afterwards).
-		var householdID uint64
+		// household membership (the inverse of LifeEventPartner's wiring):
+		// the household's Members list is pruned and, if the departed
+		// citizen was one half of an adult pairing, the SURVIVING partner's
+		// Partner reference is cleared (the pairing dissolves; the
+		// household itself persists as long as any member remains -- see
+		// household.go's dissolution-invariant doc, F1 fix). Both the
+		// household id AND the departed citizen's own Partner id must be
+		// resolved BEFORE the citizen is removed from hot+cold (no record
+		// remains to read them back from afterwards).
+		var householdID, partnerID uint64
 		if cit, ok := c.hot[cmd.CitizenID]; ok {
 			householdID = cit.Household
+			partnerID = cit.Partner
 		} else if r, ok := c.coldRecord(cmd.CitizenID); ok {
 			householdID = uint64(r.Household)
+			partnerID = uint64(r.Partner)
 		}
 		delete(c.hot, cmd.CitizenID)
 		c.removeColdLocked(cmd.CitizenID)
-		c.removeHouseholdMemberLocked(cmd.CitizenID, householdID)
+		c.removeHouseholdMemberLocked(cmd.CitizenID, householdID, partnerID)
 	case LifeEventEducation:
 		// Education drifts the personality (good schooling widens ambition/
 		// novelty-seeking). The cold store is the single source of truth, so
@@ -406,7 +469,18 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 	for _, t := range results {
 		tot = tot.add(t)
 	}
-	_ = tot
+	c.curMonthDeaths += tot.deaths
+
+	// Fertility (FEAT-160): a deterministic SEQUENTIAL pass over the same
+	// scheduled shards, run only after the parallel mortality/education/job
+	// pass above has fully completed — see applyFertilityLocked's doc
+	// comment for why a couple's cross-shard partner read cannot safely run
+	// inside runShardsParallel's goroutines. births accumulates into
+	// curMonthBirths (birthChildLocked increments it directly) so
+	// VitalEvents can report the completed month's totals the same way
+	// migration admits are tracked at the composition root (see
+	// invariant/people.go's TrackedDelta identity).
+	c.applyFertilityLocked(seed, month, shards, correlationID)
 
 	c.dayTick++
 	if c.dayTick == DaysPerMonth {
@@ -417,8 +491,34 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 		// month). Setting Month to the same value for every hot citizen is
 		// order-independent, so map iteration order cannot affect results.
 		c.syncHotMonthLocked()
+		// The calendar month just completed: snapshot its births/deaths
+		// totals for VitalEvents and reset the in-progress accumulators for
+		// the new month (mirrors monthParams's own per-month recompute).
+		c.lastMonthBirths = c.curMonthBirths
+		c.lastMonthDeaths = c.curMonthDeaths
+		c.curMonthBirths = 0
+		c.curMonthDeaths = 0
 	}
 	return nil
+}
+
+// VitalEvents returns the fertility births and mortality deaths tallied
+// across the most recently COMPLETED calendar month (FEAT-160). This is the
+// conservation-accounting surface: TotalPopulation after a completed month
+// equals TotalPopulation before it, plus VitalEvents' births, minus its
+// deaths — exactly invariant/people.go's PeopleInvariant identity
+// (Closing - Opening == TrackedDelta), with births/deaths as this
+// package's own tracked delta terms, the same role migration admits play
+// at the composition root (compose.go's peopleDelta). A partially-advanced
+// (mid-month) call returns the PREVIOUS completed month's totals, never a
+// half-counted in-progress figure.
+func (c *CitizensAPI) VitalEvents(correlationID string) (births, deaths int) {
+	if err := c.checkNotCopied(correlationID, "VitalEvents"); err != nil {
+		return 0, 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.lastMonthBirths, c.lastMonthDeaths
 }
 
 // AdvanceMonth advances a full calendar month (30 day-ticks). Convenience
@@ -560,11 +660,19 @@ func (c *CitizensAPI) setHouseholdLocked(citizenID, householdID, partnerID uint6
 }
 
 // removeHouseholdMemberLocked unwires a departed citizen from their
-// household (LifeEventDeath's inverse of LifeEventPartner's wiring). The
-// citizen is dropped from the household's Members list; if the household
-// then falls below pairingThreshold it is dissolved and every surviving
-// member has their household/partner references cleared in both stores.
-func (c *CitizensAPI) removeHouseholdMemberLocked(citizenID, householdID uint64) {
+// household (LifeEventDeath's inverse of LifeEventPartner's wiring). F1 fix
+// (destructive-review REJECT on FEAT-160): dissolution/unwiring keys on the
+// PAIRING, not raw member count -- see household.go's dissolution-invariant
+// doc. The departed citizen is dropped from the household's Members list.
+// partnerID is the departed citizen's own (pre-removal) Partner id: if
+// non-zero, the departed citizen WAS one half of an adult pairing, so the
+// SURVIVING partner's Partner reference is cleared (the pairing dissolves --
+// the survivor may legitimately re-partner later) while their Household
+// reference is left untouched, because the household persists as long as
+// any member remains (surviving parent + children, or a lone childless
+// survivor still living in the same dwelling). The household is deleted
+// only once its Members list is fully empty.
+func (c *CitizensAPI) removeHouseholdMemberLocked(citizenID, householdID, partnerID uint64) {
 	if householdID == 0 {
 		return // unpaired citizen: nothing to unwire
 	}
@@ -579,25 +687,73 @@ func (c *CitizensAPI) removeHouseholdMemberLocked(citizenID, householdID uint64)
 		}
 	}
 	h.Members = kept
-	if len(h.Members) >= pairingThreshold {
-		return // still a pair (or larger): household survives
+
+	if partnerID != 0 {
+		// The departed citizen was paired: dissolve the pairing on the
+		// survivor's side only (Partner -> 0), never touching their
+		// Household -- the survivor (and any children) keep the household.
+		c.clearPartnerOnlyLocked(partnerID)
 	}
-	for _, m := range h.Members {
-		c.clearHouseholdLocked(m)
+
+	if len(h.Members) == 0 {
+		delete(c.households, householdID)
 	}
-	delete(c.households, householdID)
 }
 
-// clearHouseholdLocked resets a citizen's household/partner references to 0
-// (the "no household" sentinel) in BOTH the hot elevation cache and the cold
-// store (the single source of truth). It is the exact inverse of the
-// setHouseholdLocked/setColdHouseholdLocked wiring LifeEventPartner performs.
-func (c *CitizensAPI) clearHouseholdLocked(citizenID uint64) {
+// detachFromHouseholdLocked unwires citizenID from whatever household they
+// CURRENTLY belong to (round-3 fix, P1: LifeEventPartner's re-partnering
+// leak). Called BEFORE FormHousehold mints a fresh pairing, so a citizen
+// re-partnering after a prior pairing dissolved (a widowed survivor, F1's
+// scenario) is never left double-listed: once in their stale old
+// household's Members (never pruned by F1's death path, which deliberately
+// leaves the survivor's household intact) and once via their own Household
+// field pointing at the new pairing. A no-op for a citizen with no current
+// household (Household == 0, e.g. a first-time pairing). Reuses
+// removeHouseholdMemberLocked's exact prune-then-maybe-delete pattern
+// (prune from Members; if a live Partner reference resolves the OTHER
+// member of the pairing, clear their Partner side too, mirroring F1's
+// dissolution invariant; delete the household once fully empty), then
+// additionally clears the DEPARTING citizen's own stale Household/Partner
+// fields (which removeHouseholdMemberLocked's original LifeEventDeath
+// caller never had to do, because that path deletes the departing citizen's
+// record entirely -- here the citizen is NOT being removed, they are about
+// to be re-wired into a brand new household by the caller).
+func (c *CitizensAPI) detachFromHouseholdLocked(citizenID uint64) {
+	var householdID, partnerID uint64
+	if cit, ok := c.hot[citizenID]; ok {
+		householdID = cit.Household
+		partnerID = cit.Partner
+	} else if r, ok := c.coldRecord(citizenID); ok {
+		householdID = uint64(r.Household)
+		partnerID = uint64(r.Partner)
+	}
+	if householdID == 0 {
+		return // no current household: nothing to detach
+	}
+	c.removeHouseholdMemberLocked(citizenID, householdID, partnerID)
 	if cit, ok := c.hot[citizenID]; ok {
 		cit.Household = 0
 		cit.Partner = 0
 	}
 	c.setColdHouseholdLocked(citizenID, 0, 0)
+}
+
+// clearPartnerOnlyLocked resets a citizen's Partner reference to 0 (the "no
+// partner" sentinel) in BOTH the hot elevation cache and the cold store (the
+// single source of truth), WITHOUT touching their Household reference. Used
+// when a partner departs (death/emigration): the pairing dissolves but the
+// household itself persists (F1 fix) -- this is the pairing-only half of
+// the setHouseholdLocked/setColdHouseholdLocked wiring LifeEventPartner
+// performs.
+func (c *CitizensAPI) clearPartnerOnlyLocked(citizenID uint64) {
+	var householdID uint64
+	if cit, ok := c.hot[citizenID]; ok {
+		cit.Partner = 0
+		householdID = cit.Household
+	} else if r, ok := c.coldRecord(citizenID); ok {
+		householdID = uint64(r.Household)
+	}
+	c.setColdHouseholdLocked(citizenID, safeUint32(householdID), 0)
 }
 
 // setColdHouseholdLocked updates a citizen's household/partner columns in

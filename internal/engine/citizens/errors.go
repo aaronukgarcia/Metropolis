@@ -71,4 +71,20 @@ const (
 	// narrowed — a bare int8(sat=200) wraps to -56, and an out-of-domain
 	// enum is a data error, not a clampable number (AC-13/GR#16).
 	ErrFieldOutOfRange = "MET-G007"
+
+	// ErrFertilityDataInvalid: data/fertility.json (FEAT-160's childbearing
+	// balance config) is missing, malformed, or fails its own schema
+	// validation (a missing unit/disclosure, a non-finite value, an
+	// out-of-order age window). Rejected at load time rather than falling
+	// back to a silently-invented default (GR#15) — mirrors
+	// engine.census's ErrCensusDataInvalid precedent.
+	ErrFertilityDataInvalid = "MET-G008"
+
+	// ErrFertilityBirthRejected: a fertility-driven birth's constructed
+	// Citizen record failed ValidateCitizen (e.g. a config-derived
+	// out-of-range BirthMonth). This should never occur for a well-formed
+	// month/config, but is logged loudly rather than silently dropped or
+	// allowed to corrupt the cold store (GR#1) — the birth is skipped for
+	// that couple this month rather than crashing the monthly pass.
+	ErrFertilityBirthRejected = "MET-G009"
 )
