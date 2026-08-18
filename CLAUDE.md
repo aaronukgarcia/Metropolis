@@ -102,7 +102,7 @@ If the summary shows git NOT SYNCED or a Vestige problem, surface that to the us
 
 ## 👥 Dev-Team Process (MANDATORY for build work — Aaron-directed, 2026-08-08)
 
-Bill (Fable 5) is the **lead: architecture, briefs, final review of test-clean work only, commits, BOW state**. All build work is delegated to subagents on **Sonnet** (save Fable tokens for lead judgement):
+**The lead session** (Fable 5 — currently the **Bev** slot; slot names no longer imply a model, 2026-08-18) owns **architecture, briefs, final review of test-clean work only, commits/merges, BOW state**. Parallel sessions are model-mixed: **Bill and Bob run deepseek** (Bill = oversight/quality, Bob = RM/BA + allocator), **Ben runs Gemini CLI** (coder). Non-Claude sessions do NOT run the Claude Code PreToolUse guard hooks — their discipline comes from `docs/planning/parallel-coder-brief.md` + `/dev-help` + per-session worktrees (`E:\git\metropolis-<name>`, branch `lane/<name>`), and the lead reviews everything at PR time. The lead's build work is delegated to subagents on **Sonnet** (save Fable tokens for lead judgement):
 
 ```
 Bill brief → BA acceptance criteria (docs/planning/acceptance/<mkey>.md, BEFORE dev dispatch)
