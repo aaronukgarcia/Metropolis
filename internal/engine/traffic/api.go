@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/education"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/roads"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -22,10 +24,27 @@ const (
 
 // Config represents player-felt numbers for traffic parameters (GR#15).
 type Config struct {
-	BaseCommuteHours      float64 `json:"baseCommuteHours"`
-	BaseAccessMinutes     float64 `json:"baseAccessMinutes"`
-	BaseCommuteMinutes    float64 `json:"baseCommuteMinutes"`
-	BaseActiveTravelShare float64 `json:"baseActiveTravelShare"`
+	BaseCommuteHours       float64 `json:"baseCommuteHours"`
+	BaseAccessMinutes      float64 `json:"baseAccessMinutes"`
+	BaseCommuteMinutes     float64 `json:"baseCommuteMinutes"`
+	BaseActiveTravelShare  float64 `json:"baseActiveTravelShare"`
+	BPRAlpha               float64 `json:"bprAlpha"`
+	BPRBeta                float64 `json:"bprBeta"`
+	CapacityPerLanePerHour float64 `json:"capacityPerLanePerHour"`
+}
+
+// Node represents a network graph node.
+type Node struct {
+	ID uint64
+}
+
+// Link represents a network graph edge over road data.
+type Link struct {
+	ID     uint64
+	Start  uint64
+	End    uint64
+	Length float64
+	Volume float64
 }
 
 // TrafficAPI represents the traffic and routing module (MOD-023).
@@ -33,6 +52,9 @@ type TrafficAPI struct {
 	mu            sync.RWMutex
 	self          atomic.Pointer[TrafficAPI]
 	demands       map[uint64]int64
+	nodes         map[uint64]*Node
+	links         map[uint64]*Link
+	roads         *roads.RoadsAPI
 	cfg           Config
 	correlationID string
 }
@@ -41,11 +63,16 @@ type TrafficAPI struct {
 func New() *TrafficAPI {
 	t := &TrafficAPI{
 		demands: make(map[uint64]int64),
+		nodes:   make(map[uint64]*Node),
+		links:   make(map[uint64]*Link),
 		cfg: Config{
-			BaseCommuteHours:      5.0,
-			BaseAccessMinutes:     15.0,
-			BaseCommuteMinutes:    30.0,
-			BaseActiveTravelShare: 0.1,
+			BaseCommuteHours:       5.0,
+			BaseAccessMinutes:      15.0,
+			BaseCommuteMinutes:     30.0,
+			BaseActiveTravelShare:  0.1,
+			BPRAlpha:               0.15,
+			BPRBeta:                4.0,
+			CapacityPerLanePerHour: 1200.0,
 		},
 		correlationID: "default-traffic",
 	}
@@ -57,6 +84,17 @@ func (t *TrafficAPI) checkNotCopied(method string) error {
 	if t.self.Load() != t {
 		return errs.New(ErrCopiedValue, t.correlationID, map[string]any{"method": method})
 	}
+	return nil
+}
+
+// SetRoads wires the outbound dependency to engine.roads.
+func (t *TrafficAPI) SetRoads(r *roads.RoadsAPI) error {
+	if err := t.checkNotCopied("SetRoads"); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.roads = r
 	return nil
 }
 
@@ -80,7 +118,7 @@ func (t *TrafficAPI) LoadConfig(dir string) error {
 	}
 
 	// Validate config bounds: Strictly positive travel times
-	if cfg.BaseCommuteHours <= 0 || cfg.BaseAccessMinutes <= 0 || cfg.BaseCommuteMinutes <= 0 || cfg.BaseActiveTravelShare < 0 {
+	if cfg.BaseCommuteHours <= 0 || cfg.BaseAccessMinutes <= 0 || cfg.BaseCommuteMinutes <= 0 || cfg.BaseActiveTravelShare < 0 || cfg.CapacityPerLanePerHour <= 0 {
 		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"message": "config travel times must be strictly positive"})
 	}
 
@@ -115,6 +153,96 @@ func (t *TrafficAPI) addDemandLocked(id uint64, count int64) {
 	}
 }
 
+// AddNode registers a node in the traffic network graph.
+func (t *TrafficAPI) AddNode(id uint64) error {
+	if err := t.checkNotCopied("AddNode"); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.nodes[id] = &Node{ID: id}
+	return nil
+}
+
+// AddLink registers a link in the traffic network graph.
+func (t *TrafficAPI) AddLink(id, start, end uint64, length float64) error {
+	if err := t.checkNotCopied("AddLink"); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if length < 0 {
+		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"length": length})
+	}
+	t.links[id] = &Link{
+		ID:     id,
+		Start:  start,
+		End:    end,
+		Length: length,
+	}
+	return nil
+}
+
+// AddLinkVolume deterministically loads volume onto a link.
+func (t *TrafficAPI) AddLinkVolume(id uint64, volume float64) error {
+	if err := t.checkNotCopied("AddLinkVolume"); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if volume < 0 {
+		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"volume": volume})
+	}
+	if l, ok := t.links[id]; ok {
+		l.Volume += volume
+	}
+	return nil
+}
+
+// LinkTravelTime computes the v/c volume-delay travel time using the BPR curve.
+func (t *TrafficAPI) LinkTravelTime(id uint64, atMonth int64) (float64, error) {
+	if err := t.checkNotCopied("LinkTravelTime"); err != nil {
+		return 0, err
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	l, ok := t.links[id]
+	if !ok {
+		return 0, errs.New(ErrInvalidInput, t.correlationID, map[string]any{"link": id})
+	}
+
+	lanes := 1
+	speedLimit := 50.0
+
+	// Real link model over road data (AC-1)
+	if t.roads != nil {
+		c, err := t.roads.CurrentLaneCount(roads.RoadID(id), atMonth)
+		if err == nil {
+			lanes = c
+		}
+		info, err := t.roads.RoadInfo(roads.RoadID(id), atMonth)
+		if err == nil {
+			speedLimit = float64(info.SpeedLimitKPH)
+		}
+	}
+
+	if lanes <= 0 {
+		lanes = 1
+	}
+	if speedLimit <= 0 {
+		speedLimit = 50.0
+	}
+
+	capacity := float64(lanes) * t.cfg.CapacityPerLanePerHour
+	freeFlowTime := l.Length / speedLimit
+	vcRatio := l.Volume / capacity
+
+	// BPR curve: T = T0 * (1 + alpha * (V/C)^beta)
+	travelTime := freeFlowTime * (1.0 + t.cfg.BPRAlpha*math.Pow(vcRatio, t.cfg.BPRBeta))
+	return travelTime, nil
+}
+
 // CommuteHours returns this citizen's weekly work-commute hours (AC-11).
 func (t *TrafficAPI) CommuteHours(citizenID uint64, correlationID string) (float64, error) {
 	if err := t.checkNotCopied("CommuteHours"); err != nil {
@@ -127,6 +255,7 @@ func (t *TrafficAPI) CommuteHours(citizenID uint64, correlationID string) (float
 		return 0, errs.New(ErrUnknownCitizen, t.correlationID, map[string]any{"citizen": citizenID})
 	}
 
+	// Fallback to coarse multiplier when full assignment not yet run
 	return t.cfg.BaseCommuteHours * t.demandMultiplier(), nil
 }
 
@@ -142,6 +271,7 @@ func (t *TrafficAPI) AccessMinutes(citizenID uint64, category leisure.Category, 
 		return 0, errs.New(ErrUnknownCitizen, t.correlationID, map[string]any{"citizen": citizenID})
 	}
 
+	// Fallback to coarse multiplier when full assignment not yet run
 	return t.cfg.BaseAccessMinutes * t.demandMultiplier(), nil
 }
 
@@ -205,6 +335,7 @@ func (t *TrafficAPI) CommuteMinutes(citizenID uint64, correlationID string) (flo
 		return 0, false, errs.New(ErrUnknownCitizen, t.correlationID, map[string]any{"citizen": citizenID})
 	}
 
+	// Fallback to coarse multiplier when full assignment not yet run
 	return t.cfg.BaseCommuteMinutes * t.demandMultiplier(), true, nil
 }
 

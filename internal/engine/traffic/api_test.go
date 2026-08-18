@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/education"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/roads"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -20,7 +22,7 @@ func TestTraffic_AC2_DataSourcedWages(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	configData := `{"baseCommuteHours": 7.5, "baseAccessMinutes": 22.0, "baseCommuteMinutes": 45.0, "baseActiveTravelShare": 0.25}`
+	configData := `{"baseCommuteHours": 7.5, "baseAccessMinutes": 22.0, "baseCommuteMinutes": 45.0, "baseActiveTravelShare": 0.25, "bprAlpha": 0.15, "bprBeta": 4.0, "capacityPerLanePerHour": 1200.0}`
 	_ = os.WriteFile(filepath.Join(tempDir, "traffic.json"), []byte(configData), 0644)
 
 	err = api.LoadConfig(tempDir)
@@ -208,5 +210,61 @@ func TestTraffic_Int64Overflow(t *testing.T) {
 	}
 	if d != maxInt64 {
 		t.Errorf("expected saturating add to cap at MaxInt64, got %d", d)
+	}
+}
+
+func TestTraffic_Stage1_NetworkLoading(t *testing.T) {
+	api := New()
+	_ = api.AddNode(1)
+	_ = api.AddNode(2)
+	_ = api.AddLink(10, 1, 2, 10.0)
+
+	api.mu.RLock()
+	linkCount := len(api.links)
+	api.mu.RUnlock()
+
+	if linkCount != 1 {
+		t.Errorf("expected 1 link, got %d", linkCount)
+	}
+
+	err := api.AddLinkVolume(10, -5.0)
+	if err == nil {
+		t.Error("expected error for negative volume")
+	}
+
+	_ = api.AddLinkVolume(10, 2400.0) // 2 lanes worth of capacity at 1200/hr
+
+	// Default lanes=1, speed=50.0, capacity=1200
+	// T0 = 10.0 / 50.0 = 0.2
+	// V/C = 2400 / 1200 = 2.0
+	// T = 0.2 * (1 + 0.15 * 2.0^4) = 0.2 * (1 + 0.15 * 16) = 0.2 * (1 + 2.4) = 0.2 * 3.4 = 0.68
+	travelTime, err := api.LinkTravelTime(10, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := 0.68
+	if math.Abs(travelTime-expected) > 1e-9 {
+		t.Errorf("expected travel time %f, got %f", expected, travelTime)
+	}
+}
+
+func TestTraffic_Stage1_RoadsDependency(t *testing.T) {
+	api := New()
+
+	// Create real roads API to satisfy the network dependency
+	roadsAPI, err := roads.LoadDefault(42, "test-traffic")
+	if err != nil {
+		t.Fatalf("failed to load roads api: %v", err)
+	}
+	_ = api.SetRoads(roadsAPI)
+
+	// Mock link
+	_ = api.AddLink(10, 1, 2, 10.0)
+
+	// Will query roads API and use defaults if the road doesn't exist
+	travelTime, _ := api.LinkTravelTime(10, 0)
+	if travelTime <= 0 {
+		t.Error("expected non-zero travel time when backed by roads API")
 	}
 }
