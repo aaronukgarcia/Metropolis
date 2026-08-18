@@ -415,7 +415,8 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		// Validate the enum domains through the shared per-field validators
 		// BEFORE mutating either store — an out-of-domain state/sector would
 		// otherwise pack to an invalid (15,15) value in the cold column, and
-		// an EmploymentState(5) would persist a value outside the 0-4 domain.
+		// an EmploymentState(6) would persist a value outside the 0-5 domain
+		// (0-5 since EmploymentOffMap=5 widened it — FEAT-198).
 		if err := validateEmploymentState(cmd.CitizenID, cmd.Employment, cmd.CorrelationID); err != nil {
 			return err
 		}

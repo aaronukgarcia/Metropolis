@@ -38,6 +38,15 @@ const (
 	EmploymentEmployed   EmploymentState = 2
 	EmploymentUnemployed EmploymentState = 3
 	EmploymentRetired    EmploymentState = 4
+	// EmploymentOffMap: resident holds a real job in an off-map commute pool
+	// (London/Ashford/Dover, §21) tracked by engine.extcommute's own
+	// assignments map ({poolID, sinceMonth} lives there, not here — GR#3
+	// single source of truth, see docs/planning/icd/engine.citizens-offmap.md
+	// §12 Open Decision 1). Citizens stores only this coarse bucket; it is
+	// still a resident (commutes out and back), so this is a relabelling,
+	// never a birth/death/migration event (no conservation-accumulator
+	// effect, ICD §4). Added FEAT-198.
+	EmploymentOffMap EmploymentState = 5
 )
 
 // Sector is the employment sector, a bucketed code.

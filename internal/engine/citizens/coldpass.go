@@ -229,6 +229,14 @@ func (s *ColdShard) matchJob(seed uint64, month int64, i int) {
 			sector := Sector(stream.IntN(4) + 1)
 			s.employment[i] = packEmployment(EmploymentEmployed, sector)
 		}
+	case EmploymentOffMap:
+		// Off-map-employed citizens already have a real job (in an
+		// extcommute pool, off-map) — the statistical job-matching draw
+		// must not fire for them, same as an on-map EmploymentEmployed
+		// citizen is exempt from re-matching. Explicit no-op case per
+		// docs/planning/icd/engine.citizens-offmap.md §11 (this was an
+		// accidental no-op via Go's zero-case fallthrough before FEAT-198;
+		// now documented so a future reader cannot mistake it for a gap).
 	}
 }
 

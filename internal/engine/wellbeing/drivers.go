@@ -134,6 +134,20 @@ func jobLevel(state citizens.EmploymentState, sector citizens.Sector) float64 {
 		default:
 			return 0.5
 		}
+	case citizens.EmploymentOffMap:
+		// Off-map-employed (extcommute pool, §21) citizens have a real,
+		// often well-paid job — just not one with a sector recorded here
+		// (extcommute.Assign writes SectorNone, ICD §4). Without this
+		// explicit case the pre-existing `default: return 0.0` below would
+		// silently score them WORSE than EmploymentUnemployed's 0.1,
+		// corrupting jobAmbitionMismatchDelta for every dormitory-town
+		// resident (docs/planning/icd/engine.citizens-offmap.md §11, REAL
+		// SILENT-MISCLASSIFICATION RISK). Per the ICD: treat as the
+		// employed-equivalent baseline — the same unknown/off-map-sector
+		// 0.5 the EmploymentEmployed switch's own default/SectorPrimary
+		// case above uses. Documented ASM-5-class placeholder, same as the
+		// rest of this function — not a new balance decision (FEAT-198).
+		return 0.5
 	default:
 		return 0.0
 	}
