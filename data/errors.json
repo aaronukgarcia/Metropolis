@@ -1285,7 +1285,7 @@
       "severity": "error",
       "module": "harness.synth",
       "message": "perf CI regression detected: {message}",
-      "remedy": "M0-ENG §6 point 5: a commit that regresses monthly-tick time more than {threshold} (as a fraction) at the 1M-citizen synthetic fails the build. Investigate what the commit changed on the tick path (or, if this is a false positive from a genuinely noisy runner, re-run before concluding the code is at fault -- MinMeasurableDuration's noise floor already screens out near-zero-duration measurements, but does not eliminate all runner variance)."
+      "remedy": "M0-ENG §6 point 5, applied since BUG-272 to the PRIMARY, deterministic allocation-based signal (AllocBytes/AllocCount): a commit that regresses either allocation metric more than {threshold} (as a fraction) at the 1M-citizen synthetic fails the build -- allocation counts are identical run-to-run for the same commit (modulo negligible incidental noise, ~0.2% observed), unlike sub-millisecond wall-clock timing on shared CI hardware, so this signal does not flap on runner load. Wall-clock is a demoted ADVISORY check that only contributes to this failure on a GROSS (WallClockGrossRegressionThreshold, e.g. >2x) slowdown, never on ordinary CI jitter. Investigate what the commit changed on the tick path -- a real allocation regression is not a runner-noise artifact the way a wall-clock delta can be."
     },
     "MET-H308": {
       "severity": "error",
@@ -1297,7 +1297,7 @@
       "severity": "warn",
       "module": "harness.synth",
       "message": "perf CI gate could not evaluate this run: {message}",
-      "remedy": "BUG-071: CompareToBaseline skipped the percentage regression check (ScaleMismatch or BelowNoiseFloor) rather than genuinely passing or failing -- this is NOT a pass. cmd/perfci exits its distinct could-not-evaluate code and does not record this run's measurement as the new baseline. Re-run at a scale/noise level the gate can actually judge (matching CitizenCount/Months against the stored baseline, and comfortably above MinMeasurableDuration) before trusting this commit's perf status either way."
+      "remedy": "BUG-071: CompareToBaseline skipped the percentage regression check (ScaleMismatch or BelowNoiseFloor) rather than genuinely passing or failing -- this is NOT a pass. cmd/perfci exits its distinct could-not-evaluate code and does not record this run's measurement as the new baseline. Since BUG-272, BelowNoiseFloor means the PRIMARY allocation-based signal could not be judged (either side's AllocCount is below MinMeasurableAllocs) -- re-run at a scale the gate can actually judge (matching CitizenCount/Months against the stored baseline, and comfortably above MinMeasurableAllocs) before trusting this commit's perf status either way."
     },
     "MET-H310": {
       "severity": "error",
