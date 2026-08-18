@@ -176,7 +176,7 @@ func TestServeMetrics_RefusesWithoutEnable(t *testing.T) {
 	// No gate configured at all.
 	if srv, err := ServeMetrics("127.0.0.1:0", nil, reg); err == nil {
 		if srv != nil {
-			srv.Close()
+			_ = srv.Close()
 		}
 		t.Fatal("expected an error with no Gate configured, got nil")
 	} else if !containsCode(err, ErrMetricsServerNotEnabled) {
@@ -189,7 +189,7 @@ func TestServeMetrics_RefusesWithoutEnable(t *testing.T) {
 	}
 	if srv, err := ServeMetrics("127.0.0.1:0", denyGate, reg); err == nil {
 		if srv != nil {
-			srv.Close()
+			_ = srv.Close()
 		}
 		t.Fatal("expected an error from a denying Gate, got nil")
 	}
@@ -198,7 +198,7 @@ func TestServeMetrics_RefusesWithoutEnable(t *testing.T) {
 	allowGate := func(correlationID string) error { return nil }
 	if srv, err := ServeMetrics("127.0.0.1:0", allowGate, nil); err == nil {
 		if srv != nil {
-			srv.Close()
+			_ = srv.Close()
 		}
 		t.Fatal("expected an error with a nil Registry, got nil")
 	} else if !containsCode(err, ErrMetricsServerNotEnabled) {
@@ -208,7 +208,7 @@ func TestServeMetrics_RefusesWithoutEnable(t *testing.T) {
 	// A non-localhost address is refused even with an approving gate.
 	if srv, err := ServeMetrics("0.0.0.0:0", allowGate, reg); err == nil {
 		if srv != nil {
-			srv.Close()
+			_ = srv.Close()
 		}
 		t.Fatal("expected an error for a non-localhost address, got nil")
 	} else if !containsCode(err, ErrMetricsAddrNotLocal) {
@@ -304,7 +304,7 @@ func TestNewMetricsHandler_ServesEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /metrics.json: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("GET /metrics.json status = %d, want 200", resp.StatusCode)
 	}
@@ -324,7 +324,7 @@ func TestNewMetricsHandler_ServesEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /: %v", err)
 	}
-	defer resp2.Body.Close()
+	defer func() { _ = resp2.Body.Close() }()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", resp2.StatusCode)
 	}
@@ -350,7 +350,7 @@ func TestNewMetricsHandler_ServesEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /metrics.json (nil registry): %v", err)
 	}
-	defer resp3.Body.Close()
+	defer func() { _ = resp3.Body.Close() }()
 	if resp3.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("nil-registry status = %d, want 503", resp3.StatusCode)
 	}
@@ -375,7 +375,7 @@ func TestServeMetrics_StartsWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /metrics.json against real listener: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
