@@ -98,7 +98,15 @@
       "G4000-G4099": "reserved for engine.policies (internal/engine/policies: the §52 policy library, named-district scope system, same-model enactment preview, PreviewDrift reckoning, and interaction/conflict surfaces — MOD-064. The E layer is fully exhausted and G000-G3999 were claimed by earlier engine modules, so engine.policies opens G4000-G4099 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G40\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G40xx code existed either place.)",
       "G4400-G4499": "reserved for engine.tourism (internal/engine/tourism: the §44 holiday-tourism visitor economy — the day-tripper/staying-visitor parallel population stream, the decomposed attraction-portfolio draw score, accommodation-stock capacity enforcement, and the August stress scenario — MOD-057. The E layer is fully exhausted and G000-G4399 were claimed by earlier engine modules, so engine.tourism opens G4400-G4499 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G44\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G44xx code existed either place.)",
       "F900-F919": "reserved for foundation.integration (internal/foundation/integration: FEAT-188's priority-tiered overflow queue (queue.go/queue_disk.go) wrapping protocol.Transport -- T0 never-enqueueable exhaustion, T1 disk-spill write/read/torn-segment failures, spill directory creation failures, and the QueuedTransport SEC-020-class copy guard. F900-F999 was entirely unclaimed (MET-F900/F901/F902/F999 appear only as synthetic fixture literals inside internal/foundation/errs' own _test.go files, which the source scanner excludes outright, so they carry no real registration and no collision). Checked against this table AND `grep -rn \"MET-F9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior real MET-F9xx code existed either place.)",
-      "G4200-G4299": "reserved for engine.fuel (internal/engine/fuel: the §49 vehicles/fuel/EV-transition module — data/fuel.json load/schema-validation failures, the unmitigated fuel-shortage event (no strategic reserve, no alternative supply), unknown-era / invalid-hour / unknown-commodity rejections, the unwired logistics/tax dependencies, the copied-value guard, and generic invalid-input rejections — MOD-062. Fortieth G-layer engine claim after engine.tourism's G4100-G4199; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G42\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G42xx code existed either place.)"
+      "G4200-G4299": "reserved for engine.fuel (internal/engine/fuel: the §49 vehicles/fuel/EV-transition module — data/fuel.json load/schema-validation failures, the unmitigated fuel-shortage event (no strategic reserve, no alternative supply), unknown-era / invalid-hour / unknown-commodity rejections, the unwired logistics/tax dependencies, the copied-value guard, and generic invalid-input rejections — MOD-062. Fortieth G-layer engine claim after engine.tourism's G4100-G4199; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G42\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G42xx code existed either place.)",
+      "G4100-G4199": "reserved for engine.staffing (internal/engine/staffing: citizens as operators + repair staff, qualification/eligibility checks, and the finite era-scaled off-map contractor pool — MOD-073. Honours lane/ben's existing claim of this block, auto-claimed there via tools/plan/add-error.js claim-range on 2026-08-18 (BUG-273) before this main-checkout registration existed — main's own G4100-G4199 had been informally claimed in source comments only by engine.airunits (internal/engine/airunits/errors.go), which was never registered here and is renumbered to G4900-G4999 below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G4300-G4399": "reserved for engine.prison (internal/engine/prison: the §43 prison estate, the category-mismatch penalty, the three regime programmes, the reoffending formula, the youth pipeline, overcrowding including §36 sold places, and the independent intake ledger — MOD-056. Honours lane/bob's existing claim of this block, recorded in metropolis-bob's data/errors.json — this collided with lane/bob's own later engine.shopping claim of the same block, which is renumbered to G4700-G4799 below since engine.prison's claim came first. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G4500-G4599": "reserved for engine.traffic (internal/engine/traffic: routing & traffic — SUE assignment, junction models, spillback, mode logit, and commute accounting — MOD-023. Honours lane/ben's existing claim of this block, auto-claimed there via tools/plan/add-error.js claim-range on 2026-08-18 (BUG-273) — this collided with engine.extcommute's earlier informal claim of the same block recorded only in internal/engine/extcommute/errors.go's source comment (MOD-035), which was never registered here and is renumbered to G4800-G4899 below since engine.traffic's registered claim is the mechanically-recorded one. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G4600-G4699": "reserved for engine.destination (internal/engine/destination: the forest holiday resort and mega-mall pit-reclamation retail feature — regional draw, town-centre-vs-mall pressure, and reclamation-site gating — MOD-061. Matches the range already claimed in internal/engine/destination/errors.go's own source comment (G4600-G4699); registered here for the first time under BUG-276, which found several modules' source-only range comments had never made it into this shared table, the structural cause of the cross-lane collisions this item resolves. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G4700-G4799": "reserved for engine.shopping (internal/engine/shopping — module previously claimed G4300-G4399 in lane/bob's data/errors.json, which collided with engine.prison's earlier-registered claim of the same block; renumbered to the next free G-layer block, G4700-G4799, since prison's claim came first (first-claim-wins). Any MET-G43xx codes engine.shopping had begun using must be re-minted at MET-G47xx to match. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G4800-G4899": "reserved for engine.extcommute (internal/engine/extcommute: MOD-035's finite off-map job pools, dormitory arithmetic, and the two-cap (pool/transport) assignment model. Module source (internal/engine/extcommute/errors.go) claims G4500-G4599, which collided with engine.traffic's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4800-G4899, since traffic's registered claim predates extcommute's unregistered source-comment claim (first-claim-wins). The 13 codes formerly MET-G4500..MET-G4512 are re-minted at MET-G4800..MET-G4812 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G4900-G4999": "reserved for engine.airunits (internal/engine/airunits: MOD-074's rotary-wing police/fire/ambulance/VIP choppers — purchase, pilot qualification, dispatch, maintenance, and weather-grounding. Module source (internal/engine/airunits/errors.go) claims G4100-G4199, which collided with engine.staffing's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4900-G4999, since staffing's registered claim predates airunits' unregistered source-comment claim (first-claim-wins). The 11 codes formerly MET-G4100..MET-G4110 are re-minted at MET-G4900..MET-G4910 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G5000-G5099": "reserved for engine.dispatch (internal/engine/dispatch: MOD-040's unified emergency & care dispatch — the parked module engine.airunits' ambulance role merges into, per GR#3. No prior claim of any kind existed on this block; pre-claimed here ahead of build so the module's eventual build does not need to run claim-range itself. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -4176,6 +4184,186 @@
       "module": "engine.fuel",
       "message": "A setter/query input was outside its documented domain ({field}={value})",
       "remedy": "Tanker throughput and strategic-reserve levels must be finite and non-negative; forecourt counts and populations must be non-negative; requested delivery quantities must be non-negative. A malformed input is rejected, never clamped to a silently-plausible value (weakness pattern #4)."
+    },
+    "MET-G4800": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "data/extcommute.json could not be loaded or failed schema validation (missing file, malformed JSON, a non-positive transport-capacity figure)",
+      "remedy": "Check that data/extcommute.json exists at the resolved data directory and passes schema validation. Wraps the underlying foundation/data error."
+    },
+    "MET-G4801": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "data/external_world.json could not be loaded or failed schema validation, OR a pool's capacity curve does not cover era 1, OR a pool names a transport channel with no capacity entry in data/extcommute.json",
+      "remedy": "Wraps the underlying foundation/data error (AC-15: never a silent zero-capacity or unlimited-capacity default)."
+    },
+    "MET-G4802": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "an off-map assignment was requested for a pool whose finite, era-scaled capacity is already exhausted",
+      "remedy": "The first cap of the two-cap model (AC-3/AC-4). Distinct from ErrTransportCapacity and ErrAlreadyOffMap."
+    },
+    "MET-G4803": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "an off-map assignment was requested for a pool with free slots but no reaching transport leg with available capacity after engine.traffic's congestion",
+      "remedy": "The second cap of the two-cap model (A6b/R6(b)). Distinct from ErrPoolFull."
+    },
+    "MET-G4804": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "an off-map assignment was requested for a citizen already holding an off-map job",
+      "remedy": "Never silently overwrites the first assignment (AC-11)."
+    },
+    "MET-G4805": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "a command named a pool id not present in data/external_world.json",
+      "remedy": "Never a silently-created placeholder pool."
+    },
+    "MET-G4806": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "an off-map assignment was requested for a citizen id the injected citizens seam reports absent",
+      "remedy": "Never a fabricated placeholder citizen (AC-11/GR#17)."
+    },
+    "MET-G4807": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "a release or assignment query named a citizen not currently holding an off-map job",
+      "remedy": "Never a silent no-op."
+    },
+    "MET-G4808": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "an era/tier argument lay outside the milestone ladder (1..13, §4)",
+      "remedy": "Rejected rather than silently clamped to a neighbouring tier (GR#16)."
+    },
+    "MET-G4809": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "a method was called on a struct-copied *ExtCommuteAPI, not the one New/Load returned",
+      "remedy": "SEC-020 family, mirroring engine.crime / engine.prison. Use the original pointer."
+    },
+    "MET-G4810": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "a command carried a structurally invalid numeric input (a negative vacancy count, a non-finite or out-of-range congestion figure)",
+      "remedy": "Never silently clamped (GR#16)."
+    },
+    "MET-G4811": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "a stateful operation required a registered dependency seam (engine.citizens, engine.traffic, engine.finance) that the composition root has not wired",
+      "remedy": "Fails closed rather than silently skipping the check (GR#17/GR#20)."
+    },
+    "MET-G4812": {
+      "severity": "error",
+      "module": "engine.extcommute",
+      "message": "SelectPool found no pool with both a free slot and an available reaching transport leg at the given era",
+      "remedy": "Never a silently-picked ineligible pool (AC-16)."
+    },
+    "MET-G4900": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "data/helicopters.json could not be loaded or failed schema validation (a type missing its cost, a negative running-cost component, an unrecognised type key, a role defined without its effect)",
+      "remedy": "Load-time — never a silent default substitution that would mask a data-authoring bug (AC-12)."
+    },
+    "MET-G4901": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "an operation named a unit-type key with no entry in data/helicopters.json's \"units\" set",
+      "remedy": "Rejected rather than silently substituted (AC-11)."
+    },
+    "MET-G4902": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "an operation named a chopper ID that was never purchased/registered",
+      "remedy": "Assigning a pilot to, dispatching, or querying a nonexistent chopper returns this — never a silently-created placeholder chopper (AC-11)."
+    },
+    "MET-G4903": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "a purchase command could not settle its capital cost against the finance seam",
+      "remedy": "No chopper is created and no finance state is mutated on this path (AC-11)."
+    },
+    "MET-G4904": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "a flight/dispatch command was issued for a chopper with no trained pilot assigned",
+      "remedy": "\"No pilot, no flight\" is mechanical, not a flavour note (AC-5, AC-11)."
+    },
+    "MET-G4905": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "AssignPilot was called with a citizen the staffing seam reports is not a trained pilot",
+      "remedy": "The chopper's pilot and state are left unchanged (AC-5, AC-11)."
+    },
+    "MET-G4906": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "a dispatch command was issued for a chopper that is out-of-service (maintenance, pilot removal, or weather grounding)",
+      "remedy": "Never a silently-accepted no-op (AC-11)."
+    },
+    "MET-G4907": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "a purchase command was issued before the type's data-loaded unlock milestone",
+      "remedy": "Choppers are a prestige/late-game asset, mechanically gated, not a hope (AC-3)."
+    },
+    "MET-G4908": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "a dispatch command was issued while the world seam reports adverse weather (wind at or above the data-loaded grounding threshold)",
+      "remedy": "Fails closed rather than silently flying through unsafe weather (AC-7, AC-11)."
+    },
+    "MET-G4909": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "an AirUnitsAPI method was called on a struct-copied value, not the one New constructed",
+      "remedy": "SEC-020 family. Use the original *AirUnitsAPI pointer."
+    },
+    "MET-G4910": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "a numeric command input was outside its documented domain (a negative amount, a negative month advance, a negative weather wind speed)",
+      "remedy": "Rejected, never silently clamped (GR#16, AC-11)."
+    },
+    "MET-G4600": {
+      "severity": "error",
+      "module": "engine.destination",
+      "message": "placement named an unrecognised archetype kind, a non-finite or under-minimum site footprint, an empty reclamation site key, or an out-of-range BDI input",
+      "remedy": "Rejected outright, never a silently-clamped or silently-defaulted placement (AC-10/GR#16)."
+    },
+    "MET-G4601": {
+      "severity": "error",
+      "module": "engine.destination",
+      "message": "a query named a destination id this API has never placed",
+      "remedy": "Never a silently-created zero entry (AC-10)."
+    },
+    "MET-G4602": {
+      "severity": "error",
+      "module": "engine.destination",
+      "message": "data/destination.json could not be loaded or failed schema validation (missing job count, negative footprint, an out-of-range draw/blight coefficient)",
+      "remedy": "Wraps the underlying foundation/data error; never a silent default figure (AC-11/GR#15)."
+    },
+    "MET-G4603": {
+      "severity": "error",
+      "module": "engine.destination",
+      "message": "a mega-mall placement named a site the engine.mining blight model does not report as an exhausted, not-yet-reclaimed extraction pit (§32, AC-3)",
+      "remedy": "Never accepted with a cosmetic reclamation skin."
+    },
+    "MET-G4604": {
+      "severity": "error",
+      "module": "engine.destination",
+      "message": "a method was called on a struct-copied *DestAPI, not the one New constructed",
+      "remedy": "SEC-020 family. Use the original *DestAPI pointer."
+    },
+    "MET-G4605": {
+      "severity": "error",
+      "module": "engine.destination",
+      "message": "an operation that needs a registered outbound dependency (tourism for regional draw, mining for reclamation/blight, parking for demand) was issued before that seam was wired",
+      "remedy": "Fail closed, never a silent zero (GR#17)."
     }
   }
 }
