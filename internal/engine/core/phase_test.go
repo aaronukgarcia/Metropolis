@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 
@@ -246,6 +247,263 @@ func (h laterHook) RunShard(shard int) ([]Effect, error) {
 	return nil, nil
 }
 func (laterHook) ApplyEffect(Effect) {}
+
+// --- BUG-269 SingleShardHook fast-path tests ---
+
+// countingHook is a PhaseHook whose RunShard call count and per-shard
+// argument are observable (mutex-guarded, never a map), so tests can
+// prove HOW MANY TIMES and for WHICH shards RunShard was invoked — the
+// direct way to distinguish "fast path took one call for shard 0" from
+// "pooled path called all 256 shards" without depending on timing.
+// shard0Effects (if set) is returned verbatim for shard 0 and mirrors
+// runPhaseForHookFast's expected input; every other shard returns
+// (nil, nil). singleShard, when true, additionally makes countingHook
+// implement SingleShardHook via *singleShardCountingHook below.
+type countingHook struct {
+	mu            *sync.Mutex
+	calls         *int
+	calledShards  *[]int
+	shard0Effects []Effect
+
+	applyMu *sync.Mutex
+	applied *[]Effect
+}
+
+func (h *countingHook) RunShard(shard int) ([]Effect, error) {
+	h.mu.Lock()
+	*h.calls++
+	*h.calledShards = append(*h.calledShards, shard)
+	h.mu.Unlock()
+	if shard != 0 {
+		return nil, nil
+	}
+	return h.shard0Effects, nil
+}
+
+func (h *countingHook) ApplyEffect(eff Effect) {
+	h.applyMu.Lock()
+	*h.applied = append(*h.applied, eff)
+	h.applyMu.Unlock()
+}
+
+// singleShardCountingHook embeds countingHook and additionally
+// implements SingleShardHook, always returning true — the explicit
+// opt-in BUG-269 introduces. Kept as a distinct type (rather than a
+// bool field checked from SingleShard) so the pooled-path comparison
+// hook (plain *countingHook) provably does NOT satisfy SingleShardHook
+// at the type-assertion runPhaseForHook performs — the same guarantee
+// production hooks rely on.
+type singleShardCountingHook struct {
+	*countingHook
+}
+
+func (singleShardCountingHook) SingleShard() bool { return true }
+
+// TestSingleShardHook_FastPathCallsShardZeroOnly proves the fast path
+// (STEP 3's "distinguishable from the pooled path" requirement): a hook
+// that opts into SingleShardHook has RunShard invoked exactly once, for
+// shard 0, never for 1..255 — the whole point of BUG-269's change.
+func TestSingleShardHook_FastPathCallsShardZeroOnly(t *testing.T) {
+	var mu, applyMu sync.Mutex
+	calls := 0
+	var calledShards []int
+	var applied []Effect
+
+	hook := singleShardCountingHook{&countingHook{
+		mu: &mu, calls: &calls, calledShards: &calledShards,
+		shard0Effects: []Effect{{Sequence: 0, Payload: "fast"}},
+		applyMu:       &applyMu, applied: &applied,
+	}}
+
+	e := NewEngine(WithPoolSize(4))
+	if err := e.RegisterPhaseHook(PhaseDailyTick, hook); err != nil {
+		t.Fatalf("RegisterPhaseHook: %v", err)
+	}
+	if err := e.AdvanceTicks("corr-fast", 1); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("RunShard called %d times, want exactly 1 (fast path)", calls)
+	}
+	if len(calledShards) != 1 || calledShards[0] != 0 {
+		t.Fatalf("RunShard called for shards %v, want [0]", calledShards)
+	}
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	if len(applied) != 1 || applied[0].Payload != "fast" {
+		t.Fatalf("applied = %v, want one effect with payload %q", applied, "fast")
+	}
+}
+
+// TestNonOptedHook_StillUsesPooledPath proves (b): a hook that does NOT
+// implement SingleShardHook is completely unaffected by BUG-269 — it
+// still gets the full det.RunPhase treatment, RunShard called once per
+// shard for all 256 shards.
+func TestNonOptedHook_StillUsesPooledPath(t *testing.T) {
+	var mu, applyMu sync.Mutex
+	calls := 0
+	var calledShards []int
+	var applied []Effect
+
+	hook := &countingHook{
+		mu: &mu, calls: &calls, calledShards: &calledShards,
+		shard0Effects: []Effect{{Sequence: 0, Payload: "pooled"}},
+		applyMu:       &applyMu, applied: &applied,
+	}
+
+	e := NewEngine(WithPoolSize(4))
+	if err := e.RegisterPhaseHook(PhaseDailyTick, hook); err != nil {
+		t.Fatalf("RegisterPhaseHook: %v", err)
+	}
+	if err := e.AdvanceTicks("corr-pooled", 1); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 256 {
+		t.Fatalf("RunShard called %d times, want exactly 256 (pooled path, one hook not opted in)", calls)
+	}
+	sortedShards := append([]int{}, calledShards...)
+	sort.Ints(sortedShards)
+	for i, s := range sortedShards {
+		if s != i {
+			t.Fatalf("pooled path did not call every shard exactly once: calledShards[%d] = %d after sort, want %d", i, s, i)
+		}
+	}
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	if len(applied) != 1 || applied[0].Payload != "pooled" {
+		t.Fatalf("applied = %v, want one effect with payload %q", applied, "pooled")
+	}
+}
+
+// TestSingleShardHook_FastPathMatchesPooledPath is the (a) determinism
+// equivalence test: the SAME shard-0 RunShard/ApplyEffect behaviour,
+// driven once through the fast path (hook opts in) and once forced
+// through the pooled path (an equivalent hook that does NOT opt in),
+// must produce byte-identical applied Effects. This is the direct proof
+// that runPhaseForHookFast's (Shard,Sequence)-degenerates-to-Sequence
+// reasoning (see its doc comment) holds in practice, not just on paper.
+func TestSingleShardHook_FastPathMatchesPooledPath(t *testing.T) {
+	// Emit several effects from shard 0 with sequence numbers
+	// deliberately out of emission order, so a bug that applied them in
+	// slice order (rather than sorted Sequence order) would be visible.
+	shard0 := []Effect{
+		{Sequence: 3, Payload: "s0:3"},
+		{Sequence: 1, Payload: "s0:1"},
+		{Sequence: 0, Payload: "s0:0"},
+		{Sequence: 2, Payload: "s0:2"},
+	}
+
+	var fastMu, fastApplyMu sync.Mutex
+	fastCalls := 0
+	var fastCalledShards []int
+	var fastApplied []Effect
+	fastHook := singleShardCountingHook{&countingHook{
+		mu: &fastMu, calls: &fastCalls, calledShards: &fastCalledShards,
+		shard0Effects: shard0, applyMu: &fastApplyMu, applied: &fastApplied,
+	}}
+	fastEngine := NewEngine(WithPoolSize(6))
+	if err := fastEngine.RegisterPhaseHook(PhaseDailyTick, fastHook); err != nil {
+		t.Fatalf("RegisterPhaseHook (fast): %v", err)
+	}
+	if err := fastEngine.AdvanceTicks("corr-equiv-fast", 1); err != nil {
+		t.Fatalf("AdvanceTicks (fast): %v", err)
+	}
+
+	var pooledMu, pooledApplyMu sync.Mutex
+	pooledCalls := 0
+	var pooledCalledShards []int
+	var pooledApplied []Effect
+	pooledHook := &countingHook{
+		mu: &pooledMu, calls: &pooledCalls, calledShards: &pooledCalledShards,
+		shard0Effects: shard0, applyMu: &pooledApplyMu, applied: &pooledApplied,
+	}
+	pooledEngine := NewEngine(WithPoolSize(6))
+	if err := pooledEngine.RegisterPhaseHook(PhaseDailyTick, pooledHook); err != nil {
+		t.Fatalf("RegisterPhaseHook (pooled): %v", err)
+	}
+	if err := pooledEngine.AdvanceTicks("corr-equiv-pooled", 1); err != nil {
+		t.Fatalf("AdvanceTicks (pooled): %v", err)
+	}
+
+	fastApplyMu.Lock()
+	gotFast := append([]Effect{}, fastApplied...)
+	fastApplyMu.Unlock()
+	pooledApplyMu.Lock()
+	gotPooled := append([]Effect{}, pooledApplied...)
+	pooledApplyMu.Unlock()
+
+	if len(gotFast) != len(shard0) || len(gotPooled) != len(shard0) {
+		t.Fatalf("got %d fast / %d pooled applied effects, want %d each", len(gotFast), len(gotPooled), len(shard0))
+	}
+	for i := range gotFast {
+		if gotFast[i] != gotPooled[i] {
+			t.Fatalf("applied[%d]: fast=%v pooled=%v — fast path diverged from pooled path", i, gotFast[i], gotPooled[i])
+		}
+	}
+	// Both must be in ascending Sequence order (0,1,2,3), proving the
+	// fast path's inline sort matches det.ApplyBarrier's canonical order.
+	for i, eff := range gotFast {
+		if eff.Sequence != i {
+			t.Fatalf("gotFast[%d].Sequence = %d, want %d (ascending canonical order)", i, eff.Sequence, i)
+		}
+	}
+}
+
+// TestSingleShardHookAssert_CatchesBrokenPromise is (d): a hook that
+// opts into SingleShardHook (SingleShard() == true) but, in violation
+// of its own promise, does real work on a shard other than 0 must be
+// caught by WithSingleShardAssert's dev-mode safety net — proving the
+// promise is guarded, not merely assumed.
+func TestSingleShardHookAssert_CatchesBrokenPromise(t *testing.T) {
+	hook := lyingSingleShardHook{}
+
+	e := NewEngine(WithPoolSize(4), WithSingleShardAssert(true))
+	if err := e.RegisterPhaseHook(PhaseDailyTick, hook); err != nil {
+		t.Fatalf("RegisterPhaseHook: %v", err)
+	}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("AdvanceTicks did not panic despite a SingleShardHook lying about shard 1 — safety net did not catch the broken promise")
+		}
+		msg := fmt.Sprintf("%v", r)
+		if !containsAll(msg, "BUG-269", "shard 1") {
+			t.Fatalf("panic message %q does not clearly identify the broken SingleShardHook promise", msg)
+		}
+	}()
+	_ = e.AdvanceTicks("corr-lying", 1)
+	t.Fatal("unreachable: AdvanceTicks should have panicked")
+}
+
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+// lyingSingleShardHook opts into SingleShardHook but actually emits an
+// Effect on shard 1 too — the broken-promise case
+// TestSingleShardHookAssert_CatchesBrokenPromise exercises.
+type lyingSingleShardHook struct{}
+
+func (lyingSingleShardHook) RunShard(shard int) ([]Effect, error) {
+	if shard == 1 {
+		return []Effect{{Sequence: 0, Payload: "shard1-should-not-exist"}}, nil
+	}
+	return nil, nil
+}
+func (lyingSingleShardHook) ApplyEffect(Effect) {}
+func (lyingSingleShardHook) SingleShard() bool  { return true }
 
 // fakeModule implements registry.Module minimally for tests.
 type fakeModule struct {

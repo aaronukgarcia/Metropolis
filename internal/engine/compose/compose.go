@@ -585,6 +585,11 @@ type noopHook struct {
 func (noopHook) RunShard(shard int) ([]core.Effect, error) { return nil, nil }
 func (noopHook) ApplyEffect(core.Effect)                   {}
 
+// SingleShard implements core.SingleShardHook (BUG-269): RunShard is a
+// nil-op for every shard including 0, so it trivially only "does work"
+// on shard 0 (none at all).
+func (noopHook) SingleShard() bool { return true }
+
 // spawnEffect carries a citizens/attract monthly spawn instruction from
 // RunShard (shard 0) to ApplyEffect (the single-goroutine barrier).
 type spawnEffect struct {
@@ -627,6 +632,11 @@ func (h *spawnHook) ApplyEffect(eff core.Effect) {
 	h.st.peopleDelta = num.SatAdd(h.st.peopleDelta, int64(p.count))
 }
 
+// SingleShard implements core.SingleShardHook (BUG-269): RunShard
+// returns (nil, nil) for every shard except 0 (see above) — the only
+// Effect ever emitted comes from shard 0.
+func (h *spawnHook) SingleShard() bool { return true }
+
 // financeEffect is the monthly finance stub's tick marker.
 type financeEffect struct{}
 
@@ -663,6 +673,11 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 	st.moneyFlows = num.SatAdd(st.moneyFlows, num.SatAdd(monthlyWages, monthlyTax))
 	st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(monthlyTax, monthlyWages))
 }
+
+// SingleShard implements core.SingleShardHook (BUG-269): RunShard
+// returns (nil, nil) for every shard except 0 (see above) — the only
+// Effect ever emitted comes from shard 0.
+func (h *financeHook) SingleShard() bool { return true }
 
 // --- consumption hook (MOD-021, real) ---
 
@@ -705,6 +720,11 @@ func (h *consumptionHook) ApplyEffect(eff core.Effect) {
 		return
 	}
 }
+
+// SingleShard implements core.SingleShardHook (BUG-269): RunShard
+// returns (nil, nil) for every shard except 0 (see above) — the only
+// Effect ever emitted comes from shard 0.
+func (h *consumptionHook) SingleShard() bool { return true }
 
 // drawConsumption solves the residential demand (one entity: the whole
 // city's population at the §17.1 per-person baseline) against water/power/
@@ -772,6 +792,12 @@ func (h *buildHook) ApplyEffect(eff core.Effect) {
 	}
 }
 
+// SingleShard implements core.SingleShardHook (BUG-269 — this is the
+// hook the regression report named directly): RunShard returns (nil,
+// nil) for every shard except 0 (see above) — the only Effect ever
+// emitted comes from shard 0.
+func (h *buildHook) SingleShard() bool { return true }
+
 // --- attract hook (MOD-029, real) ---
 
 // attractEffect is the monthly migration tick marker.
@@ -812,6 +838,11 @@ func (h *attractHook) ApplyEffect(eff core.Effect) {
 	h.st.peopleDelta = num.SatAdd(h.st.peopleDelta, res.NetApplied())
 	h.st.netMigration = num.SatAdd(h.st.netMigration, res.NetApplied())
 }
+
+// SingleShard implements core.SingleShardHook (BUG-269): RunShard
+// returns (nil, nil) for every shard except 0 (see above) — the only
+// Effect ever emitted comes from shard 0.
+func (h *attractHook) SingleShard() bool { return true }
 
 // applyMigration pushes the five §11 terms the composition root owns
 // (jobAvailability/serviceCoverage/environment/leisureFit/safety are

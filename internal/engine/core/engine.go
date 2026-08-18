@@ -124,6 +124,22 @@ func WithRegistry(r *registry.Registry) Option {
 	return func(e *Engine) { e.registry = r }
 }
 
+// WithSingleShardAssert enables a DEV-MODE-ONLY safety net for BUG-269's
+// SingleShardHook fast path (see phase.go's runPhaseForHookFast): when
+// true, every fast-path hook additionally has RunShard called for every
+// shard in [1, det.NumShards) — the same 255 calls the pooled path would
+// have made — and panics if any of them return a non-nil error or any
+// Effect, proving the hook's SingleShard() promise actually holds.
+//
+// This intentionally pays the full per-shard cost the fast path exists
+// to avoid, so it must NEVER be enabled in production: defaults to
+// false, and is meant for tests (or an explicit local debug run) that
+// want the extra assurance that a hook opting into SingleShardHook is
+// telling the truth, not a per-tick production safeguard.
+func WithSingleShardAssert(enabled bool) Option {
+	return func(e *Engine) { e.assertSingleShard = enabled }
+}
+
 // Engine is the tick orchestrator (T-ENGINE, M0-ENG §1.1): it owns the
 // simulation clock, the module registry instance, and the fixed phase
 // pipeline. See doc.go for the package-level contract this type
@@ -273,6 +289,12 @@ type Engine struct {
 	// (ErrSpeed8xGateNotConfigured, MET-E015) by checkSpeed8xAllowed
 	// (commands.go), never as "no gate configured, allow it".
 	speed8xGate Speed8xGate
+
+	// assertSingleShard is BUG-269's opt-in dev-mode safety net for the
+	// SingleShardHook fast path — see WithSingleShardAssert's doc
+	// comment. Defaults to false (production: fast path trusts the
+	// hook's promise, pays for shard 0 only).
+	assertSingleShard bool
 
 	// gameplayHandler is the injected gameplay-command handler (see
 	// GameplayCommandHandler's doc comment in commands.go). nil until
