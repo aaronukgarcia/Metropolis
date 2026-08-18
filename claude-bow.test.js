@@ -1194,8 +1194,15 @@ test('FIX-2: 5 real "Tripwire (mechanical)" strings copied verbatim from docs/pl
     { file: 'engine.capexport.md', cmd: "node -e \"const m=require('./code.json').modules.find(x=>x.key==='engine.capexport'); process.exit((m.inbound.consumers||[]).some(c=>c.key==='engine.rail')?1:0)\"", expectExit: 0 },
     // outbound.calls.some, OR-chained multi-target — docs/planning/acceptance/engine.coastal.md AC-10.
     { file: 'engine.coastal.md', cmd: "node -e \"const m=require('./code.json').modules.find(x=>x.key==='engine.coastal'); process.exit(m.outbound.calls.some(c=>c.key==='engine.tourism'||c.key==='engine.build')?1:0)\"", expectExit: 0 },
-    // bare (m.inbound.consumers||[]).length===0 check — docs/planning/acceptance/engine.defence.md AC-9.
-    { file: 'engine.defence.md', cmd: "node -e \"const m=require('./code.json').modules.find(x=>x.key==='engine.fdi'); process.exit((m.inbound.consumers||[]).length===0?0:1)\"", expectExit: 0 },
+    // (m.inbound.consumers||[]).some, single target — docs/planning/acceptance/engine.defence.md AC-9.
+    // BUG-254: AC-9's original bare `.length===0` count tripwire correctly
+    // fired when 118c359 registered engine.fdi's first three consumers
+    // (accelerator/spaceport/pharmacampus — none of them engine.defence), so
+    // the doc re-armed it as this membership test for the defence edge
+    // specifically, robust to unrelated consumers arriving. The parser's
+    // `inbound-length-zero` branch remains in claude-bow.js but no longer has
+    // a real acceptance-file exemplar.
+    { file: 'engine.defence.md', cmd: "node -e \"const m=require('./code.json').modules.find(x=>x.key==='engine.fdi'); process.exit((m.inbound.consumers||[]).some(c=>c.key==='engine.defence')?1:0)\"", expectExit: 0 },
     // outbound.calls.some, OR-chained multi-target — docs/planning/acceptance/engine.destination.md AC-7.
     { file: 'engine.destination.md', cmd: "node -e \"const m=require('./code.json').modules.find(x=>x.key==='engine.destination'); process.exit(m.outbound.calls.some(c=>c.key==='engine.shopping'||c.key==='engine.cafe')?1:0)\"", expectExit: 0 },
   ];

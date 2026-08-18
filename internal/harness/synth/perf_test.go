@@ -84,6 +84,45 @@ func TestRunPerf_MultipleMonthsAccumulatesTicks(t *testing.T) {
 	}
 }
 
+// TestMedianSampleIndex_PicksTheMedianElapsedWindow pins BUG-254's
+// sampling reduction: the recorded window must be the MEDIAN repetition,
+// so neither a lucky-fast minimum (BUG-254's frozen-baseline ratchet) nor
+// a scheduler-preemption maximum can become the gated figure. The fixture
+// is deliberately unsorted with the median in neither first nor last
+// position, so an implementation that returned min, max, first, or last
+// would all fail.
+func TestMedianSampleIndex_PicksTheMedianElapsedWindow(t *testing.T) {
+	samples := []tickSample{
+		{elapsed: 90 * time.Millisecond},
+		{elapsed: 41 * time.Millisecond},  // the lucky-fast outlier
+		{elapsed: 92 * time.Millisecond},  // the median (sorted: 41, 90, 92, 93, 156)
+		{elapsed: 156 * time.Millisecond}, // the preempted outlier
+		{elapsed: 93 * time.Millisecond},
+	}
+	if got := medianSampleIndex(samples); got != 2 {
+		t.Fatalf("medianSampleIndex = %d (elapsed %s), want 2 (the 92ms median window)", got, samples[got].elapsed)
+	}
+	// The caller's slice order is an input, not a scratch buffer — the
+	// helper must not have reordered it (RunPerf indexes back into it).
+	if samples[1].elapsed != 41*time.Millisecond || samples[3].elapsed != 156*time.Millisecond {
+		t.Fatal("medianSampleIndex reordered the caller's samples slice")
+	}
+}
+
+// TestTickSampleCount_IsOddAndAtLeastThree pins the two structural
+// properties RunPerf's median depends on (limits.go documents both): an
+// odd count makes the median a genuinely observed window rather than an
+// average, and fewer than three samples cannot reject any outlier at all.
+// Derived checks, not a pinned value — the count itself may be retuned.
+func TestTickSampleCount_IsOddAndAtLeastThree(t *testing.T) {
+	if TickSampleCount < 3 {
+		t.Fatalf("TickSampleCount = %d, want >= 3 — below that the median rejects no outliers and the sampling is decorative", TickSampleCount)
+	}
+	if TickSampleCount%2 == 0 {
+		t.Fatalf("TickSampleCount = %d, want odd — an even count makes the 'median' an interpolation between two windows, not an observed one", TickSampleCount)
+	}
+}
+
 // TestImplausibleReason_RejectsGiganticPerMonthTick is BUG-096's core
 // regression test: ImplausibleReason previously checked PerMonthTick < 0
 // only, so a gigantic-but-positive value (live-verified reproduction:

@@ -44,7 +44,9 @@ type BaselineComparison struct {
 	// pass the step check while the stored figure compounds 13.27x with
 	// zero signal (live-verified, BUG-083). CumulativeChecked is false
 	// (and CumulativeRegressed always false) when anchor is nil, scale-
-	// mismatched against current, or itself below MinMeasurableDuration
+	// mismatched against current, or its measured tick window
+	// (measuredTickWindow: PerMonthTick x Months, BUG-254) is below
+	// MinMeasurableDuration
 	// — the same defensive "skip rather than mislead" shape as
 	// ScaleMismatch/BelowNoiseFloor above, not folded into those two
 	// fields because a skipped CUMULATIVE check must never suppress a
@@ -78,17 +80,21 @@ type BaselineComparison struct {
 //     measurement), never a number picked once and frozen in source. A
 //     slower runner shifts both sides of the ratio together, so the
 //     percentage stays meaningful even as absolute times drift.
-//  2. A NOISE FLOOR (MinMeasurableDuration, limits.go). If EITHER the
-//     baseline or the current measurement is below this floor, the
-//     percentage comparison is skipped entirely (BelowNoiseFloor is set
-//     instead of Regressed) — a percentage computed against a near-zero
-//     absolute duration is dominated by GC/scheduler jitter, not real
-//     work. This is not a hypothetical: engine.core is a walking
-//     skeleton with ZERO registered phase hooks as of this sprint (see
-//     doc.go's "Status"), so a near-zero monthly-tick time is the COMMON
-//     case today, not a rare edge — without this floor, this gate would
-//     be exactly one BUG-031 waiting to happen the first time it ran on
-//     a busier-than-usual CI box.
+//  2. A NOISE FLOOR (MinMeasurableDuration, limits.go). If EITHER
+//     side's measured tick WINDOW (measuredTickWindow below:
+//     PerMonthTick x Months, the single timed span the per-month figure
+//     was derived from) is below this floor, the percentage comparison
+//     is skipped entirely (BelowNoiseFloor is set instead of Regressed)
+//     — a percentage computed against a window within a small multiple
+//     of the ~1ms Windows timer quantum is dominated by quantization
+//     and scheduler jitter, not real work. This is not a hypothetical:
+//     BUG-254 live-verified the failure in both directions — the
+//     walking-skeleton era's near-zero windows, and then FEAT-082-era
+//     ~10ms windows (-months 3) whose 18.9% peak-to-peak CI noise
+//     fabricated REGRESSED verdicts against the 10% threshold with zero
+//     code change. See MinMeasurableDuration's doc comment for the full
+//     arithmetic and why the floor attaches to the window rather than
+//     the per-month figure.
 //  3. A CITIZENCOUNT/MONTHS CROSS-CHECK (BUG-056), so the smoke-scale-
 //     vs-real-scale separation this gate depends on is not ONLY an
 //     operational convention (perf-smoke and perf-1m-probe writing to
@@ -129,6 +135,26 @@ type BaselineComparison struct {
 // may be nil (no anchor recorded yet, e.g. the very first comparison)
 // — the cumulative check is then simply skipped (CumulativeChecked
 // stays false), never treated as a failure of its own.
+// measuredTickWindow is the total measured tick span r's PerMonthTick
+// was derived from — PerMonthTick x Months — the quantity the noise
+// floor (MinMeasurableDuration, limits.go) is compared against since
+// BUG-254 (see that constant's doc comment for why the floor attaches to
+// the window, not the per-month figure).
+//
+// Deliberately reconstructed from PerMonthTick and Months rather than
+// read off r.TickTime, even though a genuine RunPerf record carries all
+// three consistently: PerMonthTick and Months are the two fields the
+// gate already validates (ScaleMismatch equality, ImplausibleReason's
+// Months/PerMonthTick bounds), while TickTime is otherwise-unvalidated —
+// a hand-injected record (the BUG-073/085/095 second-writer family)
+// could carry a huge TickTime alongside a tiny PerMonthTick to unlock a
+// comparison the floor should refuse. A floor derived only from the
+// validated fields leaves that route closed without adding yet another
+// cross-field consistency check.
+func measuredTickWindow(r PerfResult) time.Duration {
+	return r.PerMonthTick * time.Duration(r.Months)
+}
+
 func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) BaselineComparison {
 	if baseline == nil {
 		return BaselineComparison{
@@ -151,15 +177,17 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 		}
 	}
 
-	if baseline.PerMonthTick < MinMeasurableDuration || current.PerMonthTick < MinMeasurableDuration {
+	if measuredTickWindow(*baseline) < MinMeasurableDuration || measuredTickWindow(current) < MinMeasurableDuration {
 		return BaselineComparison{
 			HasBaseline:      true,
 			BaselinePerMonth: baseline.PerMonthTick,
 			CurrentPerMonth:  current.PerMonthTick,
 			BelowNoiseFloor:  true,
 			Message: fmt.Sprintf(
-				"both measurements must be >= %s to gate on a percentage regression; baseline=%s current=%s is below the noise floor, skipping the check",
-				MinMeasurableDuration, baseline.PerMonthTick, current.PerMonthTick,
+				"both measured tick windows (PerMonthTick x Months) must be >= %s to gate on a percentage regression (BUG-254); baseline window=%s (%s/month x %d) current window=%s (%s/month x %d) is below the noise floor, skipping the check",
+				MinMeasurableDuration,
+				measuredTickWindow(*baseline), baseline.PerMonthTick, baseline.Months,
+				measuredTickWindow(current), current.PerMonthTick, current.Months,
 			),
 		}
 	}
@@ -182,7 +210,7 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 	// function. An anchor that fails this is simply not consulted; it
 	// never turns into a false ScaleMismatch/BelowNoiseFloor verdict for
 	// the (already-validated) step check above.
-	if anchor != nil && anchor.CitizenCount == current.CitizenCount && anchor.Months == current.Months && anchor.PerMonthTick >= MinMeasurableDuration {
+	if anchor != nil && anchor.CitizenCount == current.CitizenCount && anchor.Months == current.Months && measuredTickWindow(*anchor) >= MinMeasurableDuration {
 		cumulativeDelta := float64(current.PerMonthTick-anchor.PerMonthTick) / float64(anchor.PerMonthTick)
 		cmp.AnchorPerMonth = anchor.PerMonthTick
 		cmp.CumulativeDeltaFraction = cumulativeDelta

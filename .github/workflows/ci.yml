@@ -340,13 +340,24 @@ jobs:
       # noise. Bump the generation again ONLY with a recorded reason of
       # this kind — an unexplained bump silently discards real history,
       # which is its own way of un-gating the gate.
+      #
+      # v3 (BUG-254, 2026-08-17): the measurement regime changed — the
+      # perfci step below now runs -months 96 (was 3) and RunPerf takes a
+      # median of synth.TickSampleCount tick windows, with the noise
+      # floor re-scoped to the measured window (see limits.go's
+      # MinMeasurableDuration). Every v2 record carries Months=3, so the
+      # first v3-regime run would hit CompareToBaseline's ScaleMismatch
+      # against it — an honest could-not-evaluate, but a permanent one.
+      # Orphaning the v2 entries lets the first post-fix run establish a
+      # fresh, honestly-measured baseline (AC-8 first-run behaviour),
+      # exactly the mechanism the v2 bump above already established.
       - name: Restore perf-results baseline
         uses: actions/cache@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v2-${{ github.run_id }}
+          key: perf-results-1m-smoke-v3-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-smoke-v2-
+            perf-results-1m-smoke-v3-
 
       # BUG-071: cmd/perfci now exits a DISTINCT code (3) when the gate
       # could not evaluate a regression (ScaleMismatch or, live-verified
@@ -386,7 +397,7 @@ jobs:
           set -e
           go build -o perfci-smoke.exe ./internal/harness/synth/cmd/perfci
           set +e
-          ./perfci-smoke.exe -preset 1M -citizens 2000 -months 3 -results perf-results.ndjson -commit ${{ github.sha }} -accepted-regressions perf-accepted-regressions.json
+          ./perfci-smoke.exe -preset 1M -citizens 2000 -months 96 -results perf-results.ndjson -commit ${{ github.sha }} -accepted-regressions perf-accepted-regressions.json
           code=$?
           set -e
           if [ "$code" -eq 3 ]; then
@@ -400,7 +411,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v2-${{ github.run_id }}
+          key: perf-results-1m-smoke-v3-${{ github.run_id }}
 
       # BUG-097: this job's save key above is unique per run (github.run_id)
       # because actions/cache/save cannot overwrite an existing key -- but
@@ -430,7 +441,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-smoke-v2-"
+          $prefix = "perf-results-1m-smoke-v3-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
@@ -563,13 +574,23 @@ jobs:
       # citizens fine and then could not record it. The v2 generation
       # orphans that unreadable history so the next dispatch records the
       # first REAL post-fix baseline.
+      #
+      # v3 (BUG-254, 2026-08-17): identical rationale to perf-smoke's v3
+      # bump above — the measurement step now runs -months 96 (was 3)
+      # with synth.TickSampleCount-median sampling and a window-scoped
+      # noise floor, so every v2 record (Months=3) would ScaleMismatch
+      # against the first v3-regime run. Since this job is REQUIRED and
+      # exit 3 hard-fails it (see the GATE FLIP note above), comparing
+      # across regimes would brick every merge; orphaning the v2 history
+      # lets the first run under -months 96 seed the fresh baseline
+      # (AC-8) instead.
       - name: Restore perf-results-1m-real baseline
         uses: actions/cache@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v2-${{ github.run_id }}
+          key: perf-results-1m-real-v3-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-real-v2-
+            perf-results-1m-real-v3-
 
       - name: Build perfci
         run: go build -o perfci.exe ./internal/harness/synth/cmd/perfci
@@ -600,7 +621,7 @@ jobs:
           $psi = New-Object System.Diagnostics.ProcessStartInfo
           $psi.FileName = ".\perfci.exe"
           $psi.ArgumentList.Add("-preset"); $psi.ArgumentList.Add("1M")
-          $psi.ArgumentList.Add("-months"); $psi.ArgumentList.Add("3")
+          $psi.ArgumentList.Add("-months"); $psi.ArgumentList.Add("96")
           $psi.ArgumentList.Add("-results"); $psi.ArgumentList.Add("perf-results-1m-real.ndjson")
           $psi.ArgumentList.Add("-commit"); $psi.ArgumentList.Add("${{ github.sha }}")
           $psi.ArgumentList.Add("-accepted-regressions"); $psi.ArgumentList.Add("perf-accepted-regressions.json")
@@ -650,12 +671,12 @@ jobs:
           path: perf-results-1m-real.ndjson
           if-no-files-found: warn
 
-      - name: Save perf-results-1m-real baseline (v2 generation, see restore step)
+      - name: Save perf-results-1m-real baseline (v3 generation, see restore step)
         if: always()
         uses: actions/cache/save@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v2-${{ github.run_id }}
+          key: perf-results-1m-real-v3-${{ github.run_id }}
 
       # BUG-097: identical rationale to perf-smoke's own pruning step —
       # this job's cache key is also unique-per-run and would otherwise
@@ -671,7 +692,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-real-v2-"
+          $prefix = "perf-results-1m-real-v3-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }

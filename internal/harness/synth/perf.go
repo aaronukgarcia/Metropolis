@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"runtime"
+	"sort"
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -32,8 +33,8 @@ type PerfResult struct {
 	Months       int
 	TotalTicks   int64
 
-	GenerationTime time.Duration // cost of Generate itself (AC-1b's O(citizenCount) work)
-	TickTime       time.Duration // total headless.Run wall time across all months
+	GenerationTime time.Duration // cost of Generate itself (AC-1b's O(citizenCount) work), measured once — never sampled
+	TickTime       time.Duration // headless.Run wall time across all months — the MEDIAN of TickSampleCount repeated windows (BUG-254, see RunPerf)
 	PerMonthTick   time.Duration // TickTime / Months — the figure AC-6/AC-10 gate on
 	PhaseTimings   []PhaseTiming
 
@@ -70,8 +71,8 @@ type PerfResult struct {
 	// regression can never be mistaken for each other, and so the tick
 	// figure stays a fair basis for comparison once real simulation
 	// content exists without any re-plumbing of this struct.
-	AllocBytes uint64 // runtime.MemStats.TotalAlloc delta across the headless.Run call
-	AllocCount uint64 // runtime.MemStats.Mallocs delta across the headless.Run call
+	AllocBytes uint64 // runtime.MemStats.TotalAlloc delta across the MEDIAN sampled headless.Run window (BUG-254: same repetition as TickTime, one coherent observation)
+	AllocCount uint64 // runtime.MemStats.Mallocs delta across the same median headless.Run window
 
 	GenerationAllocBytes uint64 // runtime.MemStats.TotalAlloc delta across the Generate call
 	GenerationAllocCount uint64 // runtime.MemStats.Mallocs delta across the Generate call
@@ -208,6 +209,35 @@ func (r PerfResult) ImplausibleReason() string {
 	}
 }
 
+// tickSample is one repetition of the months-long headless tick run
+// inside RunPerf's BUG-254 sampling loop — everything runHeadless
+// measures for one window, plus that window's own allocation deltas, so
+// the recorded PerfResult can carry the MEDIAN window's figures as one
+// coherent, genuinely-observed set rather than mixing fields from
+// different repetitions.
+type tickSample struct {
+	elapsed    time.Duration
+	ticks      int64
+	timings    []PhaseTiming
+	allocBytes uint64
+	allocCount uint64
+}
+
+// medianSampleIndex returns the index into samples of the median-elapsed
+// sample (upper median for an even count — TickSampleCount is odd on
+// purpose, see limits.go, so production never hits that case). The
+// original slice is not reordered: sample order is observable through
+// nothing, but sorting a caller's slice in place would be a needless
+// side effect.
+func medianSampleIndex(samples []tickSample) int {
+	idx := make([]int, len(samples))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.Slice(idx, func(a, b int) bool { return samples[idx[a]].elapsed < samples[idx[b]].elapsed })
+	return idx[len(idx)/2]
+}
+
 // RunPerf generates params' synthetic city, then drives it through the
 // REAL harness.headless package (headless_seam.go's runHeadless, which
 // calls headless.Run) for months simulated months (AC-4), recording
@@ -216,6 +246,20 @@ func (r PerfResult) ImplausibleReason() string {
 // history: this package was first built against a same-shape stand-in
 // because MOD-015 was not yet buildable, then rewritten to call the real
 // package once it landed the same day.
+//
+// # BUG-254: TickTime is the MEDIAN of TickSampleCount repeated windows
+//
+// The tick run is repeated TickSampleCount times (limits.go) against the
+// SAME generated world, and the recorded TickTime/PerMonthTick (and the
+// PhaseTimings, TotalTicks, and tick-side alloc counters, all taken from
+// the same median repetition) come from the median-elapsed window — so a
+// single scheduler-preemption outlier cannot become the number a CI gate
+// judges a commit by, in either direction (a lucky-fast minimum frozen
+// as a baseline was exactly BUG-254's secondary ratchet). The simulation
+// itself is deterministic (same seed, same months — engine.detgate's
+// guarantee), so the repetitions differ only in measurement noise;
+// GenerationTime and the generation alloc counters are measured once,
+// unsampled, because Generate runs once.
 func RunPerf(correlationID string, p Params, preset string, months int) (PerfResult, error) {
 	if months <= 0 {
 		return PerfResult{}, errs.New(codeInvalidMonths, correlationID, map[string]any{"months": months})
@@ -235,27 +279,38 @@ func RunPerf(correlationID string, p Params, preset string, months int) (PerfRes
 	genElapsed := time.Since(genStart)
 	runtime.ReadMemStats(&genMemAfter)
 
-	var memBefore, memAfter runtime.MemStats
-	runtime.ReadMemStats(&memBefore)
-	tickElapsed, totalTicks, timings, err := runHeadless(correlationID, header, months)
-	runtime.ReadMemStats(&memAfter)
-	if err != nil {
-		return PerfResult{}, err
+	samples := make([]tickSample, 0, TickSampleCount)
+	for i := 0; i < TickSampleCount; i++ {
+		var memBefore, memAfter runtime.MemStats
+		runtime.ReadMemStats(&memBefore)
+		tickElapsed, totalTicks, timings, runErr := runHeadless(correlationID, header, months)
+		runtime.ReadMemStats(&memAfter)
+		if runErr != nil {
+			return PerfResult{}, runErr
+		}
+		samples = append(samples, tickSample{
+			elapsed:    tickElapsed,
+			ticks:      totalTicks,
+			timings:    timings,
+			allocBytes: memAfter.TotalAlloc - memBefore.TotalAlloc,
+			allocCount: memAfter.Mallocs - memBefore.Mallocs,
+		})
 	}
+	median := samples[medianSampleIndex(samples)]
 
 	return PerfResult{
 		Preset:               preset,
 		CitizenCount:         p.CitizenCount,
 		Seed:                 p.Seed,
 		Months:               months,
-		TotalTicks:           totalTicks,
+		TotalTicks:           median.ticks,
 		GenerationTime:       genElapsed,
-		TickTime:             tickElapsed,
-		PerMonthTick:         tickElapsed / time.Duration(months),
-		PhaseTimings:         timings,
+		TickTime:             median.elapsed,
+		PerMonthTick:         median.elapsed / time.Duration(months),
+		PhaseTimings:         median.timings,
 		PhaseHookCount:       PhaseHookCountInHeadlessPath(),
-		AllocBytes:           memAfter.TotalAlloc - memBefore.TotalAlloc,
-		AllocCount:           memAfter.Mallocs - memBefore.Mallocs,
+		AllocBytes:           median.allocBytes,
+		AllocCount:           median.allocCount,
 		GenerationAllocBytes: genMemAfter.TotalAlloc - genMemBefore.TotalAlloc,
 		GenerationAllocCount: genMemAfter.Mallocs - genMemBefore.Mallocs,
 		Measured:             true,
