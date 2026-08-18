@@ -1,8 +1,9 @@
 package cafe
 
 import (
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+
 	"encoding/json"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -23,31 +24,50 @@ var _ wellbeing.TrackAttribution
 
 // Config stores the base weights and parameters for the vitality calculation (GR#15).
 type Config struct {
-	FootfallWeight    float64 `json:"footfallWeight"`
-	DensityWeight     float64 `json:"densityWeight"`
-	DwellWeight       float64 `json:"dwellWeight"`
-	SafetyWeight      float64 `json:"safetyWeight"`
-	CapacityWeight    float64 `json:"capacityWeight"`
-	BaseSafetyValue   float64 `json:"baseSafetyValue"`
-	Pedestrianization float64 `json:"pedestrianizationBoost"`
-	MarketDayBoost    float64 `json:"marketDayBoost"`
-	PerformanceBoost  float64 `json:"performanceBoost"`
+	FootfallWeight        float64 `json:"footfallWeight"`
+	DensityWeight         float64 `json:"densityWeight"`
+	DwellWeight           float64 `json:"dwellWeight"`
+	SafetyWeight          float64 `json:"safetyWeight"`
+	CapacityWeight        float64 `json:"capacityWeight"`
+	BaseSafetyValue       float64 `json:"baseSafetyValue"`
+	Pedestrianization     float64 `json:"pedestrianizationBoost"`
+	PedestrianizationCost float64 `json:"pedestrianizationCost"`
+	MarketDayBoost        float64 `json:"marketDayBoost"`
+	PerformanceBoost      float64 `json:"performanceBoost"`
 }
 
 // Centre represents the live state of a single café/vitality center (AC-1/AC-2).
 type Centre struct {
-	ID                       uint64
-	Area                     float64
-	BaseOutdoorCapacity      float64
-	Patronage                int64
-	VenueCount               int
-	DwellQuality             float64
-	Pedestrianised           bool
-	MarketDay                bool
+	ID                        uint64
+	Area                      float64
+	BaseOutdoorCapacity       float64
+	Patronage                 int64
+	VenueCount                int
+	DwellQuality              float64
+	Pedestrianised            bool
+	MarketDay                 bool
 	StreetPerformanceLicensed bool
 }
 
 // VitalityAPI represents the café culture & street-life vitality module (MOD-054).
+
+const (
+	ErrNegativeDwell      = "MET-G5110"
+	ErrInvalidSociability = "MET-G5111"
+	ErrInvalidAccess      = "MET-G5112"
+	ErrWellbeingPush      = "MET-G5113"
+	ErrCopiedValue        = "MET-G5199"
+	ErrUnknownCentre      = "MET-G5101"
+	ErrReadConfig         = "MET-G5102"
+	ErrMalformedConfig    = "MET-G5103"
+	ErrNegativeWeight     = "MET-G5104"
+	ErrInvalidSafety      = "MET-G5105"
+	ErrInvalidArea        = "MET-G5106"
+	ErrInvalidCapacity    = "MET-G5107"
+	ErrNegativePatronage  = "MET-G5108"
+	ErrNegativeVenueCount = "MET-G5109"
+)
+
 type VitalityAPI struct {
 	mu            sync.RWMutex
 	self          atomic.Pointer[VitalityAPI]
@@ -63,15 +83,16 @@ func New() *VitalityAPI {
 	v := &VitalityAPI{
 		centres: make(map[uint64]*Centre),
 		cfg: Config{
-			FootfallWeight:    1.0,
-			DensityWeight:     1.0,
-			DwellWeight:       1.0,
-			SafetyWeight:      1.0,
-			CapacityWeight:    1.0,
-			BaseSafetyValue:   0.8, // PLACEHOLDER safety term until crime edge lands (AC-5)
-			Pedestrianization: 15.0,
-			MarketDayBoost:    10.0,
-			PerformanceBoost:  5.0,
+			FootfallWeight:        1.0,
+			DensityWeight:         1.0,
+			DwellWeight:           1.0,
+			SafetyWeight:          1.0,
+			CapacityWeight:        1.0,
+			BaseSafetyValue:       0.8, // PLACEHOLDER safety term until crime edge lands (AC-5)
+			Pedestrianization:     15.0,
+			PedestrianizationCost: 500.0,
+			MarketDayBoost:        10.0,
+			PerformanceBoost:      5.0,
 		},
 		correlationID: "default-cafe",
 	}
@@ -81,7 +102,7 @@ func New() *VitalityAPI {
 
 func (v *VitalityAPI) checkNotCopied(method string) error {
 	if v.self.Load() != v {
-		return fmt.Errorf("MET-E_CAFE_99: copy guard error: method %s called on copied value", method)
+		return errs.New(ErrCopiedValue, v.correlationID, map[string]any{"method": method})
 	}
 	return nil
 }
@@ -97,20 +118,20 @@ func (v *VitalityAPI) LoadConfig(dir string) error {
 	path := filepath.Join(dir, "cafe.json")
 	bytes, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("MET-E_CAFE_02: failed to read config file: %w", err)
+		return errs.Wrap(ErrReadConfig, v.correlationID, err, map[string]any{"cause": err.Error()})
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(bytes, &cfg); err != nil {
-		return fmt.Errorf("MET-E_CAFE_03: malformed vitality config: %w", err)
+		return errs.Wrap(ErrMalformedConfig, v.correlationID, err, map[string]any{"cause": err.Error()})
 	}
 
 	// Validate config schema (AC-11)
 	if cfg.FootfallWeight < 0 || cfg.DensityWeight < 0 || cfg.DwellWeight < 0 || cfg.SafetyWeight < 0 || cfg.CapacityWeight < 0 {
-		return fmt.Errorf("MET-E_CAFE_04: negative weight in config")
+		return errs.New(ErrNegativeWeight, v.correlationID, nil)
 	}
 	if cfg.BaseSafetyValue < 0 || cfg.BaseSafetyValue > 1.0 {
-		return fmt.Errorf("MET-E_CAFE_05: safety value out of bounds [0, 1]")
+		return errs.New(ErrInvalidSafety, v.correlationID, nil)
 	}
 
 	v.cfg = cfg
@@ -148,10 +169,10 @@ func (v *VitalityAPI) RegisterCentre(centreID uint64, area float64, baseCapacity
 	defer v.mu.Unlock()
 
 	if area <= 0 {
-		return fmt.Errorf("MET-E_CAFE_06: invalid centre area: %f", area)
+		return errs.New(ErrInvalidArea, v.correlationID, map[string]any{"area": area})
 	}
 	if baseCapacity < 0 {
-		return fmt.Errorf("MET-E_CAFE_07: invalid base capacity: %f", baseCapacity)
+		return errs.New(ErrInvalidCapacity, v.correlationID, map[string]any{"baseCapacity": baseCapacity})
 	}
 
 	v.centres[centreID] = &Centre{
@@ -173,10 +194,10 @@ func (v *VitalityAPI) RegisterPatronage(centreID uint64, count int64) error {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 	if count < 0 {
-		return fmt.Errorf("MET-E_CAFE_08: negative patronage count")
+		return errs.New(ErrNegativePatronage, v.correlationID, nil)
 	}
 
 	c.Patronage += count
@@ -193,10 +214,10 @@ func (v *VitalityAPI) SetVenueCount(centreID uint64, count int) error {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 	if count < 0 {
-		return fmt.Errorf("MET-E_CAFE_09: negative venue count")
+		return errs.New(ErrNegativeVenueCount, v.correlationID, nil)
 	}
 
 	c.VenueCount = count
@@ -213,10 +234,10 @@ func (v *VitalityAPI) SetDwellQuality(centreID uint64, quality float64) error {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 	if quality < 0 {
-		return fmt.Errorf("MET-E_CAFE_10: negative dwell quality")
+		return errs.New(ErrNegativeDwell, v.correlationID, nil)
 	}
 
 	c.DwellQuality = quality
@@ -233,7 +254,7 @@ func (v *VitalityAPI) SetPedestrianised(centreID uint64, status bool) error {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	c.Pedestrianised = status
@@ -250,7 +271,7 @@ func (v *VitalityAPI) SetMarketDay(centreID uint64, status bool) error {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	c.MarketDay = status
@@ -267,7 +288,7 @@ func (v *VitalityAPI) SetStreetPerformanceLicensed(centreID uint64, status bool)
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	c.StreetPerformanceLicensed = status
@@ -284,7 +305,7 @@ func (v *VitalityAPI) Footfall(centreID uint64) (float64, error) {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return 0, errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	base := float64(c.Patronage)
@@ -307,7 +328,7 @@ func (v *VitalityAPI) VenueDensity(centreID uint64) (float64, error) {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return 0, errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	density := float64(c.VenueCount) / c.Area
@@ -324,7 +345,7 @@ func (v *VitalityAPI) DwellQuality(centreID uint64) (float64, error) {
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return 0, errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	base := c.DwellQuality
@@ -345,7 +366,7 @@ func (v *VitalityAPI) Safety(centreID uint64) (float64, error) {
 
 	_, ok := v.centres[centreID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return 0, errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	// STUB PLACEHOLDER: Currently returns BaseSafetyValue from Config
@@ -362,7 +383,7 @@ func (v *VitalityAPI) WeatherAdjustedCapacity(centreID uint64, monthIndex int64)
 
 	c, ok := v.centres[centreID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return 0, errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	multiplier := 1.0
@@ -421,16 +442,16 @@ func (v *VitalityAPI) PushIsolationReduction(citizenID uint64, sociability float
 	defer v.mu.RUnlock()
 
 	if sociability < 0 || sociability > 100 {
-		return 0, fmt.Errorf("MET-E_CAFE_11: invalid sociability range")
+		return 0, errs.New(ErrInvalidSociability, v.correlationID, nil)
 	}
 	if access < 0 || access > 1.0 {
-		return 0, fmt.Errorf("MET-E_CAFE_12: invalid access range")
+		return 0, errs.New(ErrInvalidAccess, v.correlationID, nil)
 	}
 
 	// Push access level to the wellbeing module if wired
 	if v.wellbeing != nil {
 		if err := v.wellbeing.SetCommunityVenueAccess(citizenID, access); err != nil {
-			return 0, fmt.Errorf("MET-E_CAFE_13: failed to push to wellbeing: %w", err)
+			return 0, errs.Wrap(ErrWellbeingPush, v.correlationID, err, map[string]any{"cause": err.Error()})
 		}
 	}
 
@@ -449,12 +470,15 @@ func (v *VitalityAPI) LeverageRatio(centreID uint64) (float64, error) {
 
 	_, ok := v.centres[centreID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_CAFE_01: unknown centre: %d", centreID)
+		return 0, errs.New(ErrUnknownCentre, v.correlationID, map[string]any{"centre": centreID})
 	}
 
 	// Calculate a real cost-to-vitality-delta ratio for pedestrianisation.
-	// Cost is set to a constant config rate, say 500.0 micropounds.
-	cost := 500.0
+	// Cost is loaded from config.
+	cost := v.cfg.PedestrianizationCost
+	if cost <= 0 {
+		return 0, errs.New(ErrMalformedConfig, v.correlationID, map[string]any{"cause": "pedestrianizationCost must be positive"})
+	}
 	// Delta vitality generated by pedestrianization is 15.0 (the boost to footfall).
 	delta := v.cfg.Pedestrianization
 	return delta / cost, nil

@@ -1,0 +1,12 @@
+{
+  "footfallWeight": 1,
+  "densityWeight": 1,
+  "dwellWeight": 1,
+  "safetyWeight": 1,
+  "capacityWeight": 1,
+  "baseSafetyValue": 0.8,
+  "pedestrianizationBoost": 15,
+  "pedestrianizationCost": 500,
+  "marketDayBoost": 10,
+  "performanceBoost": 5
+}
