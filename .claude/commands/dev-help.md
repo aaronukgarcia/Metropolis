@@ -25,6 +25,7 @@ When a coder session (or Aaron) types `/dev-help`, print this guidance, adapted 
 4. Tests must assert the AC's observable behaviour and be able to FAIL (break the logic, see red, fix). A test asserting a constant equals itself is a banned self-fulfilling test.
 
 ## Pipeline per module (GR#23 — nothing commits un-attacked)
+**RULE CHANGE (Aaron/lead, 2026-08-18): self-verdicts are NOT sufficient for merge.** The destructive round must be run by someone who is NOT the author — request one from the lead (message Bev) or another session. A self-recorded verdict is treated as a Tester pass at best; the lead independently audits before merge, and a verdict note that claims things the code doesn't do (fabricated attack narrative) is a serious integrity violation — worse than no verdict.
 ```
 build → own tests green → Destructive round (attack: determinism, bounds, nil,
 concurrency, does it MEET the AC) → node claude-bow.js destructive <CODE>
