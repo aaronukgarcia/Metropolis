@@ -86,6 +86,7 @@ Recording engine command/event/delta streams to `fixtures/*.ndjson.gz` via `int.
 ## Assumptions logged (v1.7 compliance)
 
 - **ASM-072 (fixture-name threat model).** Assumed a fixture's own *file* name (as opposed to a `ShardMeta.Name` inside it, already covered by `ValidateShardName`) is only untrusted when it could have been supplied by something other than this build's own record path — e.g. loaded by name from a shared directory, a bug report, or a CLI argument someone else wrote. If in practice `harness.replay`'s fixture-loading API only ever accepts a pre-resolved `*os.File`/`io.Reader` and never a bare name string the package itself turns into a path, AC-2b's own-package validation clause is vacuously satisfied (there is no such site) and only the `ShardMeta.Name`-reuse clause applies. Logged against `internal/harness/replay/` / `harness.replay`, priority P2 (`node claude-bow.js show ASM-072`).
+- **ASM-145 (maxFixtureDecodedBytes).** maxFixtureDecodedBytes=16MiB (~3 orders over the 13KB real fixture); re-derive if a larger fixture appears.
 
 ## SEC-040 — `gen/main.go`'s bare `fmt.Errorf` (GR#7 exemption, P3)
 

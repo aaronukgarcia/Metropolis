@@ -55,6 +55,9 @@ The versioned engine<->UI command/event/delta protocol: envelope types, view-sub
 ## Escalations
 
 - **Resolved.** See `foundation.errors.md`'s Escalations section — GR#20/GR#21 exist (`CLAUDE.md` lines 51-52) and are now cited above (AC-4/AC-14 for GR#20; AC-12/AC-13/AC-15/AC-16 for GR#21).
+- **ASM-560 (confirm-and-close).** Buy/Zone/Build/Demolish use single-cell CellRef; multi-cell = one command per cell.
+- **ASM-561 (confirm-and-close).** ZoneType/BuildingType are opaque engine-defined strings resolved engine-side.
+- **ASM-562 (confirm-and-close).** Demolish payload carries no cost; compensation engine-computed and returned in result.
 
 ---
 

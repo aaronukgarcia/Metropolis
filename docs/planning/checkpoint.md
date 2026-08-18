@@ -1,38 +1,40 @@
 # HEAVY CHECKPOINT — session bounce point
 
-## REFRESH #12 — Bob, 2026-08-17 (read this first; supersedes #11)
+## REFRESH #13 — 2026-08-17 (A7 checkpoint refresh; supersedes #12)
 
-**Why this bounce:** Aaron said "come to a full stop and prep for bounce." Written mid-wave, two destructive agents still in flight. This section is self-sufficient for recovery.
+**Why this refresh:** checkpoint REFRESH #12 is stale and would mislead a cold session (sitrep R5). This section corrects #12's falsehoods and is self-sufficient for recovery. Written as sitrep action A7. Full red-flag detail lives in `docs/planning/sitrep.md` (Bev's master review) — read it second.
 
-### State snapshot (2026-08-17 ~17:00)
+### Correcting #12's specific falsehoods (verified live, not transcribed)
 
-- **Branch:** `feature/services-astgate`. **The services wave is committed + pushed** (14 commits, noreply authorship verified): firms, menu (ASM-651/SEC-209/212/213/218/224), pharma (FEAT-101), defence (MOD-067), coastal (MOD-044), mining (MOD-046), news (MOD-043), build-screen (FEAT-015), plus doc/data/criteria commits.
-- **Commit-ready (ACCEPT-verdicted, Bill to sweep/commit):** fdi (MOD-059), defence (MOD-067), build-screen (FEAT-015), mining (MOD-046), news (MOD-043, ACCEPT r8 by Bill's session), menu (FEAT-021, ACCEPT r7).
-- **Last two in bounce loop — 2 destructives were running at bounce, check their verdicts FIRST on recovery:**
-  - `node claude-bow.js verdict MOD-044` (coastal) — expect ACCEPT r5 after SEC-210/211/220/221/228/229/233/234 fixes. If REJECT, bounce-fix the new SEC finding.
-  - `node claude-bow.js verdict MOD-024` (roads) — expect ACCEPT r3 after SEC-222/223/225/226/227 fixes. If REJECT, bounce-fix.
-  - **roads (MOD-024) is the ONLY module still fully uncommitted** (`?? internal/engine/roads/`). It is the last thing to sweep after its destructive ACCEPTs.
-- **Recurring pattern (durable):** every module needed 5+ destructive rounds, each finding "one more sibling" of the same class (unbounded numeric / unsaturating accumulator / raw-error path / sign-homoglyph). End the loop by scoping re-attacks to a COMPLETE surface enumeration, not "find the next one."
+- **"roads (MOD-024) is the ONLY module still fully uncommitted" — FALSE.** Roads is committed at `f73d75b` (`feat: engine.roads named roads + upgrades + roadworks [MOD-024]`) on `feature/services-astgate`. Nothing remains uncommitted in the roads module.
+- **The six "commit-ready (awaiting sweep)" items are all already committed:** fdi/defence/build-screen/mining/news landed in the services wave, menu in the same wave. Nothing is "awaiting sweep".
+- **The two "in-flight destructives" have LANDED:** MOD-044 (coastal) → ACCEPT r5 (Destructive-MOD044-r5, 20:35:46), committed `863bd31`; MOD-024 (roads) → ACCEPT r5 (Destructive-MOD024-r5, 17:03), committed `f73d75b`.
 
-### spec-lint / GR#25 (the new big thread)
+### State snapshot (verified 2026-08-17 evening)
 
-- **GR#25 "Graph-Driven Specification"** (Aaron 2026-08-17) is in CLAUDE.md + `claude-spec-guard.js` + `/spec-lint` skill. Acceptance prose must match `code.json` edges.
-- **TENSION (critical):** a BA classification proved `code.json` is STALE — **292 real Go imports are missing from the graph**, and 131 graph edges have no import. **Regenerate the graph from built code BEFORE enforcing GR#25**, or correct prose will be fail-closed rejected.
-- **spec-lint tool bug:** `tools/plan/spec-lint.js` read `m.calls` but code.json stores `m.outbound.calls` — the "875 findings" were mostly false positives. The field fix is already in the tree (current count 621); the direction-blind regex (can't tell "depends on" from "consumed by"/"out of scope") remains.
-- **Net debt for Bill to action:** ~420 genuine missing outbound edges to REGISTER (master-plan → generate.js, grouped by layer), ~201 to SKIP (invalid directions engine→ui, int.protocol→engine), ~14 real modules missing from code.json (feat.airport/borrowing/compositionroot/policy/etc.), 6 SPEC-LINT-002 method mismatches.
-- **`master-plan-v2.1.json` has a `MET-T024` dependency cycle** (from Bill's graph work) breaking `generate.test.js`. Fix before regenerating.
+- **Branch:** `feature/services-astgate`, **HEAD `863bd31`** (`fix: coastal bound throughput + policy coefficients (SEC-233/234) [MOD-044]`). Up to date with origin; 50 ahead / 0 behind main, fully pushed (no GR#24 violation).
+- **Committed:** the services wave (firms, menu, pharma, defence, coastal, mining, news, build-screen) plus the 08-17 wave (roads, fiscal, social, crime, farming, rail, census, airport, accelerator, refuse, education, wellbeing, chemicals, comms, capexport, checkpoint, maintenance, + acceptance-criteria/GR#25 docs).
+- **PR #8 OPEN** (`feat: services + 08-17 wave - 26 engine/UI modules`): CI is **red on build-test-vet / lint / node-test / perf-1m-probe** (determinism-gate + perf-smoke pass — 4 of 6 checks failing). Root cause + fix lanes tracked in **BUG-254** (main CI red since 08-16, P0 — A1 diagnosis complete, four causes, do NOT re-diagnose). Rebase-merge ONLY after green (BUG-042).
+- **Coordination DHCP-rewrite backdoor found + split — BUG-253 (P1):** the uncommitted `claude-sync.js` carried an unreviewed "DHCP rewrite" (hardcoded always-alive window id = permit backdoor; auto-eviction of live sessions; BOOT_ID 10s→1h regression; hardcoded user path; detached `coordination-keeper.js` spawn). A4 remediation is COMPLETE: the reviewed Bev 4th-slot change was split out and the backdoor quarantined to scratch copies (not destroyed). **Nothing from this was committed — do NOT commit `claude-sync.js` until BUG-253 closes.**
+- **sitrep A1–A7 in flight:** `docs/planning/sitrep.md` is Bev's master review (Aaron-approved action list A1–A7). This refresh is A7.
+- **Working tree is dirty and in-flight (A4/A5/A6) — do NOT stash/reset/clean (GR#24):** modified `claude-sync.js` (+ tests), `code.json`, `master-plan-v2.1.json`, `.github/workflows/ci.yml`, `.gitignore`, many `docs/planning/acceptance/*.md`, `internal/engine/freight/containerport_params.go`, `internal/engine/households/api.go`, `internal/harness/synth/*`; untracked `docs/planning/sitrep.md`, `docs/planning/feat-084-*.md`, `tools/bow-server.js` + `bow-ui-template.html` (real BOW web UI pair), `tools/plan/spec-lint.js` + `.test.js` (WIP), `tools/plan/_tmp_inspect.js`.
 
-### Cross-session collision (big process warning)
+### BOW status hygiene (A7 — this refresh)
 
-Bill's and Bob's sessions were BOTH dispatching agents onto the SAME BOW items concurrently (news, mining, defence, coastal, roads). Guards only catch foreign-session overlap, not same-item overlap between two live sessions. Symptoms: juniors found "the fix already in the tree", duplicate findings, SEC-numbering near-collisions, leftover scratch test files, Bill committing early (menu/defence committed pre-ACCEPT). **On recovery: before mass-dispatching onto an item, check `git log --oneline -5 -- <path>` + the item's BOW comments to see if another session is already working it; stand one session down if overlapping.** Dispatch target is now 50 lanes.
+Seven modules had BOW status lagging git. As of this refresh: **MOD-043, MOD-046, MOD-067, FEAT-015, MOD-024** were already flipped `done` (batch 18:06); **MOD-044** flipped `done` by A7 (ACCEPT r5 + committed `863bd31`). **MOD-059 stays OPEN by design** — its recorded ACCEPT (Destructive-MOD059-r5) and git ref `17ca12e` are MIS-FILED (they belong to MOD-058 engine.firms); `internal/engine/fdi/` currently holds the FEAT-101 pharma-campus catalogue, not the FDI engine. Bill's 18:06:37 correction comment on MOD-059 is authoritative — **do NOT flip MOD-059 done.**
 
-### Recovery procedure
+### Durable process warnings (carry forward)
 
-1. `metro` → checkin → `node claude-sync.js read` (check Bill/Ben state).
-2. **Check the two in-flight destructives:** `node claude-bow.js verdict MOD-044` and `verdict MOD-024`.
+- **Cross-session collision (from #12, still valid):** Bill and Bob were BOTH dispatching onto the SAME items. Before mass-dispatching, check `git log --oneline -5 -- <path>` + BOW comments; stand one session down if overlapping. Dispatch target 50 lanes.
+- **GR#25 graph debt (from #12, corrected by sitrep R3):** `claude-spec-guard.js` was NEVER written — GR#25 is prose-only. The drift is **plan-vs-Go-source** (292 real imports missing from code.json), NOT plan-vs-code.json (they are equivalent). Fix route: register edges in `master-plan-v2.1.json` → regenerate → fix spec-lint's dead checks → only then write/wire the guard.
+
+### Recovery procedure (cold session)
+
+1. `metro` → checkin → `node claude-sync.js read`.
+2. Read `docs/planning/sitrep.md` (Bev's A1–A7 master review) — current source of truth for the red flags.
 3. `node claude-bow.js list --by-seq` + `git log -10` + `git status`.
-4. If coastal/roads destructives ACCEPTed → nothing more to build; sweep is Bill's (roads is the last uncommitted module). If REJECTed → bounce-fix + re-attack.
-5. Do NOT redo committed work. Commits + BOW status are the truth.
+4. **Active threads:** BUG-254 (main CI red — fix lanes dispatched, do not re-diagnose), BUG-253 (claude-sync backdoor — quarantined, do not commit the file), PR #8 (wait for green, rebase-merge only).
+5. Never redo committed work. Commits + BOW status are the truth.
 
 ---
 

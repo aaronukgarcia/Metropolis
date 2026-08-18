@@ -345,3 +345,5 @@ that a shared one exists by dispatch time.
   ASM-453 (no Go↔MariaDB path exists yet for either FEAT-065 or FEAT-066's
   logging affordance — the shared blocker, recommend resolving once for
   both items rather than twice).
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-452** — FEAT-066 in-game vs CLI resolved by Bill (ASM-476): out-of-band CLI ACCEPTED.
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-476** — BILL RULING: out-of-band CLI is FEAT-066's v1 surface.

@@ -58,3 +58,9 @@ Typed JSON loaders + schema validation + a debug-mode hot-reload hook for the §
 ## Escalations
 
 - None at draft time. No spec/brief conflict found. One overlap noted (not a conflict) in Out of scope above: `errors.json` is named in §24's file list but already has its own dedicated loader in `foundation.errors` (Sprint 0, landed) — this item's `LoadAll` should decide deliberately whether to include it, and Bill/the junior should record that decision rather than silently duplicating or silently omitting it.
+- **Confirm-and-close (ASM-572).** externalRail gated to tier 5 (era-5 unlock tier).
+- **Confirm-and-close (ASM-573).** capacityByEra: non-empty, strictly-increasing era, non-negative capacity.
+- **Confirm-and-close (ASM-574).** Unlock nodes require specRef/description/dpCost/prereqTier.
+- **Confirm-and-close (ASM-575).** Tier coverage = each tier present ≥1 per tree.
+- **Confirm-and-close (ASM-576).** Category count derived from meta.categories (name bijection).
+- **Confirm-and-close (ASM-558).** NamingCorpus.Validate structural-only; 40-name floor stays a test assertion (not production Validate).

@@ -58,3 +58,7 @@ The F9 screen: rolling ticker, monthly bulletin front page (read-on-pause), annu
 
 - **ASM-254** (P2, code-path `internal/ui/screens/ticker/`): archive search reuses `ui.keys`' NameIndex convention rather than a bespoke query grammar; may need date-range/category filters later.
 - No BUG-058 gap found: `code.json`'s `ui.screen.ticker` outbound calls (`engine.news`) cover everything §13-F9/§29 require for this screen's scope — checked and clean.
+- **ASM-519 (confirm-and-close).** SF-3 drives screen directly (stub has no f9 view).
+- **ASM-520 (confirm-and-close).** Ticker scroll implemented locally (no shared ui.widgets primitive).
+- **ASM-521 (confirm-and-close).** Drill-through = DrillTargets pair list (ui.dash OPEN).
+- **ASM-522 (confirm-and-close).** Archive search case-insensitive substring; empty query matches nothing.

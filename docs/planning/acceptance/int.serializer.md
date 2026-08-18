@@ -58,3 +58,6 @@ The `StateSerializer` interface, NDJSON-shard save/fixture bundle format (header
 
 - **Resolved.** GR#20/GR#21 exist (`CLAUDE.md` lines 51-52) — see `foundation.errors.md`'s Escalations section. Cited above as AC-1 (GR#20) and AC-5/AC-16/AC-17/AC-18 (GR#21).
 - **Resolved.** The byte-determinism requirement (AC-5/AC-18) was flagged as principle-derived rather than literal spec text. Bill accepted: the CI determinism gate (§1.2/A8) hashes world snapshots, so save bytes must be deterministic for the gate to mean anything. Both ACs are now annotated "principle-derived, lead-confirmed" and kept as-is — this is not a Tester FAIL risk, it's confirmation the requirement stands.
+- **ASM-026 (confirm-and-close).** NUL-byte deferral now logged as this ASM; Go os layer fails closed on both GOOS (sound).
+- **ASM-149 (confirm-and-close).** ReadShard byte bound is a per-caller parameter (16MiB replay / 0 metctl) per SEC-033 lesson.
+- **ASM-061 (confirm-and-close).** cmd/metctl main.go:74 `%s` on FormatVersion safe only via ParseSemVer Atoi gate; verified empirically, now logged.

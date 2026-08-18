@@ -1193,3 +1193,66 @@ Any acceptance criteria markdown (`docs/planning/acceptance/*.md`) that referenc
 ### Enforcement
 - Verified mechanically by the pre-commit spec-lint hook `claude-spec-guard.js` calling the static graph parser `tools/plan/spec-lint.js`.
 - Ensures BAs never write unreachable or speculative criteria that mismatch physical Go interfaces or dependency edges.
+
+---
+
+## Confirmed-and-closed implementation decisions (FEAT-084 batch-2 CC fold)
+
+Prior-mapped ASM "confirm-and-close" (CC) implementation decisions for tooling/guards, folded here because these guard/tooling items have no owning acceptance doc in `docs/planning/acceptance/`. Each is one line; the source ASM was closed via `claude-bow.js done` with the fold destination cited.
+
+- **ASM-185.** Sanctioned identity = union(config email, trunk emails ≥3×, env list); config trusted, history needs ≥3 to block self-grandfathering.
+- **ASM-186.** New-contributor extension is an operator env var, not a committed file (mirrors CLAUDE_DISABLE_*_GUARD).
+- **ASM-187.** `git rebase` out of scope by construction (no git-commit porcelain invocation to match).
+- **ASM-227.** Deny reasons withhold ALL sanctioned addresses (field name+count only) — BUG-042 history justifies zero disclosure.
+- **ASM-229.** Wrapper list (bash/sh/zsh/dash/ksh/pwsh/cmd) covers this env; new wrapper added on evidence.
+- **ASM-350.** buildQuoteMask is a toggle approximating a shell lexer, not sound; documented structural limit, fail-closed.
+- **ASM-357.** Path-prefix widening covers env-var/8.3/relative/UNC shapes; residual: command-substitution + renamed/symlinked binary.
+- **ASM-344.** Round-4 fixed backslash-outside-quote + heredoc parity; residual "not a full lexer" claim logged.
+- **ASM-345.** unescapeDoubleQuoted relies on WRAPPER_PATTERNS capture grammar (\. pairs); lone trailing backslash unreachable.
+- **ASM-351.** Unterminated heredoc swallows to EOF as inert (shell wouldn't reach past it either); documented.
+- **ASM-225.** KNOWN_COMMIT_VERBS includes `merge` (same config/env derivation as commit).
+- **ASM-366.** Node-authored commit-msg hook execution on Windows git not verified; AC-12 install test catches it.
+- **ASM-577.** History-scan cap derived from `git rev-list --count HEAD`, capped 2000, env-overridable.
+- **ASM-578.** Failed derivation degrades fail-open to the 2000 ceiling (not a registry error — FEAT-045 AC-8 fail-open).
+- **ASM-193.** destructive-guard scope = plain `git commit` only (lead-accepted; re-examine when merge-with-new-code first occurs).
+- **ASM-340.** Same scope narrowing restated for destructive-guard.
+- **ASM-341.** process.cwd() (not __dirname) — test-harness isolation; wrong-cwd degrades to "deny all", not allow.
+- **ASM-348.** Alias resolving to literal `commit` treated as commit (risk points toward over-deny, safe).
+- **ASM-349.** GIT_TOKEN_RE quoted-path tolerance covers executable prefix only; suffix extraction via extractMessage.
+- **ASM-359.** isCommitInvocation = literal `'commit'`, deliberately NOT author-guard's KNOWN_COMMIT_VERBS set.
+- **ASM-362.** Env-var path override (CLAUDE_DESTRUCTIVE_GUARD_*_PATH) is test-only seam, defaults to real siblings.
+- **ASM-342.** bow_destructive_verdicts stores classes/findings as comma-joined VARCHAR; fine at current volume.
+- **ASM-356.** buildQuoteMask copied 4× (lead ACCEPTED: guards must stay independently loadable); drift test exists.
+- **ASM-367.** discoverCopies scans source-pattern (not hardcoded list); misses renamed copies (documented).
+- **ASM-368.** CRLF heredoc case = cross-copy agreement only; promote to golden when BUG-081 lands.
+- **ASM-425.** AC-3 non-regression count scales with live discoverCopies (2 files), not stale 5.
+- **ASM-424.** BUG-091 fixture drops trailing quote to isolate backslash boundary from ASM-351.
+- **ASM-432.** SEC-021 exemption boundary = lowercase+digit segments only, hyphen/underscore-split.
+- **ASM-433.** SEC-021 base64/hex fixtures are BA-authored placeholders, not real credentials.
+- **ASM-396.** BUG-088 checker-module filenames left to junior (AC-B5 header doc makes name irrelevant).
+- **ASM-405.** claude-plan-checker hashFiles uses ASCII space separator (was NUL); hash has no fixed expected value.
+- **ASM-384.** push-verify defaults (60s/30min/5s/3) are CLI-overridable guesses, not measured.
+- **ASM-388.** Settle strategy = 2-consecutive-poll count stability (not fixed settle time).
+- **ASM-389.** Junction-directory reparse-point detection; bare file-symlink variant left unverified/out of scope.
+- **ASM-390.** SETTLE_FLOOR_MS=3000 unmeasured; overridable.
+- **ASM-378.** Scratch timestamp folders: local time, colon-free HHMMSS (Windows-illegal colons).
+- **ASM-379.** gitignore honouring delegated to `git status --porcelain -uall`, no hand-rolled parser.
+- **ASM-380.** CLI shape = subcommand (`snapshot`), unknown subcommand → usage+exit 1.
+- **ASM-383.** `gh run list --commit` sole source; fails loud (exit 2) if flag renamed.
+- **ASM-385.** Exit 2 collapsed for all could-not-verify causes; stderr distinguishes subtype.
+- **ASM-430.** BUG-090 `--desc-file` scoped to note+detail flags only.
+- **ASM-431.** Shell-char warning kept advisory (Bill may want hard gate — P1).
+- **ASM-436.** `--note-file` ported to depend/ref/done/destructive (comment has no --note).
+- **ASM-483.** FEAT-061 check-2 deliberately defers FEAT-062 runAudit reuse (scope/cost mismatch; logged).
+- **ASM-197.** tool.* guard deps=[plan.pipeline] blanket convention; one-line fix if wrong.
+- **ASM-199.** New tool.* items typed 'feature', seq from gaps, P1/P2 split — Bill can re-set.
+- **ASM-282.** Shared-specRef heuristic (174 false-positive pairs) not load-bearing; move to structured collaborations field.
+- **ASM-462.** foundation.data registered at Go package `internal/foundation/data/`, not the `data/` JSON dir.
+- **ASM-463.** Test-only fixture imports NOT registered as call edges (correctly decoupled).
+- **ASM-557.** feat.debugmode stale foundation.registry edge removed (consumed by ui.screen.debug, not engine debug).
+- **ASM-205.** astgate can't derive "helper reached via guarded caller"/"scalar accessor" as safe; live findings hand-triaged.
+- **ASM-435.** SEC-048 prefers errs.New/F700-799 conversion over exemption comment (real CI gate).
+- **ASM-437.** SEC-048 correlation IDs minted inline at 3 sites, not threaded through Run.
+- **ASM-457.** astgate ratchet keys findings by exact violation message text (stable identifier).
+- **ASM-466.** Stale AND fabricated allowlist entries both hard-fail (fix = code + allowlist removal same commit).
+- **ASM-420.** BUG-053 already AST-fixed in place; re-homing into astgate optional (split as follow-up if Bill prefers narrow).
