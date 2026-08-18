@@ -6,8 +6,8 @@
 // # Coarse Approximation Baseline One Scope (Aaron, 2026-08-14):
 //
 // In accordance with lead-developer directions, the baseline one implementation
-// builds a coarse-approximation layer providing stable query surfaces for link
-// volumes, v/c ratios, and per-citizen commute times.
+// builds a coarse-approximation layer providing stable query surfaces for
+// per-citizen commute times and active travel shares.
 //
 // NOTE: SUE assignment, junction queue spillback, and the warm-start route cache
 // are deferred to a later heavy-model iteration. Current commute queries use a

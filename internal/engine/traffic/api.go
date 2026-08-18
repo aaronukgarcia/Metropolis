@@ -105,6 +105,16 @@ func (t *TrafficAPI) demandMultiplier() float64 {
 	return mult
 }
 
+func (t *TrafficAPI) addDemandLocked(id uint64, count int64) {
+	current := t.demands[id]
+	maxInt64 := int64(^uint64(0) >> 1)
+	if maxInt64-current < count {
+		t.demands[id] = maxInt64
+	} else {
+		t.demands[id] = current + count
+	}
+}
+
 // CommuteHours returns this citizen's weekly work-commute hours (AC-11).
 func (t *TrafficAPI) CommuteHours(citizenID uint64, correlationID string) (float64, error) {
 	if err := t.checkNotCopied("CommuteHours"); err != nil {
@@ -147,7 +157,7 @@ func (t *TrafficAPI) AddTripDemand(d leisure.TripDemand) error {
 		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"count": d.Count})
 	}
 
-	t.demands[uint64(d.District)] += int64(d.Count)
+	t.addDemandLocked(uint64(d.District), int64(d.Count))
 	return nil
 }
 
@@ -163,7 +173,7 @@ func (t *TrafficAPI) RegisterTrip(d education.TripDemand) error {
 		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"count": d.Count})
 	}
 
-	t.demands[d.SchoolID] += int64(d.Count)
+	t.addDemandLocked(d.SchoolID, int64(d.Count))
 	return nil
 }
 
@@ -179,7 +189,7 @@ func (t *TrafficAPI) AddDemand(destinationID uint64, count int64) error {
 		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"count": count})
 	}
 
-	t.demands[destinationID] += count
+	t.addDemandLocked(destinationID, count)
 	return nil
 }
 
@@ -196,6 +206,17 @@ func (t *TrafficAPI) CommuteMinutes(citizenID uint64, correlationID string) (flo
 	}
 
 	return t.cfg.BaseCommuteMinutes * t.demandMultiplier(), true, nil
+}
+
+// AdvanceTick resets the daily demand map to prevent monotonic accumulation (AC-15).
+func (t *TrafficAPI) AdvanceTick(correlationID string) error {
+	if err := t.checkNotCopied("AdvanceTick"); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.demands = make(map[uint64]int64)
+	return nil
 }
 
 // ActiveTravelShare returns this citizen's active travel share.

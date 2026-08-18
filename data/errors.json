@@ -4418,6 +4418,30 @@
       "module": "engine.shopping",
       "message": "shopping method {method} was called on a struct copy of the value New returned",
       "remedy": "Always use the *ShoppingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
+    },
+    "MET-G4501": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "unregistered citizen ID: {citizen}",
+      "remedy": "Ensure that the citizen record is successfully registered in engine.citizens before querying commute parameters."
+    },
+    "MET-G4502": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "invalid traffic input parameter: {value}",
+      "remedy": "All input parameters (pcu volumes, capacities, travel times) must be finite and non-negative."
+    },
+    "MET-G4503": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "no route found between zone {from} and zone {to}",
+      "remedy": "Verify that the road graph is connected and has valid lanes between the given origins and destinations."
+    },
+    "MET-G4599": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "traffic method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *TrafficAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
     }
   }
 }

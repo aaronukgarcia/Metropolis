@@ -173,3 +173,40 @@ func TestTraffic_AC13_Concurrency(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestTraffic_AC15_AdvanceTickReset(t *testing.T) {
+	api := New()
+
+	_ = api.AddDemand(301, 1000)
+	c1, _ := api.CommuteHours(1234, "test-reset")
+
+	_ = api.AdvanceTick("test-reset")
+	c2, _ := api.CommuteHours(1234, "test-reset")
+
+	if c1 <= c2 {
+		t.Errorf("expected commute hours to be higher before tick reset (%f) than after (%f)", c1, c2)
+	}
+	if c2 != 5.0 {
+		t.Errorf("expected commute hours to return to base 5.0 after reset, got %f", c2)
+	}
+}
+
+func TestTraffic_Int64Overflow(t *testing.T) {
+	api := New()
+
+	maxInt64 := int64(^uint64(0) >> 1)
+
+	_ = api.AddDemand(301, maxInt64)
+	_ = api.AddDemand(301, 10) // attempt to overflow
+
+	api.mu.RLock()
+	d := api.demands[301]
+	api.mu.RUnlock()
+
+	if d < 0 {
+		t.Errorf("expected saturating add to prevent negative overflow, got %d", d)
+	}
+	if d != maxInt64 {
+		t.Errorf("expected saturating add to cap at MaxInt64, got %d", d)
+	}
+}
