@@ -146,6 +146,9 @@ func (c *ChemAPI) Stage(key string) (ChainStage, error) {
 // StageOutput returns a stage's declared output production (t/day). An
 // unregistered key is ErrUnregisteredStage.
 func (c *ChemAPI) StageOutput(key string) (map[string]int64, error) {
+	if err := c.checkNotCopied("StageOutput"); err != nil {
+		return nil, err
+	}
 	s, err := c.Stage(key)
 	if err != nil {
 		return nil, err

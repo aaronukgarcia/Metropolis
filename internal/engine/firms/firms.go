@@ -388,6 +388,9 @@ func (f *FirmsAPI) Stage(id FirmID) (Stage, error) {
 // StaffRoster returns the firm's staff roster (real CitizenIDs), or
 // ErrUnknownFirm (AC-1/AC-4 query surface).
 func (f *FirmsAPI) StaffRoster(id FirmID) ([]uint64, error) {
+	if err := f.checkNotCopied("StaffRoster"); err != nil {
+		return nil, err
+	}
 	firm, err := f.Firm(id)
 	if err != nil {
 		return nil, err

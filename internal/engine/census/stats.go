@@ -76,6 +76,9 @@ func ageBandIndex(ageMonths int64) int {
 // AgeBandSeries returns the population's age-band distribution (AC-18): a
 // deterministic function of per-citizen birth month vs the snapshot tick.
 func (c *CensusAPI) AgeBandSeries(snap *Snapshot) [numAgeBands]int64 {
+	if err := c.checkNotCopied("AgeBandSeries"); err != nil {
+		return [numAgeBands]int64{}
+	}
 	var out [numAgeBands]int64
 	for _, cv := range snap.Citizens {
 		out[ageBandIndex(num.SatSub(snap.Tick, cv.BirthMonth))]++
@@ -86,6 +89,9 @@ func (c *CensusAPI) AgeBandSeries(snap *Snapshot) [numAgeBands]int64 {
 // SexSeries returns the population's sex distribution [female, male]
 // (AC-18): a deterministic function of per-citizen sex.
 func (c *CensusAPI) SexSeries(snap *Snapshot) [2]int64 {
+	if err := c.checkNotCopied("SexSeries"); err != nil {
+		return [2]int64{}
+	}
 	var out [2]int64
 	for _, cv := range snap.Citizens {
 		if cv.Sex == SexMale {
@@ -102,6 +108,9 @@ func (c *CensusAPI) SexSeries(snap *Snapshot) [2]int64 {
 // highest recorded stage. It is computed independently of the age/sex
 // series — perturbing only education inputs leaves those byte-identical.
 func (c *CensusAPI) EducationTierSeries(snap *Snapshot) [numStages]int64 {
+	if err := c.checkNotCopied("EducationTierSeries"); err != nil {
+		return [numStages]int64{}
+	}
 	var out [numStages]int64
 	for _, cv := range snap.Citizens {
 		ev, ok := snap.Education[cv.ID]
@@ -119,6 +128,9 @@ func (c *CensusAPI) EducationTierSeries(snap *Snapshot) [numStages]int64 {
 // identical snapshot produce byte-identical output; mutating one source's
 // input changes exactly the aggregates derived from it.
 func (c *CensusAPI) Stats(snap *Snapshot) Aggregates {
+	if err := c.checkNotCopied("Stats"); err != nil {
+		return Aggregates{}
+	}
 	var agg Aggregates
 	agg.Population = int64(len(snap.Citizens))
 	agg.AgeBands = c.AgeBandSeries(snap)

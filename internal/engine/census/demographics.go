@@ -45,6 +45,9 @@ type BlueWhiteCollar struct {
 // per-citizen sector data (AC-17). Moving a cohort of citizens between
 // blue- and white-collar sectors moves the split by exactly that cohort.
 func (c *CensusAPI) BlueWhiteCollar(snap *Snapshot) BlueWhiteCollar {
+	if err := c.checkNotCopied("BlueWhiteCollar"); err != nil {
+		return BlueWhiteCollar{}
+	}
 	var out BlueWhiteCollar
 	for _, cv := range snap.Citizens {
 		switch collarFor(cv.Sector) {
@@ -97,35 +100,75 @@ func (c *CensusAPI) outOfWorkIDs(snap *Snapshot) []uint64 {
 // GDP returns the GDP KPI: the finance ledger's GDP-relevant flows for the
 // snapshot tick (AC-19, ASM-648). Aggregated over FinanceSource, never a
 // separately-maintained counter.
-func (c *CensusAPI) GDP(snap *Snapshot) int64 { return snap.GDPFlows }
+func (c *CensusAPI) GDP(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("GDP"); err != nil {
+		return 0
+	}
+	return snap.GDPFlows
+}
 
 // Happiness returns the happiness KPI: the §18 wellbeing headline composite
 // (AC-19), aggregated over WellbeingSource.
-func (c *CensusAPI) Happiness(snap *Snapshot) float64 { return snap.Happiness }
+func (c *CensusAPI) Happiness(snap *Snapshot) float64 {
+	if err := c.checkNotCopied("Happiness"); err != nil {
+		return 0
+	}
+	return snap.Happiness
+}
 
 // LandValue returns the land-value KPI: FinanceSource's city land value
 // (AC-19).
-func (c *CensusAPI) LandValue(snap *Snapshot) int64 { return snap.LandValue }
+func (c *CensusAPI) LandValue(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("LandValue"); err != nil {
+		return 0
+	}
+	return snap.LandValue
+}
 
 // Homeless returns the homeless KPI: the count of citizens with no home
 // cell, aggregated over CitizensSource's home state (AC-19).
-func (c *CensusAPI) Homeless(snap *Snapshot) int64 { return int64(len(c.homelessIDs(snap))) }
+func (c *CensusAPI) Homeless(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("Homeless"); err != nil {
+		return 0
+	}
+	return int64(len(c.homelessIDs(snap)))
+}
 
 // InHospital returns the in-hospital KPI: ServicesSource's hospital waiting
 // list (AC-19).
-func (c *CensusAPI) InHospital(snap *Snapshot) int64 { return snap.HospitalWaiting }
+func (c *CensusAPI) InHospital(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("InHospital"); err != nil {
+		return 0
+	}
+	return snap.HospitalWaiting
+}
 
 // OutOfWork returns the out-of-work KPI: the count of unemployed citizens,
 // aggregated over CitizensSource's employment state (AC-19).
-func (c *CensusAPI) OutOfWork(snap *Snapshot) int64 { return int64(len(c.outOfWorkIDs(snap))) }
+func (c *CensusAPI) OutOfWork(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("OutOfWork"); err != nil {
+		return 0
+	}
+	return int64(len(c.outOfWorkIDs(snap)))
+}
 
 // UnfilledJobs returns the unfilled-jobs KPI: ServicesSource's unfilled-job
 // count (AC-19).
-func (c *CensusAPI) UnfilledJobs(snap *Snapshot) int64 { return snap.UnfilledJobs }
+func (c *CensusAPI) UnfilledJobs(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("UnfilledJobs"); err != nil {
+		return 0
+	}
+	return snap.UnfilledJobs
+}
 
 // JobSkillDemand returns the job→skill demand KPI: ServicesSource's demand
 // figure (AC-19, the staffing edge — ES-3).
-func (c *CensusAPI) JobSkillDemand(snap *Snapshot) int64 { return snap.JobSkillDemand }
+func (c *CensusAPI) JobSkillDemand(snap *Snapshot) int64 {
+	if err := c.checkNotCopied("JobSkillDemand"); err != nil {
+		return 0
+	}
+	return snap.JobSkillDemand
+}
 
 // SourceResolution is the drill-in result (AC-20): the underlying entities
 // (for population-derived KPIs) or ledger line (for aggregate KPIs) that
@@ -197,6 +240,9 @@ type EducationCrimeLinkage struct {
 // snapshot: mean attainment (EducationSource, joined per citizen) against
 // the crime rate (CrimeSource), plus the uneducated fraction (AC-14).
 func (c *CensusAPI) EducationCrimeLinkage(snap *Snapshot) EducationCrimeLinkage {
+	if err := c.checkNotCopied("EducationCrimeLinkage"); err != nil {
+		return EducationCrimeLinkage{}
+	}
 	var sum, count, uneducated int64
 	floor := c.cfg.Thresholds.UneducatedAttainmentFloor.Value
 	for _, cv := range snap.Citizens {

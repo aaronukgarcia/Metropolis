@@ -334,6 +334,9 @@ func (c *CommsAPI) eraConfigFor(era Era) (eraConfig, error) {
 // first capability gate). An era outside the six-era ladder is rejected
 // with ErrInvalidEra, never a silently-created zero-value gate.
 func (c *CommsAPI) OfficeTierCeiling(era Era) (int, error) {
+	if err := c.checkNotCopied("OfficeTierCeiling"); err != nil {
+		return 0, err
+	}
 	cfg, err := c.eraConfigFor(era)
 	if err != nil {
 		return 0, err
@@ -346,6 +349,9 @@ func (c *CommsAPI) OfficeTierCeiling(era Era) (int, error) {
 // fibre and stays true, independent of the continuously-rising research
 // modifier. An era outside the ladder is rejected with ErrInvalidEra.
 func (c *CommsAPI) DataCentreEligible(era Era) (bool, error) {
+	if err := c.checkNotCopied("DataCentreEligible"); err != nil {
+		return false, err
+	}
 	cfg, err := c.eraConfigFor(era)
 	if err != nil {
 		return false, err
@@ -357,6 +363,9 @@ func (c *CommsAPI) DataCentreEligible(era Era) (bool, error) {
 // for era (AC-3's third capability gate). An era outside the ladder is
 // rejected with ErrInvalidEra.
 func (c *CommsAPI) ResearchRateModifier(era Era) (float64, error) {
+	if err := c.checkNotCopied("ResearchRateModifier"); err != nil {
+		return 0, err
+	}
 	cfg, err := c.eraConfigFor(era)
 	if err != nil {
 		return 0, err
@@ -369,6 +378,9 @@ func (c *CommsAPI) ResearchRateModifier(era Era) (float64, error) {
 // the sector affinity is applied. An era outside the ladder is rejected
 // with ErrInvalidEra.
 func (c *CommsAPI) RemoteWorkBaseCoefficient(era Era) (float64, error) {
+	if err := c.checkNotCopied("RemoteWorkBaseCoefficient"); err != nil {
+		return 0, err
+	}
 	cfg, err := c.eraConfigFor(era)
 	if err != nil {
 		return 0, err
@@ -384,6 +396,9 @@ func (c *CommsAPI) RemoteWorkBaseCoefficient(era Era) (float64, error) {
 // outside the ladder is ErrInvalidEra; a sector outside the five buckets is
 // ErrUnknownSector.
 func (c *CommsAPI) RemoteWorkShare(era Era, sector Sector) (float64, error) {
+	if err := c.checkNotCopied("RemoteWorkShare"); err != nil {
+		return 0, err
+	}
 	cfg, err := c.eraConfigFor(era)
 	if err != nil {
 		return 0, err

@@ -135,26 +135,41 @@ func (a *CrimeAPI) justiceCount(id DistrictID, method string, fn func(*districtS
 
 // OffendersArrested returns the offenders arrested this month (clearance log).
 func (a *CrimeAPI) OffendersArrested(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersArrested"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersArrested", func(st *districtState) int64 { return int64(len(st.justice.arrested)) })
 }
 
 // OffendersCharged returns the offenders charged this month (charging log).
 func (a *CrimeAPI) OffendersCharged(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersCharged"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersCharged", func(st *districtState) int64 { return int64(len(st.justice.charged)) })
 }
 
 // OffendersReleasedNoCharge returns offenders released without charge this month.
 func (a *CrimeAPI) OffendersReleasedNoCharge(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersReleasedNoCharge"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersReleasedNoCharge", func(st *districtState) int64 { return int64(len(st.justice.releasedNoCharge)) })
 }
 
 // OffendersConvicted returns the offenders convicted this month (trial log).
 func (a *CrimeAPI) OffendersConvicted(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersConvicted"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersConvicted", func(st *districtState) int64 { return int64(len(st.justice.convicted)) })
 }
 
 // OffendersAcquitted returns the offenders acquitted this month (trial log).
 func (a *CrimeAPI) OffendersAcquitted(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersAcquitted"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersAcquitted", func(st *districtState) int64 { return int64(len(st.justice.acquitted)) })
 }
 
@@ -163,18 +178,27 @@ func (a *CrimeAPI) OffendersAcquitted(id DistrictID) (int64, error) {
 // stock (AC-12's identity-2 term). It is read from the courthouse's own
 // throughput overflow, never computed as an identity-balancing remainder.
 func (a *CrimeAPI) OffendersAwaitingTrial(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersAwaitingTrial"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersAwaitingTrial", func(st *districtState) int64 { return int64(len(st.justice.awaitingTrial)) })
 }
 
 // Backlog returns the awaiting-trial stock carried to next month (the
 // accumulated increment minus releases).
 func (a *CrimeAPI) Backlog(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("Backlog"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "Backlog", func(st *districtState) int64 { return int64(len(st.justice.backlog)) })
 }
 
 // OffendersReleasedOnBacklog returns the offenders released on bail/lapsed
 // charge this month (AC-13's distinct outcome, separate from acquittals).
 func (a *CrimeAPI) OffendersReleasedOnBacklog(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersReleasedOnBacklog"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersReleasedOnBacklog", func(st *districtState) int64 { return int64(len(st.justice.releasedOnBacklog)) })
 }
 
@@ -182,11 +206,17 @@ func (a *CrimeAPI) OffendersReleasedOnBacklog(id DistrictID) (int64, error) {
 // month (sentence log). It is cross-checked against the independent
 // PrisonIntake ledger by VerifyPrisonIntake (AC-12).
 func (a *CrimeAPI) OffendersSentencedToPrison(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersSentencedToPrison"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersSentencedToPrison", func(st *districtState) int64 { return int64(len(st.justice.sentencedToPrison)) })
 }
 
 // OffendersSentencedNonCustodial returns offenders sentenced non-custodially this month.
 func (a *CrimeAPI) OffendersSentencedNonCustodial(id DistrictID) (int64, error) {
+	if err := a.checkNotCopied("OffendersSentencedNonCustodial"); err != nil {
+		return 0, err
+	}
 	return a.justiceCount(id, "OffendersSentencedNonCustodial", func(st *districtState) int64 { return int64(len(st.justice.sentencedNonCustodial)) })
 }
 

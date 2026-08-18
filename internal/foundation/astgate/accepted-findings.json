@@ -814,5 +814,645 @@
   {
     "finding": "internal/engine/unlocks/force.go||function (parameter)|validForceTarget|u|*UnlocksAPI",
     "reason": "Sweep wave 2026-08-15/16 (Aaron-approved): validForceTarget is a pure read-only validation predicate taking *UnlocksAPI by value; it performs no mutation and holds no lock, so it needs no copy-guard. Astgate syntactic false positive on a function that takes a guarded type as a parameter."
+  },
+  {
+    "finding": "internal/engine/capexport/api.go|*CapExportAPI|receiver method|requireServicesLocked|a|*CapExportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/capexport/api.go|*CapExportAPI|receiver method|knownLineLocked|a|*CapExportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/capexport/api.go|*CapExportAPI|receiver method|boundIDLocked|a|*CapExportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/census/auditor.go|*CensusAPI|receiver method|auditLocked|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/census/consistency.go|*CensusAPI|receiver method|checkLocked|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/comms/comms.go|*CommsAPI|receiver method|rawShareLocked|c|*CommsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/comms/comms.go|*CommsAPI|receiver method|effectiveShareLocked|c|*CommsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/defence/facilities.go|*DefenceAPI|receiver method|payrollOfLocked|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/defence/mandates.go|*DefenceAPI|receiver method|requireBuildLocked|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/defence/mandates.go|*DefenceAPI|receiver method|requireFinanceLocked|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/defence/mandates.go|*DefenceAPI|receiver method|requireCitizensLocked|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/defence/mandates.go|*DefenceAPI|receiver method|requireAllLocked|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/api.go|*EducationAPI|receiver method|stageServiceIDLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/cohort.go|*EducationAPI|receiver method|removePupilLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|stageQualityLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|citizenAgeLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|transitionPupilLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|stageScoreLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|applyDriftLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|schoolRunLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|forkPupilLocked|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/credit.go|*FirmsAPI|receiver method|depositPoolLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/credit.go|*FirmsAPI|receiver method|baseRateLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/credit.go|*FirmsAPI|receiver method|borrowingRateLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/firms.go|*FirmsAPI|receiver method|emitLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/firms.go|*FirmsAPI|receiver method|retractFoundedEventLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/firms.go|*FirmsAPI|receiver method|retractFoundedCultureEntryLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/firms.go|*FirmsAPI|receiver method|firmIDForLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/founding.go|*FirmsAPI|receiver method|foundingProbabilityForLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/founding.go|*FirmsAPI|receiver method|foundingContextLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/founding.go|*FirmsAPI|receiver method|foundLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/founding.go|*FirmsAPI|receiver method|founderExitedLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/lifecycle.go|*FirmsAPI|receiver method|validateHiresLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/lifecycle.go|*FirmsAPI|receiver method|addHiresLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/lifecycle.go|*FirmsAPI|receiver method|growLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/lifecycle.go|*FirmsAPI|receiver method|failLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/lifecycle.go|*FirmsAPI|receiver method|applyInputScalingLocked|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/maintenance/api.go|*MaintenanceAPI|receiver method|enqueueJobLocked|a|*MaintenanceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/maintenance/api.go|*MaintenanceAPI|receiver method|viewLocked|a|*MaintenanceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/maintenance/api.go|*MaintenanceAPI|receiver method|sortedIDsLocked|a|*MaintenanceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/refuse/overflow.go|*RefuseAPI|receiver method|accumulateVerminLocked|r|*RefuseAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|nodeReferencedLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|roadViewLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|currentLanesLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|advanceLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|commitCompletedLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|recomputeFootprintLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/maintenance.go|*RoadsAPI|receiver method|maintenanceStateLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/upgrade.go|*RoadsAPI|receiver method|upgradeCostLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/upgrade.go|*RoadsAPI|receiver method|wideningLandCostLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/roads/upgrade.go|*RoadsAPI|receiver method|obstructedCellsLocked|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/social/accounting.go|*SocialAPI|receiver method|lookupLocked|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/social/accounting.go|*SocialAPI|receiver method|closeCaseLocked|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/social/provision.go|*SocialAPI|receiver method|roughSleepersLocked|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/spaceport/api.go|*SpaceportAPI|receiver method|fireLaunchLocked|a|*SpaceportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/news/history.go|*History|receiver method|snapshotLocked|h|*History",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex already held by an already-guarded entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/capexport/api.go|*CapExportAPI|receiver method|requireServices|a|*CapExportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/capexport/api.go|*CapExportAPI|receiver method|requireFinance|a|*CapExportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/capexport/api.go|*CapExportAPI|receiver method|requireProjections|a|*CapExportAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/census/census.go|*CensusAPI|receiver method|requireSources|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/census/census.go|*CensusAPI|receiver method|snapshotSources|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/census/demographics.go|*CensusAPI|receiver method|homelessIDs|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/census/demographics.go|*CensusAPI|receiver method|outOfWorkIDs|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/census/regulator.go|*CensusAPI|receiver method|regulate|c|*CensusAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/checkpoint/checkpoint.go|*Manager|receiver method|saveBundle|m|*Manager",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/checkpoint/checkpoint.go|*Manager|receiver method|nextFreeForkName|m|*Manager",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/checkpoint/checkpoint.go|*Manager|receiver method|recoverAfterLoad|m|*Manager",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/checkpoint/checkpoint.go|*Manager|receiver method|setHead|m|*Manager",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/checkpoint/lineage.go|*Manager|receiver method|prune|m|*Manager",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/coastal/advance.go|*CoastalAPI|receiver method|createGrantedCitizen|c|*CoastalAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/coastal/advance.go|*CoastalAPI|receiver method|reportNews|c|*CoastalAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/coastal/api.go|*CoastalAPI|receiver method|coastalErr|c|*CoastalAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/defence/facilities.go|*DefenceAPI|receiver method|personnelRecord|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/defence/facilities.go|*DefenceAPI|receiver method|personnelID|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/defence/grants.go|*DefenceAPI|receiver method|bidWinProbability|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/defence/grants.go|*DefenceAPI|receiver method|potByID|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/defence/mandates.go|*DefenceAPI|receiver method|mandateByID|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/defence/mandates.go|*DefenceAPI|receiver method|choiceByID|d|*DefenceAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/education/api.go|*EducationAPI|receiver method|sortedPupilIDs|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/education/cohort.go|*EducationAPI|receiver method|recordEvent|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/education/pipeline.go|*EducationAPI|receiver method|dropoutDecides|a|*EducationAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/firms/lifecycle.go|*FirmsAPI|receiver method|stageConfigFor|f|*FirmsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/fiscal/api.go|*FiscalAPI|receiver method|requireFinance|f|*FiscalAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/fiscal/api.go|*FiscalAPI|receiver method|requireTax|f|*FiscalAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/fiscal/civilservice.go|*FiscalAPI|receiver method|incomeRatePercent|f|*FiscalAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/blight.go|*BlightAPI|receiver method|heardPenalty|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/blight.go|*BlightAPI|receiver method|seenPenalty|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/blight.go|*BlightAPI|receiver method|losOcclusion|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/blight.go|*BlightAPI|receiver method|occluderHeightAt|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/blight.go|*BlightAPI|receiver method|elevationAt|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/site.go|*BlightAPI|receiver method|resolveType|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/mining/site.go|*BlightAPI|receiver method|checkGeologyGate|b|*BlightAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/rail/rail.go|*RailAPI|receiver method|modalCapFor|r|*RailAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/rail/rail.go|*RailAPI|receiver method|modalMinFor|r|*RailAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/refuse/disposal.go|*RefuseAPI|receiver method|ensureSiteShelf|r|*RefuseAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/refuse/disposal.go|*RefuseAPI|receiver method|throughputAccepted|r|*RefuseAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/refuse/refuse.go|*RefuseAPI|receiver method|snapshotDeps|r|*RefuseAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/refuse/round.go|*RefuseAPI|receiver method|registerService|r|*RefuseAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/refuse/round.go|*RefuseAPI|receiver method|deliverToSite|r|*RefuseAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/roads/api.go|*RoadsAPI|receiver method|resolveName|a|*RoadsAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/social/accounting.go|*SocialAPI|receiver method|openCase|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/social/accounting.go|*SocialAPI|receiver method|closeCase|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/social/accounting.go|*SocialAPI|receiver method|caseloadNow|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/social/api.go|*SocialAPI|receiver method|categoryCapacity|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/social/funding.go|*SocialAPI|receiver method|totalOpenCases|a|*SocialAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/worklife/api.go|*WorkScheduleAPI|receiver method|pattern|w|*WorkScheduleAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/worklife/api.go|*WorkScheduleAPI|receiver method|activeEffect|w|*WorkScheduleAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/worklife/api.go|*WorkScheduleAPI|receiver method|rotation|w|*WorkScheduleAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/worklife/api.go|*WorkScheduleAPI|receiver method|flexStart|w|*WorkScheduleAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/worklife/api.go|*WorkScheduleAPI|receiver method|dayShift|w|*WorkScheduleAPI",
+    "reason": "Sweep wave 2026-08-17 (PR #8 astgate triage): unexported helper reached only through an already-guarded entry point on the same already-validated receiver, so a second guard is redundant. Mirrors internal/foundation/errs/log.go's rotateLocked and the citizens module's helper precedent (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|receiver method|HazmatRisk|r|*Refinery",
+    "reason": "Documented in-code pure-read exception (the method's own doc comment declares it reads no mutable receiver state, so it needs no lock and no copy-guard): a struct-copied receiver returns the identical result with no mutation channel. Astgate syntactic false positive, not a genuine unguarded entry point."
+  },
+  {
+    "finding": "internal/engine/freight/port.go|*FreightAPI|receiver method|PortCapacityFor|f|*FreightAPI",
+    "reason": "Documented in-code pure-read exception (the method's own doc comment declares it reads no mutable receiver state, so it needs no lock and no copy-guard): a struct-copied receiver returns the identical result with no mutation channel. Astgate syntactic false positive, not a genuine unguarded entry point."
+  },
+  {
+    "finding": "internal/engine/freight/port.go|*FreightAPI|receiver method|CustomsSaturationFor|f|*FreightAPI",
+    "reason": "Documented in-code pure-read exception (the method's own doc comment declares it reads no mutable receiver state, so it needs no lock and no copy-guard): a struct-copied receiver returns the identical result with no mutation channel. Astgate syntactic false positive, not a genuine unguarded entry point."
+  },
+  {
+    "finding": "internal/engine/freight/port.go|*FreightAPI|receiver method|SmugglingRiskFor|f|*FreightAPI",
+    "reason": "Documented in-code pure-read exception (the method's own doc comment declares it reads no mutable receiver state, so it needs no lock and no copy-guard): a struct-copied receiver returns the identical result with no mutation channel. Astgate syntactic false positive, not a genuine unguarded entry point."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|Chem|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Chem's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|Facility|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Facility's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|Facilities|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Facilities's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|WireFreight|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WireFreight's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|WireFuel|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WireFuel's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|WireDispatch|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WireDispatch's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|WirePermit|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WirePermit's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|WireDecommission|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WireDecommission's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|Build|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Build's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|Built|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Built's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|Operate|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Operate's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|HazmatRisk|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. HazmatRisk's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|DomesticUnitCost|r.chem|*Refinery.chem",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. DomesticUnitCost's body (read in full) contains zero references to r.chem -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|WireRail|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WireRail's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|WirePermit|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WirePermit's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|WireDecommission|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. WireDecommission's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|Tiers|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Tiers's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|Tier|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Tier's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|DeepSeaTier|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. DeepSeaTier's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|PhysicalCapacity|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. PhysicalCapacity's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|CustomsCapacity|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. CustomsCapacity's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|IntermodalTransfer|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. IntermodalTransfer's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|IntermodalAccount|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. IntermodalAccount's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|ActiveTier|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. ActiveTier's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|Build|c.freight|*ContainerPort.freight",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Build's body (read in full) contains zero references to c.freight -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|SetRoadNamer|n.history|*NewsAPI.history",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. SetRoadNamer's body (read in full) contains zero references to n.history -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|SetRewriter|n.history|*NewsAPI.history",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. SetRewriter's body (read in full) contains zero references to n.history -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|Config|n.history|*NewsAPI.history",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Config's body (read in full) contains zero references to n.history -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|Rewriter|n.history|*NewsAPI.history",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Rewriter's body (read in full) contains zero references to n.history -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|Archive|n.history|*NewsAPI.history",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type, without checking whether the method body references the field. Archive's body (read in full) contains zero references to n.history -- there is no field-then-method access chain here. This is the tool over-approximating 'declared on the wrapping type' as 'reaches the field', not the WorldAPI-shaped hazard SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|ImportUnitCost|r.chem|*Refinery.chem",
+    "reason": "ImportUnitCost touches r.chem only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. r.chem is a *ChemAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/chemicals/refinery.go|*Refinery|field access chain|ImportRefined|r.chem|*Refinery.chem",
+    "reason": "ImportRefined touches r.chem only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. r.chem is a *ChemAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|TierPhysicalCapacity|c.freight|*ContainerPort.freight",
+    "reason": "TierPhysicalCapacity touches c.freight only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. c.freight is a *FreightAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|CustomsSaturation|c.freight|*ContainerPort.freight",
+    "reason": "CustomsSaturation touches c.freight only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. c.freight is a *FreightAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|SmugglingRisk|c.freight|*ContainerPort.freight",
+    "reason": "SmugglingRisk touches c.freight only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. c.freight is a *FreightAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|BalanceOfTrade|c.freight|*ContainerPort.freight",
+    "reason": "BalanceOfTrade touches c.freight only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. c.freight is a *FreightAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|Import|c.freight|*ContainerPort.freight",
+    "reason": "Import touches c.freight only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. c.freight is a *FreightAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go|*ContainerPort|field access chain|Export|c.freight|*ContainerPort.freight",
+    "reason": "Export touches c.freight only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. c.freight is a *FreightAPI pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|Ingest|n.history|*NewsAPI.history",
+    "reason": "Ingest touches n.history only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. n.history is a *History pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|History|n.history|*NewsAPI.history",
+    "reason": "History touches n.history only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. n.history is a *History pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/news/news.go|*NewsAPI|field access chain|Query|n.history|*NewsAPI.history",
+    "reason": "Query touches n.history only by delegating to the pointee's own exported methods, each of which calls its own checkNotCopied before touching its mutex. n.history is a *History pointer field: copying the wrapper never copies the pointee, so the pointee's own guard is the correct and sufficient defence (mirrors the e.subs/SubscriptionServer and p.ledger/WarningLedger pointer-field precedent)."
+  },
+  {
+    "finding": "internal/engine/freight/containerport.go||function (parameter)|LoadContainerPort|freight|*FreightAPI",
+    "reason": "Constructor parameter: freight is stored as cp.freight (a *FreightAPI pointer field) and never copied or mutated by LoadContainerPort itself; FreightAPI's own checkNotCopied guards every subsequent use of the stored pointer. Mirrors NewPalette's *KeyGrammar constructor-parameter precedent."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|handleGameplay|e|*Engine",
+    "reason": "Unexported helper reached only through HandleCommand's already-guarded dispatch (checkNotCopied before the switch) on the same already-validated *Engine receiver; it delegates to e.accept/e.reject (both guarded) and never touches e.mu itself. Mirrors the unexported-helper-behind-a-guarded-entry-point precedent."
+  },
+  {
+    "finding": "internal/engine/core/commands.go||function (parameter)|<func literal at line 54>|e|*Engine",
+    "reason": "BUG-141 per-site triage: this is WithGameplayCommandHandler's Option-pattern closure, safe by construction -- invoked exactly once, synchronously, inside NewEngine's opts loop strictly BEFORE e.self.Store(e) and before e is reachable by any other goroutine (same construction-ordering guarantee as the other With* closures already accepted for NewEngine). Genuinely safe by construction."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|SetGameplayCommandHandler|e.subs|*Engine.subs",
+    "reason": "SEC-049's field-access enumeration over-approximates: SetGameplayCommandHandler's body contains zero references to e.subs -- it touches only e.mu, e.gameplayHandler and e.sealed (and is itself receiver-guarded twice). There is no field-then-method access chain here."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|handleGameplay|e.subs|*Engine.subs",
+    "reason": "SEC-049's field-access enumeration over-approximates: handleGameplay's body contains zero references to e.subs -- it touches only e.gameplayHandler and delegates to e.accept/e.reject. There is no field-then-method access chain here."
   }
 ]
