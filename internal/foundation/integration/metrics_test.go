@@ -369,7 +369,7 @@ func TestServeMetrics_StartsWhenEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ServeMetrics: %v", err)
 	}
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 
 	resp, err := http.Get("http://" + srv.Addr() + "/metrics.json")
 	if err != nil {
