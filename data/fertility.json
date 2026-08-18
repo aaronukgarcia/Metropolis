@@ -1,0 +1,37 @@
+{
+  "$comment": "engine.citizens fertility / natural-increase balance configuration (FEAT-160). Every numeric value below is a PLACEHOLDER pending Aaron's row-by-row balance pass (the balance-number regime, same convention as data/census.json's AC-16/AC-27 disclosure pattern) — tests check direction and structure, never a pinned magnitude. Units are stated per entry so a downstream consumer never has to guess whether a figure is years or a per-month probability.",
+  "version": 1,
+  "meta": {
+    "module": "engine.citizens",
+    "featureKey": "feat.childbearing",
+    "specRefs": ["§5.1", "§5.4"],
+    "balanceRegime": "Every numeric entry below is a disclosed placeholder pending Aaron's row-by-row balance pass. Units are stated per entry."
+  },
+  "params": {
+    "minChildbearingAgeYears": {
+      "value": 18,
+      "unit": "years",
+      "disclosure": "placeholder — lower edge of the childbearing age window (FEAT-160), pending Aaron's balance pass. A partner younger than this is never fertility-eligible."
+    },
+    "maxChildbearingAgeYears": {
+      "value": 45,
+      "unit": "years",
+      "disclosure": "placeholder — upper edge of the childbearing age window (FEAT-160), pending Aaron's balance pass. A partner older than this is never fertility-eligible."
+    },
+    "peakFertilityAgeYears": {
+      "value": 28,
+      "unit": "years",
+      "disclosure": "placeholder — age at which the per-partner fertility modifier peaks (triangular curve), pending Aaron's balance pass. Must lie within [minChildbearingAgeYears, maxChildbearingAgeYears]."
+    },
+    "baseMonthlyBirthRate": {
+      "value": 0.01,
+      "unit": "probability/month",
+      "disclosure": "placeholder — per-couple monthly birth probability at peak fertility for BOTH partners, before the age modifier is applied, pending Aaron's balance pass. Directional-only: tests never assert this exact figure."
+    },
+    "maxChildrenPerHousehold": {
+      "value": 4,
+      "unit": "children",
+      "disclosure": "placeholder — household child-count cap above which a couple is no longer fertility-eligible, pending Aaron's balance pass."
+    }
+  }
+}

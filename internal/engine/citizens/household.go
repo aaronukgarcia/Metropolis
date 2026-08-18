@@ -37,14 +37,6 @@ func (h Household) RentBurdenRatio(monthlyRentMicroPounds, monthlyIncomeMicroPou
 	return ratio
 }
 
-// pairingThreshold is the minimum membership a household retains before it
-// is dissolved back into unpaired citizens (the "no household" sentinel). A
-// household is formed as a pair (2 members — see FormHousehold); when a
-// departure drops it below 2 the surviving member is alone and it is no
-// longer a pair, so it is dissolved. LifeEventPartner forms at this size and
-// LifeEventDeath unwires at this size: one shared pairing rule (GR#3).
-const pairingThreshold = 2
-
 // FormHousehold creates a new household containing both partners and
 // returns it with a shared membership (AC-12: a partnering event creates
 // a shared householdId for both partners — the caller writes that id onto
@@ -56,3 +48,33 @@ func FormHousehold(id uint64, partnerA, partnerB uint64, dwellingRooms uint8) Ho
 		DwellingRooms: dwellingRooms,
 	}
 }
+
+// AddMember appends a new member (a couple's newborn child, FEAT-160) to a
+// household's membership in place. It is the growth-side counterpart to
+// removeHouseholdMemberLocked's pruning: FormHousehold fixes a household at
+// exactly 2 members (the pairing size), but a household is not capped at 2
+// for the lifetime of the game — children born to the couple join the same
+// household without forming a new one.
+func (h *Household) AddMember(id uint64) {
+	h.Members = append(h.Members, id)
+}
+
+// Dissolution invariant (F1 fix, destructive-review REJECT on FEAT-160): a
+// household is no longer dissolved by inferring "still paired" from raw
+// membership count (len(Members) >= 2), because that stops being true once
+// a couple has children — a widowed parent's Members slice still holds
+// parent + children (>= 2 entries) even though the ADULT PAIRING is gone.
+// The pairing is instead tracked explicitly via each citizen's own Partner
+// field (Citizen.Partner / ColdRecord.Partner), never inferred from
+// membership size. registry.go's removeHouseholdMemberLocked applies this
+// invariant on departure (death/emigration):
+//   - the departed member is always pruned from h.Members;
+//   - if the departed member WAS one half of a pairing (their own Partner
+//     field, resolved before their record is removed, names the survivor),
+//     the survivor's Partner is cleared to 0 — the pairing dissolves, so the
+//     survivor may legitimately re-partner later — but the survivor's
+//     Household reference is left intact;
+//   - the household itself persists for as long as ANY member remains
+//     (surviving parent + children, or even a lone childless survivor who
+//     keeps living in the same dwelling); it is deleted only once
+//     len(Members) == 0.

@@ -728,8 +728,36 @@
     "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
   },
   {
-    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|clearHouseholdLocked|c|*CitizensAPI",
-    "reason": "Sweep wave 2026-08-15/16: unexported *Locked-suffixed helper, or exported method guarded via a *Locked helper behind an already-guarded entry point. Astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|clearPartnerOnlyLocked|c|*CitizensAPI",
+    "reason": "F1 destructive-review fix (2026-08-18): renamed from clearHouseholdLocked (previously accepted, same sweep-2026-08-15/16 reasoning) to clearPartnerOnlyLocked, since it now clears only the Partner reference (not Household -- the household persists past a partner's death). Still an unexported *Locked-suffixed helper behind an already-guarded entry point; astgate's syntactic, no-call-graph analysis cannot distinguish these from a genuine unguarded entry point (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/citizens/fertility.go|*CitizensAPI|receiver method|householdChildCountLocked|c|*CitizensAPI",
+    "reason": "F2 destructive-review fix (2026-08-18): new unexported *Locked-suffixed helper (mirrors the accepted removeHouseholdMemberLocked/clearPartnerOnlyLocked precedent), called only from applyFertilityLocked/AdvanceDayTick's already copy-guarded, already c.mu-locked path. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/citizens/fertility.go|*CitizensAPI|receiver method|applyFertilityLocked|c|*CitizensAPI",
+    "reason": "FEAT-160 fertility pass: unexported *Locked-suffixed helper called only from AdvanceDayTick (registry.go:483), which itself calls c.checkNotCopied(correlationID, \"AdvanceDayTick\") before doing anything else and holds c.mu for the whole tick. Astgate's syntactic, no-call-graph analysis cannot distinguish an already-guarded, already-locked internal helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the removeHouseholdMemberLocked/clearPartnerOnlyLocked/householdChildCountLocked precedent above."
+  },
+  {
+    "finding": "internal/engine/citizens/fertility.go|*CitizensAPI|receiver method|birthChildLocked|c|*CitizensAPI",
+    "reason": "FEAT-160 fertility pass: unexported *Locked-suffixed helper called only from applyFertilityLocked, itself reached only through AdvanceDayTick's already copy-guarded, already c.mu-locked path (see applyFertilityLocked's entry above). Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/citizens/fertility.go|*CitizensAPI|receiver method|personalityOfLocked|c|*CitizensAPI",
+    "reason": "FEAT-160 fertility pass: unexported *Locked-suffixed helper called only from birthChildLocked, itself reached only through applyFertilityLocked/AdvanceDayTick's already copy-guarded, already c.mu-locked path (see applyFertilityLocked's entry above). Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/citizens/fertility.go|*CitizensAPI|receiver method|incrementChildCountLocked|c|*CitizensAPI",
+    "reason": "FEAT-160 fertility pass: unexported *Locked-suffixed helper called only from birthChildLocked, itself reached only through applyFertilityLocked/AdvanceDayTick's already copy-guarded, already c.mu-locked path (see applyFertilityLocked's entry above). Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/citizens/fertility.go|*CitizensAPI|receiver method|birthMonthOfLocked|c|*CitizensAPI",
+    "reason": "Round-3 hardening (P2 secondary finding on householdChildCountLocked, 2026-08-18): new unexported *Locked-suffixed helper mirroring personalityOfLocked's shape exactly, called only from householdChildCountLocked, itself already accepted above as reached only through applyFertilityLocked/AdvanceDayTick's already copy-guarded, already c.mu-locked path. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
+  },
+  {
+    "finding": "internal/engine/citizens/registry.go|*CitizensAPI|receiver method|detachFromHouseholdLocked|c|*CitizensAPI",
+    "reason": "Round-3 fix (P1 data-integrity, 2026-08-18): new unexported *Locked-suffixed helper mirroring removeHouseholdMemberLocked/clearPartnerOnlyLocked's precedent exactly, called only from ApplyLifeEventCommand's LifeEventPartner case (registry.go), which calls c.checkNotCopied(cmd.CorrelationID, \"ApplyLifeEventCommand\") before doing anything else and holds c.mu for the whole command. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
   },
   {
     "finding": "internal/engine/freight/conservation.go|*FreightAPI|receiver method|computeAccountLocked|f|*FreightAPI",
@@ -1454,5 +1482,21 @@
   {
     "finding": "internal/engine/core/commands.go|*Engine|field access chain|handleGameplay|e.subs|*Engine.subs",
     "reason": "SEC-049's field-access enumeration over-approximates: handleGameplay's body contains zero references to e.subs -- it touches only e.gameplayHandler and delegates to e.accept/e.reject. There is no field-then-method access chain here."
+  },
+  {
+    "finding": "internal/engine/core/phase.go|*Engine|receiver method|runPhaseForHookFast|e|*Engine",
+    "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). BUG-269's fast path: runPhaseForHookFast is reached only through runPhase's already-guarded dispatch (mirrors runPhaseForHook exactly, same file, same guarded call chain), never a fresh unguarded entry point; the receiver is never copied. Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
+  },
+  {
+    "finding": "internal/engine/core/phase.go|*Engine|field access chain|runPhaseForHookFast|e.subs|*Engine.subs",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same \"presence, not effect\" scope isGuarded's doc comment already discloses for the receiver/parameter paths, gate.go). runPhaseForHookFast's body (internal/engine/core, BUG-269's fast path) was read in full and contains zero references to e.subs anywhere -- grep-confirmed against the whole package. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", not the WorldAPI-shaped hazard (a.w.mu touched directly) SEC-049 was built to close. Mirrors runPhaseForHook's identical e.subs entry above."
+  },
+  {
+    "finding": "internal/engine/core/engine.go||function (parameter)|<func literal at line 140>|e|*Engine",
+    "reason": "BUG-141 per-site triage (closing BUG-138's ratchet placeholder): this is NewEngine's Option-pattern closure (WithSingleShardAssert, BUG-269's fast-path dev-mode assertion opt-in) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside NewEngine's own 'for _, opt := range opts { opt(x) }' loop (see NewEngine in this file/package), strictly BEFORE x.self.Store(x) runs and BEFORE x is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Engine] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to x to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Engine parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithXxx returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, not the BUG-138 ratchet's generic not-yet-triaged placeholder."
+  },
+  {
+    "finding": "internal/engine/invariant/hook.go|*Hook|field access chain|SingleShard|h.registry|*Hook.registry",
+    "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same \"presence, not effect\" scope isGuarded's doc comment already discloses for the receiver/parameter paths, gate.go). SingleShard's body (internal/engine/invariant/hook.go, BUG-269's SingleShardHook opt-in -- func (h *Hook) SingleShard() bool { return true }) was read in full and contains zero references to h.registry anywhere -- grep-confirmed against the whole package: it is a compile-time-constant true return, touching no field at all. There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", not the WorldAPI-shaped hazard (a.w.mu touched directly) SEC-049 was built to close. Mirrors ApplyEffect/handleViolations/hardFail/RunShard's identical h.registry entries above."
   }
 ]

@@ -1749,6 +1749,18 @@
       "message": "citizen {id} field {field} value {value} is outside [{min}, {max}]",
       "remedy": "A field at the hot-to-cold boundary fell outside its documented contract range (satisfaction 0-100, schooling int16, sex/health-band/stage/employment-state/sector enums, child count 0-255). Reject the record rather than silently narrow it — a bare int8(200) wraps to -56, and an out-of-domain enum is a data error (AC-13/GR#16)."
     },
+    "MET-G008": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "data/fertility.json is missing, malformed, or fails schema validation: {rule}",
+      "remedy": "FEAT-160's childbearing balance config (data/fertility.json) must exist, decode with no unknown fields, and pass its own range checks (age window ordered, rates in [0,1], every numeric entry carries unit+disclosure). Fix the data file rather than falling back to an invented default (GR#15)."
+    },
+    "MET-G009": {
+      "severity": "error",
+      "module": "engine.citizens",
+      "message": "fertility birth for child {childID} (parents {parentA}, {parentB}) rejected: {cause}",
+      "remedy": "The fertility pass constructed an invalid Citizen record (e.g. a config-derived out-of-range BirthMonth). Logged loudly and the birth is skipped for this couple this month rather than corrupting the cold store (GR#1/GR#16); investigate the fertility config/month inputs that produced it."
+    },
     "MET-G100": {
       "severity": "error",
       "module": "engine.projections",
