@@ -10,6 +10,12 @@ import (
 )
 
 func measuredResult(preset string, perMonth time.Duration) synth.PerfResult {
+	// BUG-272: the perf gate now keys on deterministic allocation counts,
+	// not noisy wall-clock. Scale the fixture's allocations with perMonth so
+	// these tests' existing duration-ratio intentions still hold under the
+	// alloc-based gate (100ms baseline -> ~105ms = +5% = passed; ->200ms =
+	// +100% = regressed) and stay well above MinMeasurableAllocs (1000).
+	allocCount := uint64(perMonth.Milliseconds()) * 10_000 // 100ms -> 1,000,000
 	return synth.PerfResult{
 		Preset:         preset,
 		CitizenCount:   1_000_000,
@@ -18,6 +24,8 @@ func measuredResult(preset string, perMonth time.Duration) synth.PerfResult {
 		TotalTicks:     360,
 		TickTime:       perMonth * 12,
 		PerMonthTick:   perMonth,
+		AllocBytes:     allocCount * 64,
+		AllocCount:     allocCount,
 		PhaseHookCount: synth.PhaseHookCountInHeadlessPath(),
 		Measured:       true,
 	}
