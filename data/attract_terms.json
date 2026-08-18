@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "environment": {
+    "pollutionHalfSaturationKg": 50000,
+    "comment": "Directional placeholder (GR#15): total uncollected+disposal-backlog waste (kg, summed general+recycling+food) at which engine.attract's Environment term reads 50/100. Mirrors data/crime.json's safety.halfSaturationActiveCrime curve shape (see internal/engine/crime/api.go's SafetyTerm). Balance pass pending (Aaron's balance-number regime, 2026-08-13)."
+  },
+  "leisure": {
+    "bridgeVenueCapacityUnits": 500,
+    "comment": "Directional placeholder (GR#15): weekly patronage capacity (person-hours, engine.leisure's Venue.Capacity unit) assigned by the compose->leisure venue-registration bridge to every completed engine.build ZoneEntertainment order. engine.build's zone catalogue carries one generic 'entertainment' type today, with no venue-category sub-signal, so the bridge always opens one CategoryCommunity venue at this one capacity figure — a coarse composite, not a real per-building capacity read. Balance pass pending."
+  }
+}

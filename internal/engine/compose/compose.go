@@ -8,11 +8,14 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -59,13 +62,16 @@ const (
 	baselineOnePowerCapacity = 1_000_000.0
 	baselineOneGasCapacity   = 1_000_000.0
 
-	// attract master-dial inputs. A_world (40) and the five pushed terms
-	// (50) are neutral-ish placeholders; with the computed housing term
-	// reading 100 (vacant city), A ≈ 52 > A_world so migration is net
-	// positive and reputation momentum carries it upward from there.
+	// attract master-dial inputs. A_world (40) is a neutral-ish placeholder.
+	// baselineOneTermValue is now the FLAT placeholder for only the two
+	// §11 terms this integration deliberately leaves unwired
+	// (ServiceCoverage/JobAvailability — no real signal exists in any
+	// built module yet, docs/planning/icd/engine.attract-terms.md §3/§12
+	// open decision 3). Safety/LeisureFit/Environment are real, computed
+	// per month by safetyTerm/leisureFitTerm/environmentTerm below.
 	baselineOneAWorld        = 40.0
 	baselineOneMigrationRate = 1.0
-	baselineOneTermValue     = 50.0 // the five pushed §11 terms
+	baselineOneTermValue     = 50.0 // ServiceCoverage/JobAvailability placeholder (ICD §3)
 	baselineOneMonthlyRent   = 0    // micropounds; vacant city rent placeholder
 
 	// attract capacity constraints (people / dwelling units). Unbounded
@@ -82,6 +88,22 @@ const (
 	baselineOneRepFall = 0.8
 	baselineOneRepMax  = 100.0
 )
+
+// FEAT-167 (docs/planning/icd/engine.attract-terms.md): baseline one has no
+// district/cell topology yet, so the Safety/Environment terms are computed
+// against ONE compose-owned aggregate citywide district/cell — not a
+// player-facing balance number, just the coarsest identity that lets
+// engine.crime/engine.refuse's real per-district/per-cell accounting run at
+// all before topology exists.
+const (
+	citywideCrimeDistrict = crime.DistrictID(0)
+	citywideRefuseCellID  = "citywide"
+)
+
+// refuseStreams is the fixed, documented iteration order for summing
+// engine.refuse's three §25 waste streams into the Environment term's
+// composite (environmentTerm below) — a slice, never a map range (GR#21).
+var refuseStreams = []refuse.Stream{refuse.StreamGeneral, refuse.StreamRecycling, refuse.StreamFood}
 
 // Deps carries the real module dependencies Wire composes. A nil *Deps
 // (the common boot case) means "construct the defaults" — world, citizens
@@ -121,6 +143,16 @@ type Deps struct {
 	// use invariant.WithLogSink / invariant.WithPanicFunc to observe
 	// conservation violations (AC-10).
 	InvariantOpts []invariant.HookOption
+
+	// Crime, Leisure and Refuse override construction of the three
+	// FEAT-167 attract-term source modules (default: crime.New /
+	// leisure.LoadDefault / refuse.LoadDefault). nil is the common boot
+	// case; the test seam lets a caller inject a pre-configured instance
+	// to prove a term value actually moves when its source module's state
+	// changes (docs/planning/icd/engine.attract-terms.md §11).
+	Crime   *crime.CrimeAPI
+	Leisure *leisure.LeisureAPI
+	Refuse  *refuse.RefuseAPI
 }
 
 // moduleRegistration is one fixed slot in the composition order.
@@ -420,6 +452,47 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
 	}
 
+	// FEAT-167 (docs/planning/icd/engine.attract-terms.md): construct the
+	// three real Safety/LeisureFit/Environment source modules, resolved
+	// BEFORE the first hook registers like every other required module
+	// above (AC-4 — no partially-wired engine on a construction failure).
+	crimeAPI := deps.Crime
+	if crimeAPI == nil {
+		var cErr error
+		crimeAPI, cErr = crime.New(e.WorldSeed(), cid)
+		if cErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, cErr, map[string]any{"module": "crime"})
+		}
+	}
+
+	leisureAPI := deps.Leisure
+	if leisureAPI == nil {
+		var lErr error
+		leisureAPI, lErr = leisure.LoadDefault(cid)
+		if lErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, lErr, map[string]any{"module": "leisure"})
+		}
+	}
+
+	refuseAPI := deps.Refuse
+	if refuseAPI == nil {
+		var rErr error
+		refuseAPI, rErr = refuse.LoadDefault(cid)
+		if rErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, rErr, map[string]any{"module": "refuse"})
+		}
+	}
+	// RegisterCell is an upsert (refuse/generate.go): safe to call every
+	// Wire, including against an injected/pre-registered *RefuseAPI.
+	if err := refuseAPI.RegisterCell(citywideRefuseCellID, refuse.LandUseResidential, "citywide"); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "refuse"})
+	}
+
+	attractTerms, err := loadAttractTermsData(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract_terms_data"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -433,21 +506,26 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	}
 
 	st := &simState{
-		e:             e,
-		cid:           cid,
-		seed:          e.WorldSeed(),
-		citizens:      c,
-		world:         w,
-		market:        m,
-		consumption:   consumptionAPI,
-		waterNet:      waterNet,
-		powerNet:      powerNet,
-		gasNet:        gasNet,
-		buildAPI:      buildAPI,
-		attract:       attractAPI,
-		treasury:      initialTreasury,
-		citizenWealth: initialCitizenWealth,
-		nextCitizenID: 1,
+		e:                       e,
+		cid:                     cid,
+		seed:                    e.WorldSeed(),
+		citizens:                c,
+		world:                   w,
+		market:                  m,
+		consumption:             consumptionAPI,
+		waterNet:                waterNet,
+		powerNet:                powerNet,
+		gasNet:                  gasNet,
+		buildAPI:                buildAPI,
+		attract:                 attractAPI,
+		crime:                   crimeAPI,
+		leisure:                 leisureAPI,
+		refuse:                  refuseAPI,
+		attractTerms:            attractTerms,
+		leisureVenuesRegistered: make(map[uint64]bool),
+		treasury:                initialTreasury,
+		citizenWealth:           initialCitizenWealth,
+		nextCitizenID:           1,
 	}
 
 	// Establish the non-zero seed population (AC-8's precondition).
@@ -549,6 +627,24 @@ type simState struct {
 
 	buildAPI *build.BuildAPI
 	attract  *attract.AttractAPI
+
+	// FEAT-167 (docs/planning/icd/engine.attract-terms.md): the three real
+	// Safety/LeisureFit/Environment source modules, plus this integration's
+	// one new data-driven balance file. attractTerms is read-only after
+	// Wire (loadAttractTermsData runs once, at construction) — never
+	// re-read per tick.
+	crime        *crime.CrimeAPI
+	leisure      *leisure.LeisureAPI
+	refuse       *refuse.RefuseAPI
+	attractTerms attractTermsData
+
+	// leisureVenuesRegistered tracks which completed engine.build
+	// ZoneEntertainment order IDs are CURRENTLY bridged into an open
+	// engine.leisure venue (registerLeisureVenues below) — membership is
+	// removed again when the underlying structure is demolished (destructive
+	// round r1 F2 fix), so this is a live "still open" set, not a
+	// once-true-forever registration log.
+	leisureVenuesRegistered map[uint64]bool
 
 	// people conservation ledger
 	peopleOpening int64
@@ -914,6 +1010,7 @@ func (h *buildHook) ApplyEffect(eff core.Effect) {
 		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "build", "cause": err.Error()})
 		return
 	}
+	h.st.registerLeisureVenues()
 }
 
 // SingleShard implements core.SingleShardHook (BUG-269 — this is the
@@ -921,6 +1018,65 @@ func (h *buildHook) ApplyEffect(eff core.Effect) {
 // nil) for every shard except 0 (see above) — the only Effect ever
 // emitted comes from shard 0.
 func (h *buildHook) SingleShard() bool { return true }
+
+// registerLeisureVenues bridges engine.build's completed ZoneEntertainment
+// orders into engine.leisure's venue registry (FEAT-167 ICD §12 open
+// decision 4's "fourth edge gap" — mediated entirely by compose; no direct
+// engine.build -> engine.leisure edge is registered in code.json). Called
+// once per day-tick after buildAPI.Tick (buildHook.ApplyEffect, above): a
+// completed entertainment-zone build order becomes exactly one leisure
+// venue, opened once (idempotent via leisureVenuesRegistered) at the
+// data-driven bridge capacity (data/attract_terms.json's
+// leisure.bridgeVenueCapacityUnits, GR#15) in the community category — a
+// deliberately coarse composite (engine.build's zone catalogue carries one
+// generic "entertainment" type today, with no venue-category sub-signal),
+// never an invented per-building capacity. Iterates buildAPI.Queue()'s
+// insertion-order slice, never a map (GR#21).
+//
+// Destructive round r1 (F2) fix: BuildAPI.Queue() keeps every order
+// FOREVER, including one whose structure a later Demolish command already
+// deleted (SubmitDemolishCommand clears zoneState/structures, never the
+// queue entry) — an order snapshot still reporting
+// complete+ZoneEntertainment is therefore NOT proof a venue should exist.
+// The only live-truth signal is BuildAPI.Structure(tile, local): whether
+// THIS order's ID is still the standing structure on its cell. Every
+// completed entertainment order is reconciled against that truth every
+// call: currently-standing-but-not-yet-registered opens a venue,
+// registered-but-no-longer-standing (demolished, or replaced by a later
+// order on the same cell) removes it — so demolishing an entertainment
+// zone measurably lowers LeisureFit again, and a later rebuild
+// re-registers cleanly (idempotent both ways).
+func (st *simState) registerLeisureVenues() {
+	for _, order := range st.buildAPI.Queue() {
+		if order.Zone != build.ZoneEntertainment || order.Status != build.OrderComplete {
+			continue
+		}
+		venueID := uint64(order.ID)
+		structID, standing := st.buildAPI.Structure(order.Tile, order.Local)
+		stillStanding := standing && structID == order.ID
+
+		switch {
+		case stillStanding && !st.leisureVenuesRegistered[venueID]:
+			v := leisure.Venue{
+				ID:       venueID,
+				Category: leisure.CategoryCommunity,
+				District: 0,
+				Capacity: st.attractTerms.Leisure.BridgeVenueCapacityUnits,
+			}
+			if err := st.leisure.OpenVenue(v, st.cid); err != nil {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "leisure", "cause": err.Error()})
+				continue
+			}
+			st.leisureVenuesRegistered[venueID] = true
+		case !stillStanding && st.leisureVenuesRegistered[venueID]:
+			if err := st.leisure.RemoveVenue(venueID, st.cid); err != nil {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "leisure", "cause": err.Error()})
+				continue
+			}
+			delete(st.leisureVenuesRegistered, venueID)
+		}
+	}
+}
 
 // --- attract hook (MOD-029, real) ---
 
@@ -968,19 +1124,34 @@ func (h *attractHook) ApplyEffect(eff core.Effect) {
 // Effect ever emitted comes from shard 0.
 func (h *attractHook) SingleShard() bool { return true }
 
-// applyMigration pushes the five §11 terms the composition root owns
-// (jobAvailability/serviceCoverage/environment/leisureFit/safety are
-// pushed input per engine.attract's ASM-243 — no registered edge exists to
-// their real source modules yet), then runs one monthly migration step.
+// applyMigration pushes the five §11 terms the composition root owns, then
+// runs one monthly migration step. Safety/LeisureFit/Environment are real,
+// computed this same month from engine.crime/engine.leisure/engine.refuse
+// (FEAT-167, docs/planning/icd/engine.attract-terms.md); JobAvailability/
+// ServiceCoverage remain the documented flat placeholder — no real signal
+// exists in any built module yet (ICD §3/§12 open decision 3).
 // HousingVacancy/JunctionThroughput are unbounded placeholders until
 // households/logistics produce real capacity signals.
 func (st *simState) applyMigration(month int64) (attract.MigrationResult, error) {
+	safety, err := st.safetyTerm(month)
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
+	leisureFit, err := st.leisureFitTerm()
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
+	environment, err := st.environmentTerm()
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
+
 	if err := st.attract.SetTermInputs(attract.TermInputs{
 		JobAvailability:        baselineOneTermValue,
 		ServiceCoverage:        baselineOneTermValue,
-		Environment:            baselineOneTermValue,
-		LeisureFit:             baselineOneTermValue,
-		Safety:                 baselineOneTermValue,
+		Environment:            environment,
+		LeisureFit:             leisureFit,
+		Safety:                 safety,
 		HouseholdIDs:           nil, // vacant baseline-one city: no households formed yet
 		MonthlyRentMicroPounds: baselineOneMonthlyRent,
 	}); err != nil {
@@ -992,6 +1163,83 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 		HousingVacancy:     baselineOneHousingVacancy,
 		JunctionThroughput: baselineOneJunctionThroughput,
 	})
+}
+
+// safetyTerm advances engine.crime one month against the single citywide
+// district (population-driven EligiblePool half only — ICD §12 open
+// decision 2: every other DistrictInput driver has no compose-owned real
+// source yet, so it stays at its documented zero-neutral default) and
+// returns the resulting [0,100] SafetyTerm — higher population -> larger
+// EligiblePool -> more generation -> lower Safety, a real monotonic
+// dependency, never a flat constant.
+func (st *simState) safetyTerm(month int64) (float64, error) {
+	population := int64(st.citizens.TotalPopulation(st.cid))
+	in := crime.DistrictInput{
+		District:     citywideCrimeDistrict,
+		EligiblePool: population,
+	}
+	if err := st.crime.AdvanceMonth(month, []crime.DistrictInput{in}, crime.SecurityInput{}); err != nil {
+		return 0, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "crime"})
+	}
+	safety, err := st.crime.SafetyTerm(citywideCrimeDistrict)
+	if err != nil {
+		return 0, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "crime"})
+	}
+	return safety, nil
+}
+
+// leisureFitTerm queries engine.leisure's citywide LeisureFitAggregate
+// (venue mix vs the would-be-migrant taste distribution, leisure's own
+// data-loaded Config.DefaultTaste — no new data file needed, ICD §3) and
+// scales its [0,1] result to attract's [0,100] term scale. Zero registered
+// venues yields a low aggregate; the registerLeisureVenues bridge (above)
+// is what makes this move as the player builds entertainment zones.
+func (st *simState) leisureFitTerm() (float64, error) {
+	taste := st.leisure.PopulationTaste(st.cid)
+	fit, err := st.leisure.LeisureFitAggregate(taste, st.cid)
+	if err != nil {
+		return 0, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "leisure"})
+	}
+	return 100 * fit, nil
+}
+
+// environmentTerm generates one month's waste into the single citywide
+// refuse cell (population-driven, mirroring safetyTerm's EligiblePool
+// half) and folds the resulting uncollected+disposal-backlog tonnage
+// (summed across engine.refuse's three §25 streams, refuseStreams) through
+// the data-driven half-saturation curve (data/attract_terms.json's
+// environment.pollutionHalfSaturationKg, GR#15) — the same curve shape
+// engine.crime's own SafetyTerm uses. Baseline one never wires a refuse
+// collection round (no engine.logistics/engine.services dependency is
+// injected into refuse here), so the generated waste is always starved of
+// collection: uncollected tonnage — and therefore this term's degradation —
+// grows monotonically with population, a real dependency never a constant.
+func (st *simState) environmentTerm() (float64, error) {
+	population := float64(st.citizens.TotalPopulation(st.cid))
+	if err := st.refuse.Generate(citywideRefuseCellID, population); err != nil {
+		return 0, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "refuse"})
+	}
+	var outstanding int64
+	for _, s := range refuseStreams {
+		uncollected, err := st.refuse.TonnesUncollected(s)
+		if err != nil {
+			return 0, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "refuse"})
+		}
+		backlog, err := st.refuse.TonnesDisposalBacklog(s)
+		if err != nil {
+			return 0, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{"module": "refuse"})
+		}
+		outstanding = num.SatAdd(outstanding, num.SatAdd(uncollected, backlog))
+	}
+	half := st.attractTerms.Environment.PollutionHalfSaturationKg
+	total := float64(outstanding)
+	pressure := total / (total + half)
+	if pressure < 0 {
+		pressure = 0
+	} else if pressure > 1 {
+		pressure = 1
+	}
+	return 100 * (1 - pressure), nil
 }
 
 // residentIDs returns the citizen-id set eligible for personality-weighted

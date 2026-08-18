@@ -132,7 +132,13 @@ func (a *CrimeAPI) applyGangEffectsLocked(month int64, st *districtState, g *Gan
 	g.BusinessClosures = closures
 
 	// (d) Recruitment: draws from the matching demographic, reducing the
-	// district's eligible pool (the figure AC-2/AC-3 drivers read from).
+	// district's eligible pool (the figure AC-2/AC-3 drivers read from) for
+	// the REST of this month. recruitedCumulative is the persistent record
+	// (districtState's doc comment): next month's AdvanceMonth recomputes
+	// eligiblePool fresh from the live pushed pool discounted by this
+	// running total, rather than continuing to mutate a value that would
+	// otherwise go stale the moment the live push stops matching it
+	// (destructive round r1 fix).
 	recruit := int64(float64(st.eligiblePool) * cfg.Gangs.RecruitmentRate * g.Strength)
 	if recruit < 0 {
 		recruit = 0
@@ -141,6 +147,7 @@ func (a *CrimeAPI) applyGangEffectsLocked(month int64, st *districtState, g *Gan
 		recruit = st.eligiblePool
 	}
 	st.eligiblePool -= recruit
+	st.recruitedCumulative = num.SatAdd(st.recruitedCumulative, recruit)
 	g.Recruited = num.SatAdd(g.Recruited, recruit)
 }
 

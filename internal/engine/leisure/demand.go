@@ -83,6 +83,21 @@ func (a *LeisureAPI) SetPopulationTaste(d TasteDistribution, correlationID strin
 	return nil
 }
 
+// PopulationTaste returns the current citywide aggregate population taste
+// distribution (Config.DefaultTaste until SetPopulationTaste overrides it)
+// — the read side of the pushed-input seam. Added for FEAT-167's
+// engine.attract Safety/LeisureFit/Environment wiring
+// (docs/planning/icd/engine.attract-terms.md §3): the composition root
+// needs to read leisure's own data-loaded would-be-migrant taste
+// distribution to feed LeisureFitAggregate, without compose duplicating
+// that data into a second copy it would have to keep in sync (GR#3).
+func (a *LeisureAPI) PopulationTaste(correlationID string) TasteDistribution {
+	_ = a.checkNotCopied("PopulationTaste")
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.tasteDemand
+}
+
 // UnmetTasteDemand computes the per-category unmet taste demand for a
 // district (0 = citywide), against the current population taste (AC-7). A
 // non-zero district with no registered venues returns ErrUnknownDistrict.

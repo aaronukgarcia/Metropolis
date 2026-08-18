@@ -64,7 +64,36 @@ type districtState struct {
 
 	sustainedMonths int // consecutive months gang-formation conditions held (AC-6)
 
-	eligiblePool int64 // remaining eligible pool (gang recruitment reduces it, AC-7d)
+	// eligiblePool is this month's live queryable eligible pool (AC-2/AC-3's
+	// generation driver, and AC-7d's recruitment-reduced figure): recomputed
+	// every AdvanceMonth as max(0, thisMonth'sPushedEligiblePool -
+	// recruitedCumulative), then further reduced in-month by any recruitment
+	// applyGangEffectsLocked applies this same tick (queryable via
+	// EligiblePool for the remainder of the month, until the next push).
+	//
+	// BUG (destructive round r1, FEAT-167 independent attack) FIXED here:
+	// the ORIGINAL design seeded eligiblePool from DistrictInput.EligiblePool
+	// only on first sight (`if st.eligiblePool == 0`) and never again — a
+	// live monthly population push after month 1 silently stopped affecting
+	// Safety/generation entirely, and the pool could only ever fall (never
+	// track a real population's growth or, after a later shrink, recover).
+	// Reseeding is now unconditional and designed (recruitedCumulative is
+	// the ONLY thing that discounts the live push), not an incidental side
+	// effect of the pool happening to read exactly zero (which, under the
+	// old `==0` gate, wrongly re-triggered a full reseed and threw away
+	// every prior month's recruitment deduction).
+	eligiblePool int64
+
+	// recruitedCumulative is the district's running total of eligible-pool
+	// members gang recruitment has ever drawn off (AC-7d), independent of
+	// which specific gang did the recruiting and surviving across gang
+	// formation/removal/respawn cycles. It is the one persistent quantity
+	// eligiblePool's monthly recompute discounts the live pushed population
+	// by, so two states with identical (pushedPopulation,
+	// recruitmentHistory) always converge to the identical eligiblePool/
+	// Safety regardless of the population's growth PATH that got them there
+	// (the destructive round's convergence attack).
+	recruitedCumulative int64
 
 	justice justiceState
 }
@@ -273,13 +302,18 @@ func (a *CrimeAPI) AdvanceMonth(month int64, districts []DistrictInput, security
 	for _, d := range sorted {
 		st := a.ensureDistrictLocked(d.District)
 		st.inputs = d
-		if st.eligiblePool == 0 {
-			// The eligible pool is seeded once (first sight) and then
-			// carried forward, reduced by gang recruitment (AC-7d). The
-			// composition root owns population; this module only reports the
-			// recruitment reduction through EligiblePool/GangRecruited.
-			st.eligiblePool = d.EligiblePool
+		// Recomputed every month from the LIVE pushed pool, discounted by
+		// the district's persistent recruitment history — never seeded once
+		// and left stale (destructive round r1 fix, see districtState's
+		// eligiblePool doc comment above). The composition root owns
+		// population; this module reports only the recruitment-driven
+		// reduction, via recruitedCumulative, against whatever pool value
+		// is pushed each month.
+		pool := d.EligiblePool - st.recruitedCumulative
+		if pool < 0 {
+			pool = 0
 		}
+		st.eligiblePool = pool
 		a.advanceDistrictLocked(month, st, d)
 	}
 
