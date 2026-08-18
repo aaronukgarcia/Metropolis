@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "$comment": "engine.tourism (MOD-057, §44; §21 lets) — the holiday-tourism balance data contract. §44 describes the visitor economy by DIRECTION and mechanism only (the draw formula's terms and multipliers, the accommodation-stock caps, the reputation-fragile seasonal income); it gives NO tuned magnitude for the access-tier reach ladder, the reputation→multiplier scale/lag, the visitor rates, the per-kind starter bed stock, or the load/spend coefficients. Every numeric value here is therefore a PLACEHOLDER pending Aaron's balance pass (the standing balance-number regime, GR#15): tests assert direction/structure only (summer peaks, a higher access rung out-reaches a lower one, a capacity cap binds, the August queue drains), never a pinned figure. The one mechanism-relevant figure is reputationLagMonths (AC-10's lag window) — a v1 default, see ASM-319. All maps are only ever ACCESSED by key (never ranged), so JSON object-key order is irrelevant to determinism (GR#21).",
+  "accessTiers": {
+    "domestic":     { "reachMultiplier": 1 },
+    "continental":  { "reachMultiplier": 2 },
+    "global":       { "reachMultiplier": 4 }
+  },
+  "reputationScale": 100,
+  "reputationLagMonths": 2,
+  "stayingVisitorStayMonths": 1,
+  "stayingVisitorRate": 1,
+  "dayTripRate": 2,
+  "portfolioWeights": {
+    "beach": 1,
+    "venues": 1,
+    "events": 1,
+    "landmarks": 1,
+    "countryside": 1
+  },
+  "accommodation": {
+    "hotel": 0,
+    "bnb": 0,
+    "campsite": 0,
+    "holidayLet": 0
+  },
+  "load": {
+    "dayTripperTransport": 1.0,
+    "dayTripperWaste": 0.3,
+    "dayTripperPolicing": 0.2,
+    "stayingTransport": 0.5,
+    "stayingWaste": 1.0,
+    "stayingPolicing": 1.0
+  },
+  "spend": {
+    "dayTripHours": 8,
+    "dayTripMicroPounds": 5000,
+    "stayingPerNightMicroPounds": 20000
+  }
+}
