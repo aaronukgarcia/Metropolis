@@ -35,4 +35,16 @@ const (
 	// invariant.ErrWiringAfterSeal) so the original cause stays reachable
 	// through errors.Unwrap (AC-6).
 	ErrWiringAfterSeal = "MET-G803"
+
+	// ErrGameplayRejectionPassthrough (BUG-267): a gameplay-command reject
+	// that carries an already-rendered Display string from another
+	// module's registry error (e.g. world.PurchaseTile's ErrorRef, whose
+	// Code/Display were rendered against that module's OWN registry
+	// template and ctx keys). Re-wrapping such a rejection under the
+	// ORIGINAL module's code with a ctx keyed "display" left that code's
+	// real template placeholders ({tile}/{cause} for MET-E404) unresolved
+	// (the ctx key didn't match). This code's template is exactly
+	// "{display}" — a deliberate pass-through, never re-rendered against a
+	// foreign module's placeholders.
+	ErrGameplayRejectionPassthrough = "MET-G804"
 )

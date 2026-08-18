@@ -3,13 +3,21 @@ package compose
 import (
 	"errors"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
 // baseline-one stub-mechanics constants. These are NOT player-facing
@@ -24,14 +32,56 @@ const (
 	defaultStartCoordX = 15
 	defaultStartCoordY = 15
 
-	seedCitizenCount    = 64 // baseline-one seed population (AC-8's non-zero seed)
-	monthlyBirths       = 8  // citizens hook, per month
-	monthlyNetMigration = 2  // attract hook, net per month
+	seedCitizenCount = 64 // baseline-one seed population (AC-8's non-zero seed)
+	monthlyBirths    = 8  // citizens hook, per month
 
 	initialTreasury      = 10_000_000 // micropounds (10 pounds)
 	initialCitizenWealth = 5_000_000  // micropounds (5 pounds)
 	monthlyWages         = 1_000_000  // finance stub, per month (1 pound)
 	monthlyTax           = 1_000_000  // finance stub, per month (1 pound; budget closes)
+)
+
+// baseline-one real-module placeholders. Like the block above, these are
+// NOT player-facing balance numbers (GR#15 / the balance-number regime):
+// they are the cheapest coarse knobs that let the REAL modules tick in the
+// loop for FEAT-083. They are documented placeholders, not spec-transcribed
+// figures, and they will be replaced by data-loading / real topology once
+// their owning modules (utility networks, world pool) supply it.
+const (
+	// playerOwnerID is the single baseline-one player/owner identity. The
+	// build module's §7 ownership gate keys on world ownership; a real
+	// multi-player/owner model is a later sprint.
+	playerOwnerID = uint32(1)
+
+	// consumption source capacities (units/tick). The city's real utility
+	// topology does not exist yet (build has built no networks); these
+	// coarse single-source networks keep the consumption solve drawing.
+	baselineOneWaterCapacity = 1_000_000.0
+	baselineOnePowerCapacity = 1_000_000.0
+	baselineOneGasCapacity   = 1_000_000.0
+
+	// attract master-dial inputs. A_world (40) and the five pushed terms
+	// (50) are neutral-ish placeholders; with the computed housing term
+	// reading 100 (vacant city), A ≈ 52 > A_world so migration is net
+	// positive and reputation momentum carries it upward from there.
+	baselineOneAWorld        = 40.0
+	baselineOneMigrationRate = 1.0
+	baselineOneTermValue     = 50.0 // the five pushed §11 terms
+	baselineOneMonthlyRent   = 0    // micropounds; vacant city rent placeholder
+
+	// attract capacity constraints (people / dwelling units). Unbounded
+	// placeholders — the real housing-vacancy and junction-throughput
+	// signals come from households/logistics once those are wired to
+	// produce them.
+	baselineOneHousingVacancy     = int64(1_000_000)
+	baselineOneJunctionThroughput = int64(1_000_000)
+
+	// attract reputation-momentum parameters (asymmetric: fall faster than
+	// rise — §11's Detroit-trap mechanic). Same shape the attract module's
+	// own S6 scenario uses.
+	baselineOneRepRise = 0.2
+	baselineOneRepFall = 0.8
+	baselineOneRepMax  = 100.0
 )
 
 // Deps carries the real module dependencies Wire composes. A nil *Deps
@@ -58,6 +108,15 @@ type Deps struct {
 	// failing loader and asserts Wire returns ErrModuleFailed naming
 	// "market" with zero hooks left behind.
 	LoadMarket func(correlationID string) (*market.MarketAPI, error)
+
+	// Logistics overrides construction of the engine.logistics dependency
+	// build's Tick draws construction materials against (defaults to
+	// logistics.LoadDefault). A nil field is the common boot case; the
+	// BUG-266 regression test seam: a caller injects a pre-Provisioned
+	// LogisticsAPI so a build order can actually complete (unprovisioned
+	// stock never fulfils a materials draw) and drive a real demolish
+	// through handleGameplay.
+	Logistics *logistics.LogisticsAPI
 
 	// InvariantOpts are threaded straight into invariant.WireDaily. Tests
 	// use invariant.WithLogSink / invariant.WithPanicFunc to observe
@@ -87,12 +146,10 @@ var registrationOrder = []moduleRegistration{
 	{name: "world", phase: core.PhaseProduction, hook: func(st *simState) core.PhaseHook { return noopHook{name: "world", st: st} }},
 	{name: "citizens", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &spawnHook{st: st, name: "citizens", count: monthlyBirths} }},
 	{name: "market", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return noopHook{name: "market", st: st} }},
-	{name: "consumption", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return noopHook{name: "consumption", st: st} }},
+	{name: "consumption", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return &consumptionHook{st: st} }},
 	{name: "finance", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &financeHook{st: st} }},
-	{name: "build", phase: core.PhaseLandValueDecay, hook: func(st *simState) core.PhaseHook { return noopHook{name: "build", st: st} }},
-	{name: "attract", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook {
-		return &spawnHook{st: st, name: "attract", count: monthlyNetMigration}
-	}},
+	{name: "build", phase: core.PhaseLandValueDecay, hook: func(st *simState) core.PhaseHook { return &buildHook{st: st} }},
+	{name: "attract", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &attractHook{st: st} }},
 	{name: "invariant", phase: core.PhaseDailyTick, hook: nil},
 }
 
@@ -152,6 +209,23 @@ func (c *Composition) CitizenWealth() int64 {
 // composed runs at the same seed must produce the identical hash.
 func (c *Composition) PopulationHash() [32]byte {
 	return c.state.citizens.PopulationHash(c.state.cid)
+}
+
+// ConsumptionDelivered returns the cumulative utility quantity the
+// consumption hook has delivered (litres + kWh summed across water/power/
+// gas) over the run so far. Non-zero proves the real consumption solve
+// drew against the coarse networks rather than no-op'ing — the
+// "consumption actually draws" liveness observable.
+func (c *Composition) ConsumptionDelivered() float64 {
+	return c.state.consumptionDelivered
+}
+
+// NetMigration returns the cumulative signed net migration (inflow −
+// outflow) the attract hook has applied. It is the "migration is
+// attractiveness-driven" observable: driven by AttractAPI.ApplyMigration's
+// g(A − A_world), never a hardcoded +N/month.
+func (c *Composition) NetMigration() int64 {
+	return c.state.netMigration
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -220,6 +294,76 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
+	// FEAT-083: construct the real baseline-one modules that replace the
+	// three original stub slots (consumption/build/attract), plus the
+	// finance/households APIs attract's HousingAffordability term consumes.
+	// Each is resolved BEFORE the first hook registers, so a construction
+	// failure never leaves a partially-wired engine (AC-4).
+	consumptionAPI, err := consumption.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "consumption"})
+	}
+	waterNet, err := baselineOneNetwork(consumption.UtilityWater, consumption.SourceReservoir, baselineOneWaterCapacity, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "consumption"})
+	}
+	powerNet, err := baselineOneNetwork(consumption.UtilityPower, consumption.SourceSellindgeGrid, baselineOnePowerCapacity, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "consumption"})
+	}
+	gasNet, err := baselineOneNetwork(consumption.UtilityGas, consumption.SourceOffMapPipeline, baselineOneGasCapacity, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "consumption"})
+	}
+
+	seasonAPI, err := season.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "season"})
+	}
+	logisticsAPI := deps.Logistics
+	if logisticsAPI == nil {
+		var err error
+		logisticsAPI, err = logistics.LoadDefault(cid)
+		if err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "logistics"})
+		}
+	}
+	buildAPI, err := build.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "build"})
+	}
+	if err := buildAPI.SetWorld(w); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "build"})
+	}
+	if err := buildAPI.SetSeason(seasonAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "build"})
+	}
+	if err := buildAPI.SetLogistics(logisticsAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "build"})
+	}
+
+	financeAPI := finance.NewFinanceAPI(cid)
+	householdsAPI, err := households.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "households"})
+	}
+	if err := householdsAPI.SetCitizens(c); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "households"})
+	}
+	attractAPI, err := attract.New(baselineOneAttractConfig(), e.WorldSeed(), cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
+	}
+	if err := attractAPI.SetCitizens(c); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
+	}
+	if err := attractAPI.SetFinance(financeAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
+	}
+	if err := attractAPI.SetHouseholds(householdsAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -239,6 +383,12 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		citizens:      c,
 		world:         w,
 		market:        m,
+		consumption:   consumptionAPI,
+		waterNet:      waterNet,
+		powerNet:      powerNet,
+		gasNet:        gasNet,
+		buildAPI:      buildAPI,
+		attract:       attractAPI,
 		treasury:      initialTreasury,
 		citizenWealth: initialCitizenWealth,
 		nextCitizenID: 1,
@@ -250,6 +400,14 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	}
 	st.peopleOpening = int64(st.citizens.TotalPopulation(cid))
 	st.moneyOpening = num.SatAdd(st.treasury, st.citizenWealth)
+
+	// Route the four gameplay-intent commands (Buy/Zone/Build/Demolish)
+	// onto the build/world command surfaces through core's injected seam.
+	// This is the single wiring point — the same AC-1 discipline as the
+	// phase hooks: no runnable path bypasses compose to reach these.
+	if err := e.SetGameplayCommandHandler(st.handleGameplay); err != nil {
+		return nil, wrapSeal(cid, err, "build")
+	}
 
 	// Register in the fixed, documented order (AC-2). The slice order IS
 	// the contract — nothing here ranges over a map.
@@ -306,6 +464,19 @@ type simState struct {
 	world    *world.WorldAPI
 	market   *market.MarketAPI
 
+	// real baseline-one modules (FEAT-083): consumption/build/attract
+	// replace the three original stub slots. (finance/households are also
+	// constructed in Wire and handed to attract via its SetFinance/
+	// SetHouseholds seam — attract holds those references, so simState does
+	// not re-store them.)
+	consumption *consumption.UtilityAPI
+	waterNet    *consumption.Network
+	powerNet    *consumption.Network
+	gasNet      *consumption.Network
+
+	buildAPI *build.BuildAPI
+	attract  *attract.AttractAPI
+
 	// people conservation ledger
 	peopleOpening int64
 	peopleDelta   int64
@@ -318,6 +489,12 @@ type simState struct {
 
 	// cumulative gross money flow (AC-9)
 	moneyFlows int64
+
+	// cumulative consumption delivered (liveness evidence) and net
+	// migration applied (liveness evidence) — the "consumption draws" and
+	// "migration is attractiveness-driven" observables.
+	consumptionDelivered float64
+	netMigration         int64
 
 	nextCitizenID uint64
 }
@@ -384,11 +561,10 @@ func (st *simState) spawnCitizens(month int64, count int) error {
 }
 
 // noopHook is the PhaseHook for a real module whose tick behaviour is not
-// yet built (world: terrain/ownership store; market: price registry;
-// consumption/build: baseline-one stub slots). It satisfies core.PhaseHook
-// with zero work: RunShard touches only shard-local scratch (nothing),
-// ApplyEffect is a no-op, both deterministic. Documented in doc.go's
-// STUB-FOR-BASELINE section.
+// yet built (world: terrain/ownership store; market: price registry). It
+// satisfies core.PhaseHook with zero work: RunShard touches only
+// shard-local scratch (nothing), ApplyEffect is a no-op, both
+// deterministic. Documented in doc.go's STUB-FOR-BASELINE section.
 type noopHook struct {
 	name string
 	st   *simState
@@ -404,10 +580,9 @@ type spawnEffect struct {
 	count int
 }
 
-// spawnHook is the PhaseHook for citizens (births) and attract (net
-// migration). Only shard 0 emits the effect; ApplyEffect births the
-// citizens and records the tracked people delta. Deterministic for a given
-// seed + month (AC-19).
+// spawnHook is the PhaseHook for citizens (births). Only shard 0 emits the
+// effect; ApplyEffect births the citizens and records the tracked people
+// delta. Deterministic for a given seed + month (AC-19).
 type spawnHook struct {
 	st    *simState
 	name  string
@@ -475,4 +650,344 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 	// but tracked so the invariant verifies it against the store.
 	st.moneyFlows = num.SatAdd(st.moneyFlows, num.SatAdd(monthlyWages, monthlyTax))
 	st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(monthlyTax, monthlyWages))
+}
+
+// --- consumption hook (MOD-021, real) ---
+
+// consumptionEffect is the monthly consumption tick marker.
+type consumptionEffect struct {
+	month int64
+}
+
+// consumptionHook is the baseline-one consumption hook (MOD-021, real): it
+// draws the whole city's residential utility demand (water/power/gas)
+// against the three coarse baseline-one networks, via UtilityAPI's
+// SolveDailyTick, and accumulates the delivered quantity. Only shard 0
+// emits the effect; ApplyEffect is the single-goroutine barrier that runs
+// the solve (which mutates each network's last-solve state).
+type consumptionHook struct {
+	st *simState
+}
+
+func (h *consumptionHook) RunShard(shard int) ([]core.Effect, error) {
+	if shard != 0 {
+		return nil, nil
+	}
+	clock, err := h.st.e.Clock()
+	if err != nil {
+		return nil, err
+	}
+	return []core.Effect{{Sequence: 0, Payload: consumptionEffect{month: clock.Month()}}}, nil
+}
+
+func (h *consumptionHook) ApplyEffect(eff core.Effect) {
+	p, ok := eff.Payload.(consumptionEffect)
+	if !ok {
+		return
+	}
+	if err := h.st.drawConsumption(p.month); err != nil {
+		// A valid baseline-one draw cannot fail; log loudly rather than
+		// swallow (GR#1). ApplyEffect has no error return, so the failure
+		// is surfaced through the error registry's log sink.
+		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "consumption", "cause": err.Error()})
+		return
+	}
+}
+
+// drawConsumption solves the residential demand (one entity: the whole
+// city's population at the §17.1 per-person baseline) against water/power/
+// gas and accumulates the delivered quantity. A monthly approximation of
+// the module's per-day solve (PhaseConsumptionShortfall runs once per
+// month) — the real per-day cadence is the module's own daily-tick concern.
+func (st *simState) drawConsumption(month int64) error {
+	pop := float64(st.citizens.TotalPopulation(st.cid))
+	opts := consumption.DemandOptions{MonthIndex: month, GasNetworkPresent: true}
+	entities := []consumption.DemandEntity{{EntityRef: "residential", Population: pop}}
+
+	// Slice (not a map) so the network solve order is deterministic (GR#21).
+	networks := []*consumption.Network{st.waterNet, st.powerNet, st.gasNet}
+	var delivered float64
+	for _, net := range networks {
+		res, err := st.consumption.SolveDailyTick(net, entities, opts)
+		if err != nil {
+			return err
+		}
+		delivered += res.Delivered
+	}
+	st.consumptionDelivered += delivered
+	return nil
+}
+
+// --- build hook (MOD-026, real) ---
+
+// buildEffect is the monthly build-queue tick marker.
+type buildEffect struct {
+	month int64
+}
+
+// buildHook is the baseline-one build hook (MOD-026, real): it advances the
+// build queue one simulation day per month via BuildAPI.Tick. Zone/Build
+// commands themselves arrive through the gameplay-command seam
+// (handleGameplay), not this phase hook — this hook only elapses the queue.
+type buildHook struct {
+	st *simState
+}
+
+func (h *buildHook) RunShard(shard int) ([]core.Effect, error) {
+	if shard != 0 {
+		return nil, nil
+	}
+	clock, err := h.st.e.Clock()
+	if err != nil {
+		return nil, err
+	}
+	return []core.Effect{{Sequence: 0, Payload: buildEffect{month: clock.Month()}}}, nil
+}
+
+func (h *buildHook) ApplyEffect(eff core.Effect) {
+	p, ok := eff.Payload.(buildEffect)
+	if !ok {
+		return
+	}
+	if err := h.st.buildAPI.Tick(p.month); err != nil {
+		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "build", "cause": err.Error()})
+		return
+	}
+}
+
+// --- attract hook (MOD-029, real) ---
+
+// attractEffect is the monthly migration tick marker.
+type attractEffect struct {
+	month int64
+}
+
+// attractHook is the baseline-one attract hook (MOD-029, real): it runs one
+// monthly AttractAPI.ApplyMigration step. Net migration is g(A − A_world) —
+// signed, reputation-momentum-amplified, capacity-capped — never a
+// hardcoded +N. The applied net population change is tracked in the people
+// conservation ledger so the invariant balances.
+type attractHook struct {
+	st *simState
+}
+
+func (h *attractHook) RunShard(shard int) ([]core.Effect, error) {
+	if shard != 0 {
+		return nil, nil
+	}
+	clock, err := h.st.e.Clock()
+	if err != nil {
+		return nil, err
+	}
+	return []core.Effect{{Sequence: 0, Payload: attractEffect{month: clock.Month()}}}, nil
+}
+
+func (h *attractHook) ApplyEffect(eff core.Effect) {
+	p, ok := eff.Payload.(attractEffect)
+	if !ok {
+		return
+	}
+	res, err := h.st.applyMigration(p.month)
+	if err != nil {
+		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "attract", "cause": err.Error()})
+		return
+	}
+	h.st.peopleDelta = num.SatAdd(h.st.peopleDelta, res.NetApplied())
+	h.st.netMigration = num.SatAdd(h.st.netMigration, res.NetApplied())
+}
+
+// applyMigration pushes the five §11 terms the composition root owns
+// (jobAvailability/serviceCoverage/environment/leisureFit/safety are
+// pushed input per engine.attract's ASM-243 — no registered edge exists to
+// their real source modules yet), then runs one monthly migration step.
+// HousingVacancy/JunctionThroughput are unbounded placeholders until
+// households/logistics produce real capacity signals.
+func (st *simState) applyMigration(month int64) (attract.MigrationResult, error) {
+	if err := st.attract.SetTermInputs(attract.TermInputs{
+		JobAvailability:        baselineOneTermValue,
+		ServiceCoverage:        baselineOneTermValue,
+		Environment:            baselineOneTermValue,
+		LeisureFit:             baselineOneTermValue,
+		Safety:                 baselineOneTermValue,
+		HouseholdIDs:           nil, // vacant baseline-one city: no households formed yet
+		MonthlyRentMicroPounds: baselineOneMonthlyRent,
+	}); err != nil {
+		return attract.MigrationResult{}, err
+	}
+	return st.attract.ApplyMigration(attract.MigrationCommand{
+		Month:              month,
+		ResidentIDs:        st.residentIDs(),
+		HousingVacancy:     baselineOneHousingVacancy,
+		JunctionThroughput: baselineOneJunctionThroughput,
+	})
+}
+
+// residentIDs returns the citizen-id set eligible for personality-weighted
+// emigration: every sequentially-minted id (seed + births). Migrant ids
+// (minted by attract with a high-bit prefix) are not yet enumerated here —
+// a documented baseline-one limitation that only matters on the decline
+// branch (emigration), which baseline one does not reach.
+func (st *simState) residentIDs() []uint64 {
+	ids := make([]uint64, 0, st.nextCitizenID-1)
+	for id := uint64(1); id < st.nextCitizenID; id++ {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// currentMonth returns the engine clock's current simulation month.
+func (st *simState) currentMonth() (int64, error) {
+	clock, err := st.e.Clock()
+	if err != nil {
+		return 0, err
+	}
+	return clock.Month(), nil
+}
+
+// --- gameplay command seam (Buy/Zone/Build/Demolish -> build/world) ---
+
+// handleGameplay is the injected core.GameplayCommandHandler. It maps the
+// four gameplay-intent protocol commands onto the build/world command
+// surfaces: Buy -> world.PurchaseTile, Zone/Build/Demolish ->
+// BuildAPI.Submit*Command. A nil return accepts the command (core turns it
+// into an Accepted CommandResult); a non-nil registry error rejects it with
+// that code. This is the ONE place gameplay intent meets the real modules
+// (AC-1/GR#20): no runnable path routes these kinds around compose.
+func (st *simState) handleGameplay(cmd protocol.Command) error {
+	switch cmd.Kind {
+	case protocol.KindBuy:
+		p, ok := cmd.Payload.(protocol.BuyPayload)
+		if !ok {
+			return st.gameplayReject(cmd.Kind, "malformed payload")
+		}
+		tile, _, err := st.cellFromRef(p.Cell)
+		if err != nil {
+			return err
+		}
+		res := st.world.PurchaseTile(world.PurchaseCommand{CorrelationID: st.cid, Tile: tile, BuyerID: playerOwnerID})
+		if res.Accepted {
+			return nil
+		}
+		if res.Error == nil {
+			return errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "world", "cause": "purchase rejected without an error"})
+		}
+		// BUG-267: res.Error.Code/Display were already rendered against
+		// engine.world's OWN registry template (e.g. MET-E404's
+		// "PurchaseTile rejected for tile {tile}: {cause}"). Re-wrapping
+		// under that SAME code with a ctx keyed "display" left {tile}/
+		// {cause} literal in the message — the ctx key didn't match the
+		// template's placeholders. ErrGameplayRejectionPassthrough's
+		// template is exactly "{display}", so the already-rendered string
+		// passes through intact instead of being re-rendered.
+		return errs.New(ErrGameplayRejectionPassthrough, st.cid, map[string]any{"display": res.Error.Display})
+	case protocol.KindZone:
+		p, ok := cmd.Payload.(protocol.ZonePayload)
+		if !ok {
+			return st.gameplayReject(cmd.Kind, "malformed payload")
+		}
+		tile, local, err := st.cellFromRef(p.Cell)
+		if err != nil {
+			return err
+		}
+		return st.buildAPI.SubmitZoneCommand(build.ZoneCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Zone: build.ZoneType(p.ZoneType)})
+	case protocol.KindBuild:
+		p, ok := cmd.Payload.(protocol.BuildPayload)
+		if !ok {
+			return st.gameplayReject(cmd.Kind, "malformed payload")
+		}
+		tile, local, err := st.cellFromRef(p.Cell)
+		if err != nil {
+			return err
+		}
+		month, err := st.currentMonth()
+		if err != nil {
+			return err
+		}
+		// Baseline-one seam note: the protocol's BuildingType maps onto the
+		// build module's zone catalogue (build builds zones, not a separate
+		// building catalogue yet).
+		_, err = st.buildAPI.SubmitBuildCommand(build.BuildCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Zone: build.ZoneType(p.BuildingType), Month: month})
+		return err
+	case protocol.KindDemolish:
+		p, ok := cmd.Payload.(protocol.DemolishPayload)
+		if !ok {
+			return st.gameplayReject(cmd.Kind, "malformed payload")
+		}
+		tile, local, err := st.cellFromRef(p.Cell)
+		if err != nil {
+			return err
+		}
+		res, err := st.buildAPI.SubmitDemolishCommand(build.DemolishCommand{Tile: tile, Local: local, OwnerID: playerOwnerID})
+		if err != nil {
+			return err
+		}
+		// BUG-266: demolish returns a LandPrice-sourced Compensation
+		// (build.go's SubmitDemolishCommand doc: "never a bare deletion
+		// with no financial consequence"). Credit it treasury -> citizen
+		// wealth, the same transfer idiom financeHook uses for wages/tax:
+		// SatAdd/SatSub on the two pots, gross flow tallied in moneyFlows,
+		// net delta tracked in moneyDelta so the invariant verifies it
+		// against the store. The city compensates the owner for the
+		// demolished structure's land value; total money is unchanged (a
+		// transfer, not a creation), so moneyDelta's net contribution is 0.
+		st.treasury = num.SatSub(st.treasury, res.Compensation)
+		st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
+		st.moneyFlows = num.SatAdd(st.moneyFlows, res.Compensation)
+		st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(res.Compensation, res.Compensation))
+		return nil
+	default:
+		return st.gameplayReject(cmd.Kind, "unhandled gameplay kind")
+	}
+}
+
+// gameplayReject builds the registry-sourced error for a gameplay command
+// this composition cannot map (a defensive branch — core's HandleCommand
+// only reaches here for the four gameplay kinds, and Validate already
+// guarantees the payload type matches).
+func (st *simState) gameplayReject(kind protocol.Kind, cause string) error {
+	return errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "build", "kind": string(kind), "cause": cause})
+}
+
+// cellFromRef maps a protocol CellRef {x,y} onto a world tile+local cell.
+// Baseline-one placeholder: the whole playable extent is the single start
+// tile, and the {x,y} grid maps onto its 200x200 local cells. The real
+// multi-tile mapping is a world/UI concern (a later sprint).
+func (st *simState) cellFromRef(ref protocol.CellRef) (world.TileCoord, world.CellLocal, error) {
+	if ref.X < 0 || ref.X >= world.TileSizeCells || ref.Y < 0 || ref.Y >= world.TileSizeCells {
+		return world.TileCoord{}, world.CellLocal{}, errs.New(ErrModuleFailed, st.cid, map[string]any{
+			"module": "build", "cause": "cell out of bounds",
+		})
+	}
+	return world.TileCoord{X: defaultStartCoordX, Y: defaultStartCoordY}, world.CellLocal{Row: ref.Y, Col: ref.X}, nil
+}
+
+// baselineOneNetwork builds one coarse single-source utility network for
+// the consumption draw (the real topology arrives once build constructs
+// actual networks).
+func baselineOneNetwork(kind consumption.Utility, sourceType consumption.SourceType, capacity float64, cid string) (*consumption.Network, error) {
+	n := consumption.NewNetwork(kind, cid)
+	if err := n.AddSource(consumption.Source{ID: string(kind), Type: sourceType, Capacity: capacity}); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// baselineOneAttractConfig builds attract's runtime Config from the
+// documented baseline-one placeholders (the attract module has no data file
+// yet; the S6 scenario constructs the same shape inline).
+func baselineOneAttractConfig() attract.Config {
+	return attract.Config{
+		Weights: attract.Weights{
+			JobAvailability:      0.2,
+			HousingAffordability: 0.2,
+			ServiceCoverage:      0.15,
+			Environment:          0.1,
+			LeisureFit:           0.1,
+			Safety:               0.1,
+			Reputation:           0.15,
+		},
+		World:         attract.NewStaticWorldPool(baselineOneAWorld),
+		MigrationRate: baselineOneMigrationRate,
+		Reputation:    attract.ReputationConfig{RiseRate: baselineOneRepRise, FallRate: baselineOneRepFall, Max: baselineOneRepMax},
+	}
 }
