@@ -4528,6 +4528,42 @@
       "module": "engine.cafe",
       "message": "cafe method {method} was called on a struct copy of the value New returned",
       "remedy": "Do not copy structs."
+    },
+    "MET-G5001": {
+      "severity": "error",
+      "module": "engine.dispatch",
+      "message": "unregistered or off-map cell ID: {cell}",
+      "remedy": "Ensure cell ID exists in the world map."
+    },
+    "MET-G5002": {
+      "severity": "error",
+      "module": "engine.dispatch",
+      "message": "unknown incident ID: {id}",
+      "remedy": "Check the incident queue."
+    },
+    "MET-G5003": {
+      "severity": "error",
+      "module": "engine.dispatch",
+      "message": "unrecognised unit type: {type}",
+      "remedy": "Must be fire, ambulance, air-ambulance, or police."
+    },
+    "MET-G5004": {
+      "severity": "error",
+      "module": "engine.dispatch",
+      "message": "unit {unit} already assigned to an active incident",
+      "remedy": "Units must return to the pool before being reassigned or maintained."
+    },
+    "MET-G5005": {
+      "severity": "error",
+      "module": "engine.dispatch",
+      "message": "invalid input parameter",
+      "remedy": "Check parameter bounds."
+    },
+    "MET-G5099": {
+      "severity": "error",
+      "module": "engine.dispatch",
+      "message": "dispatch method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the pointer New returned."
     }
   }
 }
