@@ -2141,7 +2141,8 @@
         "engine.citizens",
         "engine.maintenance",
         "engine.finance",
-        "foundation.data"
+        "foundation.data",
+        "engine.services"
       ],
       "sprint": 11
     },
@@ -2657,7 +2658,8 @@
         "engine.traffic",
         "engine.consumption",
         "engine.tax",
-        "engine.logistics"
+        "engine.logistics",
+        "engine.finance"
       ],
       "sprint": 10
     },

@@ -2814,6 +2814,10 @@
             "outboundGuid": "ef93ba35-a092-4285-a9f3-f98e1377ba3e"
           },
           {
+            "key": "engine.fuel",
+            "outboundGuid": "028e7813-da5a-4d3b-a21e-04700849ae3c"
+          },
+          {
             "key": "engine.maintenance",
             "outboundGuid": "b4052d06-2ad1-4878-a774-2eb5d7e56f68"
           },
@@ -3891,6 +3895,10 @@
           {
             "key": "engine.social",
             "outboundGuid": "a5ae75cf-b566-4ae4-a521-112d48426ef3"
+          },
+          {
+            "key": "engine.staffing",
+            "outboundGuid": "d30a438c-0d64-49ff-9af2-1aac60456b45"
           },
           {
             "key": "engine.wellbeing",
@@ -5961,6 +5969,11 @@
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "engine.services",
+            "moduleGuid": "ab443390-0a8a-459a-ae5a-4b8a35308751",
+            "inboundGuid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e"
           }
         ]
       },
@@ -6899,6 +6912,11 @@
             "key": "engine.logistics",
             "moduleGuid": "c59ecb6e-443f-4012-a0f0-b031de444335",
             "inboundGuid": "26abfa77-3b11-43d0-a631-539a04e3a5f8"
+          },
+          {
+            "key": "engine.finance",
+            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
+            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
           }
         ]
       },
