@@ -26,17 +26,19 @@
 //
 // # Registration order (the composition contract)
 //
-// The baseline-one module set is registered in this fixed order, invariant
-// last and on the daily tick:
+// The baseline-one module set is registered in this fixed order, with
+// build and invariant both on the daily tick (invariant last, BUG-268):
 //
 //	world -> citizens -> market -> consumption -> finance -> build -> attract
-//	invariant                                                           (PhaseDailyTick, every tick)
+//	                                                          build -> invariant  (PhaseDailyTick, every tick)
 //
 // This order is held in a fixed slice (registrationOrder), never a Go map,
 // so registration is deterministic run-over-run (GR#21). The order is what
 // determines intra-phase hook order where two modules share a phase:
-// market before consumption (both PhaseConsumptionShortfall) and citizens
-// before attract (both PhasePopulation).
+// market before consumption (both PhaseConsumptionShortfall), citizens
+// before attract (both PhasePopulation), and build before invariant (both
+// PhaseDailyTick) so the build queue advances before that day's
+// conservation check observes it.
 //
 // # Phase-kind mapping (the two flagged-ambiguous modules)
 //
@@ -44,12 +46,19 @@
 // add, remove, or reorder phases. The chosen mapping, following the BA's
 // proposed table in docs/planning/acceptance/feat.compositionroot.md:
 //
-//	build  -> PhaseLandValueDecay  (land-value decay slot; MOD-026 real hook)
+//	build  -> PhaseDailyTick       (daily tick, alongside invariant; MOD-026 real hook — BUG-268)
 //	attract -> PhasePopulation     (after citizens; MOD-029 real hook)
 //
-// Both are scheduling decisions the spec does not pin (the same class
-// engine.invariant.md AC-7 flagged as ASM-080); recorded here so the lead
-// rules once rather than the developer guessing.
+// build was originally mapped onto the monthly PhaseLandValueDecay slot
+// (a scheduling decision the spec does not pin, the same class
+// engine.invariant.md AC-7 flagged as ASM-080). BUG-268 (Aaron,
+// 2026-08-18): BuildAPI.Tick elapses exactly one simulation DAY of lead
+// time per call, so registering it against a phase that only fires once
+// per simulation MONTH made every lead time run 30x too slow (a 45-day
+// dwelling took 45 months). Moved onto the daily PhaseDailyTick slot —
+// the only daily phase this package's fixed phase set offers — so the
+// queue advances once per sim-day, matching data/buildings.json's own
+// day-denominated documentation.
 //
 // # STUB-FOR-BASELINE policy
 //

@@ -138,17 +138,29 @@ type moduleRegistration struct {
 // is a slice, NEVER a map: iteration order IS the contract, and nothing in
 // this package ranges over a registration map (GR#21). The order is:
 // world, citizens, market, consumption, finance, build, attract, then the
-// invariant on PhaseDailyTick. Two modules share a phase in two places —
-// market then consumption (both PhaseConsumptionShortfall) and citizens
-// then attract (both PhasePopulation) — and this slice order is what
-// determines their intra-phase run order.
+// invariant on PhaseDailyTick. Three modules share a phase in three places —
+// market then consumption (both PhaseConsumptionShortfall), citizens then
+// attract (both PhasePopulation), and build then invariant (both
+// PhaseDailyTick, BUG-268) — and this slice order is what determines their
+// intra-phase run order.
 var registrationOrder = []moduleRegistration{
 	{name: "world", phase: core.PhaseProduction, hook: func(st *simState) core.PhaseHook { return noopHook{name: "world", st: st} }},
 	{name: "citizens", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &spawnHook{st: st, name: "citizens", count: monthlyBirths} }},
 	{name: "market", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return noopHook{name: "market", st: st} }},
 	{name: "consumption", phase: core.PhaseConsumptionShortfall, hook: func(st *simState) core.PhaseHook { return &consumptionHook{st: st} }},
 	{name: "finance", phase: core.PhaseFinance, hook: func(st *simState) core.PhaseHook { return &financeHook{st: st} }},
-	{name: "build", phase: core.PhaseLandValueDecay, hook: func(st *simState) core.PhaseHook { return &buildHook{st: st} }},
+	// BUG-268: build was wired against the monthly PhaseLandValueDecay slot,
+	// so BuildAPI.Tick's one-simulation-DAY-per-call cadence (build.go's
+	// daysPerTick) only ever fired once per simulation MONTH — a 45-day
+	// dwelling took 45 months, not 45 days. Moved to the daily
+	// PhaseDailyTick (the only daily phase this package's fixed phase set
+	// offers) so one sim-day of lead/materials/labour elapses per sim-day,
+	// matching data/buildings.json's own "labourPerTick"/"leadTimeUnit"
+	// documentation (both already written in daily terms). Registered
+	// before "invariant" below so the queue advances, then the conservation
+	// check observes the same day's result — deterministic intra-phase
+	// order via this slice's iteration order (GR#21).
+	{name: "build", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &buildHook{st: st} }},
 	{name: "attract", phase: core.PhasePopulation, hook: func(st *simState) core.PhaseHook { return &attractHook{st: st} }},
 	{name: "invariant", phase: core.PhaseDailyTick, hook: nil},
 }
@@ -720,15 +732,20 @@ func (st *simState) drawConsumption(month int64) error {
 
 // --- build hook (MOD-026, real) ---
 
-// buildEffect is the monthly build-queue tick marker.
+// buildEffect is the daily build-queue tick marker.
 type buildEffect struct {
 	month int64
 }
 
-// buildHook is the baseline-one build hook (MOD-026, real): it advances the
-// build queue one simulation day per month via BuildAPI.Tick. Zone/Build
-// commands themselves arrive through the gameplay-command seam
-// (handleGameplay), not this phase hook — this hook only elapses the queue.
+// buildHook is the baseline-one build hook (MOD-026, real; cadence fixed by
+// BUG-268): it advances the build queue one simulation day per simulation
+// day via BuildAPI.Tick, registered against PhaseDailyTick so its cadence
+// matches BuildAPI.Tick's own one-day-per-call contract (build.go's
+// daysPerTick). Passing clock.Month() every day is safe — build.go's Tick
+// only uses its month parameter for >=0 validation, never as a "did the
+// month change" gate. Zone/Build commands themselves arrive through the
+// gameplay-command seam (handleGameplay), not this phase hook — this hook
+// only elapses the queue.
 type buildHook struct {
 	st *simState
 }
