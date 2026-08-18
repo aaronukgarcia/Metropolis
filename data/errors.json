@@ -95,7 +95,10 @@
       "G3700-G3799": "reserved for engine.coastal (internal/engine/coastal: §30 small-boat arrivals, rescue, reception/processing overflow, the granted/not-granted pipeline, policy sliders, and factual reporting — MOD-044. The E layer is fully exhausted and G3000-G3699 were claimed by earlier engine modules, so engine.coastal opens G3700-G3799 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G37\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G37xx code existed either place.)",
       "G3800-G3899": "reserved for engine.defence (internal/engine/defence: the §55 Defence & Central Government module — competitive grant pots + formula support, population-threshold mandates with choice-within-compliance and a priced refusal, and the integrated facilities (anti-cyclical payroll, personnel-as-citizens, procurement value, closure-as-shock output) — MOD-067. The E layer is fully exhausted and G3000-G3799 were claimed by earlier engine modules, so engine.defence opens G3800-G3899 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G38\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G38xx code existed either place.)",
       "G3900-G3999": "reserved for engine.roads (internal/engine/roads: the §20/§51 roads & auto-naming module — named edges, the eleven-rung class ladder, in-place upgrades with widening/footprint checks, simulated roadworks, per-road maintenance state, and the deterministic seed+id naming registry — MOD-024. The E layer is fully exhausted and G000-G3899 were claimed by earlier engine modules, so engine.roads opens G3900-G3999 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G39\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G39xx code existed either place.)",
-      "F900-F919": "reserved for foundation.integration (internal/foundation/integration: FEAT-188's priority-tiered overflow queue (queue.go/queue_disk.go) wrapping protocol.Transport -- T0 never-enqueueable exhaustion, T1 disk-spill write/read/torn-segment failures, spill directory creation failures, and the QueuedTransport SEC-020-class copy guard. F900-F999 was entirely unclaimed (MET-F900/F901/F902/F999 appear only as synthetic fixture literals inside internal/foundation/errs' own _test.go files, which the source scanner excludes outright, so they carry no real registration and no collision). Checked against this table AND `grep -rn \"MET-F9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior real MET-F9xx code existed either place.)"
+      "G4000-G4099": "reserved for engine.policies (internal/engine/policies: the §52 policy library, named-district scope system, same-model enactment preview, PreviewDrift reckoning, and interaction/conflict surfaces — MOD-064. The E layer is fully exhausted and G000-G3999 were claimed by earlier engine modules, so engine.policies opens G4000-G4099 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G40\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G40xx code existed either place.)",
+      "G4400-G4499": "reserved for engine.tourism (internal/engine/tourism: the §44 holiday-tourism visitor economy — the day-tripper/staying-visitor parallel population stream, the decomposed attraction-portfolio draw score, accommodation-stock capacity enforcement, and the August stress scenario — MOD-057. The E layer is fully exhausted and G000-G4399 were claimed by earlier engine modules, so engine.tourism opens G4400-G4499 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G44\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G44xx code existed either place.)",
+      "F900-F919": "reserved for foundation.integration (internal/foundation/integration: FEAT-188's priority-tiered overflow queue (queue.go/queue_disk.go) wrapping protocol.Transport -- T0 never-enqueueable exhaustion, T1 disk-spill write/read/torn-segment failures, spill directory creation failures, and the QueuedTransport SEC-020-class copy guard. F900-F999 was entirely unclaimed (MET-F900/F901/F902/F999 appear only as synthetic fixture literals inside internal/foundation/errs' own _test.go files, which the source scanner excludes outright, so they carry no real registration and no collision). Checked against this table AND `grep -rn \"MET-F9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior real MET-F9xx code existed either place.)",
+      "G4200-G4299": "reserved for engine.fuel (internal/engine/fuel: the §49 vehicles/fuel/EV-transition module — data/fuel.json load/schema-validation failures, the unmitigated fuel-shortage event (no strategic reserve, no alternative supply), unknown-era / invalid-hour / unknown-commodity rejections, the unwired logistics/tax dependencies, the copied-value guard, and generic invalid-input rejections — MOD-062. Fortieth G-layer engine claim after engine.tourism's G4100-G4199; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G42\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G42xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -3945,6 +3948,216 @@
       "module": "foundation.integration",
       "message": "a *WAL method was called on a struct copy of the value NewWAL returned",
       "remedy": "Always use the *WAL pointer NewWAL returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased root/slot fields but has its own independent mutex, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject before any lock is ever touched."
+    },
+    "MET-F915": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "a *Registry method was called on a struct copy of the value NewRegistry returned",
+      "remedy": "Always use the *Registry pointer NewRegistry returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased entries map but has its own independent mutex, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject before any lock is ever touched."
+    },
+    "MET-F916": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "an *IntegrationMetrics method was called on a struct copy of the value Registry.Register returned",
+      "remedy": "Always use the *IntegrationMetrics pointer Registry.Register returned -- do not dereference-and-reassign it or pass it by value. Same SEC-020-class copy-identity hazard as MET-F915, one level down."
+    },
+    "MET-F917": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "ServeMetrics was called with no debug gate configured, or the configured gate denied the request",
+      "remedy": "The monitoring dashboard's HTTP surface is debug-gated and fails closed by default -- wire an explicit Gate (mirroring engine.core's Speed8xGate / feat.devmode's debug.State.IsOn) before calling ServeMetrics; it must never start listening on a build/run where the composition root has not explicitly enabled it."
+    },
+    "MET-F918": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "ServeMetrics was asked to bind an address that is not localhost-only: {addr}",
+      "remedy": "The monitoring dashboard must never be reachable off-box. Pass an address whose host is 127.0.0.1, localhost, or ::1 (never a bare :port, which binds every interface)."
+    },
+    "MET-F919": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "net.Listen failed for the monitoring dashboard's (already validated localhost-only) address: {cause}",
+      "remedy": "Check that the configured port is free and the process has permission to bind it; retry with a different Addr if the default port is already in use."
+    },
+    "MET-G4000": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "data/policies.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "Check that data/policies.json exists under the resolved data directory and passes engine.policies' schema validation (positive version; non-empty meta.combination naming the supported rule 'multiplicative'; positive meta.previewDrift tolerance and checkpoint cadence; every entry with a non-empty key/name/category/disclosure, one of the three scope kinds citywide/district/road, at least one coefficient move with a finite delta, and conflict references that all resolve to real policy keys). engine.policies never falls back to a partial or default-substituted library (GR#15/GR#7)."
+    },
+    "MET-G4001": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "unknown policy key {policy}",
+      "remedy": "The referenced policy key is not one of the entries loaded from data/policies.json. Use Policies() to enumerate the library, or add the entry to the data file."
+    },
+    "MET-G4002": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "policy {policy} is already active in an identical scope ({scope})",
+      "remedy": "Enact in a different scope, or repeal the existing enactment first. engine.policies rejects an identical-scope re-enactment rather than silently no-op'ing (AC-13)."
+    },
+    "MET-G4003": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "scope resolution failed: unknown or malformed scope {scope}",
+      "remedy": "A scope named a DistrictID or road that is not registered, or a malformed scope (e.g. a citywide scope carrying a district ID). Create the district (CreateDistrict) or register the road (RegisterRoad) before resolving scope against it. Never a resolved-to-empty-set false success (AC-13)."
+    },
+    "MET-G4004": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "unknown district {district}",
+      "remedy": "The district ID is not registered. Create it via CreateDistrict before querying or renaming it."
+    },
+    "MET-G4005": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "unknown road {road}",
+      "remedy": "The road ID is not registered. Register it via RegisterRoad before resolving a road scope against it."
+    },
+    "MET-G4006": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "unknown enactment {enactment}",
+      "remedy": "The enactment ID is not active. Enactments are created by Enact and removed by Repeal; check the ID against the current active set."
+    },
+    "MET-G4007": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "scope mismatch for policy {policy}: declared {declared}, given {given}",
+      "remedy": "The concrete scope target's kind does not match the policy's declared scope kind. Enact/resolve a citywide policy with a citywide scope, a district policy with a district scope, and a road policy with a road scope."
+    },
+    "MET-G4008": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "non-finite coefficient delta ({delta})",
+      "remedy": "A coefficient delta was NaN or ±Inf. Fix the offending entry in data/policies.json — a non-finite delta would poison the combination and projection arithmetic (GR#16)."
+    },
+    "MET-G4009": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "finance not wired for {operation}",
+      "remedy": "Wire engine.finance via SetFinance before enacting a policy with a non-zero cost or advancing the tick past an active policy's recurring opex. engine.policies never silently skips a monetary posting (GR#17)."
+    },
+    "MET-G4010": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "projections not wired for {operation}",
+      "remedy": "Wire engine.projections via SetProjections before previewing or enacting a policy. The preview and the enactment both feed the shared curve machinery; an unwired projections dependency is a fail-closed error, never a silently-skipped model update (GR#17)."
+    },
+    "MET-G4011": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "tax not wired for {operation}",
+      "remedy": "Wire engine.tax via SetTax before enacting a policy that carries a data-declared tax coefficient move. engine.policies routes tax moves through TaxAPI rather than reimplementing tax mechanics (GR#3/GR#20)."
+    },
+    "MET-G4012": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "PoliciesAPI method {method} was called on a struct copy of the value NewPoliciesAPI/Load returned",
+      "remedy": "Always use the *PoliciesAPI pointer NewPoliciesAPI/Load returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased library/district/active maps but has its own independent mutexes, the SEC-020-class hazard every Register-shaped module in this codebase rejects before any lock is touched."
+    },
+    "MET-G4400": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "data/tourism.json could not be loaded or failed schema validation (field={field}, reason={reason}, cause={cause})",
+      "remedy": "Check that data/tourism.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", a domestic/continental/global access-tier ladder with positive finite reach multipliers, per-kind accommodation stock with non-negative integer beds, finite non-negative portfolio term weights for all five terms, positive visitor rates, and a non-negative reputation scale. The tourism balance set never falls back to a silent zero or unlimited capacity (GR#7/GR#15)."
+    },
+    "MET-G4401": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "attraction {id} is not registered",
+      "remedy": "Register the attraction via AddAttraction before querying its score. A query against an unregistered attraction ID is rejected rather than returning a fabricated zero-value portfolio contribution (AC-15)."
+    },
+    "MET-G4402": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "accommodation facility {id} is not registered",
+      "remedy": "Register the accommodation facility via AddAccommodation (or SetAccommodationCapacity, which seeds the per-kind facility) before querying its beds. A query against an unregistered accommodation ID is rejected rather than returning a fabricated zero-bed record (AC-15)."
+    },
+    "MET-G4403": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "attraction {id} is invalid ({reason})",
+      "remedy": "An attraction must carry a non-zero ID, a valid portfolio term, and a finite non-negative score. Rejecting the record rather than silently folding a malformed attraction into the portfolio keeps the decomposed draw score trustworthy (AC-2)."
+    },
+    "MET-G4404": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "accommodation facility {id} is invalid ({reason})",
+      "remedy": "An accommodation facility must carry a non-zero ID, a valid accommodation kind (hotel/bnb/campsite/holidayLet), and a non-negative bed count. Rejecting it rather than silently admitting a negative-capacity facility keeps AC-6's capacity cap enforceable."
+    },
+    "MET-G4405": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "{dependency} dependency is not wired for {operation}",
+      "remedy": "Wire the missing dependency via SetAttract/SetLeisure/SetSeason/SetNews before running the operation. The tourism engine fails closed rather than fabricating a reputation, venue, seasonal, or news figure (GR#1/GR#17)."
+    },
+    "MET-G4406": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "TourismAPI method {method} was called on a struct copy of the value New/Load returned",
+      "remedy": "Always use the *TourismAPI pointer New/Load returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased attraction/accommodation maps but has its own independent mutexes, the SEC-020-class hazard every Register-shaped module in this codebase rejects before any lock is touched."
+    },
+    "MET-G4407": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "invalid input: {field} = {value} ({reason})",
+      "remedy": "A numeric or enum input (month index, access tier, bed count, reputation scale) was outside its documented domain. It is rejected rather than silently clamped or wrapped (FEAT-086)."
+    },
+    "MET-G4200": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "data/fuel.json could not be loaded or failed engine.fuel's schema validation (field={field}, reason={reason}, cause={cause})",
+      "remedy": "Check that data/fuel.json exists at the resolved data directory, is well-formed JSON, has a positive \"version\", declares at least one era with a non-empty unique era key and car/van/truck EV-share figures all present (a missing EV-share must never silently read as 0% EV), each EV-share in [0,1], non-negative fuel-demand litre figures, a 24-entry charging profile with non-negative weights and at least one positive, a positive strategic-reserve daysOfCover, a positive duty ratePencePerLitre, a non-empty duty.taxInstrument, a positive forecourt target, and a non-negative tanker throughput. The fuel balance set never falls back to a silent default (GR#7/GR#15)."
+    },
+    "MET-G4201": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "FuelAPI method {method} called on a struct-copied value",
+      "remedy": "Always use the *FuelAPI pointer Load/LoadDefault returned. Dereferencing-and-reassigning (f2 := *f) produces a second value with its own mutex but aliased state, defeating the concurrency-safety invariant (SEC-020-class). If you need a second API, call Load/LoadDefault again."
+    },
+    "MET-G4202": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "Fuel-supply shortfall with no strategic reserve and no alternative supply path to cover it (era={era}, district={district}, commodity={commodity}, factor={factor})",
+      "remedy": "A §49 fuel shortage has stranded fuel-dependent logistics deliveries with no reserve to cover it. Either restore tanker throughput (SetTankerThroughput) above liquid-fuel demand, stock the strategic reserve (SetStrategicReserve), or record the stranded delivery as the intended shortage event — never let a dependent delivery silently stall without this recorded event (AC-7)."
+    },
+    "MET-G4203": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "Fleet-composition / duty query named an era key not present in data/fuel.json's \"eras\" list (era={era})",
+      "remedy": "Query FleetComposition / ICELitres / FleetEVShare / PostFuelDuty only with an era key authored in data/fuel.json's chronological \"eras\" array. An unknown era key is hostile input, never a zero-value fleet composition silently treated as valid."
+    },
+    "MET-G4204": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "Charging-load query used an hour index outside [0, 24) (hour={hour})",
+      "remedy": "The hour-of-day charging profile has exactly 24 buckets (0 = 00:00-00:59 … 23 = 23:00-23:59). Pass an hour in [0, 24); anything else is rejected, never clamped to a silently-plausible bucket."
+    },
+    "MET-G4205": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "A fuel-dependent logistics operation ran before SetLogistics wired engine.logistics (operation={operation})",
+      "remedy": "Wire the engine.fuel → engine.logistics edge via SetLogistics before calling ReplenishmentDelivery. A missing edge is rejected loudly, never a fabricated delivery answer (GR#17/GR#20)."
+    },
+    "MET-G4206": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "A fuel-duty posting operation ran before SetTax wired engine.tax (operation={operation})",
+      "remedy": "Wire the engine.fuel → engine.tax edge via SetTax before calling PostFuelDuty. A missing edge is rejected loudly, never a dropped revenue flow (GR#17/GR#20)."
+    },
+    "MET-G4207": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "A fuel-gated replenishment delivery named a commodity outside the closed fuel-transported set (commodity={commodity})",
+      "remedy": "ReplenishmentDelivery gates exactly the four truck-delivered replenishment commodities (foodStaples, foodFresh, constructionMaterials, consumerGoods). Any other key is rejected, never a silently-ungated delivery."
+    },
+    "MET-G4208": {
+      "severity": "error",
+      "module": "engine.fuel",
+      "message": "A setter/query input was outside its documented domain ({field}={value})",
+      "remedy": "Tanker throughput and strategic-reserve levels must be finite and non-negative; forecourt counts and populations must be non-negative; requested delivery quantities must be non-negative. A malformed input is rejected, never clamped to a silently-plausible value (weakness pattern #4)."
     }
   }
 }
