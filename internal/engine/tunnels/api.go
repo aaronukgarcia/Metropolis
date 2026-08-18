@@ -12,16 +12,16 @@ import (
 
 // TunnelsAPI represents the tunnels, TBMs & hyperloop module (MOD-065).
 type TunnelsAPI struct {
-	mu           sync.RWMutex
-	self         atomic.Pointer[TunnelsAPI]
-	build        *build.BuildAPI
-	mining       *mining.BlightAPI
-	traffic      any // local interface/any for traffic dependency
-	unlocks      any // local interface/any for unlocks dependency
-	hasTBM       bool
-	isLeased     bool
-	cumulativeKm float64
-	totalLength  float64
+	mu             sync.RWMutex
+	self           atomic.Pointer[TunnelsAPI]
+	build          *build.BuildAPI
+	mining         *mining.BlightAPI
+	traffic        any // local interface/any for traffic dependency
+	unlocks        any // local interface/any for unlocks dependency
+	hasTBM         bool
+	isLeased       bool
+	cumulativeKm   float64
+	totalLength    float64
 	hyperloopGated bool
 }
 
