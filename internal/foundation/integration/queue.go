@@ -752,6 +752,9 @@ type Depth struct {
 // Depth returns the queue's current backlog, for a tick driver or
 // monitoring surface to inspect.
 func (q *QueuedTransport) Depth() Depth {
+	if err := q.checkNotCopied(errs.NewCorrelationID(), "Depth"); err != nil {
+		return Depth{}
+	}
 	t0, _ := q.t0.Depth()
 	t1, t1Disk := q.t1.Depth()
 	return Depth{T0: t0, T1: t1, T1OnDisk: t1Disk, T2: q.t2.Depth()}
@@ -767,20 +770,65 @@ func (q *QueuedTransport) Depth() Depth {
 // tick," so ANY T0 backlog, however small, means the driver is already
 // behind on its strictest tier).
 func (q *QueuedTransport) Backpressure() bool {
+	if err := q.checkNotCopied(errs.NewCorrelationID(), "Backpressure"); err != nil {
+		// Fail conservative: a copied handle is an invalid state, so tell
+		// the caller to slow down rather than report the all-clear a
+		// zero-value Depth would otherwise imply.
+		return true
+	}
 	d := q.Depth()
 	return d.T1OnDisk > 0 || d.T0 > 0
+}
+
+// closedResultCh, closedEventCh, and closedDeltaCh are the "fail closed"
+// values Results/Events/Deltas return instead of inner's real, aliased
+// channel when called on a struct-copied QueuedTransport — mirrors
+// protocol.InProcTransport's identical closedResultCh/closedEventCh/
+// closedDeltaCh (see that type's doc comment for the full rationale). A
+// receive on a closed channel always returns the zero value with
+// ok=false, so a caller ranging over one of these exits immediately
+// rather than blocking forever (a nil channel) or silently reading the
+// original's live traffic (the real, aliased channel).
+var (
+	closedResultCh = closedChanOf[protocol.CommandResult]()
+	closedEventCh  = closedChanOf[protocol.Event]()
+	closedDeltaCh  = closedChanOf[protocol.Delta]()
+)
+
+// closedChanOf constructs and immediately closes a fresh, unbuffered
+// channel of T. Used only to build the package-level closedXCh fallbacks
+// above.
+func closedChanOf[T any]() chan T {
+	ch := make(chan T)
+	close(ch)
+	return ch
 }
 
 // Results implements protocol.Transport by passing through to inner —
 // see this type's doc comment on why the outbound side is untouched by
 // this increment.
-func (q *QueuedTransport) Results() <-chan protocol.CommandResult { return q.inner.Results() }
+func (q *QueuedTransport) Results() <-chan protocol.CommandResult {
+	if err := q.checkNotCopied(errs.NewCorrelationID(), "Results"); err != nil {
+		return closedResultCh
+	}
+	return q.inner.Results()
+}
 
 // Events implements protocol.Transport by passing through to inner.
-func (q *QueuedTransport) Events() <-chan protocol.Event { return q.inner.Events() }
+func (q *QueuedTransport) Events() <-chan protocol.Event {
+	if err := q.checkNotCopied(errs.NewCorrelationID(), "Events"); err != nil {
+		return closedEventCh
+	}
+	return q.inner.Events()
+}
 
 // Deltas implements protocol.Transport by passing through to inner.
-func (q *QueuedTransport) Deltas() <-chan protocol.Delta { return q.inner.Deltas() }
+func (q *QueuedTransport) Deltas() <-chan protocol.Delta {
+	if err := q.checkNotCopied(errs.NewCorrelationID(), "Deltas"); err != nil {
+		return closedDeltaCh
+	}
+	return q.inner.Deltas()
+}
 
 // Close implements protocol.Transport by closing inner. Queued-but-not-
 // yet-drained T1 disk segments are deliberately left in place (not

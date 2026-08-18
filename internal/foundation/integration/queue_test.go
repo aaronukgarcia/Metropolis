@@ -908,7 +908,7 @@ func TestQueue_SegmentPathIsDeterministicAndSorted(t *testing.T) {
 	if filepath.Dir(p0) != filepath.Dir(p1) || filepath.Dir(p1) != filepath.Dir(p2) {
 		t.Fatalf("segment paths do not share a directory: %s / %s / %s", p0, p1, p2)
 	}
-	if !(p0 < p1 && p1 < p2) {
+	if p0 >= p1 || p1 >= p2 {
 		t.Fatalf("segment paths are not lexically sorted in sequence order: %s, %s, %s", p0, p1, p2)
 	}
 }
