@@ -122,8 +122,8 @@ See the BOW: **ASM-1232 … ASM-1241**. Each is stated as a claim that could be 
 
 - **ASM-1232 (P0).** The `S ∈ [0,1]` score is a **new** leading indicator, not a rewrite of §12's causal chain or a duplicate of `engine.spiral`'s `DecayAPI` metrics.
 - **ASM-1233 (P0).** `ErrGhostCity` as the game-over error name **collides** with `engine.spiral`'s existing `DeathGhostCity`/`ErrGhostCityNoWarning` (MET-G1102) — treated as a distinct, separately-named code.
-- **ASM-1234 (P1).** "Consecutive cycles" count for `S` is data-defined (precedent: `engine.finance`'s 3-month insolvency counter).
-- **ASM-1235 (P1).** The "18-month" runway figure is a data placeholder, reusing `engine.finance`'s reserve-months machinery.
+- **ASM-1234 (P1).** "Consecutive cycles" count for `S` is data-defined (precedent: `engine.finance`'s 3-month insolvency counter). Default of 3 consecutive monthly cycles is a balance-regime placeholder (GR#15) — closed citing the standing balance-number ruling (M2 pass, MOD-036); no Aaron re-interview.
+- **ASM-1235 (P1).** The "18-month" runway figure is a data placeholder, reusing `engine.finance`'s reserve-months machinery. The 18-month threshold is a balance-regime placeholder (GR#15) — closed citing the standing balance-number ruling (M2 pass, MOD-036); no Aaron re-interview.
 - **ASM-1236 (P1).** The wage skill-bracket taxonomy is data-defined, cross-referenced with `engine.census`'s skill axis.
 - **ASM-1237 (P2).** "Bi-weekly" refuse cadence is a data placeholder default.
 - **ASM-1238 (P1).** Per-cell coverage (not AoE) is a binding representation doctrine.

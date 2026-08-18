@@ -99,3 +99,5 @@ Logged via `node claude-bow.js add assumption ...` (see command output below) �
 - **ASM (module-key split)** — proposes `engine.helper` (registration contract/registry) + `feat.helper` (panel UI), escalated to Bill for `/register-guid` rather than decided unilaterally, mirroring `tool.astgate.md`'s ASM-112 precedent for an item whose criteria filename doesn't cleanly resolve its own module-key/location question.
 - **ASM (query-cost mechanic left undecided)** — v1 as specified has no cost to asking Helper anything; flagged against north-star idea #1/#2 rather than silently assumed free forever.
 - **ASM (`GameStateView` field set left minimal/extensible)** — deliberately unspecified beyond "read-only view", to avoid pinning a shape ahead of the engine modules that will populate it.
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-456** — GameStateView minimal/extensible interface; no concrete field set pinned yet.
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-474** — Helper v1: no panel/protocol wiring; description sourced from ProjectConsequence.Summary.

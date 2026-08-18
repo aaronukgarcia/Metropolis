@@ -102,3 +102,7 @@ node claude-bow.js add assumption "FEAT-065: in-game feedback maps to claude-bow
 
 node claude-bow.js add assumption "FEAT-065: console-open enable reuses SourcePalette rather than a new EnableSource" --code-path "internal/engine/debug/state.go" --codejson "feat.devmode" --desc "AC-DM3 requires opening the dev console to call debug.State.Enable so DebugTouched fires immediately, even if debug wasn't already on. Assumed EnableSource=SourcePalette is close enough rather than adding a fourth constant. What breaks if wrong: audit trail can't distinguish :debug on from console-triggered enable - a small additive enum change to state.go, no AC depends on which constant is used."
 ```
+
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-447** — In-game feedback maps to claude-bow.js `add bug` (no dedicated feedback type).
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-449** — Console-open enable reuses SourcePalette (no new EnableSource).
+- **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-467** — AC-DM3 enable-trigger branch unreachable via RequireConsole (real gate forecloses it).

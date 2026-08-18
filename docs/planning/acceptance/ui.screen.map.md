@@ -55,3 +55,5 @@ The F1 map screen: scrollable viewport + minimap, overlay cycle, cell inspect, c
 ## Escalations
 
 - None at draft time. `status: draft-ahead` — depends on `ui.widgets` (`MOD-010`) and `harness.stub` (`MOD-008`); refresh the exact view-subscription name(s) and fixture entity shapes against `harness.stub`'s actual implementation once it lands. Note: the BOW item's overlay list (`parking occupancy`, `vitality`) extends §13's line-244 list (which stops at "coverage per service") with entries drawn from later catalogue sections (§38 Parking, §41 Café Culture vitality) — AC-3 is worded "at minimum" to cover both without conflict.
+- **Confirm-and-close (ASM-092).** SEC-009 grid ceiling from S1.3 memory budget (150MB halved); ~5.4× real tile, safe.
+- **Confirm-and-close (ASM-146).** maxPatchWireBytes=2× maxGridBudgetBytes (150MB); chosen wire-overhead multiplier.
