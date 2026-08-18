@@ -169,17 +169,6 @@ func (h *HouseholdsAPI) ReportStock(cmd StockCommand) error {
 	return nil
 }
 
-// stockOf returns a typology's current built-stock count (0 when never
-// reported), read under mu.
-func (h *HouseholdsAPI) stockOf(typologyID string) int64 {
-	if err := h.checkNotCopied("stockOf"); err != nil {
-		return 0
-	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.stock[typologyID]
-}
-
 // Typologies returns the loaded HS housing typologies in ascending-id order
 // (GR#21) — a read-only snapshot; the count is data-derived (AC-3).
 func (h *HouseholdsAPI) Typologies() []Typology {
