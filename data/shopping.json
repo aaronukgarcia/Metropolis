@@ -1,0 +1,8 @@
+{
+  "foodDesertThreshold": 20,
+  "onlineDeliveryShare": 0.15,
+  "cornerShopPriceMult": 1.5,
+  "marketHallPriceMult": 1.1,
+  "supermarketPriceMult": 0.9,
+  "retailParkPriceMult": 0.85
+}
