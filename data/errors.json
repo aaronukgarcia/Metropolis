@@ -97,7 +97,9 @@
       "G3900-G3999": "reserved for engine.roads (internal/engine/roads: the §20/§51 roads & auto-naming module — named edges, the eleven-rung class ladder, in-place upgrades with widening/footprint checks, simulated roadworks, per-road maintenance state, and the deterministic seed+id naming registry — MOD-024. The E layer is fully exhausted and G000-G3899 were claimed by earlier engine modules, so engine.roads opens G3900-G3999 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G39\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G39xx code existed either place.)",
       "F900-F919": "reserved for foundation.integration (internal/foundation/integration: FEAT-188's priority-tiered overflow queue (queue.go/queue_disk.go) wrapping protocol.Transport -- T0 never-enqueueable exhaustion, T1 disk-spill write/read/torn-segment failures, spill directory creation failures, and the QueuedTransport SEC-020-class copy guard. F900-F999 was entirely unclaimed (MET-F900/F901/F902/F999 appear only as synthetic fixture literals inside internal/foundation/errs' own _test.go files, which the source scanner excludes outright, so they carry no real registration and no collision). Checked against this table AND `grep -rn \"MET-F9\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current -- no prior real MET-F9xx code existed either place.)",
       "G4200-G4299": "reserved for engine.fuel (internal/engine/fuel: the §49 vehicles/fuel/EV-transition module — data/fuel.json load/schema-validation failures, the unmitigated fuel-shortage event (no strategic reserve, no alternative supply), unknown-era / invalid-hour / unknown-commodity rejections, the unwired logistics/tax dependencies, the copied-value guard, and generic invalid-input rejections — MOD-062. Fortieth G-layer engine claim after engine.tourism's G4100-G4199; the G layer's three-digit namespace is exhausted, so this is a four-digit block, per BUG-234's widening of the code format from three to three-or-four digits. Checked against this table AND `grep -rn \"MET-G42\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G42xx code existed either place.)",
-      "G4400-G4499": "reserved for engine.tourism (internal/engine/tourism: the §44 holiday-tourism visitor economy — the day-tripper/staying-visitor parallel population stream, the decomposed attraction-portfolio draw score, accommodation-stock capacity enforcement, and the August stress scenario — MOD-057. The E layer is fully exhausted and G000-G4399 were claimed by earlier engine modules, so engine.tourism opens G4400-G4499 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G44\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G44xx code existed either place.)"
+      "G4400-G4499": "reserved for engine.tourism (internal/engine/tourism: the §44 holiday-tourism visitor economy — the day-tripper/staying-visitor parallel population stream, the decomposed attraction-portfolio draw score, accommodation-stock capacity enforcement, and the August stress scenario — MOD-057. The E layer is fully exhausted and G000-G4399 were claimed by earlier engine modules, so engine.tourism opens G4400-G4499 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G44\" internal/ cmd/` before claiming, per BUG-008's lesson that this table alone is not always current — no prior MET-G44xx code existed either place.)",
+      "G4000-G4099": "reserved for engine.policies (internal/engine/policies: the §52 policy library, named-district scope system, same-model enactment preview, PreviewDrift reckoning, and interaction/conflict surfaces — MOD-064. The E layer is fully exhausted and G000-G3999 were claimed by earlier engine modules, so engine.policies opens G4000-G4099 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G40\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G40xx code existed either place.)",
+      "G4300-G4399": "reserved for engine.prison (internal/engine/prison: the §43 prison estate, the category-mismatch penalty, the three regime programmes, the reoffending formula, the youth pipeline, overcrowding including §36 sold places, and the independent intake ledger — MOD-056. The E layer is fully exhausted and G000-G4299 were claimed by earlier engine modules, so engine.prison opens G4300-G4399 under BUG-234's three-to-four-digit widening. Checked against this table AND `grep -rn \"MET-G43\" internal/ cmd/` before claiming, per BUG-008's lesson — no prior MET-G43xx code existed either place.)"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -4025,6 +4027,60 @@
       "module": "engine.policies",
       "message": "PoliciesAPI method {method} was called on a struct copy of the value New returned",
       "remedy": "Always use the *PoliciesAPI pointer New returned — do not dereference-and-reassign it or pass it by value (SEC-020)."
+    },
+    "MET-G4013": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "simulation month regression: requested month {month} is before the current month {current}",
+      "remedy": "AdvanceMonth is monotonic: pass a month equal to or later than the current simulation month. A month regression is rejected, never silently rewound."
+    },
+    "MET-G4014": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "checkpoint month {checkpoint} precedes the current month {current}",
+      "remedy": "Checkpoint is monotonic: pass a month equal to or later than the current simulation month. A checkpoint before the current month is rejected, never silently rewound."
+    },
+    "MET-G4015": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "preview range is inverted: from {fromMonth} to {toMonth}",
+      "remedy": "Request a preview whose toMonth is at least fromMonth. An inverted range is rejected, never silently returned empty."
+    },
+    "MET-G4016": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "a district cannot be created with an empty name",
+      "remedy": "Pass a non-empty district name to CreateDistrict. An empty name is rejected rather than silently stored."
+    },
+    "MET-G4017": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "a district must contain at least one cell",
+      "remedy": "Pass at least one cell reference to CreateDistrict. A cell set that resolves to nothing would be a resolved-to-empty-set false success (AC-13), so it is rejected."
+    },
+    "MET-G4018": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "a road cannot be registered with an empty road ID",
+      "remedy": "Pass a non-empty RoadID to RegisterRoad. An empty ID is rejected rather than silently stored."
+    },
+    "MET-G4019": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "road {road} must contain at least one edge",
+      "remedy": "Pass at least one edge reference to RegisterRoad. A road that resolves to no edges is rejected rather than silently stored."
+    },
+    "MET-G4020": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "road {road} is already registered",
+      "remedy": "RegisterRoad rejects a duplicate RoadID rather than silently overwriting the existing edge set. Use a distinct RoadID or remove the existing registration first."
+    },
+    "MET-G4021": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "rename name must be non-empty for district {district}",
+      "remedy": "Pass a non-empty name to RenameDistrict. Renaming preserves the district's ID and scoping, so an empty name is rejected rather than erasing the name."
     },
     "MET-G4300": {
       "severity": "error",
