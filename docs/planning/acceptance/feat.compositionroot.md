@@ -4,7 +4,7 @@ BOW code: FEAT-082
 
 **BOW code:** FEAT-082
 **Module key:** `feat.compositionroot`
-**GUID:** `dbdaf1f1-d096-4bf8-8b3a-964084e93ea9`
+**GUID:** `fae40226-71d0-4836-be99-854c7b41eb4a`
 **Spec refs:** M0-ENG §1.1-1.3 (`engine.core`'s orchestrator contract, `docs/METROPOLIS-MASTER-v2.1.md` lines 792-840); M0-ENG §2 (module-stubbing / harness strategy, lines 842-851); ASM-001 (the "headless == live" gap this item resolves — see `engine.headless.md` AC-9); `engine.core.md` (MOD-012 — the phase-pipeline + `RegisterPhaseHook`/`PhaseHook` contract this file wires against, read as reference only, not rewritten); `engine.invariant.md` (MOD-019 — `Wire`/`WireDaily`); `harness.headless.md` (MOD-015 — the headless driver); `harness.synth.md`/BUG-053/BUG-101 (the "no RegisterPhaseHook" assertions blocker (a) rescopes); BUG-034/ASM-352 (`ci.yml` perf-gate exit-3 flip, blocker (b)); FEAT-083 (BASELINE ONE, the north-star tracking item); GR#20 (Contract-First, Stub-Forever); GR#21 (Red Determinism Gate).
 **Date:** 2026-08-14
 **Status:** draft-ahead (build gated behind the worker budget returning 2026-08-17; not yet dispatchable)

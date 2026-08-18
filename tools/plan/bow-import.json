@@ -574,7 +574,8 @@
       "guidIn": "19f100f8-a43d-4571-a940-304eec18235f",
       "guidOut": "776ca38b-aaa6-4665-a1be-18a54c05bbd3",
       "deps": [
-        "engine.core"
+        "engine.core",
+        "feat.compositionroot"
       ]
     },
     {
@@ -593,7 +594,8 @@
       "guidOut": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4",
       "deps": [
         "engine.core",
-        "harness.headless"
+        "harness.headless",
+        "feat.compositionroot"
       ]
     },
     {
@@ -859,6 +861,35 @@
       "deps": [
         "engine.citizens",
         "engine.finance",
+        "engine.households"
+      ]
+    },
+    {
+      "mkey": "feat.compositionroot",
+      "type": "feature",
+      "title": "FEAT-082: Composition root — wires baseline-one modules into the live tick",
+      "desc": "The one package permitted to import engine.core AND every wired module (GR#20): registers the fixed baseline-one hook set (world -> citizens -> market -> consumption -> finance -> build -> attract, invariant last on PhaseDailyTick) against a core.Engine in the single documented order (never a map, GR#21), fails loudly rather than partially-wiring (ErrAlreadyComposed/ErrModuleFailed/ErrWiringAfterSeal), and injects the Buy/Zone/Build/Demolish gameplay-command seam onto engine.world/engine.build. Closes the ASM-001 'headless == live' gap FEAT-083 (Baseline One) needs to run at all: cmd/metropolis and internal/harness/headless are the only two runnable tops that call it. The engine.citizens edge is where FEAT-169 wires citizens' cold pass (AdvanceDayTick/VitalEvents births+deaths) into the live tick's people-conservation ledger, per docs/planning/icd/engine.citizens-coldpass.md. [spec: M0-ENG §1.1-1.3; M0-ENG §2; ASM-001; FEAT-082; FEAT-083] [path: internal/engine/compose/]",
+      "seq": 375,
+      "sprint": 6,
+      "priority": "P0",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "M0-ENG §1.1-1.3; M0-ENG §2; ASM-001; FEAT-082; FEAT-083",
+      "guid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+      "guidIn": "542d181a-9253-4392-9cdb-be59f10d8913",
+      "guidOut": "ccb71e33-e413-4de2-afc2-4a453beec322",
+      "deps": [
+        "engine.core",
+        "engine.world",
+        "engine.citizens",
+        "engine.market",
+        "engine.consumption",
+        "engine.finance",
+        "engine.build",
+        "engine.attract",
+        "engine.invariant",
+        "engine.logistics",
+        "engine.season",
         "engine.households"
       ]
     },
