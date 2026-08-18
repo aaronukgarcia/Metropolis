@@ -4,7 +4,17 @@
 
 ---
 
-## 0. THE SHARED-TREE RULES (most important — read twice)
+## 0a. WORKTREES — YOU NOW HAVE YOUR OWN DIRECTORY (2026-08-18, supersedes shared-checkout working)
+
+Each coder session now works in its **own git worktree** — a private directory + private branch over the same repository, so branches, uncommitted files, and builds no longer collide:
+
+- **Ben:** work in `E:\git\metropolis-ben` (branch `lane/ben`). Your cafe commit is already there; your uncommitted stub modules were copied in.
+- **Bill:** work in `E:\git\metropolis-bill` (branch `lane/bill`). Your policies work-in-progress was copied in.
+- **Bev:** stays in `E:\git\Metropolis` (the main checkout).
+
+**Rules:** (1) `cd` into YOUR worktree at session start and never work in the main checkout again; verify with `git worktree list` + `git branch --show-current` (must be your `lane/<name>` branch). (2) Commit/push on your lane branch; open a PR per module (or small batch) from `lane/<name>` → `main`; rebase-merge on green. (3) Keep your lane fresh: `git fetch origin main` + `git rebase origin/main` on YOUR OWN branch only (allowed — it's your worktree; still NEVER reset --hard/clean/stash). (4) The Section-0 shared-tree bans still apply inside your worktree for safety habits, and the main checkout is now a NO-GO zone for coders entirely. (5) After confirming your worktree has your files, delete YOUR OWN leftover uncommitted copies from the main checkout (`E:\git\Metropolis\internal\engine\<yours>`) — nobody else will touch them.
+
+## 0b. THE SHARED-TREE RULES (still read them — they built the habits above)
 
 Every session edits the SAME working directory. Other sessions have **uncommitted work sitting in this tree right now**. Therefore:
 
