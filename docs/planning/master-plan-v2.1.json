@@ -2,7 +2,7 @@
   "planVersion": "1.1.0",
   "project": "Metropolis",
   "source": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
-  "updated": "2026-08-15",
+  "updated": "2026-08-17",
   "authoring": "Hand-authored single source of truth. tools/plan/generate.js derives code.json and tools/plan/bow-import.json from this file — never edit those outputs directly (GR#3). Sequence numbers are gapped by ~10 to allow insertions. v1.1.0 (2026-08-08): sprint assignments S0-S11 added (cloud/future items unscheduled); tool.bow decision enacted; tool.planguard + tool.ready added; engine.comms resequenced after engine.firms.",
   "designNorthStar": {
     "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
@@ -72,7 +72,9 @@
         "pattern": "versioned command/event/delta envelope with correlationId"
       },
       "deps": [],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -112,7 +114,9 @@
         "pattern": "stateless request/response, backend-agnostic, local fallback mandatory"
       },
       "deps": [],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -191,7 +195,9 @@
       "deps": [
         "foundation.repo"
       ],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -213,7 +219,9 @@
       "deps": [
         "foundation.repo"
       ],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -235,7 +243,9 @@
       "deps": [
         "foundation.repo"
       ],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -275,7 +285,8 @@
         "int.protocol"
       ],
       "calls": [
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -300,7 +311,8 @@
         "foundation.repo"
       ],
       "calls": [
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -347,7 +359,9 @@
       "deps": [
         "ui.core"
       ],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 2
     },
     {
@@ -376,7 +390,9 @@
         "foundation.registry",
         "int.protocol",
         "int.serializer",
-        "foundation.buildinfo"
+        "foundation.buildinfo",
+        "foundation.data",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -397,7 +413,8 @@
       ],
       "calls": [
         "engine.core",
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -420,7 +437,8 @@
         "ui.widgets",
         "engine.world",
         "engine.citizens",
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -484,7 +502,8 @@
       "path": "internal/engine/debug/",
       "deps": [],
       "calls": [
-        "int.serializer"
+        "int.serializer",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -527,7 +546,9 @@
       "calls": [
         "ui.core",
         "harness.replay",
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors",
+        "int.serializer"
       ],
       "sprint": 2
     },
@@ -548,7 +569,9 @@
       "calls": [
         "engine.core",
         "int.serializer",
-        "int.protocol"
+        "int.protocol",
+        "feat.debugmode",
+        "foundation.errors"
       ],
       "sprint": 1
     },
@@ -572,7 +595,9 @@
         "harness.headless",
         "foundation.buildinfo",
         "foundation.det",
-        "int.solver"
+        "int.solver",
+        "foundation.errors",
+        "int.serializer"
       ],
       "sprint": 2
     },
@@ -613,7 +638,8 @@
       ],
       "calls": [
         "engine.core",
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 3
     },
@@ -639,7 +665,9 @@
       "calls": [
         "engine.core",
         "int.serializer",
-        "engine.invariant"
+        "engine.invariant",
+        "foundation.det",
+        "foundation.errors"
       ],
       "sprint": 3,
       "collaborations": {
@@ -663,7 +691,8 @@
         "engine.core"
       ],
       "calls": [
-        "engine.core"
+        "engine.core",
+        "foundation.errors"
       ],
       "sprint": 2,
       "inbound": {
@@ -694,7 +723,8 @@
       ],
       "calls": [
         "engine.core",
-        "foundation.data"
+        "foundation.data",
+        "foundation.errors"
       ],
       "sprint": 4
     },
@@ -724,7 +754,9 @@
         "foundation.data",
         "engine.market",
         "engine.season",
-        "engine.finance"
+        "engine.finance",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 4,
       "collaborations": {
@@ -759,7 +791,9 @@
         "engine.world",
         "engine.consumption",
         "engine.invariant",
-        "engine.projections"
+        "engine.projections",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 4,
       "collaborations": {
@@ -827,7 +861,10 @@
       ],
       "calls": [
         "engine.world",
-        "foundation.data"
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 5
     },
@@ -855,7 +892,10 @@
       "calls": [
         "engine.market",
         "engine.traffic",
-        "engine.world"
+        "engine.world",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 6
     },
@@ -887,7 +927,9 @@
         "engine.logistics",
         "engine.market",
         "foundation.data",
-        "engine.season"
+        "engine.season",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 6,
       "collaborations": {
@@ -917,7 +959,8 @@
         "foundation.data"
       ],
       "calls": [
-        "foundation.data"
+        "foundation.data",
+        "foundation.errors"
       ],
       "sprint": 3
     },
@@ -942,7 +985,9 @@
       ],
       "calls": [
         "engine.citizens",
-        "foundation.data"
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 6
     },
@@ -970,7 +1015,10 @@
       "calls": [
         "engine.citizens",
         "engine.finance",
-        "engine.households"
+        "engine.households",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 6
     },
@@ -999,7 +1047,11 @@
         "engine.build",
         "engine.world",
         "engine.finance",
-        "engine.projections"
+        "engine.projections",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num",
+        "int.protocol"
       ],
       "sprint": 7,
       "collaborations": {
@@ -1032,7 +1084,8 @@
       "calls": [
         "engine.core",
         "engine.season",
-        "int.solver"
+        "int.solver",
+        "foundation.errors"
       ],
       "sprint": 7
     },
@@ -1059,7 +1112,9 @@
       ],
       "calls": [
         "foundation.data",
-        "engine.finance"
+        "engine.finance",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 4
     },
@@ -1106,7 +1161,9 @@
         "engine.consumption",
         "engine.finance",
         "engine.citizens",
-        "foundation.data"
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 4
     },
@@ -1138,7 +1195,11 @@
         "engine.consumption",
         "engine.season",
         "engine.shopping",
-        "engine.world"
+        "engine.world",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 7,
       "collaborations": {
@@ -1213,7 +1274,8 @@
         "ui.keys"
       ],
       "calls": [
-        "int.serializer"
+        "int.serializer",
+        "foundation.errors"
       ],
       "sprint": 7
     },
@@ -1284,7 +1346,9 @@
         "ui.widgets"
       ],
       "calls": [
-        "ui.widgets"
+        "ui.widgets",
+        "foundation.errors",
+        "ui.core"
       ],
       "sprint": 8
     },
@@ -1308,7 +1372,10 @@
         "ui.widgets"
       ],
       "calls": [
-        "ui.widgets"
+        "ui.widgets",
+        "foundation.errors",
+        "int.protocol",
+        "ui.core"
       ],
       "sprint": 8
     },
@@ -1328,7 +1395,12 @@
       ],
       "calls": [
         "ui.core",
-        "engine.projections"
+        "engine.projections",
+        "foundation.errors",
+        "int.protocol",
+        "ui.dash",
+        "ui.keys",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -1370,7 +1442,12 @@
       ],
       "calls": [
         "engine.build",
-        "engine.unlocks"
+        "engine.unlocks",
+        "foundation.errors",
+        "int.protocol",
+        "ui.core",
+        "ui.dash",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -1411,7 +1488,12 @@
       ],
       "calls": [
         "engine.logistics",
-        "engine.freight"
+        "engine.freight",
+        "foundation.errors",
+        "int.protocol",
+        "ui.core",
+        "ui.dash",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -1436,7 +1518,8 @@
         "engine.households",
         "engine.leisure",
         "engine.extcommute",
-        "int.protocol"
+        "int.protocol",
+        "foundation.errors"
       ],
       "sprint": 8
     },
@@ -1455,7 +1538,12 @@
         "ui.widgets"
       ],
       "calls": [
-        "engine.projections"
+        "engine.projections",
+        "foundation.errors",
+        "int.protocol",
+        "ui.core",
+        "ui.dash",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -1474,7 +1562,12 @@
         "ui.widgets"
       ],
       "calls": [
-        "engine.news"
+        "engine.news",
+        "foundation.errors",
+        "int.protocol",
+        "ui.core",
+        "ui.dash",
+        "ui.keys"
       ],
       "sprint": 8
     },
@@ -1493,7 +1586,13 @@
         "ui.core"
       ],
       "calls": [
-        "engine.core"
+        "engine.core",
+        "foundation.errors",
+        "int.protocol",
+        "int.serializer",
+        "ui.core",
+        "ui.dash",
+        "ui.keys"
       ],
       "sprint": 8
     },
@@ -1541,7 +1640,11 @@
         "engine.logistics",
         "engine.services",
         "engine.wellbeing",
-        "engine.farming"
+        "engine.farming",
+        "engine.market",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 9,
       "collaborations": {
@@ -1609,7 +1712,11 @@
         "engine.services",
         "engine.season",
         "engine.traffic",
-        "engine.projections"
+        "engine.projections",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 9,
       "collaborations": {
@@ -1643,7 +1750,10 @@
         "engine.citizens",
         "engine.services",
         "engine.wellbeing",
-        "engine.spiral"
+        "engine.spiral",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -1669,7 +1779,10 @@
       ],
       "calls": [
         "engine.core",
-        "engine.roads"
+        "engine.roads",
+        "foundation.errors",
+        "foundation.num",
+        "foundation.registry"
       ],
       "sprint": 8
     },
@@ -1696,7 +1809,11 @@
       "calls": [
         "engine.citizens",
         "engine.services",
-        "engine.news"
+        "engine.news",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -1726,7 +1843,8 @@
         "engine.market",
         "engine.season",
         "engine.consumption",
-        "engine.refuse"
+        "engine.refuse",
+        "foundation.errors"
       ],
       "sprint": 11,
       "collaborations": {
@@ -1760,7 +1878,9 @@
         "engine.build",
         "engine.wellbeing",
         "engine.market",
-        "engine.finance"
+        "engine.finance",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -1937,7 +2057,10 @@
       "calls": [
         "engine.build",
         "engine.finance",
-        "foundation.data"
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num",
+        "foundation.registry"
       ],
       "sprint": 11
     },
@@ -2025,7 +2148,10 @@
       "calls": [
         "engine.logistics",
         "engine.market",
-        "engine.firms"
+        "engine.firms",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -2054,7 +2180,10 @@
         "engine.services",
         "engine.logistics",
         "engine.firms",
-        "engine.traffic"
+        "engine.traffic",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -2082,7 +2211,10 @@
         "engine.services",
         "engine.finance",
         "engine.projections",
-        "engine.prison"
+        "engine.prison",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10,
       "collaborations": {
@@ -2165,7 +2297,9 @@
       ],
       "calls": [
         "engine.finance",
-        "foundation.data"
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 9
     },
@@ -2193,7 +2327,11 @@
         "engine.services",
         "engine.citizens",
         "engine.wellbeing",
-        "engine.projections"
+        "engine.projections",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 9,
       "collaborations": {
@@ -2252,7 +2390,11 @@
       "calls": [
         "engine.citizens",
         "engine.traffic",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -2340,7 +2482,12 @@
         "engine.citizens",
         "engine.finance",
         "engine.market",
-        "engine.build"
+        "engine.build",
+        "engine.freight",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -2367,7 +2514,12 @@
       "calls": [
         "engine.firms",
         "engine.build",
-        "engine.consumption"
+        "engine.consumption",
+        "engine.finance",
+        "engine.freight",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -2393,7 +2545,10 @@
       ],
       "calls": [
         "engine.traffic",
-        "engine.freight"
+        "engine.freight",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -2478,7 +2633,10 @@
         "engine.consumption",
         "engine.dispatch",
         "engine.market",
-        "engine.mining"
+        "engine.mining",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -2567,7 +2725,10 @@
       "calls": [
         "engine.finance",
         "engine.tax",
-        "engine.services"
+        "engine.services",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 9
     },
@@ -2594,7 +2755,12 @@
       "calls": [
         "engine.build",
         "engine.finance",
-        "engine.citizens"
+        "engine.citizens",
+        "engine.world",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -2799,7 +2965,9 @@
       "deps": [
         "foundation.errors"
       ],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -2882,7 +3050,9 @@
       "calls": [
         "feat.saveux",
         "harness.replay",
-        "int.serializer"
+        "int.serializer",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 7
     },
@@ -2902,7 +3072,9 @@
       ],
       "calls": [
         "feat.devmode",
-        "foundation.errors"
+        "foundation.errors",
+        "feat.debugmode",
+        "harness.synth"
       ],
       "sprint": 3
     },
@@ -3391,7 +3563,10 @@
         "engine.mining",
         "feat.facilitypermits",
         "engine.roads",
-        "engine.rail"
+        "engine.rail",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -3467,7 +3642,10 @@
         "feat.facilitypermits",
         "feat.decommission",
         "engine.fdi",
-        "engine.tourism"
+        "engine.tourism",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -3501,7 +3679,10 @@
         "engine.wellbeing",
         "engine.fdi",
         "feat.facilitypermits",
-        "feat.decommission"
+        "feat.decommission",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -3646,7 +3827,10 @@
         "engine.wellbeing",
         "engine.services",
         "engine.policies",
-        "engine.finance"
+        "engine.finance",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -3669,7 +3853,9 @@
       "deps": [
         "foundation.errors"
       ],
-      "calls": [],
+      "calls": [
+        "foundation.errors"
+      ],
       "sprint": 0
     },
     {
@@ -3715,7 +3901,11 @@
       ],
       "calls": [
         "engine.policies",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     }
