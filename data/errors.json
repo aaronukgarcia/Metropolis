@@ -3885,6 +3885,66 @@
       "module": "foundation.integration",
       "message": "QueuedTransport method {method} was called on a struct copy of the value NewQueuedTransport returned",
       "remedy": "Always use the *QueuedTransport pointer NewQueuedTransport returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased tier queues/inner transport but has its own independent mutexes, which is exactly the SEC-020-class hazard InProcTransport/Engine/Registry/Store/Screen/save.Manager's own checkNotCopied guards exist to reject before any lock is ever touched."
+    },
+    "MET-F905": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "connection retry counter exceeded its configured cap ({maxRetries}) without op ever succeeding",
+      "remedy": "Connection.Attempt's retry counter exceeded its configured cap without succeeding. The caller must explicitly call Reconnect to move past this state; Attempt never auto-escalates to reconnect on its own."
+    },
+    "MET-F906": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "Connection.Reconnect's name-lookup, re-authentication, or post-reconnect catch-up drain failed",
+      "remedy": "The connection falls back to StateRetrying (with its retry counter incremented) rather than being left in StateReconnecting/StateCatchingUp indefinitely -- a stuck non-terminal state would be a silent hang, not a registry error."
+    },
+    "MET-F907": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "a *Connection method was called on a struct copy of the value NewConnection returned",
+      "remedy": "Always use the *Connection pointer NewConnection returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject before any lock is ever touched."
+    },
+    "MET-F908": {
+      "severity": "fatal",
+      "module": "foundation.integration",
+      "message": "Recover could not read the active checkpoint's head pointer or could not load its bundle back into the supplied participants",
+      "remedy": "A crash-recovery attempt that cannot even establish its base state must fail loudly, never silently fall back to start from empty world. Check that the checkpoint directory and manager are correctly configured and present."
+    },
+    "MET-F909": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "a WAL entry (or the WAL-CURRENT slot pointer) that DOES exist at its final path could not be listed, read, or decoded",
+      "remedy": "A promoted WAL entry failed to read or decode -- it is treated as corrupt and never surfaced as a valid command. Investigate what wrote or modified the file at that path; recovery halts rather than silently skipping or fabricating a command. A torn/never-promoted tail write is NOT this error -- it is simply absent from the WAL slot's directory listing."
+    },
+    "MET-F910": {
+      "severity": "fatal",
+      "module": "foundation.integration",
+      "message": "a caller-supplied apply function returned an error while replaying a decoded command from the WAL: {cause}",
+      "remedy": "Recovery halts immediately rather than continuing past a failed apply to prevent producing a rebuilt state that is not byte-identical to the pre-crash state, defeating determinism (GR#21)."
+    },
+    "MET-F911": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "could not create a WAL slot directory or its staging subdirectory under {root}: {cause}",
+      "remedy": "os.MkdirAll failed for the configured WAL slot root (or its .wal-staging subdirectory) -- check the path is valid and writable. No entry was appended and no prune progressed as a result."
+    },
+    "MET-F912": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "WAL entry (seq {seq}) or the WAL-CURRENT pointer could not be durably written: {cause}",
+      "remedy": "The atomic staging-write-then-rename to the WAL slot directory (or to the WAL-CURRENT pointer file) failed (disk full, permissions, or another filesystem error). The entry was never durably logged -- a command whose Append call returns this error MUST NOT be applied, or the commit-before-apply race this package exists to close reoccurs on the WAL's own persistence path."
+    },
+    "MET-F913": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "WAL prune could not finish rebuilding the inactive slot or flip the WAL-CURRENT pointer: {cause}",
+      "remedy": "The WAL-CURRENT pointer is only ever flipped after every retained entry is durably written to the rebuilt slot, so this failure always leaves the previously active slot still active and fully intact -- no data was lost, only the disk space this prune would have reclaimed. Free disk space / fix permissions and retry the prune on the next checkpoint."
+    },
+    "MET-F914": {
+      "severity": "error",
+      "module": "foundation.integration",
+      "message": "a *WAL method was called on a struct copy of the value NewWAL returned",
+      "remedy": "Always use the *WAL pointer NewWAL returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased root/slot fields but has its own independent mutex, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject before any lock is ever touched."
     }
   }
 }
