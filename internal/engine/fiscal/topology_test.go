@@ -3,6 +3,7 @@ package fiscal
 import (
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
@@ -179,6 +180,52 @@ func TestUnknownCategoryRejected(t *testing.T) {
 
 	if _, err := f.DrillThrough(NodeCategory("nonsense")); err == nil {
 		t.Fatal("DrillThrough(unknown) returned nil error, want ErrUnknownCategory")
+	}
+}
+
+// TestUnknownCategoryControlByteEscaped asserts an unknown NodeCategory
+// carrying a raw control byte (e.g. an ANSI escape) is NOT echoed verbatim
+// into the ErrUnknownCategory message: Node/DrillThrough put the raw
+// category string into the error's "category" context, and errs.renderTemplate
+// interpolates context values with a plain fmt.Sprint with no escaping of its
+// own, so an unescaped echo would carry the control byte straight into a
+// TUI/log error tail (SEC-151, the terminal-control-byte-injection weakness
+// pattern). The escaped Display() text must contain neither the raw ESC byte
+// nor the raw BEL byte, and must instead show their Go-quoted forms.
+func TestUnknownCategoryControlByteEscaped(t *testing.T) {
+	f, _, _ := newTestFiscal(t)
+
+	malicious := NodeCategory("evil\x1b[31mred\x07")
+
+	_, err := f.Node(malicious)
+	if err == nil {
+		t.Fatal("Node(malicious) returned nil error, want ErrUnknownCategory")
+	}
+	var e *errs.E
+	if !errors.As(err, &e) {
+		t.Fatalf("Node(malicious) error is %T, want *errs.E", err)
+	}
+	rendered := e.Display()
+	if strings.ContainsRune(rendered, 0x1b) {
+		t.Errorf("Node(malicious) Display() = %q, contains a raw ESC (0x1b) byte, want it escaped", rendered)
+	}
+	if strings.ContainsRune(rendered, 0x07) {
+		t.Errorf("Node(malicious) Display() = %q, contains a raw BEL (0x07) byte, want it escaped", rendered)
+	}
+	if !strings.Contains(rendered, `\x1b`) {
+		t.Errorf("Node(malicious) Display() = %q, want it to contain the escaped form \\x1b", rendered)
+	}
+
+	if _, err := f.DrillThrough(malicious); err == nil {
+		t.Fatal("DrillThrough(malicious) returned nil error, want ErrUnknownCategory")
+	} else {
+		var de *errs.E
+		if !errors.As(err, &de) {
+			t.Fatalf("DrillThrough(malicious) error is %T, want *errs.E", err)
+		}
+		if strings.ContainsRune(de.Display(), 0x1b) {
+			t.Errorf("DrillThrough(malicious) Display() = %q, contains a raw ESC (0x1b) byte, want it escaped", de.Display())
+		}
 	}
 }
 
