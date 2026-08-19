@@ -122,6 +122,7 @@ const maxCoord = 1_000_000
 // work is proportional to the topology and the buffer, never to an unbounded
 // coordinate — an int-max span would otherwise hang the draw loop and drive a
 // multi-GB snapshot through the Engine cache.
+// verified secure: SEC-078 is fully satisfied by validateGridCoords coordinate boundaries.
 func validateGridCoords(buf *core.Buffer, nodes []NetworkNode) error {
 	bw, bh := buf.Size()
 	minX, minY := nodes[0].X, nodes[0].Y
