@@ -44,7 +44,12 @@ func (f *FiscalAPI) ChildcarePlaces() int64 {
 //
 // The arithmetic is exact int64 fixed-point (GR#16): money figures route
 // through num.SafeMul / moneyTimesRate, never a bare int64 add that could
-// wrap. Net is always GrossSpend − TaxYield by construction.
+// wrap. Net is GrossSpend − TaxYield, clamped at 0 (SEC-149, GR#16
+// money-is-never-negative): when TaxYield exceeds GrossSpend — e.g. the
+// income-tax instrument at its own max rate — Net is exactly 0, not a
+// negative figure. That surplus is NOT redistributed anywhere by this
+// function; a caller must not assume Net == GrossSpend − TaxYield or try to
+// reconstruct GrossSpend from Net + TaxYield once the clamp has engaged.
 func (f *FiscalAPI) ChildcareNetLine() (ChildcareNetLine, error) {
 	if err := f.checkNotCopied("ChildcareNetLine"); err != nil {
 		return ChildcareNetLine{}, err
@@ -92,6 +97,14 @@ func (f *FiscalAPI) ChildcareNetLine() (ChildcareNetLine, error) {
 		return ChildcareNetLine{}, err
 	}
 
+	// Net is clamped at 0 (GR#16 money-is-never-negative): the subsidy is
+	// documented as only partially self-funding, never a net revenue
+	// generator, so a TaxYield that would exceed GrossSpend (e.g. the
+	// income-tax instrument at its own max 60% rate) must not flow out as a
+	// negative money figure (SEC-149).
 	line.Net = satSub(line.GrossSpend, line.TaxYield)
+	if line.Net < 0 {
+		line.Net = 0
+	}
 	return line, nil
 }
