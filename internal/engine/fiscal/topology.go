@@ -1,10 +1,37 @@
 package fiscal
 
 import (
+	"strconv"
+	"strings"
+	"unicode"
+
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/tax"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
+
+// escapeControl renders s with every non-printable (control, e.g. ANSI
+// escape/terminal-control) rune replaced by its Go-quoted escape form
+// (SEC-151): Node/DrillThrough accept any caller-controlled NodeCategory
+// string and echo it into an ErrUnknownCategory's "category" context value;
+// errs.renderTemplate interpolates that value with a plain fmt.Sprint and
+// performs no escaping of its own (no sanitizer exists in foundation/errs to
+// reuse, so this helper lives here in the owning package rather than there),
+// so a category string carrying raw control bytes would otherwise flow
+// verbatim into a TUI/log error tail. unicode.IsPrint follows the same
+// "printable" definition Go's %q/strconv.Quote use, so the escaped form is
+// exactly what %q would show for that rune.
+func escapeControl(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if unicode.IsPrint(r) {
+			sb.WriteRune(r)
+			continue
+		}
+		sb.WriteString(strconv.QuoteRune(r))
+	}
+	return sb.String()
+}
 
 // The §54 money-in/money-out node ordering. These ordered slices — never a
 // Go map — are the only iteration order this package uses for a monetary sum
@@ -150,7 +177,7 @@ func (f *FiscalAPI) Node(cat NodeCategory) (SankeyNode, error) {
 	}
 	label, kind, ok := nodeMeta(cat)
 	if !ok {
-		return SankeyNode{}, errs.New(ErrUnknownCategory, f.correlationID, map[string]any{"category": string(cat)})
+		return SankeyNode{}, errs.New(ErrUnknownCategory, f.correlationID, map[string]any{"category": escapeControl(string(cat))})
 	}
 	if isProvisional(cat) {
 		return SankeyNode{ID: cat, Label: label, Kind: kind, Amount: 0, Provisional: true}, nil
@@ -257,7 +284,7 @@ func (f *FiscalAPI) DrillThrough(cat NodeCategory) ([]finance.Entry, error) {
 		return nil, err
 	}
 	if _, _, ok := nodeMeta(cat); !ok {
-		return nil, errs.New(ErrUnknownCategory, f.correlationID, map[string]any{"category": string(cat)})
+		return nil, errs.New(ErrUnknownCategory, f.correlationID, map[string]any{"category": escapeControl(string(cat))})
 	}
 	if isProvisional(cat) {
 		return []finance.Entry{}, nil
@@ -282,7 +309,7 @@ func (f *FiscalAPI) DrillThrough(cat NodeCategory) ([]finance.Entry, error) {
 		}
 		return out, nil
 	default:
-		return nil, errs.New(ErrUnknownCategory, f.correlationID, map[string]any{"category": string(cat)})
+		return nil, errs.New(ErrUnknownCategory, f.correlationID, map[string]any{"category": escapeControl(string(cat))})
 	}
 }
 
