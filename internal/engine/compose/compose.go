@@ -9,7 +9,9 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
@@ -17,6 +19,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
@@ -63,16 +66,21 @@ const (
 	baselineOneGasCapacity   = 1_000_000.0
 
 	// attract master-dial inputs. A_world (40) is a neutral-ish placeholder.
-	// baselineOneTermValue is now the FLAT placeholder for only the two
-	// §11 terms this integration deliberately leaves unwired
-	// (ServiceCoverage/JobAvailability — no real signal exists in any
-	// built module yet, docs/planning/icd/engine.attract-terms.md §3/§12
-	// open decision 3). Safety/LeisureFit/Environment are real, computed
-	// per month by safetyTerm/leisureFitTerm/environmentTerm below.
+	// All seven §11 terms are now real, computed per month: Safety/
+	// LeisureFit/Environment by safetyTerm/leisureFitTerm/environmentTerm
+	// (FEAT-167 wave 1), ServiceCoverage/JobAvailability by
+	// serviceCoverageTerm/jobAvailabilityTerm (servicesfirms_wire.go,
+	// FEAT-167 completion), HousingAffordability/Reputation inside
+	// attract itself. The old flat baselineOneTermValue=50.0 placeholder
+	// (docs/planning/icd/engine.attract-terms.md §3/§12 open decision 3)
+	// is gone: nothing in this package references it any more (its last
+	// use was the two ServiceCoverage/JobAvailability SetTermInputs
+	// fields below and the tripwire test that guarded them, both replaced
+	// — see servicesfirms_wire_test.go's proof that no term reads the old
+	// flat value after a warmed-up run).
 	baselineOneAWorld        = 40.0
 	baselineOneMigrationRate = 1.0
-	baselineOneTermValue     = 50.0 // ServiceCoverage/JobAvailability placeholder (ICD §3)
-	baselineOneMonthlyRent   = 0    // micropounds; vacant city rent placeholder
+	baselineOneMonthlyRent   = 0 // micropounds; vacant city rent placeholder
 
 	// attract capacity constraints (people / dwelling units). Unbounded
 	// placeholders — the real housing-vacancy and junction-throughput
@@ -153,6 +161,29 @@ type Deps struct {
 	Crime   *crime.CrimeAPI
 	Leisure *leisure.LeisureAPI
 	Refuse  *refuse.RefuseAPI
+
+	// ExtCommute overrides construction of the FEAT-207 off-map
+	// external-commuting module (default: extcommute.LoadDefault). nil is
+	// the common boot case; the test seam lets a caller inject a
+	// pre-configured instance (docs/planning/icd/engine.extcommute-compose.md
+	// §11's end-to-end unblock test).
+	ExtCommute *extcommute.ExtCommuteAPI
+
+	// Services overrides construction of the FEAT-167-completion
+	// ServiceCoverage source module (default: services.LoadDefault). nil
+	// is the common boot case; the test seam lets a caller inject a
+	// pre-registered instance to prove ServiceCoverage actually moves
+	// when its source module's state changes
+	// (docs/planning/icd/engine.services-coverage.md §11).
+	Services *services.ServicesAPI
+
+	// Firms overrides construction of the FEAT-167-completion
+	// JobAvailability source module (default: firms.LoadDefault). nil is
+	// the common boot case; the test seam lets a caller inject a
+	// pre-registered instance to prove JobAvailability actually moves
+	// when its source module's state changes
+	// (docs/planning/icd/engine.firms-labourmarket.md §11).
+	Firms *firms.FirmsAPI
 }
 
 // moduleRegistration is one fixed slot in the composition order.
@@ -294,6 +325,16 @@ func (c *Composition) VitalBirths() int64 {
 // citizens cold pass has produced and folded into peopleDelta so far.
 func (c *Composition) VitalDeaths() int64 {
 	return c.state.vitalDeaths
+}
+
+// ExtCommute returns the wired FEAT-207 off-map external-commuting handle
+// (docs/planning/icd/engine.extcommute-compose.md). Baseline one routes no
+// gameplay command to Assign/Release/InCommute yet (ICD §12 open decision
+// 4 — command routing is a later, separate item); this accessor is the
+// seam a future gameplay handler, or a test driving the end-to-end
+// assign/release proof, reaches it through.
+func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
+	return c.state.extCommute
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -493,6 +534,89 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract_terms_data"})
 	}
 
+	// FEAT-167 completion (docs/planning/icd/engine.services-coverage.md,
+	// docs/planning/icd/engine.firms-labourmarket.md): construct the two
+	// remaining §11 term source modules. Resolved BEFORE the first hook
+	// registers, like every other required module above (AC-4).
+	servicesAPI := deps.Services
+	if servicesAPI == nil {
+		var sErr error
+		servicesAPI, sErr = services.LoadDefault(cid)
+		if sErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, sErr, map[string]any{"module": "services"})
+		}
+	}
+
+	firmsAPI := deps.Firms
+	if firmsAPI == nil {
+		var fErr error
+		firmsAPI, fErr = firms.LoadDefault(e.WorldSeed(), cid)
+		if fErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, fErr, map[string]any{"module": "firms"})
+		}
+	}
+	// JobAvailability's LabourMarket() fails closed (MET-G1409) without
+	// citizens wired (labourmarket.go's TotalVacancies alone needs no
+	// dependency, but LabourMarket's Workforce side does). Finance/market/
+	// build are wired too — cheap given all three are already constructed
+	// above, and required for any future firm-lifecycle work this module
+	// owns beyond the JobAvailability aggregate (out of this ICD's scope).
+	if err := firmsAPI.SetCitizens(c); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+	if err := firmsAPI.SetFinance(financeAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+	if err := firmsAPI.SetMarket(m); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+	if err := firmsAPI.SetBuild(buildAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+
+	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
+	// Wire-time identity-map cross-check MUST run before extcommute's
+	// citizens-seam adapter is ever exercised (§3/§11 "identity-map
+	// conformance") — checked here, before extcommute is even constructed,
+	// so a drift fails loudly with zero hooks left behind (AC-4's
+	// discipline extended to this assertion).
+	if err := extCommuteEmploymentStatesIdentical(cid); err != nil {
+		return nil, err
+	}
+	extCommuteAPI := deps.ExtCommute
+	if extCommuteAPI == nil {
+		var xErr error
+		extCommuteAPI, xErr = extcommute.LoadDefault(cid)
+		if xErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, xErr, map[string]any{"module": "extcommute"})
+		}
+	}
+	if err := extCommuteAPI.SetSeed(e.WorldSeed()); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+	if err := extCommuteAPI.SetCitizensSeam(&extCommuteCitizensSeam{api: c, cid: cid}); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+	// TrafficSeam is the documented free-flow stub (ICD §12 open decision
+	// 2, FEAT-206's gate) — engine.traffic is not constructed anywhere in
+	// this package and exposes no Congestion query yet.
+	if err := extCommuteAPI.SetTrafficSeam(extCommuteTrafficSeamStub{}); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+	if err := extCommuteAPI.SetFinanceSeam(&extCommuteFinanceSeam{
+		api: financeAPI,
+		cid: cid,
+		monthFn: func() int64 {
+			clock, cErr := e.Clock()
+			if cErr != nil {
+				return 0
+			}
+			return clock.Month()
+		},
+	}); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -518,9 +642,13 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		gasNet:                  gasNet,
 		buildAPI:                buildAPI,
 		attract:                 attractAPI,
+		finance:                 financeAPI,
 		crime:                   crimeAPI,
 		leisure:                 leisureAPI,
 		refuse:                  refuseAPI,
+		services:                servicesAPI,
+		firms:                   firmsAPI,
+		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
 		treasury:                initialTreasury,
@@ -628,6 +756,13 @@ type simState struct {
 	buildAPI *build.BuildAPI
 	attract  *attract.AttractAPI
 
+	// finance is the shared *finance.FinanceAPI instance constructed in
+	// Wire and handed to attract (SetFinance) and, since FEAT-207, to
+	// extcommute's FinanceSeam adapter (extCommuteFinanceSeam). Stored here
+	// too so any future compose-owned poster (and tests) can reach the
+	// same ledger without re-threading it through every hook constructor.
+	finance *finance.FinanceAPI
+
 	// FEAT-167 (docs/planning/icd/engine.attract-terms.md): the three real
 	// Safety/LeisureFit/Environment source modules, plus this integration's
 	// one new data-driven balance file. attractTerms is read-only after
@@ -637,6 +772,21 @@ type simState struct {
 	leisure      *leisure.LeisureAPI
 	refuse       *refuse.RefuseAPI
 	attractTerms attractTermsData
+
+	// FEAT-167 completion (docs/planning/icd/engine.services-coverage.md,
+	// docs/planning/icd/engine.firms-labourmarket.md): the two remaining
+	// §11 term source modules, constructed in Wire alongside
+	// crime/leisure/refuse above.
+	services *services.ServicesAPI
+	firms    *firms.FirmsAPI
+
+	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
+	// off-map external-commuting module, wired with its three seam
+	// adapters (extcommute_wire.go). Baseline one routes no gameplay
+	// command to Assign/Release/InCommute yet (ICD §12 open decision 4 —
+	// out of this ICD's scope); this field exists so a future gameplay
+	// seam, and today's tests, can reach it.
+	extCommute *extcommute.ExtCommuteAPI
 
 	// leisureVenuesRegistered tracks which completed engine.build
 	// ZoneEntertainment order IDs are CURRENTLY bridged into an open
@@ -1124,14 +1274,20 @@ func (h *attractHook) ApplyEffect(eff core.Effect) {
 // Effect ever emitted comes from shard 0.
 func (h *attractHook) SingleShard() bool { return true }
 
-// applyMigration pushes the five §11 terms the composition root owns, then
-// runs one monthly migration step. Safety/LeisureFit/Environment are real,
-// computed this same month from engine.crime/engine.leisure/engine.refuse
-// (FEAT-167, docs/planning/icd/engine.attract-terms.md); JobAvailability/
-// ServiceCoverage remain the documented flat placeholder — no real signal
-// exists in any built module yet (ICD §3/§12 open decision 3).
-// HousingVacancy/JunctionThroughput are unbounded placeholders until
-// households/logistics produce real capacity signals.
+// applyMigration pushes all five compose-owned §11 terms, then runs one
+// monthly migration step. Safety/LeisureFit/Environment are real, computed
+// this same month from engine.crime/engine.leisure/engine.refuse (FEAT-167
+// wave 1, docs/planning/icd/engine.attract-terms.md). ServiceCoverage/
+// JobAvailability are ALSO now real (FEAT-167 completion,
+// docs/planning/icd/engine.services-coverage.md /
+// engine.firms-labourmarket.md), computed from engine.services/
+// engine.firms — see serviceCoverageTerm/jobAvailabilityTerm
+// (servicesfirms_wire.go) for the honest scope-limit each carries (no
+// automatic build->services/firm-founding bridge is wired into compose
+// yet, so both read their formula's zero-signal edge case until that
+// separate integration lands). HousingVacancy/JunctionThroughput are
+// unbounded placeholders until households/logistics produce real capacity
+// signals.
 func (st *simState) applyMigration(month int64) (attract.MigrationResult, error) {
 	safety, err := st.safetyTerm(month)
 	if err != nil {
@@ -1145,10 +1301,18 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 	if err != nil {
 		return attract.MigrationResult{}, err
 	}
+	serviceCoverage, err := st.serviceCoverageTerm()
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
+	jobAvailability, err := st.jobAvailabilityTerm()
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
 
 	if err := st.attract.SetTermInputs(attract.TermInputs{
-		JobAvailability:        baselineOneTermValue,
-		ServiceCoverage:        baselineOneTermValue,
+		JobAvailability:        jobAvailability,
+		ServiceCoverage:        serviceCoverage,
 		Environment:            environment,
 		LeisureFit:             leisureFit,
 		Safety:                 safety,

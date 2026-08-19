@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "environment": {
     "pollutionHalfSaturationKg": 50000,
     "comment": "Directional placeholder (GR#15): total uncollected+disposal-backlog waste (kg, summed general+recycling+food) at which engine.attract's Environment term reads 50/100. Mirrors data/crime.json's safety.halfSaturationActiveCrime curve shape (see internal/engine/crime/api.go's SafetyTerm). Balance pass pending (Aaron's balance-number regime, 2026-08-13)."
@@ -7,5 +7,13 @@
   "leisure": {
     "bridgeVenueCapacityUnits": 500,
     "comment": "Directional placeholder (GR#15): weekly patronage capacity (person-hours, engine.leisure's Venue.Capacity unit) assigned by the compose->leisure venue-registration bridge to every completed engine.build ZoneEntertainment order. engine.build's zone catalogue carries one generic 'entertainment' type today, with no venue-category sub-signal, so the bridge always opens one CategoryCommunity venue at this one capacity figure — a coarse composite, not a real per-building capacity read. Balance pass pending."
+  },
+  "jobAvailability": {
+    "vacancyRateHalfSaturationPerMille": 100,
+    "comment": "Directional placeholder (GR#15, FEAT-167 completion): the engine.firms LabourMarket().VacancyRatePerMille value at which the JobAvailability term reads 50/100 (docs/planning/icd/engine.firms-labourmarket.md). VacancyRatePerMille carries no upper clamp (vacancies can exceed workforce), so a half-saturation curve — the same shape data/attract_terms.json's environment.pollutionHalfSaturationKg already uses — maps it onto attract's bounded [0,100] scale: term = 100 * rate / (rate + this). 100 per-mille (10% vacancy rate) reading 50/100 is a directional starting point, not a balance-passed figure. Baseline one wires no automatic firm-founding into the composition root (a separate, larger integration outside this ICD's scope), so TotalVacancies legitimately reads 0 — and this term 0 — until that lands; the formula is proven to move under a direct engine.firms mutation (see compose's servicesfirms_wire_test.go)."
+  },
+  "serviceCoverage": {
+    "coverageRatioScalePercent": 100,
+    "comment": "Directional placeholder (GR#15, FEAT-167 completion): scales engine.services CoverageSummary().CoverageRatio (docs/planning/icd/engine.services-coverage.md) — already clamped to [0,1], or exactly 1.0 when city-wide TotalDemand is zero (coverage.go's coverageRatio) — onto attract's [0,100] term scale. 100 is the neutral (no-op) scale: term = 100 * CoverageRatio * (this/100). Baseline one wires no automatic engine.build -> engine.services registration bridge into the composition root (a separate, larger integration outside this ICD's scope — the ICD's own open decision 1), so CoverageRatio legitimately reads the zero-demand default (1.0, term 100) until that bridge lands; the formula is proven to move under a direct engine.services mutation (see compose's servicesfirms_wire_test.go)."
   }
 }

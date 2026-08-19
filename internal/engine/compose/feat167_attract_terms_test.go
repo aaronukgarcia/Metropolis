@@ -289,24 +289,22 @@ func TestFEAT167_EnvironmentTermRespondsToUncollectedWaste(t *testing.T) {
 	}
 }
 
-// --- placeholder tripwires -------------------------------------------------
-
-// TestFEAT167_ServiceCoverageAndJobAvailability_RemainFlatPlaceholder is the
-// honest-placeholder tripwire the ICD §11 requires: these two terms MUST
-// remain exactly baselineOneTermValue regardless of gameplay/population
-// mutation, and must fail LOUDLY (not silently pass) the day a follow-up
-// wires either term for real without updating this test.
-func TestFEAT167_ServiceCoverageAndJobAvailability_RemainFlatPlaceholder(t *testing.T) {
-	e, comp := newTestEngine(t, 11)
-	advanceInChunks(t, e, testTicks)
-
-	if got := comp.state.attract.JobAvailability(); got != baselineOneTermValue {
-		t.Fatalf("JobAvailability = %v after %d months, want exactly the flat placeholder %v — the honest-placeholder contract (ICD §12 open decision 3) has drifted; if this term was deliberately wired for real, UPDATE this test rather than deleting it", got, testMonths, baselineOneTermValue)
-	}
-	if got := comp.state.attract.ServiceCoverage(); got != baselineOneTermValue {
-		t.Fatalf("ServiceCoverage = %v after %d months, want exactly the flat placeholder %v — see JobAvailability's message above", got, testMonths, baselineOneTermValue)
-	}
-}
+// --- placeholder tripwire lifecycle -----------------------------------------
+//
+// TestFEAT167_ServiceCoverageAndJobAvailability_RemainFlatPlaceholder used to
+// live here: it asserted ServiceCoverage/JobAvailability stayed EXACTLY the
+// flat baselineOneTermValue=50.0 constant, and was designed (its own doc
+// comment said so) to fail loudly the day a follow-up wired either term for
+// real. That follow-up is THIS wave (FEAT-167 completion,
+// docs/planning/icd/engine.services-coverage.md /
+// engine.firms-labourmarket.md) — flipping the tripwire from "must stay
+// flat" to "must be real" IS its designed lifecycle, not a deletion of
+// coverage. The replacement real-signal tests
+// (TestFEAT167Completion_ServiceCoverageRespondsToCoverageRatio,
+// TestFEAT167Completion_JobAvailabilityRespondsToVacancyRate, and the
+// all-seven-terms-real proof) live in servicesfirms_wire_test.go, next to
+// the term functions they exercise. baselineOneTermValue itself is gone
+// from compose.go (nothing in production references it any more).
 
 // --- determinism -----------------------------------------------------------
 
