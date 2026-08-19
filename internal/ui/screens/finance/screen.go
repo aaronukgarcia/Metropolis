@@ -1,6 +1,7 @@
 package finance
 
 import (
+	"math"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -31,25 +32,28 @@ type Screen struct {
 
 	self atomic.Pointer[Screen]
 
-	correlationID string
-	subs          map[protocol.SubscriptionID]string
-	stale         bool
-	haveData      bool
+	correlationID      string
+	subs               map[protocol.SubscriptionID]string
+	stale              bool
+	haveData           bool
+	loanRejectedReason string
 
-	pl           *PLView
-	havePL       bool
-	balanceSheet *BalanceSheetView
-	haveBalance  bool
-	loans        []LoanState
-	haveLoans    bool
-	creditRating int
-	haveCredit   bool
-	taxSliders   []TaxSliderState
-	haveSliders  bool
-	payroll      *PublicPayrollView
-	havePayroll  bool
-	sankey       *FiscalCircuitView
-	haveSankey   bool
+	pl                  *PLView
+	havePL              bool
+	balanceSheet        *BalanceSheetView
+	haveBalance         bool
+	loans               []LoanState
+	haveLoans           bool
+	creditRating        int
+	haveCredit          bool
+	creditRatingHistory []float64
+	haveCreditHistory   bool
+	taxSliders          []TaxSliderState
+	haveSliders         bool
+	payroll             *PublicPayrollView
+	havePayroll         bool
+	sankey              *FiscalCircuitView
+	haveSankey          bool
 }
 
 func New(correlationID string) *Screen {
@@ -96,6 +100,25 @@ func (s *Screen) UnbindSubscription(id protocol.SubscriptionID) {
 		return
 	}
 	delete(s.subs, id)
+}
+
+func (s *Screen) ApplyResult(res protocol.CommandResult) {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyResult"}); err != nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyResult"}); err != nil {
+		return
+	}
+
+	if string(res.CorrelationID) == s.correlationID {
+		if !res.Accepted && res.Error != nil {
+			s.loanRejectedReason = res.Error.Display
+		} else {
+			s.loanRejectedReason = ""
+		}
+	}
 }
 
 func (s *Screen) ApplyDelta(delta protocol.Delta) {
@@ -182,6 +205,14 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 		s.haveCredit = false
 	}
 
+	if p.CreditRatingHistory != nil {
+		s.creditRatingHistory = append([]float64(nil), *p.CreditRatingHistory...)
+		s.haveCreditHistory = true
+	} else {
+		s.creditRatingHistory = nil
+		s.haveCreditHistory = false
+	}
+
 	if p.TaxSliders != nil {
 		s.taxSliders = make([]TaxSliderState, len(*p.TaxSliders))
 		for i, t := range *p.TaxSliders {
@@ -239,6 +270,15 @@ func (s *Screen) Stale() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.stale
+}
+
+func (s *Screen) LoanRejectedReason() string {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "LoanRejectedReason"}); err != nil {
+		return ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loanRejectedReason
 }
 
 func (s *Screen) PL() (PLView, bool) {
@@ -300,6 +340,20 @@ func (s *Screen) CreditRating() (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.creditRating, s.haveCredit
+}
+
+func (s *Screen) CreditRatingHistory() ([]float64, bool) {
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "CreditRatingHistory"}); err != nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.haveCreditHistory {
+		return nil, false
+	}
+	res := make([]float64, len(s.creditRatingHistory))
+	copy(res, s.creditRatingHistory)
+	return res, true
 }
 
 func (s *Screen) TaxSliders() ([]TaxSliderState, bool) {
@@ -382,6 +436,9 @@ func (s *Screen) RepayLoan(send SendCommandFunc, loanID string) error {
 func (s *Screen) SetTaxRate(send SendCommandFunc, id string, value float64) error {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetTaxRate"}); err != nil {
 		return err
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "invalid tax rate: NaN or Inf"})
 	}
 	args := map[string]string{
 		"id":    id,

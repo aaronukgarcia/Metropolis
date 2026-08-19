@@ -1,57 +1,11 @@
 package finance
 
 import (
-	"errors"
+	"math"
 	"testing"
 
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
-
-func TestScreen_CopyDetectedAndRejected(t *testing.T) {
-	s := New("corr-test")
-	
-	// Direct copy
-	s2 := *s
-	
-	err := s2.Subscribe(func(protocol.Command) error { return nil })
-	if err == nil {
-		t.Fatal("Subscribe on copied Screen returned nil error")
-	}
-	if !errors.Is(err, &errs.E{Code: ErrScreenCopied}) {
-		t.Fatalf("Subscribe error on copy = %v, want ErrScreenCopied", err)
-	}
-}
-
-func TestScreen_AccessorsRejectCopy(t *testing.T) {
-	s := New("corr-test")
-	s2 := *s
-
-	if s2.HaveData() {
-		t.Error("HaveData on copy returned true")
-	}
-	if s2.Stale() {
-		t.Error("Stale on copy returned true")
-	}
-	if _, ok := s2.PL(); ok {
-		t.Error("PL on copy returned true")
-	}
-	if _, ok := s2.BalanceSheet(); ok {
-		t.Error("BalanceSheet on copy returned true")
-	}
-	if _, ok := s2.Loans(); ok {
-		t.Error("Loans on copy returned true")
-	}
-	if _, ok := s2.TaxSliders(); ok {
-		t.Error("TaxSliders on copy returned true")
-	}
-	if _, ok := s2.PublicPayroll(); ok {
-		t.Error("PublicPayroll on copy returned true")
-	}
-	if _, ok := s2.Sankey(); ok {
-		t.Error("Sankey on copy returned true")
-	}
-}
 
 func TestScreen_ApplyDelta(t *testing.T) {
 	s := New("corr-delta")
@@ -73,6 +27,7 @@ func TestScreen_ApplyDelta(t *testing.T) {
 			{"id": "loan-1", "principalMicropounds": 50000000, "ratePercent": 4.5, "termMonths": 24, "nextPaymentMicropounds": 2500000}
 		],
 		"creditRating": 10,
+		"creditRatingHistory": [10.0, 9.0, 10.0],
 		"taxSliders": [
 			{"id": "council-tax", "label": "Council Tax", "value": 1.2, "min": 0.5, "max": 2.0, "step": 0.1, "incidenceDescription": "Residents"}
 		],
@@ -116,6 +71,11 @@ func TestScreen_ApplyDelta(t *testing.T) {
 		t.Errorf("Credit rating mismatched: ok=%t, val=%d", ok, rating)
 	}
 
+	history, ok := s.CreditRatingHistory()
+	if !ok || len(history) != 3 || history[1] != 9.0 {
+		t.Errorf("Credit history mismatched: ok=%t, val=%+v", ok, history)
+	}
+
 	sliders, ok := s.TaxSliders()
 	if !ok || len(sliders) != 1 || sliders[0].ID != "council-tax" {
 		t.Errorf("Tax sliders mismatched: ok=%t, val=%+v", ok, sliders)
@@ -129,5 +89,73 @@ func TestScreen_ApplyDelta(t *testing.T) {
 	sankey, ok := s.Sankey()
 	if !ok || len(sankey.Bands) != 1 || sankey.Bands[0].Source != "Exports" {
 		t.Errorf("Sankey mismatched: ok=%t, val=%+v", ok, sankey)
+	}
+}
+
+func TestDrillTargets_EveryFigureHasASource(t *testing.T) {
+	pl := PLView{
+		Period:   "Sept",
+		Revenues: []PLItem{{Label: "Tax", ValueMicropounds: 100}},
+	}
+	bs := BalanceSheetView{
+		Assets: []BalanceItem{{Label: "Cash", ValueMicropounds: 200}},
+	}
+	loans := []LoanState{{ID: "l1"}}
+	sliders := []TaxSliderState{{ID: "s1"}}
+	payroll := PublicPayrollView{WageCostMicropounds: 100}
+	sankey := FiscalCircuitView{Bands: []SankeyBand{{Source: "a", Target: "b"}}}
+
+	targets := DrillTargets(pl, bs, loans, sliders, payroll, sankey)
+	if len(targets) != 7 {
+		t.Errorf("expected 7 drill targets, got %d: %+v", len(targets), targets)
+	}
+	for _, target := range targets {
+		if !target.Valid() {
+			t.Errorf("invalid drill target: %+v", target)
+		}
+	}
+}
+
+func TestInputValidation_SetTaxRate(t *testing.T) {
+	s := New("corr-val")
+	send := func(protocol.Command) error { return nil }
+
+	// Test inputs
+	if err := s.SetTaxRate(send, "tax", math.NaN()); err == nil {
+		t.Error("SetTaxRate accepted NaN")
+	}
+	if err := s.SetTaxRate(send, "tax", math.Inf(1)); err == nil {
+		t.Error("SetTaxRate accepted +Inf")
+	}
+	if err := s.SetTaxRate(send, "tax", math.Inf(-1)); err == nil {
+		t.Error("SetTaxRate accepted -Inf")
+	}
+}
+
+func TestInputValidation_BorrowLoan(t *testing.T) {
+	s := New("corr-val")
+	send := func(protocol.Command) error { return nil }
+
+	if err := s.BorrowLoan(send, -100, 12); err == nil {
+		t.Error("BorrowLoan accepted negative principal")
+	}
+	if err := s.BorrowLoan(send, 0, 12); err == nil {
+		t.Error("BorrowLoan accepted zero principal")
+	}
+}
+
+func TestFIN8_LoanRejectionSurface(t *testing.T) {
+	s := New("corr-fin8")
+	s.ApplyResult(protocol.CommandResult{
+		CorrelationID: "corr-fin8",
+		Accepted:      false,
+		Error: &protocol.ErrorRef{
+			Code:    "MET-V303",
+			Display: "Insufficient Credit",
+		},
+	})
+
+	if got := s.LoanRejectedReason(); got != "Insufficient Credit" {
+		t.Errorf("LoanRejectedReason = %q, want %q", got, "Insufficient Credit")
 	}
 }

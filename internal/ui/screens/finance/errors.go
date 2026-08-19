@@ -4,7 +4,7 @@ import "fmt"
 
 const (
 	ErrMalformedPatch     = "MET-V300"
-	ErrStaleSubscription = "MET-V301"
+	ErrStaleSubscription  = "MET-V301"
 	ErrInvalidLoanRequest = "MET-V303"
 )
 

@@ -16,10 +16,10 @@ func renderPLInto(pl PLView, have bool) (*core.Buffer, core.Rect) {
 	return buf, rect
 }
 
-func renderLoansInto(loans []LoanState, rating int, have bool) (*core.Buffer, core.Rect) {
+func renderLoansInto(loans []LoanState, rating int, history []float64, rejected string, have bool) (*core.Buffer, core.Rect) {
 	buf := core.NewBuffer(80, 10)
 	rect := core.Rect{X: 0, Y: 0, W: 80, H: 10}
-	RenderLoans(buf, rect, loans, rating, have, widgets.DefaultPalette.Style(widgets.TokenMoney))
+	RenderLoans(buf, rect, loans, rating, history, rejected, have, widgets.DefaultPalette.Style(widgets.TokenMoney))
 	return buf, rect
 }
 
@@ -90,8 +90,8 @@ func TestSF3_CreditRatingChanges(t *testing.T) {
 	pb, _ := renderPLInto(plB, true)
 
 	// Render Loans
-	la, laRect := renderLoansInto(loansA, ratingA, true)
-	lb, _ := renderLoansInto(loansB, ratingB, true)
+	la, laRect := renderLoansInto(loansA, ratingA, nil, "", true)
+	lb, _ := renderLoansInto(loansB, ratingB, nil, "", true)
 
 	// a) The change in credit rating must change the loans/rating panel output.
 	if bufsEqual(la, lb, laRect) {

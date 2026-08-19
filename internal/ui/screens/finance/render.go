@@ -5,6 +5,9 @@ import (
 	"strconv"
 
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/diagrams"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -108,7 +111,7 @@ func RenderBalanceSheet(buf *core.Buffer, rect core.Rect, bs BalanceSheetView, h
 	}
 }
 
-func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int, have bool, style tcell.Style) {
+func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int, history []float64, rejected string, have bool, style tcell.Style) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
@@ -120,6 +123,16 @@ func RenderLoans(buf *core.Buffer, rect core.Rect, loans []LoanState, rating int
 
 	ratingStr := fmt.Sprintf("Credit Rating: %d/12", rating)
 	drawText(buf, rect, rect.X, rect.Y+1, ratingStr, style)
+
+	// Render the Sparkline for the credit rating history trend (FIN-3)
+	if len(history) > 0 {
+		sparkRect := core.Rect{X: rect.X + 25, Y: rect.Y + 1, W: 12, H: 1}
+		widgets.Sparkline(buf, sparkRect, history, style)
+	}
+
+	if rejected != "" {
+		drawText(buf, rect, rect.X, rect.Y+2, "Loan Rejected: "+rejected, style.Foreground(tcell.ColorRed).Bold(true))
+	}
 
 	y := rect.Y + 3
 	for _, l := range loans {
@@ -179,13 +192,66 @@ func RenderSankey(buf *core.Buffer, rect core.Rect, sankey FiscalCircuitView, ha
 		return
 	}
 
-	y := rect.Y + 2
+	// Build diagrams.SankeyTopology (FIN-6)
+	var topo diagrams.SankeyTopology
 	for _, b := range sankey.Bands {
-		if y >= rect.Y+rect.H {
-			break
+		flow := diagrams.SankeyFlow{
+			ID:     diagrams.SourceID(b.Source + "->" + b.Target),
+			Amount: float64(b.Amount),
 		}
-		rowStr := fmt.Sprintf("%s -> %s: %s", b.Source, b.Target, formatPounds(b.Amount))
-		drawText(buf, rect, rect.X, y, rowStr, style)
-		y++
+		if b.Target == "Treasury" || b.Target == "Budget" {
+			flow.Name = b.Source
+			topo.Sources = append(topo.Sources, flow)
+		} else {
+			flow.Name = b.Target
+			topo.Sinks = append(topo.Sinks, flow)
+		}
 	}
+
+	engine := diagrams.NewEngine()
+	// Render through diagrams' Sankey engine
+	diagramRect := core.Rect{X: rect.X, Y: rect.Y + 2, W: rect.W, H: rect.H - 2}
+	subBuf := core.NewBuffer(diagramRect.W, diagramRect.H)
+	_, _ = engine.Sankey(subBuf, topo, diagrams.Options{Palette: widgets.DefaultPalette})
+
+	// Copy from sub-buffer to main buffer
+	for dy := 0; dy < diagramRect.H; dy++ {
+		for dx := 0; dx < diagramRect.W; dx++ {
+			cell := subBuf.Get(dx, dy)
+			if cell.Rune != 0 {
+				buf.Set(diagramRect.X+dx, diagramRect.Y+dy, cell.Rune, cell.Style)
+			}
+		}
+	}
+}
+
+// DrillTargets returns the drill-through source identities this screen
+// supplies for registration into ui.dash's (MOD-038) drill-through graph,
+// per SF-5.
+func DrillTargets(pl PLView, bs BalanceSheetView, loans []LoanState, sliders []TaxSliderState, payroll PublicPayrollView, sankey FiscalCircuitView) []dash.DrillTarget {
+	var out []dash.DrillTarget
+	for _, r := range pl.Revenues {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "pl.revenue." + r.Label})
+	}
+	for _, e := range pl.Expenses {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "pl.expense." + e.Label})
+	}
+	for _, a := range bs.Assets {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.asset." + a.Label})
+	}
+	for _, l := range bs.Liabilities {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.liability." + l.Label})
+	}
+	for _, l := range loans {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "loan." + l.ID})
+	}
+	for _, s := range sliders {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "tax.slider." + s.ID})
+	}
+	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "payroll.gross"})
+	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "payroll.clawback"})
+	for _, b := range sankey.Bands {
+		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "sankey." + b.Source + "." + b.Target})
+	}
+	return out
 }

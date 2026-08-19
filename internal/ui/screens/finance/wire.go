@@ -63,14 +63,15 @@ type wireFiscalCircuitView struct {
 }
 
 type wirePatch struct {
-	SchemaVersion int                    `json:"schemaVersion"`
-	PL            *wirePLView            `json:"pl,omitempty"`
-	BalanceSheet  *wireBalanceSheetView  `json:"balanceSheet,omitempty"`
-	Loans         *[]wireLoanState       `json:"loans,omitempty"`
-	CreditRating  *int                   `json:"creditRating,omitempty"`
-	TaxSliders    *[]wireTaxSliderState  `json:"taxSliders,omitempty"`
-	PublicPayroll *wirePublicPayrollView `json:"publicPayroll,omitempty"`
-	Sankey        *wireFiscalCircuitView `json:"sankey,omitempty"`
+	SchemaVersion       int                    `json:"schemaVersion"`
+	PL                  *wirePLView            `json:"pl,omitempty"`
+	BalanceSheet        *wireBalanceSheetView  `json:"balanceSheet,omitempty"`
+	Loans               *[]wireLoanState       `json:"loans,omitempty"`
+	CreditRating        *int                   `json:"creditRating,omitempty"`
+	CreditRatingHistory *[]float64             `json:"creditRatingHistory,omitempty"`
+	TaxSliders          *[]wireTaxSliderState  `json:"taxSliders,omitempty"`
+	PublicPayroll       *wirePublicPayrollView `json:"publicPayroll,omitempty"`
+	Sankey              *wireFiscalCircuitView `json:"sankey,omitempty"`
 }
 
 func decodeWirePatch(raw json.RawMessage) (wirePatch, error) {
