@@ -2590,6 +2590,10 @@
             "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
           },
           {
+            "key": "engine.comms",
+            "outboundGuid": "1d50fe0a-ed87-4db8-b0f4-9bcda783d308"
+          },
+          {
             "key": "engine.consumption",
             "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
           },
@@ -5773,7 +5777,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "engine.spaceport",
+            "outboundGuid": "3d022c28-63d4-44ee-b671-a9d2deaf0ff3"
+          }
+        ]
       },
       "outbound": {
         "guid": "658df60a-b0f2-449a-83c5-9b853eb3270d",
@@ -6698,6 +6707,11 @@
             "key": "engine.traffic",
             "moduleGuid": "f048ef78-9446-4fdb-845e-500fda1f2743",
             "inboundGuid": "df65414a-b7cd-4003-b25d-0772bf9049d5"
+          },
+          {
+            "key": "engine.market",
+            "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
+            "inboundGuid": "261a5063-96f3-40eb-a667-af294be7fc16"
           },
           {
             "key": "foundation.data",
@@ -8476,6 +8490,11 @@
             "key": "engine.tourism",
             "moduleGuid": "e245cc2c-7b37-4c6c-aeb1-e92fcaca5bf1",
             "inboundGuid": "1082096b-c263-4415-b592-29d1e1e0ea63"
+          },
+          {
+            "key": "feat.megafacilities",
+            "moduleGuid": "0b159996-eae3-4b93-8cb6-21b86bc26ee7",
+            "inboundGuid": "4fad84c9-39d3-44dc-bef6-f127cf6ed1f0"
           },
           {
             "key": "foundation.data",
