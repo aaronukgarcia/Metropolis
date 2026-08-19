@@ -106,7 +106,10 @@
       "G4700-G4799": "reserved for engine.shopping (internal/engine/shopping — module previously claimed G4300-G4399 in lane/bob's data/errors.json, which collided with engine.prison's earlier-registered claim of the same block; renumbered to the next free G-layer block, G4700-G4799, since prison's claim came first (first-claim-wins). Any MET-G43xx codes engine.shopping had begun using must be re-minted at MET-G47xx to match. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
       "G4800-G4899": "reserved for engine.extcommute (internal/engine/extcommute: MOD-035's finite off-map job pools, dormitory arithmetic, and the two-cap (pool/transport) assignment model. Module source (internal/engine/extcommute/errors.go) claims G4500-G4599, which collided with engine.traffic's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4800-G4899, since traffic's registered claim predates extcommute's unregistered source-comment claim (first-claim-wins). The 13 codes formerly MET-G4500..MET-G4512 are re-minted at MET-G4800..MET-G4812 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
       "G4900-G4999": "reserved for engine.airunits (internal/engine/airunits: MOD-074's rotary-wing police/fire/ambulance/VIP choppers — purchase, pilot qualification, dispatch, maintenance, and weather-grounding. Module source (internal/engine/airunits/errors.go) claims G4100-G4199, which collided with engine.staffing's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4900-G4999, since staffing's registered claim predates airunits' unregistered source-comment claim (first-claim-wins). The 11 codes formerly MET-G4100..MET-G4110 are re-minted at MET-G4900..MET-G4910 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
-      "G5000-G5099": "reserved for engine.dispatch (internal/engine/dispatch: MOD-040's unified emergency & care dispatch — the parked module engine.airunits' ambulance role merges into, per GR#3. No prior claim of any kind existed on this block; pre-claimed here ahead of build so the module's eventual build does not need to run claim-range itself. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)"
+      "G5000-G5099": "reserved for engine.dispatch (internal/engine/dispatch: MOD-040's unified emergency & care dispatch — the parked module engine.airunits' ambulance role merges into, per GR#3. No prior claim of any kind existed on this block; pre-claimed here ahead of build so the module's eventual build does not need to run claim-range itself. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "V300-V399": "reserved for ui.screen.finance (lane/ben claim 2026-08-19, landed on main per the BUG-276 single-authority rule; codes MET-V300..V303 arrive with the finance PR)",
+      "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
+
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -4394,6 +4397,30 @@
       "module": "engine.staffing",
       "message": "staffing method {method} was called on a struct copy of the value New returned",
       "remedy": "Always use the *StaffingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
+    },
+    "MET-V400": {
+      "severity": "warn",
+      "module": "ui.router",
+      "message": "no registered route matched {kind} correlation/subscription/kind key {key} (tick {tick})",
+      "remedy": "This is a routing-table miss: the router received a CommandResult/Delta/Event whose key (CorrelationID, SubscriptionID, or Event.Kind prefix) matches no RegisterResultHandler/BindSubscription/RegisterEventRoute entry. Check that the sending screen registered a route before issuing the command/subscribing, or that the event Kind matches a registered prefix."
+    },
+    "MET-V401": {
+      "severity": "warn",
+      "module": "ui.router",
+      "message": "delta gap detected for subscription {subscriptionId}: {gap} delta(s) missed before seq {seq} (tick {tick})",
+      "remedy": "The transport's evict-oldest drop policy discarded one or more Deltas for this subscription before the router observed them. This is expected under sustained back-pressure (transport.go); no resubscribe-to-heal protocol exists in v1 -- the staleness dot (UI-SPEC S1) reflects this until the next in-order Delta arrives."
+    },
+    "MET-V402": {
+      "severity": "error",
+      "module": "ui.router",
+      "message": "Router method called on a struct copy (correlation {correlationId})",
+      "remedy": "A *router.Router value was copied (dereference-and-copy, or constructed via new(Router)/Router{} instead of New) rather than used via the pointer New returned. Use the *Router New gave you; never copy it by value."
+    },
+    "MET-V403": {
+      "severity": "error",
+      "module": "ui.router",
+      "message": "receiver panicked handling routed {kind} for key {key} (tick {tick}): {cause}",
+      "remedy": "The registered receiver (ResultReceiver/DeltaReceiver/EventReceiver) panicked while handling this routed message. The router recovers, logs, and continues routing subsequent messages (T2 lossy-by-design -- one poisoned message must never stop routing); the panic is the receiving screen's own bug to fix, not the router's. Check the named receiver kind + routing key's own ApplyResult/ApplyDelta/ApplyEvent implementation."
     }
   }
 }
