@@ -10,8 +10,10 @@ import "github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 // rejects every such call before it does anything else. Registered in
 // this package's own V400-V499 range (data/errors.json) rather than
 // reusing a sibling package's code — each guarded type in its own package
-// claims its own code (GR#7). (Renumbered from MET-V302 -- see errors.go's
-// NOTE on the V300-V399 collision with lane/ben's ui.screen.finance claim.)
+// claims its own code (GR#7). (This code was renumbered once, pre-commit
+// -- see errors.go's NOTE on the V300-V399 collision with lane/ben's
+// ui.screen.finance claim -- so its number does not match the sequence
+// implied by ErrRouteMiss/ErrDeltaGap in errors.go; that is expected.)
 const ErrRouterCopied = "MET-V402"
 
 // checkNotCopied reports whether the receiver is a struct copy of some
