@@ -2319,6 +2319,10 @@
             "outboundGuid": "d6ea0aac-4a9a-4a9b-88ff-564fa934ff67"
           },
           {
+            "key": "engine.policies",
+            "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
+          },
+          {
             "key": "engine.roads",
             "outboundGuid": "3f5c066b-577f-4906-8982-76df246118aa"
           },
@@ -7101,6 +7105,11 @@
             "key": "engine.finance",
             "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
             "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          },
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
           }
         ]
       },
