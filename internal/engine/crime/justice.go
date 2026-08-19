@@ -13,8 +13,8 @@ import (
 // of that stage's OWN log — never a remainder computed to balance an
 // identity (the exact anti-pattern AC-12 rejects).
 
-// PrisonIntake is the seam through which the (not-yet-landed) engine.prison
-// module supplies its independently-tracked intake ledger (AC-12's
+// PrisonIntake is the seam through which the engine.prison module (MOD-056,
+// landed) supplies its independently-tracked intake ledger (AC-12's
 // cross-check, per engine.prison.md AC-2). CrimeAPI does NOT trust its own
 // sentenced-to-prison count as proof of arrival; it cross-checks against
 // this independent ledger via VerifyPrisonIntake.
