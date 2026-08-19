@@ -372,6 +372,25 @@
       ]
     },
     {
+      "mkey": "ui.router",
+      "type": "module",
+      "title": "UI result router: the transport-owning seam routing CommandResult/Delta/Event to screens",
+      "desc": "The ui-side composition root ASM-1482 proved missing: a single dedicated goroutine (absorbing the T-VIEWS role from ui.core's ViewsLoop) drains int.protocol Transport's Results()/Deltas()/Events() channels and dispatches each message to its owning screen - CommandResult by minted CorrelationID to that screen's ApplyResult, Delta by SubscriptionID binding to ApplyDelta, Event by Kind prefix to ticker and by Severity/Crisis to chrome's alert stack. Registration-order slice routing table (never map range), routing-table miss raises a registry MET-U code (never silent drop), evict-oldest drop policy made observable via SeqTracker gaps + result-buffer pressure logging, staleness by Tick comparison never wall-clock. Presentation-only: no conservation effect, no world-state mutation possible. Full contract: docs/planning/icd/ui.result-routing.md (ASM-1482). [spec: docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG §1.1; UI-SPEC §1] [path: internal/ui/router/]",
+      "seq": 115,
+      "sprint": 6,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG §1.1; UI-SPEC §1",
+      "guid": "3675f77a-18b2-424b-9b95-a73b1d33f1d2",
+      "guidIn": "500b5f46-c02f-49f8-a44c-b89e03e42db9",
+      "guidOut": "e1580ada-2265-4f39-845a-1f8f645350aa",
+      "deps": [
+        "int.protocol",
+        "ui.core"
+      ]
+    },
+    {
       "mkey": "ui.widgets",
       "type": "module",
       "title": "Widget library: sparklines, Braille charts, heatmaps, gauges, tables, queue lanes",
