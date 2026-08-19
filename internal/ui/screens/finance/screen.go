@@ -154,11 +154,11 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 		}
 		s.pl.Revenues = make([]PLItem, len(p.PL.Revenues))
 		for i, r := range p.PL.Revenues {
-			s.pl.Revenues[i] = PLItem{Label: r.Label, ValueMicropounds: r.ValueMicropounds}
+			s.pl.Revenues[i] = PLItem(r)
 		}
 		s.pl.Expenses = make([]PLItem, len(p.PL.Expenses))
 		for i, e := range p.PL.Expenses {
-			s.pl.Expenses[i] = PLItem{Label: e.Label, ValueMicropounds: e.ValueMicropounds}
+			s.pl.Expenses[i] = PLItem(e)
 		}
 		s.havePL = true
 	} else {
@@ -171,11 +171,11 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 		}
 		s.balanceSheet.Assets = make([]BalanceItem, len(p.BalanceSheet.Assets))
 		for i, a := range p.BalanceSheet.Assets {
-			s.balanceSheet.Assets[i] = BalanceItem{Label: a.Label, ValueMicropounds: a.ValueMicropounds}
+			s.balanceSheet.Assets[i] = BalanceItem(a)
 		}
 		s.balanceSheet.Liabilities = make([]BalanceItem, len(p.BalanceSheet.Liabilities))
 		for i, l := range p.BalanceSheet.Liabilities {
-			s.balanceSheet.Liabilities[i] = BalanceItem{Label: l.Label, ValueMicropounds: l.ValueMicropounds}
+			s.balanceSheet.Liabilities[i] = BalanceItem(l)
 		}
 		s.haveBalance = true
 	} else {
@@ -185,13 +185,7 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 	if p.Loans != nil {
 		s.loans = make([]LoanState, len(*p.Loans))
 		for i, l := range *p.Loans {
-			s.loans[i] = LoanState{
-				ID:                     l.ID,
-				PrincipalMicropounds:   l.PrincipalMicropounds,
-				RatePercent:            l.RatePercent,
-				TermMonths:             l.TermMonths,
-				NextPaymentMicropounds: l.NextPaymentMicropounds,
-			}
+			s.loans[i] = LoanState(l)
 		}
 		s.haveLoans = true
 	} else {
@@ -246,7 +240,7 @@ func (s *Screen) ApplyDelta(delta protocol.Delta) {
 		s.sankey = &FiscalCircuitView{}
 		s.sankey.Bands = make([]SankeyBand, len(p.Sankey.Bands))
 		for i, b := range p.Sankey.Bands {
-			s.sankey.Bands[i] = SankeyBand{Source: b.Source, Target: b.Target, Amount: b.Amount}
+			s.sankey.Bands[i] = SankeyBand(b)
 		}
 		s.haveSankey = true
 	} else {
