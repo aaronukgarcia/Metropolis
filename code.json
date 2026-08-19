@@ -4535,12 +4535,20 @@
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
           },
           {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
+          },
+          {
             "key": "ui.screen.menu",
             "outboundGuid": "0166a389-86a1-4ffc-bc18-fff6dd3ec8b7"
           },
           {
             "key": "ui.screen.proj",
             "outboundGuid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -4803,6 +4811,11 @@
             "key": "int.protocol",
             "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
           }
         ]
       },
@@ -5215,6 +5228,11 @@
             "key": "engine.census",
             "moduleGuid": "e181626c-f1e0-4bb0-9033-15af7e4ae247",
             "inboundGuid": "b1ff934b-5ea2-4ed8-96d4-0a07be8aec28"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
           }
         ]
       },
