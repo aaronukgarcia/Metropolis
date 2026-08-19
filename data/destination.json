@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "specRef": "§48 Destination Leisure & Retail; §32 Mining, Extraction & the Blight Model (reclamation); §38 Parking",
+  "archetypes": {
+    "forestResort": {
+      "name": "Forest holiday resort",
+      "jobs": 1500,
+      "minFootprintHa": 100,
+      "yearRoundStaying": true,
+      "minShopFloorspace": 0,
+      "parkingSpaces": 1200,
+      "baseDrawFactor": 1.0,
+      "bdiHalfSaturation": 0.4,
+      "bdiMaxBoost": 0.6,
+      "blightClass": "none",
+      "noiseRadiusM": 0,
+      "visualHeightM": 0,
+      "visualMagnitude": 0,
+      "screenWallHeightM": 0
+    },
+    "megaMall": {
+      "name": "Mega-mall",
+      "jobs": 7000,
+      "minFootprintHa": 40,
+      "yearRoundStaying": false,
+      "minShopFloorspace": 300,
+      "parkingSpaces": 8000,
+      "baseDrawFactor": 1.0,
+      "bdiHalfSaturation": 0.4,
+      "bdiMaxBoost": 0.0,
+      "blightClass": "high",
+      "noiseRadiusM": 1500,
+      "visualHeightM": 30,
+      "visualMagnitude": 0.9,
+      "screenWallHeightM": 12
+    }
+  }
+}
