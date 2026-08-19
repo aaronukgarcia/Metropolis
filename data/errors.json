@@ -111,7 +111,8 @@
       "V300-V399": "reserved for ui.screen.finance (lane/ben claim 2026-08-19, landed on main per the BUG-276 single-authority rule; codes MET-V300..V303 arrive with the finance PR)",
       "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V500-V599": "reserved for ui.screen.services (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
 
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -4694,6 +4695,36 @@
       "module": "ui.screen.districts",
       "message": "SetDistrictMultiplier request rejected locally for district {district} instrument {instrument}: multiplier {multiplier} is invalid",
       "remedy": "Send a finite multiplier >= 0; the engine additionally caps the resulting effective rate (see engine.tax.md AC-6)."
+    },
+    "MET-V700": {
+      "severity": "error",
+      "module": "ui.screen.census",
+      "message": "f6.census patch failed to decode: {cause}",
+      "remedy": "check the engine's f6.census patch encoder for schema drift"
+    },
+    "MET-V701": {
+      "severity": "error",
+      "module": "ui.screen.census",
+      "message": "delta for an unknown/stale f6.census subscription: {subscriptionId}",
+      "remedy": "check the subscription lifecycle -- BindSubscription must run before ApplyDelta"
+    },
+    "MET-V702": {
+      "severity": "error",
+      "module": "ui.screen.census",
+      "message": "census screen method called on a struct-copied Screen value",
+      "remedy": "always operate through the *Screen returned by New, never a copy"
+    },
+    "MET-V703": {
+      "severity": "warn",
+      "module": "ui.screen.census",
+      "message": "KPI {key} unavailable: {reason}",
+      "remedy": "the engine rejected the KPI/source query (MET-G2701/G2702) -- check the aggregate key and that the KPI's source data is present"
+    },
+    "MET-V704": {
+      "severity": "warn",
+      "module": "ui.screen.census",
+      "message": "citizen bio {guid} unavailable: {reason}",
+      "remedy": "the engine rejected the citizen bio query (MET-G2701) -- check the GUID is a known tracked citizen"
     }
   }
 }
