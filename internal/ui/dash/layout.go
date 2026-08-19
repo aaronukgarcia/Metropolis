@@ -81,6 +81,7 @@ func (l *Layout) AddTile(t Tile) error {
 			})
 		}
 	}
+	l.tiles = cloneSlice(l.tiles)
 	l.tiles = append(l.tiles, t)
 	return nil
 }
@@ -91,6 +92,7 @@ func (l *Layout) AddTile(t Tile) error {
 func (l *Layout) RemoveTile(id string) error {
 	for i, t := range l.tiles {
 		if t.id == id {
+			l.tiles = cloneSlice(l.tiles)
 			l.tiles = append(l.tiles[:i], l.tiles[i+1:]...)
 			return nil
 		}
@@ -124,6 +126,7 @@ func (l *Layout) MoveTile(id string, to int) error {
 	if to == from {
 		return nil
 	}
+	l.tiles = cloneSlice(l.tiles)
 	t := l.tiles[from]
 	l.tiles = append(l.tiles[:from], l.tiles[from+1:]...)
 	// to is the tile's requested final index, not an index into the
