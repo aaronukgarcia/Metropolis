@@ -9,8 +9,12 @@
  *
  * Fires after every Bash/PowerShell tool call. When the just-run command was
  * a `git commit` that actually landed, reads the real, just-made commit via
- * `git log -1 --format=%H%x1f%s%x1f%B` (never trusts the tool's captured
- * stdout for the hash — the working tree is the source of truth), extracts
+ * `git log -1 --format=%H%x1f%B` (hash + full message body — %B already
+ * includes the subject line, so no separate %s field; never trusts the
+ * tool's captured stdout for the hash — the working tree is the source of
+ * truth — ASM-916 fold, 2026-08-19: this comment previously documented a
+ * stale 3-field format that never matched readHeadCommit's actual 2-field
+ * one below), extracts
  * `[mkey]`/`[CODE]` tags from the full commit message, resolves each one via
  * claude-bow.js's own canonical `findItemByRef(db, ref)` (never a bespoke
  * query — BUG-003 was exactly this hook reimplementing that lookup with
