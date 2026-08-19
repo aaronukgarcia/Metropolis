@@ -1,0 +1,10 @@
+{
+  "$comment": "Section 21 (External Commuting & Housing) + A6 (R6 'Out-commuter tax farming exploit' finite-era-scaled-capacity amendment, docs/METROPOLIS-MASTER-v2.1.md) — engine.extcommute's own transport-leg capacity tuning: the SECOND cap (R6(b)/A6b 'external rail/coach capacity and crowding already bind'). The FIRST cap (per-pool finite job capacity) lives in data/external_world.json; this file owns the reaching-transport-leg base headroom each channel carries before engine.traffic's per-channel congestion reduces it. Placeholder disclosure (ASM-393, per Aaron's standing balance-number regime): every figure here is a placeholder pending M2 Batch tuning, not a literature-cited estimate — A6 states mechanism only ('finite, era-scaled capacity... bounded and slowly growing') with no spec-given magnitude.",
+  "version": 1,
+  "specRef": "§21; A6",
+  "transportCapacity": {
+    "motorway": 800,
+    "externalRail": 500
+  },
+  "disclosure": "transportCapacity[channel] is the base number of off-map commuters the reaching leg can carry per tick, before engine.traffic's per-channel congestion (a [0,1] fraction, 0 = free-flow, 1 = gridlock) reduces it: available = base × (1 − congestion). The externalRail channel is additionally gated to tier 5 by data/external_world.json's transportRequirement (A6's era-scaled rail gating), not by this file."
+}
