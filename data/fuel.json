@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "meta": {
+    "comment": "engine.fuel (MOD-062, §49 Vehicles, Fuel & the EV Transition). This file is the sole data source for the fleet-composition EV-share-by-era curve, the fuel-demand figures, the hour-of-day charging profile, the strategic-reserve sizing, the fuel-duty rate, the forecourt-coverage target, and the port tank-farm tanker throughput — GR#15: no fuel figure lives as a Go literal in internal/engine/fuel/*.go.",
+    "placeholderConvention": "Every numeric field carries a sibling comment naming its source category — 'directional placeholder (ASM-307, pending Aaron's balance pass)', 'literature-grounded placeholder (UK published figure, mapping sanity-check only)', or 'spec-transcribed' — per ASM-307's EV-share-curve / strategic-reserve-sizing data-driven-placeholder ruling and the balance-number regime (Aaron: player-felt numbers are placeholders + directional tests; no final magnitude is decided here).",
+    "specRefs": "§49 (fleet shift car→van→truck, trucks last; fuel as a JIT commodity whose shortage strands the logistics that fix shortages; strategic reserve buildable; fat fuel-duty line; EV transition charging stack home/street/rapid/depot/forecourt-conversion; mass EV + electric heating + no storage = winter peak crisis); §50 (port tank farm / refinery tanker supply)."
+  },
+  "eras": [
+    {
+      "era": "early",
+      "carEVShare": 0.02,
+      "vanEVShare": 0.01,
+      "truckEVShare": 0.0,
+      "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): near-zero EV penetration, trucks last."
+    },
+    {
+      "era": "mid",
+      "carEVShare": 0.3,
+      "vanEVShare": 0.18,
+      "truckEVShare": 0.06,
+      "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): cars lead, vans follow, trucks lag."
+    },
+    {
+      "era": "late",
+      "carEVShare": 0.6,
+      "vanEVShare": 0.4,
+      "truckEVShare": 0.15,
+      "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): majority-EV cars, trucks still mostly diesel."
+    },
+    {
+      "era": "transitioned",
+      "carEVShare": 0.88,
+      "vanEVShare": 0.72,
+      "truckEVShare": 0.38,
+      "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): near-complete car transition, trucks electrify last and incompletely."
+    }
+  ],
+  "fuelDemand": {
+    "carLitresPerTick": 200000,
+    "vanLitresPerTick": 80000,
+    "truckLitresPerTick": 120000,
+    "logisticsFleetLitresPerTick": 40000,
+    "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): litres of liquid fuel per tick (day) per segment at 0% EV, plus the logistics fleet's own fuel burn (the tanker trucks that replenish other commodities). EV share reduces each segment's liquid-fuel burn to (1 - EVshare) × its figure."
+  },
+  "chargingProfile": {
+    "baseKWhPerTick": 120000,
+    "hourlyWeight": [0.010, 0.008, 0.006, 0.005, 0.006, 0.010, 0.015, 0.025, 0.030, 0.025, 0.020, 0.020, 0.020, 0.022, 0.025, 0.030, 0.045, 0.070, 0.100, 0.110, 0.095, 0.070, 0.045, 0.020],
+    "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): hour-of-day EV charging weights, index 0 = hour 00:00-00:59 ... index 23 = hour 23:00-23:59. Evening-peak concentrated (peak at 18:00-20:00, hour 19 highest) rather than a flat daily average — the §49 winter-crisis evening peak. baseKWhPerTick is the total daily charging load; the hourly load is baseKWhPerTick × weight[hour] / sum(weight)."
+  },
+  "strategicReserve": {
+    "daysOfCover": 90,
+    "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): strategic-reserve sizing in days of liquid-fuel cover at current demand — §49's 'strategic reserve is a buildable'. The reserve LEVEL (litres) is runtime state; daysOfCover sizes a full reserve."
+  },
+  "duty": {
+    "ratePencePerLitre": 52.95,
+    "taxInstrument": "importDuties",
+    "comment": "Literature-grounded placeholder (UK fuel duty 52.95p/litre, mapping sanity-check only, pending Aaron's balance pass). taxInstrument names the engine.tax instrument fuel duty posts through: fuel is import-only (§6/§8, engine.market.md AC-3), so its duty is an import-channel levy and posts through engine.tax's 'importDuties' instrument — see ASM- (logged) and engine.tax's own escalation (the dedicated fuel-duty instrument is an open Aaron reconciliation, not yet in data/tax_instruments.json)."
+  },
+  "forecourt": {
+    "targetForecourtsPerThousandPopulation": 0.35,
+    "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): forecourt network coverage target — 'a growing city needs forecourts like it needs substations' (§49). Coverage adequacy = forecourts / (population/1000 × target)."
+  },
+  "tanker": {
+    "portThroughputLitresPerTick": 440000,
+    "comment": "Directional placeholder (ASM-307, pending Aaron's balance pass): port tank farm / refinery tanker supply throughput in litres per tick. Equals total liquid-fuel demand at 0% EV (200000+80000+120000+40000) so the baseline is 'just supplied'; a §49 fuel shortage is modelled by cutting this throughput below demand."
+  }
+}
