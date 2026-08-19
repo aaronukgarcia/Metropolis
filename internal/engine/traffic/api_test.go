@@ -20,7 +20,7 @@ func TestTraffic_AC2_DataSourcedWages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	configData := `{"baseCommuteHours": 7.5, "baseAccessMinutes": 22.0, "baseCommuteMinutes": 45.0, "baseActiveTravelShare": 0.25, "bprAlpha": 0.15, "bprBeta": 4.0, "capacityPerLanePerHour": 1200.0}`
 	_ = os.WriteFile(filepath.Join(tempDir, "traffic.json"), []byte(configData), 0644)
@@ -407,7 +407,7 @@ func TestTraffic_LoadConfig_RejectsInvalidBPRParamsFromDisk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	configData := `{"baseCommuteHours":5,"baseAccessMinutes":15,"baseCommuteMinutes":30,"baseActiveTravelShare":0.1,"bprAlpha":-999,"bprBeta":-999,"capacityPerLanePerHour":1200}`
 	_ = os.WriteFile(filepath.Join(tempDir, "traffic.json"), []byte(configData), 0644)
