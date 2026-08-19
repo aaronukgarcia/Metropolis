@@ -1349,6 +1349,24 @@
       ]
     },
     {
+      "mkey": "ui.screen.census",
+      "type": "feature",
+      "title": "F6 Census screen: demographics/KPI drill-in",
+      "desc": "Demographics/KPI drill-in rendering over engine.census's CensusAPI (splines, GDP, happiness, employment); consumes the living-census/life-history read surface without holding world state itself (ASM-642/643 split: engine-side data model stays MOD-078/engine.census, this item is UI rendering only). [spec: Â§13-F6; Â§45; Â§46; UI-SPEC Â§4/Â§5.2] [path: internal/ui/screens/census/]",
+      "seq": 595,
+      "sprint": 9,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "specRef": "Â§13-F6; Â§45; Â§46; UI-SPEC Â§4/Â§5.2",
+      "guid": "237188fd-8a17-4dc0-94a4-afe8321cbfcf",
+      "guidIn": "22a5b5d8-bc90-4474-aa57-2fac3583d2e3",
+      "guidOut": "6e2b573b-26d2-44c8-b397-3c3cf3217906",
+      "deps": [
+        "ui.dash"
+      ]
+    },
+    {
       "mkey": "engine.refuse",
       "type": "module",
       "title": "Refuse rounds & the waste-health loop",
