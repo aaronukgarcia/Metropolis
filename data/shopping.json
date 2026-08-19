@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "$comment": "Household shopping trip generation & access module balance data (MOD-050 / engine.shopping — MOD-050 r4 verdict fix: the four format weights below MUST live here, not as an in-code fallback; GR#15: every magnitude this feature leaves unquantified lives here, never as a Go literal in internal/engine/shopping/api.go. Every numeric value below is a placeholder pending Aaron's balance pass (balance-number regime) and carries a non-empty disclosure in 'disclosures' naming it as such.",
+  "foodDesertThreshold": 20,
+  "onlineDeliveryShare": 0.15,
+  "cornerShopPriceMult": 1.5,
+  "marketHallPriceMult": 1.1,
+  "supermarketPriceMult": 0.9,
+  "retailParkPriceMult": 0.85,
+  "cornerShopWeight": 1.5,
+  "marketHallWeight": 2.0,
+  "supermarketWeight": 4.0,
+  "retailParkWeight": 3.0,
+  "disclosures": {
+    "cornerShopWeight": "sanctioned placeholder (MOD-050 r4 verdict fix) — relative household preference weight for the corner-shop format, before travel-time discounting. Zero would explicitly disable the format (documented, never silently substituted); pending Aaron's balance pass.",
+    "marketHallWeight": "sanctioned placeholder (MOD-050 r4 verdict fix) — relative household preference weight for the market-hall format, before travel-time discounting. Zero would explicitly disable the format; pending Aaron's balance pass.",
+    "supermarketWeight": "sanctioned placeholder (MOD-050 r4 verdict fix) — relative household preference weight for the supermarket format, before travel-time discounting; the highest of the four, reflecting the format's dominance in modern UK shopping baskets. Zero would explicitly disable the format; pending Aaron's balance pass.",
+    "retailParkWeight": "sanctioned placeholder (MOD-050 r4 verdict fix) — relative household preference weight for the retail-park format, before travel-time discounting. Zero would explicitly disable the format; pending Aaron's balance pass.",
+    "onlineDeliveryShare": "placeholder (AC-3) — fraction of shopping trips displaced by online/van delivery; pending Aaron's balance pass and a registered edge to engine.comms (see doc.go's outstanding-gaps note)."
+  }
+}
