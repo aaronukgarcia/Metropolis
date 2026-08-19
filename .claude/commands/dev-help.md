@@ -41,6 +41,14 @@ Verify before commit: `gofmt -l`, `go build ./internal/engine/<name>/...`, `go v
 - Message the lead: `node claude-sync.js message "<text>" --to Bev` (or Bill/Bob/Ben).
 - Stuck / spec needs a new edge / gate blocks you: STOP and ask Aaron/Bev — never bypass a guard, never widen an allowlist, never disable a hook.
 
+## The Evidence Protocol (mandatory, 2026-08-19)
+Every claim is evidence-backed or it doesn't count — full text in parallel-coder-brief.md §5a:
+- A "fixed" claim names the regression test that re-runs the ORIGINAL defect (from the REJECT note) + its passing output. Fix-verified-by-its-own-new-tests is NOT verified.
+- A "complete" AC pastes the AC file's own mechanical check (grep/tripwire) passing into your status report.
+- Deferred/unimplementable ACs are declared with the blocking ASM/BUG code — never a decorative no-assert test.
+- doc.go claims exactly what the code does; a claim without code = instant REJECT.
+- Ladder: 1st false claim = warning; 2nd = escalation to Aaron; 3rd = lane loses direct-commit, works through reviewed patches.
+
 ## Common traps (learned the hard way this week)
 - CI's astgate copyguard ratchet flags every NEW method on a guarded type: add a real `checkNotCopied` guard for public entry points; `accepted-findings.json` entries only for true internal helpers (mirror existing precedent).
 - The secret-guard's entropy check false-positives on 25+ char mixed-case field names — surface it; add a precise `exact` allowlist entry, never widen a pattern.
