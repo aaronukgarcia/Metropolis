@@ -1,5 +1,5 @@
 {
-  "$comment": "engine.firms (MOD-058) balance surface, §45 (Firms — Entrepreneur Culture to Enterprise) and §II.4 (Economy). Placeholder disclosure (ASM-logged, per Aaron's standing balance-number regime — see project memory 'Balance number regime'): every numeric figure below is a directional placeholder pending M2 Batch tuning, NOT a literature-cited estimate — §45 states mechanism and direction (ambition × education × sector experience × capital access × premises × demand signal; startup→SME→enterprise; failure/churn normal; culture compounds; professional services superlinear; deposits→credit; off-map base-rate cycle as citywide weather) with no spec-given magnitude. The functional forms (per-citizen founding composite, superlinear services demand, deposit-bounded credit, rate-cycle-priced borrowing) are the deliverable; the weights are data so a balance pass edits this file, never the Go.",
+  "$comment": "engine.firms (MOD-058) balance surface, §45 (Firms — Entrepreneur Culture to Enterprise) and §II.4 (Economy). Placeholder disclosure (ASM-logged, per Aaron's standing balance-number regime — see project memory 'Balance number regime'): every numeric figure below is a directional placeholder pending M2 Batch tuning, NOT a literature-cited estimate — §45 states mechanism and direction (ambition × education × sector experience × capital access × premises × demand signal; startup→SME→enterprise; failure/churn normal; culture compounds; professional services superlinear; deposits→credit; off-map base-rate cycle as citywide weather) with no spec-given magnitude. The functional forms (per-citizen founding composite, superlinear services demand, deposit-bounded credit, rate-cycle-priced borrowing) are the deliverable; the weights are data so a balance pass edits this file, never the Go. labourMarket.enterpriseCeiling (the Enterprise vacancy-band ceiling — §45 leaves Enterprise unbounded '250+', so the aggregate needs a data-sourced upper band) is likewise a directional placeholder pending M2 tuning.",
   "version": 1,
   "stages": [
     { "stage": "startup",    "minStaff": 1,   "premiseClass": "dwelling" },
@@ -7,6 +7,9 @@
     { "stage": "medium",     "minStaff": 26,  "premiseClass": "office" },
     { "stage": "enterprise", "minStaff": 251, "premiseClass": "heavy_industry" }
   ],
+  "labourMarket": {
+    "enterpriseCeiling": 500
+  },
   "founding": {
     "basePerMille": 1,
     "ambitionPerMille": 200,

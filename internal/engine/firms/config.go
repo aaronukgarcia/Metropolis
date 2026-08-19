@@ -24,6 +24,7 @@ type config struct {
 	Founding       foundingConfig
 	ServicesDemand servicesDemandConfig
 	Credit         creditConfig
+	LabourMarket   labourMarketConfig
 }
 
 // stageConfig is one data/firms.json "stages" entry: the staff-count floor
@@ -64,6 +65,16 @@ type creditConfig struct {
 	BaseRateCycle                 []ratePoint
 }
 
+// labourMarketConfig parameterises the vacancy-vs-workforce aggregate
+// (AC-21): the data-declared staff ceiling for the Enterprise stage. §45
+// leaves Enterprise unbounded ("250+"), so its vacancy band has no spec
+// upper edge and must be data-sourced (never a Go-literal headcount,
+// GR#15) — a directional placeholder pending M2 tuning (balance-number
+// regime).
+type labourMarketConfig struct {
+	EnterpriseCeiling int64
+}
+
 // ratePoint is one step of the off-map base-rate cycle (AC-14).
 type ratePoint struct {
 	Month      int64
@@ -73,11 +84,12 @@ type ratePoint struct {
 // rawFirmsData is data/firms.json's JSON wire shape, decoded only to be
 // validated and folded into the ordered config above.
 type rawFirmsData struct {
-	Version        int         `json:"version"`
-	Stages         []rawStage  `json:"stages"`
-	Founding       rawFounding `json:"founding"`
-	ServicesDemand rawServices `json:"servicesDemand"`
-	Credit         rawCredit   `json:"credit"`
+	Version        int             `json:"version"`
+	Stages         []rawStage      `json:"stages"`
+	Founding       rawFounding     `json:"founding"`
+	ServicesDemand rawServices     `json:"servicesDemand"`
+	Credit         rawCredit       `json:"credit"`
+	LabourMarket   rawLabourMarket `json:"labourMarket"`
 }
 
 type rawStage struct {
@@ -112,6 +124,10 @@ type rawCredit struct {
 type rawRatePoint struct {
 	Month      int64 `json:"month"`
 	BaseRateBp int64 `json:"baseRateBp"`
+}
+
+type rawLabourMarket struct {
+	EnterpriseCeiling int64 `json:"enterpriseCeiling"`
 }
 
 // fileFirms is data/firms.json's filename, relative to the resolved data
@@ -190,6 +206,16 @@ func buildConfig(raw rawFirmsData, path, correlationID string) (config, error) {
 		}
 		c.Stages = append(c.Stages, stageConfig{Stage: st, MinStaff: rs.MinStaff, PremiseClass: rs.PremiseClass})
 	}
+
+	// Labour market: Enterprise has no §45 upper bound ("250+"), so its
+	// vacancy band ceiling is data-declared (AC-21). It must be at least the
+	// Enterprise staff floor so the band is non-degenerate (a ceiling below
+	// the floor would make every Enterprise firm's headroom clamp to 0).
+	enterpriseFloor := c.Stages[len(c.Stages)-1].MinStaff // StageEnterprise is last in stageOrder
+	if raw.LabourMarket.EnterpriseCeiling < enterpriseFloor {
+		return fail("labourMarket.enterpriseCeiling", "must be >= the Enterprise minStaff floor")
+	}
+	c.LabourMarket = labourMarketConfig{EnterpriseCeiling: raw.LabourMarket.EnterpriseCeiling}
 
 	// Founding weights: every per-mille contribution non-negative.
 	f := raw.Founding
