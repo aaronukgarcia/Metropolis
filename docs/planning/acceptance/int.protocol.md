@@ -58,6 +58,7 @@ The versioned engine<->UI command/event/delta protocol: envelope types, view-sub
 - **ASM-560 (confirm-and-close).** Buy/Zone/Build/Demolish use single-cell CellRef; multi-cell = one command per cell.
 - **ASM-561 (confirm-and-close).** ZoneType/BuildingType are opaque engine-defined strings resolved engine-side.
 - **ASM-562 (confirm-and-close).** Demolish payload carries no cost; compensation engine-computed and returned in result.
+- **ASM-009 (confirm-and-close).** `InProcTransport.Close()` blocks on `closeMu.Lock()` until every in-flight sender's `RLock`-held send window completes (`transport.go` lines ~143-380); safe only because every RLock-holding sender is non-blocking by construction (select-with-default, bounded evict-retry). Live constraint, not a closed question: any future sender path that blocks while holding `closeMu.RLock()` would reintroduce unbounded `Close()` blocking with no test to catch it — noted here for the next author touching a `Send*` method.
 
 ---
 
