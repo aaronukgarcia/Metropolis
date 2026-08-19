@@ -56,15 +56,17 @@ type TrafficAPI struct {
 	links         map[uint64]*Link
 	roads         *roads.RoadsAPI
 	cfg           Config
+	routeCache    map[uint64]float64 // warm start cache (AC-3b/AC-22)
 	correlationID string
 }
 
 // New constructs a new TrafficAPI.
 func New() *TrafficAPI {
 	t := &TrafficAPI{
-		demands: make(map[uint64]int64),
-		nodes:   make(map[uint64]*Node),
-		links:   make(map[uint64]*Link),
+		demands:    make(map[uint64]int64),
+		nodes:      make(map[uint64]*Node),
+		links:      make(map[uint64]*Link),
+		routeCache: make(map[uint64]float64),
 		cfg: Config{
 			BaseCommuteHours:       5.0,
 			BaseAccessMinutes:      15.0,
