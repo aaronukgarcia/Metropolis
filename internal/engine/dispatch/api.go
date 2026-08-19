@@ -233,6 +233,9 @@ func (d *DispatchAPI) SubmitIncident(cellID uint64, incType string) (uint64, err
 }
 
 func (d *DispatchAPI) assignNearestAvailable(inc *Incident) {
+	if err := d.checkNotCopied("assignNearestAvailable"); err != nil {
+		return
+	}
 	// Gather available units of the required type (AC-15: Deterministic map iteration)
 	var candidates []uint64
 	for id, u := range d.available {

@@ -129,6 +129,9 @@ func (t *TrafficAPI) LoadConfig(dir string) error {
 }
 
 func (t *TrafficAPI) demandMultiplier() float64 {
+	if err := t.checkNotCopied("demandMultiplier"); err != nil {
+		return 1.0
+	}
 	keys := make([]uint64, 0, len(t.demands))
 	for k := range t.demands {
 		keys = append(keys, k)
@@ -146,6 +149,9 @@ func (t *TrafficAPI) demandMultiplier() float64 {
 }
 
 func (t *TrafficAPI) addDemandLocked(id uint64, count int64) {
+	if err := t.checkNotCopied("addDemandLocked"); err != nil {
+		return
+	}
 	current := t.demands[id]
 	maxInt64 := int64(^uint64(0) >> 1)
 	if maxInt64-current < count {
