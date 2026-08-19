@@ -416,6 +416,9 @@ func (s *Screen) BorrowLoan(send SendCommandFunc, amountMicropounds int64, termM
 	if amountMicropounds <= 0 {
 		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "non-positive borrow amount"})
 	}
+	if termMonths <= 0 || termMonths > 360 {
+		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "invalid termMonths (must be between 1 and 360)"})
+	}
 	args := map[string]string{
 		"amountMicropounds": strconv.FormatInt(amountMicropounds, 10),
 		"termMonths":        strconv.Itoa(termMonths),
@@ -437,8 +440,8 @@ func (s *Screen) SetTaxRate(send SendCommandFunc, id string, value float64) erro
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetTaxRate"}); err != nil {
 		return err
 	}
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "invalid tax rate: NaN or Inf"})
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "invalid tax rate (must be non-negative, non-NaN and non-Inf)"})
 	}
 	args := map[string]string{
 		"id":    id,

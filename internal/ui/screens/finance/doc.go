@@ -9,4 +9,10 @@
 //   - "f2.finance": the view delivering P&L aggregates, balance-sheet lists, active loans,
 //     tax-instrument settings/elasticity curves, gross-vs-net public payroll, and Fiscal Circuit
 //     Sankey flow bands.
+//
+// Gating Notes & Architecture Seams (BUG-058 / ASM-1482):
+//   - FIN-8 command rejection surfacing (ApplyResult) is fully designed, implemented, and verified
+//     in unit tests. However, actual routing of command results to screen sub-receivers is currently
+//     unwired in the wider frame pending the core routing-seam implementation (ASM-1482) — do not
+//     invent custom/ad-hoc wiring.
 package finance

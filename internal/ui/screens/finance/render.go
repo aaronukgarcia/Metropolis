@@ -228,7 +228,7 @@ func RenderSankey(buf *core.Buffer, rect core.Rect, sankey FiscalCircuitView, ha
 // DrillTargets returns the drill-through source identities this screen
 // supplies for registration into ui.dash's (MOD-038) drill-through graph,
 // per SF-5.
-func DrillTargets(pl PLView, bs BalanceSheetView, loans []LoanState, sliders []TaxSliderState, payroll PublicPayrollView, sankey FiscalCircuitView) []dash.DrillTarget {
+func DrillTargets(pl PLView, bs BalanceSheetView, loans []LoanState, sliders []TaxSliderState, payroll PublicPayrollView, sankey FiscalCircuitView, rating int) []dash.DrillTarget {
 	var out []dash.DrillTarget
 	for _, r := range pl.Revenues {
 		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "pl.revenue." + r.Label})
@@ -242,9 +242,11 @@ func DrillTargets(pl PLView, bs BalanceSheetView, loans []LoanState, sliders []T
 	for _, l := range bs.Liabilities {
 		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.liability." + l.Label})
 	}
+	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "balance.net_worth"})
 	for _, l := range loans {
 		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "loan." + l.ID})
 	}
+	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "credit.rating." + strconv.Itoa(rating)})
 	for _, s := range sliders {
 		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "tax.slider." + s.ID})
 	}

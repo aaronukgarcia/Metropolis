@@ -105,14 +105,52 @@ func TestDrillTargets_EveryFigureHasASource(t *testing.T) {
 	payroll := PublicPayrollView{WageCostMicropounds: 100}
 	sankey := FiscalCircuitView{Bands: []SankeyBand{{Source: "a", Target: "b"}}}
 
-	targets := DrillTargets(pl, bs, loans, sliders, payroll, sankey)
-	if len(targets) != 7 {
-		t.Errorf("expected 7 drill targets, got %d: %+v", len(targets), targets)
+	targets := DrillTargets(pl, bs, loans, sliders, payroll, sankey, 10)
+	if len(targets) != 9 {
+		t.Errorf("expected 9 drill targets, got %d: %+v", len(targets), targets)
 	}
+	hasNetWorth := false
+	hasRating := false
 	for _, target := range targets {
 		if !target.Valid() {
 			t.Errorf("invalid drill target: %+v", target)
 		}
+		if target.EntityID == "balance.net_worth" {
+			hasNetWorth = true
+		}
+		if target.EntityID == "credit.rating.10" {
+			hasRating = true
+		}
+	}
+	if !hasNetWorth {
+		t.Error("missing balance.net_worth drill target")
+	}
+	if !hasRating {
+		t.Error("missing credit.rating.10 drill target")
+	}
+}
+
+func TestInputValidation_BorrowLoan_TermMonths(t *testing.T) {
+	s := New("corr-val")
+	send := func(protocol.Command) error { return nil }
+
+	// Test negative termMonths
+	if err := s.BorrowLoan(send, 1000, -5); err == nil {
+		t.Error("BorrowLoan accepted negative termMonths")
+	}
+	// Test huge termMonths (beyond 360)
+	if err := s.BorrowLoan(send, 1000, 9999); err == nil {
+		t.Error("BorrowLoan accepted huge termMonths")
+	}
+}
+
+func TestInputValidation_SetTaxRate_Negative(t *testing.T) {
+	s := New("corr-val")
+	send := func(protocol.Command) error { return nil }
+
+	// Test negative tax rate
+	if err := s.SetTaxRate(send, "tax", -50.0); err == nil {
+		t.Error("SetTaxRate accepted negative rate -50.0")
 	}
 }
 
