@@ -1574,7 +1574,8 @@
       "calls": [
         "engine.services",
         "engine.dispatch",
-        "int.protocol"
+        "int.protocol",
+        "ui.dash"
       ],
       "sprint": 8
     },
@@ -1743,7 +1744,8 @@
         "ui.widgets",
         "int.protocol",
         "foundation.errors",
-        "engine.census"
+        "engine.census",
+        "ui.dash"
       ],
       "sprint": 9
     },
