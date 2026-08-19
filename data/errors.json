@@ -110,7 +110,8 @@
       "G5100-G5199": "reserved for engine.cafe (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-18 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V300-V399": "reserved for ui.screen.finance (lane/ben claim 2026-08-19, landed on main per the BUG-276 single-authority rule; codes MET-V300..V303 arrive with the finance PR)",
       "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V500-V599": "reserved for ui.screen.services (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V500-V599": "reserved for ui.screen.services (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
 
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -4669,6 +4670,30 @@
       "module": "ui.screen.services",
       "message": "invalid funding slider request: {reason}",
       "remedy": "check the slider value is finite, non-negative, and within the documented min/max"
+    },
+    "MET-V600": {
+      "severity": "error",
+      "module": "ui.screen.districts",
+      "message": "F8 districts screen received a malformed patch for view {view}: {cause}",
+      "remedy": "Verify the engine's f8.districts view emits schemaVersion 1 within the size cap; the screen keeps its last-known-good state."
+    },
+    "MET-V601": {
+      "severity": "warn",
+      "module": "ui.screen.districts",
+      "message": "F8 districts screen received a delta for unknown/stale subscription {subscriptionId}",
+      "remedy": "Delta dropped; verify the subscription was bound before the engine pushed it."
+    },
+    "MET-V602": {
+      "severity": "fatal",
+      "module": "ui.screen.districts",
+      "message": "A districts.Screen method was called on a struct-copied value (method {method})",
+      "remedy": "Always operate on the *Screen returned by New(); never take a value copy."
+    },
+    "MET-V603": {
+      "severity": "error",
+      "module": "ui.screen.districts",
+      "message": "SetDistrictMultiplier request rejected locally for district {district} instrument {instrument}: multiplier {multiplier} is invalid",
+      "remedy": "Send a finite multiplier >= 0; the engine additionally caps the resulting effective rate (see engine.tax.md AC-6)."
     }
   }
 }
