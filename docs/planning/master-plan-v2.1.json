@@ -1528,7 +1528,8 @@
         "engine.finance",
         "engine.tax",
         "engine.fiscal",
-        "int.protocol"
+        "int.protocol",
+        "ui.dash"
       ],
       "sprint": 8
     },
@@ -1721,7 +1722,8 @@
       "calls": [
         "engine.policies",
         "engine.tax",
-        "int.protocol"
+        "int.protocol",
+        "ui.dash"
       ],
       "sprint": 9
     },

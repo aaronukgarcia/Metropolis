@@ -4539,6 +4539,14 @@
             "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
           },
           {
+            "key": "ui.screen.districts",
+            "outboundGuid": "30ce8c12-6843-4876-8405-756280e23988"
+          },
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          },
+          {
             "key": "ui.screen.menu",
             "outboundGuid": "0166a389-86a1-4ffc-bc18-fff6dd3ec8b7"
           },
@@ -4699,6 +4707,11 @@
             "key": "int.protocol",
             "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
           }
         ]
       },
@@ -5177,6 +5190,11 @@
             "key": "int.protocol",
             "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
           }
         ]
       },
