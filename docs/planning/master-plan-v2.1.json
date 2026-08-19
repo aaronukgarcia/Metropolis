@@ -834,7 +834,9 @@
         "int.solver",
         "engine.citizens",
         "engine.roads",
-        "engine.invariant"
+        "engine.invariant",
+        "engine.education",
+        "engine.leisure"
       ],
       "sprint": 5,
       "collaborations": {
@@ -1057,7 +1059,9 @@
         "engine.households",
         "engine.crime",
         "engine.leisure",
-        "engine.refuse"
+        "engine.refuse",
+        "engine.traffic",
+        "engine.extcommute"
       ],
       "calls": [
         "engine.core",
@@ -1075,6 +1079,8 @@
         "engine.crime",
         "engine.leisure",
         "engine.refuse",
+        "engine.traffic",
+        "engine.extcommute",
         "foundation.errors",
         "foundation.num",
         "int.protocol"
