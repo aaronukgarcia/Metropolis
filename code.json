@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 161,
+  "moduleCount": 162,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -135,6 +135,10 @@
           {
             "key": "ui.harness",
             "outboundGuid": "1185f757-2553-4d06-a8c2-c141bcf9b9d0"
+          },
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           },
           {
             "key": "ui.screen.build",
@@ -617,6 +621,10 @@
           {
             "key": "ui.keys",
             "outboundGuid": "c92533bc-bf4f-4b3d-a2bd-0528afdc6c1c"
+          },
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           },
           {
             "key": "ui.screen.build",
@@ -1431,6 +1439,10 @@
             "outboundGuid": "1185f757-2553-4d06-a8c2-c141bcf9b9d0"
           },
           {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          },
+          {
             "key": "ui.screen.build",
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
           },
@@ -1492,6 +1504,82 @@
         ],
         "verdict": "findings-raised"
       }
+    },
+    {
+      "guid": "3675f77a-18b2-424b-9b95-a73b1d33f1d2",
+      "key": "ui.router",
+      "bowType": "module",
+      "seq": 115,
+      "sprint": 6,
+      "title": "UI result router: the transport-owning seam routing CommandResult/Delta/Event to screens",
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "ui",
+      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG §1.1; UI-SPEC §1",
+      "path": "internal/ui/router/",
+      "inbound": {
+        "guid": "500b5f46-c02f-49f8-a44c-b89e03e42db9",
+        "name": "Router",
+        "format": "Go package API (func New(transport protocol.Transport, ...) + Run(ctx))",
+        "pattern": "single transport-owning goroutine; sole writer of the ViewStore front snapshot; screens register handlers, never read channels",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "e1580ada-2265-4f39-845a-1f8f645350aa",
+        "calls": [
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.screen.finance",
+            "moduleGuid": "237d6c7a-77af-405f-a2b7-e6164210ab83",
+            "inboundGuid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a"
+          },
+          {
+            "key": "ui.screen.build",
+            "moduleGuid": "e987c775-5de0-4197-a00e-8fe2194841db",
+            "inboundGuid": "650b069f-4ad5-483e-a586-8d120a31af2b"
+          },
+          {
+            "key": "ui.screen.map",
+            "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
+            "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
+          },
+          {
+            "key": "ui.screen.proj",
+            "moduleGuid": "55c2d3a6-97cf-4bb0-8dcb-af53e46c9514",
+            "inboundGuid": "445b6c81-1a45-4b0d-9670-363567cc7ff9"
+          },
+          {
+            "key": "ui.screen.trade",
+            "moduleGuid": "ddbe35da-e412-4098-8ace-3324c99cd76b",
+            "inboundGuid": "f3f4ea48-a0eb-473e-964c-5fcd9dd5b17f"
+          },
+          {
+            "key": "ui.alerts",
+            "moduleGuid": "11ff0bf0-e0c2-45e2-bc90-41c2981a6028",
+            "inboundGuid": "c7b99511-9c8c-48ea-a74a-0c265514e2fe"
+          },
+          {
+            "key": "ui.screen.ticker",
+            "moduleGuid": "f2a38527-8660-43d6-ab5a-580acad9c740",
+            "inboundGuid": "06c09ee0-3692-4af8-a37f-101a299ca42f"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
     },
     {
       "guid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
@@ -1800,6 +1888,10 @@
           {
             "key": "feat.resourcesurvey",
             "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
+          },
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
         ]
       },
@@ -4448,7 +4540,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "a273467a-350b-488b-9c0f-cff42db9e994",
@@ -4509,7 +4606,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "0ec38e13-f88c-460b-a9c2-71392f36d580",
@@ -4550,7 +4652,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "8106cea4-feaf-4c51-8397-24f8ff9daecd",
@@ -4647,7 +4754,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "0b151078-0738-4064-b61f-85aff7cbc933",
@@ -4774,7 +4886,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5",
@@ -4830,7 +4947,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "a63e73e9-ffd1-44f2-9c55-7523939e48c4",
