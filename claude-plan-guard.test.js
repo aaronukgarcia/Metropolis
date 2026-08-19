@@ -249,46 +249,63 @@ test('BUG-123 round 4: sanity — the round-3 value grammar genuinely mis-handle
 test('BUG-123 end-to-end: "git -c ... commit" actually invokes checker.checkPlan() (not just matches the trigger regex)', { concurrency: false }, () => {
   const { spawnSync } = require('child_process');
   const path = require('path');
+  const os = require('os');
+  const fs = require('fs');
+  const crypto = require('crypto');
   const checker = require('./claude-plan-checker.js');
 
   const expected = checker.checkPlan();
 
-  const triggeredStart = Date.now();
-  const triggered = spawnSync(process.execPath, [path.join(__dirname, 'claude-plan-guard.js')], {
-    input: JSON.stringify({
-      tool: 'Bash',
-      tool_input: { command: 'git -c user.email=x@example.com -c commit.gpgsign=false commit -m "test: bug-123 e2e"' },
-    }),
-    encoding: 'utf8',
-  });
-  const triggeredElapsedMs = Date.now() - triggeredStart;
-  assert.equal(triggered.status, 0);
-  assert.ok(
-    triggeredElapsedMs > 100,
-    `expected the real checkPlan() payload (generate.js --check + regen, normally >100ms) to run; only took ${triggeredElapsedMs}ms — looks like the trigger never fired`
-  );
-  if (expected.status === 'clean') {
-    assert.equal(triggered.stdout.trim(), '', 'checkPlan() reported clean, so the guard must allow silently');
-  } else {
-    const parsed = JSON.parse(triggered.stdout);
-    assert.equal(parsed?.hookSpecificOutput?.permissionDecision, 'deny');
-  }
+  // BUG-291: this used to assert wall-clock elapsed time (>100ms) as a proxy
+  // for "the real checkPlan() payload ran" — banned here per BUG-031 (count
+  // work, not time); a fast CI runner completed the real work in 82ms and
+  // false-failed an innocent PR. Instead use the BUG-165-pattern test-only
+  // marker hatch in claude-plan-guard.js: it touches
+  // CLAUDE_PLAN_GUARD_TEST_MARKER right before calling checker.checkPlan(),
+  // so the marker file's existence directly proves the trigger fired,
+  // independent of how fast the machine happened to be.
+  const triggeredMarkerPath = path.join(os.tmpdir(), `claude-plan-guard-test-marker-${crypto.randomBytes(8).toString('hex')}.txt`);
+  const untriggeredMarkerPath = path.join(os.tmpdir(), `claude-plan-guard-test-marker-${crypto.randomBytes(8).toString('hex')}.txt`);
 
-  const untriggeredStart = Date.now();
-  const untriggered = spawnSync(process.execPath, [path.join(__dirname, 'claude-plan-guard.js')], {
-    input: JSON.stringify({
-      tool: 'Bash',
-      tool_input: { command: 'git -c user.email=x@example.com status' },
-    }),
-    encoding: 'utf8',
-  });
-  const untriggeredElapsedMs = Date.now() - untriggeredStart;
-  assert.equal(untriggered.status, 0);
-  assert.equal(untriggered.stdout.trim(), '', 'a non-commit "git -c ..." command must allow silently');
-  assert.ok(
-    untriggeredElapsedMs < triggeredElapsedMs,
-    `a non-commit command must return well before the real checkPlan() payload could run (took ${untriggeredElapsedMs}ms vs triggered ${triggeredElapsedMs}ms)`
-  );
+  try {
+    const triggered = spawnSync(process.execPath, [path.join(__dirname, 'claude-plan-guard.js')], {
+      input: JSON.stringify({
+        tool: 'Bash',
+        tool_input: { command: 'git -c user.email=x@example.com -c commit.gpgsign=false commit -m "test: bug-123 e2e"' },
+      }),
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_PLAN_GUARD_TEST_MARKER: triggeredMarkerPath },
+    });
+    assert.equal(triggered.status, 0);
+    assert.ok(
+      fs.existsSync(triggeredMarkerPath),
+      'expected the real checkPlan() payload to run (test-only marker file was not written) — looks like the trigger never fired'
+    );
+    if (expected.status === 'clean') {
+      assert.equal(triggered.stdout.trim(), '', 'checkPlan() reported clean, so the guard must allow silently');
+    } else {
+      const parsed = JSON.parse(triggered.stdout);
+      assert.equal(parsed?.hookSpecificOutput?.permissionDecision, 'deny');
+    }
+
+    const untriggered = spawnSync(process.execPath, [path.join(__dirname, 'claude-plan-guard.js')], {
+      input: JSON.stringify({
+        tool: 'Bash',
+        tool_input: { command: 'git -c user.email=x@example.com status' },
+      }),
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_PLAN_GUARD_TEST_MARKER: untriggeredMarkerPath },
+    });
+    assert.equal(untriggered.status, 0);
+    assert.equal(untriggered.stdout.trim(), '', 'a non-commit "git -c ..." command must allow silently');
+    assert.ok(
+      !fs.existsSync(untriggeredMarkerPath),
+      'a non-commit command must never reach checkPlan() (test-only marker file was written, but the trigger should have stayed silent)'
+    );
+  } finally {
+    try { fs.unlinkSync(triggeredMarkerPath); } catch { /* may not exist */ }
+    try { fs.unlinkSync(untriggeredMarkerPath); } catch { /* may not exist */ }
+  }
 });
 
 // ---------------------------------------------------------------------------
