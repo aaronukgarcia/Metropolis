@@ -6,7 +6,7 @@
  *
  * Port of the Prix Six claude-sync v2.2 DHCP-style permit system onto the
  * project's own `metro` MariaDB database (localhost:3306). Same protocol:
- * three named slots (Bill, Bob, Ben), 5-minute TTL permits, auto-renewal by
+ * three named slots (Bill, Ben, Bev), 5-minute TTL permits, auto-renewal by
  * the PostToolUse hook, wake recovery, reserved slots, human-only force-evict.
  *
  * The CLI surface and output strings are contract-compatible with the hook
@@ -90,7 +90,18 @@ const path = require('path');
 const crypto = require('crypto');
 const { connectCLI } = require('./claude-db.js');
 
-const NAMES = ['Bill', 'Bob', 'Ben'];
+const NAMES = ['Bill', 'Ben', 'Bev'];
+// Bob was retired permanently (Aaron, 2026-08-18) but the slot row/history
+// stays in the DB (operator handles data cleanup, never this file — GR#24).
+// Kept as its own list, not just "absent from NAMES", so every caller-
+// supplied-name path (checkin --name / CLAUDE_IDENTITY, message --to,
+// checkout --force) can give a clear RETIRED rejection instead of the
+// generic "Unknown slot name" a plain NAMES.find() miss would produce —
+// that generic message reads like a typo, not a deliberate retirement, and
+// is exactly how a stale CLAUDE_IDENTITY=Bob env var or muscle-memory
+// `--name Bob` produced the 2026-08-18 overnight incident (see isRetired /
+// retiredMessage below).
+const RETIRED = ['Bob'];
 const TTL_MS = 5 * 60 * 1000;             // permit lifetime
 const RENEW_THRESHOLD_MS = 3.5 * 60 * 1000; // --auto renews only below this remaining
 const RESERVE_MS = 30 * 60 * 1000;        // expired slot stays reserved for its window
@@ -515,6 +526,18 @@ function findMineBySessionSecret(byName, now) {
   return null;
 }
 
+/** True if `candidate` (case-insensitive) names a retired slot (Bob). */
+function isRetired(candidate) {
+  return RETIRED.some(n => n.toLowerCase() === String(candidate).toLowerCase());
+}
+
+/** Clear rejection text for a retired-slot name, reused at every
+ *  caller-supplied-name site (checkin --name / CLAUDE_IDENTITY, message
+ *  --to, checkout --force) so the message is identical wherever it fires. */
+function retiredMessage(candidate) {
+  return `${candidate} is retired (Aaron, 2026-08-18) - roles: Bev=lead, Bill=RM/BA/allocator+oversight, Ben=coder.`;
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function cmdCheckin(db) {
@@ -537,6 +560,11 @@ async function cmdCheckin(db) {
   const requested = flags.name || (!flags.any && process.env.CLAUDE_IDENTITY) || null;
 
   if (requested) {
+    if (isRetired(requested)) {
+      await db.rollback();
+      console.error(retiredMessage(requested));
+      process.exit(1);
+    }
     const name = NAMES.find(n => n.toLowerCase() === String(requested).toLowerCase());
     if (!name) {
       await db.rollback();
@@ -597,12 +625,38 @@ async function cmdCheckin(db) {
     return;
   }
 
-  // No specific name — first free slot (Bill -> Bob -> Ben).
-  const free = NAMES.find(n => slotState(byName[n], now) === 'FREE'
-    || (slotState(byName[n], now) === 'RESERVED' && byName[n].window_id === WINDOW_ID));
+  // No specific name — prefer THIS window's own last-held identity (per
+  // sync_window_map) when that slot is actually available to it; otherwise
+  // first free slot in NAMES order (Bill -> Ben -> Bev). FIX (Aaron,
+  // 2026-08-18 incident): falling straight to first-free-in-NAMES-order let
+  // a woken window with a lapsed/mismatched reservation land on a DIFFERENT
+  // identity than the one its previous session held — that's how a lead
+  // session's window kept resurrecting the Bill slot via a stale map row,
+  // and (the sibling incident) how a woken session with no name preference
+  // landed on whatever slot happened to be first-free instead of its own.
+  // Checking the map first keeps a window in its own identity whenever that
+  // slot is FREE or still RESERVED for this same window; it never grants a
+  // slot held live by someone else, and never resurrects a retired name.
+  let free = null;
+  if (WINDOW_ID) {
+    const [mapRows] = await db.query('SELECT name FROM sync_window_map WHERE window_id=?', [WINDOW_ID]);
+    if (mapRows.length) {
+      const mapped = mapRows[0].name;
+      if (NAMES.includes(mapped) && !isRetired(mapped)) {
+        const mappedState = slotState(byName[mapped], now);
+        if (mappedState === 'FREE' || (mappedState === 'RESERVED' && byName[mapped].window_id === WINDOW_ID)) {
+          free = mapped;
+        }
+      }
+    }
+  }
+  if (!free) {
+    free = NAMES.find(n => slotState(byName[n], now) === 'FREE'
+      || (slotState(byName[n], now) === 'RESERVED' && byName[n].window_id === WINDOW_ID));
+  }
   if (!free) {
     await db.rollback();
-    console.error('ALL SLOTS FULL (all-full): Bill, Bob and Ben are all occupied or reserved.');
+    console.error('ALL SLOTS FULL (all-full): Bill, Ben and Bev are all occupied or reserved.');
     for (const n of NAMES) {
       const row = byName[n];
       const state = slotState(row, now);
@@ -649,25 +703,49 @@ async function cmdRenew(db) {
     return;
   }
 
-  // This window previously held a name that is now gone or taken — next free slot.
+  // This window previously held `hadName` (per its own permit row's
+  // window_id, or the persistent sync_window_map) but neither `mine` nor
+  // `stale` matched above — typically its reservation lapsed while idle.
+  // FIX (Aaron, 2026-08-19, cross-assign incident): the DB activity log
+  // showed wake recovery silently handing a window a DIFFERENT identity
+  // than the one it held ("Bill assigned via wake recovery (previous name
+  // Ben unavailable)", "Bob assigned via wake recovery (previous name Bill
+  // unavailable)") — a session telling a human it is someone else with no
+  // human in the loop. Wake recovery must NEVER adopt a different name:
+  // if the previous slot is itself FREE, reclaim that SAME name; if it is
+  // genuinely unavailable (held live by another window, or reserved for
+  // another window), fail loudly and exit nonzero instead of cross-assigning.
   let hadName = WINDOW_ID && NAMES.find(n => byName[n].window_id === WINDOW_ID);
   if (!hadName && WINDOW_ID) {
     const [map] = await db.query('SELECT name FROM sync_window_map WHERE window_id=?', [WINDOW_ID]);
     if (map.length) hadName = map[0].name;
   }
   if (hadName) {
-    const free = NAMES.find(n => slotState(byName[n], now) === 'FREE');
-    if (free) {
-      const sessionId = await acquire(db, free);
-      await log(db, free, `${free} assigned via wake recovery (previous name ${hadName} unavailable)`);
+    if (!NAMES.includes(hadName) || isRetired(hadName)) {
+      // The previous name no longer exists as a valid slot at all (e.g. a
+      // stale window_map row pointing at retired Bob) — there is no "same
+      // name" left to reclaim. Loud + explicit, never a silent swap to some
+      // other name.
       await db.commit();
-      console.log(`[claude-sync] ⚠ IDENTITY CHANGED: your previous name ${hadName} is no longer yours.`);
-      console.log(`[claude-sync] YOU ARE: ${free} — prefix every response with "${free.toLowerCase()}>" from now on. Session: ${sessionId}`);
+      console.error(`[claude-sync] Your previous slot "${hadName}" no longer exists (retired or removed).`);
+      console.error(`[claude-sync] Check in explicitly with a current name: node claude-sync.js checkin --name <${NAMES.join('|')}>`);
+      process.exit(1);
+    }
+    const state = slotState(byName[hadName], now);
+    if (state === 'FREE') {
+      const sessionId = await acquire(db, hadName);
+      await log(db, hadName, `${hadName} wake recovery — re-acquired after idle expiry (via window map)`);
+      await db.commit();
+      console.log(`[claude-sync] Wake recovery: re-acquired ${hadName} (permit expired while idle). Session: ${sessionId}`);
       return;
     }
-    await db.commit();
-    console.log('[claude-sync] WARNING: permit expired and all slots are occupied. You hold NO identity — do not prefix responses until a checkin succeeds.');
-    return;
+    // ACTIVE (held live by another window) or RESERVED (for another
+    // window) — the previous slot is genuinely unavailable right now. Fail
+    // loudly; the human/operator decides the next step, this code never does.
+    await db.rollback();
+    console.error(`[claude-sync] Your previous slot "${hadName}" is held; re-checkin explicitly:`);
+    console.error(`[claude-sync]   node claude-sync.js checkin --name ${hadName} (--force --human-ok if a human authorises eviction)`);
+    process.exit(1);
   }
 
   await db.commit();
@@ -682,6 +760,11 @@ async function cmdCheckout(db) {
   let target = null;
   if (flags.force) {
     const forcedName = positional[0] || (typeof flags.force === 'string' ? flags.force : null);
+    if (forcedName && isRetired(forcedName)) {
+      await db.rollback();
+      console.error(retiredMessage(forcedName));
+      process.exit(1);
+    }
     const name = NAMES.find(n => forcedName && n.toLowerCase() === String(forcedName).toLowerCase());
     if (!name) {
       await db.rollback();
@@ -803,6 +886,10 @@ async function cmdMessage(db) {
   // from checkin's own validation (claude-sync.js's Unknown slot name error).
   let toName = null;
   if (flags.to !== undefined) {
+    if (isRetired(flags.to)) {
+      console.error(retiredMessage(flags.to));
+      process.exit(1);
+    }
     const name = NAMES.find(n => n.toLowerCase() === String(flags.to).toLowerCase());
     if (!name) {
       console.error(`Unknown slot name "${flags.to}". Valid: ${NAMES.join(', ')}`);
@@ -1123,7 +1210,8 @@ async function runCli() {
 }
 
 module.exports = {
-  NAMES, connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
+  NAMES, RETIRED, isRetired, retiredMessage,
+  connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
   cmdCheckin, cmdRenew, cmdMessage, cmdCheckout, cmdStatus, cmdWrite, cmdClaim,
   cmdRelease, cmdGc,
   cmdLoopSet, cmdLoopClear, cmdLoopShow, printLoopArmStatus,

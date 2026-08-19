@@ -174,3 +174,44 @@ test('FEAT-038: printSessionSummary() surfaces the GIT IDENTITY warning in the "
   const src = fs.readFileSync(path.join(__dirname, 'claude-startup.js'), 'utf8');
   assert.match(src, /git NOT SYNCED.*GIT IDENTITY warning|GIT IDENTITY warning.*git NOT SYNCED/s);
 });
+
+// ---------------------------------------------------------------------------
+// Retire-Bob checkin fix (Aaron, 2026-08-18/19, coordinator scope extension):
+// Bob was retired permanently but claude-startup.js's VALID_NAMES and several
+// hardcoded example/fallback strings still named Bob (and were missing Bev,
+// the lead's slot in the current team shape). VALID_NAMES now gates
+// parseName()'s acceptance of a resolved checkin identity, so a stale
+// checkin reply naming "Bob" must be treated exactly like any other garbage
+// value — rejected, not accepted as a real identity.
+// ---------------------------------------------------------------------------
+
+test('VALID_NAMES is exactly the current three slots — Bob removed, Bev added', () => {
+  assert.deepEqual(startup.VALID_NAMES, ['bill', 'ben', 'bev']);
+  assert.ok(!startup.VALID_NAMES.includes('bob'), 'Bob must not be accepted as a resolved identity any more');
+});
+
+test('parseName() rejects "YOU ARE: Bob" (retired name is not a valid resolved identity)', () => {
+  assert.equal(startup.parseName('YOU ARE: Bob\nSession: abc-123\n'), null,
+    'a checkin reply naming the retired Bob slot must not parse as a valid identity');
+});
+
+test('parseName() accepts "YOU ARE: Bev" (the lead\'s slot in the current team shape)', () => {
+  assert.equal(startup.parseName('YOU ARE: Bev\nSession: abc-123\n'), 'bev');
+});
+
+test('false-pass guard: parseName() still accepts the unaffected slots (Bill, Ben)', () => {
+  assert.equal(startup.parseName('YOU ARE: Bill\nSession: abc-123\n'), 'bill');
+  assert.equal(startup.parseName('YOU ARE: Ben\nSession: abc-123\n'), 'ben');
+});
+
+test('no remaining "Bob" literal in claude-startup.js source outside historical/comment context', () => {
+  const src = fs.readFileSync(path.join(__dirname, 'claude-startup.js'), 'utf8');
+  // Every remaining "bob"/"Bob" occurrence, if any, must be inside a // comment
+  // line (the retirement history note) — never inside a string literal that
+  // could reach stdout/stderr or a VALID_NAMES-style array.
+  const offendingLines = src.split('\n')
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => /bob/i.test(line))
+    .filter(({ line }) => !/^\s*\/\//.test(line.trim()) && !/^\s*\*/.test(line.trim()));
+  assert.deepEqual(offendingLines, [], `unexpected non-comment "bob" literal(s): ${JSON.stringify(offendingLines)}`);
+});

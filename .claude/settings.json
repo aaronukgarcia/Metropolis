@@ -170,7 +170,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo \"CRITICAL CONTEXT TO PRESERVE: [1] You are bob/bill/ben - prefix ALL responses. [2] Run node claude-sync.js checkin after compaction. [3] Golden Rules 1-21: error trapping, GR#2 Metropolis profile (version = git describe/ldflags + milestone tags, NO version files), SSOT, identity prefix, contract-first/stub-forever, red determinism gate stops the line. [4] Dev-team pipeline v1.5: BA criteria -> Sonnet junior -> Tester pass/fail -> Docs -> Bill review; recover mid-cycle state from docs/planning/checkpoint.md + BOW. [5] Read CLAUDE.md for full rules.\""
+            "command": "echo \"CRITICAL CONTEXT TO PRESERVE: [1] You are bill/ben/bev (Bob retired 2026-08-18) - prefix ALL responses; verify with node claude-sync.js checkin --name <yours>. [2] Run node claude-sync.js checkin after compaction. [3] Golden Rules 1-25: error trapping, GR#2 Metropolis profile (version = git describe/ldflags + milestone tags, NO version files), SSOT, identity prefix, contract-first/stub-forever, red determinism gate stops the line, GR#23 independence amendment (attacker never the author), GR#25 graph-driven specification. [4] Dev-team: Bev=lead (merges/BOW), Bill=RM/BA/allocator+oversight, Ben=coder; evidence protocol per parallel-coder-brief.md 5a; recover mid-cycle state from docs/planning/checkpoint.md + BOW. [5] Read CLAUDE.md for full rules.\""
           }
         ]
       }
