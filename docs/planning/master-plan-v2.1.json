@@ -2728,7 +2728,8 @@
         "engine.projections",
         "engine.tax",
         "foundation.data",
-        "engine.finance"
+        "engine.finance",
+        "engine.world"
       ],
       "sprint": 9,
       "collaborations": {
