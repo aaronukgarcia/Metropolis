@@ -8,27 +8,27 @@
     "naming": {
       "moduleKey": "dot-separated lowercase: <layer>.<name> (e.g. engine.traffic, ui.widgets); matches BOW mkey and code.json key",
       "goPackages": "internal/engine/<name>, internal/ui/<name>, internal/protocol, internal/foundation/<name>; cmd/metropolis, cmd/bow, cmd/metctl",
-      "specRef": "References Â§, UI-SPEC Â§, M0-ENG Â§, A-amendments and Part IV sections of docs/METROPOLIS-MASTER-v2.1.md"
+      "specRef": "References §, UI-SPEC §, M0-ENG §, A-amendments and Part IV sections of docs/METROPOLIS-MASTER-v2.1.md"
     },
     "universalEdges": {
       "note": "These call edges apply to every module and are NOT repeated per item to keep the graph readable; they are as binding as explicit edges.",
       "edges": [
         "* -> foundation.errors : every module raises registry-sourced errors with correlation IDs and writes structured NDJSON logs (GR#1, GR#7)",
-        "engine.* -> foundation.det : all randomness via counter-based hash streams; all parallelism via the 256-shard phase-barrier scheme (Â§1.2)",
-        "engine.* -> foundation.registry : every engine module registers with a mandatory Stub implementation (M0-ENG Â§2)",
+        "engine.* -> foundation.det : all randomness via counter-based hash streams; all parallelism via the 256-shard phase-barrier scheme (§1.2)",
+        "engine.* -> foundation.registry : every engine module registers with a mandatory Stub implementation (M0-ENG §2)",
         "ui.screen.* -> int.protocol : screens consume engine state ONLY via view subscriptions; their calls list names the engine modules whose projections they subscribe to, transport is always the protocol"
       ]
     },
     "errorHandling": {
-      "registry": "data/errors.json â€” every error code declared before use; format MET-<layer><NNN> (F=foundation, P=protocol, E=engine, U=ui, T=tooling), e.g. MET-E042. No ad-hoc error construction anywhere (GR#7).",
+      "registry": "data/errors.json — every error code declared before use; format MET-<layer><NNN> (F=foundation, P=protocol, E=engine, U=ui, T=tooling), e.g. MET-E042. No ad-hoc error construction anywhere (GR#7).",
       "correlation": "Every protocol command carries a correlationId (UUID, minted by the initiating side). It propagates through engine events, deltas, logs and error records so any failure is traceable end-to-end (GR#1).",
       "logging": "Structured NDJSON: logs/engine.ndjson + logs/ui.ndjson, rotated. Error entries: {ts, level, code, correlationId, module, msg, ctx}. F12 info panel tails them live; metctl errors gives offline review. Errors are stored, never printed-and-lost.",
       "display": "Selectable error display per GR#1: every user-visible failure shows its registry code + correlation ID."
     },
-    "determinism": "Same seed + same command log => bit-identical world at any worker count (Â§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG Â§6.4)."
+    "determinism": "Same seed + same command log => bit-identical world at any worker count (§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG §6.4)."
   },
   "designNorthStar": {
-    "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet â€” the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
+    "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
     "doc": "docs/planning/design-north-star.md",
     "thesis": "The game is the juggle of conflicting requirements. The entertainment comes from managing genuinely competing demands, not from arithmetic.",
     "fiveQuestionTest": [
@@ -51,7 +51,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "process",
-      "specRef": "CLAUDE.md BOW; M0-ENG Â§4; GR#3",
+      "specRef": "CLAUDE.md BOW; M0-ENG §4; GR#3",
       "path": "tools/plan/",
       "inbound": {
         "guid": "be78bf99-28be-4ebe-bba5-4b753b49fc6b",
@@ -76,7 +76,7 @@
       "priority": "P0",
       "milestone": "M0",
       "layer": "interface",
-      "specRef": "Â§15; UI-SPEC Â§1, Â§6; M0-ENG Â§1.1; V.2.1",
+      "specRef": "§15; UI-SPEC §1, §6; M0-ENG §1.1; V.2.1",
       "path": "internal/protocol/",
       "inbound": {
         "guid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b",
@@ -216,7 +216,7 @@
       "priority": "P0",
       "milestone": "M0",
       "layer": "interface",
-      "specRef": "A3; Â§5.3; V.2.2; M0-ENG Â§2.2",
+      "specRef": "A3; §5.3; V.2.2; M0-ENG §2.2",
       "path": "internal/foundation/serialize/",
       "inbound": {
         "guid": "2ed08d03-985d-4f84-941b-12aa7d3285f2",
@@ -300,7 +300,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "interface",
-      "specRef": "Â§15; A4; A9; M0-ENG Â§1",
+      "specRef": "§15; A4; A9; M0-ENG §1",
       "path": "internal/foundation/solver/",
       "inbound": {
         "guid": "d20c26e9-5a1a-4628-9c93-f95938547f19",
@@ -362,13 +362,13 @@
       "priority": "P0",
       "milestone": "M0",
       "layer": "foundation",
-      "specRef": "GR#1; GR#7; M0-ENG Â§3 (log tail)",
+      "specRef": "GR#1; GR#7; M0-ENG §3 (log tail)",
       "path": "internal/foundation/errs/",
       "inbound": {
         "guid": "d230f06c-f605-4e79-a80f-61638344e6a8",
         "name": "E",
         "format": "Go package API",
-        "pattern": "errs.New(code, correlationId, ctx) â€” the only legal error constructor",
+        "pattern": "errs.New(code, correlationId, ctx) — the only legal error constructor",
         "consumers": [
           {
             "key": "engine.accelerator",
@@ -704,7 +704,7 @@
       "priority": "P0",
       "milestone": "M0",
       "layer": "foundation",
-      "specRef": "M0-ENG Â§5; A8; M0-ENG Â§3 (build info)",
+      "specRef": "M0-ENG §5; A8; M0-ENG §3 (build info)",
       "path": "/",
       "inbound": {
         "guid": "2f206010-b923-4bd1-a819-fa0cce9b80f1",
@@ -737,7 +737,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "foundation",
-      "specRef": "M0-ENG Â§3 (build info); BUG-013",
+      "specRef": "M0-ENG §3 (build info); BUG-013",
       "path": "internal/foundation/buildinfo/",
       "inbound": {
         "guid": "7f744a93-4823-440d-a2de-551ba87a70e5",
@@ -779,7 +779,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#3; GR#6; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#3; GR#6; M0-ENG §5 (hooks)",
       "path": "claude-plan-guard.js",
       "inbound": {
         "guid": "ac6d2d51-1bc2-459c-88e1-c7d69c4247e5",
@@ -812,7 +812,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#11; GR#15; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#11; GR#15; M0-ENG §5 (hooks)",
       "path": "claude-secret-guard.js",
       "inbound": {
         "guid": "9175b0d6-8eed-4a1e-b5a8-6a9f98778687",
@@ -846,7 +846,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§4 (v_ready_to_build); M0-ENG Â§6.2",
+      "specRef": "M0-ENG §4 (v_ready_to_build); M0-ENG §6.2",
       "path": "claude-bow.js + .claude/commands/sprint.md",
       "inbound": {
         "guid": "bbc2a1a6-43a7-42c3-8502-836268ac7f87",
@@ -871,7 +871,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#22; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#22; M0-ENG §5 (hooks)",
       "path": "claude-codename-guard.js",
       "inbound": {
         "guid": "c7cc677e-7b4c-42e4-a6fc-6dc8b310237e",
@@ -896,7 +896,7 @@
       "priority": "P0",
       "milestone": "M0",
       "layer": "foundation",
-      "specRef": "Â§1.2; A8",
+      "specRef": "§1.2; A8",
       "path": "internal/foundation/det/",
       "inbound": {
         "guid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81",
@@ -998,11 +998,11 @@
       "bowType": "module",
       "seq": 80,
       "sprint": 0,
-      "title": "Module registry: real/stub/off status, health, CanToggle â€” one registry, two consumers",
+      "title": "Module registry: real/stub/off status, health, CanToggle — one registry, two consumers",
       "priority": "P0",
       "milestone": "M0",
       "layer": "foundation",
-      "specRef": "M0-ENG Â§2; M0-ENG Â§3",
+      "specRef": "M0-ENG §2; M0-ENG §3",
       "path": "internal/foundation/registry/",
       "inbound": {
         "guid": "1c1aac4c-1234-438a-be11-6733e50ec945",
@@ -1056,7 +1056,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "foundation",
-      "specRef": "Â§24; GR#15",
+      "specRef": "§24; GR#15",
       "path": "internal/foundation/data/",
       "inbound": {
         "guid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41",
@@ -1238,7 +1238,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§4; V.2.3",
+      "specRef": "M0-ENG §4; V.2.3",
       "path": "claude-bow.js",
       "inbound": {
         "guid": "ed4c94ec-08b8-4adc-8871-0b5251f8dcf3",
@@ -1273,7 +1273,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG §5 (hooks)",
       "path": "claude-dispatch-guard.js",
       "inbound": {
         "guid": "4ba93212-cf29-4d6d-8b12-c4c1c5ea8285",
@@ -1298,7 +1298,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "BUG-035; GR#2; M0-ENG Â§5 (hooks)",
+      "specRef": "BUG-035; GR#2; M0-ENG §5 (hooks)",
       "path": "claude-author-guard.js",
       "inbound": {
         "guid": "11ab3a4a-e69e-469e-8d99-5c3af26775c4",
@@ -1354,7 +1354,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5; A8; int.serializer; BUG-108",
+      "specRef": "M0-ENG §5; A8; int.serializer; BUG-108",
       "path": "cmd/metctl/",
       "inbound": {
         "guid": "16a37700-d472-4e35-bbe2-22a3f8000544",
@@ -1390,7 +1390,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "harness",
-      "specRef": "M0-ENG Â§2.1",
+      "specRef": "M0-ENG §2.1",
       "path": "internal/engine/stub/",
       "inbound": {
         "guid": "64530ba0-19ee-4a01-9f73-41e266863b99",
@@ -1434,7 +1434,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "UI-SPEC Â§1, Â§5; M0-ENG Â§1.1",
+      "specRef": "UI-SPEC §1, §5; M0-ENG §1.1",
       "path": "internal/ui/core/",
       "inbound": {
         "guid": "fb5bbde6-9be1-4875-b460-d203a6249606",
@@ -1539,7 +1539,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG Â§1.1; UI-SPEC Â§1",
+      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG §1.1; UI-SPEC §1",
       "path": "internal/ui/router/",
       "inbound": {
         "guid": "500b5f46-c02f-49f8-a44c-b89e03e42db9",
@@ -1625,7 +1625,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "UI-SPEC Â§2",
+      "specRef": "UI-SPEC §2",
       "path": "internal/ui/widgets/",
       "inbound": {
         "guid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8",
@@ -1705,7 +1705,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "UI-SPEC Â§3, Â§6",
+      "specRef": "UI-SPEC §3, §6",
       "path": "internal/ui/keys/",
       "inbound": {
         "guid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513",
@@ -1749,7 +1749,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§3; M0-ENG Â§1.1â€“1.3; Â§9 (month index)",
+      "specRef": "§3; M0-ENG §1.1–1.3; §9 (month index)",
       "path": "internal/engine/core/",
       "inbound": {
         "guid": "62889f18-fa2a-4ae9-a48c-22de5f632c28",
@@ -1864,11 +1864,11 @@
       "bowType": "feature",
       "seq": 150,
       "sprint": 1,
-      "title": "Determinism CI gate â€” the first test written",
+      "title": "Determinism CI gate — the first test written",
       "priority": "P0",
       "milestone": "M1",
       "layer": "foundation",
-      "specRef": "Â§1.2.5; A8; M0-ENG Â§6.4",
+      "specRef": "§1.2.5; A8; M0-ENG §6.4",
       "path": "internal/engine/detgate/",
       "inbound": {
         "guid": "ec44f4a6-2b55-4508-a456-32804e425019",
@@ -1915,7 +1915,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "Â§13-F1; UI-SPEC Â§2",
+      "specRef": "§13-F1; UI-SPEC §2",
       "path": "internal/ui/screens/map/",
       "inbound": {
         "guid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd",
@@ -1988,7 +1988,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "M0-ENG Â§6.4; M0-ENG Â§2",
+      "specRef": "M0-ENG §6.4; M0-ENG §2",
       "path": "cmd/metropolis/",
       "inbound": {
         "guid": "365e4b0a-7afa-4222-9415-57016ed536ef",
@@ -2025,7 +2025,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "M0-ENG Â§3",
+      "specRef": "M0-ENG §3",
       "path": "internal/ui/screens/debug/",
       "inbound": {
         "guid": "b1484a1d-a7e6-43a4-ac2a-1f1049e3efc2",
@@ -2084,7 +2084,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§14; M0-ENG Â§3",
+      "specRef": "§14; M0-ENG §3",
       "path": "internal/engine/debug/",
       "inbound": {
         "guid": "f1e42494-7f80-47c7-b4b4-5f7aab76880b",
@@ -2139,7 +2139,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "harness",
-      "specRef": "M0-ENG Â§2.2",
+      "specRef": "M0-ENG §2.2",
       "path": "internal/harness/replay/ + fixtures/",
       "inbound": {
         "guid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c",
@@ -2184,7 +2184,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "harness",
-      "specRef": "UI-SPEC Â§5",
+      "specRef": "UI-SPEC §5",
       "path": "internal/harness/uitest/",
       "inbound": {
         "guid": "5a8e5639-403b-4222-afdf-2eba77fa334c",
@@ -2235,7 +2235,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "harness",
-      "specRef": "M0-ENG Â§2.3",
+      "specRef": "M0-ENG §2.3",
       "path": "internal/harness/headless/",
       "inbound": {
         "guid": "19f100f8-a43d-4571-a940-304eec18235f",
@@ -2300,7 +2300,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "harness",
-      "specRef": "M0-ENG Â§2.4; M0-ENG Â§6.5",
+      "specRef": "M0-ENG §2.4; M0-ENG §6.5",
       "path": "internal/harness/synth/",
       "inbound": {
         "guid": "ccdeed31-5fce-4c2c-a09c-a25a35e59464",
@@ -2375,7 +2375,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "data",
-      "specRef": "V.2.5; Â§2.1; Â§2.3",
+      "specRef": "V.2.5; §2.1; §2.3",
       "path": "data/ + tools/terrain/",
       "inbound": {
         "guid": "a793b71e-c625-4961-b8ae-711145e869a5",
@@ -2400,7 +2400,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§2; Â§32 (geology); II.1",
+      "specRef": "§2; §32 (geology); II.1",
       "path": "internal/engine/world/",
       "inbound": {
         "guid": "2d8855b8-f4f0-43a3-a179-67accca83115",
@@ -2526,7 +2526,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§5; A1; A2; A7; Â§II.3",
+      "specRef": "§5; A1; A2; A7; §II.3",
       "path": "internal/engine/citizens/",
       "inbound": {
         "guid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3",
@@ -2654,13 +2654,13 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§14; Â§19 (nothing despawns)",
+      "specRef": "§14; §19 (nothing despawns)",
       "path": "internal/engine/invariant/",
       "inbound": {
         "guid": "4a4b44ab-9ed0-4322-8a2a-ad4b0178302f",
         "name": "Registry",
         "format": "Go package API: RegisterStock(name string, snapshot func() int64) called once per conserved stock at module init",
-        "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, Â§14, Â§19.3); violation is a hard assert in dev builds, a registry error in release",
+        "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, §14, §19.3); violation is a hard assert in dev builds, a registry error in release",
         "consumers": [
           {
             "key": "engine.citizens",
@@ -2707,7 +2707,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§6; I.3 (static prices)",
+      "specRef": "§6; I.3 (static prices)",
       "path": "internal/engine/market/",
       "inbound": {
         "guid": "261a5063-96f3-40eb-a667-af294be7fc16",
@@ -2805,7 +2805,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§17; Â§2.2",
+      "specRef": "§17; §2.2",
       "path": "internal/engine/consumption/",
       "inbound": {
         "guid": "3300a878-d938-4236-b138-dbb5e081674a",
@@ -2903,7 +2903,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§7; Â§II.4",
+      "specRef": "§7; §II.4",
       "path": "internal/engine/finance/",
       "inbound": {
         "guid": "d6a475f0-a86c-46db-883e-a48effe4205b",
@@ -3066,7 +3066,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§19; Â§51 (lane myth); A4; Â§II.5",
+      "specRef": "§19; §51 (lane myth); A4; §II.5",
       "path": "internal/engine/traffic/",
       "inbound": {
         "guid": "df65414a-b7cd-4003-b25d-0772bf9049d5",
@@ -3180,7 +3180,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§20; Â§51",
+      "specRef": "§20; §51",
       "path": "internal/engine/roads/",
       "inbound": {
         "guid": "6510e884-5a50-4b50-86c1-78a6329b26d0",
@@ -3244,7 +3244,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§8; Â§II.5",
+      "specRef": "§8; §II.5",
       "path": "internal/engine/logistics/",
       "inbound": {
         "guid": "26abfa77-3b11-43d0-a631-539a04e3a5f8",
@@ -3333,7 +3333,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§7; Â§34; Â§13-F3; Â§9 (winter slowdown)",
+      "specRef": "§7; §34; §13-F3; §9 (winter slowdown)",
       "path": "internal/engine/build/",
       "inbound": {
         "guid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4",
@@ -3444,7 +3444,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§9; Â§17 (modifiers)",
+      "specRef": "§9; §17 (modifiers)",
       "path": "internal/engine/season/",
       "inbound": {
         "guid": "a85f49a1-4a31-44a1-9a7d-08defdad3011",
@@ -3517,7 +3517,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§5.4; Â§21 (typologies); Part IV HS",
+      "specRef": "§5.4; §21 (typologies); Part IV HS",
       "path": "internal/engine/households/",
       "inbound": {
         "guid": "5591af37-0157-4e07-a8cf-b4ab87db7466",
@@ -3572,17 +3572,17 @@
       "bowType": "module",
       "seq": 370,
       "sprint": 6,
-      "title": "Attractiveness & migration â€” the master dial",
+      "title": "Attractiveness & migration — the master dial",
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§11; Â§4 (migration-dominated)",
+      "specRef": "§11; §4 (migration-dominated)",
       "path": "internal/engine/attract/",
       "inbound": {
         "guid": "0c36bd43-d123-42bd-ab73-be06d33887d3",
         "name": "AttractAPI",
         "format": "Go package API + deltas",
-        "pattern": "term-decomposed A score, every term drill-through; housingAffordability computed via engine.households + engine.finance (registered edges), reputation internal asymmetric momentum; the other five Â§11 terms (jobAvailability, serviceCoverage, environment, leisureFit, safety) are pushed TermInputs via SetTermInputs â€” no outbound call edge (BUG-058/ASM-243)",
+        "pattern": "term-decomposed A score, every term drill-through; housingAffordability computed via engine.households + engine.finance (registered edges), reputation internal asymmetric momentum; the other five §11 terms (jobAvailability, serviceCoverage, environment, leisureFit, safety) are pushed TermInputs via SetTermInputs — no outbound call edge (BUG-058/ASM-243)",
         "consumers": [
           {
             "key": "engine.spiral",
@@ -3641,17 +3641,17 @@
       "bowType": "feature",
       "seq": 375,
       "sprint": 6,
-      "title": "FEAT-082: Composition root â€” wires baseline-one modules into the live tick",
+      "title": "FEAT-082: Composition root — wires baseline-one modules into the live tick",
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "M0-ENG Â§1.1-1.3; M0-ENG Â§2; ASM-001; FEAT-082; FEAT-083",
+      "specRef": "M0-ENG §1.1-1.3; M0-ENG §2; ASM-001; FEAT-082; FEAT-083",
       "path": "internal/engine/compose/",
       "inbound": {
         "guid": "542d181a-9253-4392-9cdb-be59f10d8913",
         "name": "Wire",
         "format": "Go package API (func Wire(*core.Engine, *Deps) (*Composition, error))",
-        "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind â€” never a silent partial wire",
+        "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind — never a silent partial wire",
         "consumers": [
           {
             "key": "harness.headless",
@@ -3790,7 +3790,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§12; Â§II.7",
+      "specRef": "§12; §II.7",
       "path": "internal/engine/spiral/",
       "inbound": {
         "guid": "839b5566-8881-4322-adc8-461381e039ad",
@@ -3870,7 +3870,7 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§13 (F7); A5; UI-SPEC Â§4",
+      "specRef": "§13 (F7); A5; UI-SPEC §4",
       "path": "internal/engine/projections/",
       "inbound": {
         "guid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4",
@@ -3957,7 +3957,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§4; Â§22; Â§23",
+      "specRef": "§4; §22; §23",
       "path": "internal/engine/unlocks/",
       "inbound": {
         "guid": "865f4351-b2c5-48fd-aa71-261c24e1ac3c",
@@ -4004,11 +4004,11 @@
       "bowType": "feature",
       "seq": 405,
       "sprint": null,
-      "title": "Author unlock_trees.json â€” full Â§10/Â§22 inventory across 12 dev-point categories x 13 tiers",
+      "title": "Author unlock_trees.json — full §10/§22 inventory across 12 dev-point categories x 13 tiers",
       "priority": "P2",
       "milestone": "M1",
       "layer": "data",
-      "specRef": "Â§10; Â§22; BA-2 escalation 2026-08-09",
+      "specRef": "§10; §22; BA-2 escalation 2026-08-09",
       "path": "data/unlock_trees.json",
       "inbound": {
         "guid": "359eacfa-59b0-4a9e-971c-565110828767",
@@ -4039,7 +4039,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§10; Â§54 (Pie); Â§26 (staffing)",
+      "specRef": "§10; §54 (Pie); §26 (staffing)",
       "path": "internal/engine/services/",
       "inbound": {
         "guid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e",
@@ -4156,7 +4156,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§18; Â§42 (leisure coupling)",
+      "specRef": "§18; §42 (leisure coupling)",
       "path": "internal/engine/wellbeing/",
       "inbound": {
         "guid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a",
@@ -4278,7 +4278,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "specRef": "Â§21; A6",
+      "specRef": "§21; A6",
       "path": "internal/engine/extcommute/",
       "inbound": {
         "guid": "bc5b137e-5692-410b-a6cf-80da601ee414",
@@ -4333,7 +4333,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "data",
-      "specRef": "Part IV; Supplements 1-3; Â§23; Â§17",
+      "specRef": "Part IV; Supplements 1-3; §23; §17",
       "path": "data/buildings.json",
       "inbound": {
         "guid": "211229c7-a5fe-4a82-9474-e3abb8d90734",
@@ -4364,7 +4364,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "engine",
-      "specRef": "Â§3; Â§14; A3",
+      "specRef": "§3; §14; A3",
       "path": "internal/engine/save/",
       "inbound": {
         "guid": "20c48d83-347b-434c-902f-b61aeef16711",
@@ -4405,7 +4405,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§10; Â§W (storm drains)",
+      "specRef": "§10; §W (storm drains)",
       "path": "internal/engine/events/",
       "inbound": {
         "guid": "6051d4b3-c7f9-4f67-9383-0a141b32de25",
@@ -4441,7 +4441,7 @@
       "priority": "P1",
       "milestone": "M2",
       "layer": "balance",
-      "specRef": "Â§16-M2; Â§15 (Batch); Â§3 (pacing)",
+      "specRef": "§16-M2; §15 (Batch); §3 (pacing)",
       "path": "tools/balance/",
       "inbound": {
         "guid": "c3056652-1b02-43b5-accd-ece2b17e0b9e",
@@ -4477,7 +4477,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "UI-SPEC Â§2 (diagrams)",
+      "specRef": "UI-SPEC §2 (diagrams)",
       "path": "internal/ui/diagrams/",
       "inbound": {
         "guid": "ead88a71-8c91-4925-ae49-e847e77a810f",
@@ -4518,7 +4518,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "UI-SPEC Â§4",
+      "specRef": "UI-SPEC §4",
       "path": "internal/ui/dash/",
       "inbound": {
         "guid": "c9779cf4-4098-4392-a356-40f6af348a45",
@@ -4597,7 +4597,7 @@
       "priority": "P0",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13; Â§3 (auto-pause)",
+      "specRef": "§13; §3 (auto-pause)",
       "path": "internal/ui/screens/chrome/",
       "inbound": {
         "guid": "c7b99511-9c8c-48ea-a74a-0c265514e2fe",
@@ -4663,7 +4663,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F2; Â§54; Â§39",
+      "specRef": "§13-F2; §54; §39",
       "path": "internal/ui/screens/finance/",
       "inbound": {
         "guid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a",
@@ -4714,7 +4714,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F3",
+      "specRef": "§13-F3",
       "path": "internal/ui/screens/build/",
       "inbound": {
         "guid": "650b069f-4ad5-483e-a586-8d120a31af2b",
@@ -4780,7 +4780,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F4; Â§26; Â§54",
+      "specRef": "§13-F4; §26; §54",
       "path": "internal/ui/screens/services/",
       "inbound": {
         "guid": "8dacbb29-593a-4015-9821-44f67ea2db67",
@@ -4831,7 +4831,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F5; Â§33; Â§50",
+      "specRef": "§13-F5; §33; §50",
       "path": "internal/ui/screens/trade/",
       "inbound": {
         "guid": "f3f4ea48-a0eb-473e-964c-5fcd9dd5b17f",
@@ -4897,7 +4897,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F6; Â§42; Â§21; Â§45",
+      "specRef": "§13-F6; §42; §21; §45",
       "path": "internal/ui/screens/demo/",
       "inbound": {
         "guid": "36420444-d506-4a7e-a94c-8d2fc938577a",
@@ -4963,7 +4963,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F7; A5; UI-SPEC Â§4",
+      "specRef": "§13-F7; A5; UI-SPEC §4",
       "path": "internal/ui/screens/proj/",
       "inbound": {
         "guid": "445b6c81-1a45-4b0d-9670-363567cc7ff9",
@@ -5024,7 +5024,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F9; Â§29",
+      "specRef": "§13-F9; §29",
       "path": "internal/ui/screens/ticker/",
       "inbound": {
         "guid": "06c09ee0-3692-4af8-a37f-101a299ca42f",
@@ -5085,7 +5085,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "ui",
-      "specRef": "Â§13-F10; UI-SPEC Â§4 (layouts)",
+      "specRef": "§13-F10; UI-SPEC §4 (layouts)",
       "path": "internal/ui/screens/menu/",
       "inbound": {
         "guid": "9693099e-9c45-4bc4-ada8-5b943222572e",
@@ -5146,7 +5146,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "ui",
-      "specRef": "Â§13-F8; Â§52",
+      "specRef": "§13-F8; §52",
       "path": "internal/ui/screens/districts/",
       "inbound": {
         "guid": "8c91b423-a2b6-440d-b82f-b3663076b5d0",
@@ -5192,7 +5192,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "ui",
-      "specRef": "Â§13-F6; Â§45; Â§46; UI-SPEC Â§4/Â§5.2",
+      "specRef": "§13-F6; §45; §46; UI-SPEC §4/§5.2",
       "path": "internal/ui/screens/census/",
       "inbound": {
         "guid": "22a5b5d8-bc90-4474-aa57-2fac3583d2e3",
@@ -5248,7 +5248,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§25; Â§31 (compost loop)",
+      "specRef": "§25; §31 (compost loop)",
       "path": "internal/engine/refuse/",
       "inbound": {
         "guid": "877d2b29-6055-4ec4-9be2-b60b2d53fcf3",
@@ -5323,7 +5323,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§26",
+      "specRef": "§26",
       "path": "internal/engine/dispatch/",
       "inbound": {
         "guid": "ffb9d07e-1f14-4cfa-8573-192efaca1e3f",
@@ -5382,7 +5382,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§27; Â§5.1 (drift); A5",
+      "specRef": "§27; §5.1 (drift); A5",
       "path": "internal/engine/education/",
       "inbound": {
         "guid": "bae4923b-5043-45e1-82b7-7772afd79b0f",
@@ -5478,7 +5478,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§28; Supp. security tables",
+      "specRef": "§28; Supp. security tables",
       "path": "internal/engine/crime/",
       "inbound": {
         "guid": "ec4eb047-5101-496f-b9c4-760e21846954",
@@ -5552,7 +5552,7 @@
       "priority": "P1",
       "milestone": "M3",
       "layer": "engine",
-      "specRef": "Â§29; Â§20 (names); V.1 (LLM optional)",
+      "specRef": "§29; §20 (names); V.1 (LLM optional)",
       "path": "internal/engine/news/",
       "inbound": {
         "guid": "cc3758bb-d419-4103-a4da-0058d1dfefd9",
@@ -5616,7 +5616,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§30",
+      "specRef": "§30",
       "path": "internal/engine/coastal/",
       "inbound": {
         "guid": "aa2f1db7-481e-468a-be1c-63cdebf2b0e9",
@@ -5677,7 +5677,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§31; Â§17 (aquifer)",
+      "specRef": "§31; §17 (aquifer)",
       "path": "internal/engine/farming/",
       "inbound": {
         "guid": "cb96fd60-5e1b-43e3-8aee-ee3167183c19",
@@ -5742,7 +5742,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§32; resources-design-brief.md Â§1-3,5,7",
+      "specRef": "§32; resources-design-brief.md §1-3,5,7",
       "path": "internal/engine/mining/",
       "inbound": {
         "guid": "1696baf9-c153-4e81-b358-f2cbb74957dd",
@@ -5832,7 +5832,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "resources-design-brief.md Â§2-3",
+      "specRef": "resources-design-brief.md §2-3",
       "path": "internal/engine/mining/",
       "inbound": {
         "guid": "225e12ba-2cf4-4562-ab0f-6b842435d4e3",
@@ -5868,7 +5868,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "ui",
-      "specRef": "resources-design-brief.md Â§4",
+      "specRef": "resources-design-brief.md §4",
       "path": "internal/ui/screens/map/",
       "inbound": {
         "guid": "8db94cc8-a258-4858-a0f2-fa16477e3917",
@@ -5909,7 +5909,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "resources-design-brief.md Â§5",
+      "specRef": "resources-design-brief.md §5",
       "path": "internal/engine/mining/",
       "inbound": {
         "guid": "6d2d9c17-e2df-471d-bc02-a7e8ef84e5ea",
@@ -5945,7 +5945,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "resources-design-brief.md Â§6",
+      "specRef": "resources-design-brief.md §6",
       "path": "internal/engine/chemicals/",
       "inbound": {
         "guid": "d33ef92f-433f-4a68-9133-d814cff21033",
@@ -5977,11 +5977,11 @@
       "bowType": "feature",
       "seq": 675,
       "sprint": 11,
-      "title": "Facility land-allocation permit system: exp points, milestones, or purchase â€” for ANY large facility",
+      "title": "Facility land-allocation permit system: exp points, milestones, or purchase — for ANY large facility",
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "resources-design-brief.md Â§7",
+      "specRef": "resources-design-brief.md §7",
       "path": "internal/engine/build/",
       "inbound": {
         "guid": "49cbf133-f43b-4339-bede-03481829d76e",
@@ -6034,7 +6034,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "resources-design-brief.md Â§7",
+      "specRef": "resources-design-brief.md §7",
       "path": "internal/engine/finance/",
       "inbound": {
         "guid": "1af92cc2-b68e-4cd2-9a31-52e8abac9fb4",
@@ -6078,7 +6078,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "resources-design-brief.md Â§8",
+      "specRef": "resources-design-brief.md §8",
       "path": "internal/engine/mining/",
       "inbound": {
         "guid": "4fad84c9-39d3-44dc-bef6-f127cf6ed1f0",
@@ -6119,7 +6119,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§33; Â§8 (artery #2)",
+      "specRef": "§33; §8 (artery #2)",
       "path": "internal/engine/freight/",
       "inbound": {
         "guid": "3ce6d7c8-1aa6-46f4-94d1-07a20cf656e3",
@@ -6389,7 +6389,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§36",
+      "specRef": "§36",
       "path": "internal/engine/capexport/",
       "inbound": {
         "guid": "8ed7d8b5-7618-4dec-a75e-986bf896f377",
@@ -6455,7 +6455,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§37",
+      "specRef": "§37",
       "path": "internal/engine/shopping/",
       "inbound": {
         "guid": "5de8a62e-4a5a-4c42-8daa-c3553595f79d",
@@ -6506,7 +6506,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§38",
+      "specRef": "§38",
       "path": "internal/engine/parking/",
       "inbound": {
         "guid": "b08f5ffe-441c-475f-9191-3b0de4589713",
@@ -6547,7 +6547,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§39; Â§49 (fuel-duty erosion)",
+      "specRef": "§39; §49 (fuel-duty erosion)",
       "path": "internal/engine/tax/",
       "inbound": {
         "guid": "ce583be9-355d-4989-be63-cf08a3395f14",
@@ -6614,7 +6614,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§40; A5",
+      "specRef": "§40; A5",
       "path": "internal/engine/social/",
       "inbound": {
         "guid": "5f18ec56-65bd-45a8-a48d-ea42e07228e3",
@@ -6676,11 +6676,11 @@
       "bowType": "module",
       "seq": 750,
       "sprint": 11,
-      "title": "CafÃ© culture & street-life vitality",
+      "title": "Café culture & street-life vitality",
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§41",
+      "specRef": "§41",
       "path": "internal/engine/cafe/",
       "inbound": {
         "guid": "38bd22e2-5295-4e78-a758-b2343e66c208",
@@ -6721,7 +6721,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§42; Â§5.1 (tastes)",
+      "specRef": "§42; §5.1 (tastes)",
       "path": "internal/engine/leisure/",
       "inbound": {
         "guid": "d7d01c42-212d-48f4-b9b9-984bf33bd1ce",
@@ -6799,7 +6799,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§43; Â§36 (sold places)",
+      "specRef": "§43; §36 (sold places)",
       "path": "internal/engine/prison/",
       "inbound": {
         "guid": "66756617-ac6c-4ffd-9063-0dc0956133f5",
@@ -6845,7 +6845,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§44; Â§21 (lets)",
+      "specRef": "§44; §21 (lets)",
       "path": "internal/engine/tourism/",
       "inbound": {
         "guid": "1082096b-c263-4415-b592-29d1e1e0ea63",
@@ -6900,7 +6900,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§45; Â§II.4",
+      "specRef": "§45; §II.4",
       "path": "internal/engine/firms/",
       "inbound": {
         "guid": "f6c47094-fae7-4d93-8267-653b15cc1a2a",
@@ -6992,7 +6992,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§35",
+      "specRef": "§35",
       "path": "internal/engine/comms/",
       "inbound": {
         "guid": "f5f764ed-ee57-41bf-96d4-ccc82dda44ac",
@@ -7058,7 +7058,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§46",
+      "specRef": "§46",
       "path": "internal/engine/fdi/",
       "inbound": {
         "guid": "83febe83-2068-4620-9ba4-88117dd89773",
@@ -7137,7 +7137,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§47",
+      "specRef": "§47",
       "path": "internal/engine/rail/",
       "inbound": {
         "guid": "09b5cb42-7f75-4aaa-b9c6-29e774662c28",
@@ -7201,7 +7201,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§48; Â§32 (reclamation)",
+      "specRef": "§48; §32 (reclamation)",
       "path": "internal/engine/destination/",
       "inbound": {
         "guid": "3d6b9b6a-d30c-49ea-a32d-0dfc70ae4be1",
@@ -7242,7 +7242,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§49",
+      "specRef": "§49",
       "path": "internal/engine/fuel/",
       "inbound": {
         "guid": "7ecc7077-8700-4f45-aa5f-9fe056c4ca73",
@@ -7298,7 +7298,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§50; Â§26 (hazmat); resources-design-brief.md Â§6",
+      "specRef": "§50; §26 (hazmat); resources-design-brief.md §6",
       "path": "internal/engine/chemicals/",
       "inbound": {
         "guid": "182f5e0e-60f0-41c6-b8a7-774c8312572f",
@@ -7373,7 +7373,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§52; Â§II.7",
+      "specRef": "§52; §II.7",
       "path": "internal/engine/policies/",
       "inbound": {
         "guid": "09d0d31a-a860-4a7d-aaf3-868ec16894e2",
@@ -7437,7 +7437,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§53",
+      "specRef": "§53",
       "path": "internal/engine/tunnels/",
       "inbound": {
         "guid": "4d524960-407e-498e-ab8f-cce8f8d459d8",
@@ -7483,7 +7483,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§54; Supp.3 civic",
+      "specRef": "§54; Supp.3 civic",
       "path": "internal/engine/fiscal/",
       "inbound": {
         "guid": "124c2742-157f-413e-a6f9-570d1415fd6f",
@@ -7544,7 +7544,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§55",
+      "specRef": "§55",
       "path": "internal/engine/defence/",
       "inbound": {
         "guid": "417393b9-920b-4818-95c0-6313411c692a",
@@ -7611,12 +7611,12 @@
       "bowType": "interface",
       "seq": 885,
       "sprint": null,
-      "title": "Remote-call policy: retries, rate limiting, authn/z â€” secure & resilient by design",
+      "title": "Remote-call policy: retries, rate limiting, authn/z — secure & resilient by design",
       "priority": "P2",
       "milestone": "future",
       "layer": "cloud",
-      "specRef": "GR#11; Â§15 (cloud path); A9; docs/cloud.md",
-      "path": "cloud/ (planned â€” unbuilt)",
+      "specRef": "GR#11; §15 (cloud path); A9; docs/cloud.md",
+      "path": "cloud/ (planned — unbuilt)",
       "inbound": {
         "guid": "5c8071d9-c119-4822-ab9c-be633e5e1613",
         "name": null,
@@ -7646,7 +7646,7 @@
       "priority": "P3",
       "milestone": "future",
       "layer": "cloud",
-      "specRef": "M0-ENG Â§1; A4; A9",
+      "specRef": "M0-ENG §1; A4; A9",
       "path": "sidecar/solver-gpu/",
       "inbound": {
         "guid": "7bc61f07-d9b4-413a-b283-c1c79eaf96c9",
@@ -7677,7 +7677,7 @@
       "priority": "P3",
       "milestone": "future",
       "layer": "cloud",
-      "specRef": "Â§15; A9; GDD Â§15 cloud path",
+      "specRef": "§15; A9; GDD §15 cloud path",
       "path": "cloud/",
       "inbound": {
         "guid": "049859f7-ce29-44be-9dac-2d7656c83c3f",
@@ -7713,7 +7713,7 @@
       "priority": "P3",
       "milestone": "future",
       "layer": "process",
-      "specRef": "Â§16; V.1 out-of-scope; Â§29 (LLM)",
+      "specRef": "§16; V.1 out-of-scope; §29 (LLM)",
       "path": "docs/",
       "inbound": {
         "guid": "1cf64418-d369-48ec-bb7f-2120022b9231",
@@ -7738,7 +7738,7 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "ui",
-      "specRef": "Â§14; M0-ENG Â§3; docs/planning/acceptance/feat.devmode.md",
+      "specRef": "§14; M0-ENG §3; docs/planning/acceptance/feat.devmode.md",
       "path": "internal/ui/screens/devmode/",
       "inbound": {
         "guid": "61fbd7fa-acff-4e20-9099-02025feb7cda",
@@ -7775,7 +7775,7 @@
       "bowType": "feature",
       "seq": 930,
       "sprint": 3,
-      "title": "FEAT-063: The Helper â€” ask-driven advisor panel over a registered action taxonomy",
+      "title": "FEAT-063: The Helper — ask-driven advisor panel over a registered action taxonomy",
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
@@ -7907,7 +7907,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#23; GR#24; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#23; GR#24; M0-ENG §5 (hooks)",
       "path": "claude-destructive-guard.js",
       "inbound": {
         "guid": "7b39830f-98b7-4d8f-8298-b2ddb16999bc",
@@ -7932,7 +7932,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#2; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#2; M0-ENG §5 (hooks)",
       "path": "claude-version-guard.js",
       "inbound": {
         "guid": "e6363117-37b3-4739-a9d8-79d0f6c57f46",
@@ -7957,7 +7957,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#24; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#24; M0-ENG §5 (hooks)",
       "path": "claude-worktree-guard.js",
       "inbound": {
         "guid": "f7f4374e-5681-4308-8ddc-1cb2e1db4627",
@@ -7982,7 +7982,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks); session coordination",
+      "specRef": "M0-ENG §5 (hooks); session coordination",
       "path": "claude-sync.js",
       "inbound": {
         "guid": "a85436b9-9315-4f9c-85d6-f2c978809ea1",
@@ -8007,7 +8007,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-startup.js",
       "inbound": {
         "guid": "69c6220b-7b09-4dae-b546-27f279d39578",
@@ -8032,7 +8032,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-pre-commit-check.js",
       "inbound": {
         "guid": "d9f01cab-69f0-40ff-a7f8-fa877951f415",
@@ -8057,7 +8057,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#19; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#19; M0-ENG §5 (hooks)",
       "path": "claude-pre-push-check.js",
       "inbound": {
         "guid": "2a401162-86ea-40d6-b055-f88d493ed24c",
@@ -8082,7 +8082,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-ping-check.js",
       "inbound": {
         "guid": "dc042d1b-1978-4e60-9629-77fb81bc81ad",
@@ -8107,7 +8107,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#1; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#1; M0-ENG §5 (hooks)",
       "path": "claude-reflection.js",
       "inbound": {
         "guid": "7ce822d0-9c69-47b2-8852-65c6374dda6f",
@@ -8132,7 +8132,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-statusline.js",
       "inbound": {
         "guid": "9f17638b-f43e-462a-83f3-e78e4dd3cd57",
@@ -8157,7 +8157,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#14; M0-ENG Â§5 (hooks)",
+      "specRef": "GR#14; M0-ENG §5 (hooks)",
       "path": "claude-memory-prefetch.js",
       "inbound": {
         "guid": "de376380-f867-44cf-aa02-f94d39c2c110",
@@ -8182,7 +8182,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "FEAT-076; M0-ENG Â§5 (hooks)",
+      "specRef": "FEAT-076; M0-ENG §5 (hooks)",
       "path": "claude-agent-stop.js",
       "inbound": {
         "guid": "13c19efe-b981-48ad-b642-3738a39f93cf",
@@ -8232,7 +8232,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§4",
+      "specRef": "M0-ENG §4",
       "path": "claude-bow-autoref.js",
       "inbound": {
         "guid": "b53d8d80-f365-47db-9167-bd5c3ebe16b0",
@@ -8257,7 +8257,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§4",
+      "specRef": "M0-ENG §4",
       "path": "claude-bow-ref-check.js",
       "inbound": {
         "guid": "0f2eaf96-dc81-4b52-a753-1b2daf455b5c",
@@ -8357,7 +8357,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-committhook-install.js",
       "inbound": {
         "guid": "41e4133a-3065-41f8-a721-f20a638630fb",
@@ -8382,7 +8382,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§4 (BOW)",
+      "specRef": "M0-ENG §4 (BOW)",
       "path": "claude-db.js",
       "inbound": {
         "guid": "d0e28e4d-a2ad-4ad7-9183-f35c92438db3",
@@ -8403,7 +8403,7 @@
       "bowType": "feature",
       "seq": 971,
       "sprint": 0,
-      "title": "In-game feedback importer into the BOW (attribution from the submitting toolâ€™s mkey)",
+      "title": "In-game feedback importer into the BOW (attribution from the submitting tool’s mkey)",
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
@@ -8432,7 +8432,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "FEAT-076; M0-ENG Â§5 (hooks)",
+      "specRef": "FEAT-076; M0-ENG §5 (hooks)",
       "path": "claude-dispatch-log.js",
       "inbound": {
         "guid": "358fe108-6b6e-409e-ade5-b239e53dc040",
@@ -8457,7 +8457,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-git-commit-trigger.js",
       "inbound": {
         "guid": "f7c05a1e-2933-4acc-ab8e-dc714e478639",
@@ -8582,7 +8582,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "M0-ENG Â§5 (hooks)",
+      "specRef": "M0-ENG §5 (hooks)",
       "path": "claude-trailer-checker.js",
       "inbound": {
         "guid": "d364bbfb-61b6-441f-aa52-0ef1266b06a0",
@@ -8632,7 +8632,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§MP; Â§44; Â§46; Â§33; Â§32",
+      "specRef": "§MP; §44; §46; §33; §32",
       "path": "internal/engine/airport/",
       "inbound": {
         "guid": "eeb7203d-d22b-4e09-87ce-647e4c9f28a8",
@@ -8698,7 +8698,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§33; Â§47; Â§28; Â§PT; resources-design-brief.md Â§8-Â§9",
+      "specRef": "§33; §47; §28; §PT; resources-design-brief.md §8-§9",
       "path": "internal/engine/freight/",
       "inbound": {
         "guid": "07aa4d96-297d-4a74-8be8-59fd308c8f24",
@@ -8744,7 +8744,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§53; Â§MP; Â§47; Â§32",
+      "specRef": "§53; §MP; §47; §32",
       "path": "internal/engine/tunnels/",
       "inbound": {
         "guid": "a21094dc-531f-4da3-bbfd-7714e1054693",
@@ -8780,7 +8780,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§MP; resources-design-brief.md Â§8",
+      "specRef": "§MP; resources-design-brief.md §8",
       "path": "internal/engine/spaceport/",
       "inbound": {
         "guid": "da932e36-b1a5-4e83-84a8-86611a79e99e",
@@ -8851,7 +8851,7 @@
       "priority": "P3",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§MP; resources-design-brief.md Â§8",
+      "specRef": "§MP; resources-design-brief.md §8",
       "path": "internal/engine/accelerator/",
       "inbound": {
         "guid": "21c44cd9-cad9-4c35-a98f-44cef0971bfa",
@@ -8922,7 +8922,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§46; Â§45; Â§27; Â§32; Â§54; resources-design-brief.md Â§6",
+      "specRef": "§46; §45; §27; §32; §54; resources-design-brief.md §6",
       "path": "internal/engine/fdi/",
       "inbound": {
         "guid": "584f2e55-b4fc-43eb-8d01-441f78ffdc1f",
@@ -8963,7 +8963,7 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§50; Â§49; Â§26; Â§32; Â§33; resources-design-brief.md Â§6",
+      "specRef": "§50; §49; §26; §32; §33; resources-design-brief.md §6",
       "path": "internal/engine/chemicals/",
       "inbound": {
         "guid": "490225c4-7e09-4df9-84bd-b1116235e8bb",
@@ -8995,11 +8995,11 @@
       "bowType": "feature",
       "seq": 993,
       "sprint": 11,
-      "title": "Mine types â€” extractive facility catalogue",
+      "title": "Mine types — extractive facility catalogue",
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§32; Â§34; Â§17; resources-design-brief.md Â§2/Â§9",
+      "specRef": "§32; §34; §17; resources-design-brief.md §2/§9",
       "path": "internal/engine/mining/",
       "inbound": {
         "guid": "3b44be1f-d203-4514-812e-e1aaddb679b2",
@@ -9031,11 +9031,11 @@
       "bowType": "feature",
       "seq": 994,
       "sprint": 11,
-      "title": "Farm types â€” agricultural facility catalogue",
+      "title": "Farm types — agricultural facility catalogue",
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§31; Â§17; Â§25",
+      "specRef": "§31; §17; §25",
       "path": "internal/engine/farming/",
       "inbound": {
         "guid": "aaf7120e-c300-41e2-9389-2e6aae0a75c8",
@@ -9067,11 +9067,11 @@
       "bowType": "feature",
       "seq": 995,
       "sprint": 10,
-      "title": "Factory unit types â€” manufacturing facility catalogue",
+      "title": "Factory unit types — manufacturing facility catalogue",
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§33; Â§46; Â§34; Â§17; Â§45",
+      "specRef": "§33; §46; §34; §17; §45",
       "path": "internal/engine/freight/",
       "inbound": {
         "guid": "7b1d33a8-88ad-4b61-b01d-93b7327fb8cd",
@@ -9102,7 +9102,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§13 F6; Â§18; Â§40; Â§45; Â§46; UI-SPEC Â§4/Â§5.2",
+      "specRef": "§13 F6; §18; §40; §45; §46; UI-SPEC §4/§5.2",
       "path": "internal/engine/census/",
       "inbound": {
         "guid": "b1ff934b-5ea2-4ed8-96d4-0a07be8aec28",
@@ -9363,7 +9363,7 @@
       "priority": "P1",
       "milestone": "M0",
       "layer": "tooling",
-      "specRef": "GR#3; GR#20; M0-ENG Â§5; dev-team-process v1.6.1/v1.7; BUG-238",
+      "specRef": "GR#3; GR#20; M0-ENG §5; dev-team-process v1.6.1/v1.7; BUG-238",
       "path": "claude-file-claim-guard.js",
       "inbound": {
         "guid": "ee50c00d-744e-4dd7-a156-f207c2344a02",
@@ -9388,7 +9388,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Â§5.1; Â§18; Â§19.3; Â§21; Â§26; Â§42; Â§52; Â§54; Â§5.2",
+      "specRef": "§5.1; §18; §19.3; §21; §26; §42; §52; §54; §5.2",
       "path": "internal/engine/worklife/",
       "inbound": {
         "guid": "7069c291-d733-4ce3-9204-525be1325267",
