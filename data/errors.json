@@ -4590,6 +4590,30 @@
       "module": "ui.router",
       "message": "receiver panicked handling routed {kind} for key {key} (tick {tick}): {cause}",
       "remedy": "The registered receiver (ResultReceiver/DeltaReceiver/EventReceiver) panicked while handling this routed message. The router recovers, logs, and continues routing subsequent messages (T2 lossy-by-design -- one poisoned message must never stop routing); the panic is the receiving screen's own bug to fix, not the router's. Check the named receiver kind + routing key's own ApplyResult/ApplyDelta/ApplyEvent implementation."
+    },
+    "MET-G4501": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "citizen {citizen} is not a valid citizen ID for a traffic query",
+      "remedy": "Pass a non-zero citizen ID. Citizen ID 0 is never valid and is rejected rather than silently answering with a fabricated commute time."
+    },
+    "MET-G4502": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "invalid traffic input ({context})",
+      "remedy": "Reject negative trip/demand counts, negative or non-finite link lengths/volumes, and config values that fail validateConfig (finite, positive/non-negative per field) rather than silently accepting them (GR#7/GR#15/GR#16)."
+    },
+    "MET-G4503": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "link {link} BPR travel time computation would be non-finite",
+      "remedy": "LinkTravelTime rejects a non-positive/non-finite capacity, a negative/non-finite volume, or a non-finite computed travel time (overflowing V/C^beta) rather than returning +Inf/NaN with a nil error (MOD-023 r2 destructive verdict)."
+    },
+    "MET-G4599": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "TrafficAPI method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *TrafficAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased demand/node/link maps but has its own independent mutex, the SEC-020-class hazard every Register-shaped module in this codebase rejects before any lock is touched."
     }
   }
 }
