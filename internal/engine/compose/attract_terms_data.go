@@ -24,8 +24,10 @@ const attractTermsFile = "attract_terms.json"
 // attractTermsData is the decoded, validated shape of
 // data/attract_terms.json.
 type attractTermsData struct {
-	Environment attractTermsEnvironment `json:"environment"`
-	Leisure     attractTermsLeisure     `json:"leisure"`
+	Environment     attractTermsEnvironment     `json:"environment"`
+	Leisure         attractTermsLeisure         `json:"leisure"`
+	JobAvailability attractTermsJobAvailability `json:"jobAvailability"`
+	ServiceCoverage attractTermsServiceCoverage `json:"serviceCoverage"`
 }
 
 // attractTermsEnvironment holds the Environment term's half-saturation
@@ -50,6 +52,34 @@ type attractTermsLeisure struct {
 	// (engine.leisure.OpenVenue itself rejects a non-positive capacity).
 	BridgeVenueCapacityUnits int64  `json:"bridgeVenueCapacityUnits"`
 	Comment                  string `json:"comment"`
+}
+
+// attractTermsJobAvailability holds the JobAvailability term's half-
+// saturation curve parameter (jobAvailabilityTerm in servicesfirms_wire.go,
+// FEAT-167 completion via docs/planning/icd/engine.firms-labourmarket.md).
+type attractTermsJobAvailability struct {
+	// VacancyRateHalfSaturationPerMille is the engine.firms
+	// LabourMarket().VacancyRatePerMille value at which the JobAvailability
+	// term reads 50/100 — the same half-saturation curve shape Environment's
+	// pollutionHalfSaturationKg uses, applied here because
+	// VacancyRatePerMille carries no upper bound (the labour-market ICD's
+	// own doc: "there is NO upper clamp"). Must be finite and > 0.
+	VacancyRateHalfSaturationPerMille float64 `json:"vacancyRateHalfSaturationPerMille"`
+	Comment                           string  `json:"comment"`
+}
+
+// attractTermsServiceCoverage holds the ServiceCoverage term's scale
+// parameter (serviceCoverageTerm in servicesfirms_wire.go, FEAT-167
+// completion via docs/planning/icd/engine.services-coverage.md).
+type attractTermsServiceCoverage struct {
+	// CoverageRatioScalePercent scales engine.services'
+	// CoverageSummary().CoverageRatio (already clamped [0,1], or exactly 1.0
+	// when city-wide TotalDemand is zero — coverage.go's coverageRatio) onto
+	// attract's [0,100] term scale: term = 100 * CoverageRatio *
+	// (CoverageRatioScalePercent/100). 100 is the neutral (no-op) scale; a
+	// future balance pass may tune it without a code change. Must be > 0.
+	CoverageRatioScalePercent float64 `json:"coverageRatioScalePercent"`
+	Comment                   string  `json:"comment"`
 }
 
 // loadAttractTermsData resolves the data/ directory (foundation/data's
@@ -89,6 +119,20 @@ func loadAttractTermsData(correlationID string) (attractTermsData, error) {
 			"module": "attract_terms_data",
 			"field":  "leisure.bridgeVenueCapacityUnits",
 			"value":  d.Leisure.BridgeVenueCapacityUnits,
+		})
+	}
+	if !num.IsFinite(d.JobAvailability.VacancyRateHalfSaturationPerMille) || d.JobAvailability.VacancyRateHalfSaturationPerMille <= 0 {
+		return attractTermsData{}, errs.New(ErrModuleFailed, correlationID, map[string]any{
+			"module": "attract_terms_data",
+			"field":  "jobAvailability.vacancyRateHalfSaturationPerMille",
+			"value":  d.JobAvailability.VacancyRateHalfSaturationPerMille,
+		})
+	}
+	if !num.IsFinite(d.ServiceCoverage.CoverageRatioScalePercent) || d.ServiceCoverage.CoverageRatioScalePercent <= 0 {
+		return attractTermsData{}, errs.New(ErrModuleFailed, correlationID, map[string]any{
+			"module": "attract_terms_data",
+			"field":  "serviceCoverage.coverageRatioScalePercent",
+			"value":  d.ServiceCoverage.CoverageRatioScalePercent,
 		})
 	}
 	return d, nil
