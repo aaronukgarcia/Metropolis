@@ -194,7 +194,7 @@ func TestCafe_AC6_IsolationReduction(t *testing.T) {
 	}
 }
 
-func TestCafe_AC7_Instruments(t *testing.T) {
+func TestCafe_AC7_PedestrianisationAndMarketDay(t *testing.T) {
 	api := New()
 	_ = api.RegisterCentre(1, 100.0, 10.0)
 
@@ -253,7 +253,7 @@ func TestCafe_AC8_LeverageRatio(t *testing.T) {
 	}
 }
 
-func TestCafe_AC10_UnregisteredCentreError(t *testing.T) {
+func TestCafe_AC10_UnknownCentre(t *testing.T) {
 	api := New()
 	_, err := api.VitalityIndex(999, 0)
 	if err == nil {
