@@ -1,6 +1,9 @@
 package data
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // This file is §21's own: the off-map external world — the named job
 // pools citizens out-commute to (and in-commuters arrive from), each
@@ -194,7 +197,11 @@ func validateTransportRequirement(prefix string, reqs []TransportRequirement) er
 			return fieldErr(p+".availableFromTier",
 				fmt.Sprintf("must be a milestone tier %d-%d, got %d", milestoneTierMin, milestoneTierMax, r.AvailableFromTier))
 		}
-		if r.Channel == "externalRail" && r.AvailableFromTier < externalRailUnlockTier {
+		// The gate is on the normalised (trimmed) channel name (SEC-059): a
+		// whitespace-padded "externalRail" variant must still be caught by
+		// the tier-5 gate rather than silently comparing unequal to the
+		// exact literal and being treated as an ungated channel.
+		if strings.TrimSpace(r.Channel) == "externalRail" && r.AvailableFromTier < externalRailUnlockTier {
 			return fieldErr(p+".availableFromTier",
 				fmt.Sprintf("externalRail must be gated to tier >= %d, got %d", externalRailUnlockTier, r.AvailableFromTier))
 		}
