@@ -99,4 +99,27 @@
 // every map that feeds a result is iterated in sorted key order (GR#21).
 // Repeated runs from identical state yield byte-identical founder IDs,
 // stage transitions, and failure events across worker counts.
+//
+// # The vacancy-vs-workforce labour-market aggregate (AC-21..AC-27)
+//
+// [FirmsAPI.TotalVacancies] returns the city-wide vacancy count — Σ over
+// every firm of max(0, bandCeiling(stage) − len(Staff)) — where Staff is
+// the firm's real CitizenID roster (AC-4) and bandCeiling is derived from
+// data/firms.json (GR#15): the next stage's minStaff − 1 for
+// Startup/Small/Medium, and the data-declared labourMarket.enterpriseCeiling
+// for Enterprise (which §45 leaves unbounded, "250+"). [FirmsAPI.LabourMarket]
+// returns the same vacancy count together with Workforce — read live from
+// CitizensAPI.TotalPopulation over the already-registered engine.firms →
+// engine.citizens edge — and the per-mille ratio
+//
+//	VacancyRatePerMille = 0 when Workforce == 0, else vacancies×1000/workforce
+//
+// (integer arithmetic, division-by-zero guarded, never NaN/Inf; no upper
+// clamp, so a rate above 1000‰ is legal and grows strictly with vacancies).
+// Workforce is a labour-supply PROXY: CitizensAPI exposes no
+// working-age/unemployment aggregate today, so the denominator is
+// vacancies-per-resident rather than vacancies-per-seeker — a coarse but
+// honest signal, refinable later by a citizens-side unemployment aggregate.
+// Calling LabourMarket before SetCitizens fails closed with
+// ErrDependencyMissing (MET-G1409), never a silent zero Workforce.
 package firms

@@ -211,6 +211,7 @@ func validRawFirmsData() rawFirmsData {
 			StageSpreadBp:                 map[string]int64{"startup": 300, "small": 200, "medium": 100, "enterprise": 0},
 			BaseRateCycle:                 []rawRatePoint{{Month: 0, BaseRateBp: 500}},
 		},
+		LabourMarket: rawLabourMarket{EnterpriseCeiling: 500},
 	}
 }
 
