@@ -344,6 +344,8 @@
         "ui.screen.map",
         "ui.screen.proj",
         "ui.screen.trade",
+        "ui.screen.services",
+        "ui.screen.districts",
         "ui.alerts",
         "ui.screen.ticker",
         "foundation.errors"
@@ -1525,7 +1527,8 @@
       "calls": [
         "engine.finance",
         "engine.tax",
-        "engine.fiscal"
+        "engine.fiscal",
+        "int.protocol"
       ],
       "sprint": 8
     },
@@ -1570,7 +1573,8 @@
       ],
       "calls": [
         "engine.services",
-        "engine.dispatch"
+        "engine.dispatch",
+        "int.protocol"
       ],
       "sprint": 8
     },
@@ -1715,7 +1719,31 @@
       ],
       "calls": [
         "engine.policies",
-        "engine.tax"
+        "engine.tax",
+        "int.protocol"
+      ],
+      "sprint": 9
+    },
+    {
+      "key": "ui.screen.census",
+      "type": "feature",
+      "seq": 595,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "title": "F6 Census screen: demographics/KPI drill-in",
+      "desc": "Demographics/KPI drill-in rendering over engine.census's CensusAPI (splines, GDP, happiness, employment); consumes the living-census/life-history read surface without holding world state itself (ASM-642/643 split: engine-side data model stays MOD-078/engine.census, this item is UI rendering only).",
+      "specRef": "Â§13-F6; Â§45; Â§46; UI-SPEC Â§4/Â§5.2",
+      "path": "internal/ui/screens/census/",
+      "deps": [
+        "ui.dash"
+      ],
+      "calls": [
+        "ui.core",
+        "ui.widgets",
+        "int.protocol",
+        "foundation.errors",
+        "engine.census"
       ],
       "sprint": 9
     },
