@@ -2861,6 +2861,7 @@
         "engine.finance",
         "engine.citizens",
         "engine.world",
+        "engine.spiral",
         "foundation.data",
         "foundation.det",
         "foundation.errors",

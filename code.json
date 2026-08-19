@@ -3753,6 +3753,10 @@
           {
             "key": "engine.crime",
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
+          },
+          {
+            "key": "engine.defence",
+            "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           }
         ]
       },
@@ -7421,6 +7425,11 @@
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
             "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "engine.spiral",
+            "moduleGuid": "3a339420-be56-4126-bae7-086e7d20fdb8",
+            "inboundGuid": "839b5566-8881-4322-adc8-461381e039ad"
           },
           {
             "key": "foundation.data",
