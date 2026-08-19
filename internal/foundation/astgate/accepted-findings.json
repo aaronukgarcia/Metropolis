@@ -1614,5 +1614,49 @@
   {
     "finding": "internal/foundation/integration/metrics_server.go||function (parameter)|ServeMetrics|reg|*Registry",
     "reason": "FEAT-191 increment 5 (internal/foundation/integration/metrics_server.go): same shape and same reasoning as this file's NewMetricsHandler|reg finding immediately above -- ServeMetrics never touches any field on reg directly; it passes reg straight through to NewMetricsHandler(reg), whose own already-reviewed acceptance covers the one place reg is actually used (the deferred, already-guarded reg.Snapshot() call inside the /metrics.json closure). ServeMetrics' own body only nil-checks reg (a plain pointer comparison, not a field/method access) before that hand-off."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|handleResult|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper reached only through Run, an already-guarded entry point (Run calls checkNotCopied before draining any channel) on the same already-validated receiver, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|handleDelta|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper reached only through Run, an already-guarded entry point (Run calls checkNotCopied before draining any channel) on the same already-validated receiver, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|handleEvent|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper reached only through Run, an already-guarded entry point (Run calls checkNotCopied before draining any channel) on the same already-validated receiver, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|invokeResultReceiver|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper called only from handleResult, itself reached only through Run (already-guarded entry point) on the same already-validated receiver, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|invokeDeltaReceiver|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper called only from handleDelta, itself reached only through Run (already-guarded entry point) on the same already-validated receiver, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|invokeEventReceiver|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper called only from handleEvent, itself reached only through Run (already-guarded entry point) on the same already-validated receiver, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|recoverReceiverPanic|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported helper invoked only via defer from invokeResultReceiver/invokeDeltaReceiver/invokeEventReceiver, each of which is itself reached only through Run (already-guarded entry point) on the same already-validated receiver, so a second guard is redundant -- and would be actively harmful here: recoverReceiverPanic must run to completion inside a deferred recover() regardless of which panic-prone receiver call it is unwinding from, and a checkNotCopied early-return would risk leaving recover() uncalled on some path, reopening the exact GR#1 process-crash defect this helper exists to close. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|advanceTickLocked|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported *Locked-suffixed helper, called with the candidate type's mutex (r.mu) already held by an already-guarded entry point (handleResult/handleDelta/handleEvent, each reached only through Run), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go|*Router|receiver method|pruneStaleLocked|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): unexported *Locked-suffixed helper, called with the candidate type's mutex (r.mu) already held by an already-guarded entry point (handleResult/handleDelta/handleEvent, each reached only through Run), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots); the independent round verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/ui/router/router.go||function (parameter)|<func literal at line 120>|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): this is New's Option-pattern closure (WithCorrelationID) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside New's own 'for _, opt := range opts { opt(r) }' loop, strictly BEFORE r.self.Store(r) runs and BEFORE r is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Router] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to r to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Router parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithCorrelationID returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, mirroring internal/engine/core/engine.go's identical NewEngine Option-closure precedent."
+  },
+  {
+    "finding": "internal/ui/router/router.go||function (parameter)|<func literal at line 130>|r|*Router",
+    "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): this is New's Option-pattern closure (WithPendingResultTTL) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside New's own 'for _, opt := range opts { opt(r) }' loop, strictly BEFORE r.self.Store(r) runs and BEFORE r is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Router] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to r to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Router parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithPendingResultTTL returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, mirroring internal/engine/core/engine.go's identical NewEngine Option-closure precedent."
   }
 ]

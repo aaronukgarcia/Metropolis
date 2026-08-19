@@ -453,29 +453,61 @@ func (r *Router) pruneStaleLocked() {
 // DeltaGapCount returns the cumulative number of skipped Delta.Seq values
 // this Router has observed across every subscription (ICD §10's "drop/gap
 // rate" monitoring signal). Safe for concurrent use.
-func (r *Router) DeltaGapCount() uint64 { return r.deltaGaps.Load() }
+//
+// checkNotCopied guarded (SEC-020 family): unlike the unexported handle*/
+// invoke*/*Locked helpers (astgate-accepted, accepted-findings.json —
+// reached only through Run's own guarded entry), this is a directly
+// callable EXPORTED method any caller (monitoring code, tests) can invoke
+// on whatever *Router value it holds — including a struct copy — so it
+// gets its own guard, mirroring build.Screen.Stale()'s identical pattern
+// for a simple no-lock accessor.
+func (r *Router) DeltaGapCount() uint64 {
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "DeltaGapCount"}); err != nil {
+		return 0
+	}
+	return r.deltaGaps.Load()
+}
 
 // RouteMissCount returns the cumulative number of routing-table misses
 // (unregistered CorrelationID/SubscriptionID/Event.Kind, plus stale-pruned
 // result registrations) this Router has raised MET-V400 for. Safe for
-// concurrent use.
-func (r *Router) RouteMissCount() uint64 { return r.routeMisses.Load() }
+// concurrent use. checkNotCopied guarded — see DeltaGapCount's doc comment.
+func (r *Router) RouteMissCount() uint64 {
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "RouteMissCount"}); err != nil {
+		return 0
+	}
+	return r.routeMisses.Load()
+}
 
 // PanicCount returns the cumulative number of registered-receiver panics
 // this Router has recovered from (recoverReceiverPanic, above; MET-V403).
 // A non-zero value means some screen's ApplyResult/ApplyDelta/ApplyEvent
 // panicked -- the router survived and kept routing, but the panicking
 // receiver's own bug still needs fixing (doc.go's policy). Safe for
-// concurrent use.
-func (r *Router) PanicCount() uint64 { return r.panics.Load() }
+// concurrent use. checkNotCopied guarded — see DeltaGapCount's doc comment.
+func (r *Router) PanicCount() uint64 {
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "PanicCount"}); err != nil {
+		return 0
+	}
+	return r.panics.Load()
+}
 
 // PendingResultCount returns the number of CorrelationIDs currently
 // registered via RegisterResultHandler awaiting their CommandResult. Safe
 // for concurrent use — used by tests and monitoring to observe pruning
-// behaviour.
+// behaviour. checkNotCopied guarded, double-checked around the lock
+// (pre-lock per SEC-016, and again after acquiring r.mu, defence in
+// depth) — mirrors build.Screen.Stale()'s identical lock-taking-accessor
+// pattern exactly.
 func (r *Router) PendingResultCount() int {
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "PendingResultCount"}); err != nil {
+		return 0
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "PendingResultCount"}); err != nil {
+		return 0
+	}
 	return len(r.pending)
 }
 
@@ -486,7 +518,11 @@ func (r *Router) PendingResultCount() int {
 // outbound kinds; v1 has no per-kind drop policy, but pressure must at
 // least be observable). Safe for concurrent use — cap/len on a channel
 // are always safe to read concurrently with sends/receives on it.
+// checkNotCopied guarded — see DeltaGapCount's doc comment.
 func (r *Router) ResultBufferOccupancy() float64 {
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "ResultBufferOccupancy"}); err != nil {
+		return 0
+	}
 	c := cap(r.resultsCh)
 	if c <= 0 {
 		return 0
