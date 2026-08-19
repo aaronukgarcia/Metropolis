@@ -20,6 +20,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
@@ -184,6 +185,15 @@ type Deps struct {
 	// when its source module's state changes
 	// (docs/planning/icd/engine.firms-labourmarket.md §11).
 	Firms *firms.FirmsAPI
+
+	// LoadTraffic overrides construction of the FEAT-206 engine.traffic
+	// dependency (defaults to loadDefaultTraffic — traffic.New() +
+	// LoadConfig against the resolved data/ dir, mirroring LoadMarket's
+	// shape above). nil is the common boot case; the test seam lets a
+	// caller inject a failing loader and assert Wire returns
+	// ErrModuleFailed naming "traffic" with zero hooks left behind (AC-4's
+	// discipline, docs/planning/icd/engine.traffic-tick.md §2/§8).
+	LoadTraffic func(correlationID string) (*traffic.TrafficAPI, error)
 }
 
 // moduleRegistration is one fixed slot in the composition order.
@@ -208,6 +218,18 @@ type moduleRegistration struct {
 // alone on PhasePopulation now that citizens has moved off it.
 var registrationOrder = []moduleRegistration{
 	{name: "world", phase: core.PhaseProduction, hook: func(st *simState) core.PhaseHook { return noopHook{name: "world", st: st} }},
+	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): traffic's
+	// AdvanceTick registers on PhaseDailyTick, and MUST come before every
+	// other PhaseDailyTick registration below it in this slice (citizens,
+	// build, invariant) — traffic's own doc.go "Day-boundary contract"
+	// requires the reset to run "before that day's demand-generating
+	// systems... run their own tick logic for the day". Placed
+	// immediately after "world" (a different, monthly phase — its
+	// position relative to traffic carries no ordering meaning) so the
+	// slice reads world -> traffic -> citizens -> ... and, restricted to
+	// just the PhaseDailyTick subset, traffic -> citizens -> build ->
+	// invariant.
+	{name: "traffic", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &trafficTickHook{st: st} }},
 	// FEAT-169: citizens registers on the DAILY tick (not PhasePopulation)
 	// because CitizensAPI.AdvanceDayTick is itself a once-per-day-tick call
 	// (its own amortised 1/30-shards-per-day cold pass) and the ICD's T0
@@ -335,6 +357,19 @@ func (c *Composition) VitalDeaths() int64 {
 // assign/release proof, reaches it through.
 func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
 	return c.state.extCommute
+}
+
+// Traffic returns the wired FEAT-206 engine.traffic handle
+// (docs/planning/icd/engine.traffic-tick.md). Baseline one routes no other
+// demand-generating module (engine.shopping, engine.dispatch — neither
+// exists in this codebase yet) through it besides this package's own
+// AdvanceTick hook and extcommute's read-only Congestion seam
+// (traffic_wire.go); this accessor is the seam a future demand-generating
+// module's SetTraffic wiring, and today's tests (the AC-required
+// unbounded-demand regression and day-boundary ordering proofs), reach the
+// composed instance through — mirrors ExtCommute() above.
+func (c *Composition) Traffic() *traffic.TrafficAPI {
+	return c.state.traffic
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -574,6 +609,26 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
 	}
 
+	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): construct the
+	// real engine.traffic dependency BEFORE extcommute below, so its
+	// TrafficSeam adapter (extCommuteTrafficSeamAdapter, traffic_wire.go)
+	// can be built against a live instance instead of the old free-flow
+	// stub. Resolved before the first hook registers, like every other
+	// required module above (AC-4 — no partially-wired engine on a
+	// construction failure).
+	loadTraffic := deps.LoadTraffic
+	if loadTraffic == nil {
+		loadTraffic = loadDefaultTraffic
+	}
+	trafficAPI, err := loadTraffic(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "traffic"})
+	}
+	trafficSeam, err := newExtCommuteTrafficSeamAdapter(trafficAPI, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "traffic"})
+	}
+
 	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
 	// Wire-time identity-map cross-check MUST run before extcommute's
 	// citizens-seam adapter is ever exercised (§3/§11 "identity-map
@@ -597,10 +652,14 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	if err := extCommuteAPI.SetCitizensSeam(&extCommuteCitizensSeam{api: c, cid: cid}); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
 	}
-	// TrafficSeam is the documented free-flow stub (ICD §12 open decision
-	// 2, FEAT-206's gate) — engine.traffic is not constructed anywhere in
-	// this package and exposes no Congestion query yet.
-	if err := extCommuteAPI.SetTrafficSeam(extCommuteTrafficSeamStub{}); err != nil {
+	// FEAT-206: TrafficSeam is now the real derivation off the composed
+	// *traffic.TrafficAPI (traffic_wire.go's extCommuteTrafficSeamAdapter),
+	// replacing the old always-0.0 extCommuteTrafficSeamStub free-flow
+	// placeholder (ICD §12 open decision 2 is now closed for this seam;
+	// extCommuteTrafficSeamStub itself is left in extcommute_wire.go,
+	// unused by Wire, as the documented historical baseline
+	// TestExtCommute_TrafficSeamStub_IsFreeFlow still pins).
+	if err := extCommuteAPI.SetTrafficSeam(trafficSeam); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
 	}
 	if err := extCommuteAPI.SetFinanceSeam(&extCommuteFinanceSeam{
@@ -648,6 +707,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		refuse:                  refuseAPI,
 		services:                servicesAPI,
 		firms:                   firmsAPI,
+		traffic:                 trafficAPI,
 		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
@@ -779,6 +839,16 @@ type simState struct {
 	// crime/leisure/refuse above.
 	services *services.ServicesAPI
 	firms    *firms.FirmsAPI
+
+	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
+	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
+	// AdvanceTick on it once per simulated day; extCommuteTrafficSeamAdapter
+	// (constructed in Wire, held by extCommute's TrafficSeam field, not
+	// here) reads its CommuteHours live. Stored here too — mirroring
+	// finance's own doc comment above — so a future demand-generating
+	// hook this package adds, and today's tests via Composition.Traffic(),
+	// can reach the same instance without re-threading it.
+	traffic *traffic.TrafficAPI
 
 	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
 	// off-map external-commuting module, wired with its three seam
