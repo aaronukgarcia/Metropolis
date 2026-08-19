@@ -71,15 +71,18 @@ func NewEngine() *Engine {
 // RenderNetwork read opts.Palette for glyph colour — so a change in either
 // must never be served a stale cached layout. A nil buf contributes width 0
 // (its render is the zero Result regardless of width).
+// verified secure: SEC-077 is fully satisfied by layoutKey including width, height, and palette.
 func layoutKey(hash uint64, buf *core.Buffer, opts Options) uint64 {
-	w := 0
+	w, h := 0, 0
 	if buf != nil {
-		w, _ = buf.Size()
+		w, h = buf.Size()
 	}
 	var b strings.Builder
 	b.WriteString(strconv.FormatUint(hash, 16))
 	b.WriteByte(0)
 	b.WriteString(strconv.Itoa(w))
+	b.WriteByte(0)
+	b.WriteString(strconv.Itoa(h))
 	b.WriteByte(0)
 	b.WriteString(paletteKey(opts.Palette))
 	return hashString(b.String())

@@ -71,6 +71,35 @@ func TestSEC077_NetworkCacheKeyIncludesPalette(t *testing.T) {
 	}
 }
 
+// TestSEC077_NetworkCacheKeyIncludesHeight renders the same network topology
+// through the Engine cache under two different buffer heights and asserts they do
+// not share cache entries (SEC-077 height omission). A tall-buffer render getting
+// cached for a short buffer would bypass validateGridCoords constraints checks.
+func TestSEC077_NetworkCacheKeyIncludesHeight(t *testing.T) {
+	net := NetworkTopology{
+		Mode: NetworkGrid,
+		Nodes: []NetworkNode{
+			{ID: "A", Label: "a", X: 0, Y: 0},
+			{ID: "B", Label: "b", X: 0, Y: 5},
+		},
+		Edges: []NetworkEdge{{ID: "e1", From: "A", To: "B", Load: 0.1}},
+	}
+	e := NewEngine()
+
+	// Render on tall buffer first
+	tall := core.NewBuffer(20, 50)
+	if _, err := e.Network(tall, net, Options{}); err != nil {
+		t.Fatalf("tall render: %v", err)
+	}
+
+	// Render on short buffer which should REJECT due to span > height
+	short := core.NewBuffer(20, 3)
+	_, err := e.Network(short, net, Options{})
+	if err == nil {
+		t.Fatal("expected short render to fail validateGridCoords, but it hit the tall buffer cache entry and was accepted (SEC-077 height omission)")
+	}
+}
+
 // TestSEC067_OutOfRangeCoordinatesRejected asserts an oversized network grid
 // coordinate is rejected with a registry error and a zero Result before any
 // traversal (SEC-067), covering both rejection paths: a coordinate magnitude
