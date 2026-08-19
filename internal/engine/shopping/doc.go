@@ -24,10 +24,11 @@
 //
 // # Outstanding Gaps & Outbound Blockers (BUG-058):
 //
-// This module has two major outstanding architectural gaps:
-//  1. Sourcing "whose trip is this" (household location, income, typology) lacks a registered
-//     edge in code.json to any demand-generating source (like engine.households).
-//  2. Sourcing online-delivery-share dynamically lacks a registered edge to engine.comms.
+// This module has one major outstanding architectural gap:
+//  1. Sourcing online-delivery-share dynamically lacks a registered edge to engine.comms.
+//
+// Note: Sourcing the "whose trip is this" location and demographic details is now resolved
+// via the registered outbound edge to engine.citizens.
 //
 // Both inputs are currently structured around marked, fallback placeholders.
 package shopping

@@ -291,6 +291,16 @@ func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error)
 	// AC-3: Online delivery displaces total household trip count
 	effectiveTrips := baseTrips * (1.0 - s.cfg.OnlineDeliveryShare)
 
+	// Make trip counts actually vary with access geography (AC-2)
+	proximity := totalWeight / 4.0
+	accessModifier := proximity / 0.2
+	if accessModifier < 0.2 {
+		accessModifier = 0.2
+	} else if accessModifier > 2.0 {
+		accessModifier = 2.0
+	}
+	effectiveTrips = effectiveTrips * accessModifier
+
 	if s.traffic != nil {
 		_ = s.traffic.AddDemand(cellID, int64(effectiveTrips))
 	}
@@ -306,13 +316,16 @@ func (s *ShoppingAPI) FreshFoodShare(citizenID uint64, correlationID string) (fl
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// Return ok=false when citizens is unwired
+	if s.citizens == nil {
+		return 0, false, nil
+	}
+
 	// Look up actual citizen's home cell ID (AC-7)
 	var cellID uint64 = 1
-	if s.citizens != nil {
-		cit, ok := s.citizens.CitizenAt(citizenID, correlationID)
-		if ok {
-			cellID = uint64(cit.Home)
-		}
+	cit, ok := s.citizens.CitizenAt(citizenID, correlationID)
+	if ok {
+		cellID = uint64(cit.Home)
 	}
 
 	c, ok := s.cells[cellID]

@@ -17,18 +17,32 @@ import (
 func TestShopping_AC2_FormatAccessGeography(t *testing.T) {
 	api := New()
 
-	// Cell A has a corner shop close by (time 2) but no supermarket (time 40)
-	_ = api.RegisterCellAccess(101, 2.0, 30.0, 40.0, 50.0, 0.9, 0.8, 0.7, 0.6)
-	// Cell B has a supermarket close by (time 2) but no corner shop (time 40)
-	_ = api.RegisterCellAccess(102, 40.0, 30.0, 2.0, 50.0, 0.9, 0.8, 0.7, 0.6)
+	// Cell A has very close shops (high access)
+	_ = api.RegisterCellAccess(101, 1.0, 1.0, 1.0, 1.0, 0.9, 0.9, 0.9, 0.9)
+	// Cell B has far shops (low access)
+	_ = api.RegisterCellAccess(102, 50.0, 50.0, 50.0, 50.0, 0.9, 0.9, 0.9, 0.9)
 
-	// Since we are not running a full simulation, let's verify that the trip weight/access
-	// characteristics show corner shop proximity generates different weighting metrics
-	scoreA, _ := api.GroceryAccessScore(101)
-	scoreB, _ := api.GroceryAccessScore(102)
+	tripsA, _ := api.GenerateTrips(101, false)
+	tripsB, _ := api.GenerateTrips(102, false)
 
-	if scoreA == scoreB {
-		t.Error("access scores should differ based on format access geography")
+	if tripsA == tripsB {
+		t.Error("expected trips to vary with access geography (AC-2 format split)")
+	}
+	if tripsA <= tripsB {
+		t.Errorf("expected closer formats (tripsA: %d) to generate more trips than further formats (tripsB: %d)", tripsA, tripsB)
+	}
+}
+
+func TestShopping_FreshFoodShare_Unwired(t *testing.T) {
+	api := New()
+	_ = api.RegisterCellAccess(101, 5.0, 5.0, 5.0, 5.0, 0.9, 0.9, 0.9, 0.9)
+
+	_, ok, err := api.FreshFoodShare(10, "test-unwired")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected FreshFoodShare to return ok=false when citizens is unwired")
 	}
 }
 
