@@ -2241,6 +2241,7 @@
         "engine.logistics",
         "engine.firms",
         "engine.traffic",
+        "engine.market",
         "foundation.data",
         "foundation.errors",
         "foundation.num"
@@ -3705,6 +3706,7 @@
         "feat.decommission",
         "engine.fdi",
         "engine.tourism",
+        "feat.megafacilities",
         "foundation.data",
         "foundation.errors",
         "foundation.num"
