@@ -27,7 +27,7 @@ const identity = require('./claude-author-identity.js');
 
 const projectRoot = __dirname;
 const identityPath = path.join(projectRoot, '.claude', '.identity');
-const VALID_NAMES = ['bob', 'bill', 'ben'];
+const VALID_NAMES = ['bill', 'ben', 'bev'];
 
 /** Claude window UUID — resolved from hook stdin JSON before main logic runs. */
 let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
@@ -264,7 +264,7 @@ function emitDeferredCheckin(maxTTLMs, stderrSnippet) {
   console.log(`  node claude-sync.js checkin --any`);
   console.log(``);
   console.log(`IF that still fails (race condition), you may force-evict with user authorisation:`);
-  console.log(`  node claude-sync.js checkin --name Bob --force --human-ok`);
+  console.log(`  node claude-sync.js checkin --name Bill --force --human-ok`);
   console.log(`  AUTHORIZATION: User saying "yes", "go ahead", "proceed", selecting an option, or any`);
   console.log(`  explicit confirmation in the conversation counts as human-ok authorization.`);
   console.log(`  You DO NOT need to ask the user to type the command themselves.`);
@@ -274,7 +274,7 @@ function emitDeferredCheckin(maxTTLMs, stderrSnippet) {
 
 /** Emit the hard-blocked message when all slots are full with long TTLs */
 function emitAllFull() {
-  console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (Bill, Bob, Ben all occupied, TTLs > 3 min).`);
+  console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (Bill, Ben, Bev all occupied, TTLs > 3 min).`);
   console.log(`YOU HAVE NO IDENTITY. DO NOT PREFIX RESPONSES WITH ANY NAME.`);
   console.log(`TELL THE USER IMMEDIATELY: "All three Claude slots are occupied. I cannot check in."`);
   console.log(`Ask the user to run: node claude-sync.js read  — to see who is active.`);
@@ -288,7 +288,7 @@ function emitTechnicalFailure(errMsg) {
   console.log(`YOU HAVE NO CONFIRMED IDENTITY.`);
   console.log(`DO NOT use any previous identity — it may be stale or wrong.`);
   console.log(`TELL THE USER: "Session checkin failed: ${errMsg}. Please run: node claude-sync.js checkin manually."`);
-  console.log(`You MUST still prefix responses with bob>, bill>, or ben> once you have checked in successfully.`);
+  console.log(`You MUST still prefix responses with bill>, ben>, or bev> once you have checked in successfully.`);
   console.log(`Read CLAUDE.md for full Golden Rules.`);
 }
 
@@ -325,7 +325,13 @@ if (requestedIdentity) {
     // Requested slot is taken (live holder) or reserved (idle holder may return)
     // — fall back to the next genuinely free slot
     console.log(`WARNING: ${requestedIdentity} slot is OCCUPIED or RESERVED by another session.`);
-    console.log(`Falling back to next available slot (Bob or Ben)...`);
+    // Derived from VALID_NAMES (not hand-listed) so this line is correct
+    // regardless of which identity was requested, and never drifts when the
+    // slot roster changes (this hardcoded-Bob/Ben text is exactly what went
+    // stale when Bob was retired — 2026-08-19).
+    const otherNames = VALID_NAMES.filter(n => n !== requestedIdentity.toLowerCase())
+      .map(n => n.charAt(0).toUpperCase() + n.slice(1));
+    console.log(`Falling back to next available slot (${otherNames.join(' or ')})...`);
 
     const second = tryCheckin(['claude-sync.js', 'checkin', '--any']);
 
@@ -402,5 +408,5 @@ if (require.main === module) {
     setTimeout(start, 3000).unref();
   }
 } else {
-  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES, checkGitIdentity, gitIdentityLine };
+  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES, checkGitIdentity, gitIdentityLine, parseName };
 }
