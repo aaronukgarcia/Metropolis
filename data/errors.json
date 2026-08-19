@@ -107,6 +107,7 @@
       "G4800-G4899": "reserved for engine.extcommute (internal/engine/extcommute: MOD-035's finite off-map job pools, dormitory arithmetic, and the two-cap (pool/transport) assignment model. Module source (internal/engine/extcommute/errors.go) claims G4500-G4599, which collided with engine.traffic's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4800-G4899, since traffic's registered claim predates extcommute's unregistered source-comment claim (first-claim-wins). The 13 codes formerly MET-G4500..MET-G4512 are re-minted at MET-G4800..MET-G4812 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
       "G4900-G4999": "reserved for engine.airunits (internal/engine/airunits: MOD-074's rotary-wing police/fire/ambulance/VIP choppers — purchase, pilot qualification, dispatch, maintenance, and weather-grounding. Module source (internal/engine/airunits/errors.go) claims G4100-G4199, which collided with engine.staffing's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4900-G4999, since staffing's registered claim predates airunits' unregistered source-comment claim (first-claim-wins). The 11 codes formerly MET-G4100..MET-G4110 are re-minted at MET-G4900..MET-G4910 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
       "G5000-G5099": "reserved for engine.dispatch (internal/engine/dispatch: MOD-040's unified emergency & care dispatch — the parked module engine.airunits' ambulance role merges into, per GR#3. No prior claim of any kind existed on this block; pre-claimed here ahead of build so the module's eventual build does not need to run claim-range itself. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G5100-G5199": "reserved for engine.cafe (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-18 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
       "V300-V399": "reserved for ui.screen.finance (lane/ben claim 2026-08-19, landed on main per the BUG-276 single-authority rule; codes MET-V300..V303 arrive with the finance PR)",
       "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
 
@@ -2478,6 +2479,12 @@
       "message": "net fiscal cost clawback overflowed (gross {gross}, rate {rate})",
       "remedy": "NetFiscalCost's gross-wage × income-tax-rate intermediate product overflowed int64, so the clawback (and therefore the honest net) cannot be computed. The gross wage bill is too large for the fixed-point arithmetic to represent its tax clawback; reduce the staffing/wage magnitude or surface the figure differently (SEC-094)."
     },
+    "MET-G1211": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "district {district} has never had demand pushed",
+      "remedy": "CoverageForDistrict or UpdateDistrictDemand was called with a district identity that has never been seeded via UpdateDistrictDemand. Never a zero-value coverage silently read as an empty-but-existing district (AC-23)."
+    },
     "MET-G1400": {
       "severity": "error",
       "module": "engine.firms",
@@ -4188,6 +4195,60 @@
       "message": "A setter/query input was outside its documented domain ({field}={value})",
       "remedy": "Tanker throughput and strategic-reserve levels must be finite and non-negative; forecourt counts and populations must be non-negative; requested delivery quantities must be non-negative. A malformed input is rejected, never clamped to a silently-plausible value (weakness pattern #4)."
     },
+    "MET-G4300": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "data/prison.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "Check that data/prison.json exists under the resolved data directory and passes engine.prison schema validation (positive version; three categories open/standard/highSecurity; base rates and effects in [0,1]; fuseYears in [5,15]). engine.prison never falls back to a partial or default-substituted config (GR#15/GR#7)."
+    },
+    "MET-G4301": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "citizen {citizen} is not present in CitizensAPI",
+      "remedy": "Admit only real citizens. engine.prison rejects an unknown citizen outright and never creates a placeholder inmate record (AC-10)."
+    },
+    "MET-G4302": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "unknown prison category {category}",
+      "remedy": "The category is not one of data/prison.json's categories (open/standard/highSecurity). Never a silently-created placeholder category (AC-10)."
+    },
+    "MET-G4303": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "inmate {citizen} is already released",
+      "remedy": "Release is rejected for an already-released (or never-admitted) inmate — never a silent no-op (AC-11)."
+    },
+    "MET-G4304": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "invalid regime funding: line {line}, amount {amount}",
+      "remedy": "The line must be one of education/work/addictionTreatment and the amount non-negative. Never silently clamped (AC-11)."
+    },
+    "MET-G4305": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "PrisonAPI method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *PrisonAPI pointer New returned — do not dereference-and-reassign it or pass it by value (SEC-020)."
+    },
+    "MET-G4306": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "invalid admission: field {field}",
+      "remedy": "The admission carried an invalid offence class, a non-positive sentence length, or a negative capacity/sold-places figure (GR#16)."
+    },
+    "MET-G4307": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "rehab-spend rejected by the Slow-Fuse pre-submission check: {reason}",
+      "remedy": "Attach a FuseYears tag in the documented [5,15] range and a locally-computed projected-consequence value (AC-9 interim, BUG-058 block)."
+    },
+    "MET-G4308": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "invalid re-entry support value for {kind}: {value}",
+      "remedy": "The re-entry support sub-input must be in [0,1]. Never silently clamped (AC-5)."
+    },
     "MET-G4800": {
       "severity": "error",
       "module": "engine.extcommute",
@@ -4332,6 +4393,90 @@
       "message": "a numeric command input was outside its documented domain (a negative amount, a negative month advance, a negative weather wind speed)",
       "remedy": "Rejected, never silently clamped (GR#16, AC-11)."
     },
+    "MET-G5101": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "unknown centre: {centre}",
+      "remedy": "Ensure centre is registered."
+    },
+    "MET-G5102": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "failed to read config file",
+      "remedy": "Check file exists."
+    },
+    "MET-G5103": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "malformed vitality config",
+      "remedy": "Check JSON structure."
+    },
+    "MET-G5104": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative weight in config",
+      "remedy": "Fix weight."
+    },
+    "MET-G5105": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "safety value out of bounds [0, 1]",
+      "remedy": "Ensure safety is between 0 and 1."
+    },
+    "MET-G5106": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid centre area: {area}",
+      "remedy": "Ensure area is valid."
+    },
+    "MET-G5107": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid base capacity: {baseCapacity}",
+      "remedy": "Ensure base capacity is valid."
+    },
+    "MET-G5108": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative patronage count",
+      "remedy": "Ensure count is non-negative."
+    },
+    "MET-G5109": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative venue count",
+      "remedy": "Ensure count is non-negative."
+    },
+    "MET-G5110": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative dwell quality",
+      "remedy": "Ensure quality is non-negative."
+    },
+    "MET-G5111": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid sociability range",
+      "remedy": "Ensure range is valid."
+    },
+    "MET-G5112": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid access range",
+      "remedy": "Ensure range is valid."
+    },
+    "MET-G5113": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "failed to push to wellbeing",
+      "remedy": "Check wellbeing service."
+    },
+    "MET-G5199": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "cafe method {method} was called on a struct copy of the value New returned",
+      "remedy": "Do not copy structs."
+    },
     "MET-G4600": {
       "severity": "error",
       "module": "engine.destination",
@@ -4397,6 +4542,30 @@
       "module": "engine.staffing",
       "message": "staffing method {method} was called on a struct copy of the value New returned",
       "remedy": "Always use the *StaffingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
+    },
+    "MET-V300": {
+      "severity": "error",
+      "module": "ui.screen.finance",
+      "message": "malformed finance patch",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V301": {
+      "severity": "error",
+      "module": "ui.screen.finance",
+      "message": "stale or unknown subscription",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V302": {
+      "severity": "fatal",
+      "module": "ui.screen.finance",
+      "message": "finance screen called on copied value",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V303": {
+      "severity": "error",
+      "module": "ui.screen.finance",
+      "message": "loan request rejected: {reason}",
+      "remedy": "See the module's documentation for remediation guidance."
     },
     "MET-V400": {
       "severity": "warn",

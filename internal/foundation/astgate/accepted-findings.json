@@ -1658,5 +1658,77 @@
   {
     "finding": "internal/ui/router/router.go||function (parameter)|<func literal at line 130>|r|*Router",
     "reason": "Sweep wave 2026-08-19 (PR #38 astgate triage, GR#1 panic-recovery addition): this is New's Option-pattern closure (WithPendingResultTTL) -- safe by construction, not merely unreviewed. Every one of these With* closures is invoked exactly once, synchronously, from inside New's own 'for _, opt := range opts { opt(r) }' loop, strictly BEFORE r.self.Store(r) runs and BEFORE r is returned to any caller -- the same construction-ordering guarantee this file's own doc comments on the self atomic.Pointer[Router] field already rely on for SEC-016/SEC-020 (no goroutine can hold a reference to r to race a Store against, and by the identical argument, none can hold a reference to race an Option closure against). The closure's *Router parameter is therefore never a stale value-copy and is never invoked concurrently with any mutator: construction is single-threaded, the type is not yet reachable from anywhere else, and this is the ONLY call site for the closure (WithPendingResultTTL returns it directly into the opts slice consumed by that one loop -- it is not stored, re-used, or invoked a second time anywhere in this codebase). Genuinely safe by construction, mirroring internal/engine/core/engine.go's identical NewEngine Option-closure precedent."
+  },
+  {
+    "finding": "internal/engine/firms/labourmarket.go|*FirmsAPI|receiver method|totalVacanciesLocked|f|*FirmsAPI",
+    "reason": "Wave 2026-08-19 aggregate round (fuel/extcommute/prison/destination/tourism/firms/services astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex (f.mu) already held by an already-guarded entry point (TotalVacancies, reached only after checkNotCopied+RLock), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/firms/labourmarket.go|*FirmsAPI|receiver method|bandCeiling|f|*FirmsAPI",
+    "reason": "Wave 2026-08-19 aggregate round (fuel/extcommute/prison/destination/tourism/firms/services astgate triage): unexported helper method with no Locked suffix but reached only from totalVacanciesLocked, itself only reached with f.mu already held (RLock) by the already-guarded TotalVacancies entry point -- bandCeiling is a pure, lock-free read of f.cfg and f.stageConfigFor's data, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/services/coverage.go|*ServicesAPI|receiver method|districtCoverageLocked|a|*ServicesAPI",
+    "reason": "Wave 2026-08-19 aggregate round (fuel/extcommute/prison/destination/tourism/firms/services astgate triage): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by already-guarded entry points (CoverageByDistrict/CoverageForDistrict, each reached only after checkNotCopied+RLock), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/destination/destination.go|*DestinationAPI|receiver method|archetype|d|*DestinationAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper reached only from already-guarded entry points (Archetype/Place, each reached only after checkNotCopied), reading only d.cfg -- immutable after New per the function's own doc comment, so no lock is needed and a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/destination/destination.go|*DestinationAPI|receiver method|drawFactor|d|*DestinationAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper reached only from RegionalDraw, an already-guarded entry point (checkNotCopied called before any read), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported helper reached only through an already-guarded entry point from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/extcommute/extcommute.go|*ExtCommuteAPI|receiver method|transportAvailable|a|*ExtCommuteAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper called only from already-guarded entry points (Assign/SelectPool, each reached only after checkNotCopied), on state snapshotted under a.mu.RLock before this helper runs, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/extcommute/extcommute.go|*ExtCommuteAPI|receiver method|filledLocked|a|*ExtCommuteAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by already-guarded entry points (FilledSlots/Assign/SelectPool, each reached only after checkNotCopied), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/fuel/fuel.go|*FuelAPI|receiver method|fullDutyBaseLocked|f|*FuelAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (f.mu) already held by the already-guarded PostFuelDuty entry point (checkNotCopied called before the lock is taken), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/prison/prison.go|*PrisonAPI|receiver method|requireCohort|p|*PrisonAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper called only from already-guarded entry points (Release/ReoffendingRate, each reached only after checkNotCopied), with the candidate type's mutex already held (p.mu.Lock or RLock) by the caller, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/prison/prison.go|*PrisonAPI|receiver method|overcrowdingPressureLocked|p|*PrisonAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (p.mu) already held by already-guarded entry points (reached only after checkNotCopied), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/prison/prison.go|*PrisonAPI|receiver method|rawRegimeEffectLocked|p|*PrisonAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (p.mu) already held by already-guarded entry points (reached only after checkNotCopied), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/prison/prison.go|*PrisonAPI|receiver method|regimeEffectLocked|p|*PrisonAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (p.mu) already held by already-guarded entry points (ReoffendingRate and its per-line accessors, each reached only after checkNotCopied), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/prison/prison.go|*PrisonAPI|receiver method|reentrySupportLocked|p|*PrisonAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (p.mu) already held by the already-guarded ReoffendingRate entry point (checkNotCopied called before the lock is taken), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/prison/prison.go|*PrisonAPI|receiver method|baseRate|p|*PrisonAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper called only from the already-guarded ReoffendingRate entry point, with the candidate type's mutex already held (p.mu.RLock) by the caller, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/tourism/api.go|*TourismAPI|receiver method|seasonalMultiplier|t|*TourismAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper called only from already-guarded entry points (DrawScore/ProjectDraw, each reached only after checkNotCopied), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/tourism/api.go|*TourismAPI|receiver method|laggedReputationLocked|t|*TourismAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (t.mu) already held by already-guarded entry points (ProjectDraw and drawScore's callers, each reached only after checkNotCopied), so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/tourism/api.go|*TourismAPI|receiver method|drawScore|t|*TourismAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported helper called only from the already-guarded DrawScore entry point, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish this transitively-guarded helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/tourism/api.go|*TourismAPI|receiver method|totalCapacityLocked|t|*TourismAPI",
+    "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (t.mu) already held by the internal tick-advance path that owns the write lock across the whole admission/departure sequence, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
   }
 ]
