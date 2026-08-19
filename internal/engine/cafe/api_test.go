@@ -120,7 +120,7 @@ func TestCafe_AC4_SeasonalMutation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Write mutated seasonal.json where January = 3.5 and July = 0.05
 	mutatedJSON := `{
@@ -233,7 +233,7 @@ func TestCafe_AC8_LeverageRatio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	configData := `{"pedestrianizationBoost": 25.0, "pedestrianizationCost": 1250.0}`
 	_ = os.WriteFile(filepath.Join(tempDir, "cafe.json"), []byte(configData), 0644)
@@ -280,7 +280,7 @@ func TestCafe_AC11_MalformedVitalityConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Negative weight config
 	badConfig := `{"footfallWeight": -1.0}`
