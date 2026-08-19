@@ -60,3 +60,16 @@ BOW code: MOD-008
 ## Escalations
 
 - None at draft time. This file is `status: draft-ahead` — refresh against `int.protocol`'s actually-frozen v1 schema (see `docs/design/protocol.md`, currently "awaiting freeze review") before the junior is dispatched; if the frozen schema's `Command`/`Delta` shapes differ from what's cited here, update AC-1/AC-2/AC-5 accordingly rather than treating a mismatch as a spec conflict.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-089 — Run's caller contract is cancel-then-join-then-close (amends the Run AC)
+`Run`'s caller contract is **cancel-then-join-then-close**; `cancel(); Close()` without a join is a caller error, not something `Run`'s logic can reliably distinguish — the race makes it fundamentally impossible (`ctx.Done()` and `Commands()` can both be observably ready by the time `Run`'s select runs, with no ordering guarantee that cancellation is seen first). The fix states the join requirement explicitly in `Run`'s doc comment, matching `cmd/metropolis/boot.go`'s existing `cancel(); wg.Wait(); Close()` ordering; a grace window was rejected because it would reintroduce the "silent death is invisible" risk BUG-020 exists to close. Check: `Run`'s doc comment states the cancel-then-join-then-close contract, and the premature-close alarm is guaranteed not to fire only for callers that join.
+
+### ASM-066 — StubEngine.World() is deliberately unguarded (no checkNotCopied)
+`World()` (`internal/engine/stub/engine.go` line ~163 comment, method body confirms no `checkNotCopied` call) intentionally omits the copy-guard because the `*World` it returns is a plain, never-reassigned field set once at construction (`GenerateFolkestone64`) with no shared mutable state to protect — analogous to `engine.core`'s `Registry()`/`WorldSeed()`/`PoolSize()`, not to the guarded `Results()`/`Events()`/`Deltas()`/`Commands()` accessors. Falsifier (live constraint, re-check before closing): if any future code path mutates a `*World` after construction, or a caller mutates the returned `*World`, this decision is wrong and `World()` needs the same guard as the seven `mu.Lock()` sites.
+
+### ASM-067 — advanceSubscriptionScriptLocked / emitDeltaLocked are deliberately unguarded (single already-checked call site)
+Both `mu`-already-held helpers (`internal/engine/stub/engine.go` lines ~639, ~657) omit their own `checkNotCopied` call because their only call sites (`handleAdvanceTicks`, `handleSubscribe`) already ran both a pre-lock and post-lock identity check before calling them (confirmed: no `checkNotCopied` invocation inside either helper). Falsifier (live constraint): if a future call path reaches either helper without going through `handleAdvanceTicks`/`handleSubscribe`'s existing checks (new handler, promoted test helper, `chaos.go`'s delayed-delta goroutine calling back in directly), both helpers need their own guard.

@@ -58,7 +58,7 @@ FEAT-056 is tagged `code.json:engine.policies` in the BOW, but its actual delive
 ### Schema documentation
 
 - **AC-11.** `docs/design/tax-instruments-schema.md` describes every field this item introduces (the six-instrument set and their category distinctions, PAYE's two-component shape, the `zoneOverrides` block and its closed 8-class enum, the four new bearer-category sets, the placeholder-disclosure convention) — mirroring `data.modes-naming.md` AC-24's schema-reference-document precedent. Check: file exists and lists all named field groups.
-- **AC-12.** `data/tax_instruments.json` carries a `$comment`/`meta` block citing §39, §54, and §34 (the zone-class source), stating ASM-283 (file-location — already lead-ruled), ASM-284 (placeholder regime — already confirmed), ASM-287 (bearer-category pattern — already lead-ruled), and this file's own ASM-415/416/418/419. Check: `grep -n "\$comment\|\"meta\"" data/tax_instruments.json` matches; `grep -n "ASM-283\|ASM-284\|ASM-287" data/tax_instruments.json` matches.
+- **AC-12.** `data/tax_instruments.json` carries a `$comment`/`meta` block citing §39, §54, and §34 (the zone-class source), stating ASM-283 (file-location — already lead-ruled), ASM-284 (placeholder regime — already confirmed), ASM-287 (bearer-category pattern — already lead-ruled), and this file's own ASM-415/416/418/423 (ASM-597 fold, 2026-08-19: corrected from a stale ASM-419 citation — ASM-419 is an unrelated harness.synth fixture-scope item; the data file itself never cited it, only this AC's prose did). Check: `grep -n "\$comment\|\"meta\"" data/tax_instruments.json` matches; `grep -n "ASM-283\|ASM-284\|ASM-287" data/tax_instruments.json` matches.
 
 ### Error handling (GR#7)
 
