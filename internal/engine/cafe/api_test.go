@@ -21,7 +21,7 @@ func (m *mockWellbeing) SetCommunityVenueAccess(citizenID uint64, access float64
 	return nil
 }
 
-func TestCafe_AC2_DecomposedFormula(t *testing.T) {
+func TestCafe_AC2_TermDrillThrough(t *testing.T) {
 	api := New()
 	_ = api.RegisterCentre(1, 100.0, 10.0)
 	_ = api.RegisterPatronage(1, 200)
@@ -58,7 +58,7 @@ func TestCafe_AC2_DecomposedFormula(t *testing.T) {
 	}
 }
 
-func TestCafe_AC3_SourcingRealValues(t *testing.T) {
+func TestCafe_AC3_VenueDensity(t *testing.T) {
 	api := New()
 	_ = api.RegisterCentre(1, 50.0, 10.0)
 
@@ -77,7 +77,7 @@ func TestCafe_AC3_SourcingRealValues(t *testing.T) {
 	}
 }
 
-func TestCafe_AC4_WeatherAdjustedCapacity(t *testing.T) {
+func TestCafe_AC4_JanuaryGales(t *testing.T) {
 	api := New()
 	_ = api.RegisterCentre(1, 100.0, 20.0)
 
@@ -115,23 +115,56 @@ func TestCafe_AC4_SeasonalMutation(t *testing.T) {
 	api := New()
 	_ = api.RegisterCentre(1, 100.0, 50.0)
 
-	// Test default capacity
-	cap1, _ := api.WeatherAdjustedCapacity(1, 0)
+	// Create a temp directory
+	tempDir, err := os.MkdirTemp("", "cafe-season-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
 
-	// Create a real SeasonAPI instance
-	seasonAPI, _ := season.LoadDefault("test-cafe")
+	// Write mutated seasonal.json where January = 3.5 and July = 0.05
+	mutatedJSON := `{
+		"version": 1,
+		"meta": {},
+		"curves": {
+			"electricityWinterPeak": { "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"waterSummerPeak": { "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"gasSeasonal": { "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"harvestCalendar": { "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"constructionSpeedMultiplier": { "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"schoolIntakeGate": { "multipliers": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] },
+			"leisureBeachWeight": { "multipliers": [3.5, 1.0, 1.0, 1.0, 1.0, 1.0, 0.05, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"leisureIndoorWeight": { "multipliers": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0] },
+			"healthWaveModifier": { "multipliers": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] }
+		}
+	}`
+	_ = os.WriteFile(filepath.Join(tempDir, "seasonal.json"), []byte(mutatedJSON), 0644)
+
+	// Load SeasonAPI from mutated config
+	seasonAPI, err := season.Load(tempDir, "test-cafe-mutation")
+	if err != nil {
+		t.Fatalf("failed to load mutated SeasonAPI: %v", err)
+	}
 	_ = api.SetSeason(seasonAPI)
 
-	// Since we can't easily mock the unexported data in SeasonAPI without
-	// a test file, we'll verify the seam is wired correctly by asserting
-	// that WeatherAdjustedCapacity changes based on the month input via the seam.
-	capJan, _ := api.WeatherAdjustedCapacity(1, 0) // January
-	capJul, _ := api.WeatherAdjustedCapacity(1, 6) // July
+	// January capacity (month index 0)
+	capJan, err := api.WeatherAdjustedCapacity(1, 0)
+	if err != nil {
+		t.Fatalf("unexpected error January: %v", err)
+	}
+	expectedJan := 50.0 * 3.5
+	if math.Abs(capJan-expectedJan) > 1e-9 {
+		t.Errorf("January mutated capacity = %f, want %f", capJan, expectedJan)
+	}
 
-	if capJan == capJul && cap1 == capJan {
-		// Just a fallback check, to prove the seam is wired
-		// If both are equal, it might just be the default 1.0 or the
-		// season profile is flat, but it's wired.
+	// July capacity (month index 6)
+	capJul, err := api.WeatherAdjustedCapacity(1, 6)
+	if err != nil {
+		t.Fatalf("unexpected error July: %v", err)
+	}
+	expectedJul := 50.0 * 0.05
+	if math.Abs(capJul-expectedJul) > 1e-9 {
+		t.Errorf("July mutated capacity = %f, want %f", capJul, expectedJul)
 	}
 }
 
