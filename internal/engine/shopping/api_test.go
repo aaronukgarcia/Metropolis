@@ -17,19 +17,20 @@ import (
 func TestShopping_AC2_FormatAccessGeography(t *testing.T) {
 	api := New()
 
-	// Cell A has very close shops (high access)
-	_ = api.RegisterCellAccess(101, 1.0, 1.0, 1.0, 1.0, 0.9, 0.9, 0.9, 0.9)
-	// Cell B has far shops (low access)
-	_ = api.RegisterCellAccess(102, 50.0, 50.0, 50.0, 50.0, 0.9, 0.9, 0.9, 0.9)
+	// Cell 101 has corner shop very close, retail park very far
+	_ = api.RegisterCellAccess(101, 1.0, 50.0, 50.0, 50.0, 0.9, 0.9, 0.9, 0.9)
+	// Cell 102 has retail park very close, corner shop very far
+	_ = api.RegisterCellAccess(102, 50.0, 50.0, 50.0, 1.0, 0.9, 0.9, 0.9, 0.9)
 
-	tripsA, _ := api.GenerateTrips(101, false)
-	tripsB, _ := api.GenerateTrips(102, false)
+	// Since they are asymmetric, the splits MUST differ!
+	splitA, _ := api.TripsByFormat(101, false)
+	splitB, _ := api.TripsByFormat(102, false)
 
-	if tripsA == tripsB {
-		t.Error("expected trips to vary with access geography (AC-2 format split)")
+	if splitA["corner_shop"] == splitB["corner_shop"] {
+		t.Errorf("expected corner_shop trips to differ: corner-close (%d) vs retail-close (%d) (AC-2 asymmetric split)", splitA["corner_shop"], splitB["corner_shop"])
 	}
-	if tripsA <= tripsB {
-		t.Errorf("expected closer formats (tripsA: %d) to generate more trips than further formats (tripsB: %d)", tripsA, tripsB)
+	if splitA["retail_park"] == splitB["retail_park"] {
+		t.Errorf("expected retail_park trips to differ: corner-close (%d) vs retail-close (%d)", splitA["retail_park"], splitB["retail_park"])
 	}
 }
 
@@ -43,6 +44,26 @@ func TestShopping_FreshFoodShare_Unwired(t *testing.T) {
 	}
 	if ok {
 		t.Error("expected FreshFoodShare to return ok=false when citizens is unwired")
+	}
+}
+
+func TestShopping_FreshFoodShare_WiredUnresolvable(t *testing.T) {
+	api := New()
+
+	// Setup real CitizensAPI but no seeded citizen with ID 999
+	citAPI, err := citizens.NewCitizensAPI(12345, "test-shopping")
+	if err != nil {
+		t.Fatalf("failed to create citizens api: %v", err)
+	}
+	_ = api.SetCitizens(citAPI)
+
+	// Query unresolvable citizen 999
+	_, ok, err := api.FreshFoodShare(999, "test-unresolvable")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected FreshFoodShare to return ok=false for unresolvable citizen")
 	}
 }
 

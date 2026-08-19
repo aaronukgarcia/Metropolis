@@ -270,11 +270,11 @@ func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error)
 		return 0, errs.New(ErrUnregisteredCell, s.correlationID, map[string]any{"cell": cellID})
 	}
 
-	// Format trip weights based on proximity (inverse travel time) (AC-2)
-	wCorner := 1.0 / (math.Max(c.CornerShopTime, 1.0))
-	wMarket := 1.0 / (math.Max(c.MarketHallTime, 1.0))
-	wSuper := 1.0 / (math.Max(c.SupermarketTime, 1.0))
-	wRetail := 1.0 / (math.Max(c.RetailParkTime, 1.0))
+	// Format trip weights based on proximity with asymmetric preferences (AC-2)
+	wCorner := 1.5 / (math.Max(c.CornerShopTime, 1.0))
+	wMarket := 2.0 / (math.Max(c.MarketHallTime, 1.0))
+	wSuper := 4.0 / (math.Max(c.SupermarketTime, 1.0))
+	wRetail := 3.0 / (math.Max(c.RetailParkTime, 1.0))
 
 	totalWeight := wCorner + wMarket + wSuper + wRetail
 	if totalWeight == 0 {
@@ -292,7 +292,7 @@ func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error)
 	effectiveTrips := baseTrips * (1.0 - s.cfg.OnlineDeliveryShare)
 
 	// Make trip counts actually vary with access geography (AC-2)
-	proximity := totalWeight / 4.0
+	proximity := totalWeight / 10.5
 	accessModifier := proximity / 0.2
 	if accessModifier < 0.2 {
 		accessModifier = 0.2
@@ -306,6 +306,58 @@ func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error)
 	}
 
 	return int(effectiveTrips), nil
+}
+
+// TripsByFormat returns the trip split across formats (AC-2).
+func (s *ShoppingAPI) TripsByFormat(cellID uint64, isSaturday bool) (map[string]int, error) {
+	if err := s.checkNotCopied("TripsByFormat"); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	c, ok := s.cells[cellID]
+	if !ok {
+		return nil, errs.New(ErrUnregisteredCell, s.correlationID, map[string]any{"cell": cellID})
+	}
+
+	wCorner := 1.5 / (math.Max(c.CornerShopTime, 1.0))
+	wMarket := 2.0 / (math.Max(c.MarketHallTime, 1.0))
+	wSuper := 4.0 / (math.Max(c.SupermarketTime, 1.0))
+	wRetail := 3.0 / (math.Max(c.RetailParkTime, 1.0))
+
+	totalWeight := wCorner + wMarket + wSuper + wRetail
+	if totalWeight == 0 {
+		return map[string]int{
+			"corner_shop": 0,
+			"market_hall": 0,
+			"supermarket": 0,
+			"retail_park": 0,
+		}, nil
+	}
+
+	baseTrips := 10.0
+	if isSaturday {
+		baseTrips = 25.0
+	}
+
+	effectiveTrips := baseTrips * (1.0 - s.cfg.OnlineDeliveryShare)
+
+	proximity := totalWeight / 10.5
+	accessModifier := proximity / 0.2
+	if accessModifier < 0.2 {
+		accessModifier = 0.2
+	} else if accessModifier > 2.0 {
+		accessModifier = 2.0
+	}
+	effectiveTrips = effectiveTrips * accessModifier
+
+	return map[string]int{
+		"corner_shop": int(effectiveTrips * (wCorner / totalWeight)),
+		"market_hall": int(effectiveTrips * (wMarket / totalWeight)),
+		"supermarket": int(effectiveTrips * (wSuper / totalWeight)),
+		"retail_park": int(effectiveTrips * (wRetail / totalWeight)),
+	}, nil
 }
 
 // FreshFoodShare implements wellbeing's ShoppingSource interface (AC-7).
@@ -322,11 +374,12 @@ func (s *ShoppingAPI) FreshFoodShare(citizenID uint64, correlationID string) (fl
 	}
 
 	// Look up actual citizen's home cell ID (AC-7)
-	var cellID uint64 = 1
 	cit, ok := s.citizens.CitizenAt(citizenID, correlationID)
-	if ok {
-		cellID = uint64(cit.Home)
+	if !ok {
+		// Kill the fallback entirely: unresolvable = ok=false
+		return 0, false, nil
 	}
+	cellID := uint64(cit.Home)
 
 	c, ok := s.cells[cellID]
 	if !ok {
