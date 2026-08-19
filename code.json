@@ -3714,6 +3714,16 @@
             "inboundGuid": "bc5b137e-5692-410b-a6cf-80da601ee414"
           },
           {
+            "key": "engine.services",
+            "moduleGuid": "ab443390-0a8a-459a-ae5a-4b8a35308751",
+            "inboundGuid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e"
+          },
+          {
+            "key": "engine.firms",
+            "moduleGuid": "df06bec1-ea6c-456d-9d06-690cb18fa2a0",
+            "inboundGuid": "f6c47094-fae7-4d93-8267-653b15cc1a2a"
+          },
+          {
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
@@ -4050,6 +4060,10 @@
           {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "ui.screen.services",
@@ -6773,6 +6787,10 @@
           {
             "key": "engine.freight",
             "outboundGuid": "75dfc952-590a-4602-b621-dc369322b72f"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.pharmacampus",

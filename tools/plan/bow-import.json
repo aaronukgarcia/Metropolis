@@ -914,7 +914,9 @@
         "engine.leisure",
         "engine.refuse",
         "engine.traffic",
-        "engine.extcommute"
+        "engine.extcommute",
+        "engine.services",
+        "engine.firms"
       ]
     },
     {
