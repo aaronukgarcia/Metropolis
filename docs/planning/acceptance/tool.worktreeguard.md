@@ -3,10 +3,18 @@ BOW code: FEAT-080
 # Acceptance criteria — tool.worktreeguard (FEAT-080, archaeology)
 
 **Module key:** tool.worktreeguard
-**BOW code:** FEAT-080 (GUID `d9ecb82b-ffe9-468d-a837-01a20610a365`, created
+**BOW code:** FEAT-080 (BOW GUID `d9ecb82b-ffe9-468d-a837-01a20610a365`, created
 2026-08-13). Git refs: `bcdc20299b`, `e1e4e5d5c3`. Bill's comment on the item
 (2026-08-13) records the commit range (43bc119), the 22 unit/spawn tests, and
 the standing order: **do NOT mark done until the Destructive round runs.**
+**Registry note (ASM-931 fold, 2026-08-19):** the BOW GUID above and the
+`code.json`/committed-source module GUID diverge by design, not drift — the
+BOW item GUID (`d9ecb82b-...`) identifies the *work item* (FEAT-080), while
+`code.json`'s `tool.worktreeguard` module GUID (`f50ad32e-8e9b-43f9-9b50-440c69e9c629`,
+matching the header comment at `claude-worktree-guard.js` line 1) identifies
+the *module*. Same seq (953), two different identity axes — same pattern as
+every other BOW-code-vs-module-GUID pair in this registry. No reconcile
+needed; this note closes the gap the file previously left unflagged.
 **Spec refs:** GR#24 (No Code Left Behind, `CLAUDE.md` — the three mechanical
 duties, especially (a) "Never destroy the working tree"); M0-ENG §5 (hooks);
 the incident evidence in the guard's own header (the 2026-08-13
