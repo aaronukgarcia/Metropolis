@@ -130,6 +130,15 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	m.mu.Unlock()
 
 	drawViewport(buf, viewportRect, snap, m.palette)
+	// AC-4: the active overlay paints ONLY the background layer, after
+	// terrain/road/building have already painted both layers — never the
+	// foreground glyph (paintOverlay never touches Rune; see its own doc
+	// comment, overlay_data.go). Production always sources values via
+	// overlayLiveValue, which reports have=false for every one of AC-3's
+	// ten overlays today (overlayBlockedReason) — so this call is a no-op
+	// in production until a real overlay lands, by construction rather
+	// than a special case.
+	paintOverlay(buf, viewportRect, snap, snap.activeOverlay, overlayLiveValue, 0, 1, widgets.DefaultHeatRamp(m.palette))
 	if minimapRect.H > 0 {
 		drawMinimap(buf, minimapRect, snap, m.palette)
 	}
@@ -161,6 +170,7 @@ type renderSnapshot struct {
 	viewportH        int
 	cursorX, cursorY int
 	stale            bool
+	activeOverlay    Overlay
 }
 
 func (m *MapScreen) snapshotLocked() renderSnapshot {
@@ -174,16 +184,17 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 	grid := make([]cellData, len(m.grid))
 	copy(grid, m.grid)
 	return renderSnapshot{
-		width:     m.width,
-		height:    m.height,
-		grid:      grid,
-		offsetX:   m.offsetX,
-		offsetY:   m.offsetY,
-		viewportW: m.viewportW,
-		viewportH: m.viewportH,
-		cursorX:   m.cursorX,
-		cursorY:   m.cursorY,
-		stale:     m.stale,
+		width:         m.width,
+		height:        m.height,
+		grid:          grid,
+		offsetX:       m.offsetX,
+		offsetY:       m.offsetY,
+		viewportW:     m.viewportW,
+		viewportH:     m.viewportH,
+		cursorX:       m.cursorX,
+		cursorY:       m.cursorY,
+		stale:         m.stale,
+		activeOverlay: overlayOrder[m.overlayIdx],
 	}
 }
 

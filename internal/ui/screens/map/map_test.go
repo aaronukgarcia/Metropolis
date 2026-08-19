@@ -444,3 +444,174 @@ func TestConcurrent_ApplyPatchAndRender_NoRace(t *testing.T) {
 	}()
 	wg.Wait()
 }
+
+// --- AC-3: overlay cycle -------------------------------------------
+
+// TestActiveOverlay_DefaultsToFirstInOrder: a freshly constructed
+// MapScreen starts on overlayOrder's first entry (ownership) — no
+// separate "no overlay" state exists (doc.go's Overlay cycle section),
+// per AC-3's ten-overlay list having no described null/off member.
+func TestActiveOverlay_DefaultsToFirstInOrder(t *testing.T) {
+	m := newTestScreen(t)
+	if got, want := m.ActiveOverlay(), mapscreen.OverlayOwnership; got != want {
+		t.Fatalf("ActiveOverlay() on a fresh MapScreen = %v, want %v", got, want)
+	}
+}
+
+// TestCycleOverlay_Forward_ReturnsToStartAfterTenSteps is AC-3's core
+// assertion: "cycling through all overlays returns to the starting
+// overlay after N steps (N = overlay count)" — forward direction ("o").
+func TestCycleOverlay_Forward_ReturnsToStartAfterTenSteps(t *testing.T) {
+	m := newTestScreen(t)
+	start := m.ActiveOverlay()
+
+	seen := map[mapscreen.Overlay]bool{start: true}
+	const n = 10 // AC-3's ten named overlays; asserted separately below
+	for i := 0; i < n; i++ {
+		got := m.CycleOverlay(true)
+		if i < n-1 {
+			seen[got] = true
+		} else if got != start {
+			t.Fatalf("CycleOverlay(true) step %d (last of %d) = %v, want back to start %v", i+1, n, got, start)
+		}
+	}
+	if len(seen) != n {
+		t.Fatalf("forward cycle visited %d distinct overlays before returning to start, want exactly %d (no repeats, no skips)", len(seen), n)
+	}
+}
+
+// TestCycleOverlay_Reverse_ReturnsToStartAfterTenSteps is AC-3's same
+// assertion in the reverse direction ("O").
+func TestCycleOverlay_Reverse_ReturnsToStartAfterTenSteps(t *testing.T) {
+	m := newTestScreen(t)
+	start := m.ActiveOverlay()
+
+	seen := map[mapscreen.Overlay]bool{start: true}
+	const n = 10
+	for i := 0; i < n; i++ {
+		got := m.CycleOverlay(false)
+		if i < n-1 {
+			seen[got] = true
+		} else if got != start {
+			t.Fatalf("CycleOverlay(false) step %d (last of %d) = %v, want back to start %v", i+1, n, got, start)
+		}
+	}
+	if len(seen) != n {
+		t.Fatalf("reverse cycle visited %d distinct overlays before returning to start, want exactly %d (no repeats, no skips)", len(seen), n)
+	}
+}
+
+// TestCycleOverlay_ForwardThenReverse_Cancels: N forward steps then N
+// reverse steps must land back exactly where N forward steps started
+// (the two directions are true inverses of each other, not just each
+// individually cyclic).
+func TestCycleOverlay_ForwardThenReverse_Cancels(t *testing.T) {
+	m := newTestScreen(t)
+	start := m.ActiveOverlay()
+	for i := 0; i < 7; i++ {
+		m.CycleOverlay(true)
+	}
+	for i := 0; i < 7; i++ {
+		m.CycleOverlay(false)
+	}
+	if got := m.ActiveOverlay(); got != start {
+		t.Fatalf("7 forward + 7 reverse CycleOverlay calls landed on %v, want back at start %v", got, start)
+	}
+}
+
+// TestCycleOverlay_MatchesDocumentedFEAT031Order pins the cycle order to
+// FEAT-031's own list ("ownership, land value, zoning, utilities,
+// traffic, pollution, decay, per-service coverage, parking occupancy,
+// vitality") — a passing test here is what makes a future accidental
+// reordering (e.g. an alphabetised overlayOrder) visible as a failure,
+// not just a silent behaviour change.
+func TestCycleOverlay_MatchesDocumentedFEAT031Order(t *testing.T) {
+	m := newTestScreen(t)
+	want := []mapscreen.Overlay{
+		mapscreen.OverlayOwnership,
+		mapscreen.OverlayLandValue,
+		mapscreen.OverlayZoning,
+		mapscreen.OverlayUtilities,
+		mapscreen.OverlayTraffic,
+		mapscreen.OverlayPollution,
+		mapscreen.OverlayDecay,
+		mapscreen.OverlayServiceCoverage,
+		mapscreen.OverlayParkingOccupancy,
+		mapscreen.OverlayVitality,
+	}
+	if got := m.ActiveOverlay(); got != want[0] {
+		t.Fatalf("ActiveOverlay() = %v, want %v (first in FEAT-031's documented order)", got, want[0])
+	}
+	for i := 1; i < len(want); i++ {
+		if got := m.CycleOverlay(true); got != want[i] {
+			t.Fatalf("CycleOverlay(true) step %d = %v, want %v (FEAT-031's documented order)", i, got, want[i])
+		}
+	}
+	// one more step wraps back to the start
+	if got := m.CycleOverlay(true); got != want[0] {
+		t.Fatalf("CycleOverlay(true) after the full order = %v, want wrap to %v", got, want[0])
+	}
+}
+
+// --- AC-4 (screen-level): overlay state never affects Render's
+// foreground glyphs -------------------------------------------------
+
+// TestRender_CyclingOverlays_NeverChangesForegroundGlyphs is AC-4's
+// screen-level invariant, exercised through the real, public Render path
+// (the overlay_paint_internal_test.go file proves the underlying
+// paintOverlay mechanism's full two-layer contract with synthetic data;
+// this test proves Render's wiring of it is correct too): with every
+// overlay in AC-3's ten BLOCKED today (overlayLiveValue), cycling through
+// all of them must render byte-identical output, foreground AND
+// background — the honest current-state consequence of every overlay
+// reporting have=false, verified here so a regression that started
+// touching glyphs while blocked, or started diverging background for a
+// BLOCKED overlay, is caught.
+func TestRender_CyclingOverlays_NeverChangesForegroundGlyphs(t *testing.T) {
+	w := stub.GenerateFolkestone64()
+	m := newTestScreen(t)
+	m.ApplyPatch(fullPatchJSON(t, w))
+	m.SetViewportSize(20, 20)
+
+	rect := core.Rect{X: 0, Y: 0, W: 20, H: 20}
+	first := core.NewBuffer(20, 20)
+	m.Render(first, rect)
+	firstCells := captureCells(first, 20, 20)
+
+	for i := 0; i < 10; i++ {
+		m.CycleOverlay(true)
+		buf := core.NewBuffer(20, 20)
+		m.Render(buf, rect)
+		got := captureCells(buf, 20, 20)
+		if !cellsEqual(firstCells, got) {
+			t.Fatalf("cycle step %d: render differs from the first overlay's render, even though every AC-3 overlay is BLOCKED (have=false) today — a BLOCKED overlay must render identically to any other BLOCKED overlay", i+1)
+		}
+	}
+}
+
+// captureCells/cellsEqual are this (external, mapscreen_test) package's
+// own copies of sec020_test.go's snapshotBuffer/buffersEqual helpers —
+// that file lives in the internal `mapscreen` package (white-box tests),
+// so its unexported helpers are not visible here; duplicated rather than
+// exported solely for test convenience.
+func captureCells(buf *core.Buffer, w, h int) []core.Cell {
+	out := make([]core.Cell, 0, w*h)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			out = append(out, buf.Get(x, y))
+		}
+	}
+	return out
+}
+
+func cellsEqual(a, b []core.Cell) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
