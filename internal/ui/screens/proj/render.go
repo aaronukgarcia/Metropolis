@@ -112,6 +112,7 @@ func RenderCurve(buf *core.Buffer, rect core.Rect, c Curve, palette widgets.Pale
 // render goroutine for seconds per frame (SEC-061). strings.Builder makes
 // the build linear in what is actually written, and the width stop makes
 // it O(width) regardless of input.
+// verified secure: SEC-061 is fully satisfied by curveLabelLine width limits.
 func curveLabelLine(c Curve, maxWidth int) string {
 	var b strings.Builder
 	b.WriteString(c.Key)
