@@ -3,9 +3,9 @@
   "project": "Metropolis",
   "source": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
   "updated": "2026-08-17",
-  "authoring": "Hand-authored single source of truth. tools/plan/generate.js derives code.json and tools/plan/bow-import.json from this file — never edit those outputs directly (GR#3). Sequence numbers are gapped by ~10 to allow insertions. v1.1.0 (2026-08-08): sprint assignments S0-S11 added (cloud/future items unscheduled); tool.bow decision enacted; tool.planguard + tool.ready added; engine.comms resequenced after engine.firms.",
+  "authoring": "Hand-authored single source of truth. tools/plan/generate.js derives code.json and tools/plan/bow-import.json from this file â€” never edit those outputs directly (GR#3). Sequence numbers are gapped by ~10 to allow insertions. v1.1.0 (2026-08-08): sprint assignments S0-S11 added (cloud/future items unscheduled); tool.bow decision enacted; tool.planguard + tool.ready added; engine.comms resequenced after engine.firms.",
   "designNorthStar": {
-    "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
+    "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet â€” the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
     "doc": "docs/planning/design-north-star.md",
     "thesis": "The game is the juggle of conflicting requirements. The entertainment comes from managing genuinely competing demands, not from arithmetic.",
     "fiveQuestionTest": [
@@ -20,24 +20,24 @@
     "naming": {
       "moduleKey": "dot-separated lowercase: <layer>.<name> (e.g. engine.traffic, ui.widgets); matches BOW mkey and code.json key",
       "goPackages": "internal/engine/<name>, internal/ui/<name>, internal/protocol, internal/foundation/<name>; cmd/metropolis, cmd/bow, cmd/metctl",
-      "specRef": "References §, UI-SPEC §, M0-ENG §, A-amendments and Part IV sections of docs/METROPOLIS-MASTER-v2.1.md"
+      "specRef": "References Â§, UI-SPEC Â§, M0-ENG Â§, A-amendments and Part IV sections of docs/METROPOLIS-MASTER-v2.1.md"
     },
     "universalEdges": {
       "note": "These call edges apply to every module and are NOT repeated per item to keep the graph readable; they are as binding as explicit edges.",
       "edges": [
         "* -> foundation.errors : every module raises registry-sourced errors with correlation IDs and writes structured NDJSON logs (GR#1, GR#7)",
-        "engine.* -> foundation.det : all randomness via counter-based hash streams; all parallelism via the 256-shard phase-barrier scheme (§1.2)",
-        "engine.* -> foundation.registry : every engine module registers with a mandatory Stub implementation (M0-ENG §2)",
+        "engine.* -> foundation.det : all randomness via counter-based hash streams; all parallelism via the 256-shard phase-barrier scheme (Â§1.2)",
+        "engine.* -> foundation.registry : every engine module registers with a mandatory Stub implementation (M0-ENG Â§2)",
         "ui.screen.* -> int.protocol : screens consume engine state ONLY via view subscriptions; their calls list names the engine modules whose projections they subscribe to, transport is always the protocol"
       ]
     },
     "errorHandling": {
-      "registry": "data/errors.json — every error code declared before use; format MET-<layer><NNN> (F=foundation, P=protocol, E=engine, U=ui, T=tooling), e.g. MET-E042. No ad-hoc error construction anywhere (GR#7).",
+      "registry": "data/errors.json â€” every error code declared before use; format MET-<layer><NNN> (F=foundation, P=protocol, E=engine, U=ui, T=tooling), e.g. MET-E042. No ad-hoc error construction anywhere (GR#7).",
       "correlation": "Every protocol command carries a correlationId (UUID, minted by the initiating side). It propagates through engine events, deltas, logs and error records so any failure is traceable end-to-end (GR#1).",
       "logging": "Structured NDJSON: logs/engine.ndjson + logs/ui.ndjson, rotated. Error entries: {ts, level, code, correlationId, module, msg, ctx}. F12 info panel tails them live; metctl errors gives offline review. Errors are stored, never printed-and-lost.",
       "display": "Selectable error display per GR#1: every user-visible failure shows its registry code + correlation ID."
     },
-    "determinism": "Same seed + same command log => bit-identical world at any worker count (§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG §6.4)."
+    "determinism": "Same seed + same command log => bit-identical world at any worker count (Â§1.2). 256 fixed shards, ordered merges, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, no map-range on tick paths (lint-enforced, A8). CI determinism gate is written FIRST (M0-ENG Â§6.4)."
   },
   "items": [
     {
@@ -49,7 +49,7 @@
       "layer": "process",
       "title": "Planning pipeline: master plan -> code.json generator -> BOW import",
       "desc": "docs/planning/master-plan-v2.1.json as SSOT; tools/plan/generate.js mints stable GUIDs (module + inbound + outbound), computes forward/reverse call pointers, emits code.json and the BOW import file; claude-bow.js import loads the metro BOW idempotently.",
-      "specRef": "CLAUDE.md BOW; M0-ENG §4; GR#3",
+      "specRef": "CLAUDE.md BOW; M0-ENG Â§4; GR#3",
       "path": "tools/plan/",
       "deps": [],
       "calls": [],
@@ -63,8 +63,8 @@
       "milestone": "M0",
       "layer": "interface",
       "title": "Engine<->UI protocol v1: commands, events, deltas, view subscriptions",
-      "desc": "Versioned message schema (BuyLand, SetBudget, AdvanceTicks...; state deltas + events out), correlation IDs on every command, view-subscription contract (named projections, deltas only for live subscriptions — also the remote-play seam). In-process channels v1, gRPC transport implemented but dormant behind a config flag.",
-      "specRef": "§15; UI-SPEC §1, §6; M0-ENG §1.1; V.2.1",
+      "desc": "Versioned message schema (BuyLand, SetBudget, AdvanceTicks...; state deltas + events out), correlation IDs on every command, view-subscription contract (named projections, deltas only for live subscriptions â€” also the remote-play seam). In-process channels v1, gRPC transport implemented but dormant behind a config flag.",
+      "specRef": "Â§15; UI-SPEC Â§1, Â§6; M0-ENG Â§1.1; V.2.1",
       "path": "internal/protocol/",
       "inbound": {
         "name": "Transport",
@@ -86,7 +86,7 @@
       "layer": "interface",
       "title": "StateSerializer + save/fixture schema (NDJSON shards, binary at scale, metctl export)",
       "desc": "StateSerializer interface from day one (A3): sharded gzipped NDJSON canonical for configs/fixtures/exports and small saves; versioned binary shard snapshots above a size threshold; metctl export produces lossless NDJSON from any binary save. Save format IS the fixture format. Header carries version + debug-touched flag + migration rules.",
-      "specRef": "A3; §5.3; V.2.2; M0-ENG §2.2",
+      "specRef": "A3; Â§5.3; V.2.2; M0-ENG Â§2.2",
       "path": "internal/foundation/serialize/",
       "inbound": {
         "name": "StateSerializer",
@@ -106,7 +106,7 @@
       "layer": "interface",
       "title": "Solver contract: CPU/GPU/cloud interchangeable offload seam",
       "desc": "Stateless request/response contract for traffic equilibrium, cold-pass batches, deep projections and batch life-writing, with local fallback. Zone-aggregated OD sizing tables live here (A4). The engine cannot tell CPU from GPU from cloud except by latency (A9).",
-      "specRef": "§15; A4; A9; M0-ENG §1",
+      "specRef": "Â§15; A4; A9; M0-ENG Â§1",
       "path": "internal/foundation/solver/",
       "inbound": {
         "name": "Solver",
@@ -128,12 +128,12 @@
       "layer": "foundation",
       "title": "Error registry, correlation IDs, structured logging, stored error review",
       "desc": "Registry-sourced errors only (data/errors.json, codes MET-<layer><NNN>); correlation ID propagation end-to-end; structured NDJSON logs (logs/engine.ndjson, logs/ui.ndjson, rotated); errors persisted for review via F12 tail and metctl errors. The foundation every other module's error handling is built on (GR#1, GR#7).",
-      "specRef": "GR#1; GR#7; M0-ENG §3 (log tail)",
+      "specRef": "GR#1; GR#7; M0-ENG Â§3 (log tail)",
       "path": "internal/foundation/errs/",
       "inbound": {
         "name": "E",
         "format": "Go package API",
-        "pattern": "errs.New(code, correlationId, ctx) — the only legal error constructor"
+        "pattern": "errs.New(code, correlationId, ctx) â€” the only legal error constructor"
       },
       "deps": [],
       "calls": [],
@@ -148,7 +148,7 @@
       "layer": "foundation",
       "title": "Go monorepo skeleton + CI pipeline + build-info injection",
       "desc": "Monorepo layout (cmd/, internal/, data/, fixtures/, tools/, docs/, sql/); trunk-based git with conventional commits carrying BoW refs; CI: build, go vet, golangci-lint (custom determinism rules), escape-analysis gate, gctrace perf gate, UI snapshot tests, invariant suite, perf smoke; version/commit/branch/timestamp injected via -ldflags, never hand-maintained.",
-      "specRef": "M0-ENG §5; A8; M0-ENG §3 (build info)",
+      "specRef": "M0-ENG Â§5; A8; M0-ENG Â§3 (build info)",
       "path": "/",
       "deps": [],
       "calls": [],
@@ -162,8 +162,8 @@
       "milestone": "M0",
       "layer": "foundation",
       "title": "Build identity: version/commit/branch/timestamp injected via -ldflags",
-      "desc": "internal/foundation/buildinfo/ — link-time-only string vars (Version/Commit/Branch/BuildTime) plus String() for --version output and the F12 debug info panel's build & code row; never hand-maintained (M0-ENG §3). BUG-013: registered as its own module key rather than folded under foundation.repo's catch-all — buildinfo.go's own doc comment self-declares \"Module key: foundation.repo\", but engine.core (persist.go), ui.screen.debug (build.go), harness.synth (generator.go) and cmd/metctl (main.go) all call it directly as a real, distinct package, which needs its own callable key under GR#20. Same open question as BUG-108's tool.metctl entry below re: foundation.repo's catch-all scope — escalated to Bill, ASM logged.",
-      "specRef": "M0-ENG §3 (build info); BUG-013",
+      "desc": "internal/foundation/buildinfo/ â€” link-time-only string vars (Version/Commit/Branch/BuildTime) plus String() for --version output and the F12 debug info panel's build & code row; never hand-maintained (M0-ENG Â§3). BUG-013: registered as its own module key rather than folded under foundation.repo's catch-all â€” buildinfo.go's own doc comment self-declares \"Module key: foundation.repo\", but engine.core (persist.go), ui.screen.debug (build.go), harness.synth (generator.go) and cmd/metctl (main.go) all call it directly as a real, distinct package, which needs its own callable key under GR#20. Same open question as BUG-108's tool.metctl entry below re: foundation.repo's catch-all scope â€” escalated to Bill, ASM logged.",
+      "specRef": "M0-ENG Â§3 (build info); BUG-013",
       "path": "internal/foundation/buildinfo/",
       "inbound": {
         "name": "String",
@@ -185,7 +185,7 @@
       "layer": "foundation",
       "title": "Determinism core: 256 shards, phase barriers, counter RNG, fixed-point money",
       "desc": "256 fixed shards (spatial for cells/network, id-hash for citizens/firms), shard-order 0->255 merges, phase barriers with (shard, sequence)-ordered cross-shard messages, Philox-style counter RNG keyed (worldSeed, entityId, month, purpose), int64 micro-pounds, fixed-order float summation where unavoidable.",
-      "specRef": "§1.2; A8",
+      "specRef": "Â§1.2; A8",
       "path": "internal/foundation/det/",
       "inbound": {
         "name": "Stream",
@@ -207,9 +207,9 @@
       "priority": "P0",
       "milestone": "M0",
       "layer": "foundation",
-      "title": "Module registry: real/stub/off status, health, CanToggle — one registry, two consumers",
+      "title": "Module registry: real/stub/off status, health, CanToggle â€” one registry, two consumers",
       "desc": "Every simulation module registers behind an interface with a mandatory Stub implementation; engine boots with any real/stub mix; registry rows carry name, semver, status, health, last-tick cost, feature-flag source; F12 info panel is a view of the same registry with guarded toggles.",
-      "specRef": "M0-ENG §2; M0-ENG §3",
+      "specRef": "M0-ENG Â§2; M0-ENG Â§3",
       "path": "internal/foundation/registry/",
       "inbound": {
         "name": "Registry",
@@ -232,8 +232,8 @@
       "milestone": "M0",
       "layer": "foundation",
       "title": "Config data files + loader + debug hot-reload",
-      "desc": "data/consumption.json, modes.json, buildings.json, unlock_trees.json, naming_corpus.json, seasonal.json, external_world.json, policies.json, errors.json — all JSON, hot-reloadable in debug, the entire balance surface for M2 Batch tuning. Validators derive expected values from these files, never hardcoded (GR#15). BUG-103: registered at the Go package implementing the declared Store contract (internal/foundation/data/, self-declared \"Module key: foundation.data\" in its own doc.go), not at data/ — the JSON files it loads are inputs, not a code module in their own right, and carry no separate registry entry (ASM logged).",
-      "specRef": "§24; GR#15",
+      "desc": "data/consumption.json, modes.json, buildings.json, unlock_trees.json, naming_corpus.json, seasonal.json, external_world.json, policies.json, errors.json â€” all JSON, hot-reloadable in debug, the entire balance surface for M2 Batch tuning. Validators derive expected values from these files, never hardcoded (GR#15). BUG-103: registered at the Go package implementing the declared Store contract (internal/foundation/data/, self-declared \"Module key: foundation.data\" in its own doc.go), not at data/ â€” the JSON files it loads are inputs, not a code module in their own right, and carry no separate registry entry (ASM logged).",
+      "specRef": "Â§24; GR#15",
       "path": "internal/foundation/data/",
       "inbound": {
         "name": "Store",
@@ -256,8 +256,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "BOW git integration on the metro BOW (decision: no separate metropolis_bow DB)",
-      "desc": "DECIDED (Aaron, 2026-08-08): the metro BOW (claude-bow.js) IS the project Book of Work — it now carries the spec's fields (seq/sprint/milestone/spec_ref/GUIDs/deps) so building the separate metropolis_bow schema of M0-ENG §4 would duplicate SSOT (GR#3). Remaining work from that section: commit-msg validation that [mkey] refs exist in the BOW, auto-comment of commit hashes onto items (extend claude-pre-commit-check.js or a commit hook), and the F12 read-only BoW tab (already in ui.screen.debug). BUG-103: registered path corrected to the real tool (claude-bow.js at repo root) — tools/bow/ and cmd/bow/ never existed; the metropolis_bow-schema idea they implied was explicitly decided against above.",
-      "specRef": "M0-ENG §4; V.2.3",
+      "desc": "DECIDED (Aaron, 2026-08-08): the metro BOW (claude-bow.js) IS the project Book of Work â€” it now carries the spec's fields (seq/sprint/milestone/spec_ref/GUIDs/deps) so building the separate metropolis_bow schema of M0-ENG Â§4 would duplicate SSOT (GR#3). Remaining work from that section: commit-msg validation that [mkey] refs exist in the BOW, auto-comment of commit hashes onto items (extend claude-pre-commit-check.js or a commit hook), and the F12 read-only BoW tab (already in ui.screen.debug). BUG-103: registered path corrected to the real tool (claude-bow.js at repo root) â€” tools/bow/ and cmd/bow/ never existed; the metropolis_bow-schema idea they implied was explicitly decided against above.",
+      "specRef": "M0-ENG Â§4; V.2.3",
       "path": "claude-bow.js",
       "deps": [
         "foundation.repo"
@@ -274,7 +274,7 @@
       "layer": "harness",
       "title": "H-STUB StubEngine + Folkestone-64 fixture + chaos knobs",
       "desc": "Full protocol implementation with canned behaviour: static handcrafted 64x64 world, accepts commands, scripted/recorded delta streams, obeys speed controls with fake ticks; chaos knobs (delayed/burst deltas) prove UI budgets under stress. The UI is built against H-STUB from week one. Permanent fixture.",
-      "specRef": "M0-ENG §2.1",
+      "specRef": "M0-ENG Â§2.1",
       "path": "internal/engine/stub/",
       "inbound": {
         "name": "StubEngine",
@@ -299,7 +299,7 @@
       "layer": "ui",
       "title": "TUI renderer core: cell-buffer diff, decoupled loops, capability probe",
       "desc": "tcell; front/back styled cell buffers with diff flushing (no clears, flicker structurally impossible); T-INPUT (<10ms echo) / T-RENDER (10Hz + on-input) / T-VIEWS (delta subscription client, double-buffered view models); Windows Terminal primary, conhost degraded profile by capability probe; min 120x30, reflow on resize; zero-allocation draw paths on hot widgets. UI holds views, never the world (<150MB).",
-      "specRef": "UI-SPEC §1, §5; M0-ENG §1.1",
+      "specRef": "UI-SPEC Â§1, Â§5; M0-ENG Â§1.1",
       "path": "internal/ui/core/",
       "inbound": {
         "name": "RenderScreen",
@@ -325,7 +325,7 @@
       "layer": "ui",
       "title": "UI result router: the transport-owning seam routing CommandResult/Delta/Event to screens",
       "desc": "The ui-side composition root ASM-1482 proved missing: a single dedicated goroutine (absorbing the T-VIEWS role from ui.core's ViewsLoop) drains int.protocol Transport's Results()/Deltas()/Events() channels and dispatches each message to its owning screen - CommandResult by minted CorrelationID to that screen's ApplyResult, Delta by SubscriptionID binding to ApplyDelta, Event by Kind prefix to ticker and by Severity/Crisis to chrome's alert stack. Registration-order slice routing table (never map range), routing-table miss raises a registry MET-U code (never silent drop), evict-oldest drop policy made observable via SeqTracker gaps + result-buffer pressure logging, staleness by Tick comparison never wall-clock. Presentation-only: no conservation effect, no world-state mutation possible. Full contract: docs/planning/icd/ui.result-routing.md (ASM-1482).",
-      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG §1.1; UI-SPEC §1",
+      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG Â§1.1; UI-SPEC Â§1",
       "path": "internal/ui/router/",
       "inbound": {
         "name": "Router",
@@ -359,7 +359,7 @@
       "layer": "ui",
       "title": "Widget library: sparklines, Braille charts, heatmaps, gauges, tables, queue lanes",
       "desc": "The shared visual grammar: box-drawing borders, semantic + colourblind palettes (day one), 12-cell sparklines, Braille 2x4 sub-grid charts (projections with confidence bands, month-age pyramid), background-ramp heatmaps, block gauges, big-num tiles with delta arrows, sortable/filterable/CSV-exportable tables, literal truck-queue lanes per junction approach, 300ms threshold pulse.",
-      "specRef": "UI-SPEC §2",
+      "specRef": "UI-SPEC Â§2",
       "path": "internal/ui/widgets/",
       "inbound": {
         "name": "TableData",
@@ -383,7 +383,7 @@
       "layer": "ui",
       "title": "Key grammar: leader sequences, which-key HUD, palette, marks, remappable keymaps",
       "desc": "Verb->noun->variant leader language (b r s, z d h...), which-key HUD within one UI tick that dims as sequences are learned, vim counts/repeat (5 b r s, .), undo/redo where engine permits, 12 map marks, / name search over auto-named objects, fuzzy command palette with key sequences printed beside actions + parameterised commands (:loan 5M 10y), globals (Space, 1/2/3, o, ?, !), optional mouse with a key path for everything. Keymaps stored as JSON profile data.",
-      "specRef": "UI-SPEC §3, §6",
+      "specRef": "UI-SPEC Â§3, Â§6",
       "path": "internal/ui/keys/",
       "inbound": {
         "name": "KeyGrammar",
@@ -407,7 +407,7 @@
       "layer": "engine",
       "title": "Engine orchestrator: two-layer clock, deterministic phase pipeline, shard worker pool",
       "desc": "One day-night cycle per calendar month; 30 daily logistics ticks per cycle; monthly tick in fixed phases (production -> logistics settlement -> consumption & shortfall -> population -> land value & decay -> finance); speeds pause/1x/2x/4x (8x debug), secondsPerMonthAt1x=480 master pacing knob; POOL-SIM (NumCPU-2) stealing fixed shards; pre-sized arenas, zero heap allocation steady-state; T-SUBSCR view-subscription server; T-PERSIST copy-on-write snapshots off the tick path; no wall-clock time in logic, ever.",
-      "specRef": "§3; M0-ENG §1.1–1.3; §9 (month index)",
+      "specRef": "Â§3; M0-ENG Â§1.1â€“1.3; Â§9 (month index)",
       "path": "internal/engine/core/",
       "inbound": {
         "name": "Engine",
@@ -437,9 +437,9 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "foundation",
-      "title": "Determinism CI gate — the first test written",
-      "desc": "Same seed, 120 months, twice: sha256(worldSnapshot) must match; again with POOL-SIM=1 vs =14; mismatch fails the build. Built and passing on the stub engine BEFORE any simulation logic (TDD order explicit per A8). Determinism bugs are always P0. BUG-103/BUG-108: registered at its real, fully-built location internal/engine/detgate/ (doc.go+gate.go+gate_test.go+errors.go) — the prior \"internal/engine/core/ (tests) + CI\" path predated the package's own directory and left this GR#21-critical gate with no registry presence at its real home.",
-      "specRef": "§1.2.5; A8; M0-ENG §6.4",
+      "title": "Determinism CI gate â€” the first test written",
+      "desc": "Same seed, 120 months, twice: sha256(worldSnapshot) must match; again with POOL-SIM=1 vs =14; mismatch fails the build. Built and passing on the stub engine BEFORE any simulation logic (TDD order explicit per A8). Determinism bugs are always P0. BUG-103/BUG-108: registered at its real, fully-built location internal/engine/detgate/ (doc.go+gate.go+gate_test.go+errors.go) â€” the prior \"internal/engine/core/ (tests) + CI\" path predated the package's own directory and left this GR#21-critical gate with no registry presence at its real home.",
+      "specRef": "Â§1.2.5; A8; M0-ENG Â§6.4",
       "path": "internal/engine/detgate/",
       "deps": [
         "engine.core",
@@ -461,7 +461,7 @@
       "layer": "ui",
       "title": "F1 Map screen: viewport, minimap, overlays, inspect, follow",
       "desc": "Scrollable viewport + minimap; overlay cycle (ownership, land value, zoning, utilities, traffic, pollution, decay, per-service coverage, parking occupancy, vitality); Enter inspects any cell/building/citizen, f follows a citizen; foreground glyph = structure/terrain, background = metric (two data layers per cell).",
-      "specRef": "§13-F1; UI-SPEC §2",
+      "specRef": "Â§13-F1; UI-SPEC Â§2",
       "path": "internal/ui/screens/map/",
       "deps": [
         "ui.widgets"
@@ -485,7 +485,7 @@
       "layer": "engine",
       "title": "Walking skeleton: playable-looking nothing, end-to-end",
       "desc": "Protocol + registry + stub-everything engine + H-STUB + determinism gate + F1 map on fixture, running the full pipeline end-to-end before any real model. Then modules go real one at a time in BOW seq order.",
-      "specRef": "M0-ENG §6.4; M0-ENG §2",
+      "specRef": "M0-ENG Â§6.4; M0-ENG Â§2",
       "path": "cmd/metropolis/",
       "deps": [
         "harness.stub",
@@ -506,8 +506,8 @@
       "milestone": "M1",
       "layer": "ui",
       "title": "F12 info panel: build/runtime stats, module registry view + toggles, error tail, phase timing, BoW tab",
-      "desc": "Build & code info (ldflags-injected), runtime (uptime, memory vs budget table, GC pauses, goroutines, channel depths, input-echo p99), module registry rows with guarded ON/OFF/STUB toggles, last-50 error tail pretty-printing the NDJSON logs, per-phase µs sparkline over 60 ticks, read-only BoW tab (open counts by priority).",
-      "specRef": "M0-ENG §3",
+      "desc": "Build & code info (ldflags-injected), runtime (uptime, memory vs budget table, GC pauses, goroutines, channel depths, input-echo p99), module registry rows with guarded ON/OFF/STUB toggles, last-50 error tail pretty-printing the NDJSON logs, per-phase Âµs sparkline over 60 ticks, read-only BoW tab (open counts by priority).",
+      "specRef": "M0-ENG Â§3",
       "path": "internal/ui/screens/debug/",
       "deps": [
         "foundation.registry",
@@ -532,7 +532,7 @@
       "layer": "engine",
       "title": "Debug as a runtime feature switch",
       "desc": "Release builds carry it, default off; enable via --debug, config, or :debug on; switching ON is recorded in the save header forever (balance data hygiene); unlocks 8x speed, cheats (free money, instant build, force milestone), entity JSON inspector, fidelity-dial exposure, console, fixture record/replay controls.",
-      "specRef": "§14; M0-ENG §3",
+      "specRef": "Â§14; M0-ENG Â§3",
       "path": "internal/engine/debug/",
       "deps": [],
       "calls": [
@@ -550,7 +550,7 @@
       "layer": "harness",
       "title": "H-REPLAY: recorded command/delta fixtures",
       "desc": "Delta streams and command logs recorded from any engine (stub or real) into fixtures/*.ndjson.gz; replayable into the UI (stable data for UX work) and into the engine (regression: replay commands, compare snapshots). Permanent fixture.",
-      "specRef": "M0-ENG §2.2",
+      "specRef": "M0-ENG Â§2.2",
       "path": "internal/harness/replay/ + fixtures/",
       "deps": [
         "int.protocol",
@@ -570,8 +570,8 @@
       "milestone": "M1",
       "layer": "harness",
       "title": "Headless UI test harness: scripted keys, snapshot asserts, latency budgets",
-      "desc": "Drives the widget layer with scripted key sequences against recorded delta streams and asserts cell-buffer snapshots; UI-SPEC §5 latency budgets asserted in CI (keystroke echo <10ms, screen switch <30ms, diff flush <3ms typical).",
-      "specRef": "UI-SPEC §5",
+      "desc": "Drives the widget layer with scripted key sequences against recorded delta streams and asserts cell-buffer snapshots; UI-SPEC Â§5 latency budgets asserted in CI (keystroke echo <10ms, screen switch <30ms, diff flush <3ms typical).",
+      "specRef": "UI-SPEC Â§5",
       "path": "internal/harness/uitest/",
       "deps": [
         "ui.core",
@@ -595,7 +595,7 @@
       "layer": "harness",
       "title": "H-HEADLESS: engine without UI",
       "desc": "metropolis -headless -seed N -months M -out snap.json + scenario scripts (JSON command lists); emits per-phase timing and invariant reports every tick. The balance/Batch/CI workhorse.",
-      "specRef": "M0-ENG §2.3",
+      "specRef": "M0-ENG Â§2.3",
       "path": "internal/harness/headless/",
       "deps": [
         "engine.core",
@@ -620,7 +620,7 @@
       "layer": "harness",
       "title": "H-SYNTH: synthetic world generator + perf CI",
       "desc": "Parametric cities (population, sprawl, network shape) for perf/scale testing; know the 10M-citizen tick cost in month 3 of development; perf CI graphs tick-time vs scale per commit; a commit regressing monthly-tick time >10% at the 1M-citizen synthetic fails.",
-      "specRef": "M0-ENG §2.4; M0-ENG §6.5",
+      "specRef": "M0-ENG Â§2.4; M0-ENG Â§6.5",
       "path": "internal/harness/synth/",
       "deps": [
         "engine.core",
@@ -647,8 +647,8 @@
       "milestone": "M0",
       "layer": "data",
       "title": "Tile georeference: OS grid squares for start tile and expansion extent",
-      "desc": "Exact OS Terrain 50 grid squares for the 2x2km Folkestone West–Seabrook start tile and the ~60x60km East Kent expansion extent (Dover–Ashford–Dungeness). Open item V.2.5.",
-      "specRef": "V.2.5; §2.1; §2.3",
+      "desc": "Exact OS Terrain 50 grid squares for the 2x2km Folkestone Westâ€“Seabrook start tile and the ~60x60km East Kent expansion extent (Doverâ€“Ashfordâ€“Dungeness). Open item V.2.5.",
+      "specRef": "V.2.5; Â§2.1; Â§2.3",
       "path": "data/ + tools/terrain/",
       "deps": [],
       "calls": [],
@@ -663,7 +663,7 @@
       "layer": "engine",
       "title": "World & terrain: OS Terrain 50 import, cells, slope, geology, hydrology, tile expansion",
       "desc": "Build-time heightmap from OS Terrain 50 downsampled to 10m cells (~30B core: elevation, slope class, surface, ownership, zoning, structure ref, land value, overlay scratch); slope class multiplies build cost and gates types; geology layer (chalk, clay pockets, gravels, deep coal east) gates mining; terrain flow model derives Pent/Seabrook hydrology; 2x2km purchasable tiles, only owned tiles fully simulated; motorway + one junction survive the wipe.",
-      "specRef": "§2; §32 (geology); II.1",
+      "specRef": "Â§2; Â§32 (geology); II.1",
       "path": "internal/engine/world/",
       "inbound": {
         "name": "WorldAPI",
@@ -690,7 +690,7 @@
       "layer": "engine",
       "title": "Citizens Option B: persistent individuals, adaptive fidelity, no culls ever",
       "desc": "~250B hot record (month birthdate, household, home/work/school, 8-axis personality, education-drifted, derived leisure tastes, health bands, wealth, employment, satisfaction); cold store columnar SoA, field-compressed 60-100B (A1); HOT/WARM/COLD dial with amortised 1/30-shards-per-day cold pass (A2); cold parameters ONLY from the stratified rotating sample, camera-invariance a CI invariant (A7); binding deterministic life-writing on inspection; per-person Gompertz-Makeham monthly mortality hazards; NVMe stated requirement >20M local.",
-      "specRef": "§5; A1; A2; A7; §II.3",
+      "specRef": "Â§5; A1; A2; A7; Â§II.3",
       "path": "internal/engine/citizens/",
       "inbound": {
         "name": "CitizensAPI",
@@ -722,8 +722,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Invariant checker: conservation asserts every tick",
-      "desc": "People, money, goods and vehicles must balance — hard assert in dev builds, logged registry error in release; vehicle-conservation makes despawn-masking structurally impossible (§19.3); runs in H-HEADLESS reports and CI invariant suite.",
-      "specRef": "§14; §19 (nothing despawns)",
+      "desc": "People, money, goods and vehicles must balance â€” hard assert in dev builds, logged registry error in release; vehicle-conservation makes despawn-masking structurally impossible (Â§19.3); runs in H-HEADLESS reports and CI invariant suite.",
+      "specRef": "Â§14; Â§19 (nothing despawns)",
       "path": "internal/engine/invariant/",
       "deps": [
         "engine.core"
@@ -736,7 +736,7 @@
       "inbound": {
         "name": "Registry",
         "format": "Go package API: RegisterStock(name string, snapshot func() int64) called once per conserved stock at module init",
-        "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, §14, §19.3); violation is a hard assert in dev builds, a registry error in release"
+        "pattern": "each registered stock's per-tick delta must equal tracked ins minus outs (conservation of people/money/goods/vehicles, Â§14, Â§19.3); violation is a hard assert in dev builds, a registry error in release"
       }
     },
     {
@@ -747,8 +747,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Needs & commodities behind the Market interface",
-      "desc": "Water, power, gas, food staple/fresh, fuel, materials, goods, waste — each importable (opex, logistics capacity in tonnes/slots), locally producible (capex + land + jobs + inputs) or hybrid; static import prices v1 behind a Market interface so dynamic pricing is a config flip; services (non-tradable) declared separately.",
-      "specRef": "§6; I.3 (static prices)",
+      "desc": "Water, power, gas, food staple/fresh, fuel, materials, goods, waste â€” each importable (opex, logistics capacity in tonnes/slots), locally producible (capex + land + jobs + inputs) or hybrid; static import prices v1 behind a Market interface so dynamic pricing is a config flip; services (non-tradable) declared separately.",
+      "specRef": "Â§6; I.3 (static prices)",
       "path": "internal/engine/market/",
       "inbound": {
         "name": "MarketAPI",
@@ -774,8 +774,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Consumption coefficients + four utility networks",
-      "desc": "Coefficient-driven demand (class coefficients x occupancy/throughput from data/consumption.json — catalogue never hard-codes utility numbers); water, wastewater (95% rule), electricity, gas as separate networks with sources, pipes/wires (free in road corridors), storage and losses; aquifer sustainable-yield ceiling and degradation; peak vs base load; all-electric strategy viable.",
-      "specRef": "§17; §2.2",
+      "desc": "Coefficient-driven demand (class coefficients x occupancy/throughput from data/consumption.json â€” catalogue never hard-codes utility numbers); water, wastewater (95% rule), electricity, gas as separate networks with sources, pipes/wires (free in road corridors), storage and losses; aquifer sustainable-yield ceiling and degradation; peak vs base load; all-electric strategy viable.",
+      "specRef": "Â§17; Â§2.2",
       "path": "internal/engine/consumption/",
       "inbound": {
         "name": "UtilityAPI",
@@ -812,7 +812,7 @@
       "layer": "engine",
       "title": "Economy & finance: money flows, land market, loans, credit rating, insolvency",
       "desc": "Household income -> taxes -> budget -> opex/imports/debt/construction; simple firm P&L opening/closing on profitability (v1, superseded by engine.firms); continuous land pricing base x access x amenity x scarcity; loan facilities by milestone, interest from credit rating f(debt/revenue, history, reserves); refinancing spiral; insolvency (3 months unable to meet obligations, no credit) = game over; investment programmes with multi-year payback in projections. Int64 micro-pounds everywhere.",
-      "specRef": "§7; §II.4",
+      "specRef": "Â§7; Â§II.4",
       "path": "internal/engine/finance/",
       "inbound": {
         "name": "FinanceAPI",
@@ -850,8 +850,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Routing & traffic: SUE assignment, junction models, spillback, mode logit, commute accounting",
-      "desc": "Daily capacity-restrained stochastic user equilibrium on the road graph with zone-aggregated OD (~10^3-10^4 zones, A4) — never citizen-pair routing; volume-delay functions, cached warm starts, contraction hierarchies; lanes are link capacity (no lane-choice pathology); junction control types (priority/mini-rbt/roundabout/signals with splits), turn-movement capacities, queue spillback blocking upstream; nothing despawns; per-trip nested logit over 13 modes, personality-weighted, real hills for bikes; door-to-door commute times stored per citizen (hot)/district (cold); freight shares the network as PCUs; induced demand emerges from latent-demand pool.",
-      "specRef": "§19; §51 (lane myth); A4; §II.5",
+      "desc": "Daily capacity-restrained stochastic user equilibrium on the road graph with zone-aggregated OD (~10^3-10^4 zones, A4) â€” never citizen-pair routing; volume-delay functions, cached warm starts, contraction hierarchies; lanes are link capacity (no lane-choice pathology); junction control types (priority/mini-rbt/roundabout/signals with splits), turn-movement capacities, queue spillback blocking upstream; nothing despawns; per-trip nested logit over 13 modes, personality-weighted, real hills for bikes; door-to-door commute times stored per citizen (hot)/district (cold); freight shares the network as PCUs; induced demand emerges from latent-demand pool.",
+      "specRef": "Â§19; Â§51 (lane myth); A4; Â§II.5",
       "path": "internal/engine/traffic/",
       "inbound": {
         "name": "TrafficAPI",
@@ -887,8 +887,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Roads & auto-naming: named edges, class ladder, maintenance, upgrades, roadworks",
-      "desc": "Roads as named edges with identity (class ladder alley->motorway, lanes, speed limits, maintenance state — potholes cost); deterministic auto-naming for EVERY object from seed+id (Kentish corpus x suffix, continuation rules; civic buildings named for notable deceased citizens; functional numbering; transit auto-lettering), player-renameable; in-place upgrades with simulated roadworks (phased lane closures re-routing real traffic, warned in projections); road inspector shows volume, v/c, top-5 OD flows and alternatives.",
-      "specRef": "§20; §51",
+      "desc": "Roads as named edges with identity (class ladder alley->motorway, lanes, speed limits, maintenance state â€” potholes cost); deterministic auto-naming for EVERY object from seed+id (Kentish corpus x suffix, continuation rules; civic buildings named for notable deceased citizens; functional numbering; transit auto-lettering), player-renameable; in-place upgrades with simulated roadworks (phased lane closures re-routing real traffic, warned in projections); road inspector shows volume, v/c, top-5 OD flows and alternatives.",
+      "specRef": "Â§20; Â§51",
       "path": "internal/engine/roads/",
       "inbound": {
         "name": "RoadsAPI",
@@ -917,7 +917,7 @@
       "layer": "engine",
       "title": "Logistics & JIT: stocks, replenishment, junction slots, trucks, lead times",
       "desc": "Daily tick: consumers draw from local stock (capacity, holding cost, shelf life); stock managers order against forecast + player-tunable safety buffer (lean/fat per commodity); orders become truck movements on the road graph; finite junction slots/day with literal queue render; import lead times (road days, sea 10x bulk); perishables expire in queue; shortfalls hit satisfaction, health, production, construction. The beating heart.",
-      "specRef": "§8; §II.5",
+      "specRef": "Â§8; Â§II.5",
       "path": "internal/engine/logistics/",
       "inbound": {
         "name": "LogisticsAPI",
@@ -948,7 +948,7 @@
       "layer": "engine",
       "title": "Zoning (8-way) & construction: land purchase, build queue, materials, lead times, demolition",
       "desc": "Zone types Dwelling/Shop/Office/Entertainment/Farming/Manufacturing/Heavy Industry/Mining with demand bars that explain themselves (no labour, no power, no freight); construction consumes materials + labour + junction capacity with seasonal speed; lead times; demolition + compensation; land purchase before building.",
-      "specRef": "§7; §34; §13-F3; §9 (winter slowdown)",
+      "specRef": "Â§7; Â§34; Â§13-F3; Â§9 (winter slowdown)",
       "path": "internal/engine/build/",
       "inbound": {
         "name": "BuildAPI",
@@ -986,8 +986,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Seasonality: month-index curves for every seasonal system",
-      "desc": "Winter power peak, summer water stress, harvest calendar lumps, winter construction slowdown, September school intake gate, seaside leisure/tourism curve, winter health wave — all curves in data/seasonal.json and visible in projections.",
-      "specRef": "§9; §17 (modifiers)",
+      "desc": "Winter power peak, summer water stress, harvest calendar lumps, winter construction slowdown, September school intake gate, seaside leisure/tourism curve, winter health wave â€” all curves in data/seasonal.json and visible in projections.",
+      "specRef": "Â§9; Â§17 (modifiers)",
       "path": "internal/engine/season/",
       "inbound": {
         "name": "SeasonAPI",
@@ -1012,8 +1012,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Households & housing typologies: formation, appeal profiles, mismatch",
-      "desc": "Real households (partnering among hot/sampled, calibrated statistical among cold); demand = households x dwelling-size preference; 17 housing typologies with appeal profiles over household stage x wealth x personality — citywide demand is a distribution over types, a city of identical blocks leaves personality segments unhoused-by-preference; overcrowding and rent burden feed satisfaction and migration.",
-      "specRef": "§5.4; §21 (typologies); Part IV HS",
+      "desc": "Real households (partnering among hot/sampled, calibrated statistical among cold); demand = households x dwelling-size preference; 17 housing typologies with appeal profiles over household stage x wealth x personality â€” citywide demand is a distribution over types, a city of identical blocks leaves personality segments unhoused-by-preference; overcrowding and rent burden feed satisfaction and migration.",
+      "specRef": "Â§5.4; Â§21 (typologies); Part IV HS",
       "path": "internal/engine/households/",
       "inbound": {
         "name": "HouseholdsAPI",
@@ -1038,14 +1038,14 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "title": "Attractiveness & migration — the master dial",
+      "title": "Attractiveness & migration â€” the master dial",
       "desc": "A = w1*jobAvailability(skill-matched) + w2*housingAffordability + w3*serviceCoverage + w4*environment + w5*leisureFit(venue mix vs migrant personality distribution) + w6*safety + w7*reputation(momentum); monthly net migration g(A - A_world) x capacity constraints (housing vacancy, junction arrival throughput); per-resident personality-weighted emigration; reputation momentum is the Detroit trap asymmetry. World pool infinite/static v1 behind the future hook.",
-      "specRef": "§11; §4 (migration-dominated)",
+      "specRef": "Â§11; Â§4 (migration-dominated)",
       "path": "internal/engine/attract/",
       "inbound": {
         "name": "AttractAPI",
         "format": "Go package API + deltas",
-        "pattern": "term-decomposed A score, every term drill-through; housingAffordability computed via engine.households + engine.finance (registered edges), reputation internal asymmetric momentum; the other five §11 terms (jobAvailability, serviceCoverage, environment, leisureFit, safety) are pushed TermInputs via SetTermInputs — no outbound call edge (BUG-058/ASM-243)"
+        "pattern": "term-decomposed A score, every term drill-through; housingAffordability computed via engine.households + engine.finance (registered edges), reputation internal asymmetric momentum; the other five Â§11 terms (jobAvailability, serviceCoverage, environment, leisureFit, safety) are pushed TermInputs via SetTermInputs â€” no outbound call edge (BUG-058/ASM-243)"
       },
       "deps": [
         "engine.citizens",
@@ -1069,14 +1069,14 @@
       "priority": "P0",
       "milestone": "M1",
       "layer": "engine",
-      "title": "FEAT-082: Composition root — wires baseline-one modules into the live tick",
+      "title": "FEAT-082: Composition root â€” wires baseline-one modules into the live tick",
       "desc": "The one package permitted to import engine.core AND every wired module (GR#20): registers the fixed baseline-one hook set (world -> citizens -> market -> consumption -> finance -> build -> attract, invariant last on PhaseDailyTick) against a core.Engine in the single documented order (never a map, GR#21), fails loudly rather than partially-wiring (ErrAlreadyComposed/ErrModuleFailed/ErrWiringAfterSeal), and injects the Buy/Zone/Build/Demolish gameplay-command seam onto engine.world/engine.build. Closes the ASM-001 'headless == live' gap FEAT-083 (Baseline One) needs to run at all: cmd/metropolis and internal/harness/headless are the only two runnable tops that call it. The engine.citizens edge is where FEAT-169 wires citizens' cold pass (AdvanceDayTick/VitalEvents births+deaths) into the live tick's people-conservation ledger, per docs/planning/icd/engine.citizens-coldpass.md.",
-      "specRef": "M0-ENG §1.1-1.3; M0-ENG §2; ASM-001; FEAT-082; FEAT-083",
+      "specRef": "M0-ENG Â§1.1-1.3; M0-ENG Â§2; ASM-001; FEAT-082; FEAT-083",
       "path": "internal/engine/compose/",
       "inbound": {
         "name": "Wire",
         "format": "Go package API (func Wire(*core.Engine, *Deps) (*Composition, error))",
-        "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind — never a silent partial wire"
+        "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind â€” never a silent partial wire"
       },
       "deps": [
         "engine.core",
@@ -1095,7 +1095,9 @@
         "engine.leisure",
         "engine.refuse",
         "engine.traffic",
-        "engine.extcommute"
+        "engine.extcommute",
+        "engine.services",
+        "engine.firms"
       ],
       "calls": [
         "engine.core",
@@ -1115,6 +1117,8 @@
         "engine.refuse",
         "engine.traffic",
         "engine.extcommute",
+        "engine.services",
+        "engine.firms",
         "foundation.errors",
         "foundation.num",
         "int.protocol"
@@ -1129,8 +1133,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Failure states: Detroit spiral, abandonment, blight spread, ghost-city ending",
-      "desc": "Shock -> emigration -> tax base down -> cuts/debt -> attractiveness down -> more emigration -> abandoned buildings (decay state: neighbour land-value drag, hazard/fire/crime pressure, demolition cost) -> district blight spreading cell-by-cell; recovery expensive but possible; death: insolvency, or population <10% of historic peak after ever exceeding 50k — epilogue from the history log. No scripted loss.",
-      "specRef": "§12; §II.7",
+      "desc": "Shock -> emigration -> tax base down -> cuts/debt -> attractiveness down -> more emigration -> abandoned buildings (decay state: neighbour land-value drag, hazard/fire/crime pressure, demolition cost) -> district blight spreading cell-by-cell; recovery expensive but possible; death: insolvency, or population <10% of historic peak after ever exceeding 50k â€” epilogue from the history log. No scripted loss.",
+      "specRef": "Â§12; Â§II.7",
       "path": "internal/engine/spiral/",
       "inbound": {
         "name": "DecayAPI",
@@ -1168,8 +1172,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Projections engine + the Slow-Fuse Principle",
-      "desc": "Every demand/supply curve N years forward (N grows with unlocked forecasting; cloud offload extends), seasonally aware, with queued-decision markers (a planned school appears as a capacity step BEFORE it's built); Slow-Fuse (A5): any decision whose principal effects land >5 game-years out MUST render its projected consequence in the confirmation UI at decision time — binding across all systems. The anti-ambush machine.",
-      "specRef": "§13 (F7); A5; UI-SPEC §4",
+      "desc": "Every demand/supply curve N years forward (N grows with unlocked forecasting; cloud offload extends), seasonally aware, with queued-decision markers (a planned school appears as a capacity step BEFORE it's built); Slow-Fuse (A5): any decision whose principal effects land >5 game-years out MUST render its projected consequence in the confirmation UI at decision time â€” binding across all systems. The anti-ambush machine.",
+      "specRef": "Â§13 (F7); A5; UI-SPEC Â§4",
       "path": "internal/engine/projections/",
       "inbound": {
         "name": "ProjectionsAPI",
@@ -1197,7 +1201,7 @@
       "layer": "engine",
       "title": "Unlock economy: XP, 13-milestone ladder, development-point trees, direct buy",
       "desc": "XP earned continuously; milestones Wilderness(0)->Centopolis(100M win) each granting unlocks, cash, expansion permits, loan uplift, Development Points; per-category progression trees (12 'Blue'-style categories) from unlock_trees.json; off-map capacity always purchasable with money (grid/gas/rail/port/water tranches); cheat/debug force-unlock for testing.",
-      "specRef": "§4; §22; §23",
+      "specRef": "Â§4; Â§22; Â§23",
       "path": "internal/engine/unlocks/",
       "inbound": {
         "name": "UnlocksAPI",
@@ -1224,9 +1228,9 @@
       "priority": "P2",
       "milestone": "M1",
       "layer": "data",
-      "title": "Author unlock_trees.json — full §10/§22 inventory across 12 dev-point categories x 13 tiers",
-      "desc": "Split from engine.unlocks per BA-2: the gate-check MECHANISM is MOD-032; this item is the data-authoring undertaking of populating every category tree from the catalogue + §4 milestone table. GR#15: engine validators derive from this file.",
-      "specRef": "§10; §22; BA-2 escalation 2026-08-09",
+      "title": "Author unlock_trees.json â€” full Â§10/Â§22 inventory across 12 dev-point categories x 13 tiers",
+      "desc": "Split from engine.unlocks per BA-2: the gate-check MECHANISM is MOD-032; this item is the data-authoring undertaking of populating every category tree from the catalogue + Â§4 milestone table. GR#15: engine validators derive from this file.",
+      "specRef": "Â§10; Â§22; BA-2 escalation 2026-08-09",
       "path": "data/unlock_trees.json",
       "deps": [
         "foundation.data"
@@ -1244,7 +1248,7 @@
       "layer": "engine",
       "title": "Service framework: capacity + coverage + funding-quality, staffing pools, Public Service Pie",
       "desc": "Generic service model (education, healthcare, elder care, fire, police, deathcare, leisure, transport...): capacity, coverage radius, funding level -> quality; shared staffing pools (a nurse shortage is one shortage everywhere); Public Service Pie per-1k benchmark ratios (police ~2.4, teachers, nurses, refuse crews, council officers) with consequences scaling from village-mild to city-systemic; upgrade paths per catalogue.",
-      "specRef": "§10; §54 (Pie); §26 (staffing)",
+      "specRef": "Â§10; Â§54 (Pie); Â§26 (staffing)",
       "path": "internal/engine/services/",
       "inbound": {
         "name": "ServicesAPI",
@@ -1274,8 +1278,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "Wellbeing: physical & mental health tracks with causal drivers",
-      "desc": "Two 0-100 per-citizen tracks. Physical: age curve, healthcare access/quality/waiting lists, diet (fresh-food share), active travel, pollution exposure, sport x physicality. Mental: commute time (nonlinear past 45min — the biggest modifiable hit), job-ambition mismatch, green space within 400m, leisure-fit, crowding, isolation (sociability x community access), noise, financial stress (rent >35%), unemployment duration. Drives mortality, productivity, satisfaction, emigration. Wellbeing = f(physical, mental, satisfaction) is the headline stat.",
-      "specRef": "§18; §42 (leisure coupling)",
+      "desc": "Two 0-100 per-citizen tracks. Physical: age curve, healthcare access/quality/waiting lists, diet (fresh-food share), active travel, pollution exposure, sport x physicality. Mental: commute time (nonlinear past 45min â€” the biggest modifiable hit), job-ambition mismatch, green space within 400m, leisure-fit, crowding, isolation (sociability x community access), noise, financial stress (rent >35%), unemployment duration. Drives mortality, productivity, satisfaction, emigration. Wellbeing = f(physical, mental, satisfaction) is the headline stat.",
+      "specRef": "Â§18; Â§42 (leisure coupling)",
       "path": "internal/engine/wellbeing/",
       "inbound": {
         "name": "WellbeingAPI",
@@ -1317,8 +1321,8 @@
       "milestone": "M1",
       "layer": "engine",
       "title": "External commuting: finite off-map job pools, dormitory arithmetic",
-      "desc": "Off-map jobs (London/Ashford/Dover) with FINITE era-scaled capacity (A6) reachable via motorway or external rail (fast, expensive, big capacity); city collects income tax without providing the job — dormitory strategy viable early, capped by pool size, rail/coach crowding, commute mental-health burden, and structurally thin revenue (no rates/corp share — surfaced in F2 incidence); in-commuting fills labour shortage with visible wage leakage.",
-      "specRef": "§21; A6",
+      "desc": "Off-map jobs (London/Ashford/Dover) with FINITE era-scaled capacity (A6) reachable via motorway or external rail (fast, expensive, big capacity); city collects income tax without providing the job â€” dormitory strategy viable early, capped by pool size, rail/coach crowding, commute mental-health burden, and structurally thin revenue (no rates/corp share â€” surfaced in F2 incidence); in-commuting fills labour shortage with visible wage leakage.",
+      "specRef": "Â§21; A6",
       "path": "internal/engine/extcommute/",
       "inbound": {
         "name": "ExtCommuteAPI",
@@ -1346,8 +1350,8 @@
       "milestone": "M1",
       "layer": "data",
       "title": "buildings.json: the full Part IV catalogue encoded",
-      "desc": "Every object from catalogue sections R/E/W/H/ED/F-P/G/PK/L/T/PT/HS/C-I/LM/CM-WF plus supplements 1-3 (security & justice, farming & food, mining, comms & logistics, business & finance, FDI anchors, fuel & chemicals, rail industry, destination, tunnelling, health splits, civic, defence, mega-projects) with unlock gates, costs, capacities, coefficients refs, blight class, appeal profiles. Coefficients live in consumption.json — the catalogue never hard-codes utility numbers (§17).",
-      "specRef": "Part IV; Supplements 1-3; §23; §17",
+      "desc": "Every object from catalogue sections R/E/W/H/ED/F-P/G/PK/L/T/PT/HS/C-I/LM/CM-WF plus supplements 1-3 (security & justice, farming & food, mining, comms & logistics, business & finance, FDI anchors, fuel & chemicals, rail industry, destination, tunnelling, health splits, civic, defence, mega-projects) with unlock gates, costs, capacities, coefficients refs, blight class, appeal profiles. Coefficients live in consumption.json â€” the catalogue never hard-codes utility numbers (Â§17).",
+      "specRef": "Part IV; Supplements 1-3; Â§23; Â§17",
       "path": "data/buildings.json",
       "deps": [
         "foundation.data"
@@ -1366,7 +1370,7 @@
       "layer": "engine",
       "title": "Save/load UX: manual, rolling yearly autosave, milestone saves",
       "desc": "Manual save anytime, autosave every game year (rolling 10), milestone saves; save header carries version + debug-touched flag; F10 menu integration; large saves stream via StateSerializer without loading whole worlds.",
-      "specRef": "§3; §14; A3",
+      "specRef": "Â§3; Â§14; A3",
       "path": "internal/engine/save/",
       "deps": [
         "int.serializer",
@@ -1386,8 +1390,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Disasters-lite: event pressure on JIT",
-      "desc": "Road closure, storm surge on shore cells, aquifer drought — never random-spam, projected where possible, resolved through the same logistics/dispatch machinery.",
-      "specRef": "§10; §W (storm drains)",
+      "desc": "Road closure, storm surge on shore cells, aquifer drought â€” never random-spam, projected where possible, resolved through the same logistics/dispatch machinery.",
+      "specRef": "Â§10; Â§W (storm drains)",
       "path": "internal/engine/events/",
       "deps": [
         "engine.logistics",
@@ -1408,7 +1412,7 @@
       "layer": "balance",
       "title": "Balance harness: parameter sweeps, pacing tuning to achievable-but-hard",
       "desc": "Thousands of parameter runs, centuries per run, over data/*.json (the whole balance surface): local sweep runner first, Azure Batch when needed; tunes secondsPerMonthAt1x, growth curves, milestone spacing until 0->100M is achievable-but-hard in 80-150 hours.",
-      "specRef": "§16-M2; §15 (Batch); §3 (pacing)",
+      "specRef": "Â§16-M2; Â§15 (Batch); Â§3 (pacing)",
       "path": "tools/balance/",
       "inbound": {
         "name": "SweepRunner",
@@ -1434,7 +1438,7 @@
       "layer": "ui",
       "title": "Diagram engines: chain diagrams, network schematics, text Sankey",
       "desc": "Three auto-laid-out block-text engines: production chains as boxes/arrows with live t/day on arrows; power/water/chemical grids as node-edge schematics with load colouring + tube-map transit strips; text Sankey for the Fiscal Circuit (proportional block-width money bands). Layered graph drawing, small n, cached until topology changes.",
-      "specRef": "UI-SPEC §2 (diagrams)",
+      "specRef": "UI-SPEC Â§2 (diagrams)",
       "path": "internal/ui/diagrams/",
       "inbound": {
         "name": "DiagramAPI",
@@ -1459,8 +1463,8 @@
       "milestone": "M3",
       "layer": "ui",
       "title": "Dashboards, layout editor, drill-through rule",
-      "desc": "Widget grid (bignum, gauge, sparkline chart, table, mini-map, alert list) with shipped layouts per screen and a user layout editor saved in profile JSON; THE DRILL-THROUGH RULE (absolute): every number on every screen is selectable and Enter goes to its source — no dead ends, the whole UI one navigable graph.",
-      "specRef": "UI-SPEC §4",
+      "desc": "Widget grid (bignum, gauge, sparkline chart, table, mini-map, alert list) with shipped layouts per screen and a user layout editor saved in profile JSON; THE DRILL-THROUGH RULE (absolute): every number on every screen is selectable and Enter goes to its source â€” no dead ends, the whole UI one navigable graph.",
+      "specRef": "UI-SPEC Â§4",
       "path": "internal/ui/dash/",
       "inbound": {
         "name": "DashAPI",
@@ -1486,8 +1490,8 @@
       "milestone": "M3",
       "layer": "ui",
       "title": "Top bar + prioritised alert stack + crisis auto-pause",
-      "desc": "Persistent chrome: date, clock-cycle, speed, money, population, rating; bottom alert stack — prioritised, colour-coded, each alert jumps to its screen; ! jumps to top alert; crisis events auto-pause and drop camera/speed to the relevant queue.",
-      "specRef": "§13; §3 (auto-pause)",
+      "desc": "Persistent chrome: date, clock-cycle, speed, money, population, rating; bottom alert stack â€” prioritised, colour-coded, each alert jumps to its screen; ! jumps to top alert; crisis events auto-pause and drop camera/speed to the relevant queue.",
+      "specRef": "Â§13; Â§3 (auto-pause)",
       "path": "internal/ui/screens/chrome/",
       "deps": [
         "ui.core"
@@ -1511,8 +1515,8 @@
       "milestone": "M3",
       "layer": "ui",
       "title": "F2 Finance: P&L, balance sheet, loans, rating, budget sliders + fiscal-circuit master view",
-      "desc": "Full finance screen plus the §54 top-down Sankey (money enters via exports/tourism/out-commuter wages/FDI/grants, leaves via imports/leakage/interest), tax instrument panel with elasticity curves and incidence display (who actually pays), gross-vs-net public payroll truth.",
-      "specRef": "§13-F2; §54; §39",
+      "desc": "Full finance screen plus the Â§54 top-down Sankey (money enters via exports/tourism/out-commuter wages/FDI/grants, leaves via imports/leakage/interest), tax instrument panel with elasticity curves and incidence display (who actually pays), gross-vs-net public payroll truth.",
+      "specRef": "Â§13-F2; Â§54; Â§39",
       "path": "internal/ui/screens/finance/",
       "deps": [
         "ui.dash",
@@ -1534,7 +1538,7 @@
       "layer": "ui",
       "title": "F3 Land & Construction screen",
       "desc": "Purchase, zone, build queue (materials + labour + lead time), demolition; catalogue browser driven by buildings.json with unlock state.",
-      "specRef": "§13-F3",
+      "specRef": "Â§13-F3",
       "path": "internal/ui/screens/build/",
       "deps": [
         "ui.widgets"
@@ -1559,7 +1563,7 @@
       "layer": "ui",
       "title": "F4 Services screen",
       "desc": "Per-service funding slider, capacity vs demand, coverage map jump, response-time distributions, waiting lists, Public Service Pie allocation.",
-      "specRef": "§13-F4; §26; §54",
+      "specRef": "Â§13-F4; Â§26; Â§54",
       "path": "internal/ui/screens/services/",
       "deps": [
         "ui.dash"
@@ -1578,8 +1582,8 @@
       "milestone": "M3",
       "layer": "ui",
       "title": "F5 Trade & Logistics screen",
-      "desc": "Import contracts, junction queue live view (the signature truck-glyph image), warehouse stock/buffer policy per commodity, port when unlocked, balance-of-trade extension (t/day and £/day by commodity and artery), pipeline-vs-truck safety trade view.",
-      "specRef": "§13-F5; §33; §50",
+      "desc": "Import contracts, junction queue live view (the signature truck-glyph image), warehouse stock/buffer policy per commodity, port when unlocked, balance-of-trade extension (t/day and Â£/day by commodity and artery), pipeline-vs-truck safety trade view.",
+      "specRef": "Â§13-F5; Â§33; Â§50",
       "path": "internal/ui/screens/trade/",
       "deps": [
         "ui.widgets",
@@ -1605,7 +1609,7 @@
       "layer": "ui",
       "title": "F6 Demographics screen",
       "desc": "Month-age ASCII population pyramid (smooth), education pipeline, workforce by sector/skill vs demand (white/blue collar), personality & leisure-taste distributions, 'how your city spends Saturday' hours-by-activity view, housing demand-vs-stock by typology, in/out-commuting leak view.",
-      "specRef": "§13-F6; §42; §21; §45",
+      "specRef": "Â§13-F6; Â§42; Â§21; Â§45",
       "path": "internal/ui/screens/demo/",
       "deps": [
         "ui.widgets"
@@ -1630,8 +1634,8 @@
       "milestone": "M3",
       "layer": "ui",
       "title": "F7 Projections screen",
-      "desc": "Every demand/supply curve N years forward: history solid Braille, projection dim, confidence bands, threshold lines, queued-decision markers; contracted-vs-internal demand crossings (§36); rate outlook (§45); Slow-Fuse confirmations render here.",
-      "specRef": "§13-F7; A5; UI-SPEC §4",
+      "desc": "Every demand/supply curve N years forward: history solid Braille, projection dim, confidence bands, threshold lines, queued-decision markers; contracted-vs-internal demand crossings (Â§36); rate outlook (Â§45); Slow-Fuse confirmations render here.",
+      "specRef": "Â§13-F7; A5; UI-SPEC Â§4",
       "path": "internal/ui/screens/proj/",
       "deps": [
         "ui.widgets"
@@ -1655,7 +1659,7 @@
       "layer": "ui",
       "title": "F9 Ticker & History screen",
       "desc": "Rolling ticker, monthly bulletin front page (read-on-pause), annual review, searchable history archive (the epilogue source); all stories from real sim events with real names.",
-      "specRef": "§13-F9; §29",
+      "specRef": "Â§13-F9; Â§29",
       "path": "internal/ui/screens/ticker/",
       "deps": [
         "ui.widgets"
@@ -1679,7 +1683,7 @@
       "layer": "ui",
       "title": "F10 Menu & saves screen",
       "desc": "Save/load browser, settings, keymap/layout profiles, new game setup (seed, debug flag).",
-      "specRef": "§13-F10; UI-SPEC §4 (layouts)",
+      "specRef": "Â§13-F10; UI-SPEC Â§4 (layouts)",
       "path": "internal/ui/screens/menu/",
       "deps": [
         "ui.core"
@@ -1704,7 +1708,7 @@
       "layer": "ui",
       "title": "F8 Districts & Policies screen",
       "desc": "District drawing and naming, policy library browser with mechanism/impact-preview/cost/scope per instrument, bundle conflict warnings, per-district tax settings.",
-      "specRef": "§13-F8; §52",
+      "specRef": "Â§13-F8; Â§52",
       "path": "internal/ui/screens/districts/",
       "deps": [
         "ui.dash"
@@ -1724,7 +1728,7 @@
       "layer": "engine",
       "title": "Refuse rounds & the waste-health loop",
       "desc": "Per-cell waste into bin stock (wheelie/trade/skip capacities); scheduled truck rounds from depots on real roads, auto-optimised, player-overridable; missed collections -> overflow -> vermin -> health/land value/fire risk, ticker names the street; streams general/recycling (contamination)/food-compost->farm input; landfills fill permanently and blight; incineration trades airshed for energy; capped sites reclaim as parkland.",
-      "specRef": "§25; §31 (compost loop)",
+      "specRef": "Â§25; Â§31 (compost loop)",
       "path": "internal/engine/refuse/",
       "inbound": {
         "name": "RefuseAPI",
@@ -1761,7 +1765,7 @@
       "layer": "engine",
       "title": "Unified emergency & care dispatch",
       "desc": "One dispatch engine for fire/ambulance/air-ambulance/police: incident -> nearest available unit -> real roads at blue-light ~x1.6 free-flow -> outcome quality f(response time); per-cell fire spread (material, density, wind, hydrant pressure); air ambulance ignores roads (weather-limited); hospital waiting lists as JIT-for-people; elder/home care share the hospital staffing pool; response-time distributions in F4 and projections.",
-      "specRef": "§26",
+      "specRef": "Â§26",
       "path": "internal/engine/dispatch/",
       "inbound": {
         "name": "DispatchAPI",
@@ -1793,8 +1797,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Education lifecycle: cradle to grave, the longest fuse",
-      "desc": "Nursery (second-earner enabler) -> primary (Sept gate) -> secondary -> sixth form / technical college / leave-at-16 -> university (halls, graduates, research points) -> adult education (mid-life re-skilling, the dying-industry answer) -> U3A/library (elder mental health); capacity, funding->quality, school-run traffic is real; attainment on the citizen record; personality drift (§5.1); quality shortfalls surface 10-20 game-years later as skill gaps and narrowed leisure economies — Slow-Fuse projections mandatory; research points buy productivity/tech and gate mega-projects.",
-      "specRef": "§27; §5.1 (drift); A5",
+      "desc": "Nursery (second-earner enabler) -> primary (Sept gate) -> secondary -> sixth form / technical college / leave-at-16 -> university (halls, graduates, research points) -> adult education (mid-life re-skilling, the dying-industry answer) -> U3A/library (elder mental health); capacity, funding->quality, school-run traffic is real; attainment on the citizen record; personality drift (Â§5.1); quality shortfalls surface 10-20 game-years later as skill gaps and narrowed leisure economies â€” Slow-Fuse projections mandatory; research points buy productivity/tech and gate mega-projects.",
+      "specRef": "Â§27; Â§5.1 (drift); A5",
       "path": "internal/engine/education/",
       "inbound": {
         "name": "EducationAPI",
@@ -1832,8 +1836,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Crime, policing, gangs, security services, justice chain",
-      "desc": "Per-district monthly generation by type (petty->organised, fraud/cyber by era, smuggling by port throughput vs customs); drivers: young-male ambition-frustrated unemployment, deprivation, inequality between adjacent districts, blight, youth leisure deserts, low presence; concave patrol deterrence + detective clearance (persistence) + prevention (generation); gang entities form after >24 months of conditions — territory, business tax, recruitment, border wars; removal needs the full stack, decapitation without regeneration respawns; Constabulary HQ strategy sliders; MI5-analogue liaison (organised crime, smuggling rings, visible threat-level intel, never random-spam); courthouse throughput, backlogs release offenders.",
-      "specRef": "§28; Supp. security tables",
+      "desc": "Per-district monthly generation by type (petty->organised, fraud/cyber by era, smuggling by port throughput vs customs); drivers: young-male ambition-frustrated unemployment, deprivation, inequality between adjacent districts, blight, youth leisure deserts, low presence; concave patrol deterrence + detective clearance (persistence) + prevention (generation); gang entities form after >24 months of conditions â€” territory, business tax, recruitment, border wars; removal needs the full stack, decapitation without regeneration respawns; Constabulary HQ strategy sliders; MI5-analogue liaison (organised crime, smuggling rings, visible threat-level intel, never random-spam); courthouse throughput, backlogs release offenders.",
+      "specRef": "Â§28; Supp. security tables",
       "path": "internal/engine/crime/",
       "inbound": {
         "name": "CrimeAPI",
@@ -1864,8 +1868,8 @@
       "milestone": "M3",
       "layer": "engine",
       "title": "News: ticker, bulletin, annual review, epilogue",
-      "desc": "Four layers generated from REAL sim events with real names: atomic ticker; monthly bulletin (salience-scored editor: deaths, firsts, records, crises, milestones); annual review; win/death epilogue from the whole history log. Optional online LLM soft-layer rewrites prose only — facts always from the engine, no hallucinated news.",
-      "specRef": "§29; §20 (names); V.1 (LLM optional)",
+      "desc": "Four layers generated from REAL sim events with real names: atomic ticker; monthly bulletin (salience-scored editor: deaths, firsts, records, crises, milestones); annual review; win/death epilogue from the whole history log. Optional online LLM soft-layer rewrites prose only â€” facts always from the engine, no hallucinated news.",
+      "specRef": "Â§29; Â§20 (names); V.1 (LLM optional)",
       "path": "internal/engine/news/",
       "inbound": {
         "name": "NewsAPI",
@@ -1894,7 +1898,7 @@
       "layer": "engine",
       "title": "Coastal arrivals: operations + policy, both sides of the ledger honest",
       "desc": "Small-boat arrival events on shore cells (era/world/season-scaled, never player-triggered); rescue (coastguard/lifeboat), reception & processing capacity (caseworker throughput; shortfall -> requisitioned hotels at cost + friction), months-long status pipeline; granted -> full citizen records (world-profile skills, integration speed from ESOL/job-centre/housing policy); not granted -> managed departure cost; policy sliders with real trade-offs, no right answers; factual ticker coverage.",
-      "specRef": "§30",
+      "specRef": "Â§30",
       "path": "internal/engine/coastal/",
       "inbound": {
         "name": "CoastalAPI",
@@ -1925,7 +1929,7 @@
       "layer": "engine",
       "title": "Farming & the biodiversity engine",
       "desc": "Per-farm soil quality + regional BDI (habitat share, intensity, chemical load, watercourse quality, corridor connectivity); Kent crops (wheat->vines on chalk) and livestock with stocking density; conventional (+30-40% yield, -BDI, nitrate runoff to watercourses AND the aquifer your boreholes use) vs organic (24-month certification lag, premium); BDI feedback: pollinator yield multiplier (self-inflicted collapse possible), fishing stocks, treatment costs, environment/mental-health terms, drought/pest resilience; food chains to mill/dairy/abattoir/packhouse/winery; food miles freshness.",
-      "specRef": "§31; §17 (aquifer)",
+      "specRef": "Â§31; Â§17 (aquifer)",
       "path": "internal/engine/farming/",
       "inbound": {
         "name": "FarmingAPI",
@@ -1960,8 +1964,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Mining, extraction & the general blight model",
-      "desc": "Geology-gated extraction (chalk/sand-gravel/clay+brickworks/ragstone/deep coal with spoil tips and subsidence radius/offshore dredging) revealed by prospecting surveys; THE BLIGHT MODEL (general — mines, heavy industry, abattoir, incinerator, landfill, airport, motorway): noise radius (dBA falloff) + viewshed from real elevation (escarpment hides or exposes honestly), heard = mental-health hit, seen = land-value hit, stacking; mitigations are real earthworks (bunds, tree belts with 5-year grow-in, enclosures, night bans); exhausted pits reclaim to lake/park/landfill void; deep-mine closure without transition = self-scripted Detroit test. FEAT-048 (Aaron, 2026-08-11, docs/planning/resources-design-brief.md): extends this module's scope to the full subsurface resource set — metallic ores (copper/tin/iron/uranium/REM, fictional resources allowed at realistic depths), hydrocarbons (gas/oil/coal, Kent's real East Kent coalfield as the deposit-generosity calibration point), offshore deposits, geology-aware co-location; deterministic seeded deposit shuffle at world-gen (size/density/depth, GR#21/GR#15 data-file balance parameters, deps on engine.world's terrain/geology pipeline); the extraction-scale ladder (artisanal two-men-and-a-dog through Parker-scale industrial, risk/investment at every rung); the land-allocation permit gate for any large facility (exp/milestone/purchase routes, calls engine.build); mandatory decommissioning liability accrued at permit time (calls engine.finance). See feat.resourcedeposits/feat.extraction/feat.facilitypermits/feat.decommission for the tracked feature-level breakdown.",
-      "specRef": "§32; resources-design-brief.md §1-3,5,7",
+      "desc": "Geology-gated extraction (chalk/sand-gravel/clay+brickworks/ragstone/deep coal with spoil tips and subsidence radius/offshore dredging) revealed by prospecting surveys; THE BLIGHT MODEL (general â€” mines, heavy industry, abattoir, incinerator, landfill, airport, motorway): noise radius (dBA falloff) + viewshed from real elevation (escarpment hides or exposes honestly), heard = mental-health hit, seen = land-value hit, stacking; mitigations are real earthworks (bunds, tree belts with 5-year grow-in, enclosures, night bans); exhausted pits reclaim to lake/park/landfill void; deep-mine closure without transition = self-scripted Detroit test. FEAT-048 (Aaron, 2026-08-11, docs/planning/resources-design-brief.md): extends this module's scope to the full subsurface resource set â€” metallic ores (copper/tin/iron/uranium/REM, fictional resources allowed at realistic depths), hydrocarbons (gas/oil/coal, Kent's real East Kent coalfield as the deposit-generosity calibration point), offshore deposits, geology-aware co-location; deterministic seeded deposit shuffle at world-gen (size/density/depth, GR#21/GR#15 data-file balance parameters, deps on engine.world's terrain/geology pipeline); the extraction-scale ladder (artisanal two-men-and-a-dog through Parker-scale industrial, risk/investment at every rung); the land-allocation permit gate for any large facility (exp/milestone/purchase routes, calls engine.build); mandatory decommissioning liability accrued at permit time (calls engine.finance). See feat.resourcedeposits/feat.extraction/feat.facilitypermits/feat.decommission for the tracked feature-level breakdown.",
+      "specRef": "Â§32; resources-design-brief.md Â§1-3,5,7",
       "path": "internal/engine/mining/",
       "inbound": {
         "name": "BlightAPI",
@@ -1991,8 +1995,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Deposit model + deterministic seeded shuffle: type/size/density/depth, geology-aware co-location, offshore fields",
-      "desc": "FEAT-048/FEAT-049 (Aaron, 2026-08-11, resources-design-brief.md §2-3). At world-gen, a pseudo-random deterministic shuffle (drawn from the seeded RNG, GR#21 — same seed => bit-identical deposit map, runs alongside the Terrain 50 heightmap pipeline) lays out deposits of varying size/density/depth across the owned-and-unowned tile extent. Metallic ores (copper/tin/iron/uranium/REM, fictional resources allowed at realistic depths), hydrocarbons/coal (Kent's real East Kent coalfield as the deposit-generosity calibration point — don't be stingy), offshore fields. Geology-aware co-location (hydrocarbon systems cluster, coal measures imply gas, uranium doesn't sit in the chalk) biased by engine.world's terrain/geology model, not scripted. Distribution parameters (counts, size curves, depth bands, co-location rules) are a GR#15 data file, balance-tunable.",
-      "specRef": "resources-design-brief.md §2-3",
+      "desc": "FEAT-048/FEAT-049 (Aaron, 2026-08-11, resources-design-brief.md Â§2-3). At world-gen, a pseudo-random deterministic shuffle (drawn from the seeded RNG, GR#21 â€” same seed => bit-identical deposit map, runs alongside the Terrain 50 heightmap pipeline) lays out deposits of varying size/density/depth across the owned-and-unowned tile extent. Metallic ores (copper/tin/iron/uranium/REM, fictional resources allowed at realistic depths), hydrocarbons/coal (Kent's real East Kent coalfield as the deposit-generosity calibration point â€” don't be stingy), offshore fields. Geology-aware co-location (hydrocarbon systems cluster, coal measures imply gas, uranium doesn't sit in the chalk) biased by engine.world's terrain/geology model, not scripted. Distribution parameters (counts, size curves, depth bands, co-location rules) are a GR#15 data file, balance-tunable.",
+      "specRef": "resources-design-brief.md Â§2-3",
       "path": "internal/engine/mining/",
       "deps": [
         "engine.world",
@@ -2011,8 +2015,8 @@
       "milestone": "M4",
       "layer": "ui",
       "title": "Resource survey + map overlay: 'Blue 2'-style deposit visibility in the F1 overlay cycle",
-      "desc": "FEAT-048/FEAT-050 (Aaron, 2026-08-11, resources-design-brief.md §4). A resource overlay renders deposit type and extent, slotting into F1's existing overlay-cycle architecture (feat.resourcedeposits' shuffle output; two-data-layers-per-cell rule, ui.screen.map). BA ruling (docs/planning/acceptance/feat.resourcesurvey.md, 2026-08-13): surveying is a paid four-tier progression (unsurveyed -> prospected, reusing engine.world's Prospect/IsProspected gate -> surveyed, a new paid command yielding a bounded estimate range -> proven reserves, deferred to feat.extraction), not free knowledge — the brief's own \"pay to see underground\" wording and §5's yield-variance-against-estimate mechanic both presuppose this. engine.mining added as an explicit dep/call: it owns the mutable per-tile survey-tier state and the finance-debiting paid-survey command, neither of which ui.screen.map or feat.resourcedeposits can own.",
-      "specRef": "resources-design-brief.md §4",
+      "desc": "FEAT-048/FEAT-050 (Aaron, 2026-08-11, resources-design-brief.md Â§4). A resource overlay renders deposit type and extent, slotting into F1's existing overlay-cycle architecture (feat.resourcedeposits' shuffle output; two-data-layers-per-cell rule, ui.screen.map). BA ruling (docs/planning/acceptance/feat.resourcesurvey.md, 2026-08-13): surveying is a paid four-tier progression (unsurveyed -> prospected, reusing engine.world's Prospect/IsProspected gate -> surveyed, a new paid command yielding a bounded estimate range -> proven reserves, deferred to feat.extraction), not free knowledge â€” the brief's own \"pay to see underground\" wording and Â§5's yield-variance-against-estimate mechanic both presuppose this. engine.mining added as an explicit dep/call: it owns the mutable per-tile survey-tier state and the finance-debiting paid-survey command, neither of which ui.screen.map or feat.resourcedeposits can own.",
+      "specRef": "resources-design-brief.md Â§4",
       "path": "internal/ui/screens/map/",
       "deps": [
         "ui.screen.map",
@@ -2034,8 +2038,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Extraction ladder + finite depletion: two-men-and-a-dog to Parker-scale, risk/investment at every rung",
-      "desc": "FEAT-048/FEAT-051 (Aaron, 2026-08-11, resources-design-brief.md §5). Wealth extraction spans a scale ladder: artisanal (trivial capex, small yield, low risk, the early-game snowball seed) through industrial Parker-style operations (serious capex/throughput, real operating risk — yield variance against survey estimates, price exposure, breakdowns). Mining is a large money generator by design, but the ground resource is finite: deposits deplete and can run out (a mine-dependent district is a §32 deep-mine Detroit test the player seeded themselves), depletion visible via surveys/projections — squeezed, never ambushed.",
-      "specRef": "resources-design-brief.md §5",
+      "desc": "FEAT-048/FEAT-051 (Aaron, 2026-08-11, resources-design-brief.md Â§5). Wealth extraction spans a scale ladder: artisanal (trivial capex, small yield, low risk, the early-game snowball seed) through industrial Parker-style operations (serious capex/throughput, real operating risk â€” yield variance against survey estimates, price exposure, breakdowns). Mining is a large money generator by design, but the ground resource is finite: deposits deplete and can run out (a mine-dependent district is a Â§32 deep-mine Detroit test the player seeded themselves), depletion visible via surveys/projections â€” squeezed, never ambushed.",
+      "specRef": "resources-design-brief.md Â§5",
       "path": "internal/engine/mining/",
       "deps": [
         "engine.mining",
@@ -2055,8 +2059,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "International commodities market + refinement/manufacture chains: crackers, Billingham/Wilton-class works, pharma campus",
-      "desc": "FEAT-048/FEAT-052 (Aaron, 2026-08-11, resources-design-brief.md §6). An international market is always available for raw and refined product (the always-on price floor/ceiling that makes extraction monetisable from day one, consistent with the off-map connections model, §2.2) — calls engine.market. In-game production facilities for the full extraction->refinement->manufacture chain: Billingham/Wilton-class integrated chemical works and crackers, Groton-Pfizer-class pharma/R&D campus (real Sandwich, Kent — FDI-anchor tie-in), Parker-class mines. Refinement/manufacture margin vs raw export is the classic value-add long bet.",
-      "specRef": "resources-design-brief.md §6",
+      "desc": "FEAT-048/FEAT-052 (Aaron, 2026-08-11, resources-design-brief.md Â§6). An international market is always available for raw and refined product (the always-on price floor/ceiling that makes extraction monetisable from day one, consistent with the off-map connections model, Â§2.2) â€” calls engine.market. In-game production facilities for the full extraction->refinement->manufacture chain: Billingham/Wilton-class integrated chemical works and crackers, Groton-Pfizer-class pharma/R&D campus (real Sandwich, Kent â€” FDI-anchor tie-in), Parker-class mines. Refinement/manufacture margin vs raw export is the classic value-add long bet.",
+      "specRef": "resources-design-brief.md Â§6",
       "path": "internal/engine/chemicals/",
       "deps": [
         "engine.chemicals",
@@ -2076,9 +2080,9 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "title": "Facility land-allocation permit system: exp points, milestones, or purchase — for ANY large facility",
-      "desc": "FEAT-048/FEAT-053 (Aaron, 2026-08-11, resources-design-brief.md §7). All facilities can grow/expand with increasing run costs and profits; land allocation scales with facility size and is gated by a permit for any large facility (lab, airport, factory, mine, works — any). Permits acquired via three routes: experience points, milestones, or purchase — progression, achievement, and money are all currencies for the same gate. Expansion presumably re-engages the permit gate at size thresholds (BA to confirm shape). Cross-cutting: applies to the existing catalogue estate, not just new resource facilities — reconcile with buildings.json's current unlock-gate fields.",
-      "specRef": "resources-design-brief.md §7",
+      "title": "Facility land-allocation permit system: exp points, milestones, or purchase â€” for ANY large facility",
+      "desc": "FEAT-048/FEAT-053 (Aaron, 2026-08-11, resources-design-brief.md Â§7). All facilities can grow/expand with increasing run costs and profits; land allocation scales with facility size and is gated by a permit for any large facility (lab, airport, factory, mine, works â€” any). Permits acquired via three routes: experience points, milestones, or purchase â€” progression, achievement, and money are all currencies for the same gate. Expansion presumably re-engages the permit gate at size thresholds (BA to confirm shape). Cross-cutting: applies to the existing catalogue estate, not just new resource facilities â€” reconcile with buildings.json's current unlock-gate fields.",
+      "specRef": "resources-design-brief.md Â§7",
       "path": "internal/engine/build/",
       "deps": [
         "engine.build",
@@ -2098,8 +2102,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Decommissioning liability: every permitted facility carries a 'put back to nature' cost from day one",
-      "desc": "FEAT-048/FEAT-054 (Aaron, 2026-08-11, resources-design-brief.md §7). Every permitted facility carries a decommissioning/restoration liability accrued at build/permit time (calls engine.finance) — a real balance-sheet cost, not a surprise at closure. Finite resources + mandatory restoration liability prices in the full lifecycle: the player who strip-mines Kent owns the bill for the landscape afterwards.",
-      "specRef": "resources-design-brief.md §7",
+      "desc": "FEAT-048/FEAT-054 (Aaron, 2026-08-11, resources-design-brief.md Â§7). Every permitted facility carries a decommissioning/restoration liability accrued at build/permit time (calls engine.finance) â€” a real balance-sheet cost, not a surprise at closure. Finite resources + mandatory restoration liability prices in the full lifecycle: the player who strip-mines Kent owns the bill for the landscape afterwards.",
+      "specRef": "resources-design-brief.md Â§7",
       "path": "internal/engine/finance/",
       "deps": [
         "engine.finance",
@@ -2118,8 +2122,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "End-game mega-facilities: THORP/CANDU-class reprocessing, SpaceX/CERN/Aldermaston-class, Felixstowe+ container port",
-      "desc": "FEAT-048/FEAT-055 (Aaron, 2026-08-11, resources-design-brief.md §8). Ultimate-tier facilities available only toward end-game: THORP-reprocessing/CANDU-class nuclear and SpaceX/CERN/Aldermaston-class science/defence mega-facilities, both gated on a large workforce of highly trained experts (education system's long bet paying off at civilisational scale, calls engine.education — cannot be bought with money alone) plus the permit gate. Container port at Felixstowe scale or larger upgrades the existing port milestone (§9) to a genuine deep-sea container terminal tier. Extends the existing mega-projects buildings.json supplement rather than replacing it.",
-      "specRef": "resources-design-brief.md §8",
+      "desc": "FEAT-048/FEAT-055 (Aaron, 2026-08-11, resources-design-brief.md Â§8). Ultimate-tier facilities available only toward end-game: THORP-reprocessing/CANDU-class nuclear and SpaceX/CERN/Aldermaston-class science/defence mega-facilities, both gated on a large workforce of highly trained experts (education system's long bet paying off at civilisational scale, calls engine.education â€” cannot be bought with money alone) plus the permit gate. Container port at Felixstowe scale or larger upgrades the existing port milestone (Â§9) to a genuine deep-sea container terminal tier. Extends the existing mega-projects buildings.json supplement rather than replacing it.",
+      "specRef": "resources-design-brief.md Â§8",
       "path": "internal/engine/mining/",
       "deps": [
         "engine.education",
@@ -2234,7 +2238,7 @@
       "layer": "engine",
       "title": "Freight harbour, tonnes accounting & production chains",
       "desc": "All freight in tonnes/day end-to-end; port capacity = berths x crane rate x hours, customs throughput separate (smuggling risk when saturated); modal reach road 25t / rail 1000t / sea 3-40kt; quayside stacks, silos, tank farm, cold store; five chain families (construction, steel & machinery, food, consumer goods, energy) each stage a firm with input->output t/day, jobs, utility draw, blight class; balance-of-trade screen; port flips the city importer->exporter mid-game.",
-      "specRef": "§33; §8 (artery #2)",
+      "specRef": "Â§33; Â§8 (artery #2)",
       "path": "internal/engine/freight/",
       "inbound": {
         "name": "FreightAPI",
@@ -2264,7 +2268,7 @@
       "layer": "engine",
       "title": "Communications, internet & e-commerce",
       "desc": "Connectivity eras (exchange -> dial-up -> broadband -> fibre -> 2G-5G masts -> submarine cable landing station); internet quality gates office tiers, data centres, research rate, remote-work share (a traffic tool disguised as telecoms); letters decline vs parcels grow; e-commerce share shifts retail online, needs fulfilment centre + last-mile depots on real roads; drains high-street retail -> vacancy -> core blight risk; counterplay: entertainment zoning, markets, pedestrianisation. Nothing is free.",
-      "specRef": "§35",
+      "specRef": "Â§35",
       "path": "internal/engine/comms/",
       "inbound": {
         "name": "CommsAPI",
@@ -2296,8 +2300,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Service capacity export: selling your slack",
-      "desc": "Any measurable service runs a surplus book: capacity - internal demand sold on contracts (£/unit, term, cancellation penalty) — refuse, incineration, toxic waste (best margin, worst neighbour), sewage, power, hospital beds, university places, crematorium, prison places, transshipment, mutual aid; contracts are COMMITMENTS: your growth crosses sold capacity in the projections and you choose penalty vs service cut. Slack is a short position on your own growth.",
-      "specRef": "§36",
+      "desc": "Any measurable service runs a surplus book: capacity - internal demand sold on contracts (Â£/unit, term, cancellation penalty) â€” refuse, incineration, toxic waste (best margin, worst neighbour), sewage, power, hospital beds, university places, crematorium, prison places, transshipment, mutual aid; contracts are COMMITMENTS: your growth crosses sold capacity in the projections and you choose penalty vs service cut. Slack is a short position on your own growth.",
+      "specRef": "Â§36",
       "path": "internal/engine/capexport/",
       "inbound": {
         "name": "CapExportAPI",
@@ -2333,7 +2337,7 @@
       "layer": "engine",
       "title": "Shopping & grocery access",
       "desc": "Households generate real shopping trips (Saturday peak differs from commute peak) by format access: corner shop / market hall / supermarket / retail park / online delivery; per-home grocery access score (time x price x freshness); food deserts -> diet -> physical health, emerging naturally in blighted districts; grocery price level feeds cost-of-living -> real wages -> attractiveness.",
-      "specRef": "§37",
+      "specRef": "Â§37",
       "path": "internal/engine/shopping/",
       "inbound": {
         "name": "ShoppingAPI",
@@ -2360,8 +2364,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Parking: land wearing a disguise",
-      "desc": "On-street (per road type, district permits), surface, multi-storey, park & ride, workplace; charges as revenue AND the strongest mode lever; every non-walking car trip terminates in a real space; insufficient parking -> cruising traffic (search circulation load) + residential overspill (satisfaction, permit politics); F1 occupancy overlay; late-era autonomy shrinks demand — car parks become redevelopment land.",
-      "specRef": "§38",
+      "desc": "On-street (per road type, district permits), surface, multi-storey, park & ride, workplace; charges as revenue AND the strongest mode lever; every non-walking car trip terminates in a real space; insufficient parking -> cruising traffic (search circulation load) + residential overspill (satisfaction, permit politics); F1 occupancy overlay; late-era autonomy shrinks demand â€” car parks become redevelopment land.",
+      "specRef": "Â§38",
       "path": "internal/engine/parking/",
       "inbound": {
         "name": "ParkingAPI",
@@ -2387,7 +2391,7 @@
       "layer": "engine",
       "title": "Taxation: the full instrument panel, Laffer-honest",
       "desc": "Beyond headline rates: council-tax bands by typology, per-district multipliers, empty-homes premium, holiday-let surcharge; business rates by zone x land value, small-business relief, enterprise-zone discounts; behavioural levies (parking, congestion cordon, tolls, landfill tax, nightlife levy, workplace parking, fuel duty share, tourist bed tax, planning fees, user charges); EVERY instrument has a shown elasticity response curve, a revenue line, an incidence display and a projected behavioural response.",
-      "specRef": "§39; §49 (fuel-duty erosion)",
+      "specRef": "Â§39; Â§49 (fuel-duty erosion)",
       "path": "internal/engine/tax/",
       "inbound": {
         "name": "TaxAPI",
@@ -2413,8 +2417,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Social services: the floor of every downturn",
-      "desc": "Caseload from deprivation, unemployment duration, family stress, addiction, domestic crises; family support & child protection (underfunding = attainment down + crime up in the affected cohort 10 years later, literal and auditable in citizen records); homelessness (prevention/hostels/housing-first; failure = concentrated rough sleeping); disability & carers (releases informal carers to workforce); fostering; addiction services (treatment cuts demand where policing cuts supply); a funded net makes declines shallower — cheapest insurance, easiest cut, longest fuse.",
-      "specRef": "§40; A5",
+      "desc": "Caseload from deprivation, unemployment duration, family stress, addiction, domestic crises; family support & child protection (underfunding = attainment down + crime up in the affected cohort 10 years later, literal and auditable in citizen records); homelessness (prevention/hostels/housing-first; failure = concentrated rough sleeping); disability & carers (releases informal carers to workforce); fostering; addiction services (treatment cuts demand where policing cuts supply); a funded net makes declines shallower â€” cheapest insurance, easiest cut, longest fuse.",
+      "specRef": "Â§40; A5",
       "path": "internal/engine/social/",
       "inbound": {
         "name": "SocialAPI",
@@ -2449,9 +2453,9 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "title": "Café culture & street-life vitality",
+      "title": "CafÃ© culture & street-life vitality",
       "desc": "Vitality index per centre = footfall x venue density x dwell quality x safety x weather-adjusted outdoor capacity (pavement licensing; a Mediterranean July pavement is dead in January gales); third places counter isolation; vitality raises adjacent retail survival and land value (the anti-e-commerce force) and feeds tourism; deliberately the small-money high-leverage system.",
-      "specRef": "§41",
+      "specRef": "Â§41",
       "path": "internal/engine/cafe/",
       "inbound": {
         "name": "VitalityAPI",
@@ -2477,8 +2481,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Leisure time & exploration: the 168-hour budget",
-      "desc": "Weekly discretionary hours = 168 - work - sleep - chores - commute (transport policy IS leisure policy); hours spent across venues by taste weights subject to access time (evening/weekend network loads); novelty decay — a city that never opens anything bores its most dynamic residents into emigrating; openings pipeline as retention infrastructure; events calendar (festivals, match days, Christmas market) each a mini logistics exercise with crowd transport, policing, waste spikes.",
-      "specRef": "§42; §5.1 (tastes)",
+      "desc": "Weekly discretionary hours = 168 - work - sleep - chores - commute (transport policy IS leisure policy); hours spent across venues by taste weights subject to access time (evening/weekend network loads); novelty decay â€” a city that never opens anything bores its most dynamic residents into emigrating; openings pipeline as retention infrastructure; events calendar (festivals, match days, Christmas market) each a mini logistics exercise with crowd transport, policing, waste spikes.",
+      "specRef": "Â§42; Â§5.1 (tastes)",
       "path": "internal/engine/leisure/",
       "inbound": {
         "name": "LeisureAPI",
@@ -2508,8 +2512,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Prison, rehabilitation & re-entry: the long ledger",
-      "desc": "Estate local jail -> category prisons (open/standard/high-sec; wrong mix RAISES reoffending); regime budgets (education, work programmes, addiction treatment); reoffending = base(offence, age) - regime - re-entry support (probation capacity, ex-offender employment schemes, housing-on-release); youth offending a separate cheaper pipeline; overcrowding (incl. §36 sold places) degrades every regime effect at once; rehab spend returns over 5-15 years — F7 makes the case.",
-      "specRef": "§43; §36 (sold places)",
+      "desc": "Estate local jail -> category prisons (open/standard/high-sec; wrong mix RAISES reoffending); regime budgets (education, work programmes, addiction treatment); reoffending = base(offence, age) - regime - re-entry support (probation capacity, ex-offender employment schemes, housing-on-release); youth offending a separate cheaper pipeline; overcrowding (incl. Â§36 sold places) degrades every regime effect at once; rehab spend returns over 5-15 years â€” F7 makes the case.",
+      "specRef": "Â§43; Â§36 (sold places)",
       "path": "internal/engine/prison/",
       "inbound": {
         "name": "PrisonAPI",
@@ -2539,8 +2543,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Holiday tourism: the visitor economy",
-      "desc": "Day-trippers + staying visitors; draw = attraction portfolio (beach, pier, venues, events, heritage, café culture, BDI countryside) x reputation x access tiers x season (summer x3); accommodation caps: hotels, B&Bs, camping, holiday lets converting housing into visitor beds (rents up, workforce squeezed, winter ghost streets — counter-instruments: surcharge, licensing caps); visitor spend, bed tax, but capacity queues, waste and policing spikes — August is a logistics boss-fight; seasonal + reputation-fragile: strong second income, a trap as a first.",
-      "specRef": "§44; §21 (lets)",
+      "desc": "Day-trippers + staying visitors; draw = attraction portfolio (beach, pier, venues, events, heritage, cafÃ© culture, BDI countryside) x reputation x access tiers x season (summer x3); accommodation caps: hotels, B&Bs, camping, holiday lets converting housing into visitor beds (rents up, workforce squeezed, winter ghost streets â€” counter-instruments: surcharge, licensing caps); visitor spend, bed tax, but capacity queues, waste and policing spikes â€” August is a logistics boss-fight; seasonal + reputation-fragile: strong second income, a trap as a first.",
+      "specRef": "Â§44; Â§21 (lets)",
       "path": "internal/engine/tourism/",
       "inbound": {
         "name": "TourismAPI",
@@ -2567,8 +2571,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Firms: entrepreneur culture to enterprise, professional services, banking",
-      "desc": "Citizens found startups (ambition x education x sector experience x capital access x premises x demand signal); Startup -> Small -> Medium -> Enterprise, each step needing customers, right-sized premises, skill-matched staff, credit, inputs; failure and churn are normal; entrepreneur culture compounds (exits fund angels); professional & financial services consume from OTHER firms superlinearly — the white-collar engine filling office zones; banking layer (branch -> commercial -> financial district) turns deposits into firm credit and mortgages; off-map central-bank rate cycle is citywide weather the player positions for (F7 outlook).",
-      "specRef": "§45; §II.4",
+      "desc": "Citizens found startups (ambition x education x sector experience x capital access x premises x demand signal); Startup -> Small -> Medium -> Enterprise, each step needing customers, right-sized premises, skill-matched staff, credit, inputs; failure and churn are normal; entrepreneur culture compounds (exits fund angels); professional & financial services consume from OTHER firms superlinearly â€” the white-collar engine filling office zones; banking layer (branch -> commercial -> financial district) turns deposits into firm credit and mortgages; off-map central-bank rate cycle is citywide weather the player positions for (F7 outlook).",
+      "specRef": "Â§45; Â§II.4",
       "path": "internal/engine/firms/",
       "inbound": {
         "name": "FirmsAPI",
@@ -2601,8 +2605,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Multinational attraction (FDI) & anchor employers",
-      "desc": "M7+ prospects with requirement sheets (pharma campus, semiconductor fab — the utility boss-fight, assembler, chemicals complex, steel, EV gigafactory, rail works, aerospace apex) vs a competing off-map region; player bids incentive packages (land, capped tax holiday, infrastructure commitments as real build orders with penalties, training partnerships, fast-track); win = anchor: thousands of jobs, supply-chain spawning, exports, reputation; risks: incentive cost, one-employer-town fragility (closure = coal-mine-scale shock), utility gluttony.",
-      "specRef": "§46",
+      "desc": "M7+ prospects with requirement sheets (pharma campus, semiconductor fab â€” the utility boss-fight, assembler, chemicals complex, steel, EV gigafactory, rail works, aerospace apex) vs a competing off-map region; player bids incentive packages (land, capped tax holiday, infrastructure commitments as real build orders with penalties, training partnerships, fast-track); win = anchor: thousands of jobs, supply-chain spawning, exports, reputation; risks: incentive cost, one-employer-town fragility (closure = coal-mine-scale shock), utility gluttony.",
+      "specRef": "Â§46",
       "path": "internal/engine/fdi/",
       "inbound": {
         "name": "FdiAPI",
@@ -2633,8 +2637,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Rail industry & interconnected transport",
-      "desc": "Rail as industry: stabling -> maintenance depot -> heavy works (mandatory per fleet size — unserviced fleets fail in traffic), freight yards + intermodal container transfer, rolling-stock works (builds your fleet at discount, exports); interconnection doctrine: hubs score on transfer quality (timed connections, single ticketing, walk distance), citizens' journey planner = player's query tool; consolidation centres hand trucks to rail/e-van last mile; bad interchanges show as transfer-penalty mode-share loss.",
-      "specRef": "§47",
+      "desc": "Rail as industry: stabling -> maintenance depot -> heavy works (mandatory per fleet size â€” unserviced fleets fail in traffic), freight yards + intermodal container transfer, rolling-stock works (builds your fleet at discount, exports); interconnection doctrine: hubs score on transfer quality (timed connections, single ticketing, walk distance), citizens' journey planner = player's query tool; consolidation centres hand trucks to rail/e-van last mile; bad interchanges show as transfer-penalty mode-share loss.",
+      "specRef": "Â§47",
       "path": "internal/engine/rail/",
       "inbound": {
         "name": "RailAPI",
@@ -2662,8 +2666,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Destination leisure & retail: resort and mega-mall",
-      "desc": "Forest holiday resort (100+ ha woodland, BDI synergy, pool dome energy hog, ~1.5k jobs, year-round staying visitors); mega-mall as a pit-reclamation option (Bluewater-in-a-quarry, historically exact — viewshed-clever): 300+ shops, 7k jobs, colossal parking, bus/rail required, hundreds of tonnes daily logistics; hoovers regional spend in while pressuring your high streets — the town-centre-vs-mall war, player-refereed.",
-      "specRef": "§48; §32 (reclamation)",
+      "desc": "Forest holiday resort (100+ ha woodland, BDI synergy, pool dome energy hog, ~1.5k jobs, year-round staying visitors); mega-mall as a pit-reclamation option (Bluewater-in-a-quarry, historically exact â€” viewshed-clever): 300+ shops, 7k jobs, colossal parking, bus/rail required, hundreds of tonnes daily logistics; hoovers regional spend in while pressuring your high streets â€” the town-centre-vs-mall war, player-refereed.",
+      "specRef": "Â§48; Â§32 (reclamation)",
       "path": "internal/engine/destination/",
       "inbound": {
         "name": "DestinationAPI",
@@ -2689,8 +2693,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Vehicles, fuel & the EV transition",
-      "desc": "Fuel era: forecourt network coverage, tanker supply from port tank farm/refinery, fuel as a JIT commodity whose shortage strands the logistics that fix shortages (strategic reserve buildable), fat fuel-duty line; EV transition (era + policy): fleet shifts car->van->truck, charging stack (home — terraces can't charge, an equity mechanic — street posts, rapid hubs, depot, forecourt conversions); charging is real evening-peak load coupling to the grid (mass EV + electric heating + no storage = winter crisis); fuel duty erodes as EVs grow — replace the tax base (road pricing) on rails, in the projections.",
-      "specRef": "§49",
+      "desc": "Fuel era: forecourt network coverage, tanker supply from port tank farm/refinery, fuel as a JIT commodity whose shortage strands the logistics that fix shortages (strategic reserve buildable), fat fuel-duty line; EV transition (era + policy): fleet shifts car->van->truck, charging stack (home â€” terraces can't charge, an equity mechanic â€” street posts, rapid hubs, depot, forecourt conversions); charging is real evening-peak load coupling to the grid (mass EV + electric heating + no storage = winter crisis); fuel duty erodes as EVs grow â€” replace the tax base (road pricing) on rails, in the projections.",
+      "specRef": "Â§49",
       "path": "internal/engine/fuel/",
       "inbound": {
         "name": "FuelAPI",
@@ -2719,8 +2723,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Oils, rubber, plastics & the chemical network",
-      "desc": "Crude by tanker -> tank farm -> refinery (fuel + feedstock, top blight class, hazmat fire category) -> petrochemical works -> plastics converters + rubber -> tyre plant; the chemical/fuel pipeline grid as a fourth network (expensive/km, small inspectable leak risk, removes hundreds of hazardous truck movements/day — safety-vs-capex shown in F5); no refinery? import refined at margin — make-vs-buy at its largest scale. FEAT-048 (Aaron, 2026-08-11, docs/planning/resources-design-brief.md §6): extends the chain past crude to the full extraction->refinement->manufacture pipeline for engine.mining's ore/hydrocarbon output — named reference-archetype facilities: Billingham/Wilton-class integrated works and crackers, Groton-Pfizer-class pharma/R&D campus (real-world Sandwich, Kent, doubling as an FDI anchor tie-in), always-on international commodity market (calls engine.market) as the price floor/ceiling that makes extraction monetisable from day one — the refine-later-vs-sell-raw-now margin decision is the long bet. See feat.commoditymarket for the tracked feature-level breakdown.",
-      "specRef": "§50; §26 (hazmat); resources-design-brief.md §6",
+      "desc": "Crude by tanker -> tank farm -> refinery (fuel + feedstock, top blight class, hazmat fire category) -> petrochemical works -> plastics converters + rubber -> tyre plant; the chemical/fuel pipeline grid as a fourth network (expensive/km, small inspectable leak risk, removes hundreds of hazardous truck movements/day â€” safety-vs-capex shown in F5); no refinery? import refined at margin â€” make-vs-buy at its largest scale. FEAT-048 (Aaron, 2026-08-11, docs/planning/resources-design-brief.md Â§6): extends the chain past crude to the full extraction->refinement->manufacture pipeline for engine.mining's ore/hydrocarbon output â€” named reference-archetype facilities: Billingham/Wilton-class integrated works and crackers, Groton-Pfizer-class pharma/R&D campus (real-world Sandwich, Kent, doubling as an FDI anchor tie-in), always-on international commodity market (calls engine.market) as the price floor/ceiling that makes extraction monetisable from day one â€” the refine-later-vs-sell-raw-now margin decision is the long bet. See feat.commoditymarket for the tracked feature-level breakdown.",
+      "specRef": "Â§50; Â§26 (hazmat); resources-design-brief.md Â§6",
       "path": "internal/engine/chemicals/",
       "inbound": {
         "name": "ChemAPI",
@@ -2751,8 +2755,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Policies v2 as modelled instruments + named districts",
-      "desc": "Every policy states its mechanism (which coefficients it moves), F7-previewed impact BEFORE enactment, cost/enforcement needs, and scope (citywide/district/road); named districts are the scope system and an identity mechanic (CBD, Science Park, Tax-Free Harbour freeport with smuggling exposure — the name feeds firm location and reputation); library from policies.json (movement, layout & wellbeing incl. 15-minute design codes, economy, social); policies interact with compounding shown and conflict warnings.",
-      "specRef": "§52; §II.7",
+      "desc": "Every policy states its mechanism (which coefficients it moves), F7-previewed impact BEFORE enactment, cost/enforcement needs, and scope (citywide/district/road); named districts are the scope system and an identity mechanic (CBD, Science Park, Tax-Free Harbour freeport with smuggling exposure â€” the name feeds firm location and reputation); library from policies.json (movement, layout & wellbeing incl. 15-minute design codes, economy, social); policies interact with compounding shown and conflict warnings.",
+      "specRef": "Â§52; Â§II.7",
       "path": "internal/engine/policies/",
       "inbound": {
         "name": "PoliciesAPI",
@@ -2786,8 +2790,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Tunnels, TBMs & hyperloop",
-      "desc": "TBM buy/lease (M10+): per-km rate falls with cumulative km (learning curve); road/rail/metro/utility tunnels (dig-once bundling), escarpment and under-town crossings without demolition; spoil becomes reclamation fill (Samphire Hoe quoted); hyperloop (M12, research-gated): external premium link, small volume, huge prestige, monstrous capex — explicitly a prestige bet and the advisor says so.",
-      "specRef": "§53",
+      "desc": "TBM buy/lease (M10+): per-km rate falls with cumulative km (learning curve); road/rail/metro/utility tunnels (dig-once bundling), escarpment and under-town crossings without demolition; spoil becomes reclamation fill (Samphire Hoe quoted); hyperloop (M12, research-gated): external premium link, small volume, huge prestige, monstrous capex â€” explicitly a prestige bet and the advisor says so.",
+      "specRef": "Â§53",
       "path": "internal/engine/tunnels/",
       "inbound": {
         "name": "TunnelsAPI",
@@ -2814,7 +2818,7 @@
       "layer": "engine",
       "title": "The fiscal circuit, municipality quality & the welfare ledger",
       "desc": "Whole-economy F2 master view: money enters (exports, tourism, out-commuter wages, FDI, grants) and leaves (imports, leakage, interest); income/sales/corp shares + rates & duties; civil-service truth modelled honestly (public wages gross vs net, machinery-of-everything framing); municipality as a department: planning & administration funding sets permit speed, build-cost error rate, layout bonuses, corruption risk at rock bottom; childcare subsidy partially self-funding (shown as net line); benefits + social-housing programme stabilising the low-wage workforce.",
-      "specRef": "§54; Supp.3 civic",
+      "specRef": "Â§54; Supp.3 civic",
       "path": "internal/engine/fiscal/",
       "inbound": {
         "name": "FiscalAPI",
@@ -2844,8 +2848,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Defence & central government: grants, mandates, anti-cyclical anchors",
-      "desc": "Competitive grant pots (transport/regeneration/culture, match-funded, planning quality raises win rate) + formula support; population-threshold mandates (100k naval facility, 500k garrison, 1M air defence) with choice-within-compliance, compensation, and a priced refusal path; facilities integrate: utilities, goods, personnel as citizens (forces housing, schools), procurement to your shipyard/rail/aerospace anchors, closure events as §32-scale shocks.",
-      "specRef": "§55",
+      "desc": "Competitive grant pots (transport/regeneration/culture, match-funded, planning quality raises win rate) + formula support; population-threshold mandates (100k naval facility, 500k garrison, 1M air defence) with choice-within-compliance, compensation, and a priced refusal path; facilities integrate: utilities, goods, personnel as citizens (forces housing, schools), procurement to your shipyard/rail/aerospace anchors, closure events as Â§32-scale shocks.",
+      "specRef": "Â§55",
       "path": "internal/engine/defence/",
       "inbound": {
         "name": "DefenceAPI",
@@ -2876,10 +2880,10 @@
       "priority": "P2",
       "milestone": "future",
       "layer": "cloud",
-      "title": "Remote-call policy: retries, rate limiting, authn/z — secure & resilient by design",
-      "desc": "The contract every remote call (solver offload, Blob saves, LLM soft layer) must follow BEFORE any remote backend ships: authn via short-lived tokens/managed identity (never long-lived keys in config — repo side enforced by tool.secretguard); TLS everywhere; least-privilege authz; correlation IDs extended over the wire; retries with exponential backoff + jitter, budget-bounded, safe because requests are stateless/idempotent with request IDs; client-side token-bucket rate limiting + server throttle-signal respect; mandatory timeouts; failure degrades to local compute per the solver contract's fallback rule, never to a broken game. Design doc section lives in docs/cloud.md; this item turns it into enforced contract language when cloud items build. BUG-109: path corrected to its own real (future) location — it was double-booked at int.solver's internal/foundation/solver/, but cloud/ is unbuilt and cloud.netpolicy is not the same package as int.solver; it consumes int.solver (see calls[]) rather than living inside it. Path stays a documented placeholder until cloud/ exists (ASM logged).",
-      "specRef": "GR#11; §15 (cloud path); A9; docs/cloud.md",
-      "path": "cloud/ (planned — unbuilt)",
+      "title": "Remote-call policy: retries, rate limiting, authn/z â€” secure & resilient by design",
+      "desc": "The contract every remote call (solver offload, Blob saves, LLM soft layer) must follow BEFORE any remote backend ships: authn via short-lived tokens/managed identity (never long-lived keys in config â€” repo side enforced by tool.secretguard); TLS everywhere; least-privilege authz; correlation IDs extended over the wire; retries with exponential backoff + jitter, budget-bounded, safe because requests are stateless/idempotent with request IDs; client-side token-bucket rate limiting + server throttle-signal respect; mandatory timeouts; failure degrades to local compute per the solver contract's fallback rule, never to a broken game. Design doc section lives in docs/cloud.md; this item turns it into enforced contract language when cloud items build. BUG-109: path corrected to its own real (future) location â€” it was double-booked at int.solver's internal/foundation/solver/, but cloud/ is unbuilt and cloud.netpolicy is not the same package as int.solver; it consumes int.solver (see calls[]) rather than living inside it. Path stays a documented placeholder until cloud/ exists (ASM logged).",
+      "specRef": "GR#11; Â§15 (cloud path); A9; docs/cloud.md",
+      "path": "cloud/ (planned â€” unbuilt)",
       "deps": [
         "int.solver"
       ],
@@ -2897,7 +2901,7 @@
       "layer": "cloud",
       "title": "GPU solver sidecar (C++/CUDA)",
       "desc": "solver-gpu.exe speaking the frozen wire contract for int.solver's Solver interface: traffic assignment and cold-pass batches on the local RTX-class GPU (road graph + OD + flows well under 4GB VRAM); the engine cannot tell CPU from GPU except by latency; never entangle CUDA with the engine. v1 ships CPU-only.",
-      "specRef": "M0-ENG §1; A4; A9",
+      "specRef": "M0-ENG Â§1; A4; A9",
       "path": "sidecar/solver-gpu/",
       "inbound": {
         "name": "SolverGPU",
@@ -2920,8 +2924,8 @@
       "milestone": "future",
       "layer": "cloud",
       "title": "Azure tiers: Blob saves, Batch tuning, solver offload, cloud citizen shards",
-      "desc": "Blob cloud saves early; Azure Batch headless balance-tuning during development; stateless solver offload slots (traffic equilibrium, deep projections, batch life-writing) with local fallback; surrogate-model path if a subsystem outgrows local; cloud citizen-shard service beyond the ~20-30M local comfort line (A9) — player experience identical at every tier; persistent cloud sim server stays shelved.",
-      "specRef": "§15; A9; GDD §15 cloud path",
+      "desc": "Blob cloud saves early; Azure Batch headless balance-tuning during development; stateless solver offload slots (traffic equilibrium, deep projections, batch life-writing) with local fallback; surrogate-model path if a subsystem outgrows local; cloud citizen-shard service beyond the ~20-30M local comfort line (A9) â€” player experience identical at every tier; persistent cloud sim server stays shelved.",
+      "specRef": "Â§15; A9; GDD Â§15 cloud path",
       "path": "cloud/",
       "inbound": {
         "name": "CloudServices",
@@ -2948,7 +2952,7 @@
       "layer": "process",
       "title": "Reserved future-dev slots (do not build, keep seams honest)",
       "desc": "Channel Tunnel mega-project content (M11 slot), dynamic world market + finite migration pool (Market/world hooks ready), multiplayer/shared worlds (architecture-ready, shelved), LLM soft layer for ticker/advisor prose (optional, online, never the number cruncher), audio none, localisation English-only v1, modding = the JSON data files.",
-      "specRef": "§16; V.1 out-of-scope; §29 (LLM)",
+      "specRef": "Â§16; V.1 out-of-scope; Â§29 (LLM)",
       "path": "docs/",
       "deps": [],
       "calls": [],
@@ -2962,8 +2966,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "Plan-drift guard hook: commits blocked when code.json is stale",
-      "desc": "claude-plan-guard.js (PreToolUse on git commit): runs tools/plan/generate.js --check, then regenerates to a temp path and diffs against the committed code.json/bow-import.json — a hand-edit of generated files or a master-plan change without regeneration blocks the commit with the exact drift shown. Defect class eliminated: plan/registry divergence (GR#3, GR#6).",
-      "specRef": "GR#3; GR#6; M0-ENG §5 (hooks)",
+      "desc": "claude-plan-guard.js (PreToolUse on git commit): runs tools/plan/generate.js --check, then regenerates to a temp path and diffs against the committed code.json/bow-import.json â€” a hand-edit of generated files or a master-plan change without regeneration blocks the commit with the exact drift shown. Defect class eliminated: plan/registry divergence (GR#3, GR#6).",
+      "specRef": "GR#3; GR#6; M0-ENG Â§5 (hooks)",
       "path": "claude-plan-guard.js",
       "deps": [
         "plan.pipeline"
@@ -2979,8 +2983,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "Secret & hardcoding guard hook: commits blocked when staged content carries credentials or GR#15 violations",
-      "desc": "claude-secret-guard.js (PreToolUse on git commit): scans STAGED content (git diff --cached) for secrets — private key blocks, API key/token patterns, passwords in URLs/connection strings, high-entropy literals — and hardcoding smells (GR#15: expected counts/values as literals in validator-shaped code). Fail-closed on detection with per-line evidence; CLAUDE_DISABLE_SECRET_GUARD=1 escape hatch (same posture as tool.planguard); allowlist file for sanctioned patterns (e.g. the documented localhost/root/no-password metro DB default, UUID literals). Mechanises GR#11's secrets half so it no longer depends on lead vigilance.",
-      "specRef": "GR#11; GR#15; M0-ENG §5 (hooks)",
+      "desc": "claude-secret-guard.js (PreToolUse on git commit): scans STAGED content (git diff --cached) for secrets â€” private key blocks, API key/token patterns, passwords in URLs/connection strings, high-entropy literals â€” and hardcoding smells (GR#15: expected counts/values as literals in validator-shaped code). Fail-closed on detection with per-line evidence; CLAUDE_DISABLE_SECRET_GUARD=1 escape hatch (same posture as tool.planguard); allowlist file for sanctioned patterns (e.g. the documented localhost/root/no-password metro DB default, UUID literals). Mechanises GR#11's secrets half so it no longer depends on lead vigilance.",
+      "specRef": "GR#11; GR#15; M0-ENG Â§5 (hooks)",
       "path": "claude-secret-guard.js",
       "deps": [
         "plan.pipeline"
@@ -2996,8 +3000,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "BOW ready-to-build view: claude-bow.js ready + /sprint skill",
-      "desc": "The v_ready_to_build equivalent for the metro BOW: `node claude-bow.js ready` lists open items with no open dependencies grouped by sprint in seq order; .claude/commands/sprint.md skill surfaces it with the working-agreement rule 'always work from ready, never start a blocked item' (M0-ENG §6.2).",
-      "specRef": "M0-ENG §4 (v_ready_to_build); M0-ENG §6.2",
+      "desc": "The v_ready_to_build equivalent for the metro BOW: `node claude-bow.js ready` lists open items with no open dependencies grouped by sprint in seq order; .claude/commands/sprint.md skill surfaces it with the working-agreement rule 'always work from ready, never start a blocked item' (M0-ENG Â§6.2).",
+      "specRef": "M0-ENG Â§4 (v_ready_to_build); M0-ENG Â§6.2",
       "path": "claude-bow.js + .claude/commands/sprint.md",
       "deps": [
         "plan.pipeline"
@@ -3013,8 +3017,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "Codename discipline guard hook: commits/pushes blocked when the reference title's real name reaches git",
-      "desc": "claude-codename-guard.js (PreToolUse on git commit/push): enforces GR#22 — the reference title is 'Blue' and only 'Blue'; its real name, abbreviations and numbered form must never enter git (code, data, docs, comments, commit messages, branch names). Scans staged added lines (git diff --cached), the commit message/command text, and the current branch name; patterns are assembled from fragments at runtime so the guard's own source never carries the forbidden literal. Fail-closed (a miss is permanent and public once the repo is public); CLAUDE_DISABLE_CODENAME_GUARD=1 escape hatch for genuine false positives only.",
-      "specRef": "GR#22; M0-ENG §5 (hooks)",
+      "desc": "claude-codename-guard.js (PreToolUse on git commit/push): enforces GR#22 â€” the reference title is 'Blue' and only 'Blue'; its real name, abbreviations and numbered form must never enter git (code, data, docs, comments, commit messages, branch names). Scans staged added lines (git diff --cached), the commit message/command text, and the current branch name; patterns are assembled from fragments at runtime so the guard's own source never carries the forbidden literal. Fail-closed (a miss is permanent and public once the repo is public); CLAUDE_DISABLE_CODENAME_GUARD=1 escape hatch for genuine false positives only.",
+      "specRef": "GR#22; M0-ENG Â§5 (hooks)",
       "path": "claude-codename-guard.js",
       "deps": [
         "plan.pipeline"
@@ -3030,8 +3034,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "Dispatch guard hook: agent briefs checked against the BOW before send",
-      "desc": "claude-dispatch-guard.js (PreToolUse on the Agent tool): checks look-up-able facts in a dispatch brief before it is sent — cited BOW codes exist, a brief's stated module key agrees with that item's real BOW mkey, acceptance criteria the brief asks for don't already exist at docs/planning/acceptance/<mkey>.md, and declared file ownership doesn't overlap another live session's claim (via sync_file_claims) — with non-existent paths warned, not blocked. Fail-open (its own bug must not halt the team); CLAUDE_DISABLE_DISPATCH_GUARD=1 escape hatch. Born from an eight-error dispatch wave on 2026-08-10 where seven of eight errors were mechanically checkable facts asserted from memory.",
-      "specRef": "GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG §5 (hooks)",
+      "desc": "claude-dispatch-guard.js (PreToolUse on the Agent tool): checks look-up-able facts in a dispatch brief before it is sent â€” cited BOW codes exist, a brief's stated module key agrees with that item's real BOW mkey, acceptance criteria the brief asks for don't already exist at docs/planning/acceptance/<mkey>.md, and declared file ownership doesn't overlap another live session's claim (via sync_file_claims) â€” with non-existent paths warned, not blocked. Fail-open (its own bug must not halt the team); CLAUDE_DISABLE_DISPATCH_GUARD=1 escape hatch. Born from an eight-error dispatch wave on 2026-08-10 where seven of eight errors were mechanically checkable facts asserted from memory.",
+      "specRef": "GR#3; GR#13; docs/planning/dev-team-process.md v1.6.1/v1.7; M0-ENG Â§5 (hooks)",
       "path": "claude-dispatch-guard.js",
       "deps": [
         "plan.pipeline"
@@ -3047,8 +3051,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "Commit-identity guard hook: commits blocked when author/committer email isn't a sanctioned identity",
-      "desc": "claude-author-guard.js (PreToolUse on git commit): derives a sanctioned email set at runtime — the configured `git config user.email` (unconditional), emails appearing >=3 times as author or committer in trunk history, and an operator-set CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES extension list (GR#15: no hardcoded identities) — and denies a commit whose resolved author or committer email (explicit --author, GIT_AUTHOR_*/GIT_COMMITTER_* env overrides, or config fallback) isn't in that set. Matches by email only, not name+email. Fail-closed; CLAUDE_DISABLE_AUTHOR_GUARD=1 escape hatch. Born from BUG-035 (a stray test-identity commit created locally on main the same day the repo went public and its history was rewritten to control identity).",
-      "specRef": "BUG-035; GR#2; M0-ENG §5 (hooks)",
+      "desc": "claude-author-guard.js (PreToolUse on git commit): derives a sanctioned email set at runtime â€” the configured `git config user.email` (unconditional), emails appearing >=3 times as author or committer in trunk history, and an operator-set CLAUDE_AUTHOR_GUARD_EXTRA_IDENTITIES extension list (GR#15: no hardcoded identities) â€” and denies a commit whose resolved author or committer email (explicit --author, GIT_AUTHOR_*/GIT_COMMITTER_* env overrides, or config fallback) isn't in that set. Matches by email only, not name+email. Fail-closed; CLAUDE_DISABLE_AUTHOR_GUARD=1 escape hatch. Born from BUG-035 (a stray test-identity commit created locally on main the same day the repo went public and its history was rewritten to control identity).",
+      "specRef": "BUG-035; GR#2; M0-ENG Â§5 (hooks)",
       "path": "claude-author-guard.js",
       "deps": [
         "plan.pipeline"
@@ -3064,7 +3068,7 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "AST-derived copy-guard CI gate: mechanically replaces the hand copyable-struct sweep",
-      "desc": "internal/foundation/astgate/ (a real Go package, not a root Node hook — mirrors internal/foundation/errs/source_scan_test.go's AST-scan approach): walks cmd/ and internal/ source (excluding _test.go) to enumerate every candidate type (a struct mixing a sync.Mutex/RWMutex value field with an aliasable reference field) and every function that can receive one, by receiver METHOD OR by PACKAGE-LEVEL PARAMETER (the blind spot — errs.SetSink(l *Logger) — that let SEC-031 escape nine hand enumerations by four agents); flags any such function with no checkNotCopied-shaped identity guard as a hard CI violation, and separately flags (advisory-only) a guarded rejection path that writes into a shared bounded resource. No hardcoded type list or count (GR#15). Wired into the existing build-test-vet CI job per Bill's 2026-08-10 ruling (ASM-111). Filed under tool.* rather than foundation.errors deliberately (Bill's ruling on ASM-112): it is a cross-cutting repo-wide gate, not a package the code it audits belongs to.",
+      "desc": "internal/foundation/astgate/ (a real Go package, not a root Node hook â€” mirrors internal/foundation/errs/source_scan_test.go's AST-scan approach): walks cmd/ and internal/ source (excluding _test.go) to enumerate every candidate type (a struct mixing a sync.Mutex/RWMutex value field with an aliasable reference field) and every function that can receive one, by receiver METHOD OR by PACKAGE-LEVEL PARAMETER (the blind spot â€” errs.SetSink(l *Logger) â€” that let SEC-031 escape nine hand enumerations by four agents); flags any such function with no checkNotCopied-shaped identity guard as a hard CI violation, and separately flags (advisory-only) a guarded rejection path that writes into a shared bounded resource. No hardcoded type list or count (GR#15). Wired into the existing build-test-vet CI job per Bill's 2026-08-10 ruling (ASM-111). Filed under tool.* rather than foundation.errors deliberately (Bill's ruling on ASM-112): it is a cross-cutting repo-wide gate, not a package the code it audits belongs to.",
       "specRef": "BUG-024; GR#15; GR#20; GR#21; docs/planning/acceptance/tool.astgate.md",
       "path": "internal/foundation/astgate/",
       "deps": [
@@ -3083,8 +3087,8 @@
       "milestone": "M0",
       "layer": "tooling",
       "title": "metctl: operator/CLI counterpart to metropolis (export/verify, headless control)",
-      "desc": "cmd/metctl/ — real, tested CLI (main.go+main_test.go): with no args prints the build identity (M0 skeleton behaviour); `metctl export <save-dir> [-out dir]` and `metctl verify <save-dir>` operate on int.serializer bundles (M0-ENG §5; A8). BUG-108: registered under its own tool.* key rather than folded into foundation.repo's repo-wide catch-all — main.go's own doc comment self-declares \"Module key: foundation.repo\", but per Aaron's register-don't-exempt ruling (the same precedent applied to tool.astgate/tool.bow/etc.) a real, built, tested package gets its own registry entry at its own path rather than disappearing into the monorepo-skeleton entry. This is a judgment call, not a confirmed Bill ruling — BUG-108's comment thread flags the foundation.repo catch-all scope question as still open; escalated, ASM logged.",
-      "specRef": "M0-ENG §5; A8; int.serializer; BUG-108",
+      "desc": "cmd/metctl/ â€” real, tested CLI (main.go+main_test.go): with no args prints the build identity (M0 skeleton behaviour); `metctl export <save-dir> [-out dir]` and `metctl verify <save-dir>` operate on int.serializer bundles (M0-ENG Â§5; A8). BUG-108: registered under its own tool.* key rather than folded into foundation.repo's repo-wide catch-all â€” main.go's own doc comment self-declares \"Module key: foundation.repo\", but per Aaron's register-don't-exempt ruling (the same precedent applied to tool.astgate/tool.bow/etc.) a real, built, tested package gets its own registry entry at its own path rather than disappearing into the monorepo-skeleton entry. This is a judgment call, not a confirmed Bill ruling â€” BUG-108's comment thread flags the foundation.repo catch-all scope question as still open; escalated, ASM logged.",
+      "specRef": "M0-ENG Â§5; A8; int.serializer; BUG-108",
       "path": "cmd/metctl/",
       "deps": [
         "foundation.repo",
@@ -3106,7 +3110,7 @@
       "layer": "ui",
       "title": "FEAT-065: pause-anywhere dev console, object-metrics inspection, feedback-to-BOW capture",
       "desc": "A UI overlay (internal/ui/screens/devmode) built on top of feat.debugmode's existing gates/InspectEntity (never a second gating mechanism): pause-anywhere console (RequireConsole gate, Enable-before-open so DebugTouched fires the moment the console becomes usable), an object-metrics selection/query surface thin-consuming InspectEntity, and in-game free-text feedback captured via a new gated debug.State.SubmitFeedback write path (one JSON record per submission to data/devfeedback/inbox/, never a direct DB/exec/network call) polled by a new companion script claude-devfeedback-import.js which calls claude-bow.js add bug --desc-file (BUG-090 discipline) and moves consumed records to data/devfeedback/processed/ or leaves a .error sidecar. Registered per Bill's ruling (2026-08-12): feat.devmode, not ui.devconsole, because DoD #3 (feedback-to-BOW) is the item's most architecturally significant piece and is not a UI concern.",
-      "specRef": "§14; M0-ENG §3; docs/planning/acceptance/feat.devmode.md",
+      "specRef": "Â§14; M0-ENG Â§3; docs/planning/acceptance/feat.devmode.md",
       "path": "internal/ui/screens/devmode/",
       "deps": [
         "feat.debugmode"
@@ -3124,8 +3128,8 @@
       "priority": "P1",
       "milestone": "M1",
       "layer": "engine",
-      "title": "FEAT-063: The Helper — ask-driven advisor panel over a registered action taxonomy",
-      "desc": "Context-aware player advisor per Aaron's 2026-08-12 ruling (recorded on FEAT-063): Helper v1 is an ASK-DRIVEN PANEL, pull-only — the player asks 'what should I do?' / 'what if I do X?'; current features pay only the advisor-metadata registration cost (action taxonomy id, preconditions, consequence-pricing projection queries). Package internal/engine/helper/ holds the registration contract and query surface. Registered per Bill's ruling (2026-08-12, ASM on FEAT-063): a SINGLE key feat.helper covers both the registration-contract package and the panel query surface — the acceptance file's proposed engine.helper/feat.helper split is deferred until a real UI panel lands, because one BOW item maps to one mkey for destructive-guard and commit-tag resolution. No master-spec section exists for the advisor; docs/planning/acceptance/feat.helper.md is the item's SSOT.",
+      "title": "FEAT-063: The Helper â€” ask-driven advisor panel over a registered action taxonomy",
+      "desc": "Context-aware player advisor per Aaron's 2026-08-12 ruling (recorded on FEAT-063): Helper v1 is an ASK-DRIVEN PANEL, pull-only â€” the player asks 'what should I do?' / 'what if I do X?'; current features pay only the advisor-metadata registration cost (action taxonomy id, preconditions, consequence-pricing projection queries). Package internal/engine/helper/ holds the registration contract and query surface. Registered per Bill's ruling (2026-08-12, ASM on FEAT-063): a SINGLE key feat.helper covers both the registration-contract package and the panel query surface â€” the acceptance file's proposed engine.helper/feat.helper split is deferred until a real UI panel lands, because one BOW item maps to one mkey for destructive-guard and commit-tag resolution. No master-spec section exists for the advisor; docs/planning/acceptance/feat.helper.md is the item's SSOT.",
       "specRef": "docs/planning/acceptance/feat.helper.md; FEAT-063 BOW ruling (Aaron via Bill, 2026-08-12)",
       "path": "internal/engine/helper/",
       "deps": [
@@ -3144,7 +3148,7 @@
       "milestone": "M3",
       "layer": "engine",
       "title": "FEAT-064: whole-state checkpoints with revert-and-fork lineage",
-      "desc": "Player-initiated whole-state checkpoints with revert-and-fork per Aaron's 2026-08-12 interview ruling (quoted on FEAT-064's BOW comment — that comment is the spec authority; no master-spec section names checkpoints). Reverting to a checkpoint preserves the abandoned timeline as a fork; the fork tree is bounded (size N is a balance-regime placeholder pending Aaron's row-by-row approval, never a junior-invented constant). Builds on feat.saveux's Participant/SaveKind whole-state save model (FEAT-011), harness.replay's record/replay + CompareResult diffing (MOD-013), and int.serializer's bundle format — consumes them, never reimplements (GR#3/GR#20). Known prerequisite gap logged as ASM-442/ASM-470: harness.replay's Recorder buffers in-memory with no incremental flush, the wrong shape for an always-on fork log — AC-11/AC-12 stay blocked until that is resolved on MOD-013's side.",
+      "desc": "Player-initiated whole-state checkpoints with revert-and-fork per Aaron's 2026-08-12 interview ruling (quoted on FEAT-064's BOW comment â€” that comment is the spec authority; no master-spec section names checkpoints). Reverting to a checkpoint preserves the abandoned timeline as a fork; the fork tree is bounded (size N is a balance-regime placeholder pending Aaron's row-by-row approval, never a junior-invented constant). Builds on feat.saveux's Participant/SaveKind whole-state save model (FEAT-011), harness.replay's record/replay + CompareResult diffing (MOD-013), and int.serializer's bundle format â€” consumes them, never reimplements (GR#3/GR#20). Known prerequisite gap logged as ASM-442/ASM-470: harness.replay's Recorder buffers in-memory with no incremental flush, the wrong shape for an always-on fork log â€” AC-11/AC-12 stay blocked until that is resolved on MOD-013's side.",
       "specRef": "FEAT-064 BOW ruling (Aaron, 2026-08-12); docs/planning/acceptance/feat.checkpoint.md",
       "path": "internal/engine/checkpoint/",
       "deps": [
@@ -3169,7 +3173,7 @@
       "milestone": "M1",
       "layer": "harness",
       "title": "FEAT-066: pipeline metrics dashboard (out-of-band CLI) + quick defect logging",
-      "desc": "Surfaces this project's own build/test/security/perf pipeline state (claude-bow.js weakness/gate-status/lint + perf-CI results) — it does not invent a new metrics-collection mechanism (GR#3). Built as an out-of-band CLI per Bill's Escalation-A ruling (2026-08-12, recorded on ASM-476): pipeline data has no business inside the TUI runtime, and an in-game screen would drag internal/ui into consuming project tooling across the GR#20 boundary; a future in-game surface is a new feature riding this core. Includes a quick one-line defect-logging entry point reusing feat.devmode's feedback-inbox/import plumbing rather than a second BOW-writing path; per Bill's ASM-477 ruling the importer derives attribution (codejson ref/code-path) from the submitting tool's declared mkey, never hardcoded.",
+      "desc": "Surfaces this project's own build/test/security/perf pipeline state (claude-bow.js weakness/gate-status/lint + perf-CI results) â€” it does not invent a new metrics-collection mechanism (GR#3). Built as an out-of-band CLI per Bill's Escalation-A ruling (2026-08-12, recorded on ASM-476): pipeline data has no business inside the TUI runtime, and an in-game screen would drag internal/ui into consuming project tooling across the GR#20 boundary; a future in-game surface is a new feature riding this core. Includes a quick one-line defect-logging entry point reusing feat.devmode's feedback-inbox/import plumbing rather than a second BOW-writing path; per Bill's ASM-477 ruling the importer derives attribution (codejson ref/code-path) from the submitting tool's declared mkey, never hardcoded.",
       "specRef": "docs/planning/acceptance/feat.metricsdash.md; ASM-476/ASM-477 rulings (Bill, 2026-08-12)",
       "path": "internal/harness/metricsdash/",
       "deps": [
@@ -3192,7 +3196,7 @@
       "layer": "tooling",
       "title": "GR#23 destructive-guard hook: blocks code-bearing commits whose [mkey]-resolved BOW item(s) lack an accepted Destructive verdict",
       "desc": "claude-destructive-guard.js (root tooling, layer tooling).",
-      "specRef": "GR#23; GR#24; M0-ENG §5 (hooks)",
+      "specRef": "GR#23; GR#24; M0-ENG Â§5 (hooks)",
       "path": "claude-destructive-guard.js",
       "deps": [
         "plan.pipeline"
@@ -3209,7 +3213,7 @@
       "layer": "tooling",
       "title": "Version-discipline guard hook (GR#2): denies rogue hand-maintained version files and warns on engine commits",
       "desc": "claude-version-guard.js (root tooling, layer tooling).",
-      "specRef": "GR#2; M0-ENG §5 (hooks)",
+      "specRef": "GR#2; M0-ENG Â§5 (hooks)",
       "path": "claude-version-guard.js",
       "deps": [
         "plan.pipeline"
@@ -3226,7 +3230,7 @@
       "layer": "tooling",
       "title": "Worktree-destruction guard (GR#24): fail-closed block of git checkout --/reset --hard/clean/stash that would revert to HEAD",
       "desc": "claude-worktree-guard.js (root tooling, layer tooling).",
-      "specRef": "GR#24; M0-ENG §5 (hooks)",
+      "specRef": "GR#24; M0-ENG Â§5 (hooks)",
       "path": "claude-worktree-guard.js",
       "deps": [
         "plan.pipeline"
@@ -3243,7 +3247,7 @@
       "layer": "tooling",
       "title": "Session coordination harness (metro MariaDB): permits, file claims, dispatch events, wake recovery",
       "desc": "claude-sync.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks); session coordination",
+      "specRef": "M0-ENG Â§5 (hooks); session coordination",
       "path": "claude-sync.js",
       "deps": [],
       "calls": [],
@@ -3258,7 +3262,7 @@
       "layer": "tooling",
       "title": "SessionStart hook: auto checkin + identity + startup summary (BOW/Vestige/git sync)",
       "desc": "claude-startup.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-startup.js",
       "deps": [],
       "calls": [],
@@ -3273,7 +3277,7 @@
       "layer": "tooling",
       "title": "Pre-commit hook: blocks Co-Authored-By trailers in commits",
       "desc": "claude-pre-commit-check.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-pre-commit-check.js",
       "deps": [
         "plan.pipeline"
@@ -3290,7 +3294,7 @@
       "layer": "tooling",
       "title": "Pre-push hook: blocks pushes with unbundled function deploys (GR#19)",
       "desc": "claude-pre-push-check.js (root tooling, layer tooling).",
-      "specRef": "GR#19; M0-ENG §5 (hooks)",
+      "specRef": "GR#19; M0-ENG Â§5 (hooks)",
       "path": "claude-pre-push-check.js",
       "deps": [
         "plan.pipeline"
@@ -3307,7 +3311,7 @@
       "layer": "tooling",
       "title": "PostToolUse hook: DHCP-style session permit auto-renewal",
       "desc": "claude-ping-check.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-ping-check.js",
       "deps": [],
       "calls": [],
@@ -3322,7 +3326,7 @@
       "layer": "tooling",
       "title": "PostToolUse hook: post-action Golden Rules reflection",
       "desc": "claude-reflection.js (root tooling, layer tooling).",
-      "specRef": "GR#1; M0-ENG §5 (hooks)",
+      "specRef": "GR#1; M0-ENG Â§5 (hooks)",
       "path": "claude-reflection.js",
       "deps": [],
       "calls": [],
@@ -3337,7 +3341,7 @@
       "layer": "tooling",
       "title": "statusLine hook: identity/status display",
       "desc": "claude-statusline.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-statusline.js",
       "deps": [],
       "calls": [],
@@ -3352,7 +3356,7 @@
       "layer": "tooling",
       "title": "UserPromptSubmit hook: Vestige recall reminder (GR#14)",
       "desc": "claude-memory-prefetch.js (root tooling, layer tooling).",
-      "specRef": "GR#14; M0-ENG §5 (hooks)",
+      "specRef": "GR#14; M0-ENG Â§5 (hooks)",
       "path": "claude-memory-prefetch.js",
       "deps": [],
       "calls": [],
@@ -3367,7 +3371,7 @@
       "layer": "tooling",
       "title": "Agent dispatch/stop logging for utilisation measurement (FEAT-076)",
       "desc": "claude-agent-stop.js (root tooling, layer tooling).",
-      "specRef": "FEAT-076; M0-ENG §5 (hooks)",
+      "specRef": "FEAT-076; M0-ENG Â§5 (hooks)",
       "path": "claude-agent-stop.js",
       "deps": [],
       "calls": [],
@@ -3397,7 +3401,7 @@
       "layer": "tooling",
       "title": "Post-commit hook: auto-record commit hash refs onto BOW items",
       "desc": "claude-bow-autoref.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §4",
+      "specRef": "M0-ENG Â§4",
       "path": "claude-bow-autoref.js",
       "deps": [],
       "calls": [],
@@ -3412,7 +3416,7 @@
       "layer": "tooling",
       "title": "BOW git-ref integrity check",
       "desc": "claude-bow-ref-check.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §4",
+      "specRef": "M0-ENG Â§4",
       "path": "claude-bow-ref-check.js",
       "deps": [],
       "calls": [],
@@ -3478,7 +3482,7 @@
       "layer": "tooling",
       "title": "Commit-hook installer for the guard suite",
       "desc": "claude-committhook-install.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-committhook-install.js",
       "deps": [],
       "calls": [],
@@ -3493,7 +3497,7 @@
       "layer": "tooling",
       "title": "Shared metro MariaDB connection helper for the claude-*.js scripts",
       "desc": "claude-db.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §4 (BOW)",
+      "specRef": "M0-ENG Â§4 (BOW)",
       "path": "claude-db.js",
       "deps": [],
       "calls": [],
@@ -3506,7 +3510,7 @@
       "priority": "P2",
       "milestone": "M0",
       "layer": "tooling",
-      "title": "In-game feedback importer into the BOW (attribution from the submitting tool’s mkey)",
+      "title": "In-game feedback importer into the BOW (attribution from the submitting toolâ€™s mkey)",
       "desc": "claude-devfeedback-import.js (root tooling, layer tooling).",
       "specRef": "FEAT-065; ASM-477",
       "path": "claude-devfeedback-import.js",
@@ -3523,7 +3527,7 @@
       "layer": "tooling",
       "title": "Agent dispatch/stop event logging (sync_dispatch_events)",
       "desc": "claude-dispatch-log.js (root tooling, layer tooling).",
-      "specRef": "FEAT-076; M0-ENG §5 (hooks)",
+      "specRef": "FEAT-076; M0-ENG Â§5 (hooks)",
       "path": "claude-dispatch-log.js",
       "deps": [],
       "calls": [],
@@ -3538,7 +3542,7 @@
       "layer": "tooling",
       "title": "Git commit trigger wrapper for the guard suite",
       "desc": "claude-git-commit-trigger.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-git-commit-trigger.js",
       "deps": [],
       "calls": [],
@@ -3617,7 +3621,7 @@
       "layer": "tooling",
       "title": "Commit-trailer checker backing tool.precommitcheck",
       "desc": "claude-trailer-checker.js (root tooling, layer tooling).",
-      "specRef": "M0-ENG §5 (hooks)",
+      "specRef": "M0-ENG Â§5 (hooks)",
       "path": "claude-trailer-checker.js",
       "deps": [],
       "calls": [],
@@ -3649,7 +3653,7 @@
       "layer": "engine",
       "title": "Airport (Heathrow-class international)",
       "desc": "Heathrow-scale international airport: runways, terminals, freight apron, air-cargo and passenger connectivity feeding tourism, FDI and freight; thousands of jobs, huge traffic generation, noise blight via the mining blight model. Requires permit, enormous land, and road/rail links. Long-horizon bet: colossal capex, compounding connectivity payoff.",
-      "specRef": "§MP; §44; §46; §33; §32",
+      "specRef": "Â§MP; Â§44; Â§46; Â§33; Â§32",
       "path": "internal/engine/airport/",
       "inbound": {
         "name": "AirportAPI",
@@ -3684,7 +3688,7 @@
       "layer": "engine",
       "title": "Container port (Felixstowe-class deep-sea terminal)",
       "desc": "Felixstowe-scale deep-sea container terminal: berths x crane rate x hours, intermodal rail transfer, customs throughput with smuggling risk when saturated; flips the city importer-to-exporter mid-game. Permit + decommission. Upgrades the port milestone to deep-sea terminal tier.",
-      "specRef": "§33; §47; §28; §PT; resources-design-brief.md §8-§9",
+      "specRef": "Â§33; Â§47; Â§28; Â§PT; resources-design-brief.md Â§8-Â§9",
       "path": "internal/engine/freight/",
       "deps": [
         "engine.freight",
@@ -3708,8 +3712,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Channel Tunnel (Chunnel-class mega-tunnel)",
-      "desc": "Channel Tunnel-class cross-water mega-tunnel: TBM-driven (learning curve), road/rail/metro/utility bundling, dig-once; spoil as reclamation fill. Monstrous capex, huge prestige — explicitly a long-horizon prestige bet.",
-      "specRef": "§53; §MP; §47; §32",
+      "desc": "Channel Tunnel-class cross-water mega-tunnel: TBM-driven (learning curve), road/rail/metro/utility bundling, dig-once; spoil as reclamation fill. Monstrous capex, huge prestige â€” explicitly a long-horizon prestige bet.",
+      "specRef": "Â§53; Â§MP; Â§47; Â§32",
       "path": "internal/engine/tunnels/",
       "deps": [
         "engine.tunnels",
@@ -3730,7 +3734,7 @@
       "layer": "engine",
       "title": "Spaceport (SpaceX-class launch/landing site)",
       "desc": "SpaceX-class launch/landing site: end-game science/prestige mega-facility, expert-gated (money alone cannot buy it). Permit + decommission liability. Enormous prestige, FDI/tourism draw, launch-exclusion blight. Extends the buildings.json mega-projects supplement.",
-      "specRef": "§MP; resources-design-brief.md §8",
+      "specRef": "Â§MP; resources-design-brief.md Â§8",
       "path": "internal/engine/spaceport/",
       "inbound": {
         "name": "SpaceportAPI",
@@ -3764,7 +3768,7 @@
       "layer": "engine",
       "title": "Particle accelerator (CERN-class)",
       "desc": "CERN-class particle accelerator: the ultimate science mega-facility, expert-gated like the spaceport; massive electricity/water draw, permit + decommission. Enormous prestige + FDI anchor + research spillover into education and wellbeing.",
-      "specRef": "§MP; resources-design-brief.md §8",
+      "specRef": "Â§MP; resources-design-brief.md Â§8",
       "path": "internal/engine/accelerator/",
       "inbound": {
         "name": "AcceleratorAPI",
@@ -3801,7 +3805,7 @@
       "layer": "engine",
       "title": "Pharma/R&D campus (Pfizer-class)",
       "desc": "Groton-Pfizer-class pharma/R&D campus (Kent tie-in): FDI anchor with thousands of skilled jobs, education/research synergy, supply-chain spawning, exports. Permit + decommission. Long bet: education + FDI compounding into a high-value anchor employer.",
-      "specRef": "§46; §45; §27; §32; §54; resources-design-brief.md §6",
+      "specRef": "Â§46; Â§45; Â§27; Â§32; Â§54; resources-design-brief.md Â§6",
       "path": "internal/engine/fdi/",
       "deps": [
         "engine.fdi",
@@ -3825,8 +3829,8 @@
       "milestone": "M4",
       "layer": "engine",
       "title": "Oil refinery + integrated chemical works",
-      "desc": "Oil refinery + integrated chemical works: crude by tanker to tank farm to refinery to petrochemical works to plastics. Top blight class, hazmat fire category. Make-vs-buy at largest scale — no refinery means importing refined product at margin. Permit + decommission.",
-      "specRef": "§50; §49; §26; §32; §33; resources-design-brief.md §6",
+      "desc": "Oil refinery + integrated chemical works: crude by tanker to tank farm to refinery to petrochemical works to plastics. Top blight class, hazmat fire category. Make-vs-buy at largest scale â€” no refinery means importing refined product at margin. Permit + decommission.",
+      "specRef": "Â§50; Â§49; Â§26; Â§32; Â§33; resources-design-brief.md Â§6",
       "path": "internal/engine/chemicals/",
       "deps": [
         "engine.chemicals",
@@ -3847,9 +3851,9 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "title": "Mine types — extractive facility catalogue",
-      "desc": "Mine-type catalogue — every extractive type as a distinct modelled facility (chalk, sand/gravel, clay+brickworks, ragstone, deep coal, offshore dredging, quarry). Per-type footprint/output/blight/jobs/depth, geology-gated, deposit-backed, finite depleting.",
-      "specRef": "§32; §34; §17; resources-design-brief.md §2/§9",
+      "title": "Mine types â€” extractive facility catalogue",
+      "desc": "Mine-type catalogue â€” every extractive type as a distinct modelled facility (chalk, sand/gravel, clay+brickworks, ragstone, deep coal, offshore dredging, quarry). Per-type footprint/output/blight/jobs/depth, geology-gated, deposit-backed, finite depleting.",
+      "specRef": "Â§32; Â§34; Â§17; resources-design-brief.md Â§2/Â§9",
       "path": "internal/engine/mining/",
       "deps": [
         "engine.mining",
@@ -3868,9 +3872,9 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "title": "Farm types — agricultural facility catalogue",
-      "desc": "Farm-type catalogue — every agricultural type as a distinct modelled facility (arable, livestock, orchard, market garden, vineyard/winery). Per-type soil quality/BDI, conventional vs organic, food chains to mill/dairy/abattoir/packhouse/winery.",
-      "specRef": "§31; §17; §25",
+      "title": "Farm types â€” agricultural facility catalogue",
+      "desc": "Farm-type catalogue â€” every agricultural type as a distinct modelled facility (arable, livestock, orchard, market garden, vineyard/winery). Per-type soil quality/BDI, conventional vs organic, food chains to mill/dairy/abattoir/packhouse/winery.",
+      "specRef": "Â§31; Â§17; Â§25",
       "path": "internal/engine/farming/",
       "deps": [
         "engine.farming"
@@ -3888,9 +3892,9 @@
       "priority": "P2",
       "milestone": "M4",
       "layer": "engine",
-      "title": "Factory unit types — manufacturing facility catalogue",
-      "desc": "Factory-unit catalogue — every manufacturing type as a distinct modelled facility (assembler, steel mill, electronics, chemicals converter, food processing, textiles, cement, glass). Per-type footprint/input-output/jobs/utility draw/blight class.",
-      "specRef": "§33; §46; §34; §17; §45",
+      "title": "Factory unit types â€” manufacturing facility catalogue",
+      "desc": "Factory-unit catalogue â€” every manufacturing type as a distinct modelled facility (assembler, steel mill, electronics, chemicals converter, food processing, textiles, cement, glass). Per-type footprint/input-output/jobs/utility draw/blight class.",
+      "specRef": "Â§33; Â§46; Â§34; Â§17; Â§45",
       "path": "internal/engine/freight/",
       "deps": [
         "engine.freight",
@@ -3910,7 +3914,7 @@
       "layer": "engine",
       "title": "Living city census & life-history: background audit threads + cradle-to-grave object bios + demographics/KPI drill-in",
       "desc": "Living census + life-history layer: non-blocking background threads (stats generator, auditor, consistency checker, regulator), cradle-to-grave bios for every object (citizens and cars/houses/choppers alike), and demographics/KPI drill-in (splines, GDP, happiness, employment).",
-      "specRef": "§13 F6; §18; §40; §45; §46; UI-SPEC §4/§5.2",
+      "specRef": "Â§13 F6; Â§18; Â§40; Â§45; Â§46; UI-SPEC Â§4/Â§5.2",
       "path": "internal/engine/census/",
       "inbound": {
         "name": "CensusAPI",
@@ -3973,7 +3977,7 @@
       "layer": "tooling",
       "title": "Concurrent on-disk edit safety: dispatch-time file-claim block + edit-time guard",
       "desc": "Prevent the concurrent-edit near-miss class: dispatch-time HARD BLOCK when a brief declares a path owned by another live agent + auto-claim on dispatch; an edit-time guard checking sync_file_claims before every Edit/Write; claims keyed by session id (not name).",
-      "specRef": "GR#3; GR#20; M0-ENG §5; dev-team-process v1.6.1/v1.7; BUG-238",
+      "specRef": "GR#3; GR#20; M0-ENG Â§5; dev-team-process v1.6.1/v1.7; BUG-238",
       "path": "claude-file-claim-guard.js",
       "deps": [
         "tool.sync",
@@ -3992,7 +3996,7 @@
       "layer": "engine",
       "title": "Work schedules & work-life balance: shift patterns, commute, and a 40h-vs-996 working-week policy",
       "desc": "Work schedules and work-life balance: every job carries a time pattern (9-5 core-hours, 24x7 shift, any-time), every worker commutes (the rush shapes traffic), and the working week is a policy (varied ~40h default vs a 996 9-to-9/6-day option that earns more but costs wellbeing).",
-      "specRef": "§5.1; §18; §19.3; §21; §26; §42; §52; §54; §5.2",
+      "specRef": "Â§5.1; Â§18; Â§19.3; Â§21; Â§26; Â§42; Â§52; Â§54; Â§5.2",
       "path": "internal/engine/worklife/",
       "inbound": {
         "name": "WorkScheduleAPI",
