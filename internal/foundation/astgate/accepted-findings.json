@@ -1730,5 +1730,9 @@
   {
     "finding": "internal/engine/tourism/api.go|*TourismAPI|receiver method|totalCapacityLocked|t|*TourismAPI",
     "reason": "Wave 2026-08-19 aggregate round, authorized triage split (B-list, coordinator-approved): unexported *Locked-suffixed helper, called with the candidate type's mutex (t.mu) already held by the internal tick-advance path that owns the write lock across the whole admission/departure sequence, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); the destructive re-attack verified the public surface is copy-guarded."
+  },
+  {
+    "finding": "internal/engine/shopping/api.go|*ShoppingAPI|receiver method|computeFormatSplitsLocked|s|*ShoppingAPI",
+    "reason": "MOD-050 r4 verdict fix (2026-08-19): unexported *Locked-suffixed helper, called with the candidate type's mutex (s.mu) already held by its two callers, GenerateTrips and TripsByFormat, each of which calls checkNotCopied and takes s.mu.RLock() before invoking computeFormatSplitsLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical roads.obstructedCellsLocked and services.districtCoverageLocked precedents in this same file."
   }
 ]

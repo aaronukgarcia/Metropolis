@@ -4544,6 +4544,36 @@
       "message": "staffing method {method} was called on a struct copy of the value New returned",
       "remedy": "Always use the *StaffingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
     },
+    "MET-G4701": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "unregistered home cell ID: {cell}",
+      "remedy": "Ensure that the home cell ID has been successfully registered and initialized with active household format-access data before querying."
+    },
+    "MET-G4702": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "invalid travel-time or price input: {value}",
+      "remedy": "Travel time, price, and freshness parameters must be finite and non-negative. Recompute or validate inputs at the model boundary."
+    },
+    "MET-G4703": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "online-delivery share {share} is out of bounds [0, 1]",
+      "remedy": "The online-delivery share represents a probability factor and must be strictly in range [0, 1] (0% to 100%)."
+    },
+    "MET-G4799": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "shopping method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *ShoppingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
+    },
+    "MET-G4704": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "invalid format weight input: {field}={value}",
+      "remedy": "Format weight fields (cornerShopWeight/marketHallWeight/supermarketWeight/retailParkWeight) must be zero (explicitly disables that format) or a finite non-negative number; NaN and negative values are rejected fail-closed at LoadConfig time."
+    },
     "MET-V300": {
       "severity": "error",
       "module": "ui.screen.finance",
