@@ -1,6 +1,9 @@
 package data
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Validator is implemented by every config struct in this package
 // (via a pointer receiver) so the generic [Load] function can run
@@ -55,9 +58,13 @@ func requireNonNegative(field string, v float64) error {
 	return nil
 }
 
-// requireNonEmptyString checks a string field is non-blank.
+// requireNonEmptyString checks a string field is non-blank: not just
+// non-empty but not whitespace-only either (SEC-057) — a value of "   ", a
+// tab, or a newline is trimmed to "" and rejected the same as "", so the
+// package's documented "non-empty non-blank" contract is actually enforced
+// rather than checked with a bare == "" that whitespace-only strings pass.
 func requireNonEmptyString(field, v string) error {
-	if v == "" {
+	if strings.TrimSpace(v) == "" {
 		return fieldErr(field, "required, must be non-empty")
 	}
 	return nil

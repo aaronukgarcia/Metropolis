@@ -2,6 +2,7 @@ package data
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +100,45 @@ func TestNamingCorpus_EmptyPlaceNameRejected(t *testing.T) {
 
 	_, err := LoadNamingCorpus(dir, testCorrelationID())
 	assertPlaceholderCode(t, err, CodeSchemaInvalid, "roadPlaceNames[1]")
+}
+
+// TestNamingCorpus_WhitespaceOnlyPlaceNameRejected proves a whitespace-only
+// entry in the place-name list is rejected the same as an empty string, not
+// accepted as a "non-blank" name (SEC-057).
+func TestNamingCorpus_WhitespaceOnlyPlaceNameRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileNamingCorpus, `{"version":1,"categories":{"roadPlaceNames":["Cheriton","   "],"roadSuffixes":{"alley":["Close"],"gravel":["Lane"],"residential_street":["Road"],"two_lane":["Street"],"one_way_pairs":["Street"],"avenue_2_plus_2":["Avenue"],"bus_lane_variant":["Way"],"tram_track_variant":["Drive"],"dual_carriageway":["Road"]}}}`)
+
+	_, err := LoadNamingCorpus(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeSchemaInvalid, "roadPlaceNames[1]")
+}
+
+// TestNamingCorpus_WhitespaceOnlySuffixRejected proves a whitespace-only
+// road-suffix entry is rejected the same as an empty string (SEC-057).
+func TestNamingCorpus_WhitespaceOnlySuffixRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileNamingCorpus, `{"version":1,"categories":{"roadPlaceNames":["Cheriton"],"roadSuffixes":{"alley":["Close"],"gravel":["Lane"],"residential_street":["Road"],"two_lane":["Street"],"one_way_pairs":["Street"],"avenue_2_plus_2":["Avenue"],"bus_lane_variant":["Way"],"tram_track_variant":["\t"],"dual_carriageway":["Road"]}}}`)
+
+	_, err := LoadNamingCorpus(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeSchemaInvalid, "tram_track_variant[0]")
+}
+
+// TestNamingCorpus_UnknownRoadClassKeyRejected proves an unknown/misspelled
+// roadSuffixes class key is rejected at load time rather than silently
+// dropped by encoding/json's default unknown-key tolerance (SEC-058). The
+// repro is the exact one from the finding: all nine real classes present,
+// plus an extra "eleventh_class" key.
+func TestNamingCorpus_UnknownRoadClassKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileNamingCorpus, `{"version":1,"categories":{"roadPlaceNames":["Cheriton"],"roadSuffixes":{"alley":["Close"],"gravel":["Lane"],"residential_street":["Road"],"two_lane":["Street"],"one_way_pairs":["Street"],"avenue_2_plus_2":["Avenue"],"bus_lane_variant":["Way"],"tram_track_variant":["Drive"],"dual_carriageway":["Road"],"eleventh_class":["Nonsense"]}}}`)
+
+	_, err := LoadNamingCorpus(dir, testCorrelationID())
+	if err == nil {
+		t.Fatal("LoadNamingCorpus with an unknown roadSuffixes class key returned nil error, want a load-time rejection")
+	}
+	if !strings.Contains(err.Error(), "eleventh_class") {
+		t.Errorf("LoadNamingCorpus error = %v, want it to name the unknown key eleventh_class", err)
+	}
 }
 
 // TestNamingCorpus_DuplicatePlaceNameRejected proves a duplicated place
