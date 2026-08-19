@@ -34,6 +34,60 @@ func TestShopping_AC2_FormatAccessGeography(t *testing.T) {
 	}
 }
 
+func TestShopping_AC2_DataDrivenAlteredWeights(t *testing.T) {
+	api := New()
+	_ = api.RegisterCellAccess(101, 2.0, 2.0, 2.0, 2.0, 0.9, 0.9, 0.9, 0.9)
+
+	// Create temp directory and write mutated config where supermarket weight is huge (e.g., 50.0)
+	tempDir, err := os.MkdirTemp("", "shopping-config-test")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer func() { _ = os.RemoveAll(tempDir) }()
+
+	configData := `{
+		"foodDesertThreshold": 20,
+		"onlineDeliveryShare": 0.15,
+		"cornerShopPriceMult": 1.5,
+		"marketHallPriceMult": 1.1,
+		"supermarketPriceMult": 0.9,
+		"retailParkPriceMult": 0.85,
+		"cornerShopWeight": 1.0,
+		"marketHallWeight": 1.0,
+		"supermarketWeight": 50.0,
+		"retailParkWeight": 1.0
+	}`
+	_ = os.WriteFile(filepath.Join(tempDir, "shopping.json"), []byte(configData), 0644)
+
+	err = api.LoadConfig(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	// Verify that the split for supermarket is now dominant
+	splits, _ := api.TripsByFormat(101, false)
+	if splits["supermarket"] <= splits["corner_shop"]*10 {
+		t.Errorf("expected supermarket trips to be dominant under mutated data-driven config (GR#15), got splits: %+v", splits)
+	}
+}
+
+func TestShopping_AC2_SumConsistency(t *testing.T) {
+	api := New()
+	_ = api.RegisterCellAccess(101, 5.0, 10.0, 2.0, 15.0, 0.9, 0.9, 0.9, 0.9)
+
+	total, _ := api.GenerateTrips(101, false)
+	splits, _ := api.TripsByFormat(101, false)
+
+	sum := 0
+	for _, v := range splits {
+		sum += v
+	}
+
+	if total != sum {
+		t.Errorf("expected GenerateTrips (%d) to match sum(TripsByFormat) (%d) (sum consistency, AC-2)", total, sum)
+	}
+}
+
 func TestShopping_FreshFoodShare_Unwired(t *testing.T) {
 	api := New()
 	_ = api.RegisterCellAccess(101, 5.0, 5.0, 5.0, 5.0, 0.9, 0.9, 0.9, 0.9)

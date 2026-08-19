@@ -31,6 +31,10 @@ type Config struct {
 	MarketHallPriceMult  float64 `json:"marketHallPriceMult"`
 	SupermarketPriceMult float64 `json:"supermarketPriceMult"`
 	RetailParkPriceMult  float64 `json:"retailParkPriceMult"`
+	CornerShopWeight     float64 `json:"cornerShopWeight"`
+	MarketHallWeight     float64 `json:"marketHallWeight"`
+	SupermarketWeight    float64 `json:"supermarketWeight"`
+	RetailParkWeight     float64 `json:"retailParkWeight"`
 }
 
 // CellAccess holds format access travel-time and freshness data per cell (AC-2/AC-3/AC-5).
@@ -257,42 +261,57 @@ func (s *ShoppingAPI) FoodDesert(cellID uint64) (bool, error) {
 	return score < s.cfg.FoodDesertThreshold, nil
 }
 
-// GenerateTrips generates shopping trips, splitting them across formats (AC-2/AC-3/AC-4).
-func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error) {
-	if err := s.checkNotCopied("GenerateTrips"); err != nil {
-		return 0, err
-	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+func (s *ShoppingAPI) computeFormatSplitsLocked(cellID uint64, isSaturday bool) (map[string]float64, float64, error) {
 	c, ok := s.cells[cellID]
 	if !ok {
-		return 0, errs.New(ErrUnregisteredCell, s.correlationID, map[string]any{"cell": cellID})
+		return nil, 0, errs.New(ErrUnregisteredCell, s.correlationID, map[string]any{"cell": cellID})
 	}
 
-	// Format trip weights based on proximity with asymmetric preferences (AC-2)
-	wCorner := 1.5 / (math.Max(c.CornerShopTime, 1.0))
-	wMarket := 2.0 / (math.Max(c.MarketHallTime, 1.0))
-	wSuper := 4.0 / (math.Max(c.SupermarketTime, 1.0))
-	wRetail := 3.0 / (math.Max(c.RetailParkTime, 1.0))
+	// Use data-driven config weights (GR#15)
+	prefCorner := s.cfg.CornerShopWeight
+	prefMarket := s.cfg.MarketHallWeight
+	prefSuper := s.cfg.SupermarketWeight
+	prefRetail := s.cfg.RetailParkWeight
+
+	// Fallback to defaults if config weights are zero/unloaded
+	if prefCorner == 0 {
+		prefCorner = 1.5
+	}
+	if prefMarket == 0 {
+		prefMarket = 2.0
+	}
+	if prefSuper == 0 {
+		prefSuper = 4.0
+	}
+	if prefRetail == 0 {
+		prefRetail = 3.0
+	}
+
+	wCorner := prefCorner / (math.Max(c.CornerShopTime, 1.0))
+	wMarket := prefMarket / (math.Max(c.MarketHallTime, 1.0))
+	wSuper := prefSuper / (math.Max(c.SupermarketTime, 1.0))
+	wRetail := prefRetail / (math.Max(c.RetailParkTime, 1.0))
 
 	totalWeight := wCorner + wMarket + wSuper + wRetail
 	if totalWeight == 0 {
-		return 0, nil
+		return map[string]float64{
+			"corner_shop": 0,
+			"market_hall": 0,
+			"supermarket": 0,
+			"retail_park": 0,
+		}, 0, nil
 	}
 
-	// Base trips count
 	baseTrips := 10.0
 	if isSaturday {
-		// AC-4: Saturday peak trip generation profile
 		baseTrips = 25.0
 	}
 
-	// AC-3: Online delivery displaces total household trip count
 	effectiveTrips := baseTrips * (1.0 - s.cfg.OnlineDeliveryShare)
 
 	// Make trip counts actually vary with access geography (AC-2)
-	proximity := totalWeight / 10.5
+	sumPreferences := prefCorner + prefMarket + prefSuper + prefRetail
+	proximity := totalWeight / sumPreferences
 	accessModifier := proximity / 0.2
 	if accessModifier < 0.2 {
 		accessModifier = 0.2
@@ -301,11 +320,39 @@ func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error)
 	}
 	effectiveTrips = effectiveTrips * accessModifier
 
-	if s.traffic != nil {
-		_ = s.traffic.AddDemand(cellID, int64(effectiveTrips))
+	splits := map[string]float64{
+		"corner_shop": effectiveTrips * (wCorner / totalWeight),
+		"market_hall": effectiveTrips * (wMarket / totalWeight),
+		"supermarket": effectiveTrips * (wSuper / totalWeight),
+		"retail_park": effectiveTrips * (wRetail / totalWeight),
 	}
 
-	return int(effectiveTrips), nil
+	return splits, effectiveTrips, nil
+}
+
+// GenerateTrips generates shopping trips, splitting them across formats (AC-2/AC-3/AC-4).
+func (s *ShoppingAPI) GenerateTrips(cellID uint64, isSaturday bool) (int, error) {
+	if err := s.checkNotCopied("GenerateTrips"); err != nil {
+		return 0, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	splits, totalTrips, err := s.computeFormatSplitsLocked(cellID, isSaturday)
+	if err != nil {
+		return 0, err
+	}
+
+	if s.traffic != nil {
+		_ = s.traffic.AddDemand(cellID, int64(totalTrips))
+	}
+
+	// Sum the individual splits after truncation to ensure sum consistency (AC-2)
+	sum := 0
+	for _, v := range splits {
+		sum += int(v)
+	}
+	return sum, nil
 }
 
 // TripsByFormat returns the trip split across formats (AC-2).
@@ -316,48 +363,16 @@ func (s *ShoppingAPI) TripsByFormat(cellID uint64, isSaturday bool) (map[string]
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	c, ok := s.cells[cellID]
-	if !ok {
-		return nil, errs.New(ErrUnregisteredCell, s.correlationID, map[string]any{"cell": cellID})
+	splits, _, err := s.computeFormatSplitsLocked(cellID, isSaturday)
+	if err != nil {
+		return nil, err
 	}
 
-	wCorner := 1.5 / (math.Max(c.CornerShopTime, 1.0))
-	wMarket := 2.0 / (math.Max(c.MarketHallTime, 1.0))
-	wSuper := 4.0 / (math.Max(c.SupermarketTime, 1.0))
-	wRetail := 3.0 / (math.Max(c.RetailParkTime, 1.0))
-
-	totalWeight := wCorner + wMarket + wSuper + wRetail
-	if totalWeight == 0 {
-		return map[string]int{
-			"corner_shop": 0,
-			"market_hall": 0,
-			"supermarket": 0,
-			"retail_park": 0,
-		}, nil
+	out := make(map[string]int)
+	for k, v := range splits {
+		out[k] = int(v)
 	}
-
-	baseTrips := 10.0
-	if isSaturday {
-		baseTrips = 25.0
-	}
-
-	effectiveTrips := baseTrips * (1.0 - s.cfg.OnlineDeliveryShare)
-
-	proximity := totalWeight / 10.5
-	accessModifier := proximity / 0.2
-	if accessModifier < 0.2 {
-		accessModifier = 0.2
-	} else if accessModifier > 2.0 {
-		accessModifier = 2.0
-	}
-	effectiveTrips = effectiveTrips * accessModifier
-
-	return map[string]int{
-		"corner_shop": int(effectiveTrips * (wCorner / totalWeight)),
-		"market_hall": int(effectiveTrips * (wMarket / totalWeight)),
-		"supermarket": int(effectiveTrips * (wSuper / totalWeight)),
-		"retail_park": int(effectiveTrips * (wRetail / totalWeight)),
-	}, nil
+	return out, nil
 }
 
 // FreshFoodShare implements wellbeing's ShoppingSource interface (AC-7).
