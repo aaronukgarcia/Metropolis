@@ -317,6 +317,40 @@
       "sprint": 1
     },
     {
+      "key": "ui.router",
+      "type": "module",
+      "seq": 115,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "ui",
+      "title": "UI result router: the transport-owning seam routing CommandResult/Delta/Event to screens",
+      "desc": "The ui-side composition root ASM-1482 proved missing: a single dedicated goroutine (absorbing the T-VIEWS role from ui.core's ViewsLoop) drains int.protocol Transport's Results()/Deltas()/Events() channels and dispatches each message to its owning screen - CommandResult by minted CorrelationID to that screen's ApplyResult, Delta by SubscriptionID binding to ApplyDelta, Event by Kind prefix to ticker and by Severity/Crisis to chrome's alert stack. Registration-order slice routing table (never map range), routing-table miss raises a registry MET-U code (never silent drop), evict-oldest drop policy made observable via SeqTracker gaps + result-buffer pressure logging, staleness by Tick comparison never wall-clock. Presentation-only: no conservation effect, no world-state mutation possible. Full contract: docs/planning/icd/ui.result-routing.md (ASM-1482).",
+      "specRef": "docs/planning/icd/ui.result-routing.md; ASM-1482; M0-ENG §1.1; UI-SPEC §1",
+      "path": "internal/ui/router/",
+      "inbound": {
+        "name": "Router",
+        "format": "Go package API (func New(transport protocol.Transport, ...) + Run(ctx))",
+        "pattern": "single transport-owning goroutine; sole writer of the ViewStore front snapshot; screens register handlers, never read channels"
+      },
+      "deps": [
+        "int.protocol",
+        "ui.core"
+      ],
+      "calls": [
+        "int.protocol",
+        "ui.core",
+        "ui.screen.finance",
+        "ui.screen.build",
+        "ui.screen.map",
+        "ui.screen.proj",
+        "ui.screen.trade",
+        "ui.alerts",
+        "ui.screen.ticker",
+        "foundation.errors"
+      ],
+      "sprint": 6
+    },
+    {
       "key": "ui.widgets",
       "type": "module",
       "seq": 120,
