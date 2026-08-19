@@ -246,7 +246,7 @@ func DrillTargets(pl PLView, bs BalanceSheetView, loans []LoanState, sliders []T
 	for _, l := range loans {
 		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "loan." + l.ID})
 	}
-	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "credit.rating." + strconv.Itoa(rating)})
+	out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "credit.rating"})
 	for _, s := range sliders {
 		out = append(out, dash.DrillTarget{ViewName: ViewSubscriptionName, EntityID: "tax.slider." + s.ID})
 	}

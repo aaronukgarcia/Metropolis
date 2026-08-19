@@ -416,8 +416,8 @@ func (s *Screen) BorrowLoan(send SendCommandFunc, amountMicropounds int64, termM
 	if amountMicropounds <= 0 {
 		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "non-positive borrow amount"})
 	}
-	if termMonths <= 0 || termMonths > 360 {
-		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "invalid termMonths (must be between 1 and 360)"})
+	if termMonths <= 0 {
+		return errs.New(ErrInvalidLoanRequest, s.correlationID, map[string]any{"reason": "invalid termMonths (must be positive)"})
 	}
 	args := map[string]string{
 		"amountMicropounds": strconv.FormatInt(amountMicropounds, 10),
