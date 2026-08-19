@@ -74,13 +74,15 @@ func runBoundedSEC020(t *testing.T, name string, fn func()) {
 //	screen.go   InspectCursor()   -- pre-check only (delegates to CursorPos/Inspect, both already guarded) -- fails closed to InspectResult{Found:false}
 //	screen.go   Subscribe()       -- pre-check only (reads m.correlationID, never touches mu)             -- propagates the checkNotCopied error
 //	render.go   Render()          -- pre-check + own mu.Lock() site, pre+post -- draws nothing, returns (ASM-015)
+//	overlay.go  ActiveOverlay()   -- pre-check + own mu.Lock() site, pre+post -- fails closed to overlayOrder[0]
+//	overlay.go  CycleOverlay()    -- pre-check + own mu.Lock() site, pre+post -- fails closed to overlayOrder[0] (write silently dropped)
 //
-// That is 11 exported methods total: 9 with their OWN direct
+// That is 13 exported methods total: 11 with their OWN direct
 // m.mu.Lock() site (ApplyPatch, SetStale, SetViewportSize, Pan, Offset,
-// MoveCursor, CursorPos, Inspect, Render) plus 2 pre-check-only
-// (InspectCursor, Subscribe — neither touches mu directly, but both
-// still read receiver state so both are guarded) — every one of the 11
-// exercised below by name.
+// MoveCursor, CursorPos, Inspect, Render, ActiveOverlay, CycleOverlay)
+// plus 2 pre-check-only (InspectCursor, Subscribe — neither touches mu
+// directly, but both still read receiver state so both are guarded) —
+// every one of the 13 exercised below by name.
 //
 // (Corrected 7 -> 9 for the lock-touching count — the itemised list
 // above was always right, the summary arithmetic was not, the same
@@ -96,7 +98,7 @@ func runBoundedSEC020(t *testing.T, name string, fn func()) {
 // parameters and reads no receiver field at all, there is no exported
 // *MapScreen method in that shape.
 //
-// (11, not 12 or 10 — recount deliberately spelled out per Weakness
+// (13, not 12 or 14 — recount deliberately spelled out per Weakness
 // pattern #3's "get the arithmetic right, this comment IS the audit
 // trail" instruction: the two internal helper Lock sites this package
 // has — Render's snapshotLocked and clampOffsetLocked/clampCursorLocked
@@ -175,10 +177,20 @@ func TestSEC020_EveryGuardedMethod_RejectsStructCopy(t *testing.T) {
 		t.Fatalf("copy.Render() drew into buf, want buf left untouched (ASM-015 fail-closed)")
 	}
 
+	if ov := cp.ActiveOverlay(); ov != overlayOrder[0] {
+		t.Fatalf("copy.ActiveOverlay() = %v, want %v (fail-closed)", ov, overlayOrder[0])
+	}
+	if ov := cp.CycleOverlay(true); ov != overlayOrder[0] {
+		t.Fatalf("copy.CycleOverlay(true) = %v, want %v (fail-closed, write dropped)", ov, overlayOrder[0])
+	}
+
 	// The ORIGINAL must be completely unaffected by every rejected call
 	// above.
 	if x, y := orig.Offset(); x != 0 || y != 0 {
 		t.Fatalf("original.Offset() = (%d,%d) after copy-attack calls, want (0,0) unaffected", x, y)
+	}
+	if ov := orig.ActiveOverlay(); ov != overlayOrder[0] {
+		t.Fatalf("original.ActiveOverlay() = %v after copy-attack calls, want %v unaffected", ov, overlayOrder[0])
 	}
 }
 
@@ -232,6 +244,18 @@ func TestSEC020_CopyTakenWhileLockHeld_RejectedNotHung(t *testing.T) {
 
 	buf := core.NewBuffer(4, 4)
 	runBoundedSEC020(t, "Render", func() { cp.Render(buf, core.Rect{X: 0, Y: 0, W: 4, H: 4}) })
+
+	var activeOv Overlay
+	runBoundedSEC020(t, "ActiveOverlay", func() { activeOv = cp.ActiveOverlay() })
+	if activeOv != overlayOrder[0] {
+		t.Fatalf("ActiveOverlay() on a copy taken mid-lock = %v, want %v", activeOv, overlayOrder[0])
+	}
+
+	var cycledOv Overlay
+	runBoundedSEC020(t, "CycleOverlay", func() { cycledOv = cp.CycleOverlay(true) })
+	if cycledOv != overlayOrder[0] {
+		t.Fatalf("CycleOverlay(true) on a copy taken mid-lock = %v, want %v", cycledOv, overlayOrder[0])
+	}
 
 	// The original must still be fully usable afterward -- the abandoned,
 	// permanently-"locked"-looking copy mu must not have wedged anything shared.

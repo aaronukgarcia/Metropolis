@@ -94,6 +94,12 @@ type MapScreen struct {
 	cursorX, cursorY int // cursor position, relative to the current viewport
 
 	stale bool
+
+	// overlayIdx indexes overlayOrder (overlay.go) — the AC-3 overlay
+	// cycle's current position. Zero-valued (overlayOrder[0],
+	// OverlayOwnership) on a freshly constructed MapScreen, same as every
+	// other never-explicitly-set field.
+	overlayIdx int
 }
 
 // NewMapScreen constructs an empty MapScreen (no snapshot applied yet).
