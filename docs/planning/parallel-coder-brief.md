@@ -60,13 +60,25 @@ A test that calls `CommuteHours` and asserts it returns `5.0` when the code lite
 - Be able to **FAIL** if the logic is wrong — before you trust a green test, break the logic on purpose and confirm the test goes red, then fix it.
 - Include a determinism check where the AC involves seeded behavior (same seed ⇒ same result).
 
-## 5. THE PIPELINE — every commit is attacked (GR#23)
+## 5. THE PIPELINE — every commit is attacked (GR#23, independence amendment 2026-08-18)
 
-"It compiles and my tests pass" is NOT done. **Every code-bearing commit requires a recorded Destructive verdict** (someone actively trying to break your module) before it can commit — the commit is mechanically blocked otherwise.
-- After building + your own tests pass, run a Destructive pass on the module (attack: determinism, bounds/overflow, nil, concurrency, does it actually meet the AC or just look like it), then record: `node claude-bow.js destructive <CODE> --verdict accept --attacker "<you>" --note "..."`.
-- Only then commit: `git add <your exact paths>; git commit -m "feat: engine.<name> ... [engine.<name>]"` → `node claude-bow.js ref <CODE> <hash>` → `done`.
-- Verify first with the cheap gates or the `/ci-green` skill: `gofmt`, `go build ./internal/engine/<name>/...`, `go vet`, `go test -race -count=2 ./internal/engine/<name>/...`.
+"It compiles and my tests pass" is NOT done. **Every code-bearing commit requires a recorded Destructive verdict, and the attacker must NOT be the author** (GR#23 independence amendment): a self-recorded verdict is treated as a Tester pass at best and is insufficient for merge. Request the independent round from the lead (message Bev) when your own build + tests are green.
+- Your own pre-round pass still matters (attack your own work first: determinism, bounds/overflow, nil, concurrency, does it actually meet the AC or just look like it) — but it does not substitute for the independent round.
+- After an independent ACCEPT: commit `git add <your exact paths>; git commit -m "feat: engine.<name> ... [engine.<name>]"` → `node claude-bow.js ref <CODE> <hash>` (done flips are the lead's, on merge).
+- Verify first with the cheap gates: `gofmt`, `go build ./internal/engine/<name>/...`, `go vet`, `go test -race -count=2 ./internal/engine/<name>/...`.
 - **Push every commit the same session** (`/push`) — small PRs per module. Merge only on green CI.
+
+## 5a. THE EVIDENCE PROTOCOL (mandatory, 2026-08-19 — after three claims-vs-code mismatches in one night)
+
+A report that claims things the code doesn't contain is an integrity violation worse than no report (GR#23 amendment text). Every claim you make is now evidence-backed, mechanically checkable, or it doesn't count:
+
+1. **A "fixed" claim names the regression test that re-runs the ORIGINAL defect** — the exact reproduction from the REJECT verdict note, added as a permanent test — and includes its passing output. A fix verified only by the fix's own new tests is NOT verified: the tourism "two-guard fix" passed all its own tests while both original repros still worked verbatim.
+2. **A "complete" AC pastes the AC file's own mechanical check passing** (many acceptance files carry literal grep patterns / tripwire commands — run them, paste the output into your status report). Claiming "test names now match" while 4 of 9 greps fail is what triggered this section.
+3. **A deferred or unimplementable AC is declared, never papered over** — an explicit skip citing the blocking item (ASM/BUG code) beats a decorative test with no assertions every time. Honest gaps are respected; hidden ones are hunted.
+4. **Placeholders are labelled in doc.go**, and doc.go claims exactly what the code does — no more, no less. A claim without implementing code is an instant REJECT regardless of everything else being green (this repo has been burned by fabricated SUE/route-cache/link-volume claims twice).
+5. **Consequence ladder:** first false claim = warning on the item; second = formal escalation to Aaron (this happened 2026-08-18); third = the lane loses its direct-commit path and works through human-reviewed patches.
+
+The lead's independent rounds re-run original reproductions as a standing rule — assume every claim you make will be checked against the code, because it will be.
 
 ## 6. YOUR CURRENT 7 (Ben) — next step
 
