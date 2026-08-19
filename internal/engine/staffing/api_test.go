@@ -19,7 +19,7 @@ func TestStaffing_AC2_DataSourcedWages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	configData := `{"localWage": 65.0, "contractorCost": 95.0, "contractorCapacity": 12}`
 	_ = os.WriteFile(filepath.Join(tempDir, "staffing.json"), []byte(configData), 0644)
