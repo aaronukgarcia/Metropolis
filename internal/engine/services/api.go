@@ -55,11 +55,16 @@ type ServicesAPI struct {
 	mu            sync.RWMutex
 	correlationID string
 
-	kinds         map[ServiceKind]KindDef
-	instances     map[ServiceID]*serviceInstance
-	pools         []StaffingPool
-	poolAvailable map[string]float64
-	pie           []PieBenchmark
+	kinds     map[ServiceKind]KindDef
+	instances map[ServiceID]*serviceInstance
+	// districtDemand is the caller-pushed per-district demand table:
+	// district → service → (demand, distance) record (AC-21). The district
+	// identity is supplied by the caller; this package performs no spatial
+	// read.
+	districtDemand map[DistrictID]map[ServiceID]demandRecord
+	pools          []StaffingPool
+	poolAvailable  map[string]float64
+	pie            []PieBenchmark
 
 	wagePerStaffMicropounds int64
 	severityHalfPoint       float64
@@ -81,10 +86,11 @@ func New(correlationID string) *ServicesAPI {
 		correlationID = errs.NewCorrelationID()
 	}
 	a := &ServicesAPI{
-		correlationID: correlationID,
-		kinds:         make(map[ServiceKind]KindDef, len(builtinKinds)),
-		instances:     make(map[ServiceID]*serviceInstance),
-		poolAvailable: make(map[string]float64),
+		correlationID:  correlationID,
+		kinds:          make(map[ServiceKind]KindDef, len(builtinKinds)),
+		instances:      make(map[ServiceID]*serviceInstance),
+		districtDemand: make(map[DistrictID]map[ServiceID]demandRecord),
+		poolAvailable:  make(map[string]float64),
 	}
 	for _, k := range builtinKinds {
 		a.kinds[k] = defaultKindDefs[k]
@@ -428,14 +434,7 @@ func (a *ServicesAPI) Quality(id ServiceID) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return ComputeQuality(QualityInput{
-		Funding:        inst.funding,
-		Capacity:       inst.capacityCeiling(),
-		Demand:         inst.demand,
-		CoverageRadius: inst.spec.CoverageRadius,
-		DemandDistance: inst.demandDist,
-		StaffingRatio:  inst.staffingRatio(),
-	}), nil
+	return realizedQuality(inst), nil
 }
 
 // UpgradePath returns a service's §10 upgrade path (AC-9), the catalogue
