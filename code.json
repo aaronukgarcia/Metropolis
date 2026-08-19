@@ -2991,6 +2991,10 @@
           {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },
@@ -3021,6 +3025,16 @@
             "key": "engine.invariant",
             "moduleGuid": "3abafe05-7606-4067-8ab0-54007248b802",
             "inboundGuid": "4a4b44ab-9ed0-4322-8a2a-ad4b0178302f"
+          },
+          {
+            "key": "engine.education",
+            "moduleGuid": "bf17030a-a808-41c7-ad5b-b0c174262b0c",
+            "inboundGuid": "bae4923b-5043-45e1-82b7-7772afd79b0f"
+          },
+          {
+            "key": "engine.leisure",
+            "moduleGuid": "47447aee-f985-470a-9e8f-b25dbb571743",
+            "inboundGuid": "d7d01c42-212d-48f4-b9b9-984bf33bd1ce"
           }
         ]
       },
@@ -3598,6 +3612,16 @@
             "inboundGuid": "877d2b29-6055-4ec4-9be2-b60b2d53fcf3"
           },
           {
+            "key": "engine.traffic",
+            "moduleGuid": "f048ef78-9446-4fdb-845e-500fda1f2743",
+            "inboundGuid": "df65414a-b7cd-4003-b25d-0772bf9049d5"
+          },
+          {
+            "key": "engine.extcommute",
+            "moduleGuid": "39bb5039-2f59-4e32-9cb5-d7f899a05d3a",
+            "inboundGuid": "bc5b137e-5692-410b-a6cf-80da601ee414"
+          },
+          {
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
@@ -4114,6 +4138,10 @@
         "format": "Go package API + deltas",
         "pattern": "pools from external_world.json; era scaling",
         "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
           {
             "key": "ui.screen.demo",
             "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
@@ -5101,6 +5129,10 @@
           {
             "key": "engine.spaceport",
             "outboundGuid": "3d022c28-63d4-44ee-b671-a9d2deaf0ff3"
+          },
+          {
+            "key": "engine.traffic",
+            "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
           {
             "key": "feat.megafacilities",
@@ -6428,6 +6460,10 @@
           {
             "key": "engine.tourism",
             "outboundGuid": "698b7f3d-b93b-47e5-b9bd-c06ddc6eec87"
+          },
+          {
+            "key": "engine.traffic",
+            "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
           {
             "key": "feat.compositionroot",
