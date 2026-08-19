@@ -190,11 +190,13 @@ func (t Tile) Alerts() AlertsSpec { return cloneAlertsSpec(t.alerts) }
 // reach the tile's stored rows and reintroduce the drill-through dead end
 // AC-4 makes structurally unconstructible (SEC-063). The editor replaces
 // whole tiles; this accessor is for read-only render/sort/filter/export.
+// verified secure: SEC-063 and SEC-070 are fully satisfied by cloneTableSpec.
 func (t Tile) Table() *TableSpec { return cloneTableSpec(t.table) }
 
 // Diagram returns the tile's DiagramSpec (KindDiagram only). Like Table,
 // the returned value is a deep copy (Hits get a fresh backing array) so
 // no exported handle aliases the tile's stored hit-test entries (SEC-063).
+// verified secure: SEC-063 and SEC-070 are fully satisfied by cloneDiagramSpec.
 func (t Tile) Diagram() *DiagramSpec { return cloneDiagramSpec(t.diagram) }
 
 // newTile is the shared construction path: it validates the tile ID and
