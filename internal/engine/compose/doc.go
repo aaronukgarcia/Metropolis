@@ -27,19 +27,22 @@
 // # Registration order (the composition contract)
 //
 // The baseline-one module set is registered in this fixed order, with
-// citizens, build and invariant all on the daily tick (invariant last,
-// BUG-268/FEAT-169):
+// traffic, citizens, build and invariant all on the daily tick (traffic
+// first — FEAT-206's day-boundary contract — invariant last, BUG-268/
+// FEAT-169):
 //
-//	world -> citizens -> market -> consumption -> finance -> build -> attract
-//	         citizens ------------------------------------> build -> invariant  (PhaseDailyTick, every tick)
+//	world -> traffic -> citizens -> market -> consumption -> finance -> build -> attract
+//	         traffic -> citizens ------------------------------------> build -> invariant  (PhaseDailyTick, every tick)
 //
 // This order is held in a fixed slice (registrationOrder), never a Go map,
 // so registration is deterministic run-over-run (GR#21). The order is what
 // determines intra-phase hook order where modules share a phase: market
-// before consumption (both PhaseConsumptionShortfall), and citizens before
-// build before invariant (all three PhaseDailyTick) so citizens'
-// births/deaths and the build queue both advance before that day's
-// conservation check observes them. attract is now alone on
+// before consumption (both PhaseConsumptionShortfall), and traffic before
+// citizens before build before invariant (all four PhaseDailyTick) so
+// traffic's AdvanceTick reset runs before any demand-generating hook this
+// package registers (docs/planning/icd/engine.traffic-tick.md, FEAT-206),
+// and citizens' births/deaths and the build queue both advance before that
+// day's conservation check observes them. attract is now alone on
 // PhasePopulation (see below).
 //
 // # Phase-kind mapping (the flagged-ambiguous modules)
@@ -117,21 +120,26 @@
 // # STUB-FOR-BASELINE policy
 //
 // Baseline one (FEAT-083) wires the must-have spine and leaves the rest
-// coarse. world/citizens/market/consumption/build/attract/invariant are
-// REAL: world is the terrain/ownership store, citizens the cold citizen
-// store, market the price registry, consumption the utility-network draw
-// (MOD-021's SolveDailyTick against coarse single-source networks), build
-// the build-queue advance (MOD-026's BuildAPI.Tick) plus the Buy/Zone/
-// Build/Demolish command surface (routed through engine.core's
+// coarse. world/traffic/citizens/market/consumption/build/attract/invariant
+// are REAL: world is the terrain/ownership store, traffic is the coarse
+// demand-multiplier layer (MOD-023's AdvanceTick day-boundary reset,
+// FEAT-206 — see traffic_wire.go), citizens the cold citizen store, market
+// the price registry, consumption the utility-network draw (MOD-021's
+// SolveDailyTick against coarse single-source networks), build the
+// build-queue advance (MOD-026's BuildAPI.Tick) plus the Buy/Zone/Build/
+// Demolish command surface (routed through engine.core's
 // GameplayCommandHandler seam), attract the attractiveness-driven
 // migration step (MOD-029's ApplyMigration — g(A − A_world), never a
 // hardcoded +N), invariant the conservation checker. finance remains a
 // STUB PhaseHook with coarse, directional behaviour sufficient to keep
 // the loop alive: a budget-closing wage/tax transfer that moves the money
-// stock. roads/traffic/logistics/services/wellbeing/unlocks/education/
-// crime are DEFERRED ENTIRELY — no stub hooks are registered for them (a
-// stub that occupies a phase slot and does nothing is dead weight, not a
-// composition).
+// stock. roads/logistics/services/wellbeing/unlocks/education/crime are
+// DEFERRED ENTIRELY — no stub hooks are registered for them (a stub that
+// occupies a phase slot and does nothing is dead weight, not a
+// composition). Note traffic itself remains the coarse layer only — no
+// SUE assignment, no per-link routing (traffic/doc.go's "What does NOT
+// ship" section); this integration wires the daily reset and a single
+// citywide congestion read, nothing more.
 //
 // # Gameplay command seam (engine.core GameplayCommandHandler)
 //

@@ -37,7 +37,7 @@ func newTestEngine(t *testing.T, seed uint64, opts ...invariant.HookOption) (*co
 // --- AC-2: deterministic, documented registration order ---
 
 func TestRegistrationOrder_MatchesDocumented(t *testing.T) {
-	want := []string{"world", "citizens", "market", "consumption", "finance", "build", "attract", "invariant"}
+	want := []string{"world", "traffic", "citizens", "market", "consumption", "finance", "build", "attract", "invariant"}
 	got := RegistrationOrder()
 	if len(got) != len(want) {
 		t.Fatalf("RegistrationOrder() = %v, want %v", got, want)
@@ -180,7 +180,7 @@ func TestRequiredModules_CoversFullBaselineOne(t *testing.T) {
 	// The declared required-module list must be the full baseline-one set;
 	// a module silently absent from it would be a quiet N-1 success (AC-4).
 	want := map[string]bool{
-		"world": true, "citizens": true, "market": true, "consumption": true,
+		"world": true, "traffic": true, "citizens": true, "market": true, "consumption": true,
 		"finance": true, "build": true, "attract": true, "invariant": true,
 	}
 	got := RegistrationOrder()
@@ -331,6 +331,7 @@ func TestStubHooks_ShardSafetyAndDeterminism(t *testing.T) {
 
 	hooks := []core.PhaseHook{
 		noopHook{name: "world", st: st},
+		&trafficTickHook{st: st},
 		&coldPassHook{st: st},
 		noopHook{name: "market", st: st},
 		&consumptionHook{st: st},
