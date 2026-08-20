@@ -12,13 +12,8 @@ package extcommute
 // that the table alone is not always current — no prior MET-G48xx code
 // existed either place.
 //
-// NOTE (registration pending): these codes are const-declared and used via
-// errs.New/Wrap (GR#7), but data/errors.json registration is owned by the
-// lead and is NOT performed in this change. Until the codes below are added
-// to data/errors.json, errs.New returns its documented MET-F003
-// "unregistered code" fallback that still preserves the requested code in
-// Ctx["code"]; the package's tests assert these codes via a helper that
-// accepts both the registered and the pending-registration form.
+// NOTE: the codes below ARE registered in data/errors.json (G4800-G4812).
+// errs.New/Wrap (GR#7) resolves them from the real registry.
 const (
 	// ErrExtCommuteDataInvalid: data/extcommute.json could not be loaded or
 	// failed schema validation (missing file, malformed JSON, a non-positive
