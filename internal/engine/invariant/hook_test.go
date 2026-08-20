@@ -165,3 +165,100 @@ func TestHook_ConcurrentShards_NoRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestHook_Starvation_DevModeHardFail is BUG-277's dev-mode regression
+// check: a provider that returns an empty snapshot (every registered
+// invariant's stock absent) must no longer silently pass. In dev mode a
+// starved registered invariant hard-fails exactly like a Detected
+// Violation does (AC-8), via the same WithPanicFunc test-only override
+// so the check fires a real hard-fail path without killing the test
+// binary.
+func TestHook_Starvation_DevModeHardFail(t *testing.T) {
+	empty := func(tick int64) Snapshot { return NewSnapshot(tick) }
+
+	var captured string
+	reg := NewRegistry()
+	if err := reg.Register(NewPeopleInvariant()); err != nil {
+		t.Fatal(err)
+	}
+	e := core.NewEngine()
+	h := &Hook{engine: e, registry: reg, provider: empty, devMode: true, panicFn: func(msg string) { captured = msg }}
+
+	effects, err := h.RunShard(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eff := range effects {
+		h.ApplyEffect(eff)
+	}
+
+	if captured == "" {
+		t.Fatal("starvation did not hard-fail in dev mode: a registered invariant that never ran must not silently pass")
+	}
+	if !strings.Contains(captured, "people") {
+		t.Errorf("starvation hard-fail diagnostic %q does not name the starved invariant", captured)
+	}
+	if !strings.Contains(captured, "tick=0") {
+		t.Errorf("starvation hard-fail diagnostic %q does not name the tick", captured)
+	}
+}
+
+// TestHook_Starvation_ReleaseModeLogs is BUG-277's release-mode half: a
+// registered invariant whose stock is missing from the Snapshot — either
+// an entirely empty snapshot or a StockReading left at its
+// Registered:false zero value — must produce a registry-sourced logged
+// error (reusing ErrConservationViolation, MET-E300) and never panic,
+// mirroring TestHook_ReleaseModeLogs for the Detected-Violation path.
+func TestHook_Starvation_ReleaseModeLogs(t *testing.T) {
+	providers := map[string]SnapshotProvider{
+		"empty snapshot": func(tick int64) Snapshot {
+			return NewSnapshot(tick)
+		},
+		"registered false zero value": func(tick int64) Snapshot {
+			s := NewSnapshot(tick)
+			s.Readings[StockPeople] = StockReading{} // zero value: Registered false
+			return s
+		},
+	}
+
+	for name, provider := range providers {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			var logged []*errs.E
+			reg := NewRegistry()
+			if err := reg.Register(NewPeopleInvariant()); err != nil {
+				t.Fatal(err)
+			}
+			e := core.NewEngine()
+			h := &Hook{engine: e, registry: reg, provider: provider, logSink: func(er *errs.E) {
+				mu.Lock()
+				defer mu.Unlock()
+				logged = append(logged, er)
+			}}
+
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("release-mode starvation path panicked: %v", r)
+					}
+				}()
+				effects, err := h.RunShard(0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, eff := range effects {
+					h.ApplyEffect(eff)
+				}
+			}()
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(logged) != 1 {
+				t.Fatalf("len(logged) = %d, want 1 — starvation must log one registry-sourced error", len(logged))
+			}
+			if logged[0].Code != ErrConservationViolation {
+				t.Errorf("logged error code = %q, want %q", logged[0].Code, ErrConservationViolation)
+			}
+		})
+	}
+}
