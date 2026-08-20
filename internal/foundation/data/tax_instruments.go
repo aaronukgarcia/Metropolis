@@ -24,18 +24,17 @@ import (
 // renders "field {field}: {rule}") — never a silent default and never a
 // silently-dropped instrument.
 //
-// # Instrument-ID convention (SEC-090 — see the logged ASM)
+// # Instrument-ID convention (SEC-090)
 //
-// data.taxinstruments.md AC-1 lists the six instrument IDs as vat,
-// importDuties, corporationTax, paye, councilTax, businessRates AND, in the
-// same sentence, demands they match engine.roads' lowercase-slug
-// "buildingIDPattern" convention. Those two halves contradict each other:
-// four of the six IDs are camelCase, not lowercase slugs. Per the dispatch
-// brief, this loader accepts the six exact IDs as-authored and does NOT
-// reject the file over the casing conflict; the criteria contradiction is
-// flagged to Bill as an ASM rather than silently renaming the data (which
-// would break the file's own meta assumptions and any future engine.tax
-// lookup key).
+// The six instrument IDs are lowercase slugs in engine.roads'
+// "buildingIDPattern" domain (weakness pattern #4 — these IDs become
+// engine.tax lookup keys, so a spelling/casing variant is hostile input,
+// never normalised): vat, import-duties, corporation-tax, paye,
+// council-tax, business-rates. SEC-090's original camelCase IDs
+// (importDuties, corporationTax, councilTax, businessRates) were renamed
+// to kebab-case because data.taxinstruments.md AC-1 demands the
+// buildingIDPattern domain even though its own prose listed the camelCase
+// spellings; the prose-vs-domain contradiction remains logged as ASM-652.
 
 // FileTaxInstruments is data/tax_instruments.json's filename, relative to
 // the resolved data directory (see ResolveDataDir). Added per the same
@@ -46,16 +45,16 @@ const FileTaxInstruments = "tax_instruments.json"
 
 // taxInstrumentIDs is the accepted six-instrument ID set FEAT-056 names
 // (AC-1 / US-1), in a fixed order so the "missing required instrument"
-// check and the "accepted set" error text are deterministic (GR#21). The
-// IDs are accepted EXACTLY as authored in data/tax_instruments.json — see
-// the package-level doc comment for the SEC-090 casing conflict.
+// check and the "accepted set" error text are deterministic (GR#21). Every
+// ID is a lowercase slug in buildingIDPattern's domain (SEC-090); the
+// accepted-set check in Validate rejects any unknown/casing-variant ID.
 var taxInstrumentIDs = []string{
 	"vat",
-	"importDuties",
-	"corporationTax",
+	"import-duties",
+	"corporation-tax",
 	"paye",
-	"councilTax",
-	"businessRates",
+	"council-tax",
+	"business-rates",
 }
 
 // taxInstrumentCategories is the closed category enum observed across the
@@ -100,8 +99,9 @@ type TaxInstruments struct {
 	Instruments map[string]TaxInstrument `json:"instruments"`
 }
 
-// TaxInstrument is one instrument entry (vat, importDuties, corporationTax,
-// paye, councilTax, businessRates). RateRange, Elasticity, BearerWeights
+// TaxInstrument is one instrument entry (vat, import-duties,
+// corporation-tax, paye, council-tax, business-rates). RateRange,
+// Elasticity, BearerWeights
 // and NIRates are pointers so "absent" and "present-but-zero" are
 // distinguishable (GR#16/GR#17): a missing required block is rejected, not
 // silently decoded to a zero value.

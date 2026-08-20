@@ -368,7 +368,7 @@ func TestMalformedFuelData(t *testing.T) {
 			"fuelDemand":{"carLitresPerTick":200000,"vanLitresPerTick":80000,"truckLitresPerTick":120000,"logisticsFleetLitresPerTick":40000},
 			"chargingProfile":{"baseKWhPerTick":120000,"hourlyWeight":[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]},
 			"strategicReserve":{"daysOfCover":90},
-			"duty":{"ratePencePerLitre":52.95,"taxInstrument":"importDuties"},
+			"duty":{"ratePencePerLitre":52.95,"taxInstrument":"import-duties"},
 			"forecourt":{"targetForecourtsPerThousandPopulation":0.35},
 			"tanker":{"portThroughputLitresPerTick":440000}
 		}`
@@ -389,7 +389,7 @@ func TestMalformedFuelData(t *testing.T) {
 				"fuelDemand":{"carLitresPerTick":200000,"vanLitresPerTick":80000,"truckLitresPerTick":120000,"logisticsFleetLitresPerTick":40000},
 				"chargingProfile":{"baseKWhPerTick":120000,"hourlyWeight":[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]},
 				"strategicReserve":{"daysOfCover":90},
-				"duty":{"ratePencePerLitre":52.95,"taxInstrument":"importDuties"},
+				"duty":{"ratePencePerLitre":52.95,"taxInstrument":"import-duties"},
 				"forecourt":{"targetForecourtsPerThousandPopulation":0.35},
 				"tanker":{"portThroughputLitresPerTick":440000}
 			}`,
@@ -404,7 +404,7 @@ func TestMalformedFuelData(t *testing.T) {
 				"fuelDemand":{"carLitresPerTick":200000,"vanLitresPerTick":80000,"truckLitresPerTick":120000,"logisticsFleetLitresPerTick":40000},
 				"chargingProfile":{"baseKWhPerTick":120000,"hourlyWeight":[-0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]},
 				"strategicReserve":{"daysOfCover":90},
-				"duty":{"ratePencePerLitre":52.95,"taxInstrument":"importDuties"},
+				"duty":{"ratePencePerLitre":52.95,"taxInstrument":"import-duties"},
 				"forecourt":{"targetForecourtsPerThousandPopulation":0.35},
 				"tanker":{"portThroughputLitresPerTick":440000}
 			}`,

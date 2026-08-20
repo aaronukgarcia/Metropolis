@@ -53,8 +53,8 @@
   },
   "duty": {
     "ratePencePerLitre": 52.95,
-    "taxInstrument": "importDuties",
-    "comment": "Literature-grounded placeholder (UK fuel duty 52.95p/litre, mapping sanity-check only, pending Aaron's balance pass). taxInstrument names the engine.tax instrument fuel duty posts through: fuel is import-only (§6/§8, engine.market.md AC-3), so its duty is an import-channel levy and posts through engine.tax's 'importDuties' instrument — see ASM- (logged) and engine.tax's own escalation (the dedicated fuel-duty instrument is an open Aaron reconciliation, not yet in data/tax_instruments.json)."
+    "taxInstrument": "import-duties",
+    "comment": "Literature-grounded placeholder (UK fuel duty 52.95p/litre, mapping sanity-check only, pending Aaron's balance pass). taxInstrument names the engine.tax instrument fuel duty posts through: fuel is import-only (§6/§8, engine.market.md AC-3), so its duty is an import-channel levy and posts through engine.tax's 'import-duties' instrument — see ASM- (logged) and engine.tax's own escalation (the dedicated fuel-duty instrument is an open Aaron reconciliation, not yet in data/tax_instruments.json)."
   },
   "forecourt": {
     "targetForecourtsPerThousandPopulation": 0.35,

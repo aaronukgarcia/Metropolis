@@ -108,7 +108,7 @@
       "scope": "district",
       "mechanism": {
         "coefficients": [
-          { "key": "tax.businessRates.districtMultiplier", "delta": -1.0, "taxInstrument": "businessRates", "taxMode": "districtMultiplier" }
+          { "key": "tax.businessRates.districtMultiplier", "delta": -1.0, "taxInstrument": "business-rates", "taxMode": "districtMultiplier" }
         ]
       },
       "cost": {

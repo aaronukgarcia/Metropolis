@@ -95,10 +95,15 @@ func (r *recordingFinance) postCount() int {
 	return len(r.txns)
 }
 
-// recordingTax implements taxSeam, recording every SetDistrictMultiplier.
+// recordingTax implements taxSeam, recording every SetDistrictMultiplier and
+// holding the applied multiplier per (district, instrument) so
+// GetDistrictMultiplier reads back the real applied state — exactly what the
+// production *tax.TaxAPI does. A test can also call SetDistrictMultiplier
+// directly on it to simulate an out-of-band mutation of the tax state.
 type recordingTax struct {
 	mu    sync.Mutex
 	calls []recordedTaxCall
+	state map[recordedTaxKey]float64
 }
 
 type recordedTaxCall struct {
@@ -107,11 +112,29 @@ type recordedTaxCall struct {
 	multiplier float64
 }
 
+type recordedTaxKey struct {
+	district   tax.DistrictID
+	instrument string
+}
+
 func (r *recordingTax) SetDistrictMultiplier(d tax.DistrictID, inst string, m float64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, recordedTaxCall{district: d, instrument: inst, multiplier: m})
+	if r.state == nil {
+		r.state = make(map[recordedTaxKey]float64)
+	}
+	r.state[recordedTaxKey{district: d, instrument: inst}] = m
 	return nil
+}
+
+func (r *recordingTax) GetDistrictMultiplier(d tax.DistrictID, inst string) (float64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m, ok := r.state[recordedTaxKey{district: d, instrument: inst}]; ok {
+		return m, nil
+	}
+	return 1.0, nil // never touched: neutral
 }
 
 // mutableProvider is a stateful projections.CurveProvider whose value a test
@@ -715,7 +738,7 @@ func TestTaxMoveRoutesThroughTaxAPI(t *testing.T) {
 		Name:      "Tax-Free Harbour",
 		Category:  "economy",
 		Scope:     ScopeDistrict,
-		Mechanism: []CoefficientDelta{{Key: "tax.businessRates.districtMultiplier", Delta: -1.0, Tax: &TaxMove{Instrument: "businessRates", Mode: taxMoveDistrictMultiplier}}},
+		Mechanism: []CoefficientDelta{{Key: "tax.businessRates.districtMultiplier", Delta: -1.0, Tax: &TaxMove{Instrument: "business-rates", Mode: taxMoveDistrictMultiplier}}},
 	}
 	addPolicy(t, a, def)
 
@@ -727,7 +750,7 @@ func TestTaxMoveRoutesThroughTaxAPI(t *testing.T) {
 		t.Fatalf("want 1 tax move, got %d", len(rec.calls))
 	}
 	c := rec.calls[0]
-	if c.district != tax.DistrictID(districtID) || c.instrument != "businessRates" || c.multiplier != 0.0 {
+	if c.district != tax.DistrictID(districtID) || c.instrument != "business-rates" || c.multiplier != 0.0 {
 		t.Fatalf("unexpected tax move: %+v", c)
 	}
 }
