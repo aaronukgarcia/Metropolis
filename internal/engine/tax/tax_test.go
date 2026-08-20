@@ -749,6 +749,32 @@ func TestDistrictMultiplierRejectsExcessiveMultiplier(t *testing.T) {
 	}
 }
 
+// TestDistrictMultiplierRejectsSubMinEffectiveRate (BUG-299): the effective
+// rate (citywide rate × multiplier) must stay within the instrument's
+// data-declared rateRange at BOTH ends — a multiplier driving it below
+// minPercent is rejected, never stored, exactly as one driving it above
+// maxPercent. Shipped instruments all use minPercent 0, so the test raises
+// council-tax's floor to 50% to make a sub-min effective rate representable.
+func TestDistrictMultiplierRejectsSubMinEffectiveRate(t *testing.T) {
+	api := newTestAPI(t)
+	if err := api.SetRate("council-tax", 100); err != nil {
+		t.Fatalf("SetRate: %v", err)
+	}
+	api.instruments["council-tax"].def.RateRange.MinPercent = 50
+
+	// 0.4x gives an effective 40%, below the 50% floor — rejected.
+	if err := api.SetDistrictMultiplier("harbour", "council-tax", 0.4); err == nil {
+		t.Fatal("sub-min effective rate accepted")
+	} else {
+		assertCode(t, err, ErrInvalidDistrictMultiplier)
+	}
+
+	// 0.6x gives an effective 60%, within [50, 400] — accepted.
+	if err := api.SetDistrictMultiplier("harbour", "council-tax", 0.6); err != nil {
+		t.Fatalf("in-range multiplier rejected: %v", err)
+	}
+}
+
 // TestRevenueMonotonicInRate (SEC-098): revenue must be monotonic
 // non-decreasing in the rate even at rates far past the instrument's
 // declared range, where the elasticity has shrunk the base below one

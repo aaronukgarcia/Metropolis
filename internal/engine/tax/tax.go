@@ -221,11 +221,14 @@ func (t *TaxAPI) SetEVShare(instrumentID string, share float64) error {
 
 // SetDistrictMultiplier sets an optional per-district rate multiplier for an
 // instrument (AC-6). The multiplier stacks with the citywide base rate:
-// effective rate = base rate × multiplier. 1.0 means no change, 0 means a
-// tax-free district. district must be non-empty and multiplier a finite
-// number >= 0; the resulting effective rate must stay within the
-// instrument's data-loaded rateRange (SEC-098: an unbounded multiplier would
-// blow the AC-11 rate cap at district level and make revenue non-monotonic).
+// effective rate = base rate × multiplier. 1.0 means no change; a multiplier
+// of 0 is accepted only where it keeps the effective rate within the
+// instrument's rateRange (i.e. minPercent == 0). district must be non-empty
+// and multiplier a finite number >= 0; the resulting effective rate must stay
+// within the instrument's data-loaded rateRange at BOTH ends (SEC-098: an
+// unbounded multiplier would blow the AC-11 rate cap at district level and
+// make revenue non-monotonic, and a sub-min effective rate is a balance-regime
+// change — not a silent district discount).
 func (t *TaxAPI) SetDistrictMultiplier(district DistrictID, instrumentID string, multiplier float64) error {
 	if err := t.checkNotCopied("SetDistrictMultiplier"); err != nil {
 		return err
@@ -246,17 +249,22 @@ func (t *TaxAPI) SetDistrictMultiplier(district DistrictID, instrumentID string,
 			"instrument": instrumentID, "district": string(district), "multiplier": multiplier,
 		})
 	}
-	// SEC-098: bound the effective rate at the instrument's declared maximum.
-	max := 0.0
+	// SEC-098: bound the effective rate within the instrument's declared
+	// rateRange — BOTH ends. A multiplier driving the effective rate below
+	// minPercent or above maxPercent is rejected (the doc's "must stay within
+	// rateRange" is the contract; sub-min rates are a balance-regime change).
+	min, max := 0.0, 0.0
 	if rr := st.def.RateRange; rr != nil {
-		max = rr.MaxPercent
+		min, max = rr.MinPercent, rr.MaxPercent
 	}
-	if st.rate*multiplier > max {
+	effective := st.rate * multiplier
+	if effective < min || effective > max {
 		return errs.New(ErrInvalidDistrictMultiplier, t.correlationID, map[string]any{
 			"instrument":    instrumentID,
 			"district":      string(district),
 			"multiplier":    multiplier,
-			"effectiveRate": st.rate * multiplier,
+			"effectiveRate": effective,
+			"min":           min,
 			"max":           max,
 		})
 	}
