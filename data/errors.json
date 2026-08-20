@@ -4761,6 +4761,18 @@
       "message": "invalid funding slider request: {reason}",
       "remedy": "check the slider value is finite, non-negative, and within the documented min/max"
     },
+    "MET-V504": {
+      "severity": "error",
+      "module": "ui.screen.services",
+      "message": "F4 funding-adjust command failed to send: {cause}",
+      "remedy": "Retry the funding adjustment once the connection to the engine recovers; the command never reached the engine, so no state changed."
+    },
+    "MET-V505": {
+      "severity": "warn",
+      "module": "ui.screen.services",
+      "message": "F4 funding request for {id} was evicted before its CommandResult arrived (pendingFunding at capacity {cap}); its outcome is now unknown",
+      "remedy": "This is a bounded-memory safeguard, not an engine error -- if funding changes are failing to confirm, check engine/transport health; the display value has reverted to the last confirmed state where safe."
+    },
     "MET-V600": {
       "severity": "error",
       "module": "ui.screen.districts",

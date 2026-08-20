@@ -13,6 +13,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -429,6 +430,144 @@ func TestGameplay_ZoneAndBuildAccepted(t *testing.T) {
 	}
 	if res := e.HandleCommand(buildCmd); !res.Accepted {
 		t.Fatalf("Build rejected (want no MET-E009): %+v", res.Error)
+	}
+}
+
+// --- FEAT-208 increment 3: the SetFunding pilot command seam ------------
+
+// TestGameplay_SetFundingAcceptedAndAppliesToEngineState is the seam's
+// positive proof-of-failure: issuing a real protocol.KindSetFunding
+// command through the SAME e.HandleCommand path every other gameplay
+// command uses must (a) be Accepted and (b) actually change
+// ServicesAPI's live FundingLevel for that service — a handler that
+// merely accepted without forwarding to the engine (or a handler that
+// silently no-oped) would pass an Accepted-only assertion but fail this
+// one, which is the point.
+func TestGameplay_SetFundingAcceptedAndAppliesToEngineState(t *testing.T) {
+	cid := errs.NewCorrelationID()
+	servicesAPI, err := services.LoadDefault(cid)
+	if err != nil {
+		t.Fatalf("services.LoadDefault: %v", err)
+	}
+	if err := servicesAPI.RegisterService(services.ServiceSpec{
+		ID:          "clinic-1",
+		Kind:        services.ServiceHealthcare,
+		CapacityRaw: "100 visits/d",
+		UpgradePath: []services.UpgradeStep{{BuildingID: "clinic", Name: "Clinic", CapacityCeiling: 100}},
+	}); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+
+	e := core.NewEngine(core.WithPoolSize(1))
+	if _, err := Wire(e, &Deps{CorrelationID: cid, Services: servicesAPI}); err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	before, err := servicesAPI.FundingLevel("clinic-1")
+	if err != nil {
+		t.Fatalf("FundingLevel (before): %v", err)
+	}
+	if before == 0.75 {
+		t.Fatalf("test setup: default FundingLevel already 0.75 — the assertion below would not distinguish applied-vs-not")
+	}
+
+	cmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID("gameplay-setfunding"),
+		Kind:            protocol.KindSetFunding,
+		Payload:         protocol.SetFundingPayload{ServiceID: "clinic-1", Level: 0.75},
+	}
+	res := e.HandleCommand(cmd)
+	if !res.Accepted {
+		t.Fatalf("SetFunding rejected: %+v", res.Error)
+	}
+	if res.CorrelationID != cmd.CorrelationID {
+		t.Errorf("CommandResult.CorrelationID = %q, want %q (echoed verbatim)", res.CorrelationID, cmd.CorrelationID)
+	}
+
+	after, err := servicesAPI.FundingLevel("clinic-1")
+	if err != nil {
+		t.Fatalf("FundingLevel (after): %v", err)
+	}
+	if after != 0.75 {
+		t.Fatalf("FundingLevel after accepted SetFunding = %v, want 0.75 (handleGameplay must forward to ServicesAPI.SetFunding, not just accept)", after)
+	}
+}
+
+// TestGameplay_SetFundingRejectionSurfacesRegistryCode is the seam's
+// negative proof-of-failure: a level outside ServicesAPI.SetFunding's
+// [0,1] domain must reject through the SAME real path, carrying a
+// registry-sourced ErrorRef (GR#7) rather than being silently accepted or
+// panicking — and must NOT have mutated FundingLevel.
+func TestGameplay_SetFundingRejectionSurfacesRegistryCode(t *testing.T) {
+	cid := errs.NewCorrelationID()
+	servicesAPI, err := services.LoadDefault(cid)
+	if err != nil {
+		t.Fatalf("services.LoadDefault: %v", err)
+	}
+	if err := servicesAPI.RegisterService(services.ServiceSpec{
+		ID:          "clinic-1",
+		Kind:        services.ServiceHealthcare,
+		CapacityRaw: "100 visits/d",
+		UpgradePath: []services.UpgradeStep{{BuildingID: "clinic", Name: "Clinic", CapacityCeiling: 100}},
+	}); err != nil {
+		t.Fatalf("RegisterService: %v", err)
+	}
+
+	e := core.NewEngine(core.WithPoolSize(1))
+	if _, err := Wire(e, &Deps{CorrelationID: cid, Services: servicesAPI}); err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+
+	before, err := servicesAPI.FundingLevel("clinic-1")
+	if err != nil {
+		t.Fatalf("FundingLevel (before): %v", err)
+	}
+
+	cmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID("gameplay-setfunding-reject"),
+		Kind:            protocol.KindSetFunding,
+		Payload:         protocol.SetFundingPayload{ServiceID: "clinic-1", Level: 1.5},
+	}
+	res := e.HandleCommand(cmd)
+	if res.Accepted {
+		t.Fatalf("SetFunding(1.5) accepted, want rejected (outside ServicesAPI's [0,1] domain)")
+	}
+	if res.Error == nil || res.Error.Code == "" {
+		t.Fatalf("rejected CommandResult has no registry ErrorRef (GR#7): %+v", res)
+	}
+	if strings.Contains(res.Error.Display, "{") {
+		t.Errorf("Error.Display = %q, contains an unrendered template placeholder", res.Error.Display)
+	}
+
+	after, err := servicesAPI.FundingLevel("clinic-1")
+	if err != nil {
+		t.Fatalf("FundingLevel (after): %v", err)
+	}
+	if after != before {
+		t.Fatalf("FundingLevel changed after a REJECTED SetFunding: before=%v after=%v, want unchanged", before, after)
+	}
+}
+
+// TestGameplay_SetFundingUnregisteredServiceRejected proves an
+// unregistered ServiceID is rejected through the real seam too — not just
+// the two [0,1]-domain edges above (services.ErrServiceNotRegistered is a
+// distinct rejection path inside ServicesAPI.SetFunding).
+func TestGameplay_SetFundingUnregisteredServiceRejected(t *testing.T) {
+	e, _ := newTestEngine(t, 42)
+	cmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID("gameplay-setfunding-unregistered"),
+		Kind:            protocol.KindSetFunding,
+		Payload:         protocol.SetFundingPayload{ServiceID: "no-such-service", Level: 0.5},
+	}
+	res := e.HandleCommand(cmd)
+	if res.Accepted {
+		t.Fatalf("SetFunding for an unregistered service accepted, want rejected")
+	}
+	if res.Error == nil || res.Error.Code == "" {
+		t.Fatalf("rejected CommandResult has no registry ErrorRef (GR#7): %+v", res)
 	}
 }
 

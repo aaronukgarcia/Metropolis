@@ -33,6 +33,33 @@ const (
 	// still rejected engine-side (e.g. below a hard floor), is
 	// ApplyResult/FundingRejectedReason).
 	ErrInvalidFundingRequest = "MET-V503"
+
+	// ErrFundingCommandSendFailed: a SetFunding call's send() itself
+	// failed (e.g. protocol.ErrCommandQueueFull, protocol.ErrTransportClosed
+	// — the command never reached the transport at all, so no
+	// CommandResult will ever arrive for it). Distinct from
+	// ErrInvalidFundingRequest (a local pre-check on the VALUE, before
+	// send is ever called) and distinct from an engine rejection
+	// (ApplyResult/FundingRejectedReason, which requires a real
+	// CommandResult to have actually come back) — this is FEAT-208
+	// increment 3 destructive round r1's finding F-B part 1: a client-side
+	// transport/queue failure must surface as its own, separately labelled
+	// class of failure (FundingLocalFailureReason, screen.go), never
+	// silently indistinguishable from success.
+	ErrFundingCommandSendFailed = "MET-V504"
+
+	// ErrFundingRequestEvicted: pendingFunding hit its documented capacity
+	// (fundingPendingCap, screen.go) and the OLDEST outstanding request was
+	// evicted to make room — its CommandResult, if it ever arrives, will
+	// find no pendingFunding entry and be silently ignored (ApplyResult's
+	// existing "not a pending funding command" branch). Sibling of
+	// ErrFundingCommandSendFailed (MET-V504): both are LOCAL, client-side
+	// failure classes surfaced via FundingLocalFailureReason, never
+	// FundingRejectedReason — the engine never adjudicated (or, for an
+	// evicted entry, may still be about to adjudicate) this specific
+	// request either way (FEAT-208 increment 3 destructive round r2,
+	// item 3: pendingFunding previously had no bound at all).
+	ErrFundingRequestEvicted = "MET-V505"
 )
 
 // ErrScreenCopied (MET-V502) is declared in copyguard.go, next to

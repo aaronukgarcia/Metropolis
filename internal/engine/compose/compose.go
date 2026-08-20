@@ -1581,15 +1581,19 @@ func (st *simState) currentMonth() (int64, error) {
 	return clock.Month(), nil
 }
 
-// --- gameplay command seam (Buy/Zone/Build/Demolish -> build/world) ---
+// --- gameplay command seam (Buy/Zone/Build/Demolish/SetFunding -> build/world/services) ---
 
 // handleGameplay is the injected core.GameplayCommandHandler. It maps the
-// four gameplay-intent protocol commands onto the build/world command
+// gameplay-intent protocol commands onto the owning modules' command
 // surfaces: Buy -> world.PurchaseTile, Zone/Build/Demolish ->
-// BuildAPI.Submit*Command. A nil return accepts the command (core turns it
-// into an Accepted CommandResult); a non-nil registry error rejects it with
-// that code. This is the ONE place gameplay intent meets the real modules
-// (AC-1/GR#20): no runnable path routes these kinds around compose.
+// BuildAPI.Submit*Command, SetFunding -> ServicesAPI.SetFunding (FEAT-208
+// increment 3, the pilot command promoting services.set-funding off
+// protocol.KindDebug's no-op escape hatch onto this real seam — see
+// ui/screens/services/doc.go's gating note, now closed). A nil return
+// accepts the command (core turns it into an Accepted CommandResult); a
+// non-nil registry error rejects it with that code. This is the ONE place
+// gameplay intent meets the real modules (AC-1/GR#20): no runnable path
+// routes these kinds around compose.
 func (st *simState) handleGameplay(cmd protocol.Command) error {
 	switch cmd.Kind {
 	case protocol.KindBuy:
@@ -1672,6 +1676,25 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		st.moneyFlows = num.SatAdd(st.moneyFlows, res.Compensation)
 		st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(res.Compensation, res.Compensation))
 		return nil
+	case protocol.KindSetFunding:
+		p, ok := cmd.Payload.(protocol.SetFundingPayload)
+		if !ok {
+			return st.gameplayReject(cmd.Kind, "malformed payload")
+		}
+		// FEAT-208 increment 3, the pilot command (lead ruling): forwards
+		// verbatim to ServicesAPI.SetFunding — no validation duplicated
+		// here (GR#3's "the engine validates once"; api.go's SetFunding
+		// already hard-rejects non-finite/out-of-[0,1] levels, an
+		// unregistered ServiceID, and a not-yet-unlocked service's
+		// milestone gate). SetFunding's own errors are already
+		// *errs.E values built via serviceErr against this codebase's
+		// registered error registry (GR#7), so returning err directly
+		// (rather than re-wrapping under a compose-owned code) preserves
+		// the already-rendered registry code/display verbatim on the
+		// CommandResult — core/commands.go's toErrorRef type-asserts
+		// *errs.E directly, exactly the same shape Zone/Build/Demolish's
+		// own pass-through errors already take above.
+		return st.services.SetFunding(services.ServiceID(p.ServiceID), p.Level)
 	default:
 		return st.gameplayReject(cmd.Kind, "unhandled gameplay kind")
 	}

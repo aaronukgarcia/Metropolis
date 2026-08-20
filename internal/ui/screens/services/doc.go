@@ -50,11 +50,12 @@
 // # SVC-1: per-service funding sliders
 //
 // RenderSliders draws the list; Screen.SetFunding issues the player
-// action. Because int.protocol's sealed v1 command vocabulary has no
-// SetFunding Kind and this screen may not edit internal/protocol, the
-// action is carried as a protocol.DebugPayload command with a fixed Op
-// string ("services.set-funding") — the ui.screen.trade/ui.screen.menu
-// ASM-1193 precedent. Slider Min/Max/Step arrive on the wire from the
+// action. int.protocol's v1 command vocabulary now has a real
+// protocol.KindSetFunding Kind (FEAT-208 increment 3, superseding the
+// original protocol.KindDebug "services.set-funding" Op string this
+// screen rode under ASM-1193's own long-term-preference ruling — see
+// setFundingCommand, screen.go) — SetFunding builds and sends that Kind
+// directly. Slider Min/Max/Step arrive on the wire from the
 // engine rather than being spec-fixed constants here (ASM-250: no spec
 // text mandates slider bounds); this range is the slider's UI DISPLAY
 // domain only — the slider MAY still display 0-1000 or a percentage. The
@@ -145,6 +146,7 @@
 // MET-V503 before ever reaching the engine.
 //
 // Gating Notes & Architecture Seams (BUG-058 / ASM-1482):
+//
 //   - Delta path — UNBLOCKED (FEAT-208 increments 1+2): ASM-1482's core
 //     routing seam (internal/ui/router) exists and is wired into the real
 //     composition root (cmd/metropolis/boot.go's bootCore): a real
@@ -158,42 +160,129 @@
 //     publicServicePie remain server-side fast-follows (every field is
 //     already `omitempty`, so no schema change is needed when they land);
 //     ApplyDelta itself already handles all of them.
-//   - SVC-8 command rejection surfacing (ApplyResult) — STILL GATED, but
-//     the reason changed: router.RegisterResultHandler is a real, wired
-//     surface now (unlike before increment 2), but no
-//     protocol.Command/CorrelationID-bearing dispatch path reaches
-//     ServicesAPI.SetFunding — this screen's own SetFunding
-//     (screen.go:352) is never called from anywhere outside this
-//     package's own screen.go/tests, and even if it were, the command it
-//     issues ("services.set-funding") rides protocol.KindDebug
-//     (ASM-1193's DebugPayload seam, screen.go's own opCommand), whose
-//     ONLY handler, engine.core's handleDebug (commands.go), is a
-//     documented no-op placeholder that just accepts the command
-//     ("TODO(feat.debugmode, Debug op dispatch): route DebugPayload.Op to
-//     real F12 panel operations... out of scope for engine.core today") —
-//     it never inspects Op or dispatches anywhere. Reproduce with:
-//     `grep -n "case protocol.Kind" internal/engine/core/commands.go`
-//     (shows KindDebug -> handleDebug, the no-op) and
-//     `grep -rn "SetFunding" internal/engine/compose/*.go` (zero matches
-//     — compose, the ONLY package wired to receive real protocol.Command
-//     traffic via GameplayCommandHandler, never calls SetFunding; its own
-//     handleGameplay only maps KindBuy/KindZone/KindBuild/KindDemolish
-//     onto world/build, never KindDebug). A prior version of this note
-//     claimed a plain `grep -rln "\.SetFunding" internal cmd` returned
-//     zero matches outside this package — that claim was FALSE as
-//     literally written: education/refuse/social each define their own
-//     unrelated SetFunding method (internal/engine/education/funding.go,
-//     internal/engine/refuse/round.go, internal/engine/social/funding.go)
-//     that the grep also matches — those are Go-level module APIs called
-//     directly by other engine code, not protocol.Command handlers, so
-//     they say nothing about whether a real command reaches
-//     ServicesAPI.SetFunding. ApplyResult stays fully designed/
-//     implemented/verified in unit tests, unreachable in the real binary
-//     for lack of ANY dispatch path from a real Command to SetFunding,
-//     not for lack of a routing seam. Do not invent custom/ad-hoc wiring
-//     to close this gap; it is F4's own input-wiring
-//     scope, not a router or composition-root gap (mirrors
-//     internal/ui/screens/finance/doc.go's identical FIN-8 gating note).
+//
+//   - SVC-8 command rejection surfacing (ApplyResult) — UNBLOCKED
+//     (FEAT-208 increment 3, the pilot command lead ruling: "services
+//     set-funding, F4 -> engine.services.SetFunding, end-to-end with a
+//     CommandResult back through ui.router to the screen's ApplyResult").
+//     services.set-funding no longer rides protocol.KindDebug's no-op
+//     escape hatch: it is a first-class Kind (protocol.KindSetFunding,
+//     internal/protocol/commands.go, ASM-1193's own "prefer a real Kind
+//     over the Debug fallback long-term" ruling landed) that reaches
+//     compose.handleGameplay exactly like Buy/Zone/Build/Demolish
+//     (internal/engine/compose/compose.go), which forwards verbatim to
+//     ServicesAPI.SetFunding — no duplicated validation, GR#3. The
+//     rejection's registry code/display (e.g. ErrInvalidFunding,
+//     ErrNotUnlocked, ErrServiceNotRegistered) passes through unchanged
+//     onto the CommandResult and round-trips to ApplyResult/
+//     FundingRejectedReason for real, proven end to end by
+//     cmd/metropolis's feat208_inc3_command_path_test.go (a fed keystroke
+//     through a real ui.keys.KeyGrammar action all the way to a rejected
+//     CommandResult surfacing MET-G1202 on FundingRejectedReason) and by
+//     internal/engine/compose/compose_test.go's
+//     TestGameplay_SetFunding{Accepted,Rejection,Unregistered}* trio at
+//     the engine-command-seam layer. Reproduce the OLD (pre-increment-3)
+//     state's absence with `git log -p` on this file if needed — it is no
+//     longer reproducible against current HEAD.
+//
+//     The one remaining gap, honestly recorded rather than silently
+//     closed: SetFunding's own INPUT call site
+//     (Screen.RegisterFundingAdjustKeys, screen.go) is real, tested, and
+//     wired into cmd/metropolis/boot.go's bootCore against a real
+//     keys.KeyGrammar — but run.go does not yet feed live tcell key
+//     events into ANY F-screen's KeyGrammar (chrome/menu are the only
+//     packages with a live Feed loop today, and neither is F-screen-
+//     scoped), because no F-screen has a "currently active screen"
+//     concept in the shipped binary yet — runInteractive's RenderLoop
+//     only ever draws mapScreen. That is pre-existing screen-switching/
+//     render-focus infrastructure, not invented or closed by this pilot
+//     (its own rails: prove the command + result seam end-to-end; do not
+//     invent ad-hoc wiring around it). A real player cannot yet trigger
+//     this from a running terminal for that reason alone — the command
+//     seam itself, and everything from a fired action to ApplyResult, is
+//     real and mechanically proven.
+//
+// # Optimistic funding state & bounded pendingFunding (FEAT-208 increment 3,
+// GR#23 independent rounds r1-r4)
+//
+// SetFunding/RegisterFundingAdjustKeys' client-side optimistic display
+// state (fundingConfirmed, screen.go) went through FOUR independent
+// destructive rounds before landing on its current design:
+//
+//   - Round r1 found the closure-private tracker never resynced after a
+//     rejection at all (fixed by moving it onto Screen and reverting on
+//     rejection).
+//   - Round r2 found that r1's per-request revert target (a "priorLevel"
+//     snapshot) only correctly reverted the FIRST rejected link of a
+//     chain of overlapping requests — a second rejection in the same
+//     chain landed on the FIRST request's own attempted (and itself
+//     later-rejected) value, a phantom the engine never confirmed
+//     (finding F-C); and that SetFunding's own send-failure revert path
+//     had no compare-before-revert guard at all, unlike ApplyResult's,
+//     so a slow, eventually-failing send could stomp a faster,
+//     already-succeeded command's landed value (finding F-D). Fixed by
+//     introducing lastConfirmed (a separate, engine-sourced ground-truth
+//     map, updated only on Accept) as the universal revert target, guarded
+//     by a per-service issue-order ("newest outstanding") comparison.
+//   - Round r3 found round r2's DIRECTIONAL guard was itself wrong: an
+//     older-issued sibling request that simply had not resolved yet was
+//     invisible to a "is anything NEWER outstanding" scan, so a completing
+//     rejection could revert fundingConfirmed away from a value an
+//     earlier-issued, still-live request would later legitimately confirm
+//     — and ApplyResult's accept branch wrote lastConfirmed but never
+//     repaired fundingConfirmed itself, leaving it to be "fixed" only as a
+//     side effect of some later request's own revert, which round r3's
+//     100-run fuzz test proved does not always happen (47/100 resolution
+//     orders at fundingPendingCap terminated at the wrong value).
+//
+// The current fix (screen.go, round r4): (1) ApplyResult's accept branch
+// now sets BOTH lastConfirmed AND fundingConfirmed unconditionally —
+// "accepts are authoritative," never dependent on some other request's
+// revert running later. (2) Every revert path (ApplyResult's rejection
+// branch, SetFunding's send-failure branch, and pendingFunding eviction)
+// shares ONE helper (fundingRevertToLastConfirmedLocked), guarded by
+// fundingHasOtherOutstandingLocked — a direction-agnostic per-service
+// PRESENCE check (is any other request for this service still
+// outstanding at all, older or newer — no issue-order comparison, no seq
+// field) — that fires the revert only once nothing else for the service
+// remains pending. See fundingRevertToLastConfirmedLocked's own doc
+// comment for the correctness argument: the terminal state after any
+// number of overlapping accepts/rejections/failures, completing in ANY
+// order, is always lastConfirmed once every request has resolved — proven
+// by a 100-run randomised fuzz test (TestFuzz_ResolutionOrder_AtCap) and a
+// full 6-permutation exhaustive test (TestNew_AcceptInterleavedAmongRejections)
+// at fundingPendingCap.
+//
+// Known, deliberately UNCLOSED limitation: protocol.CommandResult carries
+// no ServiceID/Level (envelope.go's deliberately minimal shape) — once a
+// request is evicted from pendingFunding (below), a late-arriving result
+// for it (even a genuine Accept) cannot be attributed to any service or
+// level, so ApplyResult's membership-miss branch remains a no-op for it
+// (documented on ApplyResult's own doc comment and proven still-reproducing
+// by TestAttack_EvictedRequest_LateAcceptedResult_PermanentDivergence,
+// which is intentionally still named TestAttack_, not flipped — its own
+// text records this as an accepted, non-blocking tradeoff for a 32-cap,
+// single-pilot-key surface, not an oversight).
+//
+// pendingFunding is bounded to fundingPendingCap (32) entries — round r2
+// also found it had NO TTL, prune, or size limit at all: a CommandResult
+// that never arrives (e.g. dropped under protocol.Transport's own
+// documented evict-oldest contract, or an engine that never responds)
+// left a permanent entry forever. On overflow, SetFunding evicts the
+// single oldest outstanding entry (FIFO via pendingFundingOrder) and
+// records a loud, registry-sourced local failure
+// (ErrFundingRequestEvicted, MET-V505) rather than growing unbounded or
+// silently dropping it (GR#1). Every round's destructive tests are kept,
+// flipped to TestRegression_ (or, for round r3/r4's new attacks not yet
+// closed, left as TestAttack_/TestNew_) names, in
+// feat208_inc3_destructive_test.go (cmd/metropolis, round r1) and
+// feat208_inc3_r3_destructive_test.go (this package — round r2's own
+// predecessor file was lost mid-round-r3 by a prior session; this file's
+// own provenance note records that, and rebuilds round r2's coverage
+// alongside round r3's own new attacks: an N=3 mixed-completion-order
+// proof round r2 required, an exhaustive 6-permutation accept-interleaved
+// proof, the eviction/late-accept divergence probe above, and the 100-run
+// resolution-order fuzz).
 //
 // # SF-8/SF-9: determinism and race safety
 //
