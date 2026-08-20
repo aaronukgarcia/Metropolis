@@ -267,6 +267,39 @@ func (t *TaxAPI) SetDistrictMultiplier(district DistrictID, instrumentID string,
 	return nil
 }
 
+// GetDistrictMultiplier reads back the applied per-district rate multiplier
+// for an instrument (AC-6's read-back): the value [SetDistrictMultiplier]
+// most recently stored for that (district, instrument), or 1.0 (neutral) when
+// none has been set. It reads the applied state at call time — never a
+// policies-side mirror or a derived copy — so a consumer composing a further
+// move (engine.policies' Enact) sees any out-of-band mutation to the real
+// multiplier rather than silently clobbering it with a stale figure.
+//
+// district must be non-empty (ErrInvalidDistrictMultiplier) and instrumentID
+// a loaded instrument (ErrUnknownInstrument) — matching SetDistrictMultiplier's
+// validation, never a zero value silently treated as valid.
+func (t *TaxAPI) GetDistrictMultiplier(district DistrictID, instrumentID string) (float64, error) {
+	if err := t.checkNotCopied("GetDistrictMultiplier"); err != nil {
+		return 0, err
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if district == "" {
+		return 0, errs.New(ErrInvalidDistrictMultiplier, t.correlationID, map[string]any{
+			"instrument": instrumentID, "district": string(district),
+		})
+	}
+	if _, err := t.lookupLocked(instrumentID); err != nil {
+		return 0, err
+	}
+	if d, ok := t.districts[district]; ok {
+		if m, ok := d[instrumentID]; ok {
+			return m, nil
+		}
+	}
+	return 1.0, nil
+}
+
 // InstrumentInfo is the query surface for one instrument (AC-1/US-6): its
 // data identity, current rate, rate bounds, elasticity, reference rate, and
 // the rate/EV-responsive base, revenue and incidence computed from the

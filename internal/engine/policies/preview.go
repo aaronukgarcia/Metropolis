@@ -96,8 +96,10 @@ func computePreview(def *policyDef, scope Scope, proj projectionSeam, fromMonth,
 		return Preview{}, err
 	}
 	if toMonth < fromMonth {
-		return Preview{}, errs.New(ErrPreviewRangeInverted, correlationID, map[string]any{
-			"fromMonth": fromMonth, "toMonth": toMonth,
+		return Preview{}, errs.New(ErrUnknownScope, correlationID, map[string]any{
+			"scope":     "inverted preview range",
+			"fromMonth": fromMonth,
+			"toMonth":   toMonth,
 		})
 	}
 
