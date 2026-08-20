@@ -11,12 +11,10 @@ package airunits
 // claiming, per BUG-008's lesson — no prior MET-G49xx code existed either
 // place.
 //
-// NOTE: these codes are defined here and REPORTED for registration, but are
-// not yet present in data/errors.json (this package's build was scoped not to
-// edit the shared registry). The package's own tests exercise them against a
-// local testdata/errors.json fixture via METROPOLIS_ERRORS_PATH; once the
-// lead registers the codes below in data/errors.json, errs.New resolves them
-// from the real registry and the same assertions hold unchanged.
+// NOTE: the codes below ARE registered in data/errors.json (BUG-276
+// cross-lane collision resolution, 2026-08-18 — re-minted at MET-G4900..4911
+// from the earlier colliding G4100 block). errs.New resolves them from the
+// real registry; the package's tests assert them against data/errors.json.
 const (
 	// ErrAirunitsDataInvalid: data/helicopters.json could not be loaded or
 	// failed schema validation (a type missing its cost, a negative

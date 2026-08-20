@@ -182,11 +182,15 @@ func (m *maintenanceStub) Service(id UnitID, hours int64) (int64, error) {
 type dispatchStub struct {
 	mu            sync.Mutex
 	contributions []RoleEffect
+	reject        error
 }
 
 func (d *dispatchStub) ReportContribution(id UnitID, role UnitType, effect RoleEffect) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.reject != nil {
+		return d.reject
+	}
 	d.contributions = append(d.contributions, effect)
 	return nil
 }
@@ -985,6 +989,54 @@ func TestConcurrentDispatchGrounding(t *testing.T) {
 
 	if c := e.a.FleetCounts(); !c.Conserved() {
 		t.Fatalf("conservation broken after concurrent dispatch/grounding: %+v", c)
+	}
+}
+
+// TestServiceNegativeClearedDoesNotIncreaseWear (regression): a maintenance
+// seam that reports a negative wear-cleared value must not INCREASE the
+// chopper's wear — SatSub(x, negative) == x + |negative|, so the value is
+// clamped to zero before it reaches the wear arithmetic (GR#16).
+func TestServiceNegativeClearedDoesNotIncreaseWear(t *testing.T) {
+	env := newTestEnv(t)
+	id, err := env.a.Purchase(UnitPolice, 9999)
+	if err != nil {
+		t.Fatalf("Purchase: %v", err)
+	}
+	env.maint.serviceCleared = -100
+	if err := env.a.Service(id, 1); err != nil {
+		t.Fatalf("Service: %v", err)
+	}
+	st, ok, err := env.a.UnitStatus(id)
+	if err != nil || !ok {
+		t.Fatalf("UnitStatus: ok=%v err=%v", ok, err)
+	}
+	if st.Wear != 0 {
+		t.Fatalf("wear = %d, want 0 (negative cleared must not increase wear)", st.Wear)
+	}
+}
+
+// TestDispatchSurfacesContributionError (regression): a failing dispatch-seam
+// contribution is surfaced as an error and leaves the chopper Available — the
+// state is not flipped to EnRoute on a failed contribution (GR#12/GR#17).
+func TestDispatchSurfacesContributionError(t *testing.T) {
+	env := newTestEnv(t)
+	id, err := env.a.Purchase(UnitPolice, 9999)
+	if err != nil {
+		t.Fatalf("Purchase: %v", err)
+	}
+	if err := env.a.AssignPilot(id, pilotQualified); err != nil {
+		t.Fatalf("AssignPilot: %v", err)
+	}
+	env.disp.reject = errors.New("dispatch contribution failed")
+	if err := env.a.Dispatch(id); err == nil {
+		t.Fatal("Dispatch returned nil on a failed contribution")
+	}
+	st, ok, err := env.a.UnitStatus(id)
+	if err != nil || !ok {
+		t.Fatalf("UnitStatus: ok=%v err=%v", ok, err)
+	}
+	if st.State != StateAvailable {
+		t.Fatalf("state = %v, want available (no flip on failed contribution)", st.State)
 	}
 }
 
