@@ -85,3 +85,12 @@ The deep-sea container terminal as a tier above `container_terminal`: berths × 
 - **Assumptions logged.** ASM-675 (feature package shape, sharing `engine.freight`), ASM-684 (P0 — the FEAT-055 overlap / tier-above-`container_terminal` reading), ASM-685 (intermodal via `engine.rail`), ASM-686 (customs/smuggling reuse), ASM-687 (permit + decommission inheritance, edges unregistered).
 - **For Ben (dependency risk).** `FEAT-053`, `FEAT-054`, and `MOD-060` are all BOW-`open` with no code; `MOD-047` (`engine.freight`) is `done`. AC-4 (intermodal) and AC-7 (permit/decommission) are the ACs most exposed to those modules' concrete shapes landing differently — recommend stub-first, re-verify against real dependencies when they land.
 - **Balance-number placeholders (folded, A2).** ASM-1032: data/containerport.json figures (cost/berths/crane rate/customs capacity/tonnage/jobs) are directional placeholders. ASM-1049: deep-sea tier milestone-equal to container_terminal (M9), ordered above on cost alone (400M vs 150M).
+- **ASM-1093 (confirm-and-close).** validatePortLadder compares each present rung against the last-seen present rung (gap-crossing), not only adjacent documented rungs.
+- **ASM-1097 (confirm-and-close).** The r4 ladder chain is transitive-sound: `tierAbove` is a total milestone+cost order, so consecutive strict-ascending (each present rung vs the last-seen present rung) implies the whole present sequence is ascending — verified across single-rung, deep-only, gap, peer-interleaved and peer-equal-rank cases.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-19)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1276 — intermodal conservation test exercises a VALID rail-road handoff (amends AC-4)
+`TestIntermodalTonnesConservation` was fixed via option 1 (a valid rail-road handoff) rather than option 2 (asserting below-min rejection): option 1 preserves the test's mass-conservation intent — it still asserts in == out + dwell for a VALID transfer — and mirrors `engine.rail`'s own conservation test surface. Option 2 would have kept only rail-road transfers and asserted sea-rail rejection, weakening the end-to-end valid-transfer conservation guard AC-4 exists to protect.

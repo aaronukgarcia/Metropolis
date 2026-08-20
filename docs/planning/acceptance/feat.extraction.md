@@ -94,3 +94,14 @@ The extraction-scale ladder itself (artisanal through industrial Parker-style, w
 - **For Bill/Aaron — GR#15 data file naming.** This file assumes `data/extraction.json` as the natural home for ladder/risk parameters (AC-12), following the existing convention (`data/deposits.json` proposed by `feat.resourcedeposits.md`, `data/errors.json`, `data/modes.json`). Not yet registered anywhere — flagging for confirmation before a developer creates it, so the path in AC-12/AC-17's checks matches whatever Bill actually registers.
 - **For Aaron — balance numbers (new ASM, pending BOW filing).** Tier count and every per-tier capex/yield/breakdown/variance number, plus the low-reserve warning threshold, are spec-qualitative (§5's "trivial," "serious," "don't be stingy"-adjacent language) rather than spec-numeric. Per the Balance Number Regime (placeholder + directional tests + delegated proposal + row-by-row approval + balance pass), this file's ACs check shape/direction/presence only (AC-3's monotonic ordering, AC-9's confidence-modulated variance, AC-10's tier-differentiated breakdown risk), never a specific numeric target. A developer building to this file should propose placeholder values and file the balance pass separately rather than treating any number in this document as spec.
 - **For the QA/independent audit pass.** AC-9's variance-by-confidence comparison and AC-3's monotonic-ordering check both involve statistical or data-load assertions rather than single-seed exact-equality checks (unlike AC-14's determinism claim, which is exact-equality and therefore not flaky by construction) — worth an independent sanity check on sample size/threshold choice once a developer implements them, same caution `feat.resourcedeposits.md`'s own escalation flags for its AC-5/AC-7 statistical fixtures.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-866 — stale master-plan line numbers (stale-citation fix)
+
+
+`feat.extraction.md` cites §32 as lines 447-460 for the deep-mine closure Detroit test; the text now sits at line 462 (the master plan was edited 2026-08-14 after this file was written). Section numbers remain valid — prefer section-plus-heading anchors.
+

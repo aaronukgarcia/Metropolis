@@ -87,3 +87,40 @@ The following are logged via `node claude-bow.js add assumption ...`; summarised
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-441** — Checkpoints = sibling package, not a 4th SaveKind in feat.saveux.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-442** — Superseded by ASM-470 (Recorder durability risk confirmed real).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-443** — Fork-tree pruning per abandoned BRANCH (not raw bundle count), ancestor-preserving.
+- **ASM-1351 (confirm-and-close).** SEC-176 fixed by reloading the prior active head into live participants on post-Load failure (best-effort, ErrRevertRestoreFailed never silent).
+- **ASM-1354 (confirm-and-close).** Name-existence checks are per-Manager serialised by m.mu; cross-process check-then-save TOCTOU is out of scope for the documented contract.
+- **ASM-1370 (confirm-and-close).** SEC-190 auto-prune failure is NON-FATAL (checkpoint already promoted); prune failure surfaced via new Manager.LastPruneError() accessor.
+- **ASM-1386 (confirm-and-close).** SEC-196 derived fork name bounded at maxSaveNameLen (255); a 255-byte fork is created but re-forking it rejects loudly pre-mutation.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-19)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF). All six fold from the FEAT-084 re-baseline roster (classified there under feat.saveux/feat.checkpoint; re-read attributes all six to feat.checkpoint — `internal/engine/checkpoint/`, `code.json: feat.checkpoint`).
+
+### ASM-1334 — on-disk lineage layout: manual saves + sidecar + root head pointer (amends AC-1/AC-3)
+Checkpoints are stored as `feat.saveux` manual saves under `manual/<id>/` plus a `checkpoint-meta.json` sidecar and a **single root-level `checkpoint-head.json`** active-head pointer. A revert updates exactly one file (the head pointer) and never mutates an abandoned branch (AC-3). A fourth `SaveKind` inside `feat.saveux` was deliberately **not** added (per prior BA assumption 3). Check: the layout reuses `SaveManual` (AC-1); if Bill later prefers checkpoints as a `SaveKind`, the layout and the `manualSubdir` drift test change.
+
+### ASM-1335 — revert = load-then-fork, never a bare re-point (amends AC-3/AC-4)
+`Revert(target)` restores target state via `feat.saveux` Load and then creates a **NEW** fork checkpoint with `ParentID=target` capturing that state, so the revert-produced branch D is a real whole-state bundle with a distinct branch identity (AC-3(b)/AC-4) — not a re-point that would leave D unloadable and force AC-3(b)/AC-4 rewording.
+
+### ASM-1388 — maxSaveNameLen duplicated across the module boundary (amends AC-1/AC-13)
+`feat.saveux` does not export `maxSaveNameLen` and GR#20 forbids the import surface, so this package duplicates the 255 constant (sanctioned weakness-pattern-#2) as `maxSaveNameLen`, derives `maxCheckpointNameLen` from it, and extends `TestMaxCheckpointNameLenTracksSaveManualLimit` to probe save's real limit. Check: if save's limit ever changes, that drift test fails rather than silently producing over-length fork names (AC-13).
+
+### ASM-1339 — dangling-parent rejection (amends AC-4)
+`CreateCheckpoint` rejects a non-empty `ParentID` that does not name an existing checkpoint with `ErrParentNotFound` — boundary validation for AC-4's explicit parentage (the ACs do not literally require it; the Destructive input-validation mandate and recurring checklist 3 do), preventing a dangling parent from silently corrupting the lineage tree.
+
+### ASM-1340 — deterministic fork naming (amends AC-13)
+Revert auto-names its new checkpoint `<target>.fork<N>` with a monotonic `forkSeq` persisted in `checkpoint-head.json`, incremented with saturating arithmetic (`foundation/num`, GR#16). This keeps the name deterministic (AC-13) and unique across repeated reverts to the same target — a fixed suffix would save-over the first fork.
+
+### ASM-1373 — bundleExists occupant semantics (amends AC-1/AC-3)
+`bundleExists` treats **any** filesystem entry at `manual/<id>` (file or dir) as an occupant (mirroring `isCheckpoint`'s strict `err == nil` style) — judged stricter than needed, so a stray non-directory file blocks a checkpoint create and no overwrite is ever risked. The drift test probes save's unexported `maxSaveNameLen` by binary-searching `SaveManual` behaviour (GR#20 forbids importing the constant).
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
+
+- **ASM-1336 (confirm-and-close).** Most-recently-abandoned retention uses `CreatedAtTick` as the deterministic recency proxy (no abandonment-time field exists) and leaf nodes as non-active branches; if recency should mean most-recently-ABANDONED a long-active-then-abandoned branch orders differently, but the retention shape holds either way — only membership changes.
+- **ASM-1337 (confirm-and-close).** Revert's participant-state restoration is one-way: a post-Load fork-creation failure leaves in-memory participants reverted while the on-disk tree and active head are unchanged; the package owns the tree, not the participants, so the AC-required tree consistency holds.
+- **ASM-1350 (confirm-and-close).** SEC-175 fixed by making Revert fork-name derivation collision-proof (advance the fork sequence past any name that already names a checkpoint) rather than reserving/rejecting the `A.forkN` pattern in `CreateCheckpoint` — over-broad rejection of legitimate names and the general derived-name-collides class are both avoided.
+- **ASM-1352 (confirm-and-close).** Revert into a root with no prior active head is unrecoverable under the SEC-176 reload strategy when a post-Load step fails — there is no prior checkpoint to reload from, so live state stays reverted to target while `CurrentID` reports empty and the original error is returned unwrapped; documented.
+- **ASM-1353 (confirm-and-close).** Windows reserved device names (CON/NUL/PRN/AUX/COM1-9/LPT1-9) and case-insensitive shard-name collision are not covered by `serialize.ValidateShardName` and are flagged out of this package's ownership — the checkpoint-level `isCheckpoint` existence check already catches case-insensitive re-creation, so SEC-174/175 are covered here.
+- **ASM-1355 (confirm-and-close).** MET-G3511/3512/3513 were added to the shared `data/errors.json` within the already-reserved G3500-G3599 feat.checkpoint range, satisfying GR#7's registry-sourced rule despite the ownership scope naming only `internal/engine/checkpoint/`; a wholesale errors.json stage is the only collision risk (BUG-030).
+- **ASM-1371 (confirm-and-close).** SEC-189 resolved by REJECTING over-long checkpoint names at create: `maxCheckpointNameLen` reserves the full fork-suffix budget (`.fork` + 19 int64 digits) so every created checkpoint is revertible at ANY fork sequence; conservative-safe direction, slightly tighter than necessary if `ForkSeq` is ever capped.
+- **ASM-1372 (confirm-and-close).** SEC-188 resolved with ONE broadened error code: `ErrCheckpointExists` renamed `ErrNameOccupied` (same MET-G3511) covering both checkpoint and same-named manual-save collisions — the caller only needs "name is taken"; a UI wanting to distinguish must consult `Lineage`/`isCheckpoint`.

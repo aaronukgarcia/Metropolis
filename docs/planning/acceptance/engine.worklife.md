@@ -117,3 +117,16 @@ A time-pattern model (CoreHours / Shift / AnyTime, data-driven), the per-tick de
 - **ASM-1162 (assumption — balance-number placeholder).** The Shift pattern is labelled 24x7 but `data/worklife.json` sets `daysPerWeek` to 5 (following the ~40h default-week policy); whether a shift role is truly 7-day or '24x7' is shorthand for 24-hour daily coverage is a data-placeholder question for Aaron's balance pass.
 - **ASM-1170 (assumption — balance-domain bound).** `validateEffect` bounds `WellbeingWeight >= 0` only (not <= 1); the upper bound is a balance-domain placeholder deferred to Aaron's balance pass/MOD-034 — direction (996 < default) holds, so AC-12 is not violated.
 - **ASM-1171 (assumption — balance-domain cross-field guarantee).** `validateEffect` enforces per-field bounds only, so AC-13's never-free-productivity guarantee is enforced structurally plus `data/worklife.json`, not at the runtime boundary — MOD-064 authorship + Aaron's balance pass own the cross-field check.
+
+- **ASM-956 (confirm-and-close).** Overwork (996) wellbeing hit routes through `engine.wellbeing`'s registered `WellbeingAPI`, mapping onto existing drivers (leisure-fit via the 168-hour budget, commute-time); a new overwork driver would be a Bill/Aaron call before dispatch.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1130 — error range G2900-G2999 claimed (amends error-range AC)
+
+
+`engine.worklife` claims MET-G2900..G2906 (registry range G2900-G2999). During build a concurrent `engine.spaceport` initially claimed the same block and moved itself to G3000-G3099, resolving the collision. Flags the BUG-008 class: per-module error subranges are claimed ad hoc and concurrent waves collide; a mechanical next-free-range allocator would prevent recurrence.
+

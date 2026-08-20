@@ -87,3 +87,42 @@ The `pharma_r_d_campus` catalogue row enriched into a distinct, typed, data-sour
 - **For the sibling BA (FEAT-052 / MOD-059 / MOD-041) — cross-module contract obligation (not mine to resolve).** AC-3's education-term shape (graduates vs research points vs both — ASM-698) and AC-4's graduate/research-demand shape must agree with MOD-041's `EducationAPI` and MOD-059's bid-resolution surface before either dispatches a junior; if MOD-059's BA writes a different bid-quality input, AC-3 needs a matching refresh.
 - **For Aaron (ASM-697) — balance numbers.** Jobs count, wages, utility draw, export volume, and the education-output-to-bid-quality curve shape are all spec-qualitative ("thousands of skilled jobs", "high-wage white collar", "low freight"). Per the Balance Number Regime (placeholder + directional tests + delegated proposal + row-by-row approval + balance pass), this file's ACs check direction/structure only, never a numeric target. The one place a number matters structurally — AC-3's "higher education output → strictly better bid" — is an ordering claim, not a magnitude.
 - **For the QA/independent audit pass.** AC-3's and AC-4's directional tests are assertions *about the ordering of two city states* (higher-vs-lower education output; won-campus employment scaling), not single-seed exact-equality checks — worth an independent sanity check that the developer's fixture actually exercises the lose branch of AC-3 (the same reachable-negative-branch discipline `engine.fdi.md` AC-3 mandates), since a fixture that only tests the win branch would pass while leaving the long bet's losing side unproven.
+
+- **ASM-699 (confirm-and-close).** Supply-chain firm spawning around the won pharma anchor routes through `engine.firms`' registered demand-injection path (pharmacampus→firms edge registered), not a pharma-local firm registry (GR#3).
+
+- **ASM-1177 (confirm-and-close).** Win() emits demand/exports before firm registration so a failed registration can leak them with no inverse on the education/trade edges — accepted as a defensive path only (real FirmsAPI cannot fail for positive staff); the AC-8 atomicity guarantee (zero firms on any failure) still holds.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-696 — pharma-campus ownership boundary (amends Scope/AC-5)
+
+
+`feat.pharmacampus` owns the FDI-anchor / education-synergy / employment / supply-chain / exports / catalogue wiring only; the pharma campus manufacture-side chain stage stays FEAT-052 `feat.commoditymarket` (ASM-488), which already registers it as a `ChemAPI` stage (AC-5). Re-specifying the manufacture-side stage here would duplicate the campus and break GR#3 single-source.
+
+
+### ASM-698 — education-output to FDI-bid term is BA-invented (amends AC-3)
+
+
+The education output that improves the pharma FDI bid (graduates vs research points vs both) and its effect shape on bid quality is BA-invented — §46 names only university/graduates as needs. If MOD-059's BA chooses a different term, AC-3's check must be refreshed.
+
+
+### ASM-700 — data/pharmacampus.json is the balance-parameter home (amends AC-2)
+
+
+`data/pharmacampus.json` is the assumed home for pharma-campus balance parameters, following the `data/commoditymarket.json` / `data/megafacilities.json` convention. Unregistered path; if a different file is registered, AC-2's grep path and `doc.go` reference must change to match.
+
+
+### ASM-1136 — supply-chain spawn via FirmsAPI.RegisterFirm (amends AC-5)
+
+
+Supply-chain firms spawn through the real `FirmsAPI.RegisterFirm` path (count = data base + employment divided by a data per-worker divisor), not a pharma-local registry. `JobsCharacter` is a three-value ordinal (white-collar / industrial / mixed) until MOD-059 names its own scale.
+
+
+### ASM-1175 — Win() rollback reuses FirmsAPI.Fail (amends AC-8)
+
+
+Win() rolls back partial anchor/supply-chain registrations through `FirmsAPI.Fail`, engine.firms' only firm-removal method today. On a freshly-registered stage firm this removes the firm from the registry but also increments `failedCount` and emits `EventFailed` (a rollback artifact). AC-8 still holds — no firm remains registered after a failed win; a dedicated `UnregisterFirm` on engine.firms would be the durable fix.
+

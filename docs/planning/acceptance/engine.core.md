@@ -63,4 +63,14 @@ The tick orchestrator: two-layer clock (calendar month ⇄ 30 daily ticks), fixe
 
 ## Escalations
 
+- **ASM-005** (P2, `internal/engine/core/clock.go`) — `secondsPerMonthAt1x` pacing constant is a named Go var (`DefaultSecondsPerMonthAt1x=480` + `WithSecondsPerMonthAt1x` override), satisfying "not a magic number sprinkled about" but NOT literal GR#15 data sourcing; deferral to the MOD-036 balance harness is a balance-regime placeholder (pacing tuning is owned by the M2 balance pass; debt FEAT-030).
 - **Resolved.** The draft-time escalation is moot: `MOD-004` (foundation.det) and `MOD-005` (module registry) are both `done`, and `MOD-012` itself closed 2026-08-09. No open dependencies remain.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-053 — advanceOneDailyTick deliberately omits its own checkNotCopied (amends the copy-guard AC)
+`advanceOneDailyTick`'s `e.mu.Lock()` (the 8th site) is deliberately left WITHOUT its own `checkNotCopied` call: it is unexported with exactly one call site (AdvanceTicks' loop, reached only after `seal()` has already rejected a copy), and `self` never changes for an Engine's lifetime, so a redundant check is provably unreachable-for-a-copy dead code on the hottest path (once per TICK, not once per AdvanceTicks call). If it ever gains a second call site that does not go through `seal()` first, the safety argument breaks silently — the function's doc comment states the contract so a future second caller is a deliberate, visible decision. Check: the doc comment on `advanceOneDailyTick` states the single-call-site safety argument.
+
+- **ASM-826 (confirm-and-close).** Spec-ref line fix: §9 Seasonality header is at line 226 (month-index content 228), not 224 (which is §8 traffic); the §3 range 115-136 is approximately correct.

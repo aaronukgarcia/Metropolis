@@ -80,3 +80,20 @@ The `RoadsAPI`: road-as-named-edge identity (class, lanes, speed limit, maintena
 - **Note for Bill — this file's AC-6/7/8 are a substantive rewrite, not a polish pass.** The superseded draft's checks for those three ACs were unsatisfiable without violating GR#20's import-direction ban (see Architecture ruling above); a junior building to the old text would have had to choose between failing the AC and breaking the architecture. Flagging explicitly since it's the kind of defect the Tester/Destructive pipeline is built to catch late and expensively — better caught here.
 - **Assumption flagged (ASM-217, logged against `engine.traffic.md` codejson but affects this file equally).** With `engine.roads` forbidden from calling `engine.traffic`, the full "road inspector" and "pre-approval projection" behavioural claims from §20/§51 are unverifiable by either package's own test suite — each proves its own half only. If Bill wants an integration-level composition test before a real consuming UI module exists, that needs a dispatch-brief decision on where such a test would live without violating the import direction (candidate: inside `engine.traffic`'s test files, since `traffic → roads` is already the legal direction, so a traffic-side test importing roads read-only to build a synthetic inspector view would not create a new dependency).
 - **Assumption flagged (inherited from the superseded draft, still open).** This item depends on `MOD-006` (foundation.data, done) and `MOD-017` (engine.world, S3) for terrain/cell footprint queries during widening (AC-5). No dependency on `engine.traffic` is needed or wanted per the architecture ruling above — this resolves what the superseded draft flagged as "a real circular-consumption question"; it is no longer circular, it is simply one-directional (`traffic → roads`), and this file's rewrite reflects that throughout.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1453 — AC-5 footprint geometry and occupancy signal (amends AC-5)
+
+
+Road footprint geometry is a coarse deterministic Bresenham centerline dilated by a square stamp of the class `widthCells`; "occupied cell" means `StructureRef != 0 OR Zoning != ZoningNone`. `engine.world`'s public API can set `Zoning` (`ApplyOwnershipCommand`) but cannot yet set `StructureRef` (engine.build's later field), so widening-purchase detection is read via the Zoning half today. Had a real lane-width geometry been specified it would have been used.
+
+
+### ASM-1454 — roadworks models only the "summer" window (amends AC-6/AC-17)
+
+
+Roadworks scheduling models only the "summer" window (`isSummerMonth`, calendar months 5-7); "night" is not modelled because the simulation tick is monthly (`engine.core` `Clock().Month()`) and "night" is a sub-day concept with no month-index representation. The omission is documented in `types.go`/`doc.go`; night phasing would require finer time granularity than this package's month index.
+

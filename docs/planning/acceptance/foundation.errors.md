@@ -66,3 +66,10 @@ The error registry, correlation-ID propagation, and structured NDJSON logging fo
 
 - **Resolved.** The BA's earlier escalation questioned whether GR#20/GR#21 exist, since they weren't visible in the copy of `CLAUDE.md` in context. Bill confirmed they exist (`CLAUDE.md` lines 51-52; enacted commit 26d6dbc; detail in `docs/golden-rules-detail.md` "Metropolis Amendments"): GR#20 Contract-First, Stub-Forever; GR#21 Red Determinism Gate Stops the Line. AC-13/AC-14 above now cite GR#21 where they enforce determinism. GR#20 (interface-only consumption / stub-forever) is not independently cited in this file beyond the universal `* -> foundation.errors` edge in code.json, since `foundation.errors` has no consumed-interface or Stub-implementation surface of its own — it is the thing every other module's GR#20 contract consumes, not a GR#20 consumer itself. No further action needed. (Same resolution applies to `int.protocol.md`, `int.serializer.md`, `int.solver.md`.)
 - **ASM-126 (confirm-and-close).** SEC-033 flood budget 500ms ≈19× measured 26.6ms; tripwire not SLA; re-verify at real scale.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-074 — errs.Logger copy-guard uses a plain sentinel (amends the copy-guard AC)
+`errs.Logger`'s copy-guard uses a plain sentinel error (not `errs.New`) to avoid self-referential recursion through the package sink; a rejected `Log()` call is pushed straight into the in-memory ring buffer so it is never silently lost. Check: a test asserts a copied `Logger`'s `Log()` is rejected AND the entry is still recorded in the ring buffer rather than dropped.

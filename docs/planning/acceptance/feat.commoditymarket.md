@@ -104,3 +104,14 @@ The always-on international commodity market (a data-sourced world-price board f
 - **For Aaron — balance numbers (new ASM, pending BOW filing).** Every world price, conversion ratio, processing cost, capex, and margin magnitude is spec-qualitative (§6's "sell cheap now … sell dear later") rather than spec-numeric. Per the Balance Number Regime (placeholder + directional tests + delegated proposal + row-by-row approval + balance pass), this file's ACs check shape/direction/presence only (AC-2 coverage, AC-3 external single price, AC-8 signed margin, AC-9 non-dominant decision), never a numeric target. This is the export-side sibling of ASM-321 (which covers MOD-063's import-side margin); it is a distinct set of numbers and gets its own ASM.
 - **For the QA/independent audit pass.** AC-8's signed-margin and AC-9's non-dominant-decision checks are assertions *about the placeholder data's shape* (they can only be satisfied by a data file whose placeholder values happen to make the decision real), not single-seed exact-equality checks — worth an independent sanity check that the placeholder data a developer lands actually keeps both directions of the decision reachable, since a careless placeholder edit could make refine always-win (or always-lose) and only this check would catch it.
 - **CC confirm-and-close (batch 2, folded).** ASM-491: data/commoditymarket.json is the assumed home for world prices/archetypes/ratios/capex (unregistered, convention-following). ASM-492: Parker-class mines excluded (extraction-ladder content, not this feature).
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-866 — stale master-plan line numbers (stale-citation fix)
+
+
+`feat.commoditymarket.md` cites master §50 as lines 656-658, but the crude-to-refinery-to-petrochemical chain and make-vs-buy text now sit at 658-660 (656-658 is §49 EV-transition). The master plan was edited 2026-08-14 after this file was written. Section numbers remain valid — prefer section-plus-heading anchors.
+

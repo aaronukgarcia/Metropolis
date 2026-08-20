@@ -64,3 +64,11 @@ Typed JSON loaders + schema validation + a debug-mode hot-reload hook for the §
 - **Confirm-and-close (ASM-575).** Tier coverage = each tier present ≥1 per tree.
 - **Confirm-and-close (ASM-576).** Category count derived from meta.categories (name bijection).
 - **Confirm-and-close (ASM-558).** NamingCorpus.Validate structural-only; 40-name floor stays a test assertion (not production Validate).
+- **ASM-654 (confirm-and-close).** Bearer-share sum tolerance is 1e-9 (fractional float64 shares cannot satisfy exact equality); real 1.1/0.9 bugs are still caught.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-653 — tax_instruments loader enforces exactly-six-closed (amends AC-1)
+AC-1 says exactly six instruments but its own check says a superset containing all six. Resolved to **exactly-six-closed**: every present ID must be one of the six AND all six must be present, so a stray seventh (e.g. `landValueTax`) or a missing one is rejected loudly rather than silently kept or dropped. Check: a test loads a fixture with a seventh ID and asserts rejection, and a fixture missing one of the six and asserts rejection; a future legitimate seventh instrument requires updating the accepted set or the loader rejects it.

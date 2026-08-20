@@ -60,3 +60,12 @@ The module registry: registration API (name, semver, spec_ref/feature-flag sourc
 ## Escalations
 
 - None at draft time. No spec/brief conflict found. Minor note for Bill: M0-ENG §3's rolling "phase timing strip: per-phase µs sparkline across last 60 ticks" could be read as requiring this registry to retain a 60-tick rolling window itself (AC-5 above), or as requiring only the latest value with the 60-tick history owned by `ui.screen.debug`/`engine.core` instead. AC-5 is written to accept either design (single-latest-value API, with an optional rolling-window API tested if the junior implements one) rather than mandating one — flagging so Bill can confirm which layer should own the history if a strict interpretation is preferred.
+- **ASM-874 (confirm-and-close).** Copy-guard + defensive-copy wrappers live in foundation/registry as a reusable generic (F100-F106 taken, F107+ free), not a new foundation/copyguard package.
+- **ASM-1019 (confirm-and-close).** MOD-079 CloneMap/CloneSlice are documented **shallow**, so nested reference-value aliasing after a clone is expected and not a defect; the exported `Bind` re-arm after a byte-copy is out of the accidental-copy threat model and is recorded as an observation only, not a rejection.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-069 — SetStatus copy-guard lives in setStatusLocked (amends the copy-guard AC)
+`SetStatus` (exported) never touches `r.mu` directly — it delegates entirely to `setStatusLocked` (unexported), the actual, sole `r.mu.Lock()` site. The pre-lock/post-lock `checkNotCopied` guard belongs on `setStatusLocked` rather than being duplicated on `SetStatus`, which has no lock-touching work of its own to protect. If a future refactor adds pre-lock work directly inside `SetStatus` before it calls `setStatusLocked`, that new code would run unguarded on a copy — add a guard directly in `SetStatus` at that point. Check: the guard sits at the single `mu.Lock()` site, and a test confirms a copied `Registry` is rejected there.

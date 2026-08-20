@@ -60,3 +60,6 @@ The F10 screen: save/load browser, settings, keymap/layout profiles, new game se
 - **ASM-524 (confirm-and-close).** Menu actions issued as protocol.DebugPayload with fixed Op strings (no dedicated Kinds yet).
 - **ASM-525 (confirm-and-close).** Save-slot fields derived from Header (CreatedAtTick/GameMonth/WorldSeed/DebugTouched) only.
 - **ASM-526 (confirm-and-close).** F10 subscribes to 'f10.session' view (schema v1, screen's own choice).
+- **ASM-602 (confirm-and-close).** SEC-079 nil-keymap/nil-grammar share ONE registry code MET-U607 distinguished by {argument} ctx, per the package one-code-per-failure-mode pattern.
+- **ASM-591 (confirm-and-close).** OpenLayoutEditor hands the wired editor a defensive copy of the selected profile, not the live internal pointer (SEC-066 class).
+- **ASM-1444 (confirm-and-close).** SEC-213 reuses ErrLayoutEditorUnavailable (MET-U606) for no-profile-selected with a generalised {cause} message rather than a second code.

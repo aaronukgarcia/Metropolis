@@ -105,3 +105,14 @@ The invariant-checker framework (hard assert in dev / registry-logged error in r
 - **ASM-568 (confirm-and-close).** Term funcs = niladic closures evaluated at Check time (not SnapshotProvider builder).
 - **ASM-569 (confirm-and-close).** Violation.Terms = one signed map (ins positive, outs negative).
 - **ASM-570 (confirm-and-close).** Zero-term registration allowed (degenerates to Closing−Opening==0).
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-825 — §14/§19 line refs point at headers (stale-citation fix)
+
+
+§14's invariant-checker bullet is line 261 (not 259) and §19's nothing-despawns item 3 is line 339 (not 337); both citations point at the section header or item 1 rather than the quoted content. Section numbers remain valid — re-verify line anchors after each master-plan regeneration, or prefer section-plus-heading anchors.
+

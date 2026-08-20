@@ -173,3 +173,6 @@ Logged via `node claude-bow.js add assumption` (see BOW):
 - Any change to the derivation *logic* itself (thresholds, sources, email-only matching) —
   this file documents the moved logic as-is; changing what it decides needs a fresh BOW
   item.
+- **ASM-582 (confirm-and-close).** ASM-226 fail-open path (deriveScanLimit returns ceiling on failed rev-list --count) has no automated regression test, judged non-blocking.
+- **ASM-624 (confirm-and-close).** deriveScanLimit repo commit count is the TRUNK branch count (matches what historyEmails actually scans), not HEAD count.
+- **ASM-625 (confirm-and-close).** The destructive-reject standard covers false-DENY of a legit repeat committer (availability), not only allow-bypasses.

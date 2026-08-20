@@ -72,3 +72,12 @@ The tax instrument panel: residential (council-tax bands by typology, per-distri
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-287** — Per-instrument bearer sets ACCEPTED (universal taxonomy would force fake categories).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-418** — VAT/import/corp/PAYE bearer-category sets are BA-invented (extends ASM-287 per-instrument precedent).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-423** — 'Blue 2' resolved as mechanic-shape citation only, no literal parity claim.
+- **ASM-596 (confirm-and-close).** councilTax/businessRates maxPercent 400 is a baseline-multiplier (100%=baseline), not an out-of-band absolute rate — documented in-file convention, not a numeric defect.
+- **ASM-978 (confirm-and-close).** Incidence shares renormalised to sum 1.0 within 1e-9, matching foundation/data file-validation tolerance.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-975 — zone-scoped property instrument located by discriminator (amends AC-2)
+AC-2 forbids instrument-name literals, so the zone-scoped property instrument cannot be keyed off its ID. Exactly one property-category instrument carries `zoneOverrides` in the shipped six, making the discriminator unambiguous. Check: the finder returns the single property instrument with a non-empty `zoneOverrides`, and a test asserts that uniqueness; a future data edit with two zone-override property instruments would make the finder ambiguous.

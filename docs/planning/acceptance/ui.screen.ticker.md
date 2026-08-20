@@ -62,3 +62,5 @@ The F9 screen: rolling ticker, monthly bulletin front page (read-on-pause), annu
 - **ASM-520 (confirm-and-close).** Ticker scroll implemented locally (no shared ui.widgets primitive).
 - **ASM-521 (confirm-and-close).** Drill-through = DrillTargets pair list (ui.dash OPEN).
 - **ASM-522 (confirm-and-close).** Archive search case-insensitive substring; empty query matches nothing.
+- **ASM-605 (confirm-and-close).** Archive replacement invalidates search to no-active-search (n/N cursor cannot survive a wholesale archive swap) rather than re-running the query.
+- **ASM-606 (confirm-and-close).** empty-after-trimming uses Unicode strings.TrimSpace, not an ASCII-space check, so exotic-whitespace eventIds never reach dash.DrillTarget.EntityID.

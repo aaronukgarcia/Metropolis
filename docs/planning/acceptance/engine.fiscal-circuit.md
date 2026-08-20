@@ -163,3 +163,5 @@ See the BOW: **ASM-1232 … ASM-1241**. Each is stated as a claim that could be 
 - The exact `engine.services` per-service pie sliders/staffing pools (MOD-033) — AC-13 composes over them, it does not own them.
 - EV adoption mechanics and fuel-duty erosion (`engine.tax` AC-9) — consumed, not re-derived.
 - The tune-the-numbers balance work itself — M2 Batch harness territory.
+
+- **ASM-1240 (confirm-and-close).** Education→skill→FDI compounding is a cross-module composition with a data-defined stage duration (never an instant unlock), flowing through engine.education, engine.census and engine.fdi. GR#25: the education→census and census→fdi edges are not in code.json — flag for Architect edge-registration before the composition is enforced.

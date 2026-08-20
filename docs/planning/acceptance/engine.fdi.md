@@ -64,3 +64,14 @@ Prospect generation from data (the eight §46 archetypes, each with a requiremen
 - **ASM-1194 (assumption — validation ceiling, not a balance figure).** `maxSupplyChainFirms = 100_000` is a spawn-count validation ceiling (~4 orders above shipped figures) bounding the Win-registration loop; a tighter game-sane ceiling is a balance decision in `data/pharmacampus.json`.
 - **ASM-1195 (assumption — int64 representability bound).** `maxJitter = MaxInt64/2` is the largest symmetric half-range whose draw span cannot overflow int64; the game-sane jitter magnitude is Aaron's balance pass on `data/pharmacampus.json`.
 - **ASM-1254 (CC — test-adapter scaffolding placeholder).** The AC-5/AC-6 integration tests' `realFirmsEdge` test adapter wraps the real `*firms.FirmsAPI` (which has no remove-without-insolvency method yet, composition-root work per SEC-140); its `RemoveFirm` is unwired and returns an error, so those tests are successful-win cases and never reach the rollback path. This fails loud (a future test that does reach rollback through the real adapter errors rather than silently corrupting the ledger) — a scaffolding placeholder, not a balance number. Confirmed and closed per FEAT-084.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1255 — Fail removed from the FirmsEdge seam (amends AC-6)
+The `FirmsEdge` seam drops `Fail` entirely rather than keeping it alongside `RemoveFirm`: the seam is consumed only by `Win`, which needs register + compensating-remove, and the section-32 closure (AC-6) is exercised directly against the real `FirmsAPI` by the composition root, not through the seam. Keeping `Fail` would leave a latent "reuse Fail as rollback" trap that SEC-140 closes. Check: `grep -n "Fail" internal/engine/fdi/*.go` finds no `Fail` method on the seam, and AC-6's closure test drives the real `FirmsAPI` directly.
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
+
+- **ASM-1198 (confirm-and-close).** `ResolveBid` rejects a negative education output with the existing `ErrEducationOutputUnavailable` (MET-G2502) rather than a new registry code — `data/errors.json` is a shared file outside this package's ownership, and MET-G2502 is the education-output error in the G2500-G2505 block the brief named; a dedicated observability code is a follow-up if ever wanted.

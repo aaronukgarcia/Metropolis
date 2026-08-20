@@ -94,3 +94,43 @@ A per-instance MaintenanceView on every placed structure (engineer-days/year sca
 - **Assumption logged — ASM-889 (package shape assumption).** ACs 1/4/9/11–15 assume the feature lands as a module `engine.maintenance` with a `MaintenanceAPI` inbound contract, pending ES-1's Bill ruling on module-vs-feature registration. Logged against `internal/engine/maintenance/`, `engine.maintenance`.
 - **Cross-module obligation (not mine to resolve).** AC-8's "city-wide demand" is the exact surface MOD-073 (`engine.staffing`) will consume, and AC-9's supply-injection interface is the surface MOD-073 will wire. If MOD-073's own BA writes a different demand/supply contract shape before dispatch, AC-8/AC-9 need a matching refresh — the two BAs must agree the boundary before either dispatches a junior.
 - **ASM-1279 (assumption — balance-domain bound).** SEC-155 rejects negative `SizePerMille` but leaves the positive domain unbounded (SafeMul saturation only); a positive upper bound is an arbitrary balance decision belonging to Aaron's balance pass.
+- **ASM-1292 (confirm-and-close).** SEC-162 closed by peeking the job list and settling finance before committing the backlog removal, keeping the single infallible mutation last.
+- **ASM-1293 (confirm-and-close).** SEC-163 rejects rate*SizePerMille int64 overflow (never sanitise structural data), not a documented max-per-mille clamp.
+- **ASM-1275 (confirm-and-close).** SEC-153 saturates the month clock and accrual carry via num.SatAdd (GR#16 conserved arithmetic), not rejects an overflowing AdvanceMonth.
+- **ASM-1278 (confirm-and-close).** SEC-154 rewrites repairDemandPerYear as base + base*age/lifetime (split SafeMul terms), not bounding LifetimeYears at load time.
+- **ASM-1281 (confirm-and-close).** nextJobID++ deliberately left raw (a uint64 ID counter outside the age/month/clock/demand/cost/backlog class); applied/remaining routed through SatAdd/SatSub.
+- **ASM-1294 (confirm-and-close).** EnqueueJob/AdvanceMonth job-cost aggregation saturates via SatAddChecked; per-job cost stored exactly — a different class from SEC-163.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1225 — crews resolve whole jobs only (amends AC-6)
+Job-list semantics (a pothole is fixed or not) and integer engineer-day conservation require indivisibility: a crew resolves **whole jobs only** — a job whose cost exceeds the remaining daily budget is skipped (not partially resolved), and the crew stops at the first unaffordable job in FIFO order. Partial resolution would force fractional engineer-days into the ledger and lose AC-6's exact-integer balance. Check: a test gives a crew a budget smaller than one job's cost and asserts that job is skipped whole (zero partial spend) and the budget is conserved to the integer.
+
+### ASM-1300 — SetFinance is dependency injection, not config (amends AC-10)
+`SetFinance` stores a raw `*finance.FinanceAPI` pointer that is **not** cloned: it wires a live shared collaborator whose whole purpose is to post `SettleOpex` into the same treasury the composition root holds, and cloning it would break the AC-10 settle-to-finance edge. It is classified as dependency injection, not the SEC-167 config-aliasing class (a config struct stored by value with a reference-typed field). Check: the doc comment on `SetFinance` states the DI rationale so a future SEC-167 sweep does not re-flag it as config aliasing.
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-19)
+
+> One-line confirmations folded from the FEAT-084 ASM disposition (class CC). All re-read against `internal/engine/maintenance/` / `engine.maintenance`.
+
+- **ASM-806 (confirm-and-close).** Maintenance-cluster AC files were re-keyed from feature to module registration: `feat.maintenance` → `engine.maintenance` (MOD-072), `feat.staffing` → `engine.staffing` (MOD-073), `feat.helicopters` → `engine.airunits` (MOD-074); headers updated to module key + new BOW code, AC bodies left untouched.
+- **ASM-889 (confirm-and-close).** Package-shape assumption confirmed: the feature landed as a **module** `engine.maintenance` with a `MaintenanceAPI` inbound contract — ES-1's module-vs-feature ruling resolved to module.
+- **ASM-936 (confirm-and-close).** Verified against `code.json`: `engine.maintenance` MaintenanceAPI, `engine.staffing` StaffingAPI, `engine.airunits` AirUnitsAPI are all registered — the stale "unregistered / no code.json entry" wording left in the re-keyed ES-1 and cross-check escalation bodies is superseded.
+- **ASM-1228 (confirm-and-close).** Error subrange **G3200-G3299** claimed for engine.maintenance (MET-G3200..G3206), the first free four-digit G block at build time (G000-G3199 all claimed earlier); the errs source-scan test flags any concurrent collision.
+- **ASM-1280 (confirm-and-close).** SEC-156 fix: `TotalBacklog` now returns `(int64, error)` and propagates `checkNotCopied`; the breaking signature change has an empty external blast radius (no out-of-package callers — the composition root does not wire MOD-072 yet).
+- **ASM-1301 (confirm-and-close).** The config-aliasing class has exactly **one** site in engine.maintenance: `Config.Classes` stored by value in `New`; `MaintenanceData.Classes` is rebuilt into a fresh map by `d.config()` and the API's `instances`/`backlog` maps are built fresh and never exposed.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1227 — nil-finance skips spend settlement (amends AC-10)
+
+
+When finance is not wired (nil), `RunCrewDay` still applies the crew day but skips the spend settlement entirely — there is no maintenance-local shadow ledger. This decouples the maintenance mechanic from OPEX wiring so the composition root can run maintenance before finance is wired; an unwired module neither fails every crew day nor silently tracks money locally (AC-10's false-pass risk).
+
+- **ASM-1226 (confirm-and-close).** Daily maintenance spend = `applied × crewCostPerEngineerDay + backlogAfter × contractorCostPerEngineerDay`; the contractor term is charged on the standing un-met remainder each day and does **not** itself reduce the backlog. AC-10 defers the contractor-rate economics and OPEX P&L placement to FEAT-094; this module only crosses spend into `finance.SettleOpex` (the registered `engine.maintenance → engine.finance` edge).
+

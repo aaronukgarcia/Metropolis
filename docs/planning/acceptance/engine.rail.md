@@ -61,3 +61,25 @@ Fleet/works accounting (stabling → depot → heavy works, scaled to fleet size
 - **For Ben/Bill — BUG-058 (this file's stake, filed as part of the four-instance comment 2026-08-11).** `engine.rail → engine.capexport` (or, failing that, a direct `engine.rail → engine.finance` edge) is missing despite §47's own text framing rolling-stock export contracts as "§36 in physical form" — literally the same mechanic MOD-049 (`engine.capexport`) already implements with a registered `FinanceAPI` edge. Building a second, parallel export-contract/ledger path inside `engine.rail` instead of waiting for the edge would be a GR#3 violation; I've scoped AC-6 to stop at the local-build discount (a real, checkable figure with no cross-module dependency) and left export revenue blocked. Recommend wiring `engine.rail → engine.capexport` specifically (not a bespoke finance edge), since capexport already owns the contract-curve/`ProjectionsAPI` machinery this revenue stream should share.
 - **For Ben/Bill — no registered consumer of `RailAPI` exists yet.** Flagged at the top of this file: neither `ui.screen.trade` nor any engine module currently has a registered inbound edge to `engine.rail`. This item's ACs are written to be consumer-agnostic (testable against `RailAPI` directly) so this doesn't block build, but it's worth confirming at S10 dispatch whether `ui.screen.trade` (or a new F5 extension) is meant to pick this up, since the player currently has no named screen path to see rail-industry state.
 - **For Aaron (ASM-311).** The fleet-size-to-works-capacity ratio used in AC-2's failure-mode test is a placeholder, data-driven figure — §47 mandates the *rule* ("unserviced fleets fail in traffic") but not the numeric ratio. Real figures (ideally grounded in a reference operator's stabling-diagram ratios, since the spec's own Sandwich/Kent-precedent style favours real-world grounding) are Aaron's call.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1267 — modal-cap drift test instead of a live freight import (amends AC-3)
+The GR#3 drift between `engine.rail`'s modal caps and `engine.freight`'s modal caps is closed with a `_test.go` drift test (`TestModalCapsAgreeWithFreight`) rather than a live import of `freight.ModalCap` — a live import would require constructing a full `*freight.FreightAPI` (`freight.LoadDefault` pulls in `engine.market` + `engine.logistics`), which the stub deliberately avoids via its self-contained `loadModalCaps` reader. The drift test is the tripwire that fails on any silent divergence (verified: it fails rail=0 vs freight=3000 when min parsing is dropped). Check: `grep -rn "TestModalCapsAgreeWithFreight" internal/engine/rail/*_test.go` matches, and the test fails when rail's caps disagree with freight's.
+
+### ASM-1028 — intermodal edge built stub-first (amends AC-3; MOD-060 was open, no package)
+When `feat.containerport` needed the intermodal handoff, `engine.rail` (MOD-060) was open with **no package**, so the edge was built stub-first: a minimal stub-for-baseline `internal/engine/rail` `RailAPI` exposing only `IntermodalTransfer` (this AC-3's tonnes conservation), consumed by `feat.containerport` through the `freight.RailIntermodal` dependency-inversion seam — mirroring how `engine.firms` implements `freight.FirmRegistrar`. No import cycle: rail imports freight, freight never imports rail. The full MOD-060 build (this file) replaces or expands that stub; AC-3's tonnes-conservation check runs against whichever implementation is live.
+
+### ASM-1270 — under current data every sea-involving handoff is rejected (documented stub limitation on AC-3)
+Under current data — **sea min 3000t, rail max 1000t, road max 25t** — every sea-involving intermodal handoff is rejected, because the stub models one handoff as one movement of each mode (AC-3), so a sea leg needs ≥3000t in a single movement that rail (1000t) or road (25t) cannot carry. This rejection is accepted as a **stub-level limitation**: if the full MOD-060 build allows a sea leg to split across multiple rail movements, the stub-level rejection is too strict — but that is the full build's modelling, out of scope for the stub. A test asserting a sea↔rail handoff *succeeds* at 3000t would fail today and must not be written until the full build lands.
+
+- **ASM-1268 (confirm-and-close).** The intermodal below-min floor is the LARGER of the two modes' per-movement minimums (both legs must meet their mode's floor); with `min >= 0` validated, that is `tonnes < max(minFrom, minTo)`.
+
+
+### ASM-1073 — intermodal modal cap is min(source,dest) max (amends AC-3/AC-13)
+
+
+The intermodal transfer point enforces the smaller of the source and destination modes' `maxTonnesPerMovement` from `data/freight.json` (road 25 / rail 1000 / sea 40000). Only MAX caps are enforced at the transfer point; sea's 3kt minimum is **not** enforced because a handoff is a leg, not the whole sea movement. Over-cap is rejected (AC-13 reject-don't-clamp), never clamped.
+

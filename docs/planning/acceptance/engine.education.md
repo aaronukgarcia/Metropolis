@@ -92,3 +92,37 @@ The full stage pipeline (nursery, primary, secondary, sixth form / technical col
 - **For Aaron (balance numbers, ASM candidate).** Per-stage funding-quality curve shapes, personality-drift magnitude per quality-unit per stage, research-points-per-graduate rate, and halls-capacity-to-teaching-capacity ratios are none of them spec-given magnitudes — §27 describes direction and mechanism only. ACs above check shape/direction/incrementality (per GR#15); actual figures are `data/education.json` (or equivalent) balance data pending M2 tuning, filed as an assumption per BA instructions if a junior needs a placeholder before Aaron rules: `node claude-bow.js add assumption "education drift/attainment/research-point magnitudes are placeholder until M2 balance pass" --priority P2 --code-path internal/engine/education --codejson engine.education --desc "Spec gives direction only (§27/§5.1); no numeric target exists for drift-per-quality-unit, attainment weighting, or research-points-per-graduate. Needed a number to write a compiling junior build; without Aaron's ruling the placeholder risks becoming de facto balance by inertia."`
 - **For Ben (dependency risk — resolved by closure).** This item depends on `MOD-018` (citizens), `MOD-027` (season), `MOD-033` (services) — all now `done`, so the real `CitizensAPI`/`SeasonAPI`/`ServicesAPI` shapes AC-3/AC-4/AC-6/AC-7 rely on are available; the earlier stub-first recommendation no longer applies.
 - **Assumption logged — ASM-1036 (P2, directional balance data).** `data/education.json` carries placeholder values for drift-per-quality-unit, research-points-per-graduate, halls capacity, dropout rate, and the fork/university/adult/U3A age gates (only primary 60mo and secondary 132mo are §27-stated); all are data-sourced balance placeholders pending Aaron's M2 balance ruling (GR#15).
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1118 — StageNone is a valid in-range stage index (amends AC-12)
+`validStage(s)` is `s < numStages`, which bounds-checks only the panic range `[numStages, 255]`. `StageNone` (0) is therefore a legal array index: `Enrolment(StageNone)` returns `enrolled[0]=0` (never panics) rather than `ErrStageNotRegistered`, while `StageQuality`/`StageCapacity`/`SetStageFunding` still reject `StageNone` because it is never registered as a service. This satisfies AC-12, which demands `ErrStageNotRegistered` only for out-of-range values `>= numStages`. Check: a test asserts `Enrolment(StageNone)` returns 0 (no panic) while `StageQuality(StageNone)` returns `ErrStageNotRegistered`.
+
+- **ASM-1079 (confirm-and-close).** `Stage` command/query parameters are caller-supplied and bounds-checked before indexing `enrolled[]`/`registered[]`; an out-of-range `Stage` returns AC-12's `ErrStageNotRegistered` rather than panicking with index-out-of-range.
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
+
+- **ASM-822 (confirm-and-close).** S9 acceptance Status lines are stale vs BOW: `MOD-018` (citizens), `MOD-027` (season) and `MOD-022` (finance) are done while the files still report them open, and `MOD-034`'s `ready` overstates state (still open with two open deps); BOW status is authoritative for dispatch signalling, not the acceptance-file Status lines.
+- **ASM-815 (confirm-and-close).** S9/S11 acceptance files cite master-plan line numbers that have drifted (systematic two-line shift; largest drift A5 Slow-Fuse cited at 1350 is actually at 1367); section numbers remain valid — re-verify anchors after each master-plan regeneration or prefer section-plus-heading anchors.
+- **ASM-1060 (confirm-and-close).** `ApplyFork`/`RemovePupil`/`SetStageFunding` validate caller-supplied values (fork counts, `FuseYears`, `DepartureReason`) at the write boundary rather than silently coercing or panicking.
+- **ASM-1072 (confirm-and-close).** `ApplyFork` rejects a negative or int64-overflowing branch count with the existing `ErrForkMismatch` (MET-G1803) — all three failure modes (negative/overflow/sum-mismatch) are one class: the fork command is inconsistent with the eligible secondary cohort; context fields carry the offending counts.
+- **ASM-1081 (confirm-and-close).** `SetStageFunding` validates `ProjectedConsequence.Series` values finite at the write boundary like `Level`/`FuseYears` — a NaN/Inf series would poison the attainment curve via the queued delta.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1071 — FuseYears strictly positive (amends SetStageFunding)
+
+
+`SetStageFunding` rejects a non-finite or non-positive `FuseYears` (<=0) — slightly stricter than `engine.projections`' `validateFuseYears` (rejects only negative/non-finite, allows 0). Education funding always lands years out per §27, so a zero-year fuse is nonsensical here; the brief specified >0.
+
+
+### ASM-841 — invariant-block ACs re-keyed off closed BUG-058 (amends AC-11; stale-citation fix)
+
+
+`engine.education` AC-11 (and `engine.social` AC-12, `engine.crime` AC-19) still cite BUG-058 as the live invariant blocker. BUG-058 closed 2026-08-13 (c36778b) and its successor BUG-067 (`RegisterStockWithTerms`) closed 2026-08-14; `engine.invariant` inbound is now populated by `engine.citizens`, `engine.finance` and `engine.traffic`, and supports `RegisterStockWithTerms`. The prose blocking reason is stale — the residual gap is purely the unregistered call edges education/social/crime-to-engine.invariant (plus crime-to-market/firms, social-to-crime), now governed by the c36778b collaborations gate rather than BUG-058.
+

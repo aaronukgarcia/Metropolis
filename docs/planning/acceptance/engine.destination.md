@@ -67,3 +67,14 @@ Two buildable destination archetypes (forest resort, mega-mall) and their named 
 - **BDI-synergy source edge unresolved (blocks part of AC-5).** §48 says the forest resort "wants your nature" (BDI synergy) but no module owns a registered BDI-query edge to `engine.destination` today, and BDI itself is owned by `engine.farming`/environment systems per §31 — outside this file's five-module scope to resolve. AC-5's check is therefore written against a documented fixture input rather than a named live edge; flagging for Bill/whichever BA owns `engine.farming`'s BDI export to confirm the right edge before this AC can be un-blocked in spirit (it is not formally BUG-058-blocked since no specific missing edge has been identified yet — this is an open question, not a confirmed gap).
 - **engine.build edge — deliberately not filed.** Every sibling buildable-archetype module has a registered `engine.build` edge; destination does not. I considered filing this as a BUG-058 finding but held back (see Out of scope) because no §48 sentence names the construction-queue mechanic as explicitly as the traffic/shopping/logistics cases — flagging for Bill's judgement on whether the sibling-pattern argument alone (used successfully for finding #9's PoliciesAPI case) is sufficient here too.
 - **ASM-326 (logged).** The regional-draw split/shared-machinery boundary between `engine.destination` and `engine.tourism` is this file's own architectural drawing, not spec-specified — see the assumption record.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-326 — regional-draw split is a BA-drawn boundary (amends AC-1/AC-2)
+
+
+The regional-draw split between the two archetypes (forest resort vs mega-mall) and their shared machinery is a BA-drawn architectural boundary, not spec-specified: `engine.destination` supplies portfolio-score inputs and `engine.tourism` computes/owns the draw number (MOD-057 already owns "portfolio score decomposed"); destination does **not** own a parallel scoring path, which would duplicate machinery and break GR#3.
+

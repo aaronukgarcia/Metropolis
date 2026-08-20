@@ -69,3 +69,7 @@ Widget-grid dashboard composition (tile types: bignum, gauge, sparkline chart, t
 - **ASM-545 (confirm-and-close).** Mini-map via widgets.Heatmap, alert-list via widgets.Border (no dedicated widgets).
 - **ASM-546 (confirm-and-close).** Layout-profile JSON carries top-level `name` for menu LoadLayoutProfile.
 - **ASM-280 (confirm-and-close).** MOD-038 shipped layout = F1 Overview right-rail only; F2/F4/F8 out of scope.
+- **ASM-627 (confirm-and-close).** SEC-063/064 fix extended to the full shallow-defensive-copy class (layout tiles slice + scalar spec accessors), not just the two named instances.
+- **ASM-628 (confirm-and-close).** Layout.clone is one-level deep; the public spec accessor deep-copies are the sole public mutation boundary.
+- **ASM-629 (confirm-and-close).** Temporary zz_destructive_probe_test.go deleted after evidence captured (evidence lives in BOW findings SEC-063/SEC-064, not git).
+- **ASM-862 (confirm-and-close).** This file's escalation reference to "ASM-221" is a re-keying collision (BOW ASM-221 is the unrelated engine.season assumption); the load-bearing drill-through finding was promoted to FEAT-042 (AARON APPROVED, open) and the canonical shape resolved as `dash.DrillTarget{ViewName, EntityID}` (ASM-538/ASM-630) — the stale dangling pointer is superseded, not an unresolved open question.

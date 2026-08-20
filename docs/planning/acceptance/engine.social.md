@@ -82,3 +82,39 @@ Per-category caseload generation (family support & child protection, homelessnes
 - **Assumption logged — ASM-1342 (P2, directional balance data).** `data/social.json`'s caseload-generation rates, hostel/foster/carers capacities, crisis cases-per-event, and the intervention-harm threshold are all placeholders pending the M2 balance pass (balance-number regime, GR#15); §40 gives mechanism and framing only, no magnitudes.
 - **Assumption logged — ASM-1364 (P2, balance-shaped model simplification).** Hostel and foster stays are modelled as one-month occupancy (capacity = per-month placements, released each new routing/placement month); §40 specifies no stay duration, so the one-month default is a balance-regime placeholder — a longer real stay length is an M2 balance concern, not a mechanism defect (SEC-178's release requirement holds regardless).
 - **Assumption logged — ASM-1382 (P1, finite-guard resource ceiling).** `maxCaseloadProposalsPerMonth=100000` is a SEC-195 resource ceiling bounding the per-month proposal count, not a player-felt balance number; the value is a placeholder sitting well above shipped `data/social.json` rates and below attack magnitudes, pending Aaron/M2 review.
+- **ASM-1398 (confirm-and-close).** SEC-201 capacity read-back saturates via num.ClampInt64FromFloat (MaxInt64 = effectively-unlimited beds), not rejects via num.SafeInt64.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1348 — rough sleeping is a symptom counter, not a fourth closure kind (amends AC-7/AC-11)
+Rough sleeping is a location-attributed symptom counter, **not** a fourth case-closure kind: AC-11's identity keeps exactly three closure terms (resolved/escalated/lost), and adding rough-sleeping as a closure would break it. A case that fails all three homelessness paths therefore stays **open**, and `RoughSleeping()` derives the current-stock count from those open cases (never a per-pass re-increment — SEC-177). Because hostel/foster capacity is per-month occupancy released each new routing/placement month (SEC-178), such an open case can still be placed by a later tick once capacity frees up. Check: a test asserts an open (unplaced) case remains open and is counted by `RoughSleeping()`, then is placed once per-month capacity frees, and that AC-11's three closure terms are unchanged by the rough-sleeping count.
+
+### ASM-1368 — month validation scoped to closure and escalation paths (amends AC-11)
+SEC-180's month validation is scoped to the closure and escalation paths only: `closeCaseLocked` and `EscalateCase` reject `month < OpenedMonth`, because a back-dated **close** (recorded at a month with `Opened=0`) is the identity-corrupting shape. The open paths (`AdvanceMonth`, `InjectCrisis`) carry no `OpenedMonth` to compare against, and the concurrency test opens months out of order by design, so no monotonic-month guard is imposed there — a back-dated open does not drive AC-11's conservation identity negative the way a back-dated close does. Check: a test asserts a back-dated close/escalation is rejected while an out-of-order open is accepted.
+
+- **ASM-1347 (confirm-and-close).** AC-9's fostering match/no-match is placed-vs-queued (capacity-gated via `engine.services`): a placement attempt either places or queues; there is no stochastic carer-match model because §40 gives no matching mechanic (a stochastic model would be a balance/design decision for Aaron).
+- **ASM-1385 (confirm-and-close).** A float64 product overflow to +Inf collapses `caseloadCount` to 0 (a silent under-count) rather than rejecting — outside SEC-195's resource-exhaustion class (no allocation/OOM) and unreachable from realistic wellbeing deltas or shipped data; documented, not re-fixed.
+- **ASM-1400 (confirm-and-close).** `stressMagnitude`'s `-delta` negation is NOT a SEC-200 sibling: IEEE-754 negation of a finite float never overflows, so the finite-input-to-+Inf class cannot occur there (only a non-finite `-Inf` delta would, which is wellbeing's input-validation concern, not social's derived-arithmetic class).
+
+
+### ASM-1367 — SEC-183 reorder is a defensive correctness guarantee (amends AC-8/AC-10)
+
+
+The SEC-183 reorder (projection submission before the funding write) is defensive: with both thresholds at 5 and social always filling the consequence description, projections can never currently reject a social funding submission. The reorder is a correctness guarantee for the drift case, not a currently-exercised path; the concrete `*projections.ProjectionsAPI` dependency (no interface seam) means the exact ordering cannot be unit-tested with a fake, so the drift test pins the threshold value and `TestRejectedCutLeavesFundingUnchanged` covers the no-partial-state property.
+
+
+### ASM-1369 — slow-fuse drift test pins both constants behaviourally (amends drift-test AC)
+
+
+`engine.projections`' `slowFuseThresholdYears` is unexported and social may not import it (GR#20), so a literal two-constant assertion is impossible from social's package. The drift test instead pins social's own constant to 5.0 AND verifies projections' gate rejects a just-above-5 decision and accepts an at-5 decision, so a drift in EITHER constant fails one assertion (verified both directions, weakness-pattern-2 rule 4).
+
+
+### ASM-1407 — append-only case ledger is conserved internal state (amends AC-11)
+
+
+The append-only case ledger (`a.cases`) grows unboundedly across sim months and is not bounded here because it is conserved internal state, not an input to a setter/command — outside the SEC-202 unbounded-slice-input class. Monthly growth is count-bounded by `maxCaseloadProposalsPerMonth` (SEC-195); cumulative growth is the conserved stock AC-11 tracks. Bounding the total ledger would corrupt the conserved-stock invariant, not close an input bound.
+
+- **ASM-1345 (confirm-and-close).** engine.social claims error range **G3600-G3699** (not a MET-E range: the E layer E000-E999 is exhausted, and G3300-G3599 were claimed by engine.comms/capexport/feat.checkpoint) under BUG-234's widening — the first free G block, verified against `data/errors.json` `ranges.reserved` AND `grep -rn MET-G36 internal/ cmd/` (no prior claimant).
+

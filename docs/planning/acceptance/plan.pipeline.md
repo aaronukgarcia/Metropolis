@@ -69,3 +69,10 @@ BOW code: FEAT-062
 ## Assumptions logged (process v1.7)
 
 - **ASM — "done" BOW status (not "path exists on disk") is the correct proxy for "this module is expected to be fully registry-consistent."** A module could theoretically have a path and working code while its BOW item is still `open` (mid-build); this file treats such a module as `not-yet-built` for Direction-A purposes even if partially correct, to avoid the audit second-guessing an in-flight pipeline stage. If this produces false "not yet built" suppressions in practice (a module that's actually finished but whose BOW item lags in status), that is a BOW hygiene gap, not an audit defect — logged so it isn't silently assumed away.
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
+
+- **ASM-852 (confirm-and-close).** Acceptance spec-ref line numbers are uniformly plus-two stale vs `METROPOLIS-MASTER-v2.1.md` (2026-08-14 front-matter gain); section numbers remain valid, only the line refs drifted — re-verify anchors after each regeneration or drop line numbers for section-plus-heading anchors.
+- **ASM-864 (confirm-and-close).** Acceptance-file status headers are stale vs BOW (diagrams/ticker/menu done, proj/build in_progress, dash active) and use non-BOW vocabulary (`active`/`draft-ahead`); BOW status is authoritative for dispatch signalling, headers are process hygiene not gates.
+- **ASM-859 (confirm-and-close).** BUG-058 resolved (2026-08-13, c36778b + MET-T025) supersedes the four UI files' live BUG-058 candidate escalations and the two no-gap assertions that checked only engine outbound calls and missed BOW-declared UI deps; escalation sections are stale, not live trackers.
+- **ASM-839 (confirm-and-close).** Master-plan line numbers drifted +2 after the 2026-08-14 edit; the seven audited acceptance files' spec line refs are stale (freight/rail/chemicals/fuel/tunnels/firms/fdi examples enumerated in the ASM) while section numbers remain valid — re-pointing is a docs pass, not a spec change.

@@ -96,3 +96,47 @@ The `refinery` + `petrochemical_works` catalogue rows enriched into distinct, ty
 - **For the sibling BA (FEAT-052 / MOD-063 / MOD-062) — cross-module contract obligation (not mine to resolve).** AC-3's make-vs-buy reuses MOD-063's import-at-margin surface and ASM-321's margin data; AC-5 registers against `ChemAPI`'s stage machinery; AC-6 feeds MOD-062's `FuelAPI`. If MOD-063's or MOD-062's BA lands a different surface shape before dispatch, AC-3/AC-5/AC-6 need a matching refresh — the same boundary-agreement discipline `feat.maintenance.md`'s AC-8/AC-9 escalation names for its own demand/supply edge.
 - **For Aaron (ASM-703) — balance numbers.** Refinery capex, throughput, jobs, utility draw, and the facility-level build-vs-import break-even point are spec-qualitative (§50's "major build", "top blight class", "make-vs-buy at its largest scale"). Per the Balance Number Regime, this file's ACs check direction/structure only (AC-3's bidirectionality, AC-5's chain conservation, AC-6's fuel-supply coupling), never a numeric target; the import-vs-refine *margin* is ASM-321's, not a new number this feature owns.
 - **For the QA/independent audit pass.** AC-3's make-vs-buy bidirectionality is an assertion *about the placeholder data's shape* (both directions reachable), not a single-seed exact-equality check — the same class `feat.commoditymarket.md` AC-9 flags. Worth an independent sanity check that the developer's placeholder data actually keeps both directions rational (a careless capex/margin edit could make build always-win or always-lose, and only AC-3 would catch it).
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1153 — refinery money/tonnage is int64 micropounds, not finance.Money (amends AC-11)
+AC-11 names `engine.finance`'s Money type, but code.json has no `engine.chemicals`/`feat.refinery` → `engine.finance` edge (GR#20), so the package uses plain int64 micro-pounds at finance's documented scale plus `foundation/num` saturating helpers, mirroring freight's `feat.containerport` costMicropounds. Check: the AC-11 type check asserts int64 micropounds + saturating arithmetic, not a `finance.Money` import; if the `engine.finance` edge is later registered, this AC switches to `finance.Money`.
+
+### ASM-928 — §33 line-range citation corrected (amends the header spec refs)
+The header cites §33 The Freight Harbour as lines 462-476; the master doc's §33 actually spans 464-478 (the section header is line 464 and the balance-of-trade arc is line 478). Minor range imprecision — the cited content still resolves.
+
+### ASM-1152 — error subrange G2600-G2699 claimed (amends AC-9)
+feat.refinery claims **G2600-G2699** (codes MET-G2600..G2606, module feat.refinery): G2300-G2399 was already taken by engine.news, G2400-G2499 by engine.accelerator, and G2500-G2599 by engine.fdi in uncommitted in-flight source when this feature landed, so G2600-G2699 is the first free block. Same registry-sourced guarantee (GR#7) as the AC-9 "new MET-E-range code" literal wording, which this supersedes.
+
+### ASM-1260 — StageInput upstream = registration order (amends AC-3/AC-5)
+`StageInput` resolves a stage's upstream as the stages registered **before** it — registration order *is* the chain topological order — because `ChemAPI` registers inputs/outputs as commodity maps with no stage→stage edges to cycle-detect; cyclic registration is rejected vacuously, and draws flow strictly backward (a stage can never draw from a downstream or peer stage). If registration order were NOT meant to encode chain order, the refinery→works chain could route backwards and AC-3's conservation model would need a different upstream definition.
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-19)
+
+> One-line confirmations folded from the FEAT-084 ASM disposition (class CC). All re-read against `internal/engine/chemicals/` / `feat.refinery`.
+
+- **ASM-1173 (confirm-and-close).** FEAT-102 negative-tonnage `RegisterStage` is classified as a **ChemAPI-stub robustness gap**, not a FEAT-102 acceptance-criteria break: negative output/demand is reachable only by direct `RegisterStage` misuse, and `LoadRefinery` validates every tonnage positive, so the shipped data path never produces negative tonnage.
+- **ASM-1287 (confirm-and-close).** SEC-160's test asserts Impact 1 (a copied `Refinery` `Wire*` returns `ErrRefineryCopied`, copy seams stay nil); Impact 2 (the lock wedge) is prevented by the same guard-before-lock ordering but not directly asserted — the `-race` suite and the documented lock-free-before-lock ordering are the backstop.
+- **ASM-1296 (confirm-and-close).** `HazmatRisk()` remains unguarded as a **documented pure-read exception**: it reads only `worldSeed` (immutable after `LoadRefinery`), its tick argument, and a package constant — no shared pointer/map/slice/mutex — so a copied `Refinery` returns the same value with no mutation channel. If `worldSeed` ever becomes mutable, the exception must be revisited.
+- **ASM-1308 (confirm-and-close).** `RegisterStage` deliberately does **not** port the loader's "at least one output" rule: a stage with no outputs (a sink/consumer) is a legitimate chain stage. `buildFacilityProfile`'s `len(Outputs)==0` check is a facility-level constraint (a refinery must produce), not a chain-stage tonnage domain.
+- **ASM-1313 (confirm-and-close).** Holding `buildMu` across the external `PermitGranted`/`RegisterLiability` callbacks does **not** reintroduce the lock-held-across-a-seam deadlock class: `buildMu` is acquired only by `Build`, and no `Refinery` read method (`Built`/`Facility`/`Facilities`/`Operate`) ever acquires it — a `buildMu` deadlock would require a seam recursively calling `Build()` on the same refinery, which already deadlocked pre-fix.
+
+- **ASM-702 (confirm-and-close).** `feat.refinery` owns the facility-catalogue enrichment plus make-vs-buy/fuel-upstream/chain-head/permit/decommission wiring only; the five-stage chain, pipeline, leak risk and import margin stay MOD-063 `engine.chemicals` (no re-specification, GR#3).
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-704 — data/refinery.json is the balance-parameter home (amends AC-2)
+
+
+`data/refinery.json` is the assumed home for refinery balance parameters, following the `data/commoditymarket.json` / `data/megafacilities.json` convention. Unregistered path; if a different file is registered, AC-2's grep path and `doc.go` reference must change to match.
+
+## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
+
+- **ASM-1156 (confirm-and-close).** MOD-063's import-at-margin data file does not exist yet, so ASM-321's margin figure is mirrored under `data/refinery.json`'s import block with a disclosure naming it consumed-not-owned (ASM-703), read through the `ChemAPI.ImportMargin` surface rather than a refinery-local price table.
+- **ASM-1157 (confirm-and-close).** With MOD-063 (`engine.chemicals`) open, `feat.refinery` builds a minimal `ChemAPI` chain stub (`RegisterStage`, `StageInput`/`StageOutput` tonnage conservation, `ImportMargin`/`ImportRefined`) in `chemapi.go` to register the refinery/petrochemical-works stages against and serve the import path; the five-stage chain, pipeline and leak-risk machinery remain MOD-063's.
+

@@ -95,3 +95,5 @@ Self-contained within `engine.citizens` (no new cross-module edges — GR#25): r
 - **Cross-module note (engine.comms, FEAT-084 fold).** `engine.comms`' AC-4 remote-work slice is sector-aware only; per-citizen personality refinement is deferred to the future traffic consumer (blocked on BUG-058). If personality modulation is required now, comms needs a citizens/personality input + an edge decision.
 - **Cross-module gap (engine.education, FEAT-084 ST).** `engine.education`'s AC-10 lists Deceased/Emigrated as sourced 'via citizens life-event stream', but only a manual `RemovePupil(id, reason, month)` exists — the citizens→education departure wiring is an integration assumption, not code (needs a BOW item).
 - **Confirm-and-close (ASM-181).** 10M-citizen budget uses spec's relative 10% regression + ≤2.5GB shard-memory (no invented absolute ms).
+
+- **Confirm-and-close (ASM-819).** Spec-ref line fix: A1/A2/A7 content sits at master-doc lines 1344 (R1), 1356 (R7) and 1363-1364/1369 — the header's 1354/1361-1362/1367 pointed at A6/A8/A5; section refs remain valid.

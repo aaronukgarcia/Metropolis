@@ -85,3 +85,14 @@ FEAT-056 is tagged `code.json:engine.policies` in the BOW, but its actual delive
 - **Reused, not re-litigated: ASM-283 (file location), ASM-284 (placeholder regime), ASM-287 (bearer-category pattern).** All three already carry lead rulings (ACCEPT) on `ASM-283`'s and `ASM-287`'s BOW items, and ASM-284 is Aaron-confirmed CLOSED. This file's ACs build on those rulings rather than re-opening them, per the memory note that new ASMs of an already-ruled class should cite the standing policy, not re-interview.
 - **Balance-number placeholder (folded, A2).** ASM-564: bearer-share pass-through directions are developer-chosen standard tax incidence (player-felt), not spec-derived.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-563** — Instrument category vocabulary (vat=consumption, paye=income, etc.) is descriptive tag, not behavioural.
+
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-652 — AC-1 casing contradiction resolved as-accepted (amends AC-1; SEC-090)
+
+
+AC-1 names the six IDs `vat, importDuties, corporationTax, paye, councilTax, businessRates` and, in the same sentence, demands they match `engine.roads`' lowercase-slug `buildingIDPattern` — an internal contradiction (four IDs are camelCase). Resolution: the loader accepts the six exact IDs as-authored and does not reject the file over the casing conflict; the six IDs are the canonical authoring, and the "lowercase-slug" wording in AC-1 is the drift (SEC-090). If lowercase-slug IDs were intended, the data file and any future `engine.tax` lookup keys would need renaming.
+

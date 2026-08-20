@@ -54,3 +54,4 @@ Logged via `node claude-bow.js add assumption`:
 ## Escalations
 
 - **ASM-755's direction is the safe one, but note it.** A permissions-denied *healthy* hook reads as `absent` (fail toward warning, never toward a false "protected"). No action needed — flagged only so a future reader understands the deliberate asymmetry and does not "fix" the read to report `healthy` for an unreadable file.
+- **ASM-755 (confirm-and-close).** verify() present-but-unreadable maps to absent — documented from source reading only (no fixture); direction is deliberately fail-safe.

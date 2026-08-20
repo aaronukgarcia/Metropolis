@@ -101,3 +101,10 @@ The four tiers, each as a backend behind an existing seam: a **Blob-backed `Stat
 - **Assumption logged — ASM-801 (A9 threshold single source).** The citizen-shard migration trigger consumes `int.solver`'s `ExceedsLocalCPUCeiling` / `FitsGPUEnvelope` helpers as the single source of A9 thresholds, never re-hardcoding 20M/30M. Logged against `cloud/`, `cloud.azure`.
 - **Assumption logged — ASM-804 (operational thresholds are placeholders).** Timeout/retry budgets/rate limits/queue depths and the save-size binary threshold live as placeholders in `data/cloud.json` pending Aaron's balance pass. Logged against `cloud/`, `cloud.azure`.
 - **Cross-module obligation (not mine to resolve).** AC-8's bit-identical invariant is worded to match `cloud.gpu`'s AC-6; if `cloud.gpu`'s BA (or a later freeze review) changes the determinism wording, AC-8 should be re-synced so the two cloud backends read one consistent contract against the same `int.solver` gate.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-19)
+
+> Substantive amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-922 — determinism wording kept in sync with cloud.gpu (confirms AC-8's cross-module obligation)
+Audit dedup check confirmed: `cloud.gpu` AC-6 and this file's AC-8 encode the **same bit-identical-to-CPU invariant** against `int.solver`, and both files carry near-identical operational-number-regime boilerplate. This is an intentional shared contract, and the wording is currently in sync (both require `bytes.Equal` against the CPU payload, both are auto-P0 under GR#21, both ban a "returns something" false-pass). The standing cross-module obligation in the Escalations section remains the enforcement mechanism: if `cloud.gpu`'s determinism wording changes, AC-8 must be re-synced so both cloud backends read one consistent contract against the same `int.solver` gate.

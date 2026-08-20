@@ -68,3 +68,4 @@ A PASS on an item requires **all** Standard gates above AND every AC in the item
   exclusion), lead ruling 2026-08-09. Example: `internal/ui/screens/map/map_test.go`
   imports `internal/engine/stub` for fixture JSON; `internal/ui/screens/map/screen.go`
   and its non-test siblings do not and must not.
+- **Cite the master spec by SECTION NUMBER, not line number** (`docs/METROPOLIS-MASTER-v2.1.md`). The master doc is amended in place and its line numbers drift (~2 lines in the 2026-08-11 pass alone), so line-number citations in acceptance files go stale and silently point at the wrong heading. Cite `§N` (section number) as the stable reference; include a line number only as an optional, best-effort hint. A BA sweep re-anchors stale line cites via `grep` on the section heading, never by trusting the old number. (Ratified 2026-08-18 per ASM-832.)

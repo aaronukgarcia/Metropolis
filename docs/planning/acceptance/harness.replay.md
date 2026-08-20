@@ -90,6 +90,8 @@ Recording engine command/event/delta streams to `fixtures/*.ndjson.gz` via `int.
 
 ## SEC-040 — `gen/main.go`'s bare `fmt.Errorf` (GR#7 exemption, P3)
 
+> **RESOLVED (ASM-855 fold, 2026-08-20).** SEC-040 is `done` — closed 2026-08-13 via Destructive ACCEPT (attacker Vex): the `//go:build ignore` tag was confirmed correctly placed and syntactically valid, the file confirmed never imported anywhere, the doc comment's CLAUDE.md cross-reference confirmed accurate, and **no `fmt.Errorf` was touched** (option (a), documented exemption). The AC-18/AC-19 text below is preserved for provenance but is no longer actionable; BOW MOD-013 is `done` (closed 2026-08-10).
+
 **Finding:** `node claude-bow.js show SEC-040`. `internal/harness/replay/gen/main.go` — a `//go:build ignore` fixture-regeneration tool, excluded from the normal build, run only by hand via `go run` — constructs every error it returns via bare `fmt.Errorf`, never `errs.New`/the `MET-` registry. Confirmed current as read 2026-08-12: all nine sites still bare `fmt.Errorf` at the cited lines (52, 111, 114, 119, 122, 125, 148, 159, 168), no exemption comment or ASM- item anywhere in the file (lines 1–16's header doc explains the `//go:build ignore` exclusion but says nothing about GR#7). Not blocking — dev-only tool, errors only ever reach a developer's terminal — the finding itself offers two acceptable fixes; this item's AC requires only one of them, not both.
 
 - **AC-18 (either/or — pick one).** Either:

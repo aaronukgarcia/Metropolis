@@ -105,3 +105,19 @@ The accelerator's facility-specific mechanics: a massive electricity + water dra
 - **For Bill — ES-4: the BOW desc's "(MOD-062)" pointer is imprecise.** `engine.fuel` (MOD-062) is vehicle fuel/EV charging, not facility electricity/water. The accelerator's draw routes through `engine.consumption`'s `UtilityAPI` (AC-4), with `engine.fuel.md` AC-5 as the grid-coupling *precedent*. If Bill intended the accelerator to also interact with `engine.fuel` (e.g. via the power network's fuel-sourced generation), that is a distinct edge needing its own registration — not assumed here. Logged ASM-714.
 - **For Bill/Aaron — GR#15 data-file naming.** This file assumes `data/accelerator.json` for draw/multiplier/spillover/prestige/threshold (AC-3/AC-5/AC-7/AC-8/AC-9/AC-10/AC-18), following the `data/*.json` convention and the sibling `data/spaceport.json`/`data/megafacilities.json` proposals. Not registered anywhere — flagging for confirmation.
 - **For Aaron — balance numbers (standing regime, no new ASM).** Every figure is spec-qualitative (§MP's "2B"/"research rate ××" are placeholders). ACs check shape/direction/presence only, never a target. A developer should propose placeholders in `data/accelerator.json` and file the balance pass separately.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-1181 — the wired ExpertGate threshold is intentionally not cross-validated (amends AC-2)
+The wired `ExpertGate` threshold is intentionally not cross-validated against `cfg.ExpertGateThreshold`: the accelerator consumes the gate verdict and does not own the threshold (the stub-forever FEAT-055 pattern). `cfg.ExpertGateThreshold` is a data-file mirror used only for the `ErrExpertGateUnmet` detail and the `ExpertGateThreshold` accessor. The two values could drift, but no drift test is possible while the real FEAT-055 gate is unbuilt. Check: the AC-2 test asserts the accelerator reads the gate verdict it is handed and does not re-derive or re-validate the threshold; a drift test is deferred until the FEAT-055 gate lands.
+
+- **ASM-712 (confirm-and-close).** The accelerator's research-spillover-into-health routes through `engine.wellbeing`'s registered surface; `engine.health` is not a registered module, so no unregistered edge is invented.
+
+
+### ASM-1167 — FDI-seam failure orphans decommission liability (amends AC-13)
+
+
+An `engine.fdi` seam error during `Build` is a realistic AC-13 rejection path; the decommission liability accrued before the FDI draw is orphaned partial state if that draw fails (Destructive-MOD077 attack assumption). AC-13's no-partial-state guarantee covers the facility record / draw / research-health-FDI spillover; the already-accrued liability posting is the residual to reason about at the composition root.
+
