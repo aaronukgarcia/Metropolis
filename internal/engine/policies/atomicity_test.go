@@ -205,14 +205,14 @@ func TestInputValidationErrorCodes(t *testing.T) {
 		a := testAPI(t)
 		a.currentMonth = 5
 		_, err := a.AdvanceMonth(3)
-		assertCode(t, err, ErrUnknownScope)
+		assertCode(t, err, ErrMonthRegression)
 	})
 
 	t.Run("checkpoint precedes current month", func(t *testing.T) {
 		a := testAPI(t)
 		a.currentMonth = 5
 		_, err := a.Checkpoint(3)
-		assertCode(t, err, ErrUnknownScope)
+		assertCode(t, err, ErrCheckpointPrecedes)
 	})
 
 	t.Run("inverted preview range", func(t *testing.T) {

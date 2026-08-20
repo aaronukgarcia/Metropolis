@@ -31,32 +31,20 @@ func (a *PoliciesAPI) ResolveScope(policyID PolicyID, scope Scope) (ScopeResolut
 	if err != nil {
 		return ScopeResolution{}, err
 	}
-	if !scope.valid() {
-		return ScopeResolution{}, errs.New(ErrUnknownScope, a.correlationID, map[string]any{"scope": scope})
-	}
-	if def.Scope != scope.Kind {
-		return ScopeResolution{}, errs.New(ErrScopeMismatch, a.correlationID, map[string]any{
-			"policy": string(policyID), "declared": string(def.Scope), "given": string(scope.Kind),
-		})
+	// The single scope contract (GR#3): ResolveScope, Enact and PreviewImpact
+	// all validate through validateScopeLocked — no inline duplicate here.
+	if err := a.validateScopeLocked(def, scope); err != nil {
+		return ScopeResolution{}, err
 	}
 	switch scope.Kind {
 	case ScopeCitywide:
 		return ScopeResolution{Kind: ScopeCitywide, Citywide: true}, nil
 	case ScopeDistrict:
-		d, ok := a.districts[scope.District]
-		if !ok {
-			return ScopeResolution{}, errs.New(ErrUnknownScope, a.correlationID, map[string]any{
-				"scope": string(ScopeDistrict), "district": string(scope.District),
-			})
-		}
+		// validateScopeLocked guaranteed the district exists under this RLock.
+		d := a.districts[scope.District]
 		return ScopeResolution{Kind: ScopeDistrict, District: scope.District, Cells: copyCells(d.cells)}, nil
 	case ScopeRoad:
-		r, ok := a.roads[scope.Road]
-		if !ok {
-			return ScopeResolution{}, errs.New(ErrUnknownScope, a.correlationID, map[string]any{
-				"scope": string(ScopeRoad), "road": string(scope.Road),
-			})
-		}
+		r := a.roads[scope.Road]
 		return ScopeResolution{Kind: ScopeRoad, Road: scope.Road, Edges: copyEdges(r.edges)}, nil
 	default:
 		return ScopeResolution{}, errs.New(ErrUnknownScope, a.correlationID, map[string]any{"scope": scope})
