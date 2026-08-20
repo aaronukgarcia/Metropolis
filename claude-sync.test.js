@@ -14,7 +14,7 @@
  * could collide with a live window's).
  *
  * Covers, per docs/planning/acceptance/tool.syncmsg.md:
- *   AC-1  schema idempotency + cursor seeded with exactly 3 rows
+ *   AC-1  schema idempotency + cursor seeded with exactly 4 rows (one per NAMES entry)
  *   AC-2  message requires an active permit; from_name mandatory, never NULL
  *   AC-3  broadcast (--to omitted) vs directed (--to Bev) to_name switch
  *   AC-4  unknown --to rejected, no partial write, exact reused error string
@@ -149,7 +149,7 @@ test.beforeEach(async () => {
 
 // ── AC-1: schema idempotency ────────────────────────────────────────────────
 
-test('AC-1: ensureSchema is idempotent and seeds exactly 3 read-cursor rows', async () => {
+test('AC-1: ensureSchema is idempotent and seeds exactly 4 read-cursor rows', async () => {
   const AC1_DB = `${TEST_DB}_ac1`;
   const boot = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
   await boot.query(`DROP DATABASE IF EXISTS \`${AC1_DB}\``);
@@ -174,14 +174,14 @@ test('AC-1: ensureSchema is idempotent and seeds exactly 3 read-cursor rows', as
 
   const check = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: AC1_DB });
   const [[row1]] = await check.query('SELECT COUNT(*) AS n FROM sync_read_cursor');
-  assert.equal(row1.n, 3, 'sync_read_cursor must have exactly 3 rows immediately after first ensureSchema run');
+  assert.equal(row1.n, 4, 'sync_read_cursor must have exactly 4 rows (one per NAMES entry) immediately after first ensureSchema run');
 
   const second = runInit();
   assert.equal(second.status, 0, `second init (already-migrated DB) should also exit 0, no duplicate-table error: ${second.stderr}`);
   const [[row2]] = await check.query('SELECT COUNT(*) AS n FROM sync_read_cursor');
-  assert.equal(row2.n, 3, 'a second ensureSchema run must not change the row count (false-pass guard: not just "did not crash")');
+  assert.equal(row2.n, 4, 'a second ensureSchema run must not change the row count (false-pass guard: not just "did not crash")');
   const [[permitsRow]] = await check.query('SELECT COUNT(*) AS n FROM sync_permits');
-  assert.equal(permitsRow.n, 3, 'sync_permits row count also unchanged by the second run');
+  assert.equal(permitsRow.n, 4, 'sync_permits row count also unchanged by the second run');
 
   await check.end();
   const drop = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
@@ -239,7 +239,7 @@ test('AC-4: unknown --to target rejected, no partial write, exact reused string'
   const [[before]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
   const res = run(['message', 'hi', '--to', 'Nobody'], sid);
   assert.notEqual(res.status, 0);
-  assert.match(res.stderr, /Unknown slot name "Nobody"\. Valid: Bill, Ben, Bev/);
+  assert.match(res.stderr, /Unknown slot name "Nobody"\. Valid: Bill, Ben, Bev, Bro/);
   const [[after]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
   assert.equal(after.n, before.n);
 });
@@ -838,7 +838,7 @@ test('Sanity: normal usage is unaffected — `--to Bev` and `--body-file <path>`
 
 test('NAMES no longer contains Bob; RETIRED lists exactly Bob', () => {
   const sync = require('./claude-sync.js');
-  assert.deepEqual(sync.NAMES, ['Bill', 'Ben', 'Bev'], 'NAMES must be exactly the current three slots');
+  assert.deepEqual(sync.NAMES, ['Bill', 'Ben', 'Bev', 'Bro'], 'NAMES must be exactly the current four slots (Bro added 2026-08-20, Aaron-directed)');
   assert.ok(!sync.NAMES.includes('Bob'), 'Bob must not be a checkin-able slot any more');
   assert.deepEqual(sync.RETIRED, ['Bob']);
   assert.ok(sync.isRetired('bob'), 'isRetired must be case-insensitive');
@@ -958,7 +958,7 @@ test('ensureSchema seeds rows only for current NAMES — Bob is never seeded on 
   await sync.ensureSchema(check);
   const [rows] = await check.query('SELECT name FROM sync_permits ORDER BY name');
   const names = rows.map(r => r.name);
-  assert.deepEqual(names.slice().sort(), ['Ben', 'Bev', 'Bill'], 'seeding must create exactly the current NAMES');
+  assert.deepEqual(names.slice().sort(), ['Ben', 'Bev', 'Bill', 'Bro'], 'seeding must create exactly the current NAMES');
   assert.ok(!names.includes('Bob'), 'Bob must never be (re)seeded by ensureSchema on a fresh DB');
 
   await check.end();
