@@ -522,6 +522,9 @@ func (a *AirUnitsAPI) RoleEffect(typ UnitType) (RoleEffect, error) {
 
 // PoliceEffect returns the police chopper's coverage-radius extension (AC-8).
 func (a *AirUnitsAPI) PoliceEffect() (int64, error) {
+	if err := a.checkNotCopied("PoliceEffect"); err != nil {
+		return 0, err
+	}
 	re, err := a.RoleEffect(UnitPolice)
 	if err != nil {
 		return 0, err
@@ -531,6 +534,9 @@ func (a *AirUnitsAPI) PoliceEffect() (int64, error) {
 
 // FireEffect returns the fire chopper's remote/blaze reach bonus (AC-8).
 func (a *AirUnitsAPI) FireEffect() (int64, error) {
+	if err := a.checkNotCopied("FireEffect"); err != nil {
+		return 0, err
+	}
 	re, err := a.RoleEffect(UnitFire)
 	if err != nil {
 		return 0, err
@@ -541,6 +547,9 @@ func (a *AirUnitsAPI) FireEffect() (int64, error) {
 // AmbulanceEffect returns the air ambulance's hospital-landing-time reduction,
 // in simulation-minutes (AC-8).
 func (a *AirUnitsAPI) AmbulanceEffect() (int64, error) {
+	if err := a.checkNotCopied("AmbulanceEffect"); err != nil {
+		return 0, err
+	}
 	re, err := a.RoleEffect(UnitAmbulance)
 	if err != nil {
 		return 0, err
@@ -551,6 +560,9 @@ func (a *AirUnitsAPI) AmbulanceEffect() (int64, error) {
 // VIPEffect returns the VIP chopper's commercial revenue per month, in
 // micro-pounds (AC-8's non-emergency benefit).
 func (a *AirUnitsAPI) VIPEffect() (int64, error) {
+	if err := a.checkNotCopied("VIPEffect"); err != nil {
+		return 0, err
+	}
 	re, err := a.RoleEffect(UnitVIP)
 	if err != nil {
 		return 0, err
