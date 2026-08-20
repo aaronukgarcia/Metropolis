@@ -197,6 +197,28 @@ function loadAcceptanceDocs() {
   return { byName, byBowCode };
 }
 
+// hasAcceptance decision (ASM-802). A module reaches the BA-story gate if ANY of
+// the documented acceptance-doc naming routes resolves to an existing file:
+//   (a) module key — <module.key>.md (engine.citizens.md, tool.codebaseviz.md,
+//       ui.screen.map.md, ... — any layer prefix, not just engine.);
+//   (b) feature key — feat.<stem>.md, where stem is the module key's name segment
+//       after the layer prefix (engine.maintenance ↔ feat.maintenance.md,
+//       engine.staffing ↔ feat.staffing.md). This is the route that makes
+//       feat.-prefixed acceptance docs detectable at all;
+//   (c) BOW code filename — <BOW code>.md (BUG-011.md, MOD-074.md);
+//   (c') BOW code header-declared — the doc's opening lines declare
+//       "BOW code: <code>" (covers files whose feature name differs from the
+//       module name — the old feat.helicopters.md declared MOD-074, the BOW code
+//       of engine.airunits, so engine.airunits is still found).
+// Pure function, deterministic, unit-tested in tools/codebase-viz/generate.test.js.
+function hasAcceptanceForModule(moduleKey, bowRec, acceptance) {
+  const nameStem = moduleKey.split('.')[1] || '';
+  return acceptance.byName.has(moduleKey) ||                                // (a) module key (any prefix)
+    (nameStem !== '' && acceptance.byName.has('feat.' + nameStem)) ||       // (b) feature key
+    (bowRec !== null && acceptance.byName.has(bowRec.code)) ||              // (c) BOW code (filename)
+    (bowRec !== null && acceptance.byBowCode.has(bowRec.code));             // (c') BOW code (header-declared)
+}
+
 // Shape helpers for the code.json consumers. code.json is generated from the
 // master plan but is treated as untrusted input: syntactically-valid JSON with
 // the wrong shape must degrade (WARN + continue) exactly like malformed JSON,
@@ -298,18 +320,12 @@ function main() {
     const codeLines = codeFiles.reduce((s, f) => s + (lineCounts.get(f) || 0), 0);
     const goLines = goFiles.reduce((s, f) => s + (lineCounts.get(f) || 0), 0);
 
-    // BA-story gate (ASM-802): resolve the module's acceptance doc via all three
-    // naming routes — (a) <module.key>.md, (b) feat.<name>.md (feature key; name
-    // is the module key with its layer prefix stripped), (c) <BOW code>.md — plus
-    // the header-declared BOW code, which covers files re-keyed from a feature key
-    // to a module (feat.helicopters.md declares BOW code MOD-074 = engine.airunits).
+    // BA-story gate (ASM-802): resolve the module's acceptance doc via all four
+    // documented naming routes (module key, feat. feature key, BOW-code filename,
+    // header-declared BOW code). Extracted to hasAcceptanceForModule() so the
+    // decision is a pure, unit-tested function.
     const bowRec = bow[m.key] || null;
-    const nameStem = m.key.split('.')[1] || '';
-    const hasAcceptance =
-      acceptance.byName.has(m.key) ||                                     // (a) module key
-      (nameStem !== '' && acceptance.byName.has('feat.' + nameStem)) ||   // (b) feature key
-      (bowRec !== null && acceptance.byName.has(bowRec.code)) ||          // (c) BOW code (filename)
-      (bowRec !== null && acceptance.byBowCode.has(bowRec.code));         // (c') BOW code (header-declared)
+    const hasAcceptance = hasAcceptanceForModule(m.key, bowRec, acceptance);
 
     // go-test failure across every package under this module's path.
     let goTestFail = false;
@@ -1032,4 +1048,8 @@ initGraphInteractions();
 </html>
 `;
 
-main();
+module.exports = { hasAcceptanceForModule };
+
+if (require.main === module) {
+  main();
+}
