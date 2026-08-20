@@ -20,13 +20,24 @@
  *   AC-4  unknown --to rejected, no partial write, exact reused error string
  *   AC-5  argv parser actually consumes --to's value (no body corruption)
  *   AC-6  --body-file byte-identical read; inline+--body-file mutually excl.
- *   AC-7  checkin delivers unread + advances cursor (DB-verified, not just stdout)
- *   AC-8  offline-at-send-time identity still gets delivery on next checkin,
- *         even from a different window/session id
- *   AC-9  sender's own message never re-surfaces to the sender; recipient still sees it
+ *   AC-7  FEAT-107 delivery split: checkin shows an UNREAD COUNT only (never
+ *         message bodies) and does NOT advance the cursor; `read` is the sole
+ *         delivering + cursor-advancing path (DB-verified, not just stdout).
+ *         Includes an explicit false-pass guard (body absent from checkin
+ *         stdout AND a subsequent `read` still delivers it) — see FEAT-107's
+ *         root cause: checkin's own stdout is routinely piped/redirected, and
+ *         when checkin both delivered AND advanced the cursor, that silently
+ *         destroyed nine unread messages on 2026-08-20.
+ *   AC-8  offline-at-send-time identity still gets its COUNT on the next
+ *         checkin (even from a different window/session id) and its BODY on
+ *         the next `read`
+ *   AC-9  sender's own message never re-surfaces to the sender (neither as a
+ *         checkin count nor a read delivery); recipient still sees it via read
  *   AC-10 broadcast delivery is independent per identity (separate cursor rows)
- *   AC-11 unread messages surface oldest-first (ascending id)
- *   AC-12 delivery fires on checkin only, never on `renew --auto`
+ *   AC-11 unread messages surface oldest-first (ascending id) via `read`
+ *   AC-12 `renew --auto` never surfaces or consumes unread messages; a
+ *         genuine (non-auto) checkin only ever shows the count, never the
+ *         body — only `read` delivers
  *   AC-13 header comment documents the new command
  *
  * Also covers FEAT-070 (tool.looparm) Destructive REJECT fix-round regression
@@ -99,6 +110,12 @@ function run(args, sessionId) {
 
 function checkin(name, sessionId) {
   return run(['checkin', '--name', name], sessionId);
+}
+
+/** FEAT-107: `read` is the sole delivering + cursor-advancing command — this
+ *  is the helper the AC-7..AC-12 estate uses to actually receive messages. */
+function readCmd(sessionId) {
+  return run(['read'], sessionId);
 }
 
 test.before(async () => {
@@ -287,100 +304,136 @@ test('AC-6b: inline text + --body-file together is rejected, no row written', as
   }
 });
 
-// ── AC-7: checkin delivers + advances cursor ────────────────────────────────
+// ── AC-7: FEAT-107 delivery split — checkin shows a COUNT, read delivers ───
 
-test('AC-7: checkin surfaces unread messages and advances the cursor (DB-verified)', async () => {
+test('AC-7: checkin shows an UNREAD COUNT (never the body) and does not advance the cursor', async () => {
   const [result] = await db.query(
     "INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bev', 'hello Bev')"
   );
   const msgId = result.insertId;
   const res = checkin('Bev', 'ac7-session');
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /hello Bev/);
+  assert.match(res.stdout, /UNREAD: 1 message\(s\) - run read to receive them\./, 'checkin must show the count line verbatim');
+  assert.doesNotMatch(res.stdout, /hello Bev/, 'checkin must NEVER print the message body — that is read\'s job only (FEAT-107)');
   const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
-  assert.ok(Number(rows[0].last_read_id) >= msgId, 'cursor must have advanced to at least the delivered message id');
+  assert.equal(Number(rows[0].last_read_id), 0, 'checkin must NOT advance the cursor — only read does (FEAT-107)');
+  assert.ok(msgId > 0); // sanity: the message really was inserted
 });
 
-test('AC-7 false-pass guard: a second checkin does not re-print the already-delivered message', async () => {
+test('AC-7 false-pass guard: body absent from checkin output AND a subsequent read still delivers it', async () => {
   await db.query("INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bev', 'once only please')");
   const sid = 'ac7b-session';
-  const first = checkin('Bev', sid);
-  assert.match(first.stdout, /once only please/);
-  const second = checkin('Bev', sid); // renew-of-self path
-  assert.doesNotMatch(second.stdout, /once only please/);
+
+  // A false pass would be a test that only checks "body absent from checkin"
+  // without also proving the message is NOT lost — i.e. it must still be
+  // retrievable via read. Both halves are asserted here, in one test, so
+  // neither can silently regress without failing this test.
+  const ci = checkin('Bev', sid);
+  assert.match(ci.stdout, /UNREAD: 1 message\(s\)/, 'checkin must report the count');
+  assert.doesNotMatch(ci.stdout, /once only please/, 'checkin must not leak the body');
+
+  const first = readCmd(sid);
+  assert.equal(first.status, 0, `read should succeed: ${first.stderr}`);
+  assert.match(first.stdout, /once only please/, 'read must deliver the body checkin withheld');
+
+  // Re-reading must not re-print the now-delivered message (cursor advanced).
+  const second = readCmd(sid);
+  assert.doesNotMatch(second.stdout, /once only please/, 'a second read must not re-deliver an already-read message');
 });
 
 // ── AC-8: offline identity, delivered to a different window later ──────────
 
-test('AC-8: message to an offline identity persists and delivers on a later checkin from a different window', async () => {
+test('AC-8: message to an offline identity persists — checkin (from a different window) shows the count, read delivers the body', async () => {
   // No active Ben permit exists (beforeEach reset everyone to FREE).
   const sid1 = 'ac8-sender-session';
   assert.equal(checkin('Bill', sid1).status, 0);
   assert.equal(run(['message', 'hi Ben, are you there?', '--to', 'Ben'], sid1).status, 0);
 
-  // Deliver via a DIFFERENT, never-before-seen window/session id.
+  // Checkin via a DIFFERENT, never-before-seen window/session id — shows the
+  // count only.
   const sid2 = 'ac8-different-window-session';
   const res = checkin('Ben', sid2);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /hi Ben, are you there\?/);
+  assert.match(res.stdout, /UNREAD: 1 message\(s\)/);
+  assert.doesNotMatch(res.stdout, /hi Ben, are you there\?/, 'checkin must not deliver the body even for an offline-at-send-time identity');
+
+  // read (same window) delivers the body.
+  const readRes = readCmd(sid2);
+  assert.match(readRes.stdout, /hi Ben, are you there\?/);
 });
 
 // ── AC-9: sender suppression ─────────────────────────────────────────────────
 
-test('AC-9: sender never sees their own message on their next checkin; recipient does', async () => {
+test('AC-9: sender never sees their own message (count or body); recipient sees both via checkin count + read body', async () => {
   const billSid = 'ac9-bill-session';
   assert.equal(checkin('Bill', billSid).status, 0);
   assert.equal(run(['message', 'note', '--to', 'Bev'], billSid).status, 0);
 
-  // Bill checks in again (renew-of-self path) — must NOT see "note".
+  // Bill checks in again (renew-of-self path) — must show NO unread count at
+  // all for his own just-sent message.
   const billAgain = checkin('Bill', billSid);
   assert.equal(billAgain.status, 0);
-  assert.doesNotMatch(billAgain.stdout, /note/, 'sender must never see their own just-sent message flagged unread');
+  assert.doesNotMatch(billAgain.stdout, /UNREAD:/, 'sender must never see an unread count for their own just-sent message');
+  const billRead = readCmd(billSid);
+  assert.doesNotMatch(billRead.stdout, /note/, 'sender must never see their own just-sent message body via read either');
 
-  // Control case: Bev's checkin DOES see it.
-  const bobSid = 'ac9-bob-session';
-  const bobCi = checkin('Bev', bobSid);
-  assert.match(bobCi.stdout, /note/, 'the actual recipient must still see the message');
+  // Control case: Bev's checkin shows the count, and Bev's read shows the body.
+  const bevSid = 'ac9-bev-session';
+  const bevCi = checkin('Bev', bevSid);
+  assert.match(bevCi.stdout, /UNREAD: 1 message\(s\)/, 'the actual recipient must see the count on checkin');
+  const bevRead = readCmd(bevSid);
+  assert.match(bevRead.stdout, /note/, 'the actual recipient must see the body via read');
 });
 
 // ── AC-10: broadcast delivery independent per identity ──────────────────────
 
-test('AC-10: broadcast is delivered independently to each identity (separate cursor rows)', async () => {
+test('AC-10: broadcast is delivered independently to each identity (separate cursor rows), via read', async () => {
   const senderSid = 'ac10-sender-session';
   assert.equal(checkin('Bill', senderSid).status, 0);
   assert.equal(run(['message', 'broadcast to everyone'], senderSid).status, 0);
 
-  const bobCi = checkin('Bev', 'ac10-bob-session');
-  assert.match(bobCi.stdout, /broadcast to everyone/);
+  const bevSid = 'ac10-bev-session';
+  const bevCi = checkin('Bev', bevSid);
+  assert.match(bevCi.stdout, /UNREAD: 1 message\(s\)/);
+  const bevRead = readCmd(bevSid);
+  assert.match(bevRead.stdout, /broadcast to everyone/);
 
   // Ben must STILL receive it — one identity's cursor advancing must not
   // mark it read for another (the single-shared-scalar bug class).
-  const benCi = checkin('Ben', 'ac10-ben-session');
-  assert.match(benCi.stdout, /broadcast to everyone/, "Ben's independent cursor must still be behind the broadcast");
+  const benSid = 'ac10-ben-session';
+  const benCi = checkin('Ben', benSid);
+  assert.match(benCi.stdout, /UNREAD: 1 message\(s\)/, "Ben's independent cursor must still show the broadcast as unread");
+  const benRead = readCmd(benSid);
+  assert.match(benRead.stdout, /broadcast to everyone/, "Ben's independent cursor must still deliver the broadcast");
 });
 
 // ── AC-11: chronological ordering ────────────────────────────────────────────
 
-test('AC-11: multiple unread messages surface oldest-first', async () => {
+test('AC-11: multiple unread messages surface oldest-first, via read', async () => {
   const senderSid = 'ac11-sender-session';
   assert.equal(checkin('Bill', senderSid).status, 0);
   assert.equal(run(['message', 'first', '--to', 'Bev'], senderSid).status, 0);
   assert.equal(run(['message', 'second', '--to', 'Bev'], senderSid).status, 0);
   assert.equal(run(['message', 'third', '--to', 'Bev'], senderSid).status, 0);
 
-  const bobCi = checkin('Bev', 'ac11-bob-session');
-  const out = bobCi.stdout;
+  const sid = 'ac11-bev-session';
+  const bevCi = checkin('Bev', sid);
+  assert.match(bevCi.stdout, /UNREAD: 3 message\(s\)/, 'checkin count must reflect all 3 pending messages');
+  assert.doesNotMatch(bevCi.stdout, /first|second|third/, 'checkin must not leak any body text');
+
+  const bevRead = readCmd(sid);
+  const out = bevRead.stdout;
   const iFirst = out.indexOf('first');
   const iSecond = out.indexOf('second');
   const iThird = out.indexOf('third');
-  assert.ok(iFirst >= 0 && iSecond >= 0 && iThird >= 0, 'all three messages must be present in stdout');
+  assert.ok(iFirst >= 0 && iSecond >= 0 && iThird >= 0, 'all three messages must be present in read stdout');
   assert.ok(iFirst < iSecond, '"first" must appear before "second"');
   assert.ok(iSecond < iThird, '"second" must appear before "third"');
 });
 
-// ── AC-12: checkin-only delivery, never renew --auto ────────────────────────
+// ── AC-12: renew --auto never touches messages; only read delivers ─────────
 
-test('AC-12: renew --auto never surfaces or consumes unread messages', async () => {
+test('AC-12: renew --auto never surfaces or consumes unread messages; a genuine checkin only shows the count, read delivers', async () => {
   const sid = 'ac12-session';
   assert.equal(checkin('Bev', sid).status, 0); // Bev's permit now active with ~5min remaining
 
@@ -395,9 +448,20 @@ test('AC-12: renew --auto never surfaces or consumes unread messages', async () 
   const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
   assert.equal(Number(rows[0].last_read_id), 0, 'cursor must NOT advance on renew --auto — message still pending');
 
-  // A genuine subsequent checkin (renew-of-self path) DOES deliver it.
+  // A genuine subsequent checkin (renew-of-self path, permit still active —
+  // NOT wake recovery) shows the count only, per FEAT-107; it must NOT
+  // deliver the body and must NOT advance the cursor either.
   const genuineCheckin = checkin('Bev', sid);
-  assert.match(genuineCheckin.stdout, /mid-session arrival/);
+  assert.match(genuineCheckin.stdout, /UNREAD: 1 message\(s\)/);
+  assert.doesNotMatch(genuineCheckin.stdout, /mid-session arrival/, 'checkin must not deliver the body even on a genuine (non-auto) checkin');
+  const [rows2] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
+  assert.equal(Number(rows2[0].last_read_id), 0, 'checkin must still not advance the cursor');
+
+  // Only read delivers + advances.
+  const genuineRead = readCmd(sid);
+  assert.match(genuineRead.stdout, /mid-session arrival/);
+  const [rows3] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
+  assert.ok(Number(rows3[0].last_read_id) > 0, 'read must advance the cursor');
 });
 
 // ── AC-13: documentation ─────────────────────────────────────────────────────

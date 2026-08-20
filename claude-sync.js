@@ -20,23 +20,45 @@
  *                                 prints the METROPOLIS STARTUP SUMMARY (BOW state from
  *                                 the metro DB, Vestige check, git sync check) via
  *                                 claude-bow.js printStartupSummary. A successful checkin
- *                                 also delivers any unread directed/broadcast messages
- *                                 (see `message`, below) for the resolved identity and
- *                                 advances that identity's read cursor (FEAT-069) — this
- *                                 does NOT happen on `renew --auto`'s heartbeat, only on
- *                                 a genuine checkin.
+ *                                 prints an UNREAD COUNT line ("UNREAD: N message(s) -
+ *                                 run read to receive them") inside that same summary
+ *                                 region when the resolved identity has unread directed/
+ *                                 broadcast messages (see `message`, below) — but, as of
+ *                                 FEAT-107, checkin no longer PRINTS THE MESSAGE BODIES
+ *                                 and does NOT advance the read cursor. `read` is now the
+ *                                 sole delivering + cursor-advancing command (see below).
+ *                                 This split exists because checkin's own stdout is
+ *                                 routinely piped/redirected by callers who only want the
+ *                                 identity line (`checkin --any | Select-String YOU`, or
+ *                                 the PowerShell/CI habit of `> $null`/`Out-Null`) — when
+ *                                 checkin ALSO consumed the cursor, that redirection
+ *                                 silently destroyed the unread messages (2026-08-20: nine
+ *                                 messages lost this way). Wake recovery (`renew`'s stale-
+ *                                 permit and previous-slot-reclaim paths) gets the same
+ *                                 count-only treatment, for the same reason.
  *           [--force --human-ok]  Force-evict a live holder (HUMAN AUTHORISATION ONLY)
- *   renew [--auto] [--session ID] - Extend permit; --auto only renews when < 3.5 min left
+ *   renew [--auto] [--session ID] - Extend permit; --auto only renews when < 3.5 min left.
+ *                                 --auto stays fully silent, including about messages
+ *                                 (matches today's heartbeat-only behaviour). A genuine
+ *                                 (non-auto) wake-recovery reclaim prints the same UNREAD
+ *                                 COUNT line as checkin — never bodies, never advances
+ *                                 the cursor.
  *   ping [--session ID]         - Renew + heartbeat + status line
  *   checkout [--session ID]     - Release this window's permit
  *   checkout --force <Name>     - Admin: evict a specific permit holder
  *   status [--session ID]       - Show all slots, marking this window's
- *   read                        - Full coordination state: slots, activity log, NO-TOUCH zones
+ *   read                        - Full coordination state: slots, activity log, NO-TOUCH
+ *                                 zones, standing loops — PLUS (FEAT-107) delivers any
+ *                                 unread directed/broadcast messages for the resolved
+ *                                 identity (oldest-first) and advances its read cursor.
+ *                                 `read` is now the ONLY command that delivers message
+ *                                 bodies or moves the cursor; checkin/renew only ever
+ *                                 report a count (see above).
  *   write "message"             - Log a milestone to the activity log
  *   message "<text>" [--to <Name>] [--body-file <path>]
  *                                - Send a directed (--to) or broadcast (no --to) message,
- *                                  delivered to the resolved-name recipient's next checkin
- *                                  (FEAT-069). Requires an active permit.
+ *                                  delivered to the resolved-name recipient's next `read`
+ *                                  (FEAT-069/FEAT-107). Requires an active permit.
  *   claim <path> [--session ID] - Claim a NO-TOUCH zone before modifying files
  *   release <path>              - Release a claimed path
  *   gc                          - Clean up permits expired beyond the reserve window
@@ -349,6 +371,17 @@ async function printSuccess(name, sessionId, db) {
   } catch (err) {
     console.log(`(utilisation unavailable: ${err.message})`);
   }
+  // FEAT-107: unread message COUNT only — checkin no longer delivers bodies
+  // or advances the read cursor (see the header comment and countUnread's
+  // doc comment for why). Printed here, still inside the SUMMARY_MARKER..
+  // LOOP_MARKER region of stdout, so claude-startup.js's existing slice
+  // relays it into the session's mandatory startup block the same way it
+  // already relays the BOW/Vestige/git lines above.
+  try {
+    printUnreadCount(await countUnread(db, name));
+  } catch (err) {
+    console.log(`(unread check unavailable: ${err.message})`);
+  }
   // FEAT-070 (AC-6/AC-7/AC-8/AC-9): standing-loop auto-arm. Only prints
   // anything at all when `name` has a sync_loop_config row (AC-7: silent,
   // byte-identical no-op otherwise). Runs once per printSuccess call, which
@@ -418,12 +451,21 @@ async function printLoopArmStatus(db, name) {
 }
 
 /**
- * FEAT-069 (AC-7/AC-8/AC-9/AC-10/AC-11): deliver unread messages for `name`
- * (directed to them, or broadcast) and advance their read cursor to the
- * highest delivered id — all inside the caller's already-open transaction,
- * so a message is never lost silently (commit-then-cursor-advances-together,
- * at-least-once never at-most-once). Cursor rows are always pre-seeded by
- * ensureSchema, so a plain UPDATE (never an upsert) is correct here.
+ * FEAT-069/FEAT-107 (AC-7/AC-8/AC-9/AC-10/AC-11): deliver unread messages for
+ * `name` (directed to them, or broadcast) and advance their read cursor to
+ * the highest delivered id — all inside the caller's already-open
+ * transaction, so a message is never lost silently (commit-then-cursor-
+ * advances-together, at-least-once never at-most-once). Cursor rows are
+ * always pre-seeded by ensureSchema, so a plain UPDATE (never an upsert) is
+ * correct here.
+ *
+ * FEAT-107: as of the delivery-split, `read` is the ONLY caller of this
+ * function — checkin and renew's wake-recovery paths use `countUnread`
+ * (below) instead, which never touches the cursor. Keeping the delivering
+ * and the counting paths as two separate functions (rather than one function
+ * with a "deliver: boolean" flag) makes it structurally impossible for a
+ * future checkin-adjacent call site to accidentally advance the cursor by
+ * passing the wrong flag.
  */
 async function deliverUnread(db, name) {
   const [cursorRows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name=?', [name]);
@@ -437,6 +479,34 @@ async function deliverUnread(db, name) {
     await db.query('UPDATE sync_read_cursor SET last_read_id=? WHERE name=?', [maxId, name]);
   }
   return msgs;
+}
+
+/**
+ * FEAT-107: count-only companion to deliverUnread — same eligibility
+ * (directed to `name`, or broadcast, past their current read cursor) but
+ * NEVER touches sync_read_cursor and NEVER returns message bodies. This is
+ * what checkin and renew's wake-recovery paths use so that a caller who
+ * pipes/redirects their stdout cannot silently destroy unread messages
+ * (2026-08-20 incident: `checkin > $null` consumed nine messages because the
+ * old single deliverUnread() path both delivered AND advanced the cursor
+ * inside checkin itself).
+ */
+async function countUnread(db, name) {
+  const [cursorRows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name=?', [name]);
+  const lastReadId = cursorRows.length ? Number(cursorRows[0].last_read_id) : 0;
+  const [[{ cnt }]] = await db.query(
+    'SELECT COUNT(*) AS cnt FROM sync_messages WHERE (to_name = ? OR to_name IS NULL) AND id > ?',
+    [name, lastReadId]
+  );
+  return Number(cnt);
+}
+
+/** Plain-text rendering of the FEAT-107 unread COUNT line — used by checkin
+ *  and renew's wake-recovery paths. Prints nothing when the count is zero,
+ *  matching printUnread's existing "nothing to say, say nothing" contract
+ *  for the zero-messages case. */
+function printUnreadCount(n) {
+  if (n > 0) console.log(`UNREAD: ${n} message(s) - run read to receive them.`);
 }
 
 /** Plain-text rendering of delivered messages — terminal tool output, no UI richness. */
@@ -552,10 +622,8 @@ async function cmdCheckin(db) {
   if (mine) {
     await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
       [now + TTL_MS, now, mine.row.name]);
-    const unread = await deliverUnread(db, mine.row.name);
     await db.commit();
     await printSuccess(mine.row.name, mine.row.session_id, db);
-    printUnread(unread);
     return;
   }
 
@@ -582,11 +650,9 @@ async function cmdCheckin(db) {
       if (flags.force && flags['human-ok']) {
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} FORCE-EVICTED previous holder (human-authorised) and checked in`);
-        const unread = await deliverUnread(db, name);
         await db.commit();
         console.log(`Evicted previous ${name} holder (human-authorised).`);
         await printSuccess(name, sessionId, db);
-        printUnread(unread);
         return;
       }
       if (flags.force) {
@@ -605,10 +671,8 @@ async function cmdCheckin(db) {
       if (flags.force && flags['human-ok']) {
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} reservation overridden (human-authorised)`);
-        const unread = await deliverUnread(db, name);
         await db.commit();
         await printSuccess(name, sessionId, db);
-        printUnread(unread);
         return;
       }
       await db.rollback();
@@ -620,10 +684,8 @@ async function cmdCheckin(db) {
     // FREE, or RESERVED for this very window — take it.
     const sessionId = await acquire(db, name);
     await log(db, name, `${name} checked in`);
-    const unread = await deliverUnread(db, name);
     await db.commit();
     await printSuccess(name, sessionId, db);
-    printUnread(unread);
     return;
   }
 
@@ -669,10 +731,8 @@ async function cmdCheckin(db) {
   }
   const sessionId = await acquire(db, free);
   await log(db, free, `${free} checked in`);
-  const unread = await deliverUnread(db, free);
   await db.commit();
   await printSuccess(free, sessionId, db);
-  printUnread(unread);
 }
 
 async function cmdRenew(db) {
@@ -702,6 +762,13 @@ async function cmdRenew(db) {
     await log(db, stale.row.name, `${stale.row.name} wake recovery — re-acquired after idle expiry`);
     await db.commit();
     console.log(`[claude-sync] Wake recovery: re-acquired ${stale.row.name} (permit expired while idle). Session: ${sessionId}`);
+    // FEAT-107: checkin-adjacent path — same count-only, never-deliver,
+    // never-advance-cursor treatment as a genuine checkin (see header comment).
+    try {
+      printUnreadCount(await countUnread(db, stale.row.name));
+    } catch (err) {
+      console.log(`(unread check unavailable: ${err.message})`);
+    }
     return;
   }
 
@@ -739,6 +806,12 @@ async function cmdRenew(db) {
       await log(db, hadName, `${hadName} wake recovery — re-acquired after idle expiry (via window map)`);
       await db.commit();
       console.log(`[claude-sync] Wake recovery: re-acquired ${hadName} (permit expired while idle). Session: ${sessionId}`);
+      // FEAT-107: same count-only treatment as the stale-permit reclaim above.
+      try {
+        printUnreadCount(await countUnread(db, hadName));
+      } catch (err) {
+        console.log(`(unread check unavailable: ${err.message})`);
+      }
       return;
     }
     // ACTIVE (held live by another window) or RESERVED (for another
@@ -837,6 +910,31 @@ async function cmdStatus(db, { full = false } = {}) {
       const setAge = fmtMs(now - Number(row.set_ms));
       const armedAge = row.last_armed_ms != null ? fmtMs(now - Number(row.last_armed_ms)) : 'never armed';
       console.log(`  ${n.padEnd(4)} "${row.spec}"  (set ${setAge} ago, last armed: ${armedAge}, armed_count=${row.armed_count})`);
+    }
+
+    // FEAT-107: `read` is the sole delivering + cursor-advancing path for
+    // unread messages. Resolve the identity THIS window currently holds
+    // (allowStale so a woken window whose reservation lapsed can still read
+    // its own backlog) and deliver+advance for it only — never for any other
+    // identity, and never as a side effect of a bare `status`. Failure here
+    // must not crash `read`'s otherwise-successful slot/activity/loop output
+    // — same fail-tolerant shape as printSuccess's own try/catch blocks.
+    try {
+      const mine = findMine(byName, now, { allowStale: true });
+      if (mine) {
+        await db.beginTransaction();
+        let unread;
+        try {
+          unread = await deliverUnread(db, mine.row.name);
+          await db.commit();
+        } catch (err) {
+          await db.rollback();
+          throw err;
+        }
+        printUnread(unread);
+      }
+    } catch (err) {
+      console.log(`(unread message delivery unavailable: ${err.message})`);
     }
   }
 }
@@ -1214,6 +1312,7 @@ async function runCli() {
 module.exports = {
   NAMES, RETIRED, isRetired, retiredMessage,
   connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
+  countUnread, printUnreadCount,
   cmdCheckin, cmdRenew, cmdMessage, cmdCheckout, cmdStatus, cmdWrite, cmdClaim,
   cmdRelease, cmdGc,
   cmdLoopSet, cmdLoopClear, cmdLoopShow, printLoopArmStatus,
