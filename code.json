@@ -583,6 +583,10 @@
             "outboundGuid": "086886fe-ec35-40a5-b653-910632dc7302"
           },
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "foundation.data",
             "outboundGuid": "c2cbe598-733e-4c5b-9e16-b19f1fc41750"
           },
@@ -756,6 +760,10 @@
           {
             "key": "engine.core",
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.synth",
@@ -1029,6 +1037,10 @@
           {
             "key": "engine.news",
             "outboundGuid": "179c218a-f221-4785-8c7d-55d67df1e7b6"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "ui.screen.debug",
@@ -1459,6 +1471,10 @@
         "pattern": "single-goroutine screen ownership (T-RENDER); widgets draw to back buffer only",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
           },
@@ -1562,7 +1578,12 @@
         "name": "Router",
         "format": "Go package API (func New(transport protocol.Transport, ...) + Run(ctx))",
         "pattern": "single transport-owning goroutine; sole writer of the ViewStore front snapshot; screens register handlers, never read channels",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          }
+        ]
       },
       "outbound": {
         "guid": "e1580ada-2265-4f39-845a-1f8f645350aa",
@@ -1650,6 +1671,10 @@
         "pattern": "custom widgets over RenderScreen; no allocation on draw paths",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
           },
@@ -1730,12 +1755,20 @@
         "pattern": "leader-key state machine; every action registered with mnemonic path",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
           },
           {
             "key": "ui.screen.menu",
             "outboundGuid": "0166a389-86a1-4ffc-bc18-fff6dd3ec8b7"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -1808,6 +1841,10 @@
           {
             "key": "feat.detgate",
             "outboundGuid": "f3b59855-9e6a-4fd0-8a6a-4fcca269e7a9"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.headless",
@@ -1944,6 +1981,10 @@
             "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
           },
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.router",
             "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
@@ -2020,6 +2061,81 @@
             "key": "int.protocol",
             "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "engine.core",
+            "moduleGuid": "0bef8af8-0883-4604-bf98-71212100fffb",
+            "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
+          },
+          {
+            "key": "feat.compositionroot",
+            "moduleGuid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+            "inboundGuid": "542d181a-9253-4392-9cdb-be59f10d8913"
+          },
+          {
+            "key": "feat.debugmode",
+            "moduleGuid": "d46840c1-b7d1-480b-a46d-e93d58fd7aa4",
+            "inboundGuid": "f1e42494-7f80-47c7-b4b4-5f7aab76880b"
+          },
+          {
+            "key": "foundation.buildinfo",
+            "moduleGuid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+            "inboundGuid": "7f744a93-4823-440d-a2de-551ba87a70e5"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.registry",
+            "moduleGuid": "d6460761-184d-4bee-aac7-5f1408242a0c",
+            "inboundGuid": "1c1aac4c-1234-438a-be11-6733e50ec945"
+          },
+          {
+            "key": "harness.headless",
+            "moduleGuid": "94fcac3b-a76c-40a8-8bb6-6add9ebc9496",
+            "inboundGuid": "19f100f8-a43d-4571-a940-304eec18235f"
+          },
+          {
+            "key": "feat.devmode",
+            "moduleGuid": "7d49d8f6-f29e-48fe-af76-e67d6b15f501",
+            "inboundGuid": "61fbd7fa-acff-4e20-9099-02025feb7cda"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.keys",
+            "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
+            "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
+          },
+          {
+            "key": "ui.router",
+            "moduleGuid": "3675f77a-18b2-424b-9b95-a73b1d33f1d2",
+            "inboundGuid": "500b5f46-c02f-49f8-a44c-b89e03e42db9"
+          },
+          {
+            "key": "ui.screen.finance",
+            "moduleGuid": "237d6c7a-77af-405f-a2b7-e6164210ab83",
+            "inboundGuid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a"
+          },
+          {
+            "key": "ui.screen.map",
+            "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
+            "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
+          },
+          {
+            "key": "ui.screen.services",
+            "moduleGuid": "beb58fc8-35c7-4df4-8eb9-dcdffe0de7f3",
+            "inboundGuid": "8dacbb29-593a-4015-9821-44f67ea2db67"
+          },
+          {
+            "key": "ui.widgets",
+            "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
+            "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
           }
         ]
       },
@@ -2115,6 +2231,10 @@
           {
             "key": "feat.metricsdash",
             "outboundGuid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.headless",
@@ -2262,6 +2382,10 @@
           {
             "key": "balance.harness",
             "outboundGuid": "a1cfc2f4-847a-40cb-b269-e15f4e7c3ae1"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.synth",
@@ -3740,6 +3864,10 @@
         "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind — never a silent partial wire",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "harness.headless",
             "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
           },
@@ -4775,6 +4903,10 @@
         "pattern": null,
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.router",
             "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
@@ -4897,6 +5029,10 @@
         "pattern": null,
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.router",
             "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
@@ -4924,6 +5060,11 @@
             "key": "ui.dash",
             "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
             "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          },
+          {
+            "key": "ui.keys",
+            "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
+            "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
           }
         ]
       },
@@ -7937,6 +8078,10 @@
           {
             "key": "feat.metricsdash",
             "outboundGuid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           }
         ]
       },
