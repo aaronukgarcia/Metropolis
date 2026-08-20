@@ -164,6 +164,10 @@
     "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
   },
   {
+    "finding": "internal/foundation/errs/log.go|*Logger|receiver method|recoverAfterRotateFailure|l|*Logger",
+    "reason": "BUG-307 sweep 2026-08-20: unexported helper called ONLY from rotateLocked (which is reached only from Log, under l.mu, after Log's own pre-lock and post-lock checkNotCopied both passed). It re-opens l.path after a rotate failure; there is no independent entry point to guard, and a second checkNotCopied on a helper whose sole caller already validated the receiver is redundant — mirrors rotateLocked/rejectCopiedLog's own accepted entries immediately adjacent."
+  },
+  {
     "finding": "internal/foundation/errs/log.go|*Logger|receiver method|rejectCopiedLog|l|*Logger",
     "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
   },
@@ -530,6 +534,10 @@
   {
     "finding": "internal/engine/invariant/hook.go|*Hook|field access chain|ApplyEffect|h.registry|*Hook.registry",
     "reason": "SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same \"presence, not effect\" scope isGuarded's doc comment already discloses for the receiver/parameter paths, gate.go). ApplyEffect's body (internal/engine/invariant/hook.go) was read in full and contains zero references to h.registry anywhere -- grep-confirmed against the whole package (only three call sites of h.registry exist in the entire package, none inside this function). There is no field-then-method access chain here for SEC-049 to have found a missing guard on; this is the tool over-approximating \"declared on the wrapping type\" as \"reaches the field\", not the WorldAPI-shaped hazard (a.w.mu touched directly) SEC-049 was built to close."
+  },
+  {
+    "finding": "internal/engine/invariant/hook.go|*Hook|field access chain|handleMalformedPayload|h.registry|*Hook.registry",
+    "reason": "BUG-301 sweep 2026-08-20: same SEC-049 over-approximation class as this file's ApplyEffect/handleSkipped/handleViolations entries adjacent -- KindFieldAccess registers a ReachableFunc for EVERY declared method of *Hook because the type has a registry field, without checking whether the body references it. handleMalformedPayload's body (hook.go) was read in full and contains zero references to h.registry (grep-confirmed: the package's only h.registry access is RunSuite's call site at hook.go:102); it reads only the core.Effect parameter and the logSink/devMode/panicFn fields. No field-then-method chain exists for a guard to protect."
   },
   {
     "finding": "internal/engine/invariant/hook.go|*Hook|field access chain|handleSkipped|h.registry|*Hook.registry",

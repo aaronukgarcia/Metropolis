@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -304,6 +305,9 @@ func (l *Logger) Log(e Entry) error {
 	if err != nil {
 		return fmt.Errorf("write log entry: %w", err)
 	}
+	if n != len(line) {
+		return fmt.Errorf("write log entry: short write (%d of %d bytes)", n, len(line))
+	}
 
 	if l.file != nil {
 		l.size += int64(n)
@@ -352,6 +356,12 @@ func (l *Logger) rejectCopiedLog(e Entry) error {
 
 // rotateLocked performs the rename chain (path.N-1 -> path.N, ...,
 // path -> path.1) and reopens a fresh file at path. Caller must hold l.mu.
+//
+// BUG-307: a rotate failure AFTER l.file.Close() (a rename blocked by an
+// AV lock, a full disk on the reopen) must not leave the logger writing to
+// a closed file forever. On any such failure the original path is reopened
+// best-effort so the audit trail stays usable, rather than being bricked
+// until process exit.
 func (l *Logger) rotateLocked() error {
 	if err := l.file.Close(); err != nil {
 		return err
@@ -365,23 +375,35 @@ func (l *Logger) rotateLocked() error {
 		dst := fmt.Sprintf("%s.%d", l.path, i+1)
 		if _, err := os.Stat(src); err == nil {
 			if err := os.Rename(src, dst); err != nil {
-				return err
+				return l.recoverAfterRotateFailure(err)
 			}
 		}
 	}
 
 	if err := os.Rename(l.path, l.path+".1"); err != nil {
-		return err
+		return l.recoverAfterRotateFailure(err)
 	}
 
 	f, size, err := openAppend(l.path)
 	if err != nil {
-		return err
+		return l.recoverAfterRotateFailure(err)
 	}
 	l.file = f
 	l.w = f
 	l.size = size
 	return nil
+}
+
+// recoverAfterRotateFailure reopens l.path so a transient rotate failure
+// does not leave the logger pointed at a closed file. Best-effort: if the
+// reopen itself fails, the original rotate error is returned unchanged.
+func (l *Logger) recoverAfterRotateFailure(cause error) error {
+	if f, size, err := openAppend(l.path); err == nil {
+		l.file = f
+		l.w = f
+		l.size = size
+	}
+	return cause
 }
 
 // Close closes the underlying file, if this Logger owns one.
@@ -559,7 +581,13 @@ func (r *ringBuffer) snapshot() []Entry {
 	defer r.mu.Unlock()
 	out := make([]Entry, r.count)
 	for i := 0; i < r.count; i++ {
-		out[i] = r.buf[(r.start+i)%len(r.buf)]
+		e := r.buf[(r.start+i)%len(r.buf)]
+		if e.Ctx != nil {
+			// Defensive copy (SEC-066/BUG-307): a caller mutating the
+			// returned Entry's Ctx must not corrupt the audit trail.
+			e.Ctx = maps.Clone(e.Ctx)
+		}
+		out[i] = e
 	}
 	return out
 }
