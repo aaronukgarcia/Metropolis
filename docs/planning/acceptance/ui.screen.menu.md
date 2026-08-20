@@ -60,3 +60,4 @@ The F10 screen: save/load browser, settings, keymap/layout profiles, new game se
 - **ASM-524 (confirm-and-close).** Menu actions issued as protocol.DebugPayload with fixed Op strings (no dedicated Kinds yet).
 - **ASM-525 (confirm-and-close).** Save-slot fields derived from Header (CreatedAtTick/GameMonth/WorldSeed/DebugTouched) only.
 - **ASM-526 (confirm-and-close).** F10 subscribes to 'f10.session' view (schema v1, screen's own choice).
+- **ASM-1443 (FEAT-084 CC fold).** SEC-212's read-path fix adds a NEW registry code `MET-U608` (`ErrProfileReadFailed`) rather than reusing an existing menu code, because none of MET-U600..U607 semantically covers a profile READ/parse failure (U605 is write-only, U601 wire-patch, U604 save-listing) — reusing U605 for a read failure would itself be a misleading GR#7/GR#3 violation a re-attack would flag. One-line revert if the lead wants reuse regardless of semantic mismatch.
