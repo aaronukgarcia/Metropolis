@@ -647,7 +647,7 @@ func (q *QueuedTransport) Drain(budget int) (DrainStats, error) {
 			return stats, nil
 		}
 
-		tierIdx, cmd, ok, err := q.peekHighestPriority()
+		tierIdx, cmd, gen, ok, err := q.peekHighestPriority()
 		if err != nil {
 			return stats, err
 		}
@@ -662,7 +662,7 @@ func (q *QueuedTransport) Drain(budget int) (DrainStats, error) {
 			return stats, err
 		}
 
-		q.commitTier(tierIdx, cmd)
+		q.commitTier(tierIdx, gen)
 		stats.Sent[tierIdx]++
 	}
 }
@@ -670,39 +670,48 @@ func (q *QueuedTransport) Drain(budget int) (DrainStats, error) {
 // peekHighestPriority returns the next command to offer the inner
 // transport, in strict tier priority (tierOrder), without committing any
 // tier's dequeue. tierIdx indexes into tierOrder/DrainStats.Sent.
-func (q *QueuedTransport) peekHighestPriority() (tierIdx int, cmd protocol.Command, ok bool, err error) {
+//
+// gen carries the T2 coalesceSlot's PEEK-TIME generation (0 and unused for
+// T0/T1, whose tierQueue tracks commit position itself via nextDrainSeq) --
+// BUG-302 (Bro audit, 2026-08-20): this used to be discarded here and
+// commitTier would re-peek T2 to recover a generation, which is always the
+// CURRENT generation, not the one actually offered to (and accepted by) the
+// inner transport a moment before. A SendCommand(B) landing in the
+// coalesceSlot between this peek and Drain's eventual commit would then have
+// its generation committed instead of A's -- silently discarding B, which
+// was never sent to inner, in violation of T2's latest-wins contract (a
+// stale command may be delivered at most once; a newer one may NEVER be
+// lost). Carrying the peek-time generation through to Commit (see
+// commitTier, coalesceSlot.Commit) closes that window: Commit refuses to
+// clear a slot whose generation has since moved on, leaving the newer
+// command intact for the NEXT Drain to peek and deliver.
+func (q *QueuedTransport) peekHighestPriority() (tierIdx int, cmd protocol.Command, gen int64, ok bool, err error) {
 	for i, tier := range tierOrder {
 		switch tier {
 		case ClassT0Critical:
 			c, has, e := q.t0.peek(errs.NewCorrelationID())
 			if e != nil {
-				return i, protocol.Command{}, false, e
+				return i, protocol.Command{}, 0, false, e
 			}
 			if has {
-				return i, c, true, nil
+				return i, c, 0, true, nil
 			}
 		case ClassT1Batchable:
 			c, has, e := q.t1.peek(errs.NewCorrelationID())
 			if e != nil {
-				return i, protocol.Command{}, false, e
+				return i, protocol.Command{}, 0, false, e
 			}
 			if has {
-				return i, c, true, nil
+				return i, c, 0, true, nil
 			}
 		case ClassT2Coalescible:
-			c, gen, has := q.t2.Peek()
+			c, g, has := q.t2.Peek()
 			if has {
-				// Stash the generation in a package-level-free way: T2's
-				// commit needs the generation, not the seq peekLocked2
-				// uses for T0/T1. commitTier re-peeks T2 to fetch it
-				// (cheap: a single mutex-guarded field read), so no
-				// extra return plumbing is needed here.
-				_ = gen
-				return i, c, true, nil
+				return i, c, g, true, nil
 			}
 		}
 	}
-	return 0, protocol.Command{}, false, nil
+	return 0, protocol.Command{}, 0, false, nil
 }
 
 // peek is peekLocked with its own lock acquisition — Drain calls it
@@ -719,24 +728,24 @@ func (t *tierQueue) peek(correlationID string) (protocol.Command, bool, error) {
 }
 
 // commitTier commits the dequeue peekHighestPriority most recently
-// returned for tierOrder[tierIdx].
-func (q *QueuedTransport) commitTier(tierIdx int, cmd protocol.Command) {
+// returned for tierOrder[tierIdx]. gen is the T2 coalesceSlot generation
+// peekHighestPriority captured at PEEK time (ignored for T0/T1, which track
+// commit position internally via nextDrainSeq) -- see peekHighestPriority's
+// doc comment (BUG-302) for why this must be the peek-time generation and
+// never a re-peeked, possibly-newer one.
+func (q *QueuedTransport) commitTier(tierIdx int, gen int64) {
 	switch tierOrder[tierIdx] {
 	case ClassT0Critical:
 		q.t0.commit(errs.NewCorrelationID())
 	case ClassT1Batchable:
 		q.t1.commit(errs.NewCorrelationID())
 	case ClassT2Coalescible:
-		// Re-peek to recover the generation Set the pending command at
-		// — see peekHighestPriority's comment. cmd is unused here
-		// (Commit only needs the generation, not the payload); kept as
-		// a parameter for symmetry with the T0/T1 case and because a
-		// future increment's monitoring hook (proposal §2, not this
-		// one) will want to know WHAT was just sent per tier.
-		_, gen, has := q.t2.Peek()
-		if has {
-			q.t2.Commit(gen)
-		}
+		// Commit(gen) is a no-op (leaves the slot intact) if the slot's
+		// CURRENT generation has moved past gen -- i.e. a newer
+		// SendCommand landed after this peek but before this commit. That
+		// newer command survives untouched for the next Drain to peek and
+		// deliver, exactly coalesceSlot.Commit's doc comment's contract.
+		q.t2.Commit(gen)
 	}
 }
 
