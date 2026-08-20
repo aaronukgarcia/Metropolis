@@ -234,6 +234,89 @@ func TestIntermodalTransferRejectsSaturation(t *testing.T) {
 	}
 }
 
+// TestIntermodalTransferConservationAtSaturation is the ASM-1082 regression: a
+// transfer that would drive an intermodal ledger to int64 saturation must be
+// rejected BEFORE either ledger moves — never the buggy independent-SatAdd
+// pattern that recorded the saturating clamp and then read accepted !=
+// delivered with Dwell hardcoded 0, which broke the in == out + dwell
+// conservation identity (engine.rail.md AC-3 / AC-4) the instant one ledger
+// saturated. It also pins the boundary behaviour: a transfer that fits EXACTLY
+// (in[rail] to MaxInt64) still succeeds and reports Accepted == Delivered, and
+// a transfer at true saturation is rejected with the account left byte-for-byte
+// untouched. White-box — it seeds in[rail] to MaxInt64-5, since reaching
+// MaxInt64 via capped transfers is infeasible (the rail↔road cap is 25t); the
+// destination out[road] keeps its room, so the +25 attempt saturates the
+// in-ledger ALONE — the exact "one ledger saturates" shape the bug title names.
+func TestIntermodalTransferConservationAtSaturation(t *testing.T) {
+	r, err := NewRailAPI("rail-test")
+	if err != nil {
+		t.Fatalf("NewRailAPI: %v", err)
+	}
+	if _, err := r.IntermodalTransfer(freight.ModeRail, freight.ModeRoad, 25); err != nil {
+		t.Fatalf("rail→road 25: %v", err)
+	}
+
+	// Attack setup: push the from-ledger to within 5 tonnes of saturation.
+	r.mu.Lock()
+	r.in[freight.ModeRail] = math.MaxInt64 - 5
+	r.mu.Unlock()
+
+	before := r.IntermodalAccount()
+
+	// The saturating transfer must be rejected, and the account must be
+	// byte-for-byte untouched — no partial update, no clamped acceptance.
+	if _, err := r.IntermodalTransfer(freight.ModeRail, freight.ModeRoad, 25); !errors.Is(err, &errs.E{Code: ErrRailTransferRejected}) {
+		t.Fatalf("rail→road 25 into near-saturated in-ledger: want ErrRailTransferRejected, got %v", err)
+	}
+	assertIntermodalAccountEqual(t, r.IntermodalAccount(), before, "rejected saturated transfer mutated the account")
+
+	// A transfer that fits exactly at the boundary still succeeds and reports
+	// Accepted == Delivered (5/5, Dwell 0) — the case the buggy pattern got
+	// wrong (it clamped in to MaxInt64 and reported Accepted=5 Delivered=25).
+	res, err := r.IntermodalTransfer(freight.ModeRail, freight.ModeRoad, 5)
+	if err != nil {
+		t.Fatalf("rail→road 5 (exact boundary fit): %v", err)
+	}
+	if res.Accepted != 5 || res.Delivered != 5 || res.Dwell != 0 {
+		t.Fatalf("boundary-fit transfer: Accepted=%d Delivered=%d Dwell=%d, want 5/5/0", res.Accepted, res.Delivered, res.Dwell)
+	}
+	acct := r.IntermodalAccount()
+	if acct.InTonnes[freight.ModeRail] != math.MaxInt64 {
+		t.Fatalf("in-ledger should be exactly MaxInt64 after the boundary-fit transfer, got %d", acct.InTonnes[freight.ModeRail])
+	}
+	// Δin == Δout == 5, so the in == out + dwell identity is preserved by the
+	// successful transfer even at the saturation boundary.
+	if acct.OutTonnes[freight.ModeRoad] != 30 {
+		t.Fatalf("out-ledger should be 25+5=30 after the boundary-fit transfer, got %d", acct.OutTonnes[freight.ModeRoad])
+	}
+
+	// Now truly saturated: +1 must be rejected, again with no mutation.
+	if _, err := r.IntermodalTransfer(freight.ModeRail, freight.ModeRoad, 1); !errors.Is(err, &errs.E{Code: ErrRailTransferRejected}) {
+		t.Fatalf("rail→road 1 into saturated in-ledger: want ErrRailTransferRejected, got %v", err)
+	}
+	if acct := r.IntermodalAccount(); acct.InTonnes[freight.ModeRail] != math.MaxInt64 {
+		t.Fatalf("in-ledger mutated by a rejected post-saturation transfer: %d", acct.InTonnes[freight.ModeRail])
+	}
+}
+
+// assertIntermodalAccountEqual fails unless two account snapshots are identical
+// across every mode — a rejected transfer must leave the conservation account
+// byte-for-byte untouched (no partial update, no clamped acceptance).
+func assertIntermodalAccountEqual(t *testing.T, got, want freight.IntermodalAccount, msg string) {
+	t.Helper()
+	for _, m := range []freight.Mode{freight.ModeRoad, freight.ModeRail, freight.ModeSea} {
+		if got.InTonnes[m] != want.InTonnes[m] {
+			t.Fatalf("%s: in[%s] got %d want %d", msg, m, got.InTonnes[m], want.InTonnes[m])
+		}
+		if got.OutTonnes[m] != want.OutTonnes[m] {
+			t.Fatalf("%s: out[%s] got %d want %d", msg, m, got.OutTonnes[m], want.OutTonnes[m])
+		}
+		if got.DwellTonnes[m] != want.DwellTonnes[m] {
+			t.Fatalf("%s: dwell[%s] got %d want %d", msg, m, got.DwellTonnes[m], want.DwellTonnes[m])
+		}
+	}
+}
+
 func TestRailDeterminism(t *testing.T) {
 	run := func() string {
 		r, err := NewRailAPI("rail-test")
