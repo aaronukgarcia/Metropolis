@@ -56,3 +56,8 @@ Two fail-open PreToolUse hooks that make "two agents editing the same file" mech
 - **ASM-902** — auto-release on completion is deferred; claims end by TTL expiry, manual `release`, `checkout`, or `gc`, with no `SubagentStop` release hook (Escalation B).
 - **ASM-903** — claim liveness is TTL-only; `claimed_ms` is written at dispatch and never refreshed by the permit ping, so a >5-minute in-flight agent loses its claim (Escalation A).
 - **ASM-904** — the edit-time guard covers `Edit`/`Write` only; `MultiEdit` and other multi-target mutators are out of scope for the claim check (Escalation C).
+- **ASM-986** — the 8.3 short-name spelling gap is out-of-contract on this machine: `NtfsDisable8dot3NameCreation=2` disables 8.3 names on the non-system E: volume (no `DOCS~1` exists for docs) and the dev dispatch/edit path emits canonical long-name paths, so `DOCS~1/x.md` never reaches a `docs/x.md` claim.
+
+- **ASM-959 (FEAT-084 CC fold).** A claimed glob is interpreted with shell semantics: a single star matches within one path segment, a double star crosses segments — internal/engine/consumption/*_test.go protects direct children (e.g. s6_endtoend_test.go) but not deeper descendants.
+
+- **ASM-901 (FEAT-084 CC fold).** File-claim ownership is keyed on session_id (per-terminal), not per-agent: two subagents dispatched by the same lead session onto overlapping paths are deliberately not blocked — this is the documented "different sessions" scope in claude-file-claim-guard.js/claude-dispatch-guard.js headers and is accepted as the Baseline One granularity. Per-agent identity waits on BUG-238 (stable per-terminal identity).

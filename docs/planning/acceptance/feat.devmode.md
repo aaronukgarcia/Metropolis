@@ -106,3 +106,5 @@ node claude-bow.js add assumption "FEAT-065: console-open enable reuses SourcePa
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-447** — In-game feedback maps to claude-bow.js `add bug` (no dedicated feedback type).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-449** — Console-open enable reuses SourcePalette (no new EnableSource).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-467** — AC-DM3 enable-trigger branch unreachable via RequireConsole (real gate forecloses it).
+
+- **ASM-935 (FEAT-084 CC fold).** BUG-227 'blocked by FEAT-075' is a genuine dependency — depend edge added. FEAT-075 status is cancelled, so GR#12's done check does not mechanically refuse; the block clears when the operator deletes/re-guides FEAT-075.

@@ -96,3 +96,4 @@ The three end-game mega-facility classes as new catalogue entries in `buildings.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-515** — Gate code homed in internal/engine/mining per code.json (plan-grouping).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-516** — Gate params in data/megafacilities.json; catalogue extends buildings.json in place.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-517** — Felixstowe-class port sits above container_terminal at end-game milestone (M11/M12).
+- **Confirm-and-close (batch 3, folded).** ASM-876: FEAT-055 re-keyed to THORP/CANDU only; the Aldermaston-class science/defence mega-facility is assumed §55 defence (MOD-067) territory rather than THORP/CANDU scope — already recorded in this file's Escalation on the FEAT-055 vs FEAT-097/098/099 re-keying overlap.
