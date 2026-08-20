@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 163,
+  "moduleCount": 165,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -423,6 +423,10 @@
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -549,6 +553,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.deathwave",
+            "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
           },
           {
             "key": "feat.debugmode",
@@ -1113,6 +1121,10 @@
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -1207,6 +1219,10 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.deathwave",
+            "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
           }
         ]
       },
@@ -2421,6 +2437,10 @@
             "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -2551,6 +2571,10 @@
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -2645,6 +2669,52 @@
       "securityScan": null
     },
     {
+      "guid": "10ec4106-06a3-47a6-936c-34599d5544c3",
+      "key": "feat.deathwave",
+      "bowType": "feature",
+      "seq": 265,
+      "sprint": 7,
+      "title": "Mortality smoothing: bounded monthly death budget + weather-driven variation",
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "specRef": "§5.1; §5.2; §9; §10; §H",
+      "path": "internal/engine/citizens/",
+      "inbound": {
+        "guid": "7ffa5eb5-b79b-492a-812c-8613db43b1c5",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": [
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "b2c58228-c94f-4864-b778-5c06d9ca2034",
+        "calls": [
+          {
+            "key": "engine.season",
+            "moduleGuid": "5a348a85-15ba-46d9-aa61-0605f12785f1",
+            "inboundGuid": "a85f49a1-4a31-44a1-9a7d-08defdad3011"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
       "guid": "3abafe05-7606-4067-8ab0-54007248b802",
       "key": "engine.invariant",
       "bowType": "module",
@@ -2665,6 +2735,10 @@
           {
             "key": "engine.citizens",
             "outboundGuid": "c128a4e1-80d2-46f8-ae99-aa902f806983"
+          },
+          {
+            "key": "engine.dispatch",
+            "outboundGuid": "6f3eb944-48a3-4135-abef-bf21f4ee1260"
           },
           {
             "key": "engine.finance",
@@ -3261,6 +3335,10 @@
             "outboundGuid": "1d50fe0a-ed87-4db8-b0f4-9bcda783d308"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.freight",
             "outboundGuid": "75dfc952-590a-4602-b621-dc369322b72f"
           },
@@ -3344,6 +3422,10 @@
           {
             "key": "engine.cafe",
             "outboundGuid": "e9809660-e6e5-4ccb-a62d-b782ec32b41a"
+          },
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
           },
           {
             "key": "engine.defence",
@@ -3487,6 +3569,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.deathwave",
+            "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
           }
         ]
       },
@@ -3760,6 +3846,11 @@
             "key": "engine.firms",
             "moduleGuid": "df06bec1-ea6c-456d-9d06-690cb18fa2a0",
             "inboundGuid": "f6c47094-fae7-4d93-8267-653b15cc1a2a"
+          },
+          {
+            "key": "engine.dispatch",
+            "moduleGuid": "351b5c05-1b42-4438-b495-c0aaf6855194",
+            "inboundGuid": "ffb9d07e-1f14-4cfa-8573-192efaca1e3f"
           },
           {
             "key": "foundation.errors",
@@ -4066,6 +4157,10 @@
           {
             "key": "engine.crime",
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
+          },
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
           },
           {
             "key": "engine.dispatch",
@@ -5332,6 +5427,72 @@
       "securityScan": null
     },
     {
+      "guid": "75256c06-b41b-4094-a064-5db1282d4b98",
+      "key": "engine.deathservices",
+      "bowType": "module",
+      "seq": 605,
+      "sprint": 9,
+      "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H Health & Deathcare; §25 (refuse's rounds-as-logistics-movements structural analog); §26 (dispatch's nearest-registered emergency model)",
+      "path": "internal/engine/deathservices/",
+      "inbound": {
+        "guid": "ba1fe880-21b7-46c0-bd56-257c0f6c223d",
+        "name": "DeathServicesAPI",
+        "format": "Go package API + deltas",
+        "pattern": "body intake keyed off feat.deathwave's released death queue; disposal/triage commands (bury/cremate/dispense), no directly-writable exported fields",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49",
+        "calls": [
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "feat.deathwave",
+            "moduleGuid": "10ec4106-06a3-47a6-936c-34599d5544c3",
+            "inboundGuid": "7ffa5eb5-b79b-492a-812c-8613db43b1c5"
+          },
+          {
+            "key": "engine.services",
+            "moduleGuid": "ab443390-0a8a-459a-ae5a-4b8a35308751",
+            "inboundGuid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e"
+          },
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "engine.build",
+            "moduleGuid": "046d98bc-3850-4b7d-b909-a97b7eab0920",
+            "inboundGuid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4"
+          },
+          {
+            "key": "engine.logistics",
+            "moduleGuid": "c59ecb6e-443f-4012-a0f0-b031de444335",
+            "inboundGuid": "26abfa77-3b11-43d0-a631-539a04e3a5f8"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
       "guid": "351b5c05-1b42-4438-b495-c0aaf6855194",
       "key": "engine.dispatch",
       "bowType": "module",
@@ -5356,6 +5517,10 @@
           {
             "key": "engine.chemicals",
             "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "ui.screen.services",
@@ -5385,6 +5550,11 @@
             "key": "engine.projections",
             "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
             "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
+          },
+          {
+            "key": "engine.invariant",
+            "moduleGuid": "3abafe05-7606-4067-8ab0-54007248b802",
+            "inboundGuid": "4a4b44ab-9ed0-4322-8a2a-ad4b0178302f"
           }
         ]
       },

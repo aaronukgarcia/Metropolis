@@ -671,6 +671,24 @@
       ]
     },
     {
+      "mkey": "feat.deathwave",
+      "type": "feature",
+      "title": "Mortality smoothing: bounded monthly death budget + weather-driven variation",
+      "desc": "FEAT-087: smooths engine.citizens' Gompertz-Makeham realised deaths through a bounded monthly death budget (hazard selects, enqueues, releases at most the data-sourced budget per month) so a same-birth-month cohort crossing the mortality cliff together drains over a window of months rather than a single-tick population cliff; a declared weather emergency (drought/winter, routed through the engine.season edge per AC-7/ASM-579) suspends the budget for a non-smoothed major death event; exposes a deterministic FIFO handoff (citizenId, deathMonth, emergencyFlag) that engine.deathservices drains at its own funeral throughput. Lives inside internal/engine/citizens/ (deathwave.go) as a package-homed feature — the feat.refinery-in-chemicals precedent — not a standalone module. [spec: §5.1; §5.2; §9; §10; §H] [path: internal/engine/citizens/]",
+      "seq": 265,
+      "sprint": 7,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "specRef": "§5.1; §5.2; §9; §10; §H",
+      "guid": "10ec4106-06a3-47a6-936c-34599d5544c3",
+      "guidIn": "7ffa5eb5-b79b-492a-812c-8613db43b1c5",
+      "guidOut": "b2c58228-c94f-4864-b778-5c06d9ca2034",
+      "deps": [
+        "engine.citizens"
+      ]
+    },
+    {
       "mkey": "engine.invariant",
       "type": "module",
       "title": "Invariant checker: conservation asserts every tick",
@@ -1383,6 +1401,25 @@
       "deps": [
         "engine.logistics",
         "engine.services"
+      ]
+    },
+    {
+      "mkey": "engine.deathservices",
+      "type": "module",
+      "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
+      "desc": "FEAT-088: turns feat.deathwave's released death queue into a conserved body stock and disposes of it through three mutually-exclusive terminal methods — burial (consumes a graveyard plot, reusable only after a data-sourced reuse horizon), cremation (space-free, costed, throughput-bounded), and emergency dispensation (multi-body van/truck transport + 24x7 operation, gated on feat.deathwave's weather-driven major death event); hearses carry exactly one body per trip, so funeral throughput caps the disposal rate and a death surge drains as a queryable backlog rather than vanishing in one tick. Does not own mortality/smoothing (feat.deathwave) or hearse pathfinding (engine.logistics owns the routing). [spec: Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H Health & Deathcare; §25 (refuse's rounds-as-logistics-movements structural analog); §26 (dispatch's nearest-registered emergency model)] [path: internal/engine/deathservices/]",
+      "seq": 605,
+      "sprint": 9,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H Health & Deathcare; §25 (refuse's rounds-as-logistics-movements structural analog); §26 (dispatch's nearest-registered emergency model)",
+      "guid": "75256c06-b41b-4094-a064-5db1282d4b98",
+      "guidIn": "ba1fe880-21b7-46c0-bd56-257c0f6c223d",
+      "guidOut": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49",
+      "deps": [
+        "feat.deathwave",
+        "engine.build"
       ]
     },
     {
