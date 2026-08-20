@@ -63,4 +63,10 @@ const (
 	// degrades to "logged and moved on" rather than "the whole headless
 	// run process hangs."
 	ErrPumpShutdownTimeout = "MET-H206"
+
+	// ErrMonthsOverflow: the -months value, times DailyTicksPerMonth,
+	// overflows int64 (GR#16). Rejected up front so an absurdly large
+	// -months can never wrap negative and produce a "successful" run with a
+	// bogus TicksAdvanced (BUG-305).
+	ErrMonthsOverflow = "MET-H207"
 )

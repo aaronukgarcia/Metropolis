@@ -9,6 +9,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -372,7 +373,16 @@ func sendAndAwait(t *protocol.InProcTransport, cmd protocol.Command, correlation
 // engine.core.md) or one command per tick (needlessly many round trips).
 // Returns the number of ticks actually advanced before any error.
 func driveTicks(t *protocol.InProcTransport, months int64) (int64, error) {
-	total := months * core.DailyTicksPerMonth
+	total, overflowed := num.SafeMul(months, core.DailyTicksPerMonth)
+	if overflowed {
+		// GR#16 (BUG-305): a wrapped tick count would drive a "successful"
+		// run with a bogus TicksAdvanced and a tick-0 snapshot. Reject
+		// rather than silently wrap.
+		return 0, errs.New(ErrMonthsOverflow, string(protocol.NewCorrelationID()), map[string]any{
+			"months":        months,
+			"ticksPerMonth": core.DailyTicksPerMonth,
+		})
+	}
 	remaining := total
 	for remaining > 0 {
 		n := core.MaxAdvanceTicksPerCall
