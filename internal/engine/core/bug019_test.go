@@ -34,9 +34,12 @@ func TestBUG019_CopiedEngine_StartSubscriptionPump_RejectedNoPublish(t *testing.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	err := e2.StartSubscriptionPump(ctx, sink)
+	done, err := e2.StartSubscriptionPump(ctx, sink)
 	if !errors.Is(err, &errs.E{Code: ErrEngineCopied}) {
 		t.Fatalf("StartSubscriptionPump on a struct-copied Engine: err = %v, want ErrEngineCopied", err)
+	}
+	if done != nil {
+		t.Fatalf("StartSubscriptionPump on a struct-copied Engine returned a non-nil done channel %v, want nil (no goroutine should have started)", done)
 	}
 
 	// Signal the pump the same way a real command handler would
@@ -95,7 +98,7 @@ func TestBUG019_OriginalEngine_StartSubscriptionPump_StillWorks(t *testing.T) {
 		t.Fatalf("seed Subscribe: %v", err)
 	}
 
-	if err := e.StartSubscriptionPump(ctx, sink); err != nil {
+	if _, err := e.StartSubscriptionPump(ctx, sink); err != nil {
 		t.Fatalf("StartSubscriptionPump on a genuine Engine: err = %v, want nil", err)
 	}
 

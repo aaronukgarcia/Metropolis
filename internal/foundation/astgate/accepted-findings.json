@@ -1472,8 +1472,8 @@
     "reason": "Unexported helper reached only through HandleCommand's already-guarded dispatch (checkNotCopied before the switch) on the same already-validated *Engine receiver; it delegates to e.accept/e.reject (both guarded) and never touches e.mu itself. Mirrors the unexported-helper-behind-a-guarded-entry-point precedent."
   },
   {
-    "finding": "internal/engine/core/commands.go||function (parameter)|<func literal at line 54>|e|*Engine",
-    "reason": "BUG-141 per-site triage: this is WithGameplayCommandHandler's Option-pattern closure, safe by construction -- invoked exactly once, synchronously, inside NewEngine's opts loop strictly BEFORE e.self.Store(e) and before e is reachable by any other goroutine (same construction-ordering guarantee as the other With* closures already accepted for NewEngine). Genuinely safe by construction."
+    "finding": "internal/engine/core/commands.go||function (parameter)|<func literal at line 87>|e|*Engine",
+    "reason": "BUG-141 per-site triage: this is WithGameplayCommandHandler's Option-pattern closure, safe by construction -- invoked exactly once, synchronously, inside NewEngine's opts loop strictly BEFORE e.self.Store(e) and before e is reachable by any other goroutine (same construction-ordering guarantee as the other With* closures already accepted for NewEngine). Genuinely safe by construction. Re-keyed line 54->87 (FEAT-208 independent round r3): commands.go's DeltaSink doc-comment expansion inserted lines above this closure, shifting its line number; the closure's code and reasoning are unchanged -- a mechanical rekey, not a re-triage."
   },
   {
     "finding": "internal/engine/core/commands.go|*Engine|field access chain|SetGameplayCommandHandler|e.subs|*Engine.subs",

@@ -87,7 +87,7 @@ func TestSubscription_EngineStatusDeltas_MonotonicSeq(t *testing.T) {
 	defer func() { _ = transport.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := e.StartSubscriptionPump(ctx, transport); err != nil {
+	if _, err := e.StartSubscriptionPump(ctx, transport); err != nil {
 		t.Fatalf("StartSubscriptionPump: %v", err)
 	}
 	// RunCommandLoop now returns an error (harness.headless [MOD-015]
