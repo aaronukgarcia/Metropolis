@@ -1,8 +1,10 @@
 package metricsdash
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,4 +152,123 @@ func TestRunPerf_CorruptResultsFileIsWarningNotCrash(t *testing.T) {
 func writeFile(t *testing.T, path, content string) error {
 	t.Helper()
 	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// TestReadLastRecordForPreset_OversizedLineIsBoundedNotUnbounded is
+// BUG-305's unbounded-read proof: readLastRecordForPreset used to scan
+// via a bare bufio.Reader.ReadString('\n'), with no per-line ceiling —
+// an oversized line (a temp file well past synth.MaxResultsLineBytes)
+// could OOM the reader. This proves the call returns promptly with the
+// oversized line reported as a CorruptLine, a genuine EARLIER record for
+// the preset still recovered as `last`, and a genuine LATER record after
+// the oversized line ALSO recovered -- exactly ASM-355's "skip like a
+// torn line, keep scanning" recovery contract, mirrored from
+// synth.LoadLatestBaseline.
+func TestReadLastRecordForPreset_OversizedLineIsBoundedNotUnbounded(t *testing.T) {
+	dir := t.TempDir()
+	resultsPath := filepath.Join(dir, "perf-results.ndjson")
+
+	first := synth.PerfRecord{CommitHash: "aaa000", Preset: "1M", Result: measuredResult("1M", 100*time.Millisecond)}
+	if err := synth.AppendResult(resultsPath, first); err != nil {
+		t.Fatalf("AppendResult(first): %v", err)
+	}
+
+	// An oversized line: well past synth.MaxResultsLineBytes (1 MiB), but
+	// not so large this test itself becomes slow/expensive -- the point
+	// is proving the ceiling is enforced and the read returns promptly,
+	// not proving an actual OOM would occur without it.
+	oversized := strings.Repeat("x", synth.MaxResultsLineBytes+1024)
+	f, err := os.OpenFile(resultsPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("opening results file to append oversized line: %v", err)
+	}
+	if _, err := f.WriteString(oversized + "\n"); err != nil {
+		t.Fatalf("writing oversized line: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing results file: %v", err)
+	}
+
+	last := synth.PerfRecord{CommitHash: "ccc222", Preset: "1M", Result: measuredResult("1M", 105*time.Millisecond)}
+	if err := synth.AppendResult(resultsPath, last); err != nil {
+		t.Fatalf("AppendResult(last): %v", err)
+	}
+
+	rec, corrupt, err := readLastRecordForPreset(resultsPath, "1M")
+	if err != nil {
+		t.Fatalf("readLastRecordForPreset: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("expected the genuine record written AFTER the oversized line to still be recovered, got nil")
+	}
+	if rec.CommitHash != "ccc222" {
+		t.Errorf("CommitHash = %q, want %q (the last genuine record, not lost behind the oversized line)", rec.CommitHash, "ccc222")
+	}
+	foundOversizedWarning := false
+	for _, c := range corrupt {
+		if strings.Contains(c.Err.Error(), "exceeds maxResultsLineBytes") {
+			foundOversizedWarning = true
+		}
+	}
+	if !foundOversizedWarning {
+		t.Errorf("expected a CorruptLine naming the oversized-line rejection (ASM-355), got %+v", corrupt)
+	}
+}
+
+// TestReadLastRecordForPreset_UnmeasuredRecordIsSkipped proves the
+// BUG-305 provenance-screening fix: a record with Measured=false written
+// by a second, non-AppendResult writer (a hand edit, bypassing
+// AppendResult's own BUG-055 rejection) must be SKIPPED by
+// readLastRecordForPreset exactly as synth.LoadLatestBaseline would
+// reject it as a baseline candidate -- not trusted verbatim as "the last
+// measurement" the dashboard displays.
+func TestReadLastRecordForPreset_UnmeasuredRecordIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	resultsPath := filepath.Join(dir, "perf-results.ndjson")
+
+	genuine := synth.PerfRecord{CommitHash: "aaa000", Preset: "1M", Result: measuredResult("1M", 100*time.Millisecond)}
+	if err := synth.AppendResult(resultsPath, genuine); err != nil {
+		t.Fatalf("AppendResult(genuine): %v", err)
+	}
+
+	// Hand-write a Measured=false record directly, bypassing
+	// AppendResult's own BUG-055 rejection -- the "second writer" shape
+	// BUG-073/BUG-085's provenance re-check exists for.
+	tampered := genuine
+	tampered.CommitHash = "bbb111"
+	tampered.Result.Measured = false
+	data, err := json.Marshal(tampered)
+	if err != nil {
+		t.Fatalf("marshalling tampered record: %v", err)
+	}
+	f, err := os.OpenFile(resultsPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("opening results file to append tampered line: %v", err)
+	}
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		t.Fatalf("writing tampered line: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing results file: %v", err)
+	}
+
+	rec, corrupt, err := readLastRecordForPreset(resultsPath, "1M")
+	if err != nil {
+		t.Fatalf("readLastRecordForPreset: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("expected the genuine EARLIER record to still be recovered as `last` once the tampered one is screened out, got nil")
+	}
+	if rec.CommitHash != "aaa000" {
+		t.Errorf("CommitHash = %q, want %q -- the tampered Measured=false record must never be reported as the last measurement", rec.CommitHash, "aaa000")
+	}
+	foundProvenanceWarning := false
+	for _, c := range corrupt {
+		if strings.Contains(c.Err.Error(), "BUG-073") {
+			foundProvenanceWarning = true
+		}
+	}
+	if !foundProvenanceWarning {
+		t.Errorf("expected a CorruptLine naming the Measured=false rejection (BUG-073), got %+v", corrupt)
+	}
 }

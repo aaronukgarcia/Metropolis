@@ -2,10 +2,12 @@ package synth
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // BaselineComparison is CompareToBaseline's verdict (AC-6, AC-8, AC-10).
@@ -236,6 +238,38 @@ func measuredTickWindow(r PerfResult) time.Duration {
 	return r.PerMonthTick * time.Duration(r.Months)
 }
 
+// allocDeltaFraction returns (current-baseline)/baseline as a signed
+// fraction, guarding two hazards a bare `float64(int64(current) -
+// int64(baseline)) / float64(baseline)` has (BUG-305):
+//
+//  1. current/baseline are uint64 (PerfResult.AllocBytes/AllocCount);
+//     int64(x) for x > math.MaxInt64 is well-defined Go truncation but
+//     numerically wrong -- it turns into a large NEGATIVE int64, poisoning
+//     the delta. num.ClampInt64FromUint64 saturates at MaxInt64 instead,
+//     which for any REAL allocation count (nowhere near 2^63) is a no-op;
+//     it only changes behaviour for an already-implausible, corrupted, or
+//     hostile record.
+//  2. baseline == 0 makes the division 0/0 == NaN whenever current is also
+//     0 (both sides measured zero of this metric), which would otherwise
+//     propagate a NaN into DeltaFraction/StepRegressed/CumulativeRegressed
+//     and every %.1f%% message built from it. baseline == 0 with current >
+//     0 is a real, unbounded proportional increase (growth from nothing),
+//     reported as +Inf rather than NaN so it still compares > any finite
+//     RegressionThreshold and reads sensibly in a formatted message,
+//     instead of NaN's silently-false comparisons letting a growth-from-
+//     zero regression slip past every threshold check undetected.
+func allocDeltaFraction(current, baseline uint64) float64 {
+	if baseline == 0 {
+		if current == 0 {
+			return 0
+		}
+		return math.Inf(1)
+	}
+	c := num.ClampInt64FromUint64(current)
+	b := num.ClampInt64FromUint64(baseline)
+	return float64(c-b) / float64(b)
+}
+
 func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) BaselineComparison {
 	if baseline == nil {
 		return BaselineComparison{
@@ -308,8 +342,8 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 		return cmp
 	}
 
-	allocBytesDelta := float64(int64(current.AllocBytes)-int64(baseline.AllocBytes)) / float64(baseline.AllocBytes)
-	allocCountDelta := float64(int64(current.AllocCount)-int64(baseline.AllocCount)) / float64(baseline.AllocCount)
+	allocBytesDelta := allocDeltaFraction(current.AllocBytes, baseline.AllocBytes)
+	allocCountDelta := allocDeltaFraction(current.AllocCount, baseline.AllocCount)
 	cmp.AllocBytesDeltaFraction = allocBytesDelta
 	cmp.AllocCountDeltaFraction = allocCountDelta
 	cmp.StepRegressed = allocBytesDelta > RegressionThreshold || allocCountDelta > RegressionThreshold
@@ -322,8 +356,8 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 	// never turns into a false ScaleMismatch/BelowNoiseFloor verdict for
 	// the (already-validated) step check above.
 	if anchor != nil && anchor.CitizenCount == current.CitizenCount && anchor.Months == current.Months && anchor.AllocCount >= MinMeasurableAllocs {
-		cumAllocBytesDelta := float64(int64(current.AllocBytes)-int64(anchor.AllocBytes)) / float64(anchor.AllocBytes)
-		cumAllocCountDelta := float64(int64(current.AllocCount)-int64(anchor.AllocCount)) / float64(anchor.AllocCount)
+		cumAllocBytesDelta := allocDeltaFraction(current.AllocBytes, anchor.AllocBytes)
+		cumAllocCountDelta := allocDeltaFraction(current.AllocCount, anchor.AllocCount)
 		cmp.AnchorPerMonth = anchor.PerMonthTick
 		cmp.AnchorAllocBytes = anchor.AllocBytes
 		cmp.AnchorAllocCount = anchor.AllocCount

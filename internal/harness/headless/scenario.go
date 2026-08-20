@@ -2,11 +2,28 @@ package headless
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
+
+// maxScenarioFileBytes bounds -scenario's os.ReadFile (BUG-305): reading
+// an entire file into memory with no size check first means an
+// oversized/hostile/accidental -scenario path (a wrong path pointed at a
+// multi-GB file, a corrupted symlink loop's target, …) drives an
+// unbounded transient allocation before json.Unmarshal ever gets a
+// chance to reject the content as malformed. Mirrors the "bound the
+// caller-influenced value that sizes memory, before any allocation"
+// idiom foundation.solver's MaxRequestPayloadBytes (contract.go) applies
+// to a wire-supplied payload, applied here to a disk-supplied one. A
+// real scenario script is a short, hand-authored or generated JSON
+// command list — a handful of KB even at pathological command counts —
+// so 16 MiB is generous headroom no legitimate script can approach while
+// still bounding the read far below an operator-error or hostile
+// multi-GB file.
+const maxScenarioFileBytes = 16 << 20 // 16 MiB
 
 // LoadScenario reads path as a JSON array of wire-format protocol.Command
 // documents (AC-4, harness.headless.md) and decodes each via
@@ -30,6 +47,20 @@ import (
 // script or none — a scenario that fails partway through never produces
 // a partial command list for a caller to accidentally run.
 func LoadScenario(correlationID, path string) ([]protocol.Command, error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return nil, errs.Wrap(ErrScenarioReadFailed, correlationID, statErr, map[string]any{"path": path})
+	}
+	if info.Size() > maxScenarioFileBytes {
+		return nil, errs.New(ErrScenarioReadFailed, correlationID, map[string]any{
+			"path": path,
+			"cause": fmt.Sprintf(
+				"scenario file is %d bytes, exceeds maxScenarioFileBytes (%d) -- refusing to read an unbounded file (BUG-305)",
+				info.Size(), maxScenarioFileBytes,
+			),
+		})
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errs.Wrap(ErrScenarioReadFailed, correlationID, err, map[string]any{"path": path})
