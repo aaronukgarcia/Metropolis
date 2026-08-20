@@ -76,6 +76,29 @@ type Integration[T any, M any] interface {
 
 	// Zero returns the accumulator's zero/identity value — the seed
 	// det.MergeInOrder folds every shard's Combine into.
+	//
+	// CONTRACT (BUG-304 round 3, Bro audit independent destructive round,
+	// 2026-08-20): every call to Zero() MUST return a fresh, non-aliased
+	// value — for a reference-typed T (pointer, map, slice, chan), that
+	// means a NEW underlying object each call, never a shared
+	// package-level singleton or any other value two Zero() calls could
+	// return the SAME identity for. Two prior rounds of this bug both
+	// stemmed from Combine's idiomatic in-place-mutating reference-type
+	// fold making that identity load-bearing: executeSingleShard's
+	// dev-mode assert (executor.go, WithSingleShardAssert) folds each
+	// probed shard onto one fresh Zero() call and compares the result
+	// against a second, independent Zero() call specifically to detect a
+	// lying shard without corrupting the real merge — a Zero() that
+	// aliases across calls collapses that comparison into a
+	// self-comparison exactly the way Combine(merged, ...) compared
+	// against merged did in round 1, silently defeating the check and
+	// corrupting the real result the same way. A Zero() that violates
+	// this contract is a defect in the INTEGRATION, not something the
+	// executor can work around by construction — see
+	// executeSingleShard's doc comment for the mechanical aliasing check
+	// that now catches this class at the source, panicking with a
+	// contract-violation message naming Zero() specifically, rather than
+	// silently degrading into round 1/round 2's failure modes again.
 	Zero() T
 
 	// UpdateClass reports this integration's T0/T1/T2 class (proposal
