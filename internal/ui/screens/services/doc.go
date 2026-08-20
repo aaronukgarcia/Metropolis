@@ -145,11 +145,54 @@
 // MET-V503 before ever reaching the engine.
 //
 // Gating Notes & Architecture Seams (BUG-058 / ASM-1482):
-//   - SVC-8 command rejection surfacing (ApplyResult) is fully designed,
-//     implemented, and verified in unit tests. However, actual routing of
-//     command results to screen sub-receivers is currently unwired in the
-//     wider frame pending the core routing-seam implementation (ASM-1482)
-//     — do not invent custom/ad-hoc wiring (mirrors
+//   - Delta path — UNBLOCKED (FEAT-208 increments 1+2): ASM-1482's core
+//     routing seam (internal/ui/router) exists and is wired into the real
+//     composition root (cmd/metropolis/boot.go's bootCore): a real
+//     *Screen is constructed, primed against a live Subscribe to
+//     "f4.services", and bound into router.Router via BindSubscription,
+//     so ApplyDelta now receives real protocol.Delta traffic end to end
+//     (transport -> engine.core.Publish -> router -> this screen), not
+//     just in this package's own unit tests. Only the capacityDemand
+//     sub-view is published server-side so far
+//     (compose/services_publish.go) — sliders/responseTimes/waitingLists/
+//     publicServicePie remain server-side fast-follows (every field is
+//     already `omitempty`, so no schema change is needed when they land);
+//     ApplyDelta itself already handles all of them.
+//   - SVC-8 command rejection surfacing (ApplyResult) — STILL GATED, but
+//     the reason changed: router.RegisterResultHandler is a real, wired
+//     surface now (unlike before increment 2), but no
+//     protocol.Command/CorrelationID-bearing dispatch path reaches
+//     ServicesAPI.SetFunding — this screen's own SetFunding
+//     (screen.go:352) is never called from anywhere outside this
+//     package's own screen.go/tests, and even if it were, the command it
+//     issues ("services.set-funding") rides protocol.KindDebug
+//     (ASM-1193's DebugPayload seam, screen.go's own opCommand), whose
+//     ONLY handler, engine.core's handleDebug (commands.go), is a
+//     documented no-op placeholder that just accepts the command
+//     ("TODO(feat.debugmode, Debug op dispatch): route DebugPayload.Op to
+//     real F12 panel operations... out of scope for engine.core today") —
+//     it never inspects Op or dispatches anywhere. Reproduce with:
+//     `grep -n "case protocol.Kind" internal/engine/core/commands.go`
+//     (shows KindDebug -> handleDebug, the no-op) and
+//     `grep -rn "SetFunding" internal/engine/compose/*.go` (zero matches
+//     — compose, the ONLY package wired to receive real protocol.Command
+//     traffic via GameplayCommandHandler, never calls SetFunding; its own
+//     handleGameplay only maps KindBuy/KindZone/KindBuild/KindDemolish
+//     onto world/build, never KindDebug). A prior version of this note
+//     claimed a plain `grep -rln "\.SetFunding" internal cmd` returned
+//     zero matches outside this package — that claim was FALSE as
+//     literally written: education/refuse/social each define their own
+//     unrelated SetFunding method (internal/engine/education/funding.go,
+//     internal/engine/refuse/round.go, internal/engine/social/funding.go)
+//     that the grep also matches — those are Go-level module APIs called
+//     directly by other engine code, not protocol.Command handlers, so
+//     they say nothing about whether a real command reaches
+//     ServicesAPI.SetFunding. ApplyResult stays fully designed/
+//     implemented/verified in unit tests, unreachable in the real binary
+//     for lack of ANY dispatch path from a real Command to SetFunding,
+//     not for lack of a routing seam. Do not invent custom/ad-hoc wiring
+//     to close this gap; it is F4's own input-wiring
+//     scope, not a router or composition-root gap (mirrors
 //     internal/ui/screens/finance/doc.go's identical FIN-8 gating note).
 //
 // # SF-8/SF-9: determinism and race safety

@@ -12,8 +12,11 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/router"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
+	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
 	mapscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/map"
+	servicesscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/services"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
@@ -47,6 +50,27 @@ const codePumpShutdownTimeout = "MET-E901"
 // needlessly slow) — production code never reassigns it; it is 5s for
 // every real caller.
 var pumpShutdownJoinTimeout = 5 * time.Second
+
+// feat208PrimeTimeout bounds bootCore's synchronous Subscribe-priming
+// handshake for each FEAT-208 increment-2 router-bound screen (finance,
+// services) — see primeScreenSubscription's doc comment for why this
+// handshake exists at all: protocol.CommandResult carries no
+// SubscriptionID field, so the only way a caller learns the
+// SubscriptionID a Subscribe command produced is from the FIRST Delta
+// that echoes the Subscribe command's own CorrelationID
+// (engine/core/subscribe.go's pendingCorrID discipline, "echoed on the
+// next delta only, then cleared"). This handshake must complete BEFORE
+// router.Router.Run starts draining the transport (a second concurrent
+// reader of the same transport channels would split delivery
+// non-deterministically — ui/router/doc.go's "single writer of the front
+// snapshot" rule, GR#21) — bootCore is therefore the ONLY reader of
+// transport.Deltas()/Results() during this window. Wall-clock bounded,
+// not sim-Tick bounded, because this runs entirely at boot before the
+// sim clock or Router are driving anything — mirrors
+// pumpShutdownJoinTimeout's identical wall-clock-at-the-seam precedent
+// immediately above. A package-level var, not a const, so a test can
+// lower it for a fast, deterministic proof of the timeout path.
+var feat208PrimeTimeout = 5 * time.Second
 
 // skeletonModuleVersion is the placeholder semver every registerSkeletonModules
 // entry reports (none of these wrappers are independently versioned yet —
@@ -108,20 +132,72 @@ func registerSkeletonModules(reg *registry.Registry, correlationID string) error
 // skeletonWiring bundles every live component feat.skeleton wires
 // together once boot succeeds: the module registry, the real
 // int.protocol Transport, the real harness.stub StubEngine driving it,
-// ui.core's ViewStore/ViewsLoop consuming its Delta stream, and the real
-// ui.screen.map MapScreen subscribed to "f1.viewport" — exactly AC-1a's
-// "real components end to end, nothing mocked." Screen/render/input
-// wiring (the tcell-dependent half) is deliberately NOT part of this
-// struct — see run.go — so tests can exercise this whole slice headless,
-// without a terminal (tcell.Screen is only needed once rendering starts).
+// ui.router's Router (FEAT-208 increment 2 — see router field's own doc
+// comment for the ViewsLoop-to-Router transition this dispatch performs)
+// draining its Delta/Result/Event stream, and the real
+// ui.screen.finance/ui.screen.services/ui.screen.map screens bound
+// against it — exactly AC-1a's "real components end to end, nothing
+// mocked." Screen/render/input wiring (the tcell-dependent half) is
+// deliberately NOT part of this struct — see run.go — so tests can
+// exercise this whole slice headless, without a terminal (tcell.Screen is
+// only needed once rendering starts).
 type skeletonWiring struct {
 	correlationID string
 	registry      *registry.Registry
 	transport     *protocol.InProcTransport
 	engine        *enginecore.Engine
-	viewStore     *core.ViewStore
-	viewsLoop     *core.ViewsLoop
-	mapScreen     *mapscreen.MapScreen
+
+	// viewStore is ui.core's ViewStore — kept ONLY because
+	// core.NewRenderLoop's constructor (run.go) still requires one as a
+	// parameter for mapDrawFunc's vm.Patches/vm.Stale reads. FEAT-208
+	// increment 2 retires ui.core.ViewsLoop as this binary's transport
+	// consumer (replaced by router, below) — viewStore is therefore now
+	// PERMANENTLY EMPTY in this binary (NewViewStore's own initial empty
+	// snapshot, never published to again): nothing writes into it any
+	// more. This is not a functional regression — "f1.viewport" was
+	// already never a served view before this increment (mapScreen's own
+	// Subscribe call below is fire-and-forget and has always been
+	// rejected by the real engine, see mapScreen's doc comment), so
+	// ViewsLoop was already never populating viewStore with anything in
+	// this binary even before the swap. A future increment that adds
+	// "f1.viewport" to compose's viewRegistrationOrder (design's §6 last
+	// fast-follow) will need to either (a) prime+bind mapScreen through
+	// router the same way financeScreen/servicesScreen are primed below
+	// and give mapDrawFunc a router-fed adapter instead of viewStore, or
+	// (b) teach ui.core to expose a writable ViewStore surface router can
+	// publish through (doc.go's own "widening core's exported surface...
+	// is a ui.core change, out of scope here" note) — not decided here,
+	// flagged for that follow-up.
+	viewStore *core.ViewStore
+
+	// router is ui.router's Router (BOW MOD-115, ASM-1482), FEAT-208
+	// increment 2's boot-time swap: it now owns the transport's
+	// Results()/Deltas()/Events() drain in place of ui.core's ViewsLoop
+	// (which this binary constructed but never actually needed — see
+	// viewStore's doc comment above). router.Run(ctx) is started as the
+	// ONE dedicated transport-draining goroutine (ui/router/doc.go's
+	// single-writer rule) only AFTER financeScreen/servicesScreen have
+	// each been primed and bound (below) — never concurrently with the
+	// priming reads, which read the SAME transport channels directly and
+	// would otherwise race Router.Run for delivery (GR#21).
+	router *router.Router
+
+	// financeScreen/servicesScreen are FEAT-208 increment 2's two real,
+	// router-bound F-screens: internal/ui/screens/finance's Screen
+	// subscribed to "f2.finance" and internal/ui/screens/services'
+	// Screen subscribed to "f4.services", each bound into router via
+	// BindSubscription once primeScreenSubscription has learned their
+	// real SubscriptionID (see that function's doc comment). Neither is
+	// wired into any render/input path yet in this dispatch's scope
+	// (that is F2/F4's own screen-rendering integration, not this
+	// composition-root increment) — they exist here so their Delta
+	// stream is genuinely live end to end, provable via HaveData()/
+	// BalanceSheet()/CapacityDemand() from a test that reaches into
+	// skeletonWiring, exactly as mapScreen already is for "f1.viewport".
+	financeScreen  *financescreen.Screen
+	servicesScreen *servicesscreen.Screen
+
+	mapScreen *mapscreen.MapScreen
 
 	// debugState is feat.debugmode's (FEAT-008) single source of truth
 	// for whether debug mode is on, and devConsole is feat.devmode's
@@ -177,12 +253,12 @@ type skeletonWiring struct {
 	engineRunErr error
 
 	// engineDone is closed the instant the Run goroutine returns,
-	// independently of viewsLoop's own goroutine and of wg.Wait() (which
+	// independently of router's own Run goroutine and of wg.Wait() (which
 	// blocks on BOTH). It exists so a caller can synchronize on "Run has
 	// exited and engineRunErr is now readable" without first having to
 	// cancel ctx (which would also be racing to stop the engine loop, the
 	// exact hazard Run's own doc comment warns about) or wait for
-	// viewsLoop to stop too. shutdown()'s w.wg.Wait() remains the primary,
+	// router.Run to stop too. shutdown()'s w.wg.Wait() remains the primary,
 	// production shutdown path; engineDone is the narrower signal
 	// BUG-020's regression test needs to observe a premature Commands()
 	// close deterministically, before anything cancels ctx.
@@ -196,6 +272,19 @@ type skeletonWiring struct {
 	// mirroring engineDone's own close-then-select join idiom above,
 	// applied to the pump goroutine instead of RunCommandLoop's.
 	pumpDone <-chan struct{}
+
+	// routerRunErr is router.Router.Run's return value, written exactly
+	// once by the goroutine bootCore starts for it, mirroring
+	// engineRunErr's own "write once, read only after the owning
+	// goroutine is known to have exited" discipline. Router.Run returns
+	// ctx.Err() (context.Canceled) on the ordinary shutdown path — that
+	// is expected, not a failure — or nil if the transport's channels
+	// were closed first (transport.Close() called before ctx cancel).
+	// Not surfaced through a dedicated done channel the way engineDone
+	// is: nothing in this binary today needs to observe router's exit
+	// before shutdown()'s own w.wg.Wait() returns (unlike BUG-020's
+	// engineDone need, which predates router's existence).
+	routerRunErr error
 }
 
 // EngineRunErr returns the error core.Engine.RunCommandLoop exited with
@@ -273,7 +362,27 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		cancel:        cancel,
 		engineDone:    make(chan struct{}),
 	}
-	w.viewsLoop = core.NewViewsLoop(transport, w.viewStore, correlationID)
+	// FEAT-208 increment 2: router replaces ui.core.ViewsLoop as this
+	// binary's transport consumer — see the router/viewStore field doc
+	// comments above for the full rationale. Constructing it here does
+	// NOT start it draining anything yet (router.New never touches the
+	// transport's channels until Run is called) — Run is deliberately
+	// started further below, only after financeScreen/servicesScreen
+	// have been primed and bound via primeScreenSubscription, which reads
+	// the same channels directly and must be the transport's ONLY reader
+	// until it finishes (see feat208PrimeTimeout's doc comment).
+	w.router = router.New(transport, router.WithCorrelationID(correlationID))
+	// Each screen mints its OWN correlation ID (never bootCore's shared
+	// correlationID param, which mapScreen below still reuses per its
+	// pre-existing, pre-FEAT-208 construction) so each Subscribe command
+	// below carries a distinct CorrelationID — primeScreenSubscription
+	// matches its own screen's first Delta/Result by exactly this value,
+	// and a shared ID across two concurrent Subscribes would make that
+	// match ambiguous.
+	financeCorrID := errs.NewCorrelationID()
+	servicesCorrID := errs.NewCorrelationID()
+	w.financeScreen = financescreen.New(financeCorrID)
+	w.servicesScreen = servicesscreen.New(servicesCorrID)
 	w.debugState = dbgState
 	w.devConsole = devmode.New(
 		devmode.WithRequireConsole(w.debugState.RequireConsole),
@@ -310,31 +419,249 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	}
 	w.pumpDone = pumpDone
 
-	w.wg.Add(2)
+	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
 		w.engineRunErr = engine.RunCommandLoop(ctx, transport)
 		close(w.engineDone)
 	}()
-	go func() { defer w.wg.Done(); w.viewsLoop.Run(ctx.Done()) }()
+
+	// FEAT-208 increment 2: prime + bind financeScreen ("f2.finance") and
+	// servicesScreen ("f4.services") BEFORE router.Run starts (this is
+	// the only window in which bootCore itself reads transport.Deltas()/
+	// Results() directly — see primeScreenSubscription's doc comment).
+	// Both views are real, registered compose.Wire entries
+	// (viewRegistrationOrder, internal/engine/compose/{finance,services}_publish.go)
+	// as of this increment, so both Subscribes are expected to be
+	// accepted and to produce a first Delta — unlike mapScreen's
+	// "f1.viewport" below, which is NOT registered and is not primed.
+	//
+	// primed is the shared "already bound during this priming window"
+	// forwarding table both calls below share — see primeScreenSubscription's
+	// doc comment for why this is required: signalSubscriptionPump's
+	// coalescing means a SINGLE pump wake can publish deltas for EVERY
+	// currently-live subscription in one cycle (subscribe.go's Publish
+	// iterates all of them), not just the one just-subscribed. Priming
+	// servicesScreen first and financeScreen second means financeScreen's
+	// own Subscribe call can (and, empirically, sometimes does) wake a
+	// pump cycle that ALSO republishes servicesScreen's already-bound
+	// subscription — that second services delta must reach servicesScreen
+	// too, not be silently dropped just because its CorrelationID isn't
+	// financeScreen's.
+	primed := make(map[protocol.SubscriptionID]func(protocol.Delta))
+	if err := primeScreenSubscription(transport, w.router, primed, servicesCorrID, servicesscreen.ViewSubscriptionName,
+		func() error { return w.servicesScreen.Subscribe(transport.SendCommand) },
+		w.servicesScreen.BindSubscription,
+		w.servicesScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.services.Subscribe",
+		})
+	}
+	if err := primeScreenSubscription(transport, w.router, primed, financeCorrID, financescreen.ViewSubscriptionName,
+		func() error { return w.financeScreen.Subscribe(transport.SendCommand) },
+		w.financeScreen.BindSubscription,
+		w.financeScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.finance.Subscribe",
+		})
+	}
 
 	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's
 	// real, already-accepted Subscribe method — internal/ui/screens/map's
 	// own public API — never a hand-rolled Command literal standing in
-	// for it). With the real engine, "f1.viewport" is not yet a served view
-	// (v1 serves "engine.status" only), so this Subscribe is issued and the
-	// engine rejects it — the honest baseline-one state, recorded here: the
-	// map screen's real viewport rendering is its own follow-up, not this
-	// flip's scope.
+	// for it). With the real engine, "f1.viewport" is STILL not a served
+	// view this increment (only "f2.finance"/"f4.services"/"engine.status"
+	// are registered — the design's §6 "f1.viewport" fast-follow has not
+	// landed), so this Subscribe is issued and the engine rejects it — the
+	// honest baseline-one state, recorded here: the map screen's real
+	// viewport rendering is its own follow-up, not this flip's scope. It
+	// is deliberately NOT run through primeScreenSubscription (which would
+	// simply time out waiting for a Delta that can never arrive) — it
+	// keeps its pre-existing fire-and-forget shape.
 	if err := w.mapScreen.Subscribe(transport.SendCommand); err != nil {
-		w.shutdown()
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.map.Subscribe",
 		})
 	}
 
+	// NOW start router.Run — the ONE dedicated transport-draining
+	// goroutine for the rest of this process's life (ui/router/doc.go).
+	// Priming above is complete, so router.Run is the transport's only
+	// reader from this point forward.
+	w.wg.Add(1)
+	go func() { defer w.wg.Done(); w.routerRunErr = w.router.Run(ctx) }()
+
 	return w, nil
 }
+
+// primeScreenSubscription performs the one synchronous handshake every
+// FEAT-208 increment-2 router-bound screen needs at boot: it calls
+// subscribe() (the screen's own real Subscribe method, e.g.
+// financeScreen.Subscribe(transport.SendCommand)), then reads
+// transport.Results()/Deltas() DIRECTLY (bypassing router — router has
+// not started yet, see w.router's own doc comment) until it has observed
+// BOTH the accepted CommandResult and the first Delta carrying
+// correlationID (the exact CorrelationID the screen's Subscribe call
+// used) — subscribe.go's "pendingCorrID... echoed on the next delta
+// only" contract is what makes this possible: the first Delta for a
+// fresh Subscribe always carries the causing command's own
+// CorrelationID, exactly once.
+//
+// Once both are observed, it calls bind(subscriptionID) (the screen's own
+// BindSubscription) AND router.BindSubscription(subscriptionID, ...) so
+// every SUBSEQUENT delta for this subscription — which router.Run will
+// see once it starts — is routed to the same screen; then it calls
+// applyDelta(firstDelta) directly (since router never saw this first
+// delta — it was consumed here, before Run started) so the screen's
+// first real data is not lost. It also registers subscriptionID into
+// primed (see below) so a LATER call to primeScreenSubscription (priming
+// a different screen) can still forward deltas belonging to THIS
+// subscription if one arrives during its own wait.
+//
+// This exists because protocol.CommandResult has no SubscriptionID field
+// (envelope.go) — router.RegisterResultHandler only delivers
+// CommandResults, not Deltas, so it cannot by itself learn a Subscribe's
+// resulting SubscriptionID. This handshake is boot.go's own bridge across
+// that gap, not a router or protocol change (out of this dispatch's
+// scope — see the FEAT-208 build brief).
+//
+// primed is a shared map every sequential primeScreenSubscription call in
+// the same bootCore invocation passes the SAME instance of (bootCore's
+// own `primed := make(map[...])`, threaded through both calls). It exists
+// because engine.core's signalSubscriptionPump is coalescing
+// (commands.go's own doc comment: "multiple commands... collapse into a
+// single recompute") and subscribe.go's Publish republishes EVERY live
+// subscription on each pump wake, not just the one that just subscribed
+// — so priming a SECOND screen can (and, empirically, sometimes does)
+// observe a pump cycle that ALSO republishes the FIRST screen's
+// already-bound subscription (its Seq advancing past 1). Without
+// forwarding, that delta's CorrelationID would not match `want` (only a
+// subscription's very first delta ever carries one) and it would be
+// silently dropped — losing a real update for the first screen AND
+// leaving router's own SeqTracker (once it starts) expecting a Seq it
+// will never see, misreporting a gap. Every delta whose SubscriptionID is
+// already in primed is therefore forwarded to its owner's applyDelta
+// directly here, exactly mirroring what router.handleDelta will do for
+// every later delta once Run starts (minus router's own SeqTracker
+// bookkeeping, which is irrelevant here since nothing has bound through
+// router's Observe path yet during priming).
+//
+// applyDelta's type is func(protocol.Delta), matching every real screen's
+// exported ApplyDelta method exactly (finance.Screen, services.Screen) —
+// passed as a bound method value, never wrapped, so a panic inside a
+// screen's own ApplyDelta during priming surfaces exactly as it would
+// during a normal boot failure (loud, not swallowed) rather than being
+// silently absorbed by an adapter.
+func primeScreenSubscription(
+	transport *protocol.InProcTransport,
+	rt *router.Router,
+	primed map[protocol.SubscriptionID]func(protocol.Delta),
+	correlationID string,
+	viewName string,
+	subscribe func() error,
+	bind func(protocol.SubscriptionID),
+	applyDelta func(protocol.Delta),
+) error {
+	if err := subscribe(); err != nil {
+		return err
+	}
+	want := protocol.CorrelationID(correlationID)
+	deadline := time.After(feat208PrimeTimeout)
+	gotResult, gotDelta := false, false
+	for !gotResult || !gotDelta {
+		select {
+		case r, ok := <-transport.Results():
+			if !ok {
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName, "cause": "transport.Results() closed while priming",
+				})
+			}
+			if r.CorrelationID != want {
+				// A CommandResult for a CorrelationID that is NOT this
+				// handshake's own — and not any earlier handshake's
+				// either, since each command produces exactly one
+				// CommandResult and an already-primed screen's own
+				// Subscribe result was already consumed by ITS OWN prior
+				// primeScreenSubscription call. bootCore is documented
+				// (and, for as long as priming runs, REQUIRED) to be the
+				// transport's only reader — no other command can
+				// legitimately be in flight during this window (mapScreen's
+				// own Subscribe is issued strictly AFTER both primes
+				// complete; render/input, which could issue arbitrary
+				// commands, only start after bootCore returns). A stray
+				// result here therefore means some caller broke that
+				// invariant — a programming error, not a droppable event:
+				// silently discarding it (the previous behaviour) would
+				// consume a real Go channel receive that a router-
+				// registered handler could never be delivered afterward
+				// (GR#23 independent round r2/r3 finding — see
+				// feat208_priming_destructive_test.go's own attack). Fail
+				// loud instead, naming the foreign CorrelationID, so this
+				// constraint violation surfaces as a boot failure rather
+				// than a silently eaten result.
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName,
+					"cause":                "observed a CommandResult for a foreign CorrelationID during the priming window — bootCore must be the transport's only reader while priming runs; a third concurrent command at boot is a programming error, not a droppable event",
+					"foreignCorrelationID": string(r.CorrelationID),
+				})
+			}
+			if !r.Accepted {
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName, "cause": "Subscribe rejected",
+				})
+			}
+			gotResult = true
+		case d, ok := <-transport.Deltas():
+			if !ok {
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName, "cause": "transport.Deltas() closed while priming",
+				})
+			}
+			if d.CorrelationID != want {
+				// Not this handshake's own first delta. If it belongs to
+				// an already-primed subscription (coalesced pump wake —
+				// see primed's own doc comment above), forward it to that
+				// subscription's owner directly rather than dropping it.
+				if fn, ok := primed[d.SubscriptionID]; ok {
+					fn(d)
+				}
+				continue
+			}
+			bind(d.SubscriptionID)
+			rt.BindSubscription(d.SubscriptionID, deltaReceiverFunc(applyDelta))
+			primed[d.SubscriptionID] = applyDelta
+			applyDelta(d)
+			gotDelta = true
+		case <-deadline:
+			return errs.New(codeBootFailure, correlationID, map[string]any{
+				"component": "primeScreenSubscription", "view": viewName, "cause": "timed out waiting for Subscribe's own Result/Delta",
+			})
+		}
+	}
+	return nil
+}
+
+// deltaReceiverFunc adapts a bare func(protocol.Delta) into
+// router.DeltaReceiver (an ApplyDelta(protocol.Delta) method), so
+// primeScreenSubscription can bind router.BindSubscription directly
+// against a screen's exported ApplyDelta method value without router
+// needing to import (or know about) any concrete screen package —
+// preserving ui/router/doc.go's "never imports a concrete screen
+// package" contract.
+type deltaReceiverFunc func(protocol.Delta)
+
+func (f deltaReceiverFunc) ApplyDelta(d protocol.Delta) { f(d) }
 
 // sendPauseCommand sends a real protocol.KindPause Command through
 // transport (feat.devmode AC-DM2: opening the console pauses the sim) —

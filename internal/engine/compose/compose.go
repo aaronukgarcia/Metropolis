@@ -293,15 +293,20 @@ type viewRegistration struct {
 // registration order (AC-2 extended) — a slice, NEVER a map: this
 // package never ranges a view registration table (GR#21), matching
 // registrationOrder's own discipline above. Increment 1 (the FEAT-208
-// design's §6 recommended first slice) registers exactly one view:
+// design's §6 recommended first slice) registered exactly one view:
 // "f4.services", serving only its capacityDemand sub-view
-// (buildServicesCapacityDemandPatch, services_publish.go). Later
-// increments (f8.districts, f2.finance, f5.trade, f7.projections,
+// (buildServicesCapacityDemandPatch, services_publish.go). Increment 2
+// adds "f2.finance", serving only its balanceSheet sub-view
+// (buildFinanceBalanceSheetPatch, finance_publish.go) — the design's §6
+// fast-follow list's next entry, chosen because engine.finance is
+// already composed and ui.screen.finance's ApplyDelta already exists.
+// Later increments (f8.districts, f5.trade, f7.projections,
 // f1.viewport) are documented, deliberate fast-follows — see the
 // design's §6 — each adding one more entry here, in the SAME slice,
 // never a new registration mechanism.
 var viewRegistrationOrder = []viewRegistration{
 	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
+	{name: financeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildFinanceBalanceSheetPatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view

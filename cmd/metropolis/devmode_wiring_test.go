@@ -112,15 +112,17 @@ func TestBootCore_DevConsole_PauseWiredThroughRealTransport(t *testing.T) {
 	}
 	defer w.shutdown()
 
-	// bootCore's own internal MapScreen.Subscribe call already produced
-	// exactly one CommandResult nothing has read yet — drain it first,
-	// same as boot_test.go's TestIntegration_CommandsExerciseRealEngineEndToEnd,
-	// so the Pause result read below is unambiguously this test's own.
-	select {
-	case <-w.transport.Results():
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for the boot Subscribe's CommandResult")
-	}
+	// FEAT-208 increment 2: w.router now owns w.transport.Results() post-
+	// boot (router_testutil_test.go's own doc comment) — no leftover-
+	// result drain is needed or possible any more. sendPauseCommand
+	// (boot.go) stamps the Pause Command's CorrelationID with whatever
+	// string Open below is called with ("pause-through-real-transport"),
+	// so this test registers exactly that correlation ID with w.router
+	// BEFORE calling Open, guaranteeing router routes the resulting
+	// CommandResult back to this test's own channel regardless of
+	// whatever else router is also routing/RouteMiss-logging
+	// concurrently (e.g. the boot-time MapScreen Subscribe's own result).
+	pauseResultCh := awaitRouterResult(w, "pause-through-real-transport")
 
 	// Force debug on directly against the SAME State devConsole is wired
 	// to, via a wiring this test constructs standalone only for the
@@ -148,7 +150,7 @@ func TestBootCore_DevConsole_PauseWiredThroughRealTransport(t *testing.T) {
 	}
 
 	select {
-	case res := <-w.transport.Results():
+	case res := <-pauseResultCh:
 		if !res.Accepted {
 			t.Fatalf("Pause command rejected by the real engine: %+v", res.Error)
 		}
