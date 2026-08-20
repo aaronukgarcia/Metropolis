@@ -720,20 +720,65 @@ func findReachableFuncs(candidates []CandidateType, files []pkgFile) []*Reachabl
 	return out
 }
 
-// funcLitName derives a readable identity for a function literal so
-// violationKey (which has no Line component, by design — see its own
-// doc comment) still distinguishes two different closures in the same
-// file: prefer the name of the var/field it is directly assigned to
-// (var Copier = func(...){...} -> "Copier"), and fall back to a
-// position-qualified synthetic name for closures with no direct
-// assignment (passed inline as an argument, returned bare, etc.) so
-// two such closures in the same file can never collide.
-func funcLitName(fset *token.FileSet, lit *ast.FuncLit, assignedNames map[*ast.FuncLit]string) string {
+// unassignedClosureFormat is the FuncName shape used for a function
+// literal that has no direct var/field assignment (BUG-306's fix,
+// scopeName + ordinal — see funcLitName's doc comment). Exported as a
+// named format string (rather than inlined at each call site) so the
+// migration tooling and tests can build/parse it identically to
+// funcLitName itself, instead of hand-duplicating the layout.
+const unassignedClosureFormat = "%s#closure%d"
+
+// packageScopeName is the synthetic enclosing-scope name used for a
+// function literal that is not lexically nested inside any *ast.FuncDecl
+// at all (e.g. a bare closure passed as an argument in a package-level
+// var initializer). It is deliberately not a legal Go identifier so it
+// can never collide with a real enclosing function's name.
+const packageScopeName = "<package>"
+
+// funcLitName derives a POSITION-INDEPENDENT identity for a function
+// literal so violationKey (which has no Line component, by design — see
+// its own doc comment) still distinguishes two different closures in the
+// same file: prefer the name of the var/field it is directly assigned to
+// (var Copier = func(...){...} -> "Copier"; already position-independent
+// because a duplicate var name in the same scope is a Go compile error),
+// and fall back to scopeName (the innermost enclosing function/method
+// name, or packageScopeName for a closure with no enclosing FuncDecl at
+// all) plus ordinal (this closure's 1-based position among the OTHER
+// closures found within that same enclosing scope, counted in AST
+// traversal/declaration order) for closures with no direct assignment
+// (passed inline as an argument, returned bare, etc.).
+//
+// BUG-306 (Bro audit M2, 2026-08-20): the prior fallback was
+// "<func literal at line %d>" — a Line-keyed identity feeding directly
+// into violationKey via FuncName, which is exactly the BUG-119 round-1
+// failure mode (a location-dependent component reintroduced into a key
+// that round 1 of THAT fix had already banned) via a second, independent
+// code path round 1 didn't touch: a cosmetic edit (a doc comment, a
+// blank line, an unrelated statement) inserted anywhere above an
+// unassigned closure in the same enclosing function shifts its line
+// number, which changes funcLitName's return value, which changes
+// violationKey, which flips the closure's already-accepted finding into
+// a false "NEW violation" build failure — the false-positive class
+// BUG-119 was supposed to have retired for good. This was the direct
+// cause of the repeated manual accepted-findings rekey (commands.go
+// re-keyed twice in two days per BUG-306's own report).
+//
+// ordinal is stable under exactly that churn: it counts POSITION among
+// sibling closures within the same enclosing scope, not the closure's
+// own line number, so inserting/removing text above the closure that
+// does not add or remove an earlier sibling closure in source order
+// leaves every closure's ordinal — and therefore its FuncName, and
+// therefore violationKey — unchanged. This is deliberately the same
+// "location-independent, structure-derived" philosophy as BUG-119 round
+// 7's ReceiverExprPrinted/MatchedExprPrinted (printed type text instead
+// of a line number) and round 2's ReceiverTypeName (the enclosing
+// declaration disambiguates otherwise-identical tuples) — see
+// violationKey's own doc comment for both.
+func funcLitName(fset *token.FileSet, lit *ast.FuncLit, assignedNames map[*ast.FuncLit]string, scopeName string, ordinal int) string {
 	if name, ok := assignedNames[lit]; ok {
 		return name
 	}
-	pos := fset.Position(lit.Pos())
-	return fmt.Sprintf("<func literal at line %d>", pos.Line)
+	return fmt.Sprintf(unassignedClosureFormat, scopeName, ordinal)
 }
 
 // scanFuncLits implements BUG-138's fix: walk pf.AST for every
@@ -770,16 +815,76 @@ func scanFuncLits(pf pkgFile, byName map[string]bool) []*ReachableFunc {
 		return true
 	})
 
+	// Second pass: for every top-level *ast.FuncDecl, walk its body for
+	// FuncLits with that FuncDecl's own name/receiver as the enclosing
+	// scope (BUG-306); package-level FuncLits with no enclosing FuncDecl
+	// at all (e.g. a closure argument inside a package-level var
+	// initializer) get their own walk below, keyed on packageScopeName.
 	var out []*ReachableFunc
-	ast.Inspect(pf.AST, func(n ast.Node) bool {
+	for _, decl := range pf.AST.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		recvExprPrinted := ""
+		if fd.Recv != nil && len(fd.Recv.List) > 0 {
+			recvExprPrinted = printExpr(pf.Fset, fd.Recv.List[0].Type)
+		}
+		out = walkClosuresIn(fd.Body, pf, byName, assignedNames, fd.Name.Name, recvExprPrinted, out)
+	}
+
+	// Package-level closures: any FuncLit reachable from a Decl that is
+	// NOT itself the *ast.FuncDecl.Body walk above (var/const initializers
+	// and any expression they contain) share ONE ordinal sequence keyed
+	// on packageScopeName, counted across the whole file in declaration
+	// order — inserting/removing a package-level FuncDecl above them does
+	// not touch this sequence, since only non-FuncDecl decls feed it.
+	for _, decl := range pf.AST.Decls {
+		if _, isFd := decl.(*ast.FuncDecl); isFd {
+			continue
+		}
+		out = walkClosuresIn(decl, pf, byName, assignedNames, packageScopeName, "", out)
+	}
+	return out
+}
+
+// walkClosuresIn finds every *ast.FuncLit directly reachable from node
+// (which is NOT itself expected to be a FuncLit — callers pass a
+// FuncDecl's body or a package-level Decl) and assigns each one a
+// position-independent identity (BUG-306): scopeName/scopeRecvExpr name
+// the ENCLOSING scope this call was invoked for (an enclosing function's
+// own name/receiver, or packageScopeName/"" at package level), and
+// ordinal is that closure's 1-based position among the closures found
+// directly within this SAME call's scope, in AST traversal order.
+//
+// A closure nested inside another closure gets its OWN fresh scope
+// (recursing with the outer closure's own just-computed name as the new
+// scopeName, and a new ordinal counter starting at 1) rather than sharing
+// the outer function's counter — so adding/removing a sibling closure
+// inside the OUTER closure never perturbs ordinals inside an INNER one,
+// and vice versa. This mirrors BUG-138's "closures can nest arbitrarily"
+// requirement while keeping every scope's ordinal sequence independent.
+func walkClosuresIn(node ast.Node, pf pkgFile, byName map[string]bool, assignedNames map[*ast.FuncLit]string, scopeName, scopeRecvExpr string, out []*ReachableFunc) []*ReachableFunc {
+	ordinal := 0
+	ast.Inspect(node, func(n ast.Node) bool {
+		if n == node {
+			return true
+		}
 		lit, ok := n.(*ast.FuncLit)
 		if !ok || lit.Body == nil {
 			return true
 		}
+		ordinal++
 		pos := pf.Fset.Position(lit.Pos())
-		name := funcLitName(pf.Fset, lit, assignedNames)
-		out = appendParamFuncs(out, byName, pf, name, noReceiverSentinel, "", lit.Type, lit.Body, pos.Line)
-		return true
+		name := funcLitName(pf.Fset, lit, assignedNames, scopeName, ordinal)
+		out = appendParamFuncs(out, byName, pf, name, noReceiverSentinel, scopeRecvExpr, lit.Type, lit.Body, pos.Line)
+
+		// Recurse into this closure's OWN body as a fresh, independent
+		// scope (see doc comment above) instead of letting ast.Inspect's
+		// default traversal fold nested closures into this scope's
+		// ordinal sequence.
+		out = walkClosuresIn(lit.Body, pf, byName, assignedNames, name, scopeRecvExpr, out)
+		return false
 	})
 	return out
 }
