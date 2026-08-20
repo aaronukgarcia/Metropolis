@@ -4396,6 +4396,12 @@
       "message": "a numeric command input was outside its documented domain (a negative amount, a negative month advance, a negative weather wind speed)",
       "remedy": "Rejected, never silently clamped (GR#16, AC-11)."
     },
+    "MET-G4911": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "Pilot is already assigned to another aircraft",
+      "remedy": "Release the pilot from their current aircraft (RemovePilot) before assigning them to a new one; a pilot flies exactly one unit at a time."
+    },
     "MET-G5101": {
       "severity": "error",
       "module": "engine.cafe",
