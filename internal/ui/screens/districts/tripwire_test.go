@@ -1,52 +1,50 @@
 package districts
 
-// Independent-destructive addition (GR#23): doc.go repeatedly labels AC-2,
-// AC-3, AC-4, AC-5 and AC-8 "BLOCKED (tripwire)" but, as shipped, no test in
-// this package actually fires when the blocking condition (engine.policies
-// landing on main) goes away -- the prose says "tripwire", the package has
-// none. A tripwire that can never fire is a fabrication, not a safeguard:
-// nobody would be told to come back and build AC-2/3/4/5/8 once
-// engine.policies merges. This test makes the check mechanical: it fails
-// loudly the moment internal/engine/policies exists in this module tree,
-// forcing a human to read this comment and revisit the five BLOCKED ACs
-// instead of AC-2/3/4/5/8 silently staying unbuilt forever after their
-// blocker clears.
+// Independent-destructive addition (GR#23), second life. Originally this
+// tripwire fired the moment internal/engine/policies appeared in the module
+// tree, forcing a human to revisit the five BLOCKED ACs (AC-2/3/4/5/8 in
+// docs/planning/acceptance/ui.screen.districts.md) instead of letting them
+// stay silently unbuilt after their blocker cleared.
 //
-// Path arithmetic: this package lives at internal/ui/screens/districts: two
-// levels up is internal/ui/, three levels up is internal/, so
-// "../../../engine/policies" is internal/engine/policies -- verified
-// against internal/engine/tax's actual location the same way (AC-6 is live
-// today because that directory exists; this test asserts its policies
-// sibling does not, yet).
+// IT FIRED, AS DESIGNED, on 2026-08-20 when the lane/bob sweep landed
+// engine.policies on main. The bookkeeping it demanded was done at that
+// moment: FEAT-210 tracks building the five ACs against the real
+// PoliciesAPI (fixture-testable now; live data arrives with FEAT-208's
+// publish path). The test now guards the INVERSE drift: FEAT-210's premise
+// is that engine.policies exists on main -- if the module were ever
+// reverted/renamed without FEAT-210 and this package's doc.go being
+// re-scoped, the panes would reference a phantom module. Fail loudly in
+// that case too.
+//
+// Path arithmetic: this package lives at internal/ui/screens/districts;
+// "../../../engine/policies" is internal/engine/policies.
 
 import (
 	"os"
 	"testing"
 )
 
-func TestTripwire_EnginePoliciesNotYetLanded(t *testing.T) {
+func TestTripwire_EnginePoliciesLanded_FEAT210Pending(t *testing.T) {
 	const policiesDir = "../../../engine/policies"
 	info, err := os.Stat(policiesDir)
 	if os.IsNotExist(err) {
-		// Expected today: engine.policies is REJECT-state on lane/bob only,
-		// not on main. AC-2/AC-3/AC-4/AC-5/AC-8 remain correctly BLOCKED.
-		return
+		t.Fatalf(
+			"TRIPWIRE FIRED (inverse): %s no longer exists, but FEAT-210 and "+
+				"this package's doc.go assume engine.policies is on main "+
+				"(landed 2026-08-20, lane/bob sweep). If the module was "+
+				"deliberately reverted, re-scope FEAT-210 and restore the "+
+				"BLOCKED state in doc.go; do not leave AC-2/3/4/5/8 pointing "+
+				"at a phantom module.",
+			policiesDir,
+		)
 	}
 	if err != nil {
 		t.Fatalf("unexpected error stat'ing %s: %v", policiesDir, err)
 	}
-	if info.IsDir() {
-		t.Fatalf(
-			"TRIPWIRE FIRED: %s now exists -- engine.policies has landed on main. "+
-				"AC-2 (district drawing/naming), AC-3 (policy library browser), "+
-				"AC-4 (impact preview confidence-honest rendering), AC-5 (conflict "+
-				"warnings) and AC-8 (ResolveScope cell-highlight) in "+
-				"docs/planning/acceptance/ui.screen.districts.md are no longer "+
-				"correctly BLOCKED and this package (doc.go's Provenance section) "+
-				"must be revisited to build against the real, now-registered "+
-				"PoliciesAPI shape -- do not leave this pane rendering "+
-				"RenderBlockedFeature once its data source is real.",
-			policiesDir,
-		)
+	if !info.IsDir() {
+		t.Fatalf("%s exists but is not a directory -- investigate", policiesDir)
 	}
+	// engine.policies is on main and FEAT-210 tracks building AC-2/3/4/5/8
+	// against it. This passing test is the record that the original
+	// tripwire fired and was actioned, not a claim that the ACs are built.
 }

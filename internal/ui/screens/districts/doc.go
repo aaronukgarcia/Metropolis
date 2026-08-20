@@ -21,7 +21,12 @@
 // unmerged/rejected dependency's exact field shapes is no safer -- rejected
 // code is exactly the code most likely to change shape before it lands.
 // So: every AC whose data comes from engine.policies (AC-2, AC-3, AC-4,
-// AC-5, AC-8) is DECLARED BLOCKED here, tripwire below, following the F4
+// AC-5, AC-8) was DECLARED BLOCKED here with a tripwire, following the F4
+// precedent. THE TRIPWIRE FIRED 2026-08-20 when engine.policies landed on
+// main (lane/bob sweep): those five ACs are now PENDING BUILD under
+// FEAT-210 against the real, accepted PoliciesAPI shape -- still not
+// stubbed ahead here, still rendering RenderBlockedFeature until FEAT-210
+// executes. Original rationale preserved below, following the F4
 // SVC-3/SVC-6 precedent (internal/ui/screens/services/doc.go) exactly --
 // no wire schema, no forward-compat stub is invented for a PoliciesAPI
 // shape this package has not seen accepted. Only AC-1 (protocol purity,
@@ -44,7 +49,7 @@
 // TestNoEngineImport makes the same guarantee mechanically in `go test`
 // (mirrors every built F-screen's own sf1_test.go).
 //
-// # AC-2: district drawing/naming -- BLOCKED (tripwire)
+// # AC-2: district drawing/naming -- PENDING BUILD (FEAT-210; engine.policies landed 2026-08-20)
 //
 // US-1's cell-paint-and-name flow issues a CreateDistrict command against
 // engine.policies' registered edge. Not built: engine.policies is not on
@@ -54,7 +59,7 @@
 // Bill: AC-2 cannot be closed until engine.policies lands accepted on
 // main.
 //
-// # AC-3: policy library browser -- BLOCKED (tripwire)
+// # AC-3: policy library browser -- PENDING BUILD (FEAT-210; engine.policies landed 2026-08-20)
 //
 // US-2's categorised browser sources PoliciesAPI's library query. Not
 // built: no PoliciesAPI, no wire schema for it (inventing one against
@@ -63,7 +68,7 @@
 // renders the honest "unavailable -- engine.policies not yet merged to
 // main" state for this pane.
 //
-// # AC-4: impact preview (confidence-honest rendering) -- BLOCKED (tripwire)
+// # AC-4: impact preview (confidence-honest rendering) -- PENDING BUILD (FEAT-210; engine.policies landed 2026-08-20)
 //
 // US-3's PreviewImpact rendering (Computed solid / Extrapolated dim, per
 // engine.policies.md AC-4/AC-5 and UI-SPEC §4's history-vs-projection
@@ -72,7 +77,7 @@
 // "Lazy implementation this rejects" clause) either render nothing
 // honestly labelled or invent fake confidence data.
 //
-// # AC-5: conflict warnings -- BLOCKED (tripwire)
+// # AC-5: conflict warnings -- PENDING BUILD (FEAT-210; engine.policies landed 2026-08-20)
 //
 // US-4's inline conflict warning sources PoliciesAPI's conflictsWith data
 // (engine.policies.md AC-11). No live source; RenderBlockedFeature covers
@@ -111,7 +116,7 @@
 // AC-7 text and "Out of scope" section require; no check for it exists in
 // this package's tests.
 //
-// # AC-8: scope-resolution consumption (ResolveScope) -- BLOCKED (tripwire)
+// # AC-8: scope-resolution consumption (ResolveScope) -- PENDING BUILD (FEAT-210; engine.policies landed 2026-08-20)
 //
 // F8's district cell-highlight rendering would source
 // engine.policies.ResolveScope. Not built: no engine.policies on main.
@@ -162,8 +167,8 @@
 // "districts.set-tax-multiplier" command this screen depends on, states
 // explicitly that row-level drill-through is BLOCKED pending ASM-275
 // (AC-7) -- and additionally, beyond AC-13's own minimum, that AC-2/3/4/5/8
-// are wholesale BLOCKED pending engine.policies landing accepted on main
-// (Provenance, above) -- and cross-references engine.policies.md's
+// are wholesale PENDING BUILD under FEAT-210 (engine.policies landed
+// 2026-08-20; Provenance, above) -- and cross-references engine.policies.md's
 // PreviewDrift/confidence-tag conventions this screen would render, not
 // reinvent, once that lands.
 //
@@ -171,7 +176,7 @@
 //
 // This dispatch builds AC-1, AC-6, AC-7 (whole-view half only), AC-9
 // (partial), AC-10, AC-11, AC-12, AC-13. AC-2, AC-3, AC-4, AC-5, AC-8 and
-// AC-7's row-level half are BLOCKED (tripwire, see above) -- their wire/
+// AC-7's row-level half await FEAT-210 / ASM-275 (see above) -- their wire/
 // drill plumbing is deliberately NOT stubbed against engine.policies'
 // unreviewed shape; wiring them requires this package to be revisited once
 // engine.policies lands, not merely flipped on. Out of scope (per
