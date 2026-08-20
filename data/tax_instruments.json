@@ -45,7 +45,7 @@
       },
       "zoneOverrides": {}
     },
-    "importDuties": {
+    "import-duties": {
       "name": "Import duties",
       "category": "import",
       "rateRange": {
@@ -58,7 +58,7 @@
         "comment": "Base elasticity of the imported-goods transaction base to the duty rate. Derived placeholder, no external anchor — pending Aaron's balance pass."
       },
       "bearerWeights": {
-        "comment": "Rate-dependent incidence split (ASM-287: importer firm vs downstream consumer; §54 'duties & levies'). Two example rate points; at higher duty the importer passes more through to the downstream consumer. Note: importDuties taxes transactions in data/market.json commodities — it does not restate any commodity price field (GR#3, AC-3).",
+        "comment": "Rate-dependent incidence split (ASM-287: importer firm vs downstream consumer; §54 'duties & levies'). Two example rate points; at higher duty the importer passes more through to the downstream consumer. Note: import-duties taxes transactions in data/market.json commodities — it does not restate any commodity price field (GR#3, AC-3).",
         "ratePoints": [
           {
             "ratePercent": 10,
@@ -80,7 +80,7 @@
       },
       "zoneOverrides": {}
     },
-    "corporationTax": {
+    "corporation-tax": {
       "name": "Corporation tax",
       "category": "corporateProfit",
       "rateRange": {
@@ -183,7 +183,7 @@
       },
       "zoneOverrides": {}
     },
-    "councilTax": {
+    "council-tax": {
       "name": "Council tax",
       "category": "property",
       "rateRange": {
@@ -220,7 +220,7 @@
       },
       "zoneOverrides": {}
     },
-    "businessRates": {
+    "business-rates": {
       "name": "Business rates",
       "category": "property",
       "rateRange": {

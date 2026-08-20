@@ -38,6 +38,7 @@ type financeSeam interface {
 // it in production.
 type taxSeam interface {
 	SetDistrictMultiplier(district tax.DistrictID, instrumentID string, multiplier float64) error
+	GetDistrictMultiplier(district tax.DistrictID, instrumentID string) (float64, error)
 }
 
 // PoliciesAPI is code.json's "engine.policies" inbound contract
@@ -69,6 +70,13 @@ type PoliciesAPI struct {
 	nextEnactmentID uint64
 	nextDistrictID  uint64
 	currentMonth    int64
+
+	// lastPostedMonth is the most recent simulation month for which
+	// AdvanceMonth fully completed (checkpoint, recurring opex posting, and
+	// clock advance). A second AdvanceMonth for the same month is a no-op —
+	// never a double debit, never a re-run checkpoint. -1 means "no month
+	// has been fully processed yet".
+	lastPostedMonth int64
 
 	meta policiesMeta
 
@@ -125,6 +133,7 @@ func NewPoliciesAPI(correlationID string) *PoliciesAPI {
 		previews:        make(map[EnactmentID]storedPreview),
 		nextEnactmentID: 1,
 		nextDistrictID:  1,
+		lastPostedMonth: -1,
 	}
 	a.self.Store(a)
 	return a
@@ -285,13 +294,10 @@ func (a *PoliciesAPI) sortedActiveEnactmentsLocked() []*enactment {
 	return acts
 }
 
-// nextEnactmentIDLocked mints the next enactment ID. The caller holds the
-// write lock.
-func (a *PoliciesAPI) nextEnactmentIDLocked() EnactmentID {
-	if err := a.checkNotCopied("nextEnactmentIDLocked"); err != nil {
-		return ""
-	}
-	id := EnactmentID(fmt.Sprintf("enactment-%d", a.nextEnactmentID))
-	a.nextEnactmentID++
-	return id
+// encodeEnactmentID renders the deterministic enactment ID for the given
+// counter value ("enactment-<n>"). It is a pure function: the caller owns
+// the counter and advances it only after a successful commit, so a failed
+// enactment never burns an ID (GR#21).
+func encodeEnactmentID(n uint64) EnactmentID {
+	return EnactmentID(fmt.Sprintf("enactment-%d", n))
 }

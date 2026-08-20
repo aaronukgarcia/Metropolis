@@ -92,7 +92,7 @@ func TestLoadInstruments(t *testing.T) {
 		ids = append(ids, in.ID)
 		have[in.ID] = true
 	}
-	for _, want := range []string{"vat", "importDuties", "corporationTax", "paye", "councilTax", "businessRates"} {
+	for _, want := range []string{"vat", "import-duties", "corporation-tax", "paye", "council-tax", "business-rates"} {
 		if !have[want] {
 			t.Errorf("missing instrument %q", want)
 		}
@@ -161,7 +161,7 @@ func TestSetRate(t *testing.T) {
 // relationship, not a decorative coefficient.
 func TestElasticBaseShrinksWithRate(t *testing.T) {
 	api := newTestAPI(t)
-	const id = "councilTax"
+	const id = "council-tax"
 	base := gbp(10_000_000)
 
 	// Low rate: at the reference rate the base is full.
@@ -198,7 +198,7 @@ func TestElasticBaseShrinksWithRate(t *testing.T) {
 // revenue is concave, not a straight rate × fixedBase line.
 func TestLafferMarginalRevenueDecelerates(t *testing.T) {
 	api := newTestAPI(t)
-	const id = "councilTax"
+	const id = "council-tax"
 	if err := api.SetBase(id, gbp(10_000_000)); err != nil {
 		t.Fatalf("SetBase: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestLafferMarginalRevenueDecelerates(t *testing.T) {
 // split — proportions, not just the total — and the split always sums to 1.0.
 func TestIncidenceShift(t *testing.T) {
 	api := newTestAPI(t)
-	const id = "councilTax"
+	const id = "council-tax"
 
 	if err := api.SetRate(id, 100); err != nil {
 		t.Fatalf("SetRate low: %v", err)
@@ -300,7 +300,7 @@ func TestBearerSharesSumToOne(t *testing.T) {
 // citywide rate and changes the district-scoped revenue and incidence.
 func TestDistrictMultiplier(t *testing.T) {
 	api := newTestAPI(t)
-	const id = "councilTax"
+	const id = "council-tax"
 	if err := api.SetBase(id, gbp(5_000_000)); err != nil {
 		t.Fatalf("SetBase: %v", err)
 	}
@@ -334,6 +334,51 @@ func TestDistrictMultiplier(t *testing.T) {
 	}
 	if shareOf(districtInc, "tenant") == shareOf(cityInc, "tenant") {
 		t.Fatalf("district multiplier had no incidence effect: tenant share is %v in both", shareOf(cityInc, "tenant"))
+	}
+}
+
+// TestGetDistrictMultiplierReadBack (AC-6 read-back): the getter returns the
+// multiplier SetDistrictMultiplier actually stored, and 1.0 (neutral) when
+// none has been set for that (district, instrument) — the applied-state
+// read-back consumers use instead of each maintaining a private mirror.
+func TestGetDistrictMultiplierReadBack(t *testing.T) {
+	api := newTestAPI(t)
+	const id = "business-rates"
+
+	// Unset: the neutral multiplier is 1.0, never a zero value.
+	if got, err := api.GetDistrictMultiplier("harbour", id); err != nil {
+		t.Fatalf("GetDistrictMultiplier unset: %v", err)
+	} else if got != 1.0 {
+		t.Fatalf("unset multiplier = %v, want 1.0", got)
+	}
+
+	// A set multiplier is read back exactly as applied.
+	if err := api.SetDistrictMultiplier("harbour", id, 0.9); err != nil {
+		t.Fatalf("SetDistrictMultiplier: %v", err)
+	}
+	if got, err := api.GetDistrictMultiplier("harbour", id); err != nil {
+		t.Fatalf("GetDistrictMultiplier: %v", err)
+	} else if got != 0.9 {
+		t.Fatalf("read-back multiplier = %v, want 0.9", got)
+	}
+
+	// A different district is independent: still neutral.
+	if got, err := api.GetDistrictMultiplier("other", id); err != nil {
+		t.Fatalf("GetDistrictMultiplier other: %v", err)
+	} else if got != 1.0 {
+		t.Fatalf("other-district multiplier = %v, want 1.0", got)
+	}
+
+	// Unknown instrument and empty district are rejected, never silently valid.
+	if _, err := api.GetDistrictMultiplier("harbour", "fuelDuty"); err == nil {
+		t.Fatal("unknown instrument silently accepted")
+	} else {
+		assertCode(t, err, ErrUnknownInstrument)
+	}
+	if _, err := api.GetDistrictMultiplier("", id); err == nil {
+		t.Fatal("empty district silently accepted")
+	} else {
+		assertCode(t, err, ErrInvalidDistrictMultiplier)
 	}
 }
 
@@ -675,22 +720,22 @@ func TestZoneClassEnumCoversData(t *testing.T) {
 // the AC-11 rate cap is not bypassable at district level.
 func TestDistrictMultiplierRejectsExcessiveMultiplier(t *testing.T) {
 	api := newTestAPI(t)
-	if err := api.SetBase("councilTax", gbp(10_000_000)); err != nil {
+	if err := api.SetBase("council-tax", gbp(10_000_000)); err != nil {
 		t.Fatalf("SetBase: %v", err)
 	}
-	if err := api.SetRate("councilTax", 100); err != nil {
+	if err := api.SetRate("council-tax", 100); err != nil {
 		t.Fatalf("SetRate: %v", err)
 	}
 
 	// council tax max is 400%; a 5x multiplier gives an effective 500%.
-	err := api.SetDistrictMultiplier("harbour", "councilTax", 5)
+	err := api.SetDistrictMultiplier("harbour", "council-tax", 5)
 	assertCode(t, err, ErrInvalidDistrictMultiplier)
 
-	city, err := api.Revenue("councilTax")
+	city, err := api.Revenue("council-tax")
 	if err != nil {
 		t.Fatalf("Revenue: %v", err)
 	}
-	district, err := api.RevenueInDistrict("councilTax", "harbour")
+	district, err := api.RevenueInDistrict("council-tax", "harbour")
 	if err != nil {
 		t.Fatalf("RevenueInDistrict: %v", err)
 	}
@@ -699,7 +744,7 @@ func TestDistrictMultiplierRejectsExcessiveMultiplier(t *testing.T) {
 	}
 
 	// A multiplier that keeps the effective rate within bounds is accepted.
-	if err := api.SetDistrictMultiplier("harbour", "councilTax", 2); err != nil {
+	if err := api.SetDistrictMultiplier("harbour", "council-tax", 2); err != nil {
 		t.Fatalf("in-range multiplier rejected: %v", err)
 	}
 }

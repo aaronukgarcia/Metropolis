@@ -1,18 +1,28 @@
 package policies
 
-// Registry error codes for engine.policies (MOD-064). Range: G4000-G4099,
-// claimed here per docs/planning/acceptance/README.md's "Conventions
-// ratified during Sprint 1" (per-module error subranges are claimed at
-// build time by the owning module). The E layer (E000-E999) is fully
-// claimed by eleven earlier engine modules and the G layer's G000-G3999
-// was claimed by engine.citizens … engine.roads before this module landed,
-// so engine.policies is the next G-layer claimant. Checked against
-// data/errors.json's "ranges.reserved" table AND
-// `grep -rn "MET-G40" internal/ cmd/` before claiming, per BUG-008's
-// lesson — no prior MET-G40xx code existed either place. Every code below
-// IS registered in data/errors.json with real severity/module/message/
-// remedy fields (GR#7); the internal/foundation/errs source-scan test
-// guards against drift.
+// Registry error codes for engine.policies (MOD-064). The module owns the
+// G4000-G4099 block reserved for it in data/errors.json's ranges.reserved
+// table; it raises exactly the codes below, G4000-G4012 (thirteen codes),
+// which are the ones registered in the canonical data/errors.json. The
+// remaining reserved slots (G4013-G4099) are intentionally unclaimed.
+//
+// The E layer (E000-E999) was fully claimed by eleven earlier engine
+// modules and G000-G3999 was claimed by engine.citizens … engine.roads
+// before this module landed, so engine.policies is the next G-layer
+// claimant. Every code below IS registered in data/errors.json with real
+// severity/module/message/remedy fields (GR#7); the
+// internal/foundation/errs source-scan test guards against drift.
+//
+// NOTE (error-range discipline): an earlier draft of this file minted nine
+// additional codes (G4013-G4021) for defensive input validations (month
+// regression, empty district/road inputs, duplicate road registration,
+// etc.). Those codes were never registered in the canonical
+// data/errors.json — the module's registered range ends at G4012 — so they
+// are removed here and their call sites re-mapped onto the closest
+// registered code by meaning: G4003 (unknown/malformed scope) for
+// malformed or empty-resolving inputs, G4004 (unknown district) for
+// invalid district identity, G4005 (unknown road) for invalid road
+// identity.
 const (
 	// ErrPoliciesDataInvalid: data/policies.json could not be loaded or
 	// failed schema validation (missing file, malformed JSON, schema
@@ -33,15 +43,19 @@ const (
 	ErrPolicyAlreadyActive = "MET-G4002"
 
 	// ErrUnknownScope: scope resolution (ResolveScope/Enact) named a
-	// DistrictID or road that is not registered. Never a resolved-to-empty-
-	// set false success (AC-13).
+	// DistrictID or road that is not registered, or the input was otherwise
+	// malformed (including a month/range regression and an empty district
+	// or road cell/edge set, which would resolve to an empty set — a
+	// resolved-to-empty-set false success, AC-13). Never a silent no-op.
 	ErrUnknownScope = "MET-G4003"
 
-	// ErrUnknownDistrict: a district query (District/RenameDistrict) named
-	// a DistrictID that does not exist.
+	// ErrUnknownDistrict: a district query (District/RenameDistrict) or a
+	// district-shaped input named a DistrictID that does not exist or is
+	// empty (no valid district identity).
 	ErrUnknownDistrict = "MET-G4004"
 
-	// ErrUnknownRoad: a road scope named a RoadID that is not registered.
+	// ErrUnknownRoad: a road-shaped input named a RoadID that is not
+	// registered or is empty (no valid road identity).
 	ErrUnknownRoad = "MET-G4005"
 
 	// ErrEnactmentNotFound: Repeal (or drift bookkeeping) referenced an
@@ -74,39 +88,4 @@ const (
 	// ErrCopiedValue: a PoliciesAPI method was called on a struct-copied
 	// value (SEC-020-class).
 	ErrCopiedValue = "MET-G4012"
-
-	// ErrMonthRegression: AdvanceMonth was called with a month earlier than
-	// the current simulation month. Distinct from the unknown-scope and
-	// checkpoint errors that previously shared a code with this.
-	ErrMonthRegression = "MET-G4013"
-
-	// ErrCheckpointPrecedesCurrentMonth: Checkpoint was called with a month
-	// earlier than the current simulation month.
-	ErrCheckpointPrecedesCurrentMonth = "MET-G4014"
-
-	// ErrPreviewRangeInverted: a preview was requested with toMonth before
-	// fromMonth.
-	ErrPreviewRangeInverted = "MET-G4015"
-
-	// ErrEmptyDistrictName: CreateDistrict was called with an empty name.
-	ErrEmptyDistrictName = "MET-G4016"
-
-	// ErrEmptyDistrictCells: CreateDistrict was called with no cells (a
-	// scope that resolves to nothing would be a resolved-to-empty-set false
-	// success, AC-13).
-	ErrEmptyDistrictCells = "MET-G4017"
-
-	// ErrEmptyRoadID: RegisterRoad was called with an empty RoadID.
-	ErrEmptyRoadID = "MET-G4018"
-
-	// ErrEmptyRoadEdges: RegisterRoad was called with an empty edge set.
-	ErrEmptyRoadEdges = "MET-G4019"
-
-	// ErrRoadAlreadyRegistered: RegisterRoad was called for a RoadID that is
-	// already registered. Rejected, never silently overwritten.
-	ErrRoadAlreadyRegistered = "MET-G4020"
-
-	// ErrEmptyRenameName: RenameDistrict was called with an empty name for a
-	// district that exists.
-	ErrEmptyRenameName = "MET-G4021"
 )

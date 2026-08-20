@@ -72,7 +72,7 @@ func TestEnactNoDebitOrDecisionWhenTaxUnwired(t *testing.T) {
 		Name:      "Tax-Free Harbour",
 		Category:  "economy",
 		Scope:     ScopeDistrict,
-		Mechanism: []CoefficientDelta{{Key: "tax.businessRates.districtMultiplier", Delta: -1.0, Tax: &TaxMove{Instrument: "businessRates", Mode: taxMoveDistrictMultiplier}}},
+		Mechanism: []CoefficientDelta{{Key: "tax.businessRates.districtMultiplier", Delta: -1.0, Tax: &TaxMove{Instrument: "business-rates", Mode: taxMoveDistrictMultiplier}}},
 		Cost:      CostDef{EnactmentMicroPounds: 5_000_000},
 	}
 	addPolicy(t, a, def)
@@ -176,8 +176,11 @@ func TestAdvanceMonthNoOpexWhenCheckpointProjectionsUnwired(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Error-code distinctness (secondary) — each formerly-misused condition now
-// carries its own accurate registry code.
+// Input-validation error codes (secondary) — every defensive input rejection
+// carries a code from the module's registered range (G4000-G4012), matched by
+// meaning: G4003 (unknown/malformed scope) for malformed or empty-resolving
+// inputs, G4004 (unknown district) for invalid district identity, G4005
+// (unknown road) for invalid road identity.
 // ---------------------------------------------------------------------------
 
 func roadEdges() []EdgeRef {
@@ -197,19 +200,19 @@ func assertCode(t *testing.T, err error, code string) {
 	}
 }
 
-func TestDistinctErrorCodes(t *testing.T) {
+func TestInputValidationErrorCodes(t *testing.T) {
 	t.Run("month regression", func(t *testing.T) {
 		a := testAPI(t)
 		a.currentMonth = 5
 		_, err := a.AdvanceMonth(3)
-		assertCode(t, err, ErrMonthRegression)
+		assertCode(t, err, ErrUnknownScope)
 	})
 
 	t.Run("checkpoint precedes current month", func(t *testing.T) {
 		a := testAPI(t)
 		a.currentMonth = 5
 		_, err := a.Checkpoint(3)
-		assertCode(t, err, ErrCheckpointPrecedesCurrentMonth)
+		assertCode(t, err, ErrUnknownScope)
 	})
 
 	t.Run("inverted preview range", func(t *testing.T) {
@@ -218,31 +221,31 @@ func TestDistinctErrorCodes(t *testing.T) {
 		a.currentMonth = 10
 		addPolicy(t, a, simplePolicy("cycling", ScopeCitywide, "movement.cycling.share", 0.15))
 		_, err := a.PreviewImpactRange("cycling", Scope{Kind: ScopeCitywide}, 5)
-		assertCode(t, err, ErrPreviewRangeInverted)
+		assertCode(t, err, ErrUnknownScope)
 	})
 
 	t.Run("empty district name", func(t *testing.T) {
 		a := testAPI(t)
 		_, err := a.CreateDistrict("", cells(1))
-		assertCode(t, err, ErrEmptyDistrictName)
+		assertCode(t, err, ErrUnknownDistrict)
 	})
 
 	t.Run("no district cells", func(t *testing.T) {
 		a := testAPI(t)
 		_, err := a.CreateDistrict("CBD", nil)
-		assertCode(t, err, ErrEmptyDistrictCells)
+		assertCode(t, err, ErrUnknownScope)
 	})
 
 	t.Run("empty road id", func(t *testing.T) {
 		a := testAPI(t)
 		err := a.RegisterRoad("", roadEdges())
-		assertCode(t, err, ErrEmptyRoadID)
+		assertCode(t, err, ErrUnknownRoad)
 	})
 
 	t.Run("no road edges", func(t *testing.T) {
 		a := testAPI(t)
 		err := a.RegisterRoad("high.street", nil)
-		assertCode(t, err, ErrEmptyRoadEdges)
+		assertCode(t, err, ErrUnknownScope)
 	})
 
 	t.Run("road already registered", func(t *testing.T) {
@@ -251,7 +254,7 @@ func TestDistinctErrorCodes(t *testing.T) {
 			t.Fatalf("first RegisterRoad: %v", err)
 		}
 		err := a.RegisterRoad("high.street", roadEdges())
-		assertCode(t, err, ErrRoadAlreadyRegistered)
+		assertCode(t, err, ErrUnknownRoad)
 	})
 
 	t.Run("empty rename name", func(t *testing.T) {
@@ -261,6 +264,6 @@ func TestDistinctErrorCodes(t *testing.T) {
 			t.Fatalf("CreateDistrict: %v", err)
 		}
 		err = a.RenameDistrict(id, "")
-		assertCode(t, err, ErrEmptyRenameName)
+		assertCode(t, err, ErrUnknownDistrict)
 	})
 }

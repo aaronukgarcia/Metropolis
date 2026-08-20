@@ -27,10 +27,10 @@ func (a *PoliciesAPI) CreateDistrict(name string, cells []CellRef) (DistrictID, 
 		return "", err
 	}
 	if name == "" {
-		return "", errs.New(ErrEmptyDistrictName, a.correlationID, nil)
+		return "", errs.New(ErrUnknownDistrict, a.correlationID, map[string]any{"district": ""})
 	}
 	if len(cells) == 0 {
-		return "", errs.New(ErrEmptyDistrictCells, a.correlationID, nil)
+		return "", errs.New(ErrUnknownScope, a.correlationID, map[string]any{"scope": "district with no cells"})
 	}
 	canonical := dedupeCells(cells)
 
@@ -49,7 +49,7 @@ func (a *PoliciesAPI) RenameDistrict(id DistrictID, name string) error {
 		return err
 	}
 	if name == "" {
-		return errs.New(ErrEmptyRenameName, a.correlationID, map[string]any{"district": string(id)})
+		return errs.New(ErrUnknownDistrict, a.correlationID, map[string]any{"district": string(id)})
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -100,17 +100,17 @@ func (a *PoliciesAPI) RegisterRoad(id RoadID, edges []EdgeRef) error {
 		return err
 	}
 	if id == "" {
-		return errs.New(ErrEmptyRoadID, a.correlationID, nil)
+		return errs.New(ErrUnknownRoad, a.correlationID, map[string]any{"road": ""})
 	}
 	if len(edges) == 0 {
-		return errs.New(ErrEmptyRoadEdges, a.correlationID, map[string]any{"road": string(id)})
+		return errs.New(ErrUnknownScope, a.correlationID, map[string]any{"scope": "road with no edges"})
 	}
 	canonical := dedupeEdges(edges)
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.roads[id]; ok {
-		return errs.New(ErrRoadAlreadyRegistered, a.correlationID, map[string]any{"road": string(id)})
+		return errs.New(ErrUnknownRoad, a.correlationID, map[string]any{"road": string(id)})
 	}
 	a.roads[id] = roadDef{edges: canonical}
 	return nil

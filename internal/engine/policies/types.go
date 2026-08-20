@@ -94,7 +94,7 @@ type CoefficientDelta struct {
 // TaxMove is the data-declared routing of a coefficient move into
 // engine.tax (out of scope: engine.policies does not implement tax
 // mechanics itself — it calls TaxAPI). Instrument names a tax instrument
-// (e.g. "businessRates"); Mode is the only supported tax-move shape,
+// (e.g. "business-rates"); Mode is the only supported tax-move shape,
 // "districtMultiplier" (a freeport-style per-district rate multiplier).
 type TaxMove struct {
 	Instrument string

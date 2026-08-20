@@ -42,12 +42,12 @@ func newTestTaxInstruments() TaxInstruments {
 	return TaxInstruments{
 		Version: 1,
 		Instruments: map[string]TaxInstrument{
-			"vat":            ins("VAT (sales tax share)", "consumption"),
-			"importDuties":   ins("Import duties", "import"),
-			"corporationTax": ins("Corporation tax", "corporateProfit"),
-			"paye":           paye,
-			"councilTax":     ins("Council tax", "property"),
-			"businessRates":  ins("Business rates", "property"),
+			"vat":             ins("VAT (sales tax share)", "consumption"),
+			"import-duties":   ins("Import duties", "import"),
+			"corporation-tax": ins("Corporation tax", "corporateProfit"),
+			"paye":            paye,
+			"council-tax":     ins("Council tax", "property"),
+			"business-rates":  ins("Business rates", "property"),
 		},
 	}
 }
@@ -71,7 +71,7 @@ func writeTaxInstruments(t *testing.T, ti TaxInstruments) string {
 // data/tax_instruments.json now loads and validates cleanly end-to-end, and
 // that the loaded ID set is exactly the six FEAT-056 instruments (not a
 // count-only pass) with at least one populated zoneOverrides (AC-4's
-// worked example on businessRates).
+// worked example on business-rates).
 func TestLoadTaxInstruments_RealFile_LoadsAndValidates(t *testing.T) {
 	dir := realDataDir(t)
 	ti, err := LoadTaxInstruments(dir, testCorrelationID())
@@ -88,15 +88,15 @@ func TestLoadTaxInstruments_RealFile_LoadsAndValidates(t *testing.T) {
 		}
 	}
 
-	br, ok := ti.Instruments["businessRates"]
+	br, ok := ti.Instruments["business-rates"]
 	if !ok {
-		t.Fatal("businessRates not present")
+		t.Fatal("business-rates not present")
 	}
 	if len(br.ZoneOverrides) == 0 {
-		t.Error("businessRates.zoneOverrides is empty — FEAT-056's zone-scoped worked example (AC-4) is not queryable")
+		t.Error("business-rates.zoneOverrides is empty — FEAT-056's zone-scoped worked example (AC-4) is not queryable")
 	}
 	if _, ok := br.ZoneOverrides["heavyIndustry"]; !ok {
-		t.Error("businessRates.zoneOverrides lacks the heavyIndustry discount entry")
+		t.Error("business-rates.zoneOverrides lacks the heavyIndustry discount entry")
 	}
 }
 
@@ -118,6 +118,18 @@ func TestLoadTaxInstruments_UnknownInstrumentIDRejected(t *testing.T) {
 
 	_, err := LoadTaxInstruments(writeTaxInstruments(t, ti), testCorrelationID())
 	assertPlaceholderCode(t, err, CodeSchemaInvalid, "unknown instrument ID")
+}
+
+// TestTaxInstrumentIDsMatchBuildingIDPattern (SEC-090): every accepted
+// instrument ID is a lowercase slug in buildingIDPattern's domain, so the
+// IDs that become engine.tax lookup keys can never carry a casing variant
+// that a future enforcing loader would reject (weakness pattern #4).
+func TestTaxInstrumentIDsMatchBuildingIDPattern(t *testing.T) {
+	for _, id := range taxInstrumentIDs {
+		if !buildingIDPattern.MatchString(id) {
+			t.Errorf("tax instrument ID %q does not match buildingIDPattern %s", id, buildingIDPattern.String())
+		}
+	}
 }
 
 // --- missing-required / out-of-range / unknown-enum fields (AC-13, GR#17) --
@@ -175,11 +187,11 @@ func TestLoadTaxInstruments_BearerShareOutOfRangeRejected(t *testing.T) {
 
 func TestLoadTaxInstruments_UnknownZoneClassRejected(t *testing.T) {
 	ti := newTestTaxInstruments()
-	br := ti.Instruments["businessRates"]
+	br := ti.Instruments["business-rates"]
 	br.ZoneOverrides = map[string]ZoneOverride{
 		"retail": {RateMultiplier: f64ptr(0.7)},
 	}
-	ti.Instruments["businessRates"] = br
+	ti.Instruments["business-rates"] = br
 
 	_, err := LoadTaxInstruments(writeTaxInstruments(t, ti), testCorrelationID())
 	assertPlaceholderCode(t, err, CodeSchemaInvalid, "zone class")
@@ -227,13 +239,13 @@ func TestLoadTaxInstruments_RepeatedLoadDeepEqual(t *testing.T) {
 // TestLoadTaxInstruments_MultipleViolationsDeterministicOrder proves that a
 // file with several simultaneously-violating instruments blames the SAME
 // (sorted-first) instrument on every load, never depending on Go map
-// iteration order (AC-14). councilTax sorts before vat, so councilTax's
+// iteration order (AC-14). council-tax sorts before vat, so council-tax's
 // unknown category is the stable first error.
 func TestLoadTaxInstruments_MultipleViolationsDeterministicOrder(t *testing.T) {
 	ti := newTestTaxInstruments()
-	council := ti.Instruments["councilTax"]
+	council := ti.Instruments["council-tax"]
 	council.Category = "bogus"
-	ti.Instruments["councilTax"] = council
+	ti.Instruments["council-tax"] = council
 	vat := ti.Instruments["vat"]
 	vat.RateRange = nil
 	ti.Instruments["vat"] = vat
@@ -241,7 +253,7 @@ func TestLoadTaxInstruments_MultipleViolationsDeterministicOrder(t *testing.T) {
 	dir := writeTaxInstruments(t, ti)
 	for i := 0; i < 3; i++ {
 		_, err := LoadTaxInstruments(dir, testCorrelationID())
-		assertPlaceholderCode(t, err, CodeSchemaInvalid, "instruments[councilTax].category")
+		assertPlaceholderCode(t, err, CodeSchemaInvalid, "instruments[council-tax].category")
 	}
 }
 
