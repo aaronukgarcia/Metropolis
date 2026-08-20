@@ -5,6 +5,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // FEAT-208 increment 2 (docs/planning — the FEAT-208 publish-path design
@@ -98,7 +99,24 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 	}
 	debt := st.finance.OutstandingDebt()
 
-	netWorth := int64(treasury) + int64(reserves) - int64(debt)
+	// BUG-308 fix 1: raw int64 +/- on saturated finance.Money values can
+	// wrap negative (two near-MaxInt64 assets summing past the int64 top
+	// wraps around to a large negative NetWorth rather than saturating,
+	// which would render as a nonsensical city-bankrupt reading on the
+	// wire). GR#3 check performed first: engine.finance's FinanceAPI
+	// exposes no exported NetWorth/total accessor this could delegate to
+	// instead — TotalMoneyInCirculation/TotalFirmProfit/BudgetBalance all
+	// answer a DIFFERENT question (money stock across ALL accounts incl.
+	// Households/Firms, firm profit, opex-vs-tax), and this view's own
+	// Assets/Liabilities definition (§ doc comment above) deliberately
+	// EXCLUDES Households/Firms, so there is no existing total to reuse —
+	// this file keeps its own narrow Treasury+Reserves-Debt arithmetic,
+	// just made saturating. Mirrors finance/money.go's own
+	// satAddMoney/satSubMoney idiom (both of which are themselves thin
+	// Money-typed adapters over these exact num functions — money.go's
+	// helpers are unexported so compose calls foundation/num directly
+	// rather than duplicating the adapter).
+	netWorth := num.SatSub(num.SatAdd(int64(treasury), int64(reserves)), int64(debt))
 
 	patch := financeBalanceSheetWirePatch{
 		SchemaVersion: financeWireSchemaVersion,

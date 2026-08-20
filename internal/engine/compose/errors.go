@@ -80,4 +80,13 @@ const (
 	// migrantIDHighBit and citizens' fertilityChildIDBase both
 	// independently started at 1<<62).
 	ErrIDNamespaceRangesOverlap = "MET-G806"
+
+	// ErrInvalidWireAmount (BUG-308): extcommute_wire.go's
+	// extCommuteFinanceSeam.post rejected a negative amountMicropounds
+	// from a FinanceSeam verb (RecordOffMapWage/RemoveOffMapWage/
+	// RecordBusinessRates/RecordCorpShare/RecordWageLeakage). A negative
+	// amount posted through post's debit/credit pair would reverse the
+	// credit flow, silently breaking money conservation (GR#16) — this
+	// code is raised instead of posting the sign-flipped transaction.
+	ErrInvalidWireAmount = "MET-G807"
 )

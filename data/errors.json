@@ -2265,6 +2265,12 @@
       "message": "composition root: id-namespace ranges overlap (fertilityChildIDBase={fertilityChildIDBase}, migrantIDBase={migrantIDBase})",
       "remedy": "Wire-time assertion (FEAT-169 destructive-review REJECT finding): citizens.FertilityChildIDBase must be at least 2x attract.MigrantIDBase so the three-package disjoint id map (compose seeds [1, 2^62), attract migrants [2^62, 2^63), citizens fertility children [2^63, ...)) actually holds. This should never fire in production -- both sides are compile-time constants -- but a future edit to either package's base constant that breaks the convention now fails loudly at every Wire call instead of silently overlapping the two id ranges (the original bug: both bases independently started at 1<<62). See citizens/doc.go and compose/doc.go for the full id map."
     },
+    "MET-G807": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "extcommute finance seam rejected a non-positive money amount ({amount} micropounds) for {verb}",
+      "remedy": "A FinanceSeam verb (RecordOffMapWage/RemoveOffMapWage/RecordBusinessRates/RecordCorpShare/RecordWageLeakage) was called with a negative amountMicropounds. A negative amount posted through the debit/credit pair would reverse the credit flow (money conservation, GR#16) -- the seam rejects it loudly instead of posting a sign-flipped transaction. Fix the caller (engine.extcommute) so it never derives a negative wage/amount."
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",
