@@ -767,34 +767,56 @@ func (t *TourismAPI) AdvanceMonth() error {
 	if err := t.checkNotCopied("AdvanceMonth"); err != nil {
 		return err
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 
-	if t.attract == nil {
+	// Snapshot the wired seams and the immutable current-month inputs under a
+	// read lock, then RELEASE before calling into them. The seams are external
+	// composition-root calls that may take their own locks; holding this
+	// module's write lock across them is the BUG-298 deadlock hazard (a seam
+	// that ever calls back into a TourismAPI read — e.g. Month — would block
+	// forever). Mirrors the snapshot-then-call pattern of DrawScore/ProjectDraw/
+	// PortfolioScore/TermScore. cfg and correlationID are immutable after New,
+	// so they are read lock-free below (as the read methods already do).
+	t.mu.RLock()
+	attract := t.attract
+	season := t.season
+	leisure := t.leisure
+	attractions := append([]Attraction(nil), t.attractions...)
+	m := t.month
+	accessMult := t.cfg.AccessTierReach[t.accessTier]
+	t.mu.RUnlock()
+
+	if attract == nil {
 		return errs.New(ErrDependencyMissing, t.correlationID, map[string]any{"dependency": "attract", "operation": "AdvanceMonth"})
 	}
-	if t.season == nil {
+	if season == nil {
 		return errs.New(ErrDependencyMissing, t.correlationID, map[string]any{"dependency": "season", "operation": "AdvanceMonth"})
 	}
 
-	rep := t.attract.Reputation()
+	rep := attract.Reputation()
 	if !num.IsFinite(rep) {
 		rep = 0
 	}
+	seasonal, err := t.seasonalMultiplier(season, m)
+	if err != nil {
+		return err
+	}
+	portfolio, err := portfolioScore(attractions, leisure, t.cfg.PortfolioWeights, t.correlationID)
+	if err != nil {
+		return err
+	}
+
+	// Mutation phase under the write lock — no seam call below, they all
+	// completed lock-free above.
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	t.repHistory = append(t.repHistory, rep)
 
-	m := t.month
+	// lagRep/draw/desired are local math, computed under the lock to preserve
+	// the original append-then-read ordering: laggedReputationLocked reads the
+	// just-appended reading when the lag window is still unfilled (month 0).
 	lagRep := t.laggedReputationLocked(m)
-	seasonal, err := t.seasonalMultiplier(t.season, m)
-	if err != nil {
-		return err
-	}
-	portfolio, err := portfolioScore(t.attractions, t.leisure, t.cfg.PortfolioWeights, t.correlationID)
-	if err != nil {
-		return err
-	}
 	repMult := reputationMultiplier(lagRep, t.cfg.ReputationScale)
-	draw := portfolio * repMult * t.cfg.AccessTierReach[t.accessTier] * seasonal
+	draw := portfolio * repMult * accessMult * seasonal
 
 	desiredStaying := num.ClampInt64FromFloat(draw * t.cfg.StayingVisitorRate)
 	desiredDayTrip := num.ClampInt64FromFloat(draw * t.cfg.DayTripRate)

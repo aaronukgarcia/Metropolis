@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/news"
@@ -51,6 +52,21 @@ func (f *fakeNews) Ingest(ev news.Event) (news.Story, error) {
 	defer f.mu.Unlock()
 	f.events = append(f.events, ev)
 	return news.Story{}, nil
+}
+
+// callbackAttract is the BUG-298 re-entrancy probe: Reputation calls back into
+// the API it is wired into (a read that takes the module's RLock). If
+// AdvanceMonth held the write lock while calling Reputation, this call would
+// block forever and the test below would time out.
+type callbackAttract struct {
+	api   *tourism.TourismAPI
+	calls int
+}
+
+func (c *callbackAttract) Reputation() float64 {
+	c.calls++
+	_ = c.api.Month() // re-entrant read — deadlocks if the write lock is held
+	return 0
 }
 
 // --- helpers ---
@@ -100,6 +116,34 @@ func newTestAPI(t *testing.T) (*tourism.TourismAPI, *fakeAttract) {
 		t.Fatalf("SetSeason: %v", err)
 	}
 	return api, attract
+}
+
+// TestAdvanceMonthDoesNotHoldLockAcrossSeams is the BUG-298 regression: a
+// wired attract seam that calls back into the API must not deadlock — proving
+// AdvanceMonth no longer holds its write lock across the external seam calls.
+// Run in a goroutine with a timeout so a regression reads as a clean failure
+// rather than a hung test binary.
+func TestAdvanceMonthDoesNotHoldLockAcrossSeams(t *testing.T) {
+	api, _ := newTestAPI(t)
+	cb := &callbackAttract{api: api}
+	if err := api.SetAttract(cb); err != nil {
+		t.Fatalf("SetAttract(callback): %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- api.AdvanceMonth() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("AdvanceMonth: %v", err)
+		}
+		if cb.calls == 0 {
+			t.Fatal("attract.Reputation was not called")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("AdvanceMonth deadlocked: write lock held across attract.Reputation() (BUG-298)")
+	}
 }
 
 func realSeason(t *testing.T) *season.SeasonAPI {
