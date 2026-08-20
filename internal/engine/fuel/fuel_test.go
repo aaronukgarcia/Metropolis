@@ -1,7 +1,9 @@
 package fuel
 
 import (
+	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -431,6 +433,66 @@ func TestMalformedFuelData(t *testing.T) {
 				t.Fatal("malformed fixture loaded without error")
 			} else {
 				assertCode(t, err, ErrFuelDataInvalid)
+			}
+		})
+	}
+}
+
+// TestFuelDataValidateRejectsNonFinite is the BUG-297 regression suite: every
+// non-finite-unsafe float64 field in data/fuel.json's schema must be rejected
+// as a NaN/±Inf value by Validate — never silently pass a raw <0/>0 comparison
+// (which is false for NaN) and let a non-finite figure propagate into the
+// fleet/duty/availability arithmetic (GR#16). Constructed directly (not via
+// Load, whose json.Unmarshal already rejects non-finite literals) so the
+// validation layer itself is what is exercised.
+func TestFuelDataValidateRejectsNonFinite(t *testing.T) {
+	const validJSON = `{
+		"version": 1,
+		"eras": [
+			{"era":"early","carEVShare":0.02,"vanEVShare":0.01,"truckEVShare":0.0}
+		],
+		"fuelDemand":{"carLitresPerTick":200000,"vanLitresPerTick":80000,"truckLitresPerTick":120000,"logisticsFleetLitresPerTick":40000},
+		"chargingProfile":{"baseKWhPerTick":120000,"hourlyWeight":[0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]},
+		"strategicReserve":{"daysOfCover":90},
+		"duty":{"ratePencePerLitre":52.95,"taxInstrument":"import-duties"},
+		"forecourt":{"targetForecourtsPerThousandPopulation":0.35},
+		"tanker":{"portThroughputLitresPerTick":440000}
+	}`
+
+	base := func(t *testing.T) fuelData {
+		t.Helper()
+		var fd fuelData
+		if err := json.Unmarshal([]byte(validJSON), &fd); err != nil {
+			t.Fatalf("unmarshal valid fixture: %v", err)
+		}
+		return fd
+	}
+
+	cases := []struct {
+		name   string
+		mutate func(*fuelData)
+	}{
+		{"NaN carEVShare", func(fd *fuelData) { *fd.Eras[0].CarEVShare = math.NaN() }},
+		{"+Inf vanEVShare", func(fd *fuelData) { *fd.Eras[0].VanEVShare = math.Inf(1) }},
+		{"-Inf truckEVShare", func(fd *fuelData) { *fd.Eras[0].TruckEVShare = math.Inf(-1) }},
+		{"NaN carLitresPerTick", func(fd *fuelData) { fd.FuelDemand.CarLitresPerTick = math.NaN() }},
+		{"+Inf vanLitresPerTick", func(fd *fuelData) { fd.FuelDemand.VanLitresPerTick = math.Inf(1) }},
+		{"NaN truckLitresPerTick", func(fd *fuelData) { fd.FuelDemand.TruckLitresPerTick = math.NaN() }},
+		{"-Inf logisticsFleetLitresPerTick", func(fd *fuelData) { fd.FuelDemand.LogisticsFleetLitresPerTick = math.Inf(-1) }},
+		{"NaN hourlyWeight", func(fd *fuelData) { fd.ChargingProfile.HourlyWeight[0] = math.NaN() }},
+		{"+Inf baseKWhPerTick", func(fd *fuelData) { fd.ChargingProfile.BaseKWhPerTick = math.Inf(1) }},
+		{"NaN daysOfCover", func(fd *fuelData) { fd.StrategicReserve.DaysOfCover = math.NaN() }},
+		{"-Inf ratePencePerLitre", func(fd *fuelData) { fd.Duty.RatePencePerLitre = math.Inf(-1) }},
+		{"NaN forecourtTarget", func(fd *fuelData) { fd.Forecourt.TargetForecourtsPerThousandPopulation = math.NaN() }},
+		{"+Inf tankerThroughput", func(fd *fuelData) { fd.Tanker.PortThroughputLitresPerTick = math.Inf(1) }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := base(t)
+			tc.mutate(&fd)
+			if err := fd.Validate(); err == nil {
+				t.Fatalf("non-finite value accepted by Validate (BUG-297)")
 			}
 		})
 	}
