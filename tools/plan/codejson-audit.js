@@ -326,6 +326,27 @@ async function runAudit(opts = {}) {
     trackGuid(m.inbound && m.inbound.guid, m.key, 'inbound.guid');
     trackGuid(m.outbound && m.outbound.guid, m.key, 'outbound.guid');
   }
+  // BUG-309: edge GUIDs (outbound.calls[].moduleGuid/inboundGuid) are
+  // references to the callee's module/inbound GUIDs, not fresh identities —
+  // so they are tracked for WELL-FORMEDNESS only (a malformed edge GUID is a
+  // data-integrity defect), never for uniqueness (they legitimately repeat
+  // the callee's own GUID). Previously these were not scanned at all.
+  const edgeGuidLocs = new Map();
+  for (const m of modules) {
+    for (const call of (m.outbound && m.outbound.calls) || []) {
+      if (call.moduleGuid) {
+        if (!edgeGuidLocs.has(call.moduleGuid)) edgeGuidLocs.set(call.moduleGuid, []);
+        edgeGuidLocs.get(call.moduleGuid).push({ key: m.key, field: 'outbound.calls[].moduleGuid' });
+      }
+      if (call.inboundGuid) {
+        if (!edgeGuidLocs.has(call.inboundGuid)) edgeGuidLocs.set(call.inboundGuid, []);
+        edgeGuidLocs.get(call.inboundGuid).push({ key: m.key, field: 'outbound.calls[].inboundGuid' });
+      }
+    }
+  }
+  for (const [guid, locs] of edgeGuidLocs) {
+    if (!UUID_V4_RE.test(guid)) malformedGuids.push({ guid, locations: locs });
+  }
   const malformedGuids = [];
   for (const [guid, locs] of guidLocations) {
     if (!UUID_V4_RE.test(guid)) malformedGuids.push({ guid, locations: locs });

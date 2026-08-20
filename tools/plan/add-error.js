@@ -502,13 +502,21 @@ function check({ errorsPath, repoDir }) {
   }
   for (const [letter, list] of byLetter) {
     const sorted = [...list].sort((a, b) => a.start - b.start);
-    for (let i = 1; i < sorted.length; i++) {
-      const prev = sorted[i - 1];
-      const cur = sorted[i];
-      if (cur.start <= prev.end) {
+    // BUG-309: track the running maximum end, not just the immediate
+    // predecessor — a short interval sandwiched between two wide ones
+    // (e.g. G000-G100, G050-G050, G060-G080) must still flag the outer
+    // pair's overlap, which a prev-only comparison misses.
+    let maxEnd = -1;
+    let maxEndKey = '';
+    for (const cur of sorted) {
+      if (cur.start <= maxEnd) {
         problems.push(
-          `reservations overlap on layer ${letter}: ${prev.key} and ${cur.key}`
+          `reservations overlap on layer ${letter}: ${maxEndKey} and ${cur.key}`
         );
+      }
+      if (cur.end > maxEnd) {
+        maxEnd = cur.end;
+        maxEndKey = cur.key;
       }
     }
   }
