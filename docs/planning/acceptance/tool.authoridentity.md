@@ -173,3 +173,5 @@ Logged via `node claude-bow.js add assumption` (see BOW):
 - Any change to the derivation *logic* itself (thresholds, sources, email-only matching) —
   this file documents the moved logic as-is; changing what it decides needs a fresh BOW
   item.
+
+- **ASM-911 (FEAT-084 CC fold).** claude-author-identity.js header line 6 still cites BOW mkey candidate tool.committhook while the module key is tool.authoridentity per code.json; the candidate wording predates the re-key.

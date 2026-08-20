@@ -226,3 +226,5 @@ Logged via `node claude-bow.js add assumption`:
   not a defect in these criteria — but the gap stays open until the integration
   dispatch lands. Flagging for Bill/Aaron to prioritise against the engine
   wave.
+
+- **ASM-948 (FEAT-084 CC fold).** Registry/BOW title still says 'blocks Co-Authored-By trailers in commits' but the hook is demoted to advisory-only post-BUG-088 and never emits a blocking decision; title should say advisory/warns, not blocks.

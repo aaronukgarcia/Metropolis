@@ -60,3 +60,5 @@ The module registry: registration API (name, semver, spec_ref/feature-flag sourc
 ## Escalations
 
 - None at draft time. No spec/brief conflict found. Minor note for Bill: M0-ENG §3's rolling "phase timing strip: per-phase µs sparkline across last 60 ticks" could be read as requiring this registry to retain a 60-tick rolling window itself (AC-5 above), or as requiring only the latest value with the 60-tick history owned by `ui.screen.debug`/`engine.core` instead. AC-5 is written to accept either design (single-latest-value API, with an optional rolling-window API tested if the junior implements one) rather than mandating one — flagging so Bill can confirm which layer should own the history if a strict interpretation is preferred.
+
+- **ASM-882 (CC fold).** Copy-guard/defensive-copy wrappers home in foundation.registry (Proposal A1); a dedicated package is escalated, not decided. No existing hand-rolled checkNotCopied site is migrated - the wrapper is proven via fixtures only. If Bill wanted a real migration or a different package, that is a mechanical rename or under-delivery.

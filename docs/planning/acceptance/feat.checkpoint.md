@@ -87,3 +87,7 @@ The following are logged via `node claude-bow.js add assumption ...`; summarised
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-441** — Checkpoints = sibling package, not a 4th SaveKind in feat.saveux.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-442** — Superseded by ASM-470 (Recorder durability risk confirmed real).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-443** — Fork-tree pruning per abandoned BRANCH (not raw bundle count), ancestor-preserving.
+
+- **ASM-1338 (FEAT-084 CC fold).** feat.checkpoint error codes use MET-G3500..G3510 (range G3500-G3599), renumbered because G3300-G3399 (engine.comms) and G3400-G3499 (engine.capexport) were claimed concurrently mid-build; the errs source-scan test flags a range-collision if another agent claims G3500-G3599 too.
+
+- **ASM-1387 (FEAT-084 CC fold).** A new MET-G3515-class checkpoint code necessarily touches the shared data/errors.json (GR#7 + the errs TestSourceCodesAreRegisteredAndInRange gate); the module adds only its single hunk within the already-reserved G3500-G3599 range and, per BUG-030, the lead reviews the staged hunk rather than git-add-ing the file wholesale. Reusing an existing code instead would conflate a fork-name failure with a create-name failure.

@@ -93,3 +93,9 @@ Two additions to existing foundation packages, plus one process mandate. (1) In 
 - **ASM-872 (GR#20 registration gap).** `internal/foundation/num` is unregistered in code.json (no inbound contract GUID); AC-1's registration is a prerequisite, not a given.
 - **ASM-873 (error sub-range claim).** The new coercion failure codes claim `MET-F800..F899` — verified the first free foundation sub-range (current highest F code `MET-F708`; `F700-F799` is `tool.astgate`).
 - **ASM-874 (copy-guard wrapper shape).** The reusable copy-guard + defensive-copy wrappers land in `internal/foundation/registry` as a generic embed-by-value type, reusing `F100-F199` (`F107+` free for the wrapper's copied-rejection code), not a new `foundation/copyguard` package.
+
+- **ASM-993 (FEAT-084 CC fold).** MET-F800..F803 (foundation.num F800-F899 range: non-finite / int64 overflow / out-of-range / type mismatch) and MET-F107 (foundation.registry F100-F199 copy-guard copied) minted for feat.securehelpers failures; all five registered in data/errors.json with real severity/module/message/remedy.
+
+- **ASM-995 (FEAT-084 SF fold).** AC-14 (routing every boundary coercion/copy-guard/defensive-copy through these primitives in brief.md and dev-team-process.md) is deliberately out of this build — a cross-module process change requiring tooling-owner/lead sign-off; this build covers AC-1..AC-13 and AC-15 only.
+
+- **ASM-1001 (FEAT-084 CC fold).** errs source-scan red is out-of-scope engine G-code drift (MET-G1602 freight, MET-G1700/G1701 rail, MET-G1508 refuse), not MOD-079: foundation.num (MET-F800..F803) and foundation.registry (MET-F107) report ZERO source-scan violations.

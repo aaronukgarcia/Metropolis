@@ -85,3 +85,9 @@ The decommissioning-liability accounting surface on the shared `internal/engine/
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-502** — Liability feeds CreditRating debt exposure, not the monthly-obligation set.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-503** — Discharge invoked by engine.mining Reclaim (unbuilt); feature owns surface only.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-504** — data/decommission.json (unregistered, convention-following).
+
+- **ASM-1075 (FEAT-084 CC fold).** The upgrade guard is keyed on strict (milestone, cost) ordering via the shared tierAbove helper: a downgrade or same-tier repeat is rejected before permit/liability work, so activeTier is never demoted and no second day-one decommission liability registers. (Code lives under feat.containerport/internal/engine/freight per code.json, but the substance is decommission liability.)
+
+- **ASM-1179 (FEAT-084 CC fold).** Decommission accrual is the final external side effect in Build, immediately before the infallible local commit (FDI draw posted first), matching the sibling spaceport StartBuild pattern; if the FDI draw should instead be the commit-adjacent final write, the ordering rationale changes. (Code home engine.accelerator; roster routed to feat.decommission — folded here.)
+
+- **ASM-1182 (FEAT-084 CC fold).** A compensation (rollback) failure surfaces both errors via stdlib errors.Join so neither the primary decommission error nor the rollback error is swallowed (GR#1); a dedicated compensation-failed registry code was avoided because it would require editing shared data/errors.json outside module ownership. (Code home engine.accelerator; roster routed to feat.decommission — folded here.)

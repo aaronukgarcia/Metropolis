@@ -53,3 +53,5 @@ No build, vet, or test gates apply — there is deliberately nothing to build.
 ## Escalations
 
 - None.
+
+- **ASM-792 (fold).** The reserved future-dev slots (Channel Tunnel M11, dynamic world market + finite migration pool, multiplayer/shared worlds, LLM soft layer for prose only, audio none, localisation English-only v1, modding = JSON data files) must not be built or faked as built for Baseline One; the existing Market/world hooks stay honest seams, not implementations. AC-1 asserts no reserved subsystem exists as production code and the BOW item stays open.

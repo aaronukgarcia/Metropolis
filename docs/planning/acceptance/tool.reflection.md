@@ -179,3 +179,5 @@ Logged via `node claude-bow.js add assumption`:
   closing FEAT-112 properly requires the test file AC-12/AC-13 specify, since a
   prompt that silently stops firing is indistinguishable from a working one to a
   human who isn't watching for it. "Documented" is not "verdicted."
+
+- **ASM-946 (FEAT-084 SF fold).** tool.reflection.md Escalations item 2 mislabels the no-test-file gap as ASM-743/AC-12; ASM-743 is the stale-prompt-content assumption, not a no-test-file assumption — reflection lacks its own dedicated no-test-file ASM (siblings ASM-724/727/729/735 each have one).
