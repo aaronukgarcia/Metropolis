@@ -129,6 +129,7 @@ func (h *Hook) SingleShard() bool { return true }
 func (h *Hook) ApplyEffect(eff core.Effect) {
 	result, ok := eff.Payload.(SuiteResult)
 	if !ok {
+		h.handleMalformedPayload(eff)
 		return
 	}
 	if result.AnyViolation {
@@ -228,6 +229,43 @@ func (h *Hook) handleSkipped(result SuiteResult) {
 				e.Display(), outcome.Name, result.Tick, skippedReason,
 			))
 		}
+	}
+}
+
+// malformedPayloadReason is the shared diagnostic for an Effect whose
+// payload is not a SuiteResult. The Hook only ever emits SuiteResult
+// payloads itself, so this is defensive against a mis-wired or corrupted
+// Effect — but a gate that cannot evaluate must never report success, so
+// the drop is a logged registry error (and dev-mode hard assert), never a
+// silent return (BUG-301, the same class as BUG-277's starved-invariant
+// fix — MET-E300 is reused, with the reason carried in Ctx).
+const malformedPayloadReason = "Effect payload was not a SuiteResult — the conservation verdict could not be evaluated"
+
+// handleMalformedPayload turns a non-SuiteResult Effect payload into a
+// registry-sourced error (always logged) and, in dev mode, additionally a
+// hard assert, mirroring handleSkipped. It carries the reason in Ctx (which
+// lands in the structured log entry) and "n/a" in the template's expected/
+// actual delta placeholders, since a malformed payload has no delta to
+// report.
+func (h *Hook) handleMalformedPayload(eff core.Effect) {
+	correlationID := errs.NewCorrelationID()
+
+	e := errs.New(ErrConservationViolation, correlationID, map[string]any{
+		"invariant": skippedDelta,
+		"tick":      skippedDelta,
+		"expected":  skippedDelta,
+		"actual":    skippedDelta,
+		"reason":    malformedPayloadReason,
+	})
+	if h.logSink != nil {
+		h.logSink(e)
+	}
+
+	if h.devMode {
+		h.hardFail(fmt.Sprintf(
+			"%s (reason=%s sequence=%d)",
+			e.Display(), malformedPayloadReason, eff.Sequence,
+		))
 	}
 }
 
