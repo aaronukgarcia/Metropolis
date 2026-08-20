@@ -308,8 +308,16 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 		return cmp
 	}
 
-	allocBytesDelta := float64(int64(current.AllocBytes)-int64(baseline.AllocBytes)) / float64(baseline.AllocBytes)
-	allocCountDelta := float64(int64(current.AllocCount)-int64(baseline.AllocCount)) / float64(baseline.AllocCount)
+	// GR#16 (BUG-305): compute the deltas in float64 directly from the
+	// uint64 counters — never through an int64 cast, which wraps any
+	// counter at/above 2^63. Guard the byte divisor so a zero-byte-but-
+	// nonzero-count record yields a 0 delta, never a NaN that would
+	// fail-open below.
+	var allocBytesDelta float64
+	if baseline.AllocBytes > 0 {
+		allocBytesDelta = (float64(current.AllocBytes) - float64(baseline.AllocBytes)) / float64(baseline.AllocBytes)
+	}
+	allocCountDelta := (float64(current.AllocCount) - float64(baseline.AllocCount)) / float64(baseline.AllocCount)
 	cmp.AllocBytesDeltaFraction = allocBytesDelta
 	cmp.AllocCountDeltaFraction = allocCountDelta
 	cmp.StepRegressed = allocBytesDelta > RegressionThreshold || allocCountDelta > RegressionThreshold
@@ -322,8 +330,11 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 	// never turns into a false ScaleMismatch/BelowNoiseFloor verdict for
 	// the (already-validated) step check above.
 	if anchor != nil && anchor.CitizenCount == current.CitizenCount && anchor.Months == current.Months && anchor.AllocCount >= MinMeasurableAllocs {
-		cumAllocBytesDelta := float64(int64(current.AllocBytes)-int64(anchor.AllocBytes)) / float64(anchor.AllocBytes)
-		cumAllocCountDelta := float64(int64(current.AllocCount)-int64(anchor.AllocCount)) / float64(anchor.AllocCount)
+		var cumAllocBytesDelta float64
+		if anchor.AllocBytes > 0 {
+			cumAllocBytesDelta = (float64(current.AllocBytes) - float64(anchor.AllocBytes)) / float64(anchor.AllocBytes)
+		}
+		cumAllocCountDelta := (float64(current.AllocCount) - float64(anchor.AllocCount)) / float64(anchor.AllocCount)
 		cmp.AnchorPerMonth = anchor.PerMonthTick
 		cmp.AnchorAllocBytes = anchor.AllocBytes
 		cmp.AnchorAllocCount = anchor.AllocCount
