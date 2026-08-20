@@ -51,9 +51,9 @@
 
 Only 1 mechanical duplicate was found (explicit same-fork citation). Near-duplicate *themes* recur constantly (error-range claims, copy-guard conventions, SEC finite-guard scoping) but each instance binds to a different module's spec, so they fold separately — the right dedupe is the shared-standard folds noted in the execution plan, not item-level closes.
 
-## The Aaron decision list (class AD — 16 items, goes to Aaron directly)
+## The Aaron decision list (class AD — 16 items baseline, goes to Aaron directly; **2 RATIFIED as shipped since baseline — ASM-1451, ASM-1452 — leaving 14 pending**)
 
-The 13 approved 2026-08-14 AD items (all still open), plus 3 curated from the new population (marked NEW).
+The 13 approved 2026-08-14 AD items (all still open), plus 3 curated from the new population (marked NEW; **ASM-1451 and ASM-1452 since RATIFIED as shipped — see §4 below**).
 
 ### 1. Architecture ownership / boundaries (6)
 - **ASM-281** — Call-edge direction inferred from spec prose may not match the intended GR#20 contract direction (needs per-candidate architect ruling before master-plan edits).
@@ -74,10 +74,10 @@ The 13 approved 2026-08-14 AD items (all still open), plus 3 curated from the ne
 - **ASM-299** — Terror attack + storm-surge-damage: the two lowest-confidence crisis candidates.
 - **ASM-346** — C5 storm-surge "damage-to-occupied-cells" gated on feat.disasters emitting a distinguishable damage event.
 
-### 4. Gameplay-feel / strategy (3)
+### 4. Gameplay-feel / strategy (3 baseline → 1 pending; ASM-1451/1452 RATIFIED as shipped)
 - **ASM-461** — Death warning must be a proactive push alert (ui.alerts), not just a passive F7/F2 pane.
-- **ASM-1451** (NEW) — engine.roads AC-4 upgrade compatibility: provisionally any-to-any with rung-distance cost scaling; the step-through-adjacent alternative was never ruled. Strategy-changing (gravel→motorway jumps). One-line predicate change if ruled the other way.
-- **ASM-1452** (NEW) — Civic-building naming: 'notable deceased citizen' eligibility/ranking rule never defined (§20); only the toponym+type fallback is implemented. Also needs an engine.citizens edge if ruled in.
+- **ASM-1451** (NEW — **RATIFIED as shipped, Aaron; resolved**) — engine.roads AC-4 upgrade compatibility: the ruling is **any-to-any with rung-distance cost scaling** — any rung of the class ladder may convert directly to any other rung (gravel→motorway jumps legal), with cost scaled by rung-distance; the step-through-adjacent alternative was ruled out. Folded into `engine.roads.md` AC-4/AC-19.
+- **ASM-1452** (NEW — **RATIFIED as shipped, Aaron; resolved**) — Civic-building naming: the **toponym+type fallback is correct** (shipped behaviour); the 'notable deceased citizen' eligibility/ranking rule is future work tracked as **FEAT-213** (out of scope). The engine.citizens edge only becomes relevant when FEAT-213 lands. Folded into `engine.roads.md` AC-10.
 
 ## Auto-close list (class CC-BAL — batch 1, 112 items)
 
