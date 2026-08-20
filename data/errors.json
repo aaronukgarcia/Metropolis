@@ -681,6 +681,12 @@
       "message": "NewClock rejected secondsPerMonthAt1x={seconds}: must be a positive, finite real-seconds pacing constant",
       "remedy": "Pass a positive, finite secondsPerMonthAt1x (e.g. DefaultSecondsPerMonthAt1x, or a value loaded via LoadSecondsPerMonthAt1x/LoadDefaultSecondsPerMonthAt1x from data/pacing.json) -- a zero, negative, NaN, or +/-Inf pacing constant would silently produce zero or garbage SecondsPerMonth/TicksPerRealSecond figures instead of a loud rejection."
     },
+    "MET-E021": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "command handling hit an unexpected non-registry error: {cause}",
+      "remedy": "All engine.core errors are registry-sourced *errs.E; a non-*errs.E reaching the error-to-ErrorRef boundary is an internal invariant break. Report it loudly rather than mislabelling it as an unhandled command kind."
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",

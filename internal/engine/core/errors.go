@@ -159,4 +159,13 @@ const (
 	// parameter type; the finiteness check exists for that boundary too,
 	// per this bug's own wording ("+ finite").
 	ErrInvalidPacingConstant = "MET-E020"
+
+	// ErrUnexpectedError: a non-*errs.E reached the toErrorRef boundary
+	// (commands.go) — every engine.core error is registry-sourced, so this
+	// is an internal invariant break, never an "unhandled command kind".
+	// BUG-310 (Bro audit): toErrorRef previously mislabelled this defensive
+	// fallback as ErrUnhandledCommandKind (MET-E009), conflating "an error
+	// of an unexpected type" with "a command kind this engine has no
+	// handler for".
+	ErrUnexpectedError = "MET-E021"
 )

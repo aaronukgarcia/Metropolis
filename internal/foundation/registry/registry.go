@@ -108,6 +108,13 @@ type ModuleEntry struct {
 	LastTickCostMicros uint64
 	FlagSource         string
 	CanToggle          bool
+
+	// healthSet records whether WithHealth explicitly set Health during
+	// Register — a first-class flag so Register does not have to re-run the
+	// Option closures (which would fire any future side-effectful option
+	// twice) to detect "was health set" (BUG-310). Unexported: it is a
+	// construction bookkeeping bit, never part of the F12 snapshot.
+	healthSet bool
 }
 
 // Option customizes a Register call. Unset options take the defaults
@@ -145,7 +152,7 @@ func WithFlagSource(source string) Option {
 // real implementation was supplied, otherwise the mandatory stub)
 // reporting its own Health().
 func WithHealth(health Health) Option {
-	return func(e *ModuleEntry) { e.Health = health }
+	return func(e *ModuleEntry) { e.Health = health; e.healthSet = true }
 }
 
 // moduleRecord is the registry's internal storage for one key: the public
@@ -342,7 +349,7 @@ func (r *Registry) Register(key string, real, stub Module, opts ...Option) error
 	if entry.Status == StatusReal && real != nil {
 		active = real
 	}
-	if !healthWasSet(opts) {
+	if !entry.healthSet {
 		entry.Health = active.Health()
 	}
 
@@ -368,19 +375,6 @@ func (r *Registry) Register(key string, real, stub Module, opts ...Option) error
 	r.modules[key] = &moduleRecord{entry: entry, real: real, stub: stub}
 	r.order = append(r.order, key)
 	return nil
-}
-
-// healthWasSet reports whether opts included WithHealth, so Register
-// knows not to overwrite an explicit caller-supplied health with the
-// active implementation's self-reported one. It probes by applying opts
-// to a sentinel and comparing against the zero Health value — cheap and
-// avoids adding a second bool to every Option closure.
-func healthWasSet(opts []Option) bool {
-	var probe ModuleEntry
-	for _, opt := range opts {
-		opt(&probe)
-	}
-	return probe.Health != ""
 }
 
 // Get returns a copy of the entry registered under key, and false if key

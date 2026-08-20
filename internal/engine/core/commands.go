@@ -228,7 +228,9 @@ func toErrorRef(err error) *protocol.ErrorRef {
 	if e, ok := err.(*errs.E); ok {
 		return &protocol.ErrorRef{Code: e.Code, Display: e.Display()}
 	}
-	wrapped := errs.Wrap(ErrUnhandledCommandKind, errs.NewCorrelationID(), err, map[string]any{"cause": err.Error()})
+	// BUG-310: a non-*errs.E here is an internal invariant break, not an
+	// "unhandled command kind" — label it as the unexpected-error it is.
+	wrapped := errs.Wrap(ErrUnexpectedError, errs.NewCorrelationID(), err, map[string]any{"cause": err.Error()})
 	return &protocol.ErrorRef{Code: wrapped.Code, Display: wrapped.Display()}
 }
 
