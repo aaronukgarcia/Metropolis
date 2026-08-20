@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "ranges": {},
+  "codes": {
+    "MET-F003": {
+      "severity": "error",
+      "module": "foundation.errors",
+      "message": "unregistered error code {code} requested via {constructor}",
+      "remedy": "register the code in data/errors.json"
+    },
+    "MET-G4900": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "data/helicopters.json could not be loaded or failed schema validation",
+      "remedy": "fix the data file or register the missing field"
+    },
+    "MET-G4901": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "unknown unit type",
+      "remedy": "use one of police/fire/ambulance/vip"
+    },
+    "MET-G4902": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "unknown chopper",
+      "remedy": "reference a purchased chopper id"
+    },
+    "MET-G4903": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "insufficient funds for purchase",
+      "remedy": "ensure the treasury can settle the capital cost"
+    },
+    "MET-G4904": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "no pilot assigned",
+      "remedy": "assign a trained pilot before dispatching"
+    },
+    "MET-G4905": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "citizen is not a trained pilot",
+      "remedy": "assign a citizen with the pilot qualification"
+    },
+    "MET-G4906": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "chopper is not dispatchable",
+      "remedy": "dispatch only an in-service available chopper"
+    },
+    "MET-G4907": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "unit type locked behind a later milestone",
+      "remedy": "advance to the type's unlock milestone first"
+    },
+    "MET-G4908": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "adverse weather grounds air dispatch",
+      "remedy": "wait for calmer weather"
+    },
+    "MET-G4909": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "method called on a struct-copied AirUnitsAPI",
+      "remedy": "call methods on the value New constructed"
+    },
+    "MET-G4910": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "invalid input",
+      "remedy": "provide an in-domain value"
+    },
+    "MET-G4911": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "pilot already assigned to another chopper",
+      "remedy": "remove the pilot from their current chopper before reassigning"
+    }
+  }
+}
