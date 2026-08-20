@@ -114,10 +114,14 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	// written. Any earlier return leaves ok false, and the cleanup below
 	// removes both paths (os.Remove on a file that was never created is
 	// a harmless ENOENT, ignored) — AC-2's "no partial artifact"
-	// requirement.
+	// requirement. closed tracks whether f was already closed explicitly
+	// on the success path, so the deferred close never double-closes.
 	ok := false
+	closed := false
 	defer func() {
-		_ = f.Close()
+		if !closed {
+			_ = f.Close()
+		}
 		if !ok {
 			_ = os.Remove(shardPath)
 			_ = os.Remove(headerPath)
@@ -138,6 +142,14 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	if err != nil {
 		return errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "writing fixture shard"})
 	}
+	// Close the shard explicitly on the success path so a failed close
+	// (e.g. a disk full on the final flush) surfaces as an error rather
+	// than a silently-truncated shard that still looks valid to Load
+	// (BUG-305).
+	if err := f.Close(); err != nil {
+		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "closing fixture shard"})
+	}
+	closed = true
 
 	h := serialize.NewHeader(meta.WorldSeed, 0, 0, meta.AppVersion)
 	h.ShardIndex = []serialize.ShardMeta{shardMeta}

@@ -8,6 +8,13 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
+// maxScenarioBytes bounds a scenario file's size before it is read whole
+// into memory (BUG-305): a scenario is a small JSON command list, so 1 MiB
+// is orders of magnitude beyond any legitimate script while capping the
+// worst-case allocation a hostile/accidental multi-GB file would otherwise
+// force. Mirrors synth's maxResultsLineBytes ceiling.
+const maxScenarioBytes = 1 << 20
+
 // LoadScenario reads path as a JSON array of wire-format protocol.Command
 // documents (AC-4, harness.headless.md) and decodes each via
 // protocol.DecodeCommand — the SAME decoder the real transport wire
@@ -23,13 +30,25 @@ import (
 // itself, which still requires a non-empty CorrelationID everywhere
 // else in this codebase).
 //
-// Any read or parse failure — a missing/unreadable file, malformed JSON,
-// an unknown command Kind, or a failed envelope Validate — is reported
-// as a single registry-sourced ErrScenarioReadFailed (MET-H200, AC-8),
-// never a panic. LoadScenario returns either every command in the
-// script or none — a scenario that fails partway through never produces
-// a partial command list for a caller to accidentally run.
+// Any read or parse failure — a missing/unreadable file, an oversized
+// file, malformed JSON, an unknown command Kind, or a failed envelope
+// Validate — is reported as a single registry-sourced
+// ErrScenarioReadFailed (MET-H200, AC-8), never a panic. LoadScenario
+// returns either every command in the script or none — a scenario that
+// fails partway through never produces a partial command list for a
+// caller to accidentally run.
 func LoadScenario(correlationID, path string) ([]protocol.Command, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, errs.Wrap(ErrScenarioReadFailed, correlationID, err, map[string]any{"path": path})
+	}
+	if info.Size() > maxScenarioBytes {
+		return nil, errs.New(ErrScenarioReadFailed, correlationID, map[string]any{
+			"path":  path,
+			"cause": "scenario file exceeds the 1 MiB size cap",
+		})
+	}
+
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, errs.Wrap(ErrScenarioReadFailed, correlationID, err, map[string]any{"path": path})
