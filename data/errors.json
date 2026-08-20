@@ -219,6 +219,12 @@
       "message": "CopyGuard: method called on a struct copy of the guarded value (SEC-020)",
       "remedy": "Every type with shared mutable state embeds registry.CopyGuard[T] and calls Bind() exactly once at the end of its constructor, then Check() before touching its mutex. A struct copy carries the original's stored identity pointer but a different field address, so Check rejects it fail-closed (and a zero value / new(T) / hand-built literal, whose Bind never ran, is rejected the same way). Always use the pointer the constructor returned; never dereference-and-copy it."
     },
+    "MET-F108": {
+      "severity": "error",
+      "module": "foundation.registry",
+      "message": "status {status} is not one of real/stub/off",
+      "remedy": "A module status must be one of the three documented values. A misspelled status is rejected at registration and at SetStatus, never silently persisted."
+    },
     "MET-F200": {
       "severity": "error",
       "module": "foundation.det",
@@ -692,6 +698,12 @@
       "module": "harness.headless",
       "message": "subscription pump goroutine did not exit within the shutdown join timeout ({timeoutMs}ms) - proceeding with transport.Close anyway",
       "remedy": "check for a blocking or reentrant-into-Publish DeltaSink implementation (see engine.core's DeltaSink doc comment) - the pump goroutine may be permanently stuck"
+    },
+    "MET-H207": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "headless months count {months} overflows the tick budget ({ticksPerMonth} ticks/month)",
+      "remedy": "Reject an absurdly large -months before advancing any tick, so an overflow can never produce a successful run with a bogus tick count."
     },
     "MET-E100": {
       "severity": "error",
