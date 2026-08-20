@@ -496,7 +496,22 @@
         "feat.detgate"
       ],
       "calls": [
-        "int.protocol"
+        "int.protocol",
+        "engine.core",
+        "feat.compositionroot",
+        "feat.debugmode",
+        "foundation.buildinfo",
+        "foundation.errors",
+        "foundation.registry",
+        "harness.headless",
+        "feat.devmode",
+        "ui.core",
+        "ui.keys",
+        "ui.router",
+        "ui.screen.finance",
+        "ui.screen.map",
+        "ui.screen.services",
+        "ui.widgets"
       ],
       "sprint": 1
     },
@@ -1598,7 +1613,8 @@
         "engine.services",
         "engine.dispatch",
         "int.protocol",
-        "ui.dash"
+        "ui.dash",
+        "ui.keys"
       ],
       "sprint": 8
     },
