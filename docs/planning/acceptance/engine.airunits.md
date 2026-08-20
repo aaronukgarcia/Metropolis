@@ -108,3 +108,5 @@ Four distinct rotary-wing unit types (police, fire, ambulance, VIP/commercial) w
 - **Assumption logged — ASM-588 (maintenance seam).** The chopper's engineer-hour burden surfaces through MOD-072's `engine.maintenance` MaintenanceView demand, not a chopper-local ledger. Logged against `internal/engine/airunits/`, `engine.airunits`.
 - **Assumption logged — ASM-589 (weather gate).** The chopper weather gate reuses `engine.dispatch` AC-7's weather condition read from `engine.world`, with the specific threshold a `data/helicopters.json` placeholder. Logged against `internal/engine/airunits/`, `engine.airunits`.
 - **Assumption logged — ASM-590 (CAPEX/OPEX split).** Chopper purchase posts as CAPEX through finance's capital path and running cost as OPEX through the `CatOpex` family, mirroring FEAT-094. Logged against `internal/engine/airunits/`, `engine.airunits`.
+
+- **ASM-940 (FEAT-084 SF fold).** Spec line refs corrected: 'More police = less crime' is at section 28 line 422 (line 428 is the section 29 'The News System' header); the non-tradable services list lives at section 7 line 205, not section 10 line 230.

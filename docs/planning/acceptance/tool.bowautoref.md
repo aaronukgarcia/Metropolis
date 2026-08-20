@@ -70,3 +70,5 @@ Three properties define its contract and are AC'd below: (1) it trusts the **wor
 
 - **ASM-718** — retrospective posture + missing test file: the doc's Tests ACs specify coverage to be written/verified (no suite exists as of `781f3ca`); the intended seam is the exported `autoRefForCommit`/`insertRefIdempotent`/`refExists`/`extractTags`/`readHeadCommit` surface, which the header exports for direct testing without a real git commit.
 - **ASM-719** — `--amend` commits are never auto-ref'd (hash-rewrite ambiguity); deliberate, accepted gap, requiring a manual `ref`.
+
+- **ASM-917 (FEAT-084 CC fold).** claude-bow-autoref.js header line 43 says the hook sits after claude-reflection.js, but .claude/settings.json lists claude-bow-autoref.js BEFORE claude-reflection.js in both Bash and PowerShell PostToolUse matchers (ordering drift).

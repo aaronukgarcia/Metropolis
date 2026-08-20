@@ -222,3 +222,5 @@ Logged via `node claude-bow.js add assumption`:
 - **No new escalation beyond ASM-762/ASM-763** — the BUG-194/197/198 hardening
   is already its own closed record; this file's job is to make the module's
   contract greppable, not to relitigate those rounds.
+
+- **ASM-914 (FEAT-084 CC fold).** claude-plan-checker.js header line 5 still cites BOW mkey tool.planguard while the module key is tool.planchecker per code.json (re-keying drift).

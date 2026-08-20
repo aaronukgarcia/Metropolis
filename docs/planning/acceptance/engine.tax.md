@@ -72,3 +72,7 @@ The tax instrument panel: residential (council-tax bands by typology, per-distri
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-287** — Per-instrument bearer sets ACCEPTED (universal taxonomy would force fake categories).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-418** — VAT/import/corp/PAYE bearer-category sets are BA-invented (extends ASM-287 per-instrument precedent).
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-423** — 'Blue 2' resolved as mechanic-shape citation only, no literal parity claim.
+
+- **ASM-974 (FEAT-084 CC fold).** Ledger payer and finance tax category are derived from the instrument's data category; the property category holds two instruments with different payers, so it is split by incidence bearer set (owner/landlord/tenant = residential to households; firm/consumer = commercial to firms).
+
+- **ASM-976 (FEAT-084 SF fold).** AC-9 names a fuel-duty instrument FEAT-056 did not ship; built a generic per-instrument base-erosion mechanism (SetEVShare + InstrumentInfo.EVShare) demonstrated on an existing instrument. When a real fuel-duty instrument is added, its EV-share wiring may need a different shape.

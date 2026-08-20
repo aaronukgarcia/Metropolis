@@ -69,3 +69,7 @@ BOW code: FEAT-062
 ## Assumptions logged (process v1.7)
 
 - **ASM — "done" BOW status (not "path exists on disk") is the correct proxy for "this module is expected to be fully registry-consistent."** A module could theoretically have a path and working code while its BOW item is still `open` (mid-build); this file treats such a module as `not-yet-built` for Direction-A purposes even if partially correct, to avoid the audit second-guessing an in-flight pipeline stage. If this produces false "not yet built" suppressions in practice (a module that's actually finished but whose BOW item lags in status), that is a BOW hygiene gap, not an audit defect — logged so it isn't silently assumed away.
+
+## Assumptions logged (FEAT-084 CC folds)
+
+- **ASM-865** — the seven resource-cluster FEAT acceptance files' stale BOW-status headers (feat.resourcedeposits / feat.resourcesurvey / feat.extraction / feat.commoditymarket / feat.facilitypermits / feat.decommission / feat.megafacilities) were verified RESOLVED at fold time: every file's `**Status:**` line now reflects the moved BOW state (MOD-017 done, engine.mining registered, MOD-031 in_progress, MOD-020/MOD-047 done, MOD-026/022/032 done, finance package exists, feat.facilitypermits.md exists, MOD-047 done). Mirrors the ASM-829/830/838 header-drift class; no further action needed.

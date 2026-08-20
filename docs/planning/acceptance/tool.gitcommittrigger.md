@@ -229,3 +229,5 @@ Logged via `node claude-bow.js add assumption`:
   spread across four suites today), but it is not required for this contract to
   be judged — the indirect coverage in AC-13 is the live proof. Flagged as a
   hygiene improvement, not a correctness gap.
+
+- **ASM-915 (FEAT-084 CC fold).** claude-git-commit-trigger.js header line 5 cites provenance mkey tool.secretguard while the module key is tool.gitcommittrigger per code.json (weakest form of the re-keying theme).

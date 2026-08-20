@@ -76,3 +76,5 @@ Unlike `claude-plan-guard.js`/`claude-secret-guard.js` (fail-CLOSED, because the
 - **ASM-720** — retrospective posture + missing test file, and the no-`module.exports` fact: coverage must be subprocess/stdin-stdout, not unit-level.
 - **ASM-721** — the escape-hatch variable is `CLAUDE_DISABLE_BOW_REF=1` (shipped), authoritative over `tool.bow.md` AC-13's provisional `CLAUDE_DISABLE_BOW_REF_CHECK=1`.
 - **ASM-722** — `nearMisses` suggestions are best-effort UX and never affect the allow/deny verdict (strict-resolve-then-deny, no fuzzy matching).
+
+- **ASM-913 (FEAT-084 CC fold).** claude-bow-ref-check.js header line 5 still cites BOW mkey tool.bow / MOD-007 (parent) while the module key is tool.bowrefcheck per code.json (re-keying drift).
