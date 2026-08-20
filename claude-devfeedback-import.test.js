@@ -27,6 +27,7 @@ const {
   deriveTitle,
   deriveAttribution,
   deriveKind,
+  PROCESSING_SUFFIX,
   SCHEMA_VERSION,
   DEFAULT_SOURCE_MKEY,
   DEFAULT_KIND,
@@ -239,6 +240,74 @@ test('a transient claude-bow.js failure followed by a later successful run recov
   assert.equal(fs.existsSync(path.join(inboxDir, 'a.json.error')), false, 'stale .error sidecar must be cleared on eventual success');
 });
 
+// ── ASM-766: post-success rename failure must NOT double-file on retry ──
+
+test('ASM-766: a post-success move failure does not double-file the BOW item on retry (mark-then-move recovers, never re-adds)', () => {
+  const inboxDir = mkTmpDir('devfb-inbox-');
+  const processedDir = path.join(mkTmpDir('devfb-processed-'), 'processed');
+  writeRecord(inboxDir, 'a.json', wellFormedRecord({ correlationId: 'corr-asm-766' }));
+
+  const spawnStub = makeStubSpawn(true);
+  // A rename stub that only fails the move-into-processed/ rename (the
+  // post-success failure ASM-766 is about) — the mark rename
+  // (inbox/a.json -> inbox/a.json.processing) and any rollback must still
+  // work.
+  let failMoves = true;
+  const flakyRename = (src, dest) => {
+    if (failMoves && String(dest).includes(processedDir)) {
+      throw new Error('simulated post-success rename failure');
+    }
+    fs.renameSync(src, dest);
+  };
+
+  const first = runImport({
+    inboxDir, processedDir, spawnSyncFn: spawnStub, bowScript: '/fake/claude-bow.js', renameFn: flakyRename,
+  });
+  assert.equal(first.imported, 0);
+  assert.equal(first.failed, 1, 'the first run must report the post-success move failure');
+  assert.equal(spawnStub.calls.length, 1, 'exactly one claude-bow.js add on the first run');
+  // The record is now marked *.processing in the inbox, NOT a plain .json —
+  // so a later run can tell it is already owned by an import.
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json')), false, 'plain record must no longer be in inbox/ after the mark');
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json' + PROCESSING_SUFFIX)), true, 'record must be marked *.processing, not re-importable');
+  assert.equal(fs.existsSync(path.join(processedDir, 'a.json')), false, 'move failed, so nothing in processed/ yet');
+
+  // Second run: the rename works now. The marked file must be recovered
+  // into processed/ WITHOUT a second claude-bow.js add — the ASM-766
+  // regression this test exists to pin.
+  failMoves = false;
+  const second = runImport({
+    inboxDir, processedDir, spawnSyncFn: spawnStub, bowScript: '/fake/claude-bow.js', renameFn: flakyRename,
+  });
+  assert.equal(second.recovered, 1, 'the marked record must be recovered, not re-imported');
+  assert.equal(second.imported, 0, 'no fresh import on the retry');
+  assert.equal(spawnStub.calls.length, 1, 'NO duplicate claude-bow.js add on retry — this is the ASM-766 double-file regression');
+  assert.equal(fs.existsSync(path.join(processedDir, 'a.json')), true, 'record ends up in processed/ on the recovery run');
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json' + PROCESSING_SUFFIX)), false, 'marked file must be gone after recovery');
+});
+
+test('ASM-766: a failed claude-bow.js add rolls the mark back so a later run re-attempts exactly once (no stuck *.processing, no duplicate)', () => {
+  const inboxDir = mkTmpDir('devfb-inbox-');
+  const processedDir = path.join(mkTmpDir('devfb-processed-'), 'processed');
+  writeRecord(inboxDir, 'a.json', wellFormedRecord({ correlationId: 'corr-asm-766-rollback' }));
+
+  const failingSpawn = makeStubSpawn(false); // claude-bow.js add fails (e.g. DB down)
+  const firstSummary = runImport({ inboxDir, processedDir, spawnSyncFn: failingSpawn, bowScript: '/fake/claude-bow.js' });
+  assert.equal(firstSummary.failed, 1);
+  // The mark was rolled back: the record is a plain a.json again, NOT
+  // *.processing, so a later run will re-attempt it.
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json')), true, 'record must be rolled back to a plain a.json after a bow-add failure');
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json' + PROCESSING_SUFFIX)), false, 'no *.processing file may be left behind by a failed add');
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json.error')), true, '.error sidecar still names the bow-add failure');
+
+  const succeedingSpawn = makeStubSpawn(true);
+  const secondSummary = runImport({ inboxDir, processedDir, spawnSyncFn: succeedingSpawn, bowScript: '/fake/claude-bow.js' });
+  assert.equal(secondSummary.imported, 1);
+  assert.equal(succeedingSpawn.calls.length, 1, 'exactly one add on the retry');
+  assert.equal(fs.existsSync(path.join(processedDir, 'a.json')), true);
+  assert.equal(fs.existsSync(path.join(inboxDir, 'a.json.error')), false, 'stale .error sidecar must be cleared on eventual success');
+});
+
 // ── ASM-477: per-record source-mkey attribution ─────────────────────────
 
 test('ASM-477: a record with sourceMkey "feat.metricsdash" imports with --codejson feat.metricsdash and a metricsdash-specific --code-path (not feat.devmode)', () => {
@@ -384,8 +453,10 @@ test('multiple concurrent-style submissions never interleave: two records, two d
   assert.equal(spawnStub.calls.length, 2);
   assert.equal(fs.existsSync(path.join(processedDir, 'one.json')), true);
   assert.equal(fs.existsSync(path.join(processedDir, 'two.json')), true);
-  const oneTitle = spawnStub.calls.find(c => c.args.includes(path.join(inboxDir, 'one.json')));
-  const twoTitle = spawnStub.calls.find(c => c.args.includes(path.join(inboxDir, 'two.json')));
+  // ASM-766 mark-then-move: --desc-file points at the *marked* path
+  // (`one.json.processing`), which is still the record itself on disk.
+  const oneTitle = spawnStub.calls.find(c => c.args.includes(path.join(inboxDir, 'one.json' + PROCESSING_SUFFIX)));
+  const twoTitle = spawnStub.calls.find(c => c.args.includes(path.join(inboxDir, 'two.json' + PROCESSING_SUFFIX)));
   assert.ok(oneTitle && oneTitle.args.some(a => a.includes('first submission')));
   assert.ok(twoTitle && twoTitle.args.some(a => a.includes('second submission')));
 });

@@ -37,6 +37,18 @@
  * (never deleted — auditability, GR#1) and any stale `.error` sidecar from
  * a prior failed attempt on the same file is removed.
  *
+ * ASM-766 mark-then-move (2026-08-20): the move into processed/ is no
+ * longer the only thing standing between a successful `claude-bow.js add`
+ * and a re-run seeing the same source back in inbox/. Before calling add,
+ * the record is atomically renamed from `a.json` -> `a.json.processing`
+ * (the mark). A later run treats any `*.json.processing` file as "this
+ * submission is already owned by an import" and recovers it straight into
+ * processed/ WITHOUT calling add again — so a rename-into-processed/ failure
+ * can no longer double-file the BOW item (the old KNOWN LIMITATION below is
+ * solved). If `claude-bow.js add` itself fails, the mark is rolled back
+ * (the record is renamed back to `a.json`) and the normal retry below
+ * re-attempts it — nothing about the self-heal behavior changes.
+ *
  * On failure (malformed record, or the `claude-bow.js add` invocation
  * itself fails/exits non-zero): the record is left in inbox/ untouched and
  * a `.error` sidecar is written next to it naming the failure — a
@@ -49,21 +61,11 @@
  * self-heal on the next run instead of requiring a human to notice and
  * manually re-trigger it.
  *
- * KNOWN LIMITATION (documented rather than solved under this dispatch's
- * time budget — flagged in the FEAT-065 report): if `claude-bow.js add`
- * succeeds (a real BOW item now exists) but the subsequent
- * rename-into-processed/ fails (e.g. a permissions change mid-run), the
- * source record stays in inbox/ and a NEXT run would call `claude-bow.js
- * add` again for the same content, producing a duplicate BOW item. This
- * script marks that specific failure mode distinctly in its `.error`
- * sidecar ("MANUAL CLEANUP REQUIRED, do not resubmit without checking the
- * BOW for a duplicate first") so a human notices before it can repeat
- * silently, but it does not (yet) prevent the duplicate mechanically. A
- * true fix needs either a two-phase commit (mark-then-move) or querying
- * the BOW for an existing item with this correlationId before calling add
- * — out of scope for this dispatch, escalate if this edge case matters in
- * practice (a rename failing immediately after a successful adjacent write
- * is rare).
+ * Former KNOWN LIMITATION (now fixed by ASM-766): a post-success rename
+ * failure used to leave the source in inbox/ so the next run re-added it —
+ * a duplicate BOW item. Mark-then-move removes that window mechanically;
+ * the `.error` sidecar written on a move failure now says the file will be
+ * recovered (moved, not re-added) on the next run.
  *
  * Usage: node claude-devfeedback-import.js
  * Exits 0 even if individual records were malformed/failed (those are
@@ -88,6 +90,14 @@ const DEFAULT_BOW_SCRIPT = path.join(ROOT, 'claude-bow.js');
 // constant (GR#3: one source of truth for the schema's shape — this
 // script does not own the schema, it only validates against it).
 const SCHEMA_VERSION = 1;
+
+// ASM-766 (2026-08-20): the suffix a record is atomically renamed to BEFORE
+// `claude-bow.js add` is invoked. A `*.json.processing` file sitting in
+// inbox/ means "this submission's BOW import is already owned by an import
+// that got at least as far as the add" — a later run recovers it straight
+// into processed/ and never re-adds it, so a rename-into-processed/ failure
+// can no longer double-file the BOW item.
+const PROCESSING_SUFFIX = '.processing';
 
 // The devmode module key every imported item is tagged with
 // (docs/planning/acceptance/feat.devmode.md AC-DM10). No per-screen
@@ -268,17 +278,63 @@ function clearStaleErrorSidecar(recordPath) {
 }
 
 /**
+ * recoverMarkedRecord finishes an import whose `claude-bow.js add` already
+ * happened on a prior run but whose move into processed/ never completed:
+ * the source file is sitting in inbox/ as `a.json.processing` (the ASM-766
+ * mark). The BOW item already exists, so this moves the marked file into
+ * processed/ WITHOUT calling `claude-bow.js add` again — the mechanical
+ * guarantee that a post-success rename failure cannot double-file the BOW.
+ * Returns 'recovered' on success, 'move-failed' if the retried move fails
+ * again (it will simply be retried on the next run, never re-added).
+ */
+function recoverMarkedRecord(recordPath, opts) {
+  const processedDir = opts.processedDir;
+  const renameFn = opts.renameFn || fs.renameSync;
+  const correlationId = crypto.randomUUID();
+  const originalName = path.basename(recordPath).slice(0, -PROCESSING_SUFFIX.length);
+  const dest = path.join(processedDir, originalName);
+
+  try {
+    fs.mkdirSync(processedDir, { recursive: true });
+    renameFn(recordPath, dest);
+  } catch (err) {
+    writeErrorSidecar(
+      recordPath,
+      `BOW item already exists for this submission (file is marked ${PROCESSING_SUFFIX} by a prior import) but moving it to processed/ failed again: ${err.message} -- will be retried on the next run; no re-add will occur.`
+    );
+    logError('devfeedback-move-failed', correlationId, `recovery move failed for ${recordPath}: ${err.message}`);
+    return 'move-failed';
+  }
+
+  clearStaleErrorSidecar(recordPath);
+  logInfo(`recovered ${originalName} -> processed/ (BOW item already filed)`, { correlationId });
+  return 'recovered';
+}
+
+/**
  * importOne processes a single inbox record file: validate, and on
- * success call `claude-bow.js add bug` with --desc-file pointed at the
- * record itself (BUG-090), then move it to processedDir. Returns a status
- * string: 'imported' | 'malformed' | 'bow-failed' | 'move-failed' | 'read-failed'.
+ * success call `claude-bow.js add <kind>` with --desc-file pointed at the
+ * record itself (BUG-090), then move it to processedDir. ASM-766
+ * mark-then-move: the record is atomically renamed to `*.json.processing`
+ * BEFORE the add, so a failed move can never re-add the same content on a
+ * later run (the marked file is recovered, not re-imported). Returns a
+ * status string: 'imported' | 'recovered' | 'malformed' | 'bow-failed' |
+ * 'move-failed' | 'mark-failed' | 'read-failed'.
  */
 function importOne(recordPath, opts) {
   const processedDir = opts.processedDir;
   const bowScript = opts.bowScript;
   const spawnSyncFn = opts.spawnSyncFn;
+  const renameFn = opts.renameFn || fs.renameSync;
   const codePath = opts.codePath;
   const correlationId = crypto.randomUUID();
+
+  // ASM-766: a *.json.processing file is a submission whose BOW import was
+  // already completed (or at least initiated) on a prior run. Never re-add
+  // it — recover it into processed/ instead.
+  if (recordPath.endsWith(PROCESSING_SUFFIX)) {
+    return recoverMarkedRecord(recordPath, opts);
+  }
 
   let raw;
   try {
@@ -310,9 +366,23 @@ function importOne(recordPath, opts) {
   const attribution = deriveAttribution(record, codePath);
   const kind = deriveKind(record);
 
+  // ASM-766 mark-then-move, step 1: atomically rename the record to
+  // `a.json.processing` BEFORE the `claude-bow.js add`. From this point on
+  // the file's presence in inbox/ says "this submission is already owned by
+  // an import" — a later run recovers it into processed/ instead of adding
+  // a duplicate BOW item, even if the move below fails.
+  const markedPath = recordPath + PROCESSING_SUFFIX;
+  try {
+    renameFn(recordPath, markedPath);
+  } catch (err) {
+    writeErrorSidecar(recordPath, `could not mark ${path.basename(recordPath)} as in-flight (rename to *.processing failed): ${err.message}`);
+    logError('devfeedback-mark-failed', correlationId, `mark rename failed for ${recordPath}: ${err.message}`);
+    return 'mark-failed';
+  }
+
   const args = [
     bowScript, 'add', kind, title,
-    '--desc-file', recordPath, // BUG-090: never inline --desc
+    '--desc-file', markedPath, // BUG-090: never inline --desc; the marked path is still the record itself on disk
     '--code-path', attribution.codePath,
     '--codejson', attribution.codejson,
   ];
@@ -328,37 +398,56 @@ function importOne(recordPath, opts) {
     const cause = result.error
       ? result.error.message
       : `exit ${result.status}: ${(result.stderr || result.stdout || '').trim()}`;
-    writeErrorSidecar(recordPath, `claude-bow.js add bug failed: ${cause}`);
-    logError('devfeedback-bow-add-failed', correlationId, `claude-bow.js add bug failed for ${recordPath}: ${cause}`);
+    // Roll the mark back so a later run re-attempts. (A *.processing file
+    // is otherwise interpreted as "already imported" and would be moved to
+    // processed/ without a BOW item ever being created.)
+    try {
+      renameFn(markedPath, recordPath);
+    } catch (rollbackErr) {
+      // Double filesystem failure (add failed AND the rollback rename
+      // failed). Leave the mark in place so a later run can never re-add,
+      // and say explicitly that no BOW item was created.
+      writeErrorSidecar(
+        markedPath,
+        `claude-bow.js add ${kind} failed: ${cause} -- AND the rollback rename back to ${path.basename(recordPath)} failed: ${rollbackErr.message}. File is stuck as *.processing with NO BOW item; manual review required.`
+      );
+      logError('devfeedback-bow-add-failed', correlationId, `claude-bow.js add ${kind} failed for ${recordPath}: ${cause}`);
+      return 'bow-failed';
+    }
+    writeErrorSidecar(recordPath, `claude-bow.js add ${kind} failed: ${cause}`);
+    logError('devfeedback-bow-add-failed', correlationId, `claude-bow.js add ${kind} failed for ${recordPath}: ${cause}`);
     return 'bow-failed';
   }
 
+  // ASM-766 mark-then-move, step 2: the add succeeded, so move the marked
+  // file into processed/. If this rename fails, the file stays in inbox/
+  // as *.json.processing and the NEXT run recovers it WITHOUT re-adding.
   try {
     fs.mkdirSync(processedDir, { recursive: true });
-    fs.renameSync(recordPath, path.join(processedDir, path.basename(recordPath)));
+    renameFn(markedPath, path.join(processedDir, path.basename(recordPath)));
   } catch (err) {
-    // See this file's header "KNOWN LIMITATION" note: a BOW item now
-    // exists for this submission but the move failed. Marked distinctly
-    // so a human notices before a re-run could double-add it.
     writeErrorSidecar(
-      recordPath,
-      `BOW item "${title}" was created successfully but moving the record to processed/ failed: ${err.message} -- MANUAL CLEANUP REQUIRED, do not resubmit without checking the BOW for a duplicate first`
+      markedPath,
+      `BOW item "${title}" was created successfully and the record is marked ${PROCESSING_SUFFIX}, but moving it to processed/ failed: ${err.message} -- the file will be recovered (moved, NOT re-added) on the next run; no manual cleanup required.`
     );
     logError('devfeedback-move-failed', correlationId, `post-success move failed for ${recordPath}: ${err.message}`);
     return 'move-failed';
   }
 
-  clearStaleErrorSidecar(recordPath); // a prior failed attempt's sidecar is now stale
-  logInfo(`imported ${path.basename(recordPath)} -> BOW bug`, { correlationId, title });
+  // A prior failed attempt's sidecars are now stale — clear both the plain
+  // `a.json.error` (from a bow-failed retry) and any `a.json.processing.error`.
+  clearStaleErrorSidecar(recordPath);
+  clearStaleErrorSidecar(markedPath);
+  logInfo(`imported ${path.basename(recordPath)} -> BOW ${kind}`, { correlationId, title });
   return 'imported';
 }
 
 /**
- * runImport scans inboxDir for *.json records (never .tmp partial writes,
- * never .error sidecars — both are excluded by the .json-only filter) and
- * processes each via importOne. Returns a summary object. A missing
- * inboxDir (nothing has ever been submitted) is a legitimate no-op, not an
- * error (AC-DM11).
+ * runImport scans inboxDir for *.json records and (ASM-766) *.json.processing
+ * marked files (never .tmp partial writes, never .error sidecars — both are
+ * excluded by the filter) and processes each via importOne. Returns a
+ * summary object. A missing inboxDir (nothing has ever been submitted) is a
+ * legitimate no-op, not an error (AC-DM11).
  */
 function runImport(opts) {
   const options = opts || {};
@@ -366,23 +455,25 @@ function runImport(opts) {
   const processedDir = options.processedDir || DEFAULT_PROCESSED_DIR;
   const bowScript = options.bowScript || DEFAULT_BOW_SCRIPT;
   const spawnSyncFn = options.spawnSyncFn || spawnSync;
+  const renameFn = options.renameFn || fs.renameSync;
   const codePath = options.codePath || DEFAULT_CODE_PATH;
 
-  const summary = { imported: 0, malformed: 0, failed: 0, total: 0 };
+  const summary = { imported: 0, malformed: 0, failed: 0, recovered: 0, total: 0 };
 
   if (!fs.existsSync(inboxDir)) {
     return summary;
   }
 
   const entries = fs.readdirSync(inboxDir)
-    .filter(name => name.endsWith('.json'))
+    .filter(name => name.endsWith('.json') || name.endsWith(PROCESSING_SUFFIX))
     .sort(); // deterministic processing order
 
   summary.total = entries.length;
   for (const name of entries) {
     const recordPath = path.join(inboxDir, name);
-    const status = importOne(recordPath, { processedDir, bowScript, spawnSyncFn, codePath });
+    const status = importOne(recordPath, { processedDir, bowScript, spawnSyncFn, renameFn, codePath });
     if (status === 'imported') summary.imported++;
+    else if (status === 'recovered') summary.recovered++;
     else if (status === 'malformed') summary.malformed++;
     else summary.failed++;
   }
@@ -409,10 +500,12 @@ if (require.main === module) {
   module.exports = {
     runImport,
     importOne,
+    recoverMarkedRecord,
     validateRecord,
     deriveTitle,
     deriveAttribution,
     deriveKind,
+    PROCESSING_SUFFIX,
     DEFAULT_INBOX_DIR,
     DEFAULT_PROCESSED_DIR,
     DEFAULT_BOW_SCRIPT,
