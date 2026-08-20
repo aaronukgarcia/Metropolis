@@ -341,9 +341,21 @@ func (ins TaxInstrument) validate(id string) error {
 	return nil
 }
 
+// nonFinite reports whether v is NaN or ±Inf — the guard every float64
+// validate check runs FIRST, so a non-finite figure is rejected as a data
+// error rather than silently passing a raw <0/>1 range comparison (which is
+// false for NaN and would let it propagate into the tax math, GR#16).
+func nonFinite(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
+
 func (rr RateRange) validate(prefix string) error {
+	if nonFinite(rr.MinPercent) {
+		return fieldErr(prefix+".minPercent", fmt.Sprintf("must be finite, got %v", rr.MinPercent))
+	}
 	if rr.MinPercent < 0 {
 		return fieldErr(prefix+".minPercent", fmt.Sprintf("must be >= 0, got %v", rr.MinPercent))
+	}
+	if nonFinite(rr.MaxPercent) {
+		return fieldErr(prefix+".maxPercent", fmt.Sprintf("must be finite, got %v", rr.MaxPercent))
 	}
 	if rr.MaxPercent < rr.MinPercent {
 		return fieldErr(prefix+".maxPercent",
@@ -358,6 +370,9 @@ func (bw BearerWeights) validate(prefix string, rr *RateRange) error {
 	}
 	for i, rp := range bw.RatePoints {
 		rpPrefix := fmt.Sprintf("%s.ratePoints[%d]", prefix, i)
+		if nonFinite(rp.RatePercent) {
+			return fieldErr(rpPrefix+".ratePercent", fmt.Sprintf("must be finite, got %v", rp.RatePercent))
+		}
 		if rp.RatePercent < rr.MinPercent || rp.RatePercent > rr.MaxPercent {
 			return fieldErr(rpPrefix+".ratePercent",
 				fmt.Sprintf("must be within rateRange [%v, %v], got %v", rr.MinPercent, rr.MaxPercent, rp.RatePercent))
@@ -369,6 +384,10 @@ func (bw BearerWeights) validate(prefix string, rr *RateRange) error {
 		for j, b := range rp.Bearers {
 			if err := requireNonEmptyString(fmt.Sprintf("%s.bearers[%d].category", rpPrefix, j), b.Category); err != nil {
 				return err
+			}
+			if nonFinite(b.Share) {
+				return fieldErr(fmt.Sprintf("%s.bearers[%d].share", rpPrefix, j),
+					fmt.Sprintf("must be finite, got %v", b.Share))
 			}
 			if b.Share < 0 || b.Share > 1 {
 				return fieldErr(fmt.Sprintf("%s.bearers[%d].share", rpPrefix, j),
@@ -394,6 +413,9 @@ func (b IncomeTaxBand) validate(prefix string) error {
 			fmt.Sprintf("must be > lowerBoundMicroPounds (%d), got %d (or null for no upper bound)",
 				b.LowerBoundMicroPounds, *b.UpperBoundMicroPounds))
 	}
+	if nonFinite(b.RatePercent) {
+		return fieldErr(prefix+".ratePercent", fmt.Sprintf("must be finite, got %v", b.RatePercent))
+	}
 	if b.RatePercent < 0 {
 		return fieldErr(prefix+".ratePercent", fmt.Sprintf("must be >= 0, got %v", b.RatePercent))
 	}
@@ -401,8 +423,14 @@ func (b IncomeTaxBand) validate(prefix string) error {
 }
 
 func (n NIRates) validate(prefix string) error {
+	if nonFinite(n.EmployeePercent) {
+		return fieldErr(prefix+".employeePercent", fmt.Sprintf("must be finite, got %v", n.EmployeePercent))
+	}
 	if n.EmployeePercent < 0 {
 		return fieldErr(prefix+".employeePercent", fmt.Sprintf("must be >= 0, got %v", n.EmployeePercent))
+	}
+	if nonFinite(n.EmployerPercent) {
+		return fieldErr(prefix+".employerPercent", fmt.Sprintf("must be finite, got %v", n.EmployerPercent))
 	}
 	if n.EmployerPercent < 0 {
 		return fieldErr(prefix+".employerPercent", fmt.Sprintf("must be >= 0, got %v", n.EmployerPercent))
@@ -414,11 +442,11 @@ func (z ZoneOverride) validate(prefix string) error {
 	if z.RateMultiplier == nil && z.ReliefPercent == nil {
 		return fieldErr(prefix, "must specify rateMultiplier or reliefPercent")
 	}
-	if z.RateMultiplier != nil && *z.RateMultiplier < 0 {
-		return fieldErr(prefix+".rateMultiplier", fmt.Sprintf("must be >= 0, got %v", *z.RateMultiplier))
+	if z.RateMultiplier != nil && (nonFinite(*z.RateMultiplier) || *z.RateMultiplier < 0) {
+		return fieldErr(prefix+".rateMultiplier", fmt.Sprintf("must be finite and >= 0, got %v", *z.RateMultiplier))
 	}
-	if z.ReliefPercent != nil && (*z.ReliefPercent < 0 || *z.ReliefPercent > 100) {
-		return fieldErr(prefix+".reliefPercent", fmt.Sprintf("must be in [0, 100], got %v", *z.ReliefPercent))
+	if z.ReliefPercent != nil && (nonFinite(*z.ReliefPercent) || *z.ReliefPercent < 0 || *z.ReliefPercent > 100) {
+		return fieldErr(prefix+".reliefPercent", fmt.Sprintf("must be finite and in [0, 100], got %v", *z.ReliefPercent))
 	}
 	return nil
 }
