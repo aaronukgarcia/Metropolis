@@ -1853,7 +1853,7 @@
       "layer": "engine",
       "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
       "desc": "FEAT-088: turns feat.deathwave's released death queue into a conserved body stock and disposes of it through three mutually-exclusive terminal methods — burial (consumes a graveyard plot, reusable only after a data-sourced reuse horizon), cremation (space-free, costed, throughput-bounded), and emergency dispensation (multi-body van/truck transport + 24x7 operation, gated on feat.deathwave's weather-driven major death event); hearses carry exactly one body per trip, so funeral throughput caps the disposal rate and a death surge drains as a queryable backlog rather than vanishing in one tick. Does not own mortality/smoothing (feat.deathwave) or hearse pathfinding (engine.logistics owns the routing).",
-      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H Health & Deathcare; §25 (refuse's rounds-as-logistics-movements structural analog); §26 (dispatch's nearest-registered emergency model)",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H; §25; §26",
       "path": "internal/engine/deathservices/",
       "inbound": {
         "name": "DeathServicesAPI",
