@@ -81,6 +81,14 @@ func MulRat(correlationID string, a Micropounds, num, den int64) (Micropounds, e
 			"op": "mulrat", "a": int64(a), "num": num, "den": den,
 		})
 	}
+	// BUG-310: MinInt64 / -1 itself overflows (Go's two's-complement divide
+	// wraps it back to MinInt64), so the division — not just the multiply —
+	// is a second overflow surface the doc comment must not claim away.
+	if den == -1 && product == math.MinInt64 {
+		return 0, errs.New(ErrMoneyOverflow, correlationID, map[string]any{
+			"op": "mulrat", "a": int64(a), "num": num, "den": den, "cause": "division overflow",
+		})
+	}
 	return Micropounds(product / den), nil
 }
 

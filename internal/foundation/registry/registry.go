@@ -35,7 +35,20 @@ const (
 	// of the value NewRegistry returned (SEC-020) — see checkNotCopied's
 	// doc comment.
 	codeRegistryCopied = "MET-F106"
+
+	// codeInvalidStatus: WithStatus/SetStatus supplied a Status that is
+	// not one of StatusReal/StatusStub/StatusOff (BUG-310) — a misspelled
+	// toggle is rejected, never silently persisted as a fourth, unknown
+	// status.
+	codeInvalidStatus = "MET-F108"
 )
+
+// validStatus reports whether s is one of the three documented module
+// statuses. A misspelled status is hostile input, not a value to silently
+// persist (BUG-310).
+func validStatus(s Status) bool {
+	return s == StatusReal || s == StatusStub || s == StatusOff
+}
 
 // Status is a module's boot/runtime mode.
 type Status string
@@ -316,6 +329,12 @@ func (r *Registry) Register(key string, real, stub Module, opts ...Option) error
 	}
 	entry.Key = key // opts must never override the registration key
 
+	if !validStatus(entry.Status) {
+		return errs.New(codeInvalidStatus, errs.NewCorrelationID(), map[string]any{
+			"key": key, "status": string(entry.Status),
+		})
+	}
+
 	if entry.Semver == "" {
 		entry.Semver = stub.Version()
 	}
@@ -573,6 +592,11 @@ func (r *Registry) setStatusLocked(key string, target Status, confirmToken strin
 	if confirmToken == "" || confirmToken != key {
 		return ToggleEvent{}, nil, errs.New(codeBadConfirm, errs.NewCorrelationID(), map[string]any{
 			"key": key,
+		})
+	}
+	if !validStatus(target) {
+		return ToggleEvent{}, nil, errs.New(codeInvalidStatus, errs.NewCorrelationID(), map[string]any{
+			"key": key, "status": string(target),
 		})
 	}
 	if target == StatusReal && rec.real == nil {
