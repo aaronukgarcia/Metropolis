@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -63,6 +64,17 @@ import (
 //     failure branch already does, rather than surfacing an error)
 func TestSEC019_Deterministic_AllGuardedSites_RejectedNotHung(t *testing.T) {
 	s := NewSubscriptionServer()
+	// FEAT-208: Subscribe now checks the registered view table rather
+	// than a single hardcoded "engine.status" constant — a bare
+	// NewSubscriptionServer() (unlike NewEngine(), which auto-registers
+	// engine.status) has no views registered yet, so this test (whose
+	// actual subject is copy semantics, not engine.status itself) seeds
+	// one directly. The stub patch func is never expected to run —
+	// PublishEngineStatus on the mid-lock-copied s2 must be rejected by
+	// checkNotCopied before ever reaching a ViewPatchFunc call.
+	if err := s.RegisterView(engineStatusView, func() (json.RawMessage, error) { return json.RawMessage("{}"), nil }); err != nil {
+		t.Fatalf("RegisterView(%s): %v", engineStatusView, err)
+	}
 	id, err := s.Subscribe(engineStatusView, nil, "", "sec019-seed")
 	if err != nil {
 		t.Fatalf("seed Subscribe: %v", err)
@@ -151,6 +163,11 @@ func TestSEC019_Deterministic_AllGuardedSites_RejectedNotHung(t *testing.T) {
 // checkNotCopied rejects it first.
 func TestSEC019_CrashClass_ConcurrentMapWrites_WithoutFix(t *testing.T) {
 	s := NewSubscriptionServer()
+	// FEAT-208: see the identical RegisterView seed note in
+	// TestSEC019_Deterministic_AllGuardedSites_RejectedNotHung above.
+	if err := s.RegisterView(engineStatusView, func() (json.RawMessage, error) { return json.RawMessage("{}"), nil }); err != nil {
+		t.Fatalf("RegisterView(%s): %v", engineStatusView, err)
+	}
 	s.mu.Lock()
 	s2 := s2Copy(s)
 	s.mu.Unlock()

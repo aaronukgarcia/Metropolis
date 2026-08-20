@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	enginecore "github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -23,6 +24,29 @@ import (
 // which wired dependency failed, so a startup failure is always traceable
 // to a specific piece of the skeleton, never just "something broke."
 const codeBootFailure = "MET-E900"
+
+// codePumpShutdownTimeout is MET-E901 (data/errors.json, feat.skeleton's
+// E900-E949 range): logged, never returned as a boot failure, when
+// shutdown()'s bounded join on the subscription pump goroutine's done
+// channel (F2/R3, FEAT-208 increment 1) times out — see shutdown()'s own
+// doc comment for why this can happen (a DeltaSink that blocks
+// indefinitely or reenters Publish, both prohibited by
+// engine/core.DeltaSink's contract but not mechanically preventable) and
+// why proceeding with transport.Close() anyway, rather than hanging
+// forever, is the correct degrade.
+const codePumpShutdownTimeout = "MET-E901"
+
+// pumpShutdownJoinTimeout bounds shutdown()'s wait on the subscription
+// pump goroutine's done channel (R3, independent round r2/r3, FEAT-208
+// increment 1). No existing shutdown-timeout idiom was found elsewhere
+// in this codebase to mirror (checked cmd/, internal/harness/headless —
+// neither had one before this), so this uses the round's own
+// fallback value. A package-level var, not a const, ONLY so
+// feat208_pump_shutdown_test.go can lower it for a fast, deterministic
+// proof of the timeout path itself (a real 5s wait would make that test
+// needlessly slow) — production code never reassigns it; it is 5s for
+// every real caller.
+var pumpShutdownJoinTimeout = 5 * time.Second
 
 // skeletonModuleVersion is the placeholder semver every registerSkeletonModules
 // entry reports (none of these wrappers are independently versioned yet —
@@ -163,6 +187,15 @@ type skeletonWiring struct {
 	// BUG-020's regression test needs to observe a premature Commands()
 	// close deterministically, before anything cancels ctx.
 	engineDone chan struct{}
+
+	// pumpDone is the done channel StartSubscriptionPump returns (F2,
+	// independent round r1, FEAT-208 increment 1): closed exactly once,
+	// when the subscription pump goroutine actually exits. Previously
+	// nothing tracked or joined this goroutine at shutdown at all —
+	// shutdown() now selects on this before closing the transport,
+	// mirroring engineDone's own close-then-select join idiom above,
+	// applied to the pump goroutine instead of RunCommandLoop's.
+	pumpDone <-chan struct{}
 }
 
 // EngineRunErr returns the error core.Engine.RunCommandLoop exited with
@@ -254,6 +287,29 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		}),
 	)
 
+	// FEAT-208: start the subscription pump so registered views (today:
+	// "engine.status", plus whatever compose.Wire's viewRegistrationOrder
+	// added — see internal/engine/compose/services_publish.go) actually
+	// publish deltas. Previously never started in this binary at all
+	// (the FEAT-208 design survey's own finding: "even engine.status is
+	// not live in the shipped binary today") — StartSubscriptionPump can
+	// only fail on a struct-copied Engine (BUG-019) or a second call on
+	// the same Engine (F1a, ErrSubscriptionPumpAlreadyStarted), neither
+	// of which engine here ever is/does, so this call cannot fail in
+	// practice; wrapped the same loud-not-silent way every other
+	// bootCore failure is (MET-E900) rather than assumed infallible.
+	// pumpDone (F2) is stored on w below and joined in shutdown() before
+	// transport.Close().
+	pumpDone, err := engine.StartSubscriptionPump(ctx, transport)
+	if err != nil {
+		cancel()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "engine.core.StartSubscriptionPump",
+		})
+	}
+	w.pumpDone = pumpDone
+
 	w.wg.Add(2)
 	go func() {
 		defer w.wg.Done()
@@ -302,24 +358,60 @@ func sendPauseCommand(transport protocol.Transport, correlationID string) error 
 }
 
 // shutdown cancels the background goroutines bootCore started, waits for
-// both to fully exit, and only then closes the transport.
+// ALL of them (RunCommandLoop, ViewsLoop.Run, AND — F2, independent
+// round r1 — the subscription pump) to fully exit, and only then closes
+// the transport.
 //
-// Order matters here: StubEngine.Run and ui.core.ViewsLoop.Run both
-// select on ctx.Done() as well as their respective channels, so
-// cancelling ctx is sufficient to stop them without needing
-// transport.Close() at all — and closing the transport BEFORE they have
-// actually exited would race the engine goroutine's still-in-flight
+// Order matters here: RunCommandLoop, ui.core.ViewsLoop.Run, and the
+// subscription pump goroutine all select on ctx.Done() as well as their
+// respective channels, so cancelling ctx is sufficient to stop all three
+// without needing transport.Close() at all — and closing the transport
+// BEFORE they have actually exited would race their still-in-flight
 // SendResult/SendDelta calls against Close()'s channel-close, which
 // protocol.InProcTransport's own SendResult docs don't guarantee is race-
 // free (the "stops accepting commands" check races the send it guards,
 // same shape as any check-then-act on a separate signal channel).
-// Waiting for both goroutines to return before closing sidesteps that
+// Waiting for every goroutine to return before closing sidesteps that
 // window entirely rather than depending on a fix to that package (which,
 // per this item's scope, belongs to int.protocol's own loop, not
-// feat.skeleton's).
+// feat.skeleton's). Previously (before F2) w.pumpDone did not exist at
+// all and the pump goroutine was never joined here — a leak this
+// function's own "waits for both to fully exit" claim did not actually
+// keep.
+//
+// BOUNDED join on w.pumpDone (R3, independent round r2/r3, FEAT-208
+// increment 1): w.wg.Wait() above still blocks unconditionally on
+// RunCommandLoop/ViewsLoop.Run (both are engine.core's own, trusted
+// code, and ctx cancellation is proven sufficient to stop them promptly
+// — no external DeltaSink implementation can misbehave there). The pump
+// goroutine is different: it calls a caller-supplied DeltaSink
+// (transport here, but SubscriptionServer.Publish's contract on
+// DeltaSink — commands.go — is a caller-facing seam, not an internal
+// implementation detail), and r2's independent round proved a
+// DeltaSink that blocks indefinitely or reenters Publish (both
+// documented-prohibited, neither mechanically preventable) can hang the
+// pump goroutine forever. Waiting on w.pumpDone with NO timeout would
+// therefore hang process shutdown forever too — exactly what r2's
+// TestAttack_ReentrantDeltaSink_DeadlocksThePumpGoroutine warned about.
+// pumpShutdownJoinTimeout bounds that wait: on timeout, MET-E901 is
+// logged (registry-sourced, GR#1/GR#7 — never a silent give-up) and
+// shutdown proceeds to transport.Close() anyway rather than hanging.
+// transport is not InProcTransport for this binary today, so this is a
+// belt-and-braces degrade against a future DeltaSink swap, not a
+// currently-reachable production hang (InProcTransport's own SendDelta
+// is documented non-blocking and never re-enters anything).
 func (w *skeletonWiring) shutdown() {
 	w.cancel()
 	w.wg.Wait()
+	if w.pumpDone != nil {
+		select {
+		case <-w.pumpDone:
+		case <-time.After(pumpShutdownJoinTimeout):
+			_ = errs.New(codePumpShutdownTimeout, w.correlationID, map[string]any{
+				"timeoutMs": pumpShutdownJoinTimeout.Milliseconds(),
+			})
+		}
+	}
 	_ = w.transport.Close()
 }
 

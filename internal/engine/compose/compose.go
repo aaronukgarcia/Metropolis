@@ -278,6 +278,44 @@ func RegistrationOrder() []string {
 // need the declared figure without constructing an engine (AC-14).
 func BaselineOneHookCount() int { return len(registrationOrder) }
 
+// viewRegistration is one fixed slot in the FEAT-208 view-publishing
+// order, parallel to moduleRegistration above (AC-2's "zero hooks left
+// behind" discipline extended to "zero views left behind"). fn resolves
+// this view's ViewPatchFunc against the wired simState — it is not
+// called until Wire actually registers it, mirroring
+// moduleRegistration.hook's deferred-construction shape.
+type viewRegistration struct {
+	name string
+	fn   func(st *simState) core.ViewPatchFunc
+}
+
+// viewRegistrationOrder is the fixed, documented FEAT-208 view
+// registration order (AC-2 extended) — a slice, NEVER a map: this
+// package never ranges a view registration table (GR#21), matching
+// registrationOrder's own discipline above. Increment 1 (the FEAT-208
+// design's §6 recommended first slice) registers exactly one view:
+// "f4.services", serving only its capacityDemand sub-view
+// (buildServicesCapacityDemandPatch, services_publish.go). Later
+// increments (f8.districts, f2.finance, f5.trade, f7.projections,
+// f1.viewport) are documented, deliberate fast-follows — see the
+// design's §6 — each adding one more entry here, in the SAME slice,
+// never a new registration mechanism.
+var viewRegistrationOrder = []viewRegistration{
+	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
+}
+
+// RegisteredViewNames returns a defensive copy of the fixed view
+// registration order (view names), in the order Wire registers them —
+// mirrors RegistrationOrder() above, for a test or future harness that
+// needs the declared FEAT-208 view set without constructing an engine.
+func RegisteredViewNames() []string {
+	out := make([]string, len(viewRegistrationOrder))
+	for i, r := range viewRegistrationOrder {
+		out[i] = r.name
+	}
+	return out
+}
+
 // Composition is the read-only handle Wire returns once the baseline-one
 // hook set is registered. It exposes the composition's own live state
 // (population, money flows) so a headless driver or test can assert the
@@ -745,6 +783,22 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		}
 	}
 
+	// FEAT-208: register every view compose publishes, in the fixed,
+	// documented viewRegistrationOrder — same "resolve every producer
+	// before the first RegisterView call" discipline the phase-hook loop
+	// above already applies (AC-4's "zero hooks left behind" extended to
+	// "zero views left behind"): every fn(st) closure above was already
+	// built when viewRegistrationOrder's literal was constructed, so a
+	// RegisterView failure here (e.g. a duplicate name — cannot happen
+	// today, the slice's names are all distinct literals) never leaves a
+	// partially-registered view table any more than a phase-hook failure
+	// leaves a partially-wired engine.
+	for _, reg := range viewRegistrationOrder {
+		if err := e.RegisterView(reg.name, reg.fn(st)); err != nil {
+			return nil, wrapSeal(cid, err, reg.name)
+		}
+	}
+
 	return &Composition{state: st}, nil
 }
 
@@ -787,13 +841,37 @@ func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool 
 //
 // # No mutex, by the same discipline as invariant.Hook
 //
-// simState holds no sync.Mutex. Every access is single-goroutine by
-// construction: only shard 0 of each hook's RunShard touches it (the
-// invariant's SnapshotProvider, the spawn/finance ApplyEffect barrier
-// work), and the phase pipeline runs phases sequentially — the daily
-// phase's det.RunPhase joins its workers before the monthly phases start.
-// A mutex here would be a copy hazard with no copy risk to guard (and
-// would make this type an astgate SEC-020 candidate for nothing).
+// simState holds no sync.Mutex. Every access to simState's OWN plain
+// fields (treasury, citizenWealth, peopleDelta, moneyDelta, ...) is
+// single-goroutine by construction: only shard 0 of each hook's RunShard
+// touches them (the invariant's SnapshotProvider, the spawn/finance
+// ApplyEffect barrier work), and the phase pipeline runs phases
+// sequentially — the daily phase's det.RunPhase joins its workers before
+// the monthly phases start.
+//
+// CORRECTION (F3, independent round r1, FEAT-208 increment 1): this
+// "single-goroutine by construction" property does NOT extend to
+// buildServicesCapacityDemandPatch (services_publish.go) or any future
+// view-publishing method this file adds — those run on the subscription
+// pump goroutine (engine/core.StartSubscriptionPump), CONCURRENTLY with
+// the phase-pipeline goroutines this comment describes, not sequenced
+// with them. That is safe ONLY because those methods read through the
+// held module's OWN synchronization (st.services is a
+// *services.ServicesAPI, and every accessor it exposes — ServiceIDs,
+// Capacity, Demand — takes its own sync.RWMutex internally); they never
+// touch simState's own unguarded plain fields. See
+// engine/core.ViewPatchFunc's doc comment (subscribe.go) for the general
+// contract this specific case satisfies. A future ViewPatchFunc-backed
+// method that read one of simState's own plain fields directly (e.g.
+// st.treasury) WOULD be a real, unguarded data race against the phase
+// pipeline — this file's discipline (§3.3 of the design) of only ever
+// reading through an already-guarded *XxxAPI accessor is load-bearing,
+// not incidental.
+//
+// A mutex on simState itself would be a copy hazard with no copy risk to
+// guard (and would make this type an astgate SEC-020 candidate for
+// nothing) — the fix for the concurrency gap above is "read through the
+// module's own lock," never "add a lock here."
 type simState struct {
 	e    *core.Engine
 	cid  string

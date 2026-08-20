@@ -627,6 +627,24 @@
       "message": "Could not load secondsPerMonthAt1x from data/pacing.json: {cause}",
       "remedy": "Check that data/pacing.json exists at the resolved data directory, is well-formed JSON, has a positive 'version', and has a positive 'secondsPerMonthAt1x' value. This closes FEAT-030 / MOD-012's interim ruling: the pacing constant is sourced from this data file at boot, with internal/engine/core/clock.go's DefaultSecondsPerMonthAt1x kept only as a fallback default for callers that construct an Engine without loading data (e.g. isolated unit tests)."
     },
+    "MET-E017": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterView called twice for view {view}",
+      "remedy": "compose.Wire's viewRegistrationOrder must register each view name at most once"
+    },
+    "MET-E018": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterView called with a nil ViewPatchFunc for view {view}",
+      "remedy": "pass a non-nil ViewPatchFunc; compose.Wire's viewRegistrationOrder entries must all resolve to a real patch producer"
+    },
+    "MET-E019": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "StartSubscriptionPump called a second time on the same Engine (a pump is already running)",
+      "remedy": "call StartSubscriptionPump at most once per Engine; join the done channel it returns before starting a new one"
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",
@@ -662,6 +680,12 @@
       "module": "harness.headless",
       "message": "command {kind} could not be sent to the engine during a headless run: {cause}",
       "remedy": "SendCommand failed at the transport layer (a failed cmd.Validate(), protocol.ErrTransportClosed, or protocol.ErrCommandQueueFull from InProcTransport.SendCommand), so the command never reached the engine -- there is no engine.core rejection code to report (distinct from MET-H202, which surfaces a real engine rejection). Inspect {cause} for the transport failure and fix the command or the transport wiring."
+    },
+    "MET-H206": {
+      "severity": "warn",
+      "module": "harness.headless",
+      "message": "subscription pump goroutine did not exit within the shutdown join timeout ({timeoutMs}ms) - proceeding with transport.Close anyway",
+      "remedy": "check for a blocking or reentrant-into-Publish DeltaSink implementation (see engine.core's DeltaSink doc comment) - the pump goroutine may be permanently stuck"
     },
     "MET-E100": {
       "severity": "error",
@@ -1124,6 +1148,12 @@
       "module": "feat.skeleton",
       "message": "metropolis failed to boot: {component} failed to initialize: {cause}",
       "remedy": "Check the named component ({component}: e.g. tcell screen, harness.stub fixture load, or the module registry) for the underlying cause. cmd/metropolis exits non-zero and never renders a partial/blank screen on this path (AC-7) â€” rerun with the printed correlation ID to trace the full boot sequence in the log."
+    },
+    "MET-E901": {
+      "severity": "warn",
+      "module": "feat.skeleton",
+      "message": "subscription pump goroutine did not exit within the shutdown join timeout ({timeoutMs}ms) - proceeding with transport.Close anyway",
+      "remedy": "check for a blocking or reentrant-into-Publish DeltaSink implementation (see engine.core's DeltaSink doc comment) - the pump goroutine may be permanently stuck"
     },
     "MET-P000": {
       "severity": "error",
