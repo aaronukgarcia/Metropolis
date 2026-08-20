@@ -178,7 +178,7 @@ type CorruptLine struct {
 // allowed to abort the whole scan.
 const maxResultsLineBytes = 1 << 20 // 1 MiB
 
-// readResultsLine reads one '\n'-terminated line from r without trusting
+// ReadResultsLine reads one '\n'-terminated line from r without trusting
 // the file's line lengths: it accumulates the line incrementally and, the
 // moment it exceeds maxResultsLineBytes, stops retaining any further
 // bytes and switches to draining (discarding) the remainder of the line,
@@ -188,7 +188,7 @@ const maxResultsLineBytes = 1 << 20 // 1 MiB
 // semantics are preserved); oversized is true when the line exceeded the
 // ceiling, in which case line holds only a truncated prefix. err is
 // io.EOF at a clean end of stream, or the underlying read error.
-func readResultsLine(r *bufio.Reader) (line []byte, oversized bool, err error) {
+func ReadResultsLine(r *bufio.Reader) (line []byte, oversized bool, err error) {
 	for {
 		frag, rerr := r.ReadSlice('\n')
 		if len(frag) > 0 && !oversized {
@@ -370,7 +370,7 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 	// what other presets' records prove about the file's general format.
 	requestedPresetCorruptSeen := false
 	for {
-		line, oversized, readErr := readResultsLine(reader)
+		line, oversized, readErr := ReadResultsLine(reader)
 		if readErr != nil && readErr != io.EOF {
 			return nil, nil, corrupt, fmt.Errorf("synth: reading results file %q: %w", path, readErr)
 		}

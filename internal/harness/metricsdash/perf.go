@@ -51,15 +51,21 @@ func fileMissing(path string) bool {
 	return os.IsNotExist(err)
 }
 
+// maxPerfLineBytes mirrors synth's ASM-355 per-line ceiling
+// (maxResultsLineBytes) so the dashboard's raw re-scan is bounded by the
+// same cap the trusted LoadLatestBaseline reader enforces — a single
+// oversized line is flagged, never read into memory unbounded (BUG-305).
+const maxPerfLineBytes = 1 << 20
+
 // readLastRecordForPreset scans path (an AppendResult-written NDJSON
 // file, synth/results.go) for the LAST record matching preset, using
-// the same bufio.Reader.ReadString('\n') technique
-// synth.LoadLatestBaseline uses (BUG-074: no fixed per-line size cap,
-// see that function's doc comment) rather than a fresh, less-hardened
-// scanner — this is a read-only enumeration alongside
-// synth.LoadLatestBaseline's own replay, reusing synth.PerfRecord's
-// schema directly rather than a hand-authored parallel shape (AC-1).
-// A missing file is not an error (mirrors LoadLatestBaseline).
+// synth.ReadResultsLine — the SAME capped line reader
+// synth.LoadLatestBaseline uses (ASM-355) rather than an unbounded
+// ReadString — and re-applying the same Measured/plausibility provenance
+// screening LoadLatestBaseline applies (BUG-073/BUG-085), so a
+// hand-injected record is flagged as corrupt rather than trusted as the
+// comparison point. A missing file is not an error (mirrors
+// LoadLatestBaseline).
 func readLastRecordForPreset(path, preset string) (*synth.PerfRecord, []synth.CorruptLine, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -75,18 +81,31 @@ func readLastRecordForPreset(path, preset string) (*synth.PerfRecord, []synth.Co
 	var corrupt []synth.CorruptLine
 	lineNo := 0
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, oversized, readErr := synth.ReadResultsLine(reader)
 		if readErr != nil && readErr != io.EOF {
 			return last, corrupt, fmt.Errorf("metricsdash: reading perf results file %q: %w", path, readErr)
 		}
-		if line != "" {
+		if len(line) > 0 {
 			lineNo++
-			trimmed := strings.TrimSpace(line)
-			if trimmed != "" {
-				var rec synth.PerfRecord
-				if jerr := json.Unmarshal([]byte(trimmed), &rec); jerr != nil {
-					corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: jerr})
-				} else if rec.Preset == preset {
+		}
+		if oversized {
+			corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: fmt.Errorf("record at line %d exceeds %d bytes -- refusing to read an unbounded line (BUG-305)", lineNo, maxPerfLineBytes)})
+			if readErr == io.EOF {
+				break
+			}
+			continue
+		}
+		trimmed := strings.TrimSpace(string(line))
+		if trimmed != "" {
+			var rec synth.PerfRecord
+			if jerr := json.Unmarshal([]byte(trimmed), &rec); jerr != nil {
+				corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: jerr})
+			} else if rec.Preset == preset {
+				if !rec.Result.Measured {
+					corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: fmt.Errorf("record at line %d for preset %q has Measured=false -- refusing to trust an unmeasured record as the comparison point (BUG-073)", lineNo, preset)})
+				} else if rec.Result.ImplausibleReason() != "" {
+					corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: fmt.Errorf("record at line %d for preset %q is not a plausible genuine measurement: %s (BUG-085)", lineNo, preset, rec.Result.ImplausibleReason())})
+				} else {
 					r := rec
 					last = &r
 				}
