@@ -262,3 +262,41 @@ func TestHook_Starvation_ReleaseModeLogs(t *testing.T) {
 		})
 	}
 }
+
+// TestHook_MalformedPayload_ReleaseModeLogs is BUG-301's release-mode half:
+// ApplyEffect must not silently drop a non-SuiteResult Effect payload — it
+// logs a registry-sourced error (reusing ErrConservationViolation, the same
+// "gate could not evaluate" class as BUG-277) and never panics.
+func TestHook_MalformedPayload_ReleaseModeLogs(t *testing.T) {
+	var mu sync.Mutex
+	var logged []*errs.E
+	h, _ := newTestHook(t, WithLogSink(func(e *errs.E) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, e)
+	}))
+
+	h.ApplyEffect(core.Effect{Sequence: 0, Payload: "not a SuiteResult"})
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(logged) != 1 {
+		t.Fatalf("len(logged) = %d, want 1 — a malformed payload must log one registry-sourced error", len(logged))
+	}
+	if logged[0].Code != ErrConservationViolation {
+		t.Errorf("logged error code = %q, want %q", logged[0].Code, ErrConservationViolation)
+	}
+}
+
+// TestHook_MalformedPayload_DevModeHardFails is BUG-301's dev-mode half: a
+// malformed payload triggers the hard-fail path, never a silent drop.
+func TestHook_MalformedPayload_DevModeHardFails(t *testing.T) {
+	fired := false
+	h, _ := newTestHook(t, WithDevMode(true), WithPanicFunc(func(string) { fired = true }))
+
+	h.ApplyEffect(core.Effect{Sequence: 0, Payload: struct{}{}})
+
+	if !fired {
+		t.Fatal("dev-mode hard-fail path did not fire for a malformed payload")
+	}
+}
