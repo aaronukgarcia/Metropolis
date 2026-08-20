@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/json"
+	"math"
 	"reflect"
 	"testing"
 )
@@ -183,6 +184,52 @@ func TestLoadTaxInstruments_BearerShareOutOfRangeRejected(t *testing.T) {
 
 	_, err := LoadTaxInstruments(writeTaxInstruments(t, ti), testCorrelationID())
 	assertPlaceholderCode(t, err, CodeSchemaInvalid, "must be in [0, 1]")
+}
+
+func TestLoadTaxInstruments_NonFiniteRejected(t *testing.T) {
+	// The per-field IsFinite guards are exercised through Validate() directly
+	// because encoding/json's Marshal rejects NaN/±Inf before a fixture could
+	// ever reach the loader — so these cannot route through writeTaxInstruments
+	// (mirrors internal/engine/fuel/data.go's own BUG-297 regression test).
+	cases := []struct {
+		name   string
+		mutate func(*TaxInstruments)
+	}{
+		{"NaN rateRange min", func(ti *TaxInstruments) {
+			vat := ti.Instruments["vat"]
+			vat.RateRange.MinPercent = math.NaN()
+			ti.Instruments["vat"] = vat
+		}},
+		{"NaN ratePoint rate", func(ti *TaxInstruments) {
+			vat := ti.Instruments["vat"]
+			vat.BearerWeights.RatePoints[0].RatePercent = math.NaN()
+			ti.Instruments["vat"] = vat
+		}},
+		{"NaN bearer share", func(ti *TaxInstruments) {
+			vat := ti.Instruments["vat"]
+			vat.BearerWeights.RatePoints[0].Bearers[0].Share = math.NaN()
+			ti.Instruments["vat"] = vat
+		}},
+		{"NaN incomeTaxBand rate", func(ti *TaxInstruments) {
+			paye := ti.Instruments["paye"]
+			paye.IncomeTaxBands[0].RatePercent = math.NaN()
+			ti.Instruments["paye"] = paye
+		}},
+		{"NaN NI employee percent", func(ti *TaxInstruments) {
+			paye := ti.Instruments["paye"]
+			paye.NIRates.EmployeePercent = math.NaN()
+			ti.Instruments["paye"] = paye
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ti := newTestTaxInstruments()
+			tc.mutate(&ti)
+			if err := ti.Validate(); err == nil {
+				t.Fatalf("non-finite value accepted by Validate")
+			}
+		})
+	}
 }
 
 func TestLoadTaxInstruments_UnknownZoneClassRejected(t *testing.T) {
