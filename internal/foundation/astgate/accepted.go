@@ -109,8 +109,9 @@ var findingKeyValidKinds = map[string]bool{
 // It intentionally does NOT attempt to validate the free-text fields
 // (ReceiverExprPrinted/MatchedExprPrinted can legitimately be almost any
 // syntactically-valid Go type expression printExpr can emit, and FuncName
-// can be a synthetic "<func literal at line N>" label for an anonymous
-// closure -- see funcLitName) -- validating those against the full Go
+// can be a synthetic "<scope>#closureN" label for an anonymous closure
+// with no direct var/field assignment -- see funcLitName, BUG-306) --
+// validating those against the full Go
 // grammar would just reimplement go/parser for no real gain. What IS
 // checked is the part of the shape that is fixed regardless of source
 // content: the field COUNT, the file path's form, and the kind field's

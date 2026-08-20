@@ -1400,6 +1400,130 @@ func Consume(g *Guarded) {
 	}
 }
 
+// --- BUG-306 regression: an UNASSIGNED closure's ratchet key must also ---
+// --- survive a cosmetic edit above it (line-keying reborn one level down) ---
+//
+// TestFindingKey_ClosureStableAcrossCosmeticEditAboveIt is
+// TestFindingKey_StableAcrossCosmeticEditAboveIt's sibling for the second,
+// independent place a location-dependent identity crept back in:
+// funcLitName's fallback for a function literal with no direct var/field
+// assignment used to be "<func literal at line %d>" — fed straight into
+// violationKey via FuncName, so a cosmetic edit (a doc comment) inserted
+// ABOVE an unassigned closure shifted its line, which changed FuncName,
+// which changed violationKey, which flipped its already-accepted finding
+// into a false NEW-violation build failure — the BUG-119 false-positive
+// class, reborn via a second code path BUG-119's own fix never touched
+// (violationKey excludes rf.Line directly, but funcLitName's synthetic
+// name was still built FROM rf.Line one call earlier). BUG-306 (Bro audit
+// M2, 2026-08-20) reported this as the direct cause of the repeated manual
+// accepted-findings rekey (commands.go re-keyed twice in two days).
+//
+// The fix (gate.go's funcLitName/scanFuncLits/walkClosuresIn) replaces the
+// line-based fallback with scopeName (the enclosing function's own name)
+// plus ordinal (this closure's 1-based position among ITS OWN enclosing
+// scope's closures, in AST traversal order) — neither component moves
+// when a cosmetic edit shifts line numbers, only when a sibling closure is
+// actually added/removed ahead of it in the same enclosing scope.
+func TestFindingKey_ClosureStableAcrossCosmeticEditAboveIt(t *testing.T) {
+	before := `package fixture
+
+import "sync"
+
+type Guarded struct {
+	mu    sync.Mutex
+	items []int
+}
+
+func (g *Guarded) checkNotCopied() bool { return true }
+
+func call(f func(*Guarded)) {}
+
+func Register() {
+	call(func(g *Guarded) {
+		_ = g
+	})
+}
+`
+	root := writeFixturePkg(t, "closurecosmeticfix", map[string]string{"fixture.go": before})
+	res, err := Run(root, "internal")
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Findings) != 1 {
+		t.Fatalf("fixture setup broken: expected exactly 1 violation (the unassigned closure's), got %d: %v", len(res.Findings), res.Findings)
+	}
+	beforeKey := res.Findings[0].Key
+	beforeMsg := res.Findings[0].Message
+
+	// A purely cosmetic edit: one comment block inserted above the import
+	// line, exactly like TestFindingKey_StableAcrossCosmeticEditAboveIt's
+	// attack — nothing about Register or its closure's shape changes, only
+	// line numbers below the insertion point (including the closure's own
+	// line, which is what this test is targeting).
+	after := `package fixture
+
+// This comment is a cosmetic addition that shifts every subsequent line
+// number in the file, including the unassigned closure inside Register
+// below, without changing anything semantic about it — the BUG-306
+// attack: the same BUG-119 class, one level down inside funcLitName's
+// fallback for a closure with no direct var/field assignment.
+
+import "sync"
+
+type Guarded struct {
+	mu    sync.Mutex
+	items []int
+}
+
+func (g *Guarded) checkNotCopied() bool { return true }
+
+func call(f func(*Guarded)) {}
+
+func Register() {
+	call(func(g *Guarded) {
+		_ = g
+	})
+}
+`
+	fixturePath := filepath.Join(root, "internal", "closurecosmeticfix", "fixture.go")
+	if err := os.WriteFile(fixturePath, []byte(after), 0o644); err != nil {
+		t.Fatalf("rewriting fixture with cosmetic edit: %v", err)
+	}
+
+	res2, err := Run(root, "internal")
+	if err != nil {
+		t.Fatalf("Run (after cosmetic edit): %v", err)
+	}
+	if len(res2.Findings) != 1 {
+		t.Fatalf("fixture setup broken after cosmetic edit: expected exactly 1 violation, got %d: %v", len(res2.Findings), res2.Findings)
+	}
+	afterKey := res2.Findings[0].Key
+	afterMsg := res2.Findings[0].Message
+
+	if beforeMsg == afterMsg {
+		t.Fatalf("fixture setup broken: expected the cosmetic edit to shift the closure's line number (and therefore its "+
+			"message text), but the message was unchanged: %q", beforeMsg)
+	}
+	if beforeKey != afterKey {
+		t.Fatalf("BUG-306 REGRESSION: a purely cosmetic edit above an unassigned closure changed the finding's ratchet key "+
+			"(%q -> %q) even though the closure's own shape and position among its enclosing scope's closures never "+
+			"changed. Message before: %q; message after: %q. This is the BUG-119 false-positive class reborn via "+
+			"funcLitName's line-keyed fallback.",
+			beforeKey, afterKey, beforeMsg, afterMsg)
+	}
+
+	// The end-to-end proof: an allowlist entry recorded against the
+	// closure's finding BEFORE the cosmetic edit must still match AFTER
+	// it, via the exact enforceRatchet code path TestRun_LiveTree_ReportsFindings uses.
+	accepted := AcceptedFindings{beforeKey: "test fixture: accepted before the cosmetic edit"}
+	fake := &fakeRatchetReporter{}
+	enforceRatchet(fake, "accepted-findings.json", res2.Findings, accepted)
+	if fake.errorCalls != 0 {
+		t.Fatalf("BUG-306 REGRESSION: an allowlist entry recorded before a cosmetic edit above an unassigned closure no "+
+			"longer matches the same violation after the edit -- enforceRatchet reported %d error(s)", fake.errorCalls)
+	}
+}
+
 // --- SEC-051 regression: orphaned (fabricated or stale) allowlist entries ---
 //
 // TestOrphanedEntry_FabricatedFinding_FailsBuild reproduces the Destructive
