@@ -90,7 +90,9 @@ const path = require('path');
 const crypto = require('crypto');
 const { connectCLI } = require('./claude-db.js');
 
-const NAMES = ['Bill', 'Ben', 'Bev'];
+const NAMES = ['Bill', 'Ben', 'Bev', 'Bro'];
+// Bro added 2026-08-20 (Aaron-directed): fourth worker slot. Seeded into
+// sync_permits on the next checkin like every NAMES entry (seedSlots).
 // Bob was retired permanently (Aaron, 2026-08-18) but the slot row/history
 // stays in the DB (operator handles data cleanup, never this file — GR#24).
 // Kept as its own list, not just "absent from NAMES", so every caller-
