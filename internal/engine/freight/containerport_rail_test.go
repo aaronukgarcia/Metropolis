@@ -1,11 +1,13 @@
 package freight_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/freight"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/rail"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // TestIntermodalTonnesConservation is AC-4's false-pass guard, run end-to-end
@@ -14,7 +16,10 @@ import (
 // INDEPENDENTLY from the account (never a conservation-OK flag). No sea leg
 // appears here: sea's 3,000 t minimum exceeds road's 25 t and rail's 1,000 t
 // per-movement maxes, so a conserving sea↔rail handoff is unrepresentable
-// (SEC-125) — the rail↔road pair is the valid surface.
+// (SEC-125) — the rail↔road pair is the valid surface. The seam must also
+// REJECT a below-minimum sea-touching handoff (ASM-1271): the wired engine.rail
+// stub returns ErrRailTransferRejected rather than silently accepting the
+// physically-impossible sub-coaster-floor transfer the pre-SEC-125 code did.
 func TestIntermodalTonnesConservation(t *testing.T) {
 	dir, err := data.ResolveDataDir("cp-rail-test")
 	if err != nil {
@@ -34,6 +39,18 @@ func TestIntermodalTonnesConservation(t *testing.T) {
 		t.Fatalf("rail.NewRailAPI: %v", err)
 	}
 	cp.WireRail(r)
+
+	// SEC-125 (ASM-1271): a below-minimum sea leg must be REJECTED with
+	// ErrRailTransferRejected through the wired seam, never silently accepted.
+	// 1,000 t is at rail's cap, so only sea's 3,000 t coaster floor can reject
+	// it — the exact sub-coaster-floor shape the pre-fix code recorded as a
+	// successful handoff.
+	if _, err := cp.IntermodalTransfer(freight.ModeSea, freight.ModeRail, 1000); !errors.Is(err, &errs.E{Code: rail.ErrRailTransferRejected}) {
+		t.Fatalf("sea→rail 1000 (below sea minimum): want %s, got %v", rail.ErrRailTransferRejected, err)
+	}
+	if _, err := cp.IntermodalTransfer(freight.ModeRail, freight.ModeSea, 1000); !errors.Is(err, &errs.E{Code: rail.ErrRailTransferRejected}) {
+		t.Fatalf("rail→sea 1000 (below sea minimum): want %s, got %v", rail.ErrRailTransferRejected, err)
+	}
 
 	if _, err := cp.IntermodalTransfer(freight.ModeRail, freight.ModeRoad, 25); err != nil {
 		t.Fatalf("rail→road: %v", err)
