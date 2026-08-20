@@ -145,4 +145,18 @@ const (
 	// this error and starts no goroutine, rather than silently doubling
 	// up.
 	ErrSubscriptionPumpAlreadyStarted = "MET-E019"
+
+	// ErrInvalidPacingConstant: NewClock was constructed with a
+	// secondsPerMonthAt1x that is <= 0 or non-finite (NaN/+-Inf).
+	// BUG-303 (Bro audit, 2026-08-20): NewClock previously accepted any
+	// int64 unvalidated, so a bad caller-supplied pacing constant (e.g. a
+	// zero from an uninitialised config struct) silently produced a Clock
+	// whose SecondsPerMonth/TicksPerRealSecond report garbage or zero
+	// pacing figures instead of failing loudly at construction — the
+	// point GR#16 boundary discipline says a caller-supplied value must
+	// be validated, not trusted. Note secondsPerMonthAt1x is int64, so
+	// NaN/Inf can only actually arise if a future caller widens the
+	// parameter type; the finiteness check exists for that boundary too,
+	// per this bug's own wording ("+ finite").
+	ErrInvalidPacingConstant = "MET-E020"
 )

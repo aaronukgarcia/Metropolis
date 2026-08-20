@@ -78,7 +78,10 @@ func TestLoadSecondsPerMonthAt1x_FixtureMutationFlowsThrough(t *testing.T) {
 
 	// The loaded value must actually drive the clock — not just be
 	// computed and discarded — so exercise NewClock with it too.
-	c := NewClock(got2)
+	c, err2 := NewClock(got2)
+	if err2 != nil {
+		t.Fatalf("NewClock(%d): %v", got2, err2)
+	}
 	c.setPaused(false)
 	c.setSpeed(Speed1x)
 	if got := c.SecondsPerMonth(); got != 999 {

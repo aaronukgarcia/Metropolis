@@ -1,5 +1,7 @@
 package core
 
+import "github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+
 // This file implements the two-layer clock (§3, AC-1): one calendar
 // month = one day-night cycle = DailyTicksPerMonth logistics day-ticks.
 // Nothing in this file reads the wall clock — see doc.go and AC-12.
@@ -80,12 +82,30 @@ type Clock struct {
 // NewClock constructs a Clock at genesis (tick 0), paused, at Speed1x,
 // with the given pacing constant (pass DefaultSecondsPerMonthAt1x for
 // the master doc §3 default).
-func NewClock(secondsPerMonthAt1x int64) Clock {
+//
+// BUG-303 (Bro audit, 2026-08-20): secondsPerMonthAt1x must be > 0 (and,
+// per GR#16 boundary discipline, finite — moot for the current int64
+// parameter type, which cannot hold NaN/Inf, but checked in the shape a
+// future float widening would need so this validation does not silently
+// stop covering that case). An unvalidated <= 0 value previously produced
+// a Clock whose SecondsPerMonth/TicksPerRealSecond queries silently
+// return garbage or zero pacing figures (TicksPerRealSecond's own <= 0
+// guard papers over the *symptom*, dividing by zero would panic, but a
+// negative constant sails straight through as plausible-looking garbage)
+// instead of failing loudly at construction, where the bad value
+// actually originated. Rejected with the registry-sourced
+// ErrInvalidPacingConstant (MET-E020) rather than a bare error, per GR#7.
+func NewClock(secondsPerMonthAt1x int64) (Clock, error) {
+	if secondsPerMonthAt1x <= 0 {
+		return Clock{}, errs.New(ErrInvalidPacingConstant, errs.NewCorrelationID(), map[string]any{
+			"seconds": secondsPerMonthAt1x,
+		})
+	}
 	return Clock{
 		speed:               Speed1x,
 		paused:              true,
 		secondsPerMonthAt1x: secondsPerMonthAt1x,
-	}
+	}, nil
 }
 
 // Tick returns the total elapsed daily-tick count since genesis.
