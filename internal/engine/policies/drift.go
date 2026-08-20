@@ -32,8 +32,7 @@ func (a *PoliciesAPI) AdvanceMonth(month int64) ([]PreviewDriftEvent, error) {
 	defer a.mu.Unlock()
 
 	if month < a.currentMonth {
-		return nil, errs.New(ErrUnknownScope, a.correlationID, map[string]any{
-			"scope":   "month regression",
+		return nil, errs.New(ErrMonthRegression, a.correlationID, map[string]any{
 			"month":   month,
 			"current": a.currentMonth,
 		})
@@ -160,8 +159,7 @@ func (a *PoliciesAPI) Checkpoint(month int64) ([]PreviewDriftEvent, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if month < a.currentMonth {
-		return nil, errs.New(ErrUnknownScope, a.correlationID, map[string]any{
-			"scope":      "checkpoint precedes current month",
+		return nil, errs.New(ErrCheckpointPrecedes, a.correlationID, map[string]any{
 			"checkpoint": month,
 			"current":    a.currentMonth,
 		})

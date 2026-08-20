@@ -92,15 +92,19 @@ func (a *PoliciesAPI) PreviewImpactRange(policyID PolicyID, scope Scope, toMonth
 // temporary decision IDs are namespaced under a preview prefix so they can
 // never collide with an enactment's permanent decisions.
 func computePreview(def *policyDef, scope Scope, proj projectionSeam, fromMonth, toMonth int64, correlationID string) (Preview, error) {
-	if err := proj.SetCurrentMonth(fromMonth); err != nil {
-		return Preview{}, err
-	}
+	// Validate the range BEFORE any side effect (GR#12): SetCurrentMonth is a
+	// mutation on the shared projections seam, so an inverted range must be
+	// rejected before it, not after a rejected preview has already moved the
+	// projections' current month.
 	if toMonth < fromMonth {
 		return Preview{}, errs.New(ErrUnknownScope, correlationID, map[string]any{
 			"scope":     "inverted preview range",
 			"fromMonth": fromMonth,
 			"toMonth":   toMonth,
 		})
+	}
+	if err := proj.SetCurrentMonth(fromMonth); err != nil {
+		return Preview{}, err
 	}
 
 	deltas := coefficientPayload(def)

@@ -2,9 +2,9 @@ package policies
 
 // Registry error codes for engine.policies (MOD-064). The module owns the
 // G4000-G4099 block reserved for it in data/errors.json's ranges.reserved
-// table; it raises exactly the codes below, G4000-G4012 (thirteen codes),
+// table; it raises exactly the codes below, G4000-G4014 (fifteen codes),
 // which are the ones registered in the canonical data/errors.json. The
-// remaining reserved slots (G4013-G4099) are intentionally unclaimed.
+// remaining reserved slots (G4015-G4099) are intentionally unclaimed.
 //
 // The E layer (E000-E999) was fully claimed by eleven earlier engine
 // modules and G000-G3999 was claimed by engine.citizens … engine.roads
@@ -17,12 +17,15 @@ package policies
 // additional codes (G4013-G4021) for defensive input validations (month
 // regression, empty district/road inputs, duplicate road registration,
 // etc.). Those codes were never registered in the canonical
-// data/errors.json — the module's registered range ends at G4012 — so they
-// are removed here and their call sites re-mapped onto the closest
-// registered code by meaning: G4003 (unknown/malformed scope) for
-// malformed or empty-resolving inputs, G4004 (unknown district) for
-// invalid district identity, G4005 (unknown road) for invalid road
-// identity.
+// data/errors.json — the module's registered range ended at G4012 — so they
+// were removed and their call sites re-mapped onto the closest registered
+// code by meaning: G4003 (unknown/malformed scope) for malformed or
+// empty-resolving inputs, G4004 (unknown district) for invalid district
+// identity, G4005 (unknown road) for invalid road identity. G4013
+// (month regression) and G4014 (checkpoint-precedes) have since been
+// registered in data/errors.json (BUG-300) and are raised again by their
+// dedicated constants below — a month/checkpoint ordering failure is a
+// temporal error, not a scope-lookup error, and now carries its own code.
 const (
 	// ErrPoliciesDataInvalid: data/policies.json could not be loaded or
 	// failed schema validation (missing file, malformed JSON, schema
@@ -88,4 +91,14 @@ const (
 	// ErrCopiedValue: a PoliciesAPI method was called on a struct-copied
 	// value (SEC-020-class).
 	ErrCopiedValue = "MET-G4012"
+
+	// ErrMonthRegression: AdvanceMonth was called with a month before the
+	// current simulation month. AdvanceMonth is monotonic — a regression is
+	// rejected, never silently rewound (BUG-300).
+	ErrMonthRegression = "MET-G4013"
+
+	// ErrCheckpointPrecedes: Checkpoint was called with a month before the
+	// current simulation month. Checkpoint is monotonic — a preceding
+	// checkpoint is rejected, never silently rewound (BUG-300).
+	ErrCheckpointPrecedes = "MET-G4014"
 )

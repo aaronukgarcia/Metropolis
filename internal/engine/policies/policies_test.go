@@ -26,6 +26,10 @@ type recordingProjections struct {
 	decisions []projections.Decision
 	horizon   int64
 	base      float64
+
+	// setCurrentMonth records every SetCurrentMonth call so a test can prove
+	// a rejected preview never moves the seam's current month (GR#12).
+	setCurrentMonth []int64
 }
 
 func (r *recordingProjections) EnqueueDecision(d projections.Decision) error {
@@ -46,7 +50,13 @@ func (r *recordingProjections) Curve(key string, from, to int64) ([]projections.
 }
 
 func (r *recordingProjections) HorizonMonths() (int64, error) { return r.horizon, nil }
-func (r *recordingProjections) SetCurrentMonth(int64) error   { return nil }
+
+func (r *recordingProjections) SetCurrentMonth(m int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.setCurrentMonth = append(r.setCurrentMonth, m)
+	return nil
+}
 
 // deltasWithPrefix returns the (Key, Delta) payload of every recorded
 // decision whose ID starts with prefix, in record order.
@@ -779,5 +789,23 @@ func TestLibraryLoadsFromData(t *testing.T) {
 		if !seen[want] {
 			t.Fatalf("expected policy %q in the data library", want)
 		}
+	}
+}
+
+// TestPreviewImpactInvertedRangeDoesNotMoveCurrentMonth (regression): an
+// inverted preview range is rejected BEFORE SetCurrentMonth mutates the
+// projections seam — a rejected preview never moves the seam's current month
+// (GR#12).
+func TestPreviewImpactInvertedRangeDoesNotMoveCurrentMonth(t *testing.T) {
+	a := testAPI(t)
+	rec := &recordingProjections{horizon: 72}
+	a.projections = rec
+	a.currentMonth = 10
+	addPolicy(t, a, simplePolicy("cycling", ScopeCitywide, "movement.cycling.share", 0.15))
+
+	_, err := a.PreviewImpactRange("cycling", Scope{Kind: ScopeCitywide}, 5)
+	assertCode(t, err, ErrUnknownScope)
+	if got := len(rec.setCurrentMonth); got != 0 {
+		t.Fatalf("SetCurrentMonth called %d times on a rejected inverted-range preview, want 0", got)
 	}
 }
