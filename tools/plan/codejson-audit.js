@@ -344,10 +344,10 @@ async function runAudit(opts = {}) {
       }
     }
   }
+  const malformedGuids = [];
   for (const [guid, locs] of edgeGuidLocs) {
     if (!UUID_V4_RE.test(guid)) malformedGuids.push({ guid, locations: locs });
   }
-  const malformedGuids = [];
   for (const [guid, locs] of guidLocations) {
     if (!UUID_V4_RE.test(guid)) malformedGuids.push({ guid, locations: locs });
   }
