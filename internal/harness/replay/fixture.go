@@ -177,7 +177,6 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 	if err != nil {
 		return errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"path": shardPath, "cause": "writing fixture shard"})
 	}
-
 	h := serialize.NewHeader(meta.WorldSeed, 0, 0, meta.AppVersion)
 	h.ShardIndex = []serialize.ShardMeta{shardMeta}
 	fh := fixtureHeader{Header: h, ProtocolVersion: protocol.ProtocolVersion}

@@ -40,12 +40,13 @@ const maxScenarioFileBytes = 16 << 20 // 16 MiB
 // itself, which still requires a non-empty CorrelationID everywhere
 // else in this codebase).
 //
-// Any read or parse failure — a missing/unreadable file, malformed JSON,
-// an unknown command Kind, or a failed envelope Validate — is reported
-// as a single registry-sourced ErrScenarioReadFailed (MET-H200, AC-8),
-// never a panic. LoadScenario returns either every command in the
-// script or none — a scenario that fails partway through never produces
-// a partial command list for a caller to accidentally run.
+// Any read or parse failure — a missing/unreadable file, an oversized
+// file, malformed JSON, an unknown command Kind, or a failed envelope
+// Validate — is reported as a single registry-sourced
+// ErrScenarioReadFailed (MET-H200, AC-8), never a panic. LoadScenario
+// returns either every command in the script or none — a scenario that
+// fails partway through never produces a partial command list for a
+// caller to accidentally run.
 func LoadScenario(correlationID, path string) ([]protocol.Command, error) {
 	info, statErr := os.Stat(path)
 	if statErr != nil {
