@@ -52,13 +52,30 @@ func fileMissing(path string) bool {
 }
 
 // readLastRecordForPreset scans path (an AppendResult-written NDJSON
-// file, synth/results.go) for the LAST record matching preset, using
-// the same bufio.Reader.ReadString('\n') technique
-// synth.LoadLatestBaseline uses (BUG-074: no fixed per-line size cap,
-// see that function's doc comment) rather than a fresh, less-hardened
-// scanner — this is a read-only enumeration alongside
-// synth.LoadLatestBaseline's own replay, reusing synth.PerfRecord's
-// schema directly rather than a hand-authored parallel shape (AC-1).
+// file, synth/results.go) for the LAST record matching preset (AC-1).
+//
+// BUG-305 hardened this to mirror synth.LoadLatestBaseline exactly on the
+// two axes an independent audit found it had drifted from:
+//
+//  1. Bounded reads (ASM-355): this used to read lines via a bare
+//     bufio.Reader.ReadString('\n'), which has no per-line size ceiling —
+//     a single oversized line (corrupt, hostile, or an operator mistake)
+//     could OOM the reader, the exact failure ASM-355 closed for
+//     LoadLatestBaseline itself but never re-applied here. It now scans
+//     via synth.ReadResultsLine, the same finite-ceiling reader
+//     LoadLatestBaseline uses, so an oversized line becomes a
+//     synth.CorruptLine and is skipped, never read unbounded.
+//  2. Provenance screening: this used to trust ANY well-formed
+//     PerfRecord for preset as "the last record", including one with
+//     Measured=false or an implausible measurement — a hand-edited or
+//     corrupted record LoadLatestBaseline would reject as a baseline
+//     candidate would still display on the dashboard as if it were
+//     genuine. It now applies synth.ScreenRecordProvenance, the same
+//     Measured/implausible screen LoadLatestBaseline's replay applies,
+//     so a record LoadLatestBaseline would reject is likewise skipped
+//     here (reported as a CorruptLine, not silently substituted for a
+//     genuine last measurement).
+//
 // A missing file is not an error (mirrors LoadLatestBaseline).
 func readLastRecordForPreset(path, preset string) (*synth.PerfRecord, []synth.CorruptLine, error) {
 	f, err := os.Open(path)
@@ -75,20 +92,38 @@ func readLastRecordForPreset(path, preset string) (*synth.PerfRecord, []synth.Co
 	var corrupt []synth.CorruptLine
 	lineNo := 0
 	for {
-		line, readErr := reader.ReadString('\n')
+		line, oversized, readErr := synth.ReadResultsLine(reader)
 		if readErr != nil && readErr != io.EOF {
 			return last, corrupt, fmt.Errorf("metricsdash: reading perf results file %q: %w", path, readErr)
 		}
-		if line != "" {
+		if oversized {
 			lineNo++
-			trimmed := strings.TrimSpace(line)
+			// ASM-355 (mirrored from synth.LoadLatestBaseline): a line
+			// over synth.MaxResultsLineBytes is recorded as a
+			// CorruptLine (unattributable — its preset was never read)
+			// and skipped, exactly like a torn line, so a good later
+			// record is still recovered rather than the scan reading an
+			// unbounded line or aborting outright.
+			corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: fmt.Errorf("record at line %d exceeds maxResultsLineBytes (%d bytes) -- refusing to read an unbounded line (ASM-355)", lineNo, synth.MaxResultsLineBytes)})
+			if readErr == io.EOF {
+				break
+			}
+			continue
+		}
+		if len(line) != 0 {
+			lineNo++
+			trimmed := strings.TrimSpace(string(line))
 			if trimmed != "" {
 				var rec synth.PerfRecord
 				if jerr := json.Unmarshal([]byte(trimmed), &rec); jerr != nil {
 					corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: jerr})
 				} else if rec.Preset == preset {
-					r := rec
-					last = &r
+					if provErr := synth.ScreenRecordProvenance(rec, lineNo); provErr != nil {
+						corrupt = append(corrupt, synth.CorruptLine{LineNo: lineNo, Err: provErr})
+					} else {
+						r := rec
+						last = &r
+					}
 				}
 			}
 		}

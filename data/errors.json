@@ -693,6 +693,12 @@
       "message": "subscription pump goroutine did not exit within the shutdown join timeout ({timeoutMs}ms) - proceeding with transport.Close anyway",
       "remedy": "check for a blocking or reentrant-into-Publish DeltaSink implementation (see engine.core's DeltaSink doc comment) - the pump goroutine may be permanently stuck"
     },
+    "MET-H207": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "invalid -months value {months}: {cause}",
+      "remedy": "Months must be positive, and months*DailyTicksPerMonth must fit in int64. cmd/metropolis's -months flag already enforces > 0 at the CLI layer; this is driveTicks' own library-level guard (BUG-305) against a caller that reaches Run directly with an out-of-range or overflow-inducing value."
+    },
     "MET-E100": {
       "severity": "error",
       "module": "engine.detgate",

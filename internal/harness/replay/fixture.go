@@ -72,6 +72,38 @@ func fixtureHeaderPath(dir, name string) (string, error) {
 	return filepath.Join(dir, name+".header.json"), nil
 }
 
+// saveCloseErr folds the shard file's f.Close() error into Save's own
+// return value (BUG-305: previously discarded unconditionally via
+// `_ = f.Close()`, even on the success path). A flush/close failure here
+// (disk full, a late I/O error that surfaces only at Close, GR#1) means a
+// shard whose bytes might not actually be durable on disk was reported as
+// a clean Save regardless, with dir/<name>.header.json already written
+// pointing at it.
+//
+// It is a pure function of its three inputs, extracted out of Save's
+// defer closure specifically so this decision is directly unit-testable
+// without needing to force a real *os.File to fail on Close — there is no
+// portable, reliable technique to do that across this codebase's
+// supported platforms (POSIX double-close tricks behave differently on
+// Windows), so the logic itself is tested here instead of via an
+// integration-level forced failure.
+//
+// closeErr is nil when the Close succeeded (the overwhelmingly common
+// case: returns priorErr unchanged, whatever it was). priorErr is Save's
+// own err as of the moment the defer runs — when non-nil, Save already
+// has a MORE SPECIFIC failure to report (a write, encode, or header
+// error) and a close failure on top of that is not new information worth
+// overriding it with. Only when priorErr is nil AND closeErr is non-nil
+// does this wrap and return the close failure as Save's own error —
+// exactly the "Save was otherwise about to report a clean success"
+// case this fix targets.
+func saveCloseErr(closeErr, priorErr error, shardPath string) error {
+	if closeErr == nil || priorErr != nil {
+		return priorErr
+	}
+	return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), closeErr, map[string]any{"path": shardPath, "cause": "closing fixture shard file"})
+}
+
 // Save writes every record rec has captured to dir/<name>.ndjson.gz (one
 // NDJSON+gzip shard, via serialize.NDJSONSerializer.WriteShard — AC-2)
 // plus dir/<name>.header.json (AC-4). dir is created if it does not
@@ -84,8 +116,13 @@ func fixtureHeaderPath(dir, name string) (string, error) {
 // partway through, the deferred cleanup removes whatever was already
 // written. Save either succeeds completely (a valid shard AND header
 // both on disk) or leaves NOTHING on disk — never a half-written
-// fixture that looks valid to a later Load.
-func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
+// fixture that looks valid to a later Load. ONE disclosed exception
+// (BUG-305): a Close error surfaced on the otherwise-successful path
+// returns an error while the files remain installed — the data was
+// fully written and any real corruption is contained by Load's SHA-256
+// check; removing installed files for a close-status failure would
+// destroy a likely-good fixture.
+func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 	shardPath, err := fixtureShardPath(dir, name)
 	if err != nil {
 		return err
@@ -117,11 +154,13 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) error {
 	// requirement.
 	ok := false
 	defer func() {
-		_ = f.Close()
+		closeErr := f.Close()
 		if !ok {
 			_ = os.Remove(shardPath)
 			_ = os.Remove(headerPath)
+			return
 		}
+		err = saveCloseErr(closeErr, err, shardPath)
 	}()
 
 	idx := 0

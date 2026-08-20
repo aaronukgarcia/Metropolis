@@ -63,4 +63,15 @@ const (
 	// degrades to "logged and moved on" rather than "the whole headless
 	// run process hangs."
 	ErrPumpShutdownTimeout = "MET-H206"
+
+	// ErrInvalidMonths: driveTicks (run.go) rejected Config.Months —
+	// either non-positive, or so large that months*core.DailyTicksPerMonth
+	// would overflow int64 (BUG-305). cmd/metropolis's -months flag
+	// already enforces > 0 at the CLI layer, but Run/driveTicks is also a
+	// library entry point any other caller can reach directly; without
+	// this check, an overflowing multiply would wrap silently (Go's
+	// defined two's-complement truncation) and Run would return a
+	// SUCCESSFUL Result carrying a bogus, wrapped TicksAdvanced instead of
+	// failing loudly — the poisoned-perf-baseline shape this code closes.
+	ErrInvalidMonths = "MET-H207"
 )
