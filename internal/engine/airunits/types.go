@@ -17,8 +17,6 @@ const (
 	UnitAmbulance
 	// UnitVIP is the VIP/commercial chopper: a non-emergency prestige asset.
 	UnitVIP
-
-	numUnitTypes
 )
 
 // String returns the canonical type key (also data/helicopters.json's

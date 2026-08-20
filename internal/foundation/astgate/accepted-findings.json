@@ -1734,5 +1734,41 @@
   {
     "finding": "internal/engine/shopping/api.go|*ShoppingAPI|receiver method|computeFormatSplitsLocked|s|*ShoppingAPI",
     "reason": "MOD-050 r4 verdict fix (2026-08-19): unexported *Locked-suffixed helper, called with the candidate type's mutex (s.mu) already held by its two callers, GenerateTrips and TripsByFormat, each of which calls checkNotCopied and takes s.mu.RLock() before invoking computeFormatSplitsLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical roads.obstructedCellsLocked and services.districtCoverageLocked precedents in this same file."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|readWeatherLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its four callers, AssignPilot, Dispatch, Service, and AdvanceMonth, each of which calls checkNotCopied and takes a.mu.Lock() before invoking readWeatherLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|weatherAdverseLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its callers, AssignPilot, Dispatch, Service, and AdvanceMonth, each of which calls checkNotCopied and takes a.mu.Lock() before invoking weatherAdverseLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|opexPostsLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its sole caller, AdvanceMonth, which calls checkNotCopied and takes a.mu.Lock() before invoking opexPostsLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|roleEffectLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its sole caller, Dispatch, which calls checkNotCopied and takes a.mu.Lock() before invoking roleEffectLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|vipRevenueLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its sole caller, AdvanceMonth, which calls checkNotCopied and takes a.mu.Lock() before invoking vipRevenueLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|unitStatusLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its two callers, Fleet and UnitStatus, each of which calls checkNotCopied and takes a.mu.RLock()/a.mu.Lock() before invoking unitStatusLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|findPilotLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its sole caller, AssignPilot, which calls checkNotCopied and takes a.mu.Lock() before invoking findPilotLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/airunits/airunits.go|*AirUnitsAPI|receiver method|sortedUnitIDsLocked|a|*AirUnitsAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its callers, AdvanceMonth, Fleet, and findPilotLocked (itself only reachable with a.mu held), each of which calls checkNotCopied and takes a.mu.Lock()/a.mu.RLock() before invoking sortedUnitIDsLocked, so a second guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/engine/policies/enact.go|*PoliciesAPI|receiver method|rollbackProjectionsLocked|a|*PoliciesAPI",
+    "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its sole caller, commitEnactLocked, which is itself only reachable from Enact -- Enact calls checkNotCopied and takes a.mu.Lock() before invoking commitEnactLocked, which re-checks checkNotCopied under the held lock before invoking rollbackProjectionsLocked, so a third guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
   }
 ]
