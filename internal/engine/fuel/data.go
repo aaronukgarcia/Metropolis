@@ -6,6 +6,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // fileFuel is data/fuel.json's filename, relative to the resolved data
@@ -97,12 +98,16 @@ func (f *fuelData) Validate() error {
 			if seg.v == nil {
 				return &data.FieldError{Field: seg.field, Rule: "required — a defined era must declare its EV-share figure (missing would silently read as 0% EV, masking a data-authoring bug)"}
 			}
-			if *seg.v < 0 || *seg.v > 1 {
-				return &data.FieldError{Field: seg.field, Rule: "must be a fraction in [0,1], got " + ftoa(*seg.v)}
+			if !num.IsFinite(*seg.v) || *seg.v < 0 || *seg.v > 1 {
+				return &data.FieldError{Field: seg.field, Rule: "must be a finite fraction in [0,1], got " + ftoa(*seg.v)}
 			}
 		}
 	}
 
+	if !num.IsFinite(f.FuelDemand.CarLitresPerTick) || !num.IsFinite(f.FuelDemand.VanLitresPerTick) ||
+		!num.IsFinite(f.FuelDemand.TruckLitresPerTick) || !num.IsFinite(f.FuelDemand.LogisticsFleetLitresPerTick) {
+		return &data.FieldError{Field: "fuelDemand", Rule: "per-segment litre figures must be finite (not NaN/±Inf)"}
+	}
 	if f.FuelDemand.CarLitresPerTick < 0 || f.FuelDemand.VanLitresPerTick < 0 ||
 		f.FuelDemand.TruckLitresPerTick < 0 || f.FuelDemand.LogisticsFleetLitresPerTick < 0 {
 		return &data.FieldError{Field: "fuelDemand", Rule: "per-segment litre figures must be >= 0"}
@@ -110,6 +115,9 @@ func (f *fuelData) Validate() error {
 
 	sum := 0.0
 	for h, w := range f.ChargingProfile.HourlyWeight {
+		if !num.IsFinite(w) {
+			return &data.FieldError{Field: "chargingProfile.hourlyWeight[" + itoa(h) + "]", Rule: "must be finite (not NaN/±Inf)"}
+		}
 		if w < 0 {
 			return &data.FieldError{Field: "chargingProfile.hourlyWeight[" + itoa(h) + "]", Rule: "must be >= 0 (a negative charging-load value is never valid)"}
 		}
@@ -118,24 +126,24 @@ func (f *fuelData) Validate() error {
 	if sum <= 0 {
 		return &data.FieldError{Field: "chargingProfile.hourlyWeight", Rule: "must contain at least one positive weight (an all-zero profile would silently read as 'no charging demand')"}
 	}
-	if f.ChargingProfile.BaseKWhPerTick < 0 {
-		return &data.FieldError{Field: "chargingProfile.baseKWhPerTick", Rule: "must be >= 0"}
+	if !num.IsFinite(f.ChargingProfile.BaseKWhPerTick) || f.ChargingProfile.BaseKWhPerTick < 0 {
+		return &data.FieldError{Field: "chargingProfile.baseKWhPerTick", Rule: "must be finite and >= 0"}
 	}
 
-	if f.StrategicReserve.DaysOfCover <= 0 {
-		return &data.FieldError{Field: "strategicReserve.daysOfCover", Rule: "must be > 0"}
+	if !num.IsFinite(f.StrategicReserve.DaysOfCover) || f.StrategicReserve.DaysOfCover <= 0 {
+		return &data.FieldError{Field: "strategicReserve.daysOfCover", Rule: "must be finite and > 0"}
 	}
-	if f.Duty.RatePencePerLitre <= 0 {
-		return &data.FieldError{Field: "duty.ratePencePerLitre", Rule: "must be > 0"}
+	if !num.IsFinite(f.Duty.RatePencePerLitre) || f.Duty.RatePencePerLitre <= 0 {
+		return &data.FieldError{Field: "duty.ratePencePerLitre", Rule: "must be finite and > 0"}
 	}
 	if f.Duty.TaxInstrument == "" {
 		return &data.FieldError{Field: "duty.taxInstrument", Rule: "required, must name an engine.tax instrument"}
 	}
-	if f.Forecourt.TargetForecourtsPerThousandPopulation <= 0 {
-		return &data.FieldError{Field: "forecourt.targetForecourtsPerThousandPopulation", Rule: "must be > 0"}
+	if !num.IsFinite(f.Forecourt.TargetForecourtsPerThousandPopulation) || f.Forecourt.TargetForecourtsPerThousandPopulation <= 0 {
+		return &data.FieldError{Field: "forecourt.targetForecourtsPerThousandPopulation", Rule: "must be finite and > 0"}
 	}
-	if f.Tanker.PortThroughputLitresPerTick < 0 {
-		return &data.FieldError{Field: "tanker.portThroughputLitresPerTick", Rule: "must be >= 0"}
+	if !num.IsFinite(f.Tanker.PortThroughputLitresPerTick) || f.Tanker.PortThroughputLitresPerTick < 0 {
+		return &data.FieldError{Field: "tanker.portThroughputLitresPerTick", Rule: "must be finite and >= 0"}
 	}
 	return nil
 }
