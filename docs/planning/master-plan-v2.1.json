@@ -717,6 +717,27 @@
       }
     },
     {
+      "key": "feat.deathwave",
+      "type": "feature",
+      "seq": 265,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "title": "Mortality smoothing: bounded monthly death budget + weather-driven variation",
+      "desc": "FEAT-087: smooths engine.citizens' Gompertz-Makeham realised deaths through a bounded monthly death budget (hazard selects, enqueues, releases at most the data-sourced budget per month) so a same-birth-month cohort crossing the mortality cliff together drains over a window of months rather than a single-tick population cliff; a declared weather emergency (drought/winter, routed through the engine.season edge per AC-7/ASM-579) suspends the budget for a non-smoothed major death event; exposes a deterministic FIFO handoff (citizenId, deathMonth, emergencyFlag) that engine.deathservices drains at its own funeral throughput. Lives inside internal/engine/citizens/ (deathwave.go) as a package-homed feature — the feat.refinery-in-chemicals precedent — not a standalone module.",
+      "specRef": "§5.1; §5.2; §9; §10; §H",
+      "path": "internal/engine/citizens/",
+      "deps": [
+        "engine.citizens"
+      ],
+      "calls": [
+        "engine.season",
+        "foundation.data",
+        "foundation.errors"
+      ],
+      "sprint": 7
+    },
+    {
       "key": "engine.invariant",
       "type": "module",
       "seq": 270,
@@ -1121,6 +1142,7 @@
         "engine.extcommute",
         "engine.services",
         "engine.firms",
+        "engine.dispatch",
         "foundation.errors",
         "foundation.num",
         "int.protocol"
@@ -1812,7 +1834,8 @@
         "engine.traffic",
         "engine.services",
         "engine.world",
-        "engine.projections"
+        "engine.projections",
+        "engine.invariant"
       ],
       "sprint": 9,
       "collaborations": {
@@ -1820,6 +1843,38 @@
           "engine.projections"
         ]
       }
+    },
+    {
+      "key": "engine.deathservices",
+      "type": "module",
+      "seq": 605,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
+      "desc": "FEAT-088: turns feat.deathwave's released death queue into a conserved body stock and disposes of it through three mutually-exclusive terminal methods — burial (consumes a graveyard plot, reusable only after a data-sourced reuse horizon), cremation (space-free, costed, throughput-bounded), and emergency dispensation (multi-body van/truck transport + 24x7 operation, gated on feat.deathwave's weather-driven major death event); hearses carry exactly one body per trip, so funeral throughput caps the disposal rate and a death surge drains as a queryable backlog rather than vanishing in one tick. Does not own mortality/smoothing (feat.deathwave) or hearse pathfinding (engine.logistics owns the routing).",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H Health & Deathcare; §25 (refuse's rounds-as-logistics-movements structural analog); §26 (dispatch's nearest-registered emergency model)",
+      "path": "internal/engine/deathservices/",
+      "inbound": {
+        "name": "DeathServicesAPI",
+        "format": "Go package API + deltas",
+        "pattern": "body intake keyed off feat.deathwave's released death queue; disposal/triage commands (bury/cremate/dispense), no directly-writable exported fields"
+      },
+      "deps": [
+        "feat.deathwave",
+        "engine.build"
+      ],
+      "calls": [
+        "engine.citizens",
+        "feat.deathwave",
+        "engine.services",
+        "engine.world",
+        "engine.build",
+        "engine.logistics",
+        "foundation.data",
+        "foundation.errors"
+      ],
+      "sprint": 9
     },
     {
       "key": "engine.education",
