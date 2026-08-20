@@ -645,6 +645,12 @@
       "message": "StartSubscriptionPump called a second time on the same Engine (a pump is already running)",
       "remedy": "call StartSubscriptionPump at most once per Engine; join the done channel it returns before starting a new one"
     },
+    "MET-E020": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "NewClock rejected secondsPerMonthAt1x={seconds}: must be a positive, finite real-seconds pacing constant",
+      "remedy": "Pass a positive, finite secondsPerMonthAt1x (e.g. DefaultSecondsPerMonthAt1x, or a value loaded via LoadSecondsPerMonthAt1x/LoadDefaultSecondsPerMonthAt1x from data/pacing.json) -- a zero, negative, NaN, or +/-Inf pacing constant would silently produce zero or garbage SecondsPerMonth/TicksPerRealSecond figures instead of a loud rejection."
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",

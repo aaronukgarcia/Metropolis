@@ -79,8 +79,26 @@ func WithPoolSize(n int) Option {
 // WithSecondsPerMonthAt1x overrides the clock's real-time pacing
 // constant (see clock.go's DefaultSecondsPerMonthAt1x doc comment for
 // why this is an Option rather than a hardcoded value).
+//
+// BUG-303: NewClock now rejects a <= 0 (or, per its own comment, a
+// future non-finite) seconds value with ErrInvalidPacingConstant
+// (MET-E020) instead of silently constructing a garbage-pacing Clock.
+// Option is `func(*Engine)` (no error return) across every other Option
+// in this file, so this deliberately does NOT change that shared shape
+// for one caller's sake; instead a rejected value is logged loudly
+// (GR#1 — never silently swallowed) and e.clock is left as whatever
+// NewEngine already set it to (its own DefaultSecondsPerMonthAt1x
+// construction, which is always valid), rather than replaced with a
+// zero-value Clock that would then silently report 0 pacing everywhere.
 func WithSecondsPerMonthAt1x(seconds int64) Option {
-	return func(e *Engine) { e.clock = NewClock(seconds) }
+	return func(e *Engine) {
+		c, err := NewClock(seconds)
+		if err != nil {
+			_ = errs.Wrap(ErrInvalidPacingConstant, errs.NewCorrelationID(), err, map[string]any{"seconds": seconds})
+			return
+		}
+		e.clock = c
+	}
 }
 
 // WithPhaseObserver installs a PhaseObserver (see phase.go).
@@ -345,8 +363,17 @@ type Engine struct {
 // registry, and zero registered PhaseHooks (the walking-skeleton
 // property, M0-ENG §2).
 func NewEngine(opts ...Option) *Engine {
+	// DefaultSecondsPerMonthAt1x is a fixed, always-positive package
+	// constant (clock.go), so NewClock cannot actually reject it here —
+	// the error is checked anyway (GR#1: never assume a call that returns
+	// an error cannot fail) and logged loudly rather than silently
+	// discarded if that invariant is ever broken by a future edit.
+	clock, err := NewClock(DefaultSecondsPerMonthAt1x)
+	if err != nil {
+		_ = errs.Wrap(ErrInvalidPacingConstant, errs.NewCorrelationID(), err, map[string]any{"seconds": DefaultSecondsPerMonthAt1x})
+	}
 	e := &Engine{
-		clock:       NewClock(DefaultSecondsPerMonthAt1x),
+		clock:       clock,
 		poolSize:    defaultPoolSize(),
 		hooks:       make(map[PhaseKind][]PhaseHook),
 		deltaSignal: make(chan struct{}, 1),
