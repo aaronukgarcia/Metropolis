@@ -66,6 +66,21 @@ func (st *simState) jobAvailabilityTerm() (float64, error) {
 		rate = 0
 	}
 	half := st.attractTerms.JobAvailability.VacancyRateHalfSaturationPerMille
+	// BUG-308 fix 3: a non-positive half-saturation constant (a
+	// data/attract_terms.json misconfiguration or loader regression) can
+	// make rate+half divide to +Inf (rate>0, half==-rate) or 0/0==NaN
+	// (rate==0, half==0). clampTerm's NaN guard already exists for the
+	// latter, but the +Inf case would silently fall through to its
+	// v>100 branch and clamp to 100 as an ACCIDENT of IEEE-754 comparison
+	// semantics, not a deliberate default — reading as "job availability
+	// maxed out" for what is actually a broken config. Guard the divisor
+	// explicitly here (extending clampTerm's own NaN-guard pattern to the
+	// input side) so a non-positive half-saturation constant reads as the
+	// documented floor (0), the same "fail toward the safe/neutral edge"
+	// discipline clampTerm's doc comment already describes.
+	if half <= 0 {
+		return 0, nil
+	}
 	term := 100 * rate / (rate + half)
 	return clampTerm(term), nil
 }

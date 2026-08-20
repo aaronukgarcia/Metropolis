@@ -182,7 +182,24 @@ func (s *extCommuteFinanceSeam) month() int64 {
 
 // post is the shared two-entry balanced-transaction helper every verb below
 // uses: debit one account, credit another, same amount, one category.
+//
+// BUG-308 fix 2: every FinanceSeam verb above funnels through this one
+// choke point, so the non-negative-amount seam check lives here ONCE
+// rather than duplicated five times. A negative amount posted through
+// Post's debit/credit pair would REVERSE the credit flow (the debit
+// account gains money instead of losing it, and vice versa) — silently
+// breaking money conservation (GR#16) rather than erroring. Per GR#16's
+// boundary discipline, reject loudly at the seam instead of posting a
+// sign-flipped transaction: extcommute.EmploymentState math or a future
+// caller bug could otherwise drain the treasury/external account with no
+// trace beyond an inverted ledger line.
 func (s *extCommuteFinanceSeam) post(debit, credit finance.AccountID, amount int64, cat finance.Category, desc string) error {
+	if amount < 0 {
+		return errs.New(ErrInvalidWireAmount, s.cid, map[string]any{
+			"amount": amount,
+			"verb":   string(cat),
+		})
+	}
 	_, err := s.api.Post(finance.Transaction{
 		Month:       s.month(),
 		Description: desc,
