@@ -1,6 +1,9 @@
 package airunits
 
-import "github.com/aaronukgarcia/Metropolis/internal/foundation/det"
+import (
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
+)
 
 // UnitType enumerates the four distinct rotary-wing unit types (AC-1): police,
 // fire, ambulance, and VIP/commercial. Each is a distinct typed identity, not
@@ -203,15 +206,18 @@ type RunningCost struct {
 	Crew      det.Micropounds
 }
 
-// Total returns the full flying running cost (all four components).
+// Total returns the full flying running cost (all four components), summed
+// with saturation (GR#16) so a data error can never wrap the total negative.
 func (r RunningCost) Total() det.Micropounds {
-	return r.Fuel + r.Hangar + r.Insurance + r.Crew
+	return det.Micropounds(num.SatAdd(
+		num.SatAdd(num.SatAdd(int64(r.Fuel), int64(r.Hangar)), int64(r.Insurance)),
+		int64(r.Crew)))
 }
 
 // GroundedTotal returns the standing running cost a grounded chopper incurs
-// (hangar + insurance + crew, no fuel).
+// (hangar + insurance + crew, no fuel), saturated (GR#16).
 func (r RunningCost) GroundedTotal() det.Micropounds {
-	return r.Hangar + r.Insurance + r.Crew
+	return det.Micropounds(num.SatAdd(num.SatAdd(int64(r.Hangar), int64(r.Insurance)), int64(r.Crew)))
 }
 
 // UnitStatus is the queryable snapshot of one chopper (AC-2's UnitStatus).

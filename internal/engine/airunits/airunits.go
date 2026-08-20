@@ -1,6 +1,7 @@
 package airunits
 
 import (
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -40,10 +41,9 @@ type AirUnitsAPI struct {
 
 	mu sync.RWMutex
 
-	fleet        map[UnitID]*chopper
-	nextUnitID   UnitID
-	currentMonth int64
-	weather      Weather
+	fleet      map[UnitID]*chopper
+	nextUnitID UnitID
+	weather    Weather
 
 	// commercialRevenue is the aggregate VIP commercial-revenue earned so far,
 	// in micro-pounds (AC-8's non-emergency benefit).
@@ -211,7 +211,6 @@ func (a *AirUnitsAPI) AssignPilot(id UnitID, pilot PilotID) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.weather = a.readWeatherLocked()
 	ch := a.fleet[id]
 	if ch == nil {
 		return errs.New(ErrUnknownUnit, a.correlationID, map[string]any{"unit": uint64(id)})
@@ -236,6 +235,7 @@ func (a *AirUnitsAPI) AssignPilot(id UnitID, pilot PilotID) error {
 			"pilot": uint64(pilot), "unit": uint64(id), "assignedUnit": uint64(conflict.id),
 		})
 	}
+	a.weather = a.readWeatherLocked()
 	ch.pilot = pilot
 	if ch.state == StateOutOfService && ch.reason == groundNoPilot &&
 		ch.wear < a.cfg.Maintenance.OutOfServiceWearThreshold && !a.weatherAdverseLocked() {
@@ -275,11 +275,11 @@ func (a *AirUnitsAPI) Dispatch(id UnitID) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.weather = a.readWeatherLocked()
 	ch := a.fleet[id]
 	if ch == nil {
 		return errs.New(ErrUnknownUnit, a.correlationID, map[string]any{"unit": uint64(id)})
 	}
+	a.weather = a.readWeatherLocked()
 	if a.weatherAdverseLocked() {
 		return errs.New(ErrWeatherGrounded, a.correlationID, map[string]any{"unit": uint64(id), "windKnots": a.weather.WindKnots})
 	}
@@ -289,10 +289,15 @@ func (a *AirUnitsAPI) Dispatch(id UnitID) error {
 	if ch.pilot == 0 {
 		return errs.New(ErrNoPilot, a.correlationID, map[string]any{"unit": uint64(id)})
 	}
-	ch.state = StateEnRoute
+	// Report the role contribution to the dispatch seam BEFORE flipping state
+	// (validate-before-mutate, GR#12): a failed contribution surfaces as an
+	// error and leaves the chopper Available, never silently dropped (GR#17).
 	if a.dispatch != nil {
-		_ = a.dispatch.ReportContribution(ch.id, ch.typ, a.roleEffectLocked(ch.typ))
+		if err := a.dispatch.ReportContribution(ch.id, ch.typ, a.roleEffectLocked(ch.typ)); err != nil {
+			return err
+		}
 	}
+	ch.state = StateEnRoute
 	return nil
 }
 
@@ -349,7 +354,6 @@ func (a *AirUnitsAPI) Service(id UnitID, engineerHours int64) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.weather = a.readWeatherLocked()
 	ch := a.fleet[id]
 	if ch == nil {
 		return errs.New(ErrUnknownUnit, a.correlationID, map[string]any{"unit": uint64(id)})
@@ -361,10 +365,17 @@ func (a *AirUnitsAPI) Service(id UnitID, engineerHours int64) error {
 	if err != nil {
 		return err
 	}
+	// A seam reporting negative wear-cleared would otherwise INCREASE wear via
+	// SatSub(x, negative) == x + |negative|. Clamp it to zero (GR#16): a bad
+	// seam return can stall maintenance, never make a chopper worse.
+	if cleared < 0 {
+		cleared = 0
+	}
 	ch.wear = num.SatSub(ch.wear, cleared)
 	if ch.wear < 0 {
 		ch.wear = 0
 	}
+	a.weather = a.readWeatherLocked()
 	if ch.state == StateOutOfService && ch.reason == groundMaintenance &&
 		ch.wear < a.cfg.Maintenance.OutOfServiceWearThreshold && ch.pilot != 0 && !a.weatherAdverseLocked() {
 		ch.state = StateAvailable
@@ -380,6 +391,16 @@ func (a *AirUnitsAPI) Service(id UnitID, engineerHours int64) error {
 // burden to the maintenance seam, and applies the grounding scheduler
 // (maintenance wear, adverse weather). It is the single tick mutation path —
 // accessors never mutate.
+//
+// Best-effort per chopper (not atomic across the fleet): a seam failure for
+// one chopper is recorded in firstErr while the remaining choppers are still
+// processed, and the first such error is returned after the loop. This is
+// deliberate — a per-chopper tick loop should surface a failure (never
+// silently swallow it) without aborting the whole month for one bad chopper,
+// and the loop is tick-serialised so there is no cross-chopper rollback to
+// reconcile. A caller that needs all-or-nothing month atomicity must wrap the
+// whole AdvanceMonth in its own transaction; this method's contract is
+// "process every chopper, report the first error".
 func (a *AirUnitsAPI) AdvanceMonth(month int64) error {
 	if err := a.checkNotCopied("AdvanceMonth"); err != nil {
 		return err
@@ -390,7 +411,6 @@ func (a *AirUnitsAPI) AdvanceMonth(month int64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	a.currentMonth = month
 	a.weather = a.readWeatherLocked()
 	var firstErr error
 	threshold := a.cfg.Maintenance.OutOfServiceWearThreshold
@@ -679,6 +699,11 @@ func (a *AirUnitsAPI) vipRevenueLocked(id UnitID, month int64) int64 {
 		return 0
 	}
 	s := det.NewStream(a.seed, uint64(id), month, "airunits.vip-revenue")
+	if max == math.MaxInt64 {
+		// max+1 would overflow to a negative bound and IntN(n<=0) returns 0,
+		// silently zeroing the draw. Int63 draws [0, MaxInt64] directly.
+		return s.Int63()
+	}
 	return s.IntN(max + 1)
 }
 
