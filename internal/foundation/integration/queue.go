@@ -138,6 +138,7 @@ var kindClass = map[protocol.Kind]Class{
 	protocol.KindZone:          ClassT1Batchable,
 	protocol.KindBuild:         ClassT1Batchable,
 	protocol.KindDemolish:      ClassT1Batchable,
+	protocol.KindSetFunding:    ClassT1Batchable,
 }
 
 // classOfDefault is the Class an unrecognised Kind falls back to — see

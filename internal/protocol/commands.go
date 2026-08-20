@@ -53,6 +53,17 @@ const (
 	KindZone     Kind = "Zone"
 	KindBuild    Kind = "Build"
 	KindDemolish Kind = "Demolish"
+
+	// KindSetFunding is F4's (ui.screen.services) per-service funding-slider
+	// command (FEAT-208 increment 3, ASM-1193's own "prefer a real Kind over
+	// the Debug fallback long-term" ruling, made concrete here as the first
+	// instance): promotes services.set-funding off protocol.KindDebug's
+	// no-op escape hatch (whose only handler, engine.core's handleDebug, is
+	// a documented placeholder that never inspects Op) onto a first-class,
+	// registered Kind that reaches compose.handleGameplay exactly like
+	// Buy/Zone/Build/Demolish do. Added per the additive extension rule
+	// above — a new Kind, not a repurposed one.
+	KindSetFunding Kind = "SetFunding"
 )
 
 // AdvanceTicksPayload requests the engine advance the simulation by N
@@ -208,6 +219,29 @@ type DemolishPayload struct {
 
 func (DemolishPayload) commandKind() Kind { return KindDemolish }
 
+// SetFundingPayload requests a funding-level change for one registered
+// service (F4's per-service slider, §26/§54). ServiceID is an opaque,
+// engine-defined identifier resolved against engine.services' registered
+// instance roster — deliberately a string, not an enum, mirroring
+// ZonePayload.ZoneType/BuildPayload.BuildingType's rationale exactly (this
+// neutral package never has to know the service catalogue). Level is the
+// engine's own [0,1] funding-level fraction (internal/engine/services/
+// api.go's ServicesAPI.SetFunding contract) — the UI's display-domain
+// rescale (e.g. 0-1000, a percentage) happens screen-side, before the
+// command is ever built (internal/ui/screens/services/screen.go's
+// normalizeFundingLevel), so this payload always carries the already-
+// rescaled [0,1] fraction, never a raw slider position. Range/finite
+// validation is the engine's job (ServicesAPI.SetFunding hard-rejects
+// non-finite or out-of-[0,1] values), not this package's — same scope
+// discipline every other payload's internal invariants follow
+// (Command.Validate's doc comment).
+type SetFundingPayload struct {
+	ServiceID string  `json:"serviceId"`
+	Level     float64 `json:"level"`
+}
+
+func (SetFundingPayload) commandKind() Kind { return KindSetFunding }
+
 // commandRegistry maps every known Kind to a factory that returns a
 // fresh, zero-valued pointer to that Kind's payload type. codec.go uses
 // it to make decoding table-driven: an unrecognized Kind is a typed
@@ -231,6 +265,7 @@ var commandRegistry = map[Kind]func() CommandPayload{
 	KindZone:          func() CommandPayload { return &ZonePayload{} },
 	KindBuild:         func() CommandPayload { return &BuildPayload{} },
 	KindDemolish:      func() CommandPayload { return &DemolishPayload{} },
+	KindSetFunding:    func() CommandPayload { return &SetFundingPayload{} },
 }
 
 // KnownKinds returns the registered command Kinds, for diagnostics and

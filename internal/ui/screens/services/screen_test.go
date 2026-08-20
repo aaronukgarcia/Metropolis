@@ -110,8 +110,29 @@ func TestApplyDelta_AbsentSubSurfaceMarksUnavailable(t *testing.T) {
 	}
 }
 
+// TestApplyResult_RejectionSurfacedThenClearedOnAccept drives ApplyResult
+// through a REAL SetFunding call (capturing the fresh, per-command
+// CorrelationID SetFunding mints — FEAT-208 increment 3 destructive round
+// r1 finding F-A, screen.go's pendingFunding doc comment) rather than
+// hand-crafting a CommandResult against a fixed, guessed ID: ApplyResult
+// now dispatches by pendingFunding membership, not equality against
+// s.correlationID, so a fixture using the OLD fixed-ID shape would no
+// longer exercise the real code path at all.
 func TestApplyResult_RejectionSurfacedThenClearedOnAccept(t *testing.T) {
 	s := New("corr-result")
+	sl := ServiceSlider{ID: "clinic-1", Label: "Clinic", Min: 0, Max: 1, Step: 0.05}
+
+	var corrID protocol.CorrelationID
+	captureSend := func(cmd protocol.Command) error {
+		corrID = cmd.CorrelationID
+		return nil
+	}
+	if err := s.SetFunding(captureSend, sl, 0.5); err != nil {
+		t.Fatalf("SetFunding: %v", err)
+	}
+	if corrID == "" {
+		t.Fatal("SetFunding did not send a command with a CorrelationID")
+	}
 
 	// MET-G1203 (engine.services' own ErrInvalidFunding,
 	// internal/engine/services/errors.go:52) is used here deliberately —
@@ -121,7 +142,7 @@ func TestApplyResult_RejectionSurfacedThenClearedOnAccept(t *testing.T) {
 	// (screen.go's SetFunding); reusing it here would mislabel a local
 	// code as engine-originated.
 	s.ApplyResult(protocol.CommandResult{
-		CorrelationID: "corr-result",
+		CorrelationID: corrID,
 		Accepted:      false,
 		Error:         &protocol.ErrorRef{Code: "MET-G1203", Display: "funding cannot go below the statutory floor"},
 	})
@@ -129,12 +150,23 @@ func TestApplyResult_RejectionSurfacedThenClearedOnAccept(t *testing.T) {
 		t.Errorf("FundingRejectedReason() = %q, want the engine's rejection reason (SVC-8: never a silent revert)", got)
 	}
 
-	s.ApplyResult(protocol.CommandResult{CorrelationID: "corr-result", Accepted: true})
+	// A second SetFunding call mints a NEW CorrelationID; its accepted
+	// result must clear the rejection reason left by the first.
+	if err := s.SetFunding(captureSend, sl, 0.5); err != nil {
+		t.Fatalf("SetFunding (second): %v", err)
+	}
+	s.ApplyResult(protocol.CommandResult{CorrelationID: corrID, Accepted: true})
 	if got := s.FundingRejectedReason(); got != "" {
 		t.Errorf("FundingRejectedReason() = %q after an accepted result, want empty", got)
 	}
 }
 
+// TestApplyResult_IgnoresMismatchedCorrelationID proves a CommandResult
+// whose CorrelationID this screen never itself issued via SetFunding
+// (e.g. a stale/duplicate delivery, or a result meant for something
+// else entirely) is ignored — dispatch is by pendingFunding membership,
+// not a guessable fixed ID (FEAT-208 increment 3 destructive round r1
+// finding F-A).
 func TestApplyResult_IgnoresMismatchedCorrelationID(t *testing.T) {
 	s := New("corr-mine")
 	// MET-G1203, not MET-V503 — see TestApplyResult_RejectionSurfacedThenClearedOnAccept's note.
@@ -144,7 +176,7 @@ func TestApplyResult_IgnoresMismatchedCorrelationID(t *testing.T) {
 		Error:         &protocol.ErrorRef{Code: "MET-G1203", Display: "not for this screen"},
 	})
 	if got := s.FundingRejectedReason(); got != "" {
-		t.Errorf("FundingRejectedReason() = %q, want empty for a result addressed to a different correlation ID", got)
+		t.Errorf("FundingRejectedReason() = %q, want empty for a result addressed to a correlation ID this screen never issued", got)
 	}
 }
 
@@ -160,7 +192,7 @@ func TestSetFunding_RejectsInvalidValuesLocally(t *testing.T) {
 	}
 }
 
-func TestSetFunding_SendsFixedOpString(t *testing.T) {
+func TestSetFunding_SendsRealSetFundingKind(t *testing.T) {
 	s := New("corr-setfunding-ok")
 	var got protocol.Command
 	send := func(cmd protocol.Command) error {
@@ -171,15 +203,15 @@ func TestSetFunding_SendsFixedOpString(t *testing.T) {
 	if err := s.SetFunding(send, sl, 250); err != nil {
 		t.Fatalf("SetFunding: %v", err)
 	}
-	payload, ok := got.Payload.(protocol.DebugPayload)
+	if got.Kind != protocol.KindSetFunding {
+		t.Errorf("Kind = %q, want %q (FEAT-208 increment 3: real Kind, not the KindDebug escape hatch)", got.Kind, protocol.KindSetFunding)
+	}
+	payload, ok := got.Payload.(protocol.SetFundingPayload)
 	if !ok {
-		t.Fatalf("Payload type = %T, want protocol.DebugPayload", got.Payload)
+		t.Fatalf("Payload type = %T, want protocol.SetFundingPayload", got.Payload)
 	}
-	if payload.Op != opSetFunding {
-		t.Errorf("Op = %q, want %q (ASM-1193 fixed Op string convention)", payload.Op, opSetFunding)
-	}
-	if payload.Args["id"] != "police" {
-		t.Errorf("Args[id] = %q, want %q", payload.Args["id"], "police")
+	if payload.ServiceID != "police" {
+		t.Errorf("ServiceID = %q, want %q", payload.ServiceID, "police")
 	}
 }
 
@@ -202,9 +234,9 @@ func TestSetFunding_RescalesValueToEngineDomain(t *testing.T) {
 	if err := s.SetFunding(send, sl, 250); err != nil {
 		t.Fatalf("SetFunding: %v", err)
 	}
-	payload := got.Payload.(protocol.DebugPayload)
-	if want := "0.25"; payload.Args["value"] != want {
-		t.Errorf("Args[value] = %q, want %q (engine's [0,1] funding-level domain, internal/engine/services/api.go SetFunding — not the raw 250 display-domain value)", payload.Args["value"], want)
+	payload := got.Payload.(protocol.SetFundingPayload)
+	if want := 0.25; payload.Level != want {
+		t.Errorf("Level = %v, want %v (engine's [0,1] funding-level domain, internal/engine/services/api.go SetFunding — not the raw 250 display-domain value)", payload.Level, want)
 	}
 }
 

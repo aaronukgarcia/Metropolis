@@ -109,6 +109,8 @@ func wellFormedPayload(kind protocol.Kind, subID protocol.SubscriptionID) protoc
 		return protocol.BuildPayload{Cell: protocol.CellRef{X: 5, Y: 11}, BuildingType: "house.small"}
 	case protocol.KindDemolish:
 		return protocol.DemolishPayload{Cell: protocol.CellRef{X: 6, Y: 13}}
+	case protocol.KindSetFunding:
+		return protocol.SetFundingPayload{ServiceID: "clinic-1", Level: 0.5}
 	default:
 		panic("wellFormedPayload: unhandled kind " + string(kind))
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/keys"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/router"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
 	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
@@ -71,6 +72,31 @@ var pumpShutdownJoinTimeout = 5 * time.Second
 // immediately above. A package-level var, not a const, so a test can
 // lower it for a fast, deterministic proof of the timeout path.
 var feat208PrimeTimeout = 5 * time.Second
+
+// feat208PilotServiceID/feat208PilotFundingStep/feat208PilotFundingKeyPath
+// configure FEAT-208 increment 3's F4 funding-adjust input call site
+// (servicesscreen.RegisterFundingAdjustKeys, wired in bootCore below).
+// "clinic-1" is a documented PLACEHOLDER target, not a data-file-sourced
+// roster read: engine.build has no automatic bridge into
+// engine.services' instance registry yet in baseline one (the same
+// documented gap compose/services_publish.go's own doc comment names for
+// the capacityDemand publish side), so no real registered ServiceID is
+// guaranteed live at boot time regardless of which one this constant
+// names — a real multi-service slider selector is out of this pilot's
+// rails (RegisterFundingAdjustKeys' own doc comment). The mnemonic path
+// ("s" "f" as the leader prefix — "services funding" — "+"/"-" as the two
+// terminal actions) is a plain leader-tree path, deliberately NOT
+// digit-led: ui.keys' grammar.go Feed reserves every bare digit token at
+// idle for its count-prefix accumulation (AC-5), so a path starting "4"
+// (as in "F4") could never actually be reached via Feed — this is not a
+// spec-mandated binding either way, since UI-SPEC names no funding-adjust
+// keybinding today.
+const (
+	feat208PilotServiceID   = "clinic-1"
+	feat208PilotFundingStep = 0.05
+)
+
+var feat208PilotFundingKeyPath = []string{"s", "f"}
 
 // skeletonModuleVersion is the placeholder semver every registerSkeletonModules
 // entry reports (none of these wrappers are independently versioned yet —
@@ -196,6 +222,18 @@ type skeletonWiring struct {
 	// skeletonWiring, exactly as mapScreen already is for "f1.viewport".
 	financeScreen  *financescreen.Screen
 	servicesScreen *servicesscreen.Screen
+
+	// keyGrammar is ui.keys' leader-key state machine (MOD-011), FEAT-208
+	// increment 3's own real input call site for F4's funding sliders
+	// (servicesscreen.RegisterFundingAdjustKeys, registered below against
+	// this SAME instance). See that method's own doc comment for the
+	// honestly-recorded scope boundary: this is a real, tested,
+	// production KeyGrammar with a real action registered on it — but
+	// run.go does not yet feed live tcell key events into it (no F-screen
+	// has a "currently active" concept in this binary yet, mapScreen
+	// being the only one ever rendered) — pre-existing screen-switching
+	// infrastructure this dispatch's rails do not cover.
+	keyGrammar *keys.KeyGrammar
 
 	mapScreen *mapscreen.MapScreen
 
@@ -471,6 +509,52 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.finance.Subscribe",
+		})
+	}
+
+	// FEAT-208 increment 3: the F4 funding-slider INPUT call site
+	// (servicesscreen.RegisterFundingAdjustKeys' own doc comment has the
+	// full scope note — this constructs the real, production
+	// keys.KeyGrammar it registers against, and wires a send function
+	// that ALSO registers the outgoing command's CorrelationID with
+	// w.router BEFORE sending it, so its CommandResult is routed back to
+	// servicesScreen.ApplyResult (router.RegisterResultHandler's own
+	// contract: register before or at the SendCommand call, never after).
+	//
+	// Destructive round r1 correction (finding F-A): an earlier version of
+	// this comment said servicesScreen reused ONE fixed CorrelationID
+	// (s.correlationID) for every SetFunding command, mirroring
+	// financescreen.BorrowLoan/RepayLoan/SetTaxRate's own convention. That
+	// was a real, reachable bug for THIS screen specifically: two
+	// SetFunding commands sharing one CorrelationID collapse onto
+	// router.RegisterResultHandler's ONE pending-result slot per
+	// CorrelationID (its own contract — "one CommandResult per registered
+	// CorrelationID, then consumed"), so the second command's
+	// CommandResult became an unrecoverable router.ErrRouteMiss, never
+	// reaching ApplyResult — proven reachable through this EXACT
+	// sendServicesCommand/RegisterFundingAdjustKeys call pattern (a
+	// same-key double-press before the first result returns) by
+	// cmd/metropolis/feat208_inc3_destructive_test.go's
+	// TestRegression_DuplicateCorrelationID_BothCommandResultsDelivered.
+	// servicesscreen.Screen.SetFunding now mints a FRESH
+	// protocol.CorrelationID per call (screen.go) instead — this closure's
+	// per-call RegisterResultHandler registration was already correct in
+	// SHAPE (it always re-registers before every send, exactly as needed);
+	// the bug was that every registration used the SAME key, silently
+	// overwriting the previous one's still-pending entry. No change was
+	// needed here beyond this correction — see screen.go for the actual
+	// fix.
+	w.keyGrammar = keys.NewKeyGrammar(nil, 0, 0, correlationID)
+	sendServicesCommand := func(cmd protocol.Command) error {
+		w.router.RegisterResultHandler(cmd.CorrelationID, w.servicesScreen)
+		return transport.SendCommand(cmd)
+	}
+	if err := w.servicesScreen.RegisterFundingAdjustKeys(w.keyGrammar, sendServicesCommand, feat208PilotServiceID, feat208PilotFundingStep, feat208PilotFundingKeyPath); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.services.RegisterFundingAdjustKeys",
 		})
 	}
 

@@ -60,8 +60,9 @@ type DeltaSink interface {
 }
 
 // GameplayCommandHandler is the injected seam HandleCommand consults for
-// the four gameplay-intent commands (Buy, Zone, Build, Demolish — the
-// build screen's vocabulary, internal/protocol/commands.go). engine.core
+// the gameplay-intent commands (Buy, Zone, Build, Demolish — the build
+// screen's vocabulary; SetFunding — F4's funding-slider vocabulary, added
+// FEAT-208 increment 3 — internal/protocol/commands.go). engine.core
 // neither owns nor imports the modules that adjudicate those commands
 // (engine.build, engine.finance, engine.world); the composition root
 // (internal/engine/compose) — the one package permitted to know all
@@ -157,18 +158,19 @@ func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
 		return e.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		return e.handleDebug(cmd)
-	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish:
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding:
 		return e.handleGameplay(cmd, correlationID)
 	default:
 		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))
 	}
 }
 
-// handleGameplay dispatches the four gameplay-intent commands (Buy, Zone,
-// Build, Demolish) to the injected GameplayCommandHandler. It is the
-// deny-by-default counterpart to handleSetSpeed's checkSpeed8xAllowed:
-// with no handler wired (the bare-NewEngine case) every gameplay kind is
-// rejected with ErrUnhandledCommandKind rather than silently accepted,
+// handleGameplay dispatches the gameplay-intent commands (Buy, Zone,
+// Build, Demolish, SetFunding) to the injected GameplayCommandHandler. It
+// is the deny-by-default counterpart to handleSetSpeed's
+// checkSpeed8xAllowed: with no handler wired (the bare-NewEngine case)
+// every gameplay kind is rejected with ErrUnhandledCommandKind rather
+// than silently accepted,
 // and with a handler wired, the handler's error (nil or registry-sourced)
 // decides accept/reject. engine.core never adjudicates the gameplay
 // itself — that is engine.build/engine.finance/engine.world's job, reached

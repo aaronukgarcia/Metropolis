@@ -1476,8 +1476,8 @@
     "reason": "Unexported helper reached only through HandleCommand's already-guarded dispatch (checkNotCopied before the switch) on the same already-validated *Engine receiver; it delegates to e.accept/e.reject (both guarded) and never touches e.mu itself. Mirrors the unexported-helper-behind-a-guarded-entry-point precedent."
   },
   {
-    "finding": "internal/engine/core/commands.go||function (parameter)|<func literal at line 87>|e|*Engine",
-    "reason": "BUG-141 per-site triage: this is WithGameplayCommandHandler's Option-pattern closure, safe by construction -- invoked exactly once, synchronously, inside NewEngine's opts loop strictly BEFORE e.self.Store(e) and before e is reachable by any other goroutine (same construction-ordering guarantee as the other With* closures already accepted for NewEngine). Genuinely safe by construction. Re-keyed line 54->87 (FEAT-208 independent round r3): commands.go's DeltaSink doc-comment expansion inserted lines above this closure, shifting its line number; the closure's code and reasoning are unchanged -- a mechanical rekey, not a re-triage."
+    "finding": "internal/engine/core/commands.go||function (parameter)|<func literal at line 88>|e|*Engine",
+    "reason": "BUG-141 per-site triage: this is WithGameplayCommandHandler's Option-pattern closure, safe by construction -- invoked exactly once, synchronously, inside NewEngine's opts loop strictly BEFORE e.self.Store(e) and before e is reachable by any other goroutine (same construction-ordering guarantee as the other With* closures already accepted for NewEngine). Genuinely safe by construction. Re-keyed line 54->87->88 (FEAT-208 increment 3): commands.go's GameplayCommandHandler/handleGameplay doc comments were expanded to name SetFunding alongside Buy/Zone/Build/Demolish, inserting a line above this closure and shifting its line number again; the closure's code and reasoning are unchanged -- a mechanical rekey, not a re-triage."
   },
   {
     "finding": "internal/engine/core/commands.go|*Engine|field access chain|SetGameplayCommandHandler|e.subs|*Engine.subs",
@@ -1774,5 +1774,21 @@
   {
     "finding": "internal/engine/policies/enact.go|*PoliciesAPI|receiver method|rollbackProjectionsLocked|a|*PoliciesAPI",
     "reason": "lane/bob sweep 2026-08-20 (PR #58 astgate reconciliation): unexported *Locked-suffixed helper, called with the candidate type's mutex (a.mu) already held by its sole caller, commitEnactLocked, which is itself only reachable from Enact -- Enact calls checkNotCopied and takes a.mu.Lock() before invoking commitEnactLocked, which re-checks checkNotCopied under the held lock before invoking rollbackProjectionsLocked, so a third guard is redundant. Astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked helper from a genuine unguarded entry point (doc.go's known blind spots); mirrors the identical shopping.computeFormatSplitsLocked, roads.obstructedCellsLocked, and services.districtCoverageLocked precedents in this same registry."
+  },
+  {
+    "finding": "internal/ui/screens/services/screen.go|*Screen|receiver method|fundingHasOtherOutstandingLocked|s|*Screen",
+    "reason": "FEAT-208 increment 3 destructive round r4 fix (real per-finding triage, not a blanket ratchet placeholder; re-keyed from round r2's fundingIsNewestOutstandingLocked, which round r4 replaced with this direction-agnostic presence check): unexported *Locked-suffixed helper, called ONLY from fundingRevertToLastConfirmedLocked, itself called only from ApplyResult, SetFunding, and evictOldestPendingFundingLocked -- all three of those are reached only with s.mu already held (ApplyResult/SetFunding both call checkNotCopied before ever taking s.mu; evictOldestPendingFundingLocked's own name/doc comment states its precondition is 'caller must hold s.mu'). Never reachable independently -- mirrors this same registry's shopping.computeFormatSplitsLocked/roads.obstructedCellsLocked/services.districtCoverageLocked *Locked-suffixed-helper-behind-an-already-guarded-caller precedent exactly."
+  },
+  {
+    "finding": "internal/ui/screens/services/screen.go|*Screen|receiver method|fundingRevertToLastConfirmedLocked|s|*Screen",
+    "reason": "FEAT-208 increment 3 destructive round r2 fix: unexported *Locked-suffixed helper, called only from ApplyResult's rejection branch, SetFunding's send-failure branch, and evictOldestPendingFundingLocked -- all three already hold s.mu at the call site (ApplyResult/SetFunding both call checkNotCopied before ever taking s.mu, and this method's own doc comment states 'caller must hold s.mu'). Never reachable independently -- same precedent as fundingHasOtherOutstandingLocked above."
+  },
+  {
+    "finding": "internal/ui/screens/services/screen.go|*Screen|receiver method|removePendingFundingOrderLocked|s|*Screen",
+    "reason": "FEAT-208 increment 3 destructive round r2 fix: unexported *Locked-suffixed helper, called only from ApplyResult and SetFunding's send-failure branch, both already holding s.mu (checkNotCopied is called before either method ever takes s.mu). Never reachable independently -- same precedent as fundingHasOtherOutstandingLocked above."
+  },
+  {
+    "finding": "internal/ui/screens/services/screen.go|*Screen|receiver method|evictOldestPendingFundingLocked|s|*Screen",
+    "reason": "FEAT-208 increment 3 destructive round r2 fix: unexported *Locked-suffixed helper, called only from SetFunding, which holds s.mu at the call site (checkNotCopied is called before SetFunding ever takes s.mu) and whose own doc comment states this method's precondition is 'caller must hold s.mu'. Never reachable independently -- same precedent as fundingHasOtherOutstandingLocked above."
   }
 ]
