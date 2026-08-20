@@ -137,7 +137,7 @@ func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
 		}
 	}
 	if err := cmd.Validate(); err != nil {
-		return e.reject(cmd, errs.New(ErrInvalidEnvelope, "", map[string]any{"cause": err.Error()}))
+		return e.reject(cmd, errs.New(ErrInvalidEnvelope, string(cmd.CorrelationID), map[string]any{"cause": err.Error()}))
 	}
 	correlationID := string(cmd.CorrelationID)
 
@@ -228,7 +228,7 @@ func toErrorRef(err error) *protocol.ErrorRef {
 	if e, ok := err.(*errs.E); ok {
 		return &protocol.ErrorRef{Code: e.Code, Display: e.Display()}
 	}
-	wrapped := errs.Wrap(ErrUnhandledCommandKind, "", err, map[string]any{"cause": err.Error()})
+	wrapped := errs.Wrap(ErrUnhandledCommandKind, errs.NewCorrelationID(), err, map[string]any{"cause": err.Error()})
 	return &protocol.ErrorRef{Code: wrapped.Code, Display: wrapped.Display()}
 }
 

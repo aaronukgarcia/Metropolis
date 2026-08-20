@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"io"
+	"math"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -75,6 +76,17 @@ func (e *Engine) Snapshot(w io.Writer, correlationID string, prior ...serialize.
 		return serialize.Header{}, err
 	}
 	tick, month, seed := e.snapshotStateLocked()
+
+	// GR#16 (BUG-310): the header's seed field is int64, so a world seed at
+	// or above 2^63 would wrap to a negative value and disagree with the
+	// authoritative uint64 seed in the meta shard. Reject rather than write
+	// a header that contradicts its own meta record.
+	if seed > math.MaxInt64 {
+		return serialize.Header{}, errs.New(ErrSnapshotFailed, correlationID, map[string]any{
+			"cause": "world seed exceeds the int64 header range",
+			"seed":  seed,
+		})
+	}
 
 	header := serialize.NewHeader(int64(seed), tick, month, buildinfo.Version)
 	if len(prior) > 0 {
