@@ -5436,7 +5436,7 @@
       "priority": "P1",
       "milestone": "M4",
       "layer": "engine",
-      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H Health & Deathcare; §25 (refuse's rounds-as-logistics-movements structural analog); §26 (dispatch's nearest-registered emergency model)",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H; §25; §26",
       "path": "internal/engine/deathservices/",
       "inbound": {
         "guid": "ba1fe880-21b7-46c0-bd56-257c0f6c223d",
