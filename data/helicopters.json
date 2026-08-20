@@ -1,0 +1,82 @@
+{
+  "$comment": "engine.airunits balance data (MOD-074, mkey engine.airunits). Cites §26 Emergency & Care Dispatch Model (the air ambulance ignores roads; weather-limited; 1 air unit ≈ 10 ground units of marginal coverage in congested eras — the anti-gridlock asset), §10 Service & Feature Inventory (the air-ambulance pad: M8+DP, 4M, 1 unit, beats traffic), §28 Crime, Policing & Security (more police = less crime, concave deterrence in patrol coverage — the police-chopper coverage-extension precedent), and §54 The Fiscal Circuit (the Public Service Pie per-1k staffing targets, police ~2.4/1k — the approval/staffing tie-in). Design (Aaron 2026-08-15, BOW MOD-074): four rotary-wing roles (police, fire, ambulance, VIP/commercial), EXPENSIVE (very high purchase CAPEX + multi-component OPEX: fuel, hangar, insurance, crew), SKILLED (no pilot, no flight), MAINTENANCE-HEAVY (engineer-hours + downtime), EFFECTIVE (role-specific reach), POPULAR (approval from not-stuck-in-traffic), TRAFFIC-IMMUNE (road-independent, weather-limited). EVERY numeric figure in this file is a PLACEHOLDER pending Aaron's row-by-row balance pass; the tested invariants are DIRECTION and STRUCTURE (a chopper costs more than a ground unit; a flying chopper costs more than a grounded one; two roles differ; four distinct effects), never a specific magnitude (balance-number regime, engine.maintenance.md AC-16 / engine.finance.md AC-21 precedent). Rebalancing is a data edit, never a code change.",
+  "version": 1,
+  "meta": {
+    "note": "Placeholders pending Aaron's balance pass. UNITS: purchaseCostMicroPounds, fuelCostMicroPounds, hangarCostMicroPounds, insuranceCostMicroPounds, crewCostMicroPounds and commercialRevenuePerMonth are MICRO-POUNDS (1 GBP = 1,000,000 micro-pounds, matching engine.finance's Money type); unlockMilestone is a MILESTONE TIER INDEX (higher = later; a purchase is rejected below its tier, making choppers mechanically a late-game asset); coverageRadiusExtension is COVERAGE UNITS; remoteFireReachBonus is BLOCK-LOSS-REDUCTION UNITS; hospitalLandingReductionMinutes is SIMULATION-MINUTES; wearPerFlightCycle is WEAR POINTS per flight cycle; outOfServiceWearThreshold is WEAR POINTS (out-of-service when accumulated wear reaches it); engineerHoursPerWearPoint is ENGINEER-HOURS per wear point; approvalWeightPerActiveChopper is APPROVAL POINTS per active chopper; groundingWindKnots is WIND SPEED IN KNOTS (adverse weather at or above it grounds air dispatch); airSpeedMinutesPerUnit is SIMULATION-MINUTES per distance unit.",
+    "costUnit": "micro-pounds",
+    "milestoneUnit": "milestone tier index",
+    "effectUnit": "coverage units / block-loss-reduction units / simulation-minutes / micro-pounds (per role)",
+    "maintenanceUnit": "wear points and engineer-hours",
+    "approvalUnit": "approval points",
+    "weatherUnit": "wind speed in knots",
+    "travelUnit": "simulation-minutes per distance unit"
+  },
+  "units": {
+    "police": {
+      "purchaseCostMicroPounds": 5000000000000,
+      "unlockMilestone": 7,
+      "fuelCostMicroPounds": 1800000000,
+      "hangarCostMicroPounds": 1200000000,
+      "insuranceCostMicroPounds": 900000000,
+      "crewCostMicroPounds": 2800000000,
+      "effect": {
+        "coverageRadiusExtension": 400
+      },
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "fire": {
+      "purchaseCostMicroPounds": 6000000000000,
+      "unlockMilestone": 8,
+      "fuelCostMicroPounds": 2500000000,
+      "hangarCostMicroPounds": 1400000000,
+      "insuranceCostMicroPounds": 1100000000,
+      "crewCostMicroPounds": 3000000000,
+      "effect": {
+        "remoteFireReachBonus": 300
+      },
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "ambulance": {
+      "purchaseCostMicroPounds": 4500000000000,
+      "unlockMilestone": 8,
+      "fuelCostMicroPounds": 2000000000,
+      "hangarCostMicroPounds": 1300000000,
+      "insuranceCostMicroPounds": 1000000000,
+      "crewCostMicroPounds": 3200000000,
+      "effect": {
+        "hospitalLandingReductionMinutes": 12
+      },
+      "disclosure": "placeholder pending Aaron's balance pass"
+    },
+    "vip": {
+      "purchaseCostMicroPounds": 8000000000000,
+      "unlockMilestone": 9,
+      "fuelCostMicroPounds": 2200000000,
+      "hangarCostMicroPounds": 2000000000,
+      "insuranceCostMicroPounds": 2500000000,
+      "crewCostMicroPounds": 5000000000,
+      "effect": {
+        "commercialRevenuePerMonth": 15000000000
+      },
+      "disclosure": "placeholder pending Aaron's balance pass"
+    }
+  },
+  "maintenance": {
+    "wearPerFlightCycle": 1,
+    "outOfServiceWearThreshold": 60,
+    "engineerHoursPerWearPoint": 4,
+    "disclosure": "placeholder pending Aaron's balance pass"
+  },
+  "approval": {
+    "approvalWeightPerActiveChopper": 2,
+    "disclosure": "placeholder pending Aaron's balance pass"
+  },
+  "weather": {
+    "groundingWindKnots": 35,
+    "disclosure": "placeholder pending Aaron's balance pass"
+  },
+  "travel": {
+    "airSpeedMinutesPerUnit": 2,
+    "disclosure": "placeholder pending Aaron's balance pass"
+  }
+}
