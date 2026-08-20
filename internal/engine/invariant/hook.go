@@ -115,12 +115,28 @@ func (h *Hook) SingleShard() bool { return true }
 
 // ApplyEffect implements core.PhaseHook. Called single-goroutine, at
 // the phase barrier, exactly once per tick (see Hook's doc comment).
+//
+// BUG-277: this consumer now reads BOTH verdicts RunSuite reports —
+// AnyViolation (an imbalance was actually detected) and AllRan (every
+// registered invariant actually ran this tick). Before the fix only
+// AnyViolation was consumed, so a provider returning an empty snapshot
+// (or a StockReading left at its Registered:false zero value) silently
+// starved a registered invariant every tick with no error, no log, no
+// dev-mode assert — a gate that could not evaluate reporting success,
+// which is the exact silent-failure class this package exists to prevent
+// (AC-1b's consumer obligation: never conflate "some invariants were
+// skipped" with "all invariants ran clean").
 func (h *Hook) ApplyEffect(eff core.Effect) {
 	result, ok := eff.Payload.(SuiteResult)
-	if !ok || !result.AnyViolation {
+	if !ok {
 		return
 	}
-	h.handleViolations(result)
+	if result.AnyViolation {
+		h.handleViolations(result)
+	}
+	if !result.AllRan {
+		h.handleSkipped(result)
+	}
 }
 
 // handleViolations turns every Detected Violation in result into a
@@ -151,6 +167,65 @@ func (h *Hook) handleViolations(result SuiteResult) {
 			h.hardFail(fmt.Sprintf(
 				"%s (invariant=%s tick=%d expected=%d actual=%d)",
 				e.Display(), outcome.Name, result.Tick, outcome.Violation.Expected, outcome.Violation.Actual,
+			))
+		}
+	}
+}
+
+// skippedDelta is what handleSkipped reports for MET-E300's
+// expected/actual delta placeholders: an invariant that never ran has no
+// delta to report, so the rendered message reads "expected delta n/a,
+// actual delta n/a" rather than leaving the literal {expected}/{actual}
+// placeholders unrendered (errs.renderTemplate leaves a missing template
+// key as its visible literal "{key}" — never a silent drop).
+const skippedDelta = "n/a"
+
+// skippedReason is the shared diagnostic for a registered invariant that
+// did not run this tick: its stock was not reported/registered in the
+// Snapshot (AC-12's skip). Carried both in the registry-sourced error's
+// Ctx (so it lands in the structured log entry) and in the dev-mode hard
+// assert's message, so a human can tell "starved invariant" apart from a
+// genuine imbalance, which shares the same reused MET-E300 code.
+const skippedReason = "registered invariant did not run this tick: stock not reported/registered in Snapshot"
+
+// handleSkipped turns every Outcome whose Ran is false (its stock was
+// not reported/registered in this tick's Snapshot — AC-12's skip) into a
+// registry-sourced error (always logged) and, in dev mode, additionally
+// a hard assert (AC-8), mirroring handleViolations one-for-one. One
+// correlation ID is minted per tick's batch of skipped invariants, as
+// handleViolations does for its batch.
+//
+// BUG-277: a registered invariant that silently never runs is a gate
+// that cannot evaluate, and a gate that cannot evaluate must never
+// report success. ErrConservationViolation (MET-E300) is REUSED here —
+// data/errors.json is deliberately untouched, per this fix's scope — a
+// skipped invariant is the conservation checker failing to verify
+// conservation, the same failure class MET-E300 already names. The
+// skippedReason field (carried in Ctx, surfaced in the structured log
+// entry) is what distinguishes "did not run" from a genuine imbalance.
+func (h *Hook) handleSkipped(result SuiteResult) {
+	correlationID := errs.NewCorrelationID()
+
+	for _, outcome := range result.Outcomes {
+		if outcome.Ran {
+			continue
+		}
+
+		e := errs.New(ErrConservationViolation, correlationID, map[string]any{
+			"invariant": outcome.Name,
+			"tick":      result.Tick,
+			"expected":  skippedDelta,
+			"actual":    skippedDelta,
+			"reason":    skippedReason,
+		})
+		if h.logSink != nil {
+			h.logSink(e)
+		}
+
+		if h.devMode {
+			h.hardFail(fmt.Sprintf(
+				"%s (invariant=%s tick=%d reason=%s)",
+				e.Display(), outcome.Name, result.Tick, skippedReason,
 			))
 		}
 	}
