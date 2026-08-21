@@ -62,10 +62,10 @@
 // # Caching (AC-6, US-5)
 //
 // Engine caches rendered diagrams keyed on the topology hash plus the
-// buffer width and the semantic palette (each topology type has a Hash
-// method; cache.go's layoutKey folds the rest in). A 10 Hz UI tick
-// re-rendering an unchanged topology at the same width and palette never
-// re-runs a full layered-graph-drawing pass. The cache is safe for
+// buffer width, the buffer height, and the semantic palette (each topology
+// type has a Hash method; cache.go's layoutKey folds the rest in). A 10 Hz
+// UI tick re-rendering an unchanged topology at the same size and palette
+// never re-runs a full layered-graph-drawing pass. The cache is safe for
 // concurrent use (AC-10).
 //
 // # Errors (GR#7)

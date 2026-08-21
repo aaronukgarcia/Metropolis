@@ -66,12 +66,12 @@ func NewEngine() *Engine {
 
 // layoutKey folds every non-topology input a layout consumes into the cache
 // key (SEC-065, SEC-077). The topology hash covers the topology alone, but
-// the buffer width and the semantic palette are layout inputs too —
-// RenderSankey reads buf.Size() to derive bandMax, and both RenderSankey and
-// RenderNetwork read opts.Palette for glyph colour — so a change in either
-// must never be served a stale cached layout. A nil buf contributes width 0
-// (its render is the zero Result regardless of width).
-// verified secure: SEC-077 is fully satisfied by layoutKey including width, height, and palette.
+// the buffer width, the buffer height, and the semantic palette are layout
+// inputs too — RenderSankey reads buf.Size() to derive bandMax, and both
+// RenderSankey and RenderNetwork read opts.Palette for glyph colour — so a
+// change in any of the three must never be served a stale cached layout. A
+// nil buf contributes width 0 and height 0 (its render is the zero Result
+// regardless of width or height).
 func layoutKey(hash uint64, buf *core.Buffer, opts Options) uint64 {
 	w, h := 0, 0
 	if buf != nil {
@@ -144,8 +144,9 @@ func (e *Engine) Render(buf *core.Buffer, hash uint64, render func(buf *core.Buf
 }
 
 // Chain renders topo through the cache, keyed on layoutKey (topology hash +
-// buffer width + palette). A buffer width or palette change therefore never
-// reuses a stale layout (SEC-065, SEC-077).
+// buffer width + buffer height + palette). A buffer width, buffer height,
+// or palette change therefore never reuses a stale layout (SEC-065,
+// SEC-077).
 func (e *Engine) Chain(buf *core.Buffer, topo ChainTopology, opts Options) (Result, error) {
 	// Copy guard up front (defence-in-depth on top of Render's own check —
 	// the astgate enumerates every reachable *Engine method, and this
@@ -159,8 +160,9 @@ func (e *Engine) Chain(buf *core.Buffer, topo ChainTopology, opts Options) (Resu
 }
 
 // Network renders topo through the cache, keyed on layoutKey (topology hash +
-// buffer width + palette). A buffer width or palette change therefore never
-// reuses a stale layout (SEC-065, SEC-077).
+// buffer width + buffer height + palette). A buffer width, buffer height,
+// or palette change therefore never reuses a stale layout (SEC-065,
+// SEC-077).
 func (e *Engine) Network(buf *core.Buffer, topo NetworkTopology, opts Options) (Result, error) {
 	if err := e.checkNotCopied(); err != nil {
 		return Result{}, err
@@ -171,8 +173,9 @@ func (e *Engine) Network(buf *core.Buffer, topo NetworkTopology, opts Options) (
 }
 
 // Sankey renders topo through the cache, keyed on layoutKey (topology hash +
-// buffer width + palette). A buffer width or palette change therefore never
-// reuses a stale layout (SEC-065, SEC-077).
+// buffer width + buffer height + palette). A buffer width, buffer height,
+// or palette change therefore never reuses a stale layout (SEC-065,
+// SEC-077).
 func (e *Engine) Sankey(buf *core.Buffer, topo SankeyTopology, opts Options) (Result, error) {
 	if err := e.checkNotCopied(); err != nil {
 		return Result{}, err
