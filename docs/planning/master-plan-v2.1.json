@@ -1626,7 +1626,8 @@
         "engine.tax",
         "engine.fiscal",
         "int.protocol",
-        "ui.dash"
+        "ui.dash",
+        "ui.diagrams"
       ],
       "sprint": 8
     },

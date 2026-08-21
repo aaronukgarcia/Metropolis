@@ -4841,7 +4841,12 @@
         "name": "Engine",
         "format": "Go package API (NewEngine() *Engine; methods Chain/Network/Sankey render+cache ChainTopology/NetworkTopology/SankeyTopology via RenderChain/RenderNetwork/RenderSankey)",
         "pattern": "topology in, cell-buffer layout out; cache keyed on topology hash",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          }
+        ]
       },
       "outbound": {
         "guid": "c7e55045-c1d0-4f5b-b73d-8dba5658a982",
@@ -5073,6 +5078,11 @@
             "key": "ui.dash",
             "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
             "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          },
+          {
+            "key": "ui.diagrams",
+            "moduleGuid": "f1dc63b8-98e3-4a0b-b629-a924dd27597b",
+            "inboundGuid": "ead88a71-8c91-4925-ae49-e847e77a810f"
           }
         ]
       },
