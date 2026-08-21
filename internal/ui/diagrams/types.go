@@ -1,6 +1,7 @@
 package diagrams
 
 import (
+	"encoding/binary"
 	"hash/fnv"
 	"sort"
 	"strconv"
@@ -152,87 +153,141 @@ func hashString(s string) uint64 {
 	return h.Sum64()
 }
 
-// Hash returns a deterministic cache key for the topology (AC-6). The
-// serialisation follows slice order, so a reordered-but-semantically-equal
-// input re-hashes — a harmless recompute, never a stale result.
+// writeField appends s to b self-delimited by its own byte length, encoded
+// as 8 fixed-width big-endian bytes immediately before the content
+// (BUG-319). This replaces the old NUL-separated, variable-arity framing
+// that let a Label containing NUL bytes impersonate a whole extra record:
+// a length-prefixed field can never be mistaken for a record boundary or
+// another field, because the prefix is derived from len(s) at write time —
+// never copied from, or influenced by, the caller-controlled bytes of s
+// itself. A fixed-width binary prefix (as opposed to a decimal-text length
+// followed by a delimiter) needs no reservation of any byte value for
+// "end of length", so no character is unavailable to field content either;
+// every byte string, including empty strings and strings containing NUL,
+// round-trips into a distinct position in the record stream.
+//
+// Hash is write-only (nothing ever decodes this stream back into fields),
+// so what write-time self-delimiting must guarantee is narrower than a full
+// wire format: two different (record-type, field...) sequences must never
+// serialise to the same byte string. Fixing the field count per record tag
+// (3 for "n", 5 for "e", etc. — see each Hash below) plus length-prefixing
+// every field gives exactly that: the tag fixes how many length-prefixed
+// fields follow, and each length prefix fixes exactly how many content
+// bytes follow it before the next field or tag, so the whole stream
+// decomposes into records and fields in only one way.
+func writeField(b *strings.Builder, s string) {
+	var lenBuf [8]byte
+	binary.BigEndian.PutUint64(lenBuf[:], uint64(len(s)))
+	b.Write(lenBuf[:])
+	b.WriteString(s)
+}
+
+// typeTagChain, typeTagNetwork, typeTagSankey are unconditional, one-byte
+// discriminators written as the very first byte of each topology's Hash
+// stream (BUG-319 round r1 finding). Without a type tag, ChainTopology{}
+// and SankeyTopology{} — both fully empty — serialise to the identical
+// empty string and collide at hashString("") = 0xcbf29ce484222325; a shared
+// Engine.cache keyed only on this hash then serves one type's cached Result
+// to the other. NetworkTopology escaped only by the accident of its Mode
+// byte always being written (even when zero-valued), which is exactly the
+// "protection resting on an accident" pattern this fixes deliberately for
+// all three types.
+//
+// The chosen bytes ('C', 'N', 'S') cannot be confused with any record tag
+// ('n', 'e', 's', 'k' — all lowercase) purely by case, but the stronger
+// guarantee is positional: the type tag is always the first byte written,
+// before any record, in every Hash implementation. A record tag can only
+// ever appear at offset 1 or later, so no field content — however it is
+// framed — can ever produce a byte that is mistaken for the type tag at
+// offset 0.
+const (
+	typeTagChain   = 'C'
+	typeTagNetwork = 'N'
+	typeTagSankey  = 'S'
+)
+
+// Hash returns a deterministic cache key for the topology (AC-6, BUG-319).
+// The serialisation follows slice order, so a reordered-but-semantically-
+// equal input re-hashes — a harmless recompute, never a stale result. The
+// stream begins with the unconditional typeTagChain byte (BUG-319 round r1
+// — see typeTagChain doc), so ChainTopology can never collide with another
+// topology type's Hash regardless of Nodes/Edges content. Every record
+// after the type tag is a one-byte tag ('n' = node, 'e' = edge) followed by
+// a FIXED number of length-prefixed fields (writeField), so no field's
+// content — including an embedded NUL or a byte sequence resembling another
+// field's framing — can forge a record boundary or smuggle in an extra
+// record.
 func (t ChainTopology) Hash() uint64 {
 	var b strings.Builder
+	b.WriteByte(typeTagChain)
 	for _, n := range t.Nodes {
-		b.WriteString("n")
-		b.WriteByte(0)
-		b.WriteString(string(n.ID))
-		b.WriteByte(0)
-		b.WriteString(n.Label)
-		b.WriteByte(0)
+		b.WriteByte('n')
+		writeField(&b, string(n.ID))
+		writeField(&b, n.Label)
 	}
 	for _, e := range t.Edges {
-		b.WriteString("e")
-		b.WriteByte(0)
-		b.WriteString(string(e.ID))
-		b.WriteByte(0)
-		b.WriteString(string(e.From))
-		b.WriteByte(0)
-		b.WriteString(string(e.To))
-		b.WriteByte(0)
-		b.WriteString(e.Figure)
-		b.WriteByte(0)
+		b.WriteByte('e')
+		writeField(&b, string(e.ID))
+		writeField(&b, string(e.From))
+		writeField(&b, string(e.To))
+		writeField(&b, e.Figure)
 	}
 	return hashString(b.String())
 }
 
-// Hash returns a deterministic cache key for the topology (AC-6).
+// Hash returns a deterministic cache key for the topology (AC-6, BUG-319).
+// See ChainTopology.Hash for the tagged, length-prefixed, fixed-arity
+// framing rationale. The stream begins with the unconditional typeTagNetwork
+// byte (BUG-319 round r1), written before Mode — NetworkTopology previously
+// escaped the cross-type collision only by the accident of Mode always
+// being written (even when zero-valued); it now carries the same deliberate
+// discriminator as ChainTopology and SankeyTopology rather than relying on
+// that accident.
 func (t NetworkTopology) Hash() uint64 {
 	var b strings.Builder
+	b.WriteByte(typeTagNetwork)
 	b.WriteByte(byte(t.Mode))
 	for _, n := range t.Nodes {
-		b.WriteString("n")
-		b.WriteByte(0)
-		b.WriteString(string(n.ID))
-		b.WriteByte(0)
-		b.WriteString(n.Label)
-		b.WriteByte(0)
-		b.WriteString(strconv.Itoa(n.X))
-		b.WriteByte(0)
-		b.WriteString(strconv.Itoa(n.Y))
-		b.WriteByte(0)
+		b.WriteByte('n')
+		writeField(&b, string(n.ID))
+		writeField(&b, n.Label)
+		writeField(&b, strconv.Itoa(n.X))
+		writeField(&b, strconv.Itoa(n.Y))
 	}
 	for _, e := range t.Edges {
-		b.WriteString("e")
-		b.WriteByte(0)
-		b.WriteString(string(e.ID))
-		b.WriteByte(0)
-		b.WriteString(string(e.From))
-		b.WriteByte(0)
-		b.WriteString(string(e.To))
-		b.WriteByte(0)
-		b.WriteString(strconv.FormatFloat(e.Load, 'g', -1, 64))
-		b.WriteByte(0)
+		b.WriteByte('e')
+		writeField(&b, string(e.ID))
+		writeField(&b, string(e.From))
+		writeField(&b, string(e.To))
+		writeField(&b, strconv.FormatFloat(e.Load, 'g', -1, 64))
 	}
 	return hashString(b.String())
 }
 
-// Hash returns a deterministic cache key for the topology (AC-6).
+// Hash returns a deterministic cache key for the topology (AC-6, BUG-319).
+// See ChainTopology.Hash for the tagged, length-prefixed, fixed-arity
+// framing rationale. Amount is formatted with strconv.FormatFloat before
+// framing, which folds every NaN bit pattern (any payload, signalling or
+// quiet) to the literal text "NaN" and every infinity to "+Inf"/"-Inf" —
+// so two distinct NaN representations of "not a real number" still hash
+// identically, matching the pre-existing (unaffected) float handling. The
+// stream begins with the unconditional typeTagSankey byte (BUG-319 round
+// r1 — see typeTagChain doc): SankeyTopology{} and ChainTopology{} were
+// previously both the empty string and collided identically.
 func (t SankeyTopology) Hash() uint64 {
 	var b strings.Builder
+	b.WriteByte(typeTagSankey)
 	for _, f := range t.Sources {
-		b.WriteString("s")
-		b.WriteByte(0)
-		b.WriteString(string(f.ID))
-		b.WriteByte(0)
-		b.WriteString(f.Name)
-		b.WriteByte(0)
-		b.WriteString(strconv.FormatFloat(f.Amount, 'g', -1, 64))
-		b.WriteByte(0)
+		b.WriteByte('s')
+		writeField(&b, string(f.ID))
+		writeField(&b, f.Name)
+		writeField(&b, strconv.FormatFloat(f.Amount, 'g', -1, 64))
 	}
 	for _, f := range t.Sinks {
-		b.WriteString("k")
-		b.WriteByte(0)
-		b.WriteString(string(f.ID))
-		b.WriteByte(0)
-		b.WriteString(f.Name)
-		b.WriteByte(0)
-		b.WriteString(strconv.FormatFloat(f.Amount, 'g', -1, 64))
-		b.WriteByte(0)
+		b.WriteByte('k')
+		writeField(&b, string(f.ID))
+		writeField(&b, f.Name)
+		writeField(&b, strconv.FormatFloat(f.Amount, 'g', -1, 64))
 	}
 	return hashString(b.String())
 }
