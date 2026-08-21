@@ -62,4 +62,10 @@
 // structural: byte-identical across repeated runs and worker counts, with no
 // shared/global RNG and no wall-clock read on the tick path. The world seed
 // is retained in New for API symmetry and any future per-launch draw.
+//
+// ASM-1140 (confirm-and-close). engine.spaceport consumes engine.education
+// research output via the local EducationGate seam (ResearchPoints, satisfied
+// directly by *education.EducationAPI) with the registered engine.spaceport ->
+// engine.education outbound edge; FEAT-055 has no code on disk, so there is no
+// FEAT-055 inheritance (ES-3/ASM-708).
 package spaceport
