@@ -128,4 +128,24 @@
 // that data file, never as a Go literal here (GR#15). Every failure is a
 // registry-sourced *errs.E (MET-G28xx, this module's claimed sub-range — see
 // errors.go).
+//
+// # Claimed error range (ASM-1147, SF fold)
+//
+// This module claims MET-G2800-G2899. G2300-G2399 and G2700-G2799 are claimed
+// in other in-flight source (engine.news MET-G2300-G2304, engine.census
+// MET-G2700-G2704), and G2400-G2699 are already reserved (engine.accelerator,
+// feat.pharmacampus, feat.refinery). G2800-G2899 is the first block strictly
+// above everything reserved or raised in source; MET-G2800-G2803 are
+// registered with a matching ranges.reserved entry in data/errors.json.
+//
+// # Throughput model (ASM-1148, SF fold)
+//
+// Passenger throughput is the binding constraint of (runways ×
+// per-runway-pax-per-day) and (terminalGates × per-gate-pax-per-day), then
+// scaled by the data-driven reduced-throughput percentage when surface access
+// is absent — the documented equivalent of the spec's MP model (runway count ×
+// per-runway slot rate × terminal gate capacity). This lets either component
+// independently move throughput (AC-2): adding a runway OR a terminal gate
+// changes the binding constraint, and neither component is a single paxPerDay
+// constant.
 package airport
