@@ -300,13 +300,19 @@ type viewRegistration struct {
 // (buildFinanceBalanceSheetPatch, finance_publish.go) — the design's §6
 // fast-follow list's next entry, chosen because engine.finance is
 // already composed and ui.screen.finance's ApplyDelta already exists.
-// Later increments (f8.districts, f5.trade, f7.projections,
-// f1.viewport) are documented, deliberate fast-follows — see the
-// design's §6 — each adding one more entry here, in the SAME slice,
-// never a new registration mechanism.
+// BUG-323 adds "f1.viewport", serving the start tile's real
+// engine.world terrain (buildViewportPatch, viewport_publish.go) — the
+// design's §6 fast-follow list's next entry, pulled forward to P0
+// because F1 is the DEFAULT screen at boot and, with no view registered
+// here, engine.core rejected its Subscribe and it rendered entirely
+// blank. Later increments (f8.districts, f5.trade, f7.projections) are
+// documented, deliberate fast-follows — see the design's §6 — each
+// adding one more entry here, in the SAME slice, never a new
+// registration mechanism.
 var viewRegistrationOrder = []viewRegistration{
 	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
 	{name: financeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildFinanceBalanceSheetPatch }},
+	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view

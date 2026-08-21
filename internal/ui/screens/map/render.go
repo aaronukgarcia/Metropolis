@@ -8,18 +8,46 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
-// Terrain glyphs — the foreground rune drawn for each of Folkestone-64's
-// four handcrafted terrain bands (internal/engine/stub/fixture.go's
-// TerrainKind), overridden by an overlay glyph when the cell also carries
-// a road or building (drawRune below). An unrecognised/empty terrain
-// string (a not-yet-known cell, or a future terrain kind this package
-// hasn't been taught) falls back to blankGlyph rather than guessing.
+// Terrain glyphs — the foreground rune drawn for each terrain string the
+// "f1.viewport" schema can carry, overridden by an overlay glyph when the
+// cell also carries a road or building (cellStyleAndRune below). An
+// unrecognised/empty terrain string (a not-yet-known cell, or a future
+// terrain kind this package hasn't been taught) falls back to blankGlyph
+// rather than guessing.
+//
+// TWO vocabularies are recognised, deliberately:
+//
+//   - Folkestone-64's four handcrafted Sprint-1 fixture bands
+//     (internal/engine/stub/fixture.go's TerrainKind: shore/shelf/
+//     motorway/escarpment). Kept because internal/engine/stub still
+//     serves exactly those strings, and this package's fixture-driven
+//     tests still assert them.
+//   - engine.world's five REAL surface kinds (internal/engine/world's
+//     types.go Surface: grass/woodland/water/shingle/rock), added for
+//     BUG-323. compose's "f1.viewport" view publishes Surface.String()
+//     verbatim, so without these entries every real cell would fall
+//     through to blankGlyph and the map would stay blank even with a
+//     correctly registered, non-empty view — the same bug wearing a
+//     different hat. The mapping lives here, on the CONSUMER side,
+//     rather than having the engine re-label its terrain into the older
+//     fixture vocabulary: the engine publishes what it holds, and the
+//     renderer is taught to read it.
 const (
 	glyphShore      = '~'
 	glyphShelf      = '.'
 	glyphMotorway   = '='
 	glyphEscarpment = '^'
 	blankGlyph      = ' '
+
+	// engine.world Surface glyphs (BUG-323). glyphWater reuses shore's
+	// '~' and glyphRock reuses escarpment's '^' — the same ground drawn
+	// the same way under the two vocabularies' different names; grass,
+	// woodland and shingle get their own distinct runes.
+	glyphGrass    = '.'
+	glyphWoodland = '%'
+	glyphWater    = '~'
+	glyphShingle  = ':'
+	glyphRock     = '^'
 
 	// Overlay glyphs (AC-4's two-layer contract: these replace only the
 	// foreground rune, never the background terrain colour).
@@ -42,6 +70,14 @@ const (
 // (money-green), the motorway corridor as a caution amber, and the
 // escarpment as the same grey-purple widgets.Heatmap's ramp already uses
 // for "high"/rugged terrain-adjacent readings elsewhere.
+//
+// BUG-323 extends the same reasoning to engine.world's real Surface
+// vocabulary: water reads as water, grass and woodland as open/green
+// (money-green — the palette has one green; the GLYPH is what separates
+// them, exactly as AC-4's two independent layers intend), shingle as a
+// caution amber (the same token the motorway band uses — a shoreline
+// band, visually distinct from both green and blue), rock as the same
+// grey-purple as the escarpment it is the real-vocabulary name for.
 func terrainToken(terrain string) (widgets.Token, bool) {
 	switch terrain {
 	case "shore":
@@ -51,6 +87,15 @@ func terrainToken(terrain string) (widgets.Token, bool) {
 	case "motorway":
 		return widgets.TokenWarning, true
 	case "escarpment":
+		return widgets.TokenDecay, true
+	// engine.world Surface vocabulary (BUG-323).
+	case "water":
+		return widgets.TokenWater, true
+	case "grass", "woodland":
+		return widgets.TokenMoney, true
+	case "shingle":
+		return widgets.TokenWarning, true
+	case "rock":
 		return widgets.TokenDecay, true
 	default:
 		return 0, false
@@ -67,6 +112,17 @@ func terrainGlyph(terrain string) rune {
 		return glyphMotorway
 	case "escarpment":
 		return glyphEscarpment
+	// engine.world Surface vocabulary (BUG-323).
+	case "grass":
+		return glyphGrass
+	case "woodland":
+		return glyphWoodland
+	case "water":
+		return glyphWater
+	case "shingle":
+		return glyphShingle
+	case "rock":
+		return glyphRock
 	default:
 		return blankGlyph
 	}

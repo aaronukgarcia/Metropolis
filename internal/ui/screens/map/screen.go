@@ -100,6 +100,15 @@ type MapScreen struct {
 	// OverlayOwnership) on a freshly constructed MapScreen, same as every
 	// other never-explicitly-set field.
 	overlayIdx int
+
+	// subs is the set of SubscriptionIDs bound to this screen (BUG-323),
+	// mirroring ui.screen.finance/ui.screen.services' identical field.
+	// Populated by BindSubscription; consulted by ApplyDelta so a delta
+	// belonging to somebody else's subscription is dropped-and-logged
+	// rather than applied. Nil until the first BindSubscription call — a
+	// nil map reads cleanly, so an ApplyDelta before any bind is an
+	// "unknown subscription" log, never a panic.
+	subs map[protocol.SubscriptionID]string
 }
 
 // NewMapScreen constructs an empty MapScreen (no snapshot applied yet).
@@ -140,6 +149,66 @@ func (m *MapScreen) Subscribe(send SendCommandFunc) error {
 		Payload:         protocol.SubscribePayload{ViewName: ViewSubscriptionName},
 	}
 	return send(cmd)
+}
+
+// BindSubscription records subscriptionID as belonging to this screen's
+// "f1.viewport" subscription (BUG-323) — the same contract
+// ui.screen.finance/ui.screen.services' identically-named methods carry,
+// so cmd/metropolis' primeScreenSubscription can prime and bind F1
+// exactly the way it already primes F2 and F4.
+func (m *MapScreen) BindSubscription(id protocol.SubscriptionID) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BindSubscription"}); err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BindSubscription"}); err != nil {
+		return
+	}
+	if m.subs == nil {
+		m.subs = make(map[protocol.SubscriptionID]string)
+	}
+	m.subs[id] = ViewSubscriptionName
+}
+
+// UnbindSubscription forgets a previously bound subscription.
+func (m *MapScreen) UnbindSubscription(id protocol.SubscriptionID) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "UnbindSubscription"}); err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "UnbindSubscription"}); err != nil {
+		return
+	}
+	delete(m.subs, id)
+}
+
+// ApplyDelta applies one routed protocol.Delta belonging to this
+// screen's bound subscription (BUG-323), delegating the actual decode
+// and grid update to ApplyPatch. A delta whose SubscriptionID is not
+// bound to this screen — or is bound to some other view name — is
+// dropped with a registry-sourced log entry (GR#7) and never applied:
+// the map must never render another view's payload as terrain.
+//
+// This is the method cmd/metropolis' router hands F1's deltas to, and
+// the method primeScreenSubscription calls directly for the very first
+// delta (the one consumed during priming, before router.Run starts).
+func (m *MapScreen) ApplyDelta(delta protocol.Delta) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyDelta"}); err != nil {
+		return
+	}
+	m.mu.Lock()
+	view, ok := m.subs[delta.SubscriptionID]
+	m.mu.Unlock()
+	if !ok || view != ViewSubscriptionName {
+		_ = errs.New("MET-U100", m.correlationID, map[string]any{
+			"cause":          "delta for an unknown or unbound subscription",
+			"subscriptionID": string(delta.SubscriptionID),
+		})
+		return
+	}
+	m.ApplyPatch(delta.Patch)
 }
 
 // ApplyPatch decodes raw as an "f1.viewport" wire patch and applies it to
