@@ -230,12 +230,9 @@ func TestSEC077_TickingTopologyGrowsCacheUnbounded(t *testing.T) {
 // corrupts every subsequent cache hit for that key.
 // ---------------------------------------------------------------------------
 func TestSEC077_CachedResultHitsAreAliased(t *testing.T) {
-	// KNOWN DEFECT, pre-dating the SEC-077 height fix and out of its scope:
-	// Render returns the cached Result by value but Result.Hits aliases the
-	// cache entry's backing array. Remove this Skip when Render clones Hits
-	// (or Result carries an immutable view); the assertion is the regression
-	// test.
-	t.Skip("known defect: cached Result.Hits is caller-mutable -- reported for a separate BOW item")
+	// FIXED (BUG-318): Render now clones Hits on every return path
+	// (cloneResult in cache.go), so a caller mutating its Result no longer
+	// poisons the cache entry. This is the permanent regression test.
 	topo := tallSankey(4)
 	e := NewEngine()
 	buf := core.NewBuffer(80, 24)

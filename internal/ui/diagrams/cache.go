@@ -136,11 +136,32 @@ func (e *Engine) Render(buf *core.Buffer, hash uint64, render func(buf *core.Buf
 	defer e.mu.Unlock()
 	if ent, ok := e.cache[hash]; ok {
 		blit(buf, ent.res.Region, ent.glyphs)
-		return ent.res, ent.err
+		return cloneResult(ent.res), ent.err
 	}
 	res, err := render(buf)
 	e.cache[hash] = cacheEntry{res: res, err: err, glyphs: snapshot(buf, res.Region)}
-	return res, err
+	return cloneResult(res), err
+}
+
+// cloneResult returns a Result whose Hits slice is a fresh copy, never the
+// cache entry's own backing array (BUG-318). Result is returned by value on
+// every path (a cache hit and a fresh render alike), but Hits is a slice —
+// without this clone a caller that sorts hits in place, or writes to a Hit,
+// permanently poisons the cached entry for every future cache hit on the
+// same key (SEC-077 round: a mutated Hit reported SourceID "POISONED"
+// instead of "sa0", misrouting drill-through, US-4/AC-5).
+//
+// A shallow copy is enough here: Hit's fields (core.Rect, SourceID) are both
+// plain value types with no nested slice, map, or pointer, and Result.Region
+// is a value-type core.Rect too — so Hits is the only field on either type
+// that can alias shared state. Cloning it on every return (not just on a
+// cache hit) also protects the FIRST caller of a freshly rendered topology:
+// e.cache[hash] stores the same res the first caller receives, so without
+// this, caller #1 mutating its Result would poison the entry before caller
+// #2 ever sees a cache hit.
+func cloneResult(res Result) Result {
+	res.Hits = append([]Hit(nil), res.Hits...)
+	return res
 }
 
 // Chain renders topo through the cache, keyed on layoutKey (topology hash +
