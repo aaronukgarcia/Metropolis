@@ -125,7 +125,7 @@ func (p *ProjectionsAPI) RegisterCurveProvider(key string, provider CurveProvide
 		return err
 	}
 	if _, exists := p.providers[key]; exists {
-		return errs.New(ErrDuplicateCurveProvider, p.correlationID, map[string]any{"actionID": key})
+		return errs.New(ErrDuplicateCurveProvider, p.correlationID, map[string]any{"key": key})
 	}
 	p.providers[key] = provider
 	return nil
@@ -175,7 +175,10 @@ func (p *ProjectionsAPI) SetCurrentMonth(monthIndex int64) error {
 		return err
 	}
 	if monthIndex < 0 {
-		return errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{"monthIndex": monthIndex})
+		return errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{
+			"monthIndex": monthIndex,
+			"cause":      "monthIndex is negative (before the world's epoch)",
+		})
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -232,7 +235,10 @@ func (p *ProjectionsAPI) Curve(key string, fromMonth, toMonth int64) ([]Point, e
 		return nil, err
 	}
 	if fromMonth < 0 || toMonth < 0 {
-		return nil, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{"monthIndex": minInt64(fromMonth, toMonth)})
+		return nil, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{
+			"monthIndex": minInt64(fromMonth, toMonth),
+			"cause":      "fromMonth/toMonth is negative (before the world's epoch)",
+		})
 	}
 	if fromMonth > toMonth {
 		return nil, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{

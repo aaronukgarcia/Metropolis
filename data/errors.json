@@ -1854,13 +1854,13 @@
     "MET-G100": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "unknown curve key {key} queried from engine.projections",
-      "remedy": "Register a curve provider for {key} via RegisterCurveProvider before querying it; no zero-value curve is returned (AC-9)."
+      "message": "unknown curve key {commodity} queried from engine.projections",
+      "remedy": "Register a curve provider for {commodity} via RegisterCurveProvider before querying it; no zero-value curve is returned (AC-9)."
     },
     "MET-G101": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "month query out of bounds: {detail} (negative month before world epoch, or a from/to range wider than the max query width)",
+      "message": "month query out of bounds: month {monthIndex} ({cause})",
       "remedy": "Query a non-negative month within the allowed range width; the request is rejected rather than overflowing the result buffer (AC-9, BUG-214 bounds guard)."
     },
     "MET-G102": {
@@ -1872,7 +1872,7 @@
     "MET-G103": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "Slow-Fuse decision (FuseYears {value} > 5) submitted without a projected-consequence payload",
+      "message": "Slow-Fuse decision submitted without required payload: {field}",
       "remedy": "A decision whose principal effect lands >5 game-years out MUST carry a non-empty projected consequence before confirmation (A5, AC-5/AC-10)."
     },
     "MET-G104": {
@@ -1896,7 +1896,7 @@
     "MET-G107": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "embedded projections config invalid at load: {detail}",
+      "message": "embedded projections config invalid at load: {curve} ({cause})",
       "remedy": "Fix the embedded horizon.json/deathwarnings.json (malformed JSON or missing disclosure); the package fails loudly rather than defaulting (AC-12/AC-20)."
     },
     "MET-G108": {
