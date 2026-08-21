@@ -78,7 +78,7 @@ func TestBUG064_WorldValueCopy_EnsureTileRejected(t *testing.T) {
 // through a.w. Constructs a WorldAPI wrapping a value-copy of a real,
 // populated World (mirroring BUG-064's own live-verified repro: two
 // independently-zeroed RWMutex instances over one shared map) and
-// confirms EVERY one of the 11 a.w.mu-touching methods rejects it with
+// confirms EVERY one of the 12 a.w.mu-touching methods rejects it with
 // ErrWorldCopied, none silently succeeding against the aliased map.
 func TestBUG064_WorldAPI_CopiedWorldRejected(t *testing.T) {
 	original := NewWorldAPI(TileCoord{15, 13})
@@ -109,6 +109,11 @@ func TestBUG064_WorldAPI_CopiedWorldRejected(t *testing.T) {
 	}
 	if _, err := copied.CellAt(tc, CellLocal{Row: 0, Col: 0}, "corr"); true {
 		wantCopied(t, "CellAt", err)
+	}
+	if _, err := copied.TileCells(tc, "corr"); true {
+		// BUG-323 added this bulk whole-tile read; it takes a.w.mu, so
+		// it belongs in this enumeration like every other one.
+		wantCopied(t, "TileCells", err)
 	}
 	if _, err := copied.TileAt(tc, "corr"); true {
 		wantCopied(t, "TileAt", err)

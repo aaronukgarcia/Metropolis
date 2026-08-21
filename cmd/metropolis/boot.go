@@ -473,13 +473,22 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		})
 	}
 
+	// BUG-323: mapScreen now mints its OWN correlation ID, exactly as
+	// financeScreen/servicesScreen do below, because it is now primed
+	// through primeScreenSubscription — which matches its screen's first
+	// Delta/CommandResult by exactly this value, and which fails the boot
+	// loud on any FOREIGN CorrelationID observed during the priming
+	// window. Reusing bootCore's shared correlationID (its pre-BUG-323
+	// construction) would make that match ambiguous against anything else
+	// that ever used the shared ID.
+	mapCorrID := errs.NewCorrelationID()
 	w := &skeletonWiring{
 		correlationID: correlationID,
 		registry:      reg,
 		transport:     transport,
 		engine:        engine,
 		viewStore:     core.NewViewStore(),
-		mapScreen:     mapscreen.NewMapScreen(correlationID, widgets.DefaultPalette),
+		mapScreen:     mapscreen.NewMapScreen(mapCorrID, widgets.DefaultPalette),
 		statusBar:     newStatusBar(),
 		ctx:           ctx,
 		cancel:        cancel,
@@ -594,6 +603,28 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.finance.Subscribe",
+		})
+	}
+	// BUG-323: F1 ("f1.viewport") is primed and bound the SAME way, now
+	// that compose.Wire registers a real view behind it
+	// (viewRegistrationOrder / internal/engine/compose/viewport_publish.go).
+	// Before this, mapScreen's Subscribe was issued fire-and-forget below
+	// this block and the engine rejected it outright — no Delta ever
+	// arrived, every cell stayed Known=false, and the game's DEFAULT
+	// screen rendered as an empty field of spaces. Priming it here means
+	// the first full terrain snapshot is applied before bootCore returns,
+	// so the very first frame the player sees has real terrain on it
+	// rather than one frame of blank.
+	if err := primeScreenSubscription(transport, w.router, primed, mapCorrID, mapscreen.ViewSubscriptionName,
+		func() error { return w.mapScreen.Subscribe(transport.SendCommand) },
+		w.mapScreen.BindSubscription,
+		w.mapScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.map.Subscribe",
 		})
 	}
 
@@ -761,26 +792,10 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		return nil, err
 	}
 
-	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's
-	// real, already-accepted Subscribe method — internal/ui/screens/map's
-	// own public API — never a hand-rolled Command literal standing in
-	// for it). With the real engine, "f1.viewport" is STILL not a served
-	// view this increment (only "f2.finance"/"f4.services"/"engine.status"
-	// are registered — the design's §6 "f1.viewport" fast-follow has not
-	// landed), so this Subscribe is issued and the engine rejects it — the
-	// honest baseline-one state, recorded here: the map screen's real
-	// viewport rendering is its own follow-up, not this flip's scope. It
-	// is deliberately NOT run through primeScreenSubscription (which would
-	// simply time out waiting for a Delta that can never arrive) — it
-	// keeps its pre-existing fire-and-forget shape.
-	if err := w.mapScreen.Subscribe(transport.SendCommand); err != nil {
-		w.cancel()
-		w.wg.Wait()
-		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
-			"component": "ui.screen.map.Subscribe",
-		})
-	}
+	// (BUG-323: F1's own "f1.viewport" Subscribe used to sit HERE, issued
+	// fire-and-forget and rejected by the engine because no view was
+	// registered behind the name. It now runs through
+	// primeScreenSubscription with F2/F4 above — see that call site.)
 
 	// NOW start router.Run — the ONE dedicated transport-draining
 	// goroutine for the rest of this process's life (ui/router/doc.go).
@@ -1189,12 +1204,24 @@ func (w *skeletonWiring) shutdown() {
 // noted here rather than silently generalized, since inventing that
 // routing is out of this item's scope (only one F-screen exists yet).
 func mapDrawFunc(ms *mapscreen.MapScreen) core.DrawFunc {
-	return func(back *core.Buffer, vm *core.ViewModels) {
-		for id, patch := range vm.Patches {
-			ms.ApplyPatch(patch)
-			ms.SetStale(vm.Stale[id])
-			break
-		}
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		// BUG-323: this closure used to range vm.Patches and feed the
+		// first entry into ms.ApplyPatch/ms.SetStale — ui.core's
+		// ViewStore path, which FEAT-208 increment 2 left PERMANENTLY
+		// EMPTY in this binary when router replaced ViewsLoop (see
+		// skeletonWiring.viewStore's doc comment). mapScreen's terrain
+		// now arrives through router-bound ApplyDelta, exactly like
+		// financeScreen's and servicesScreen's, so this reads nothing
+		// from vm at all — same shape as financeDrawFunc. Leaving the
+		// old loop in place would be dead code today and a
+		// double-application hazard the moment anything ever published
+		// into viewStore again.
+		//
+		// Known consequence, recorded rather than hidden: nothing calls
+		// ms.SetStale any more, so the staleness dot renders its
+		// "fresh" glyph permanently. router owns per-subscription
+		// staleness now and exposing it to a DrawFunc is a ui.router/
+		// ui.core surface change — out of this fix's scope.
 		w, h := back.Size()
 		ms.Render(back, core.Rect{X: 0, Y: 0, W: w, H: h})
 	}

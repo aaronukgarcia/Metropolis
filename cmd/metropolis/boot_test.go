@@ -71,10 +71,19 @@ func TestBootCore_DuplicateModuleRegistration_FailsCleanly(t *testing.T) {
 
 // TestIntegration_RealEngineBootsAndServesEngineStatus proves the FEAT-082
 // flip: bootCore now constructs a real *enginecore.Engine wired by the
-// composition root, not harness.stub.StubEngine. The boot-time MapScreen
-// Subscribe ("f1.viewport") is now REJECTED by the real engine — v1 serves
-// only "engine.status" — which is the honest baseline-one state, and the
-// engine.status view IS served.
+// composition root, not harness.stub.StubEngine, and that engine serves
+// its registered views.
+//
+// BUG-323 INVERTED HALF OF THIS TEST. It previously asserted that the
+// boot-time MapScreen Subscribe ("f1.viewport") was REJECTED, recording
+// as "the honest baseline-one state" the very defect BUG-323 was later
+// raised against: f1.viewport had no registered view, so F1 — the
+// DEFAULT screen at boot — rendered entirely blank. compose's
+// viewRegistrationOrder now registers it (internal/engine/compose/
+// viewport_publish.go), so the same Subscribe must be ACCEPTED. The
+// assertion is kept, with its sense flipped, rather than deleted: it is
+// the cheapest possible tripwire for the registration being removed
+// again.
 func TestIntegration_RealEngineBootsAndServesEngineStatus(t *testing.T) {
 	reg := registry.NewRegistry()
 	w, err := bootCore("integration-real-engine", reg)
@@ -89,16 +98,11 @@ func TestIntegration_RealEngineBootsAndServesEngineStatus(t *testing.T) {
 
 	// FEAT-208 increment 2: w.router (not this test) now owns
 	// w.transport.Results()/Deltas() post-boot (router_testutil_test.go's
-	// own doc comment) — the boot-time MapScreen Subscribe's own
-	// CommandResult is no longer observable via a raw channel read here
-	// (router drains and RouteMiss-logs it, since nothing registered a
-	// handler for mapScreen's correlationID; that gating is unchanged
-	// from before this increment — see boot.go's mapScreen.Subscribe
-	// comment). The "f1.viewport" rejection claim this test makes is
-	// instead proven by issuing the same Subscribe ourselves, through
-	// router.RegisterResultHandler — an equivalent, race-free proof of
-	// the same real-engine behaviour (v1 serves only registered views,
-	// and "f1.viewport" is still not one of them this increment).
+	// own doc comment), so the boot-time MapScreen Subscribe's own
+	// CommandResult is not observable via a raw channel read here. The
+	// view-serving claim is instead proven by issuing the same Subscribes
+	// ourselves, through router.RegisterResultHandler — an equivalent,
+	// race-free proof of the same real-engine behaviour.
 	send := func(kind protocol.Kind, payload protocol.CommandPayload) protocol.CommandResult {
 		t.Helper()
 		cmd := protocol.Command{
@@ -110,8 +114,13 @@ func TestIntegration_RealEngineBootsAndServesEngineStatus(t *testing.T) {
 		return sendAndAwaitResult(t, w, cmd)
 	}
 
-	if res := send(protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "f1.viewport"}); res.Accepted {
-		t.Fatalf("f1.viewport Subscribe was Accepted, want REJECTED by the real engine (not a registered view this increment)")
+	if res := send(protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "f1.viewport"}); !res.Accepted {
+		t.Fatalf("f1.viewport Subscribe was REJECTED by the real engine (%+v) — compose no longer registers the map's view, so F1 renders blank at boot (BUG-323)", res.Error)
+	}
+	// A name nothing registers must still be rejected — otherwise the
+	// assertion above would pass for an engine that accepts everything.
+	if res := send(protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "f9.not-a-view"}); res.Accepted {
+		t.Fatalf("an unregistered view name was Accepted — the registered-view lookup is not gating anything")
 	}
 	if res := send(protocol.KindSubscribe, protocol.SubscribePayload{ViewName: "engine.status"}); !res.Accepted {
 		t.Fatalf("engine.status Subscribe rejected by the real engine: %+v", res.Error)
