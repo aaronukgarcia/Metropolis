@@ -249,6 +249,38 @@
       "sprint": 0
     },
     {
+      "key": "foundation.integration",
+      "type": "module",
+      "seq": 1000,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "title": "Integration Engine: contract-driven, location-transparent deterministic shard executor + resilience substrate",
+      "desc": "The substrate every module plugs into (FEAT-187..191, 5 increments merged 2026-08-18): an Integration[T,M] contract (pure seeded RunShard, ordered Merge, T0/T1/T2 update class) run via a location-transparent WorkerPool (LocalPool/SerialPool now, RemotePool seam later) reusing det.MergeInOrder/det.ApplyBarrier for byte-identical merge regardless of dispatch strategy; a priority-tiered disk-backed overflow queue (T0/T1/T2, never-drop backpressure); a resilience state machine (retry/catch-up/reconnect+re-auth) with WAL-backed crash recovery replaying to the last checkpoint; a debug-gated local metrics dashboard. Not yet wired to any consumer — wiring 31 unwired modules onto it is later work.",
+      "specRef": "FEAT-187..191; integration-engine.md",
+      "path": "internal/foundation/integration/",
+      "inbound": {
+        "name": "Integration",
+        "format": "Go package API (generic Integration[T,M] contract + Execute[T,M] entry point; WorkerPool/LocalPool/SerialPool dispatch seam; QueuedTransport/WAL/Connection/Registry support types)",
+        "pattern": "pure seeded RunShard per shard, deterministic ordered Merge via det.MergeInOrder/det.ApplyBarrier — byte-identical regardless of dispatch/location"
+      },
+      "deps": [
+        "foundation.det",
+        "foundation.errors",
+        "int.protocol",
+        "feat.checkpoint",
+        "feat.saveux"
+      ],
+      "calls": [
+        "foundation.det",
+        "foundation.errors",
+        "int.protocol",
+        "feat.checkpoint",
+        "feat.saveux"
+      ],
+      "sprint": 0
+    },
+    {
       "key": "tool.bow",
       "type": "module",
       "seq": 95,
@@ -1508,8 +1540,8 @@
       "specRef": "UI-SPEC §2 (diagrams)",
       "path": "internal/ui/diagrams/",
       "inbound": {
-        "name": "DiagramAPI",
-        "format": "Go package API",
+        "name": "Engine",
+        "format": "Go package API (NewEngine() *Engine; methods Chain/Network/Sankey render+cache ChainTopology/NetworkTopology/SankeyTopology via RenderChain/RenderNetwork/RenderSankey)",
         "pattern": "topology in, cell-buffer layout out; cache keyed on topology hash"
       },
       "deps": [
@@ -4071,9 +4103,7 @@
         "engine.freight",
         "engine.firms"
       ],
-      "calls": [
-        "engine.freight"
-      ],
+      "calls": [],
       "sprint": 10
     },
     {
@@ -4127,8 +4157,8 @@
       "specRef": "GR#7; SEC-080; SEC-093; FEAT-086",
       "path": "internal/foundation/num/",
       "inbound": {
-        "name": "Num",
-        "format": "Go package API",
+        "name": "SatAdd",
+        "format": "Go package API (function collection, no facade type: SatAdd/SatSub/SatAddChecked saturating; SafeInt64/SafeMul/SafeFloat64FromAny/SafeInt64FromAny reject-form; BoundedLedger/NewBoundedLedger; GuardFinite/IsFinite/ClampInt64FromFloat/ClampInt64FromUint64 guards)",
         "pattern": "safe coercion: saturating + reject-form helpers; registry-sourced errors on non-finite/overflow"
       },
       "deps": [
