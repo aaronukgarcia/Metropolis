@@ -53,6 +53,16 @@ nul
 *.ndjson.gz
 !fixtures/**/*.ndjson.gz
 
+# tools/bow-server.js rendered output (a stale BOW DB snapshot baked into
+# HTML, 400KB+); the template bow-ui-template.html IS source and stays tracked.
+bow-ui.html
+# Scratch/backup files agents leave beside source; the content belongs in a
+# BOW item or a commit, never as loose debris (sitrep 2026-08-17 A7).
+*.other-agent.bak
+_edges_scratch.txt
+# coordination-keeper.js's silent renewal log
+.claude/keeper.log
+
 # FEAT-065 dev-mode feedback file-drop inbox: runtime-generated free-text
 # submissions and their processed/error sidecars — never committed (this
 # is player/dev-typed content landing on disk, not source or fixtures).
