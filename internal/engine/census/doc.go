@@ -56,3 +56,21 @@
 // distinct from engine.invariant's people/money/goods CONSERVATION. The
 // census does not re-implement or register with the invariant checker.
 package census
+
+// ASM-1272 (confirm-and-close). SEC-152 canonicalises GUID spelling (leading-zero padding normalised to kind-name:unpadded-id) rather than rejecting it.
+// ASM-1288 (confirm-and-close). SEC-161 fixed with num.SatAdd/num.SatSub saturation (SEC-131 precedent), not reject-on-overflow or a Config.validate upper bound.
+// ASM-1200 (confirm-and-close). TrackObject rejects a citizen GUID registered LifeSpanShortLived because citizens are always whole-game (checkLocked invariant).
+// ASM-647 (confirm-and-close). Census CC tracks liveness (GUID + least-check-in), distinct from engine.invariant conservation — observer boundary documented, not merged or duplicated.
+//
+// ASM-1206 (confirm-and-close). Source(happiness) rejects a non-finite float
+// via num.SafeInt64 (the GR#16 reject-form choke point), so the returned
+// error code is foundation.num's MET-F800/MET-F801 with its own correlation
+// ID — the census does not add a duplicate census code for the same coercion
+// (matches config.go, which already calls num.SafeInt64). If a census-
+// specific code is later wanted for the drill-in surface, that is the wrap
+// point.
+
+// ASM-1204 (confirm-and-close). Population-bounded counters and healthSum stay plain arithmetic, not num.SatAdd — none can wrap int64 (max 100M citizens; healthSum adds uint8 HealthBand in 0..5); revisit if the cap rises or HealthBand widens.
+// ASM-1290 (confirm-and-close). Per-citizen int64 counters stay plain increments — bounded by len(snap.Citizens), outside the source-controlled magnitude class SatAdd/SatSub guards.
+
+// ASM-1168 (confirm-and-close). Source() drill-in covers the eight KPI aggregates only; the three spline series (age/sex/education-tier) and the blue/white-collar datum carry no explicit drill-target (documented scope).
