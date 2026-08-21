@@ -1,6 +1,6 @@
 # CLAUDE.md - Metropolis Project Brief
 
-> **Last updated:** 2026-08-12 (GR#23 now MECHANICAL: claude-destructive-guard.js blocks code-bearing commits without an accepted verdict in bow_destructive_verdicts — record via `node claude-bow.js destructive <code> --verdict accept|reject ...`. Perf gate live+required per-push. Commit-ready-list protocol + oversight/worker loops in force — see Dev-Team Process below)
+> **Last updated:** 2026-08-21 (four-slot roster Bill/Ben/Bev/Bro live — Bob retired 2026-08-18, Bro added 2026-08-20; GR#25 graph-driven specification added 2026-08-17. GR#23 remains MECHANICAL: claude-destructive-guard.js blocks code-bearing commits without an accepted verdict in bow_destructive_verdicts — record via `node claude-bow.js destructive <code> --verdict accept|reject ...`. Perf gate live+required per-push. Commit-ready-list protocol + oversight/worker loops in force — see Dev-Team Process below)
 > **Read this entire file at the start of every session.**
 
 ---
@@ -32,7 +32,7 @@ These rules are inherited from Prix Six and apply to every piece of code written
 | #1 | Aggressive Error Trapping — log, type, correlation ID, selectable display |
 | #2 | Version Discipline — **Metropolis profile (2026-08-08):** app version = git describe via ldflags + milestone tags; BOW `[mkey]` ref required on engine/UI/data commits; root tooling exempt; verify after every push |
 | #3 | Single Source of Truth — no duplication without validation |
-| #4 | Identity Prefix — every response starts with `bill>`, `bob>`, or `ben>` |
+| #4 | Identity Prefix — every response starts with `bill>`, `ben>`, `bev>`, or `bro>` |
 | #5 | Verbose Confirmations — explicit, timestamped, version-numbered confirmations |
 | #6 | GUID Documentation — read comments before changing code, update GUID versions and code.json |
 | #7 | Registry-Sourced Errors — every error MUST be created from the error registry, no exceptions |
@@ -78,15 +78,16 @@ If the summary shows git NOT SYNCED or a Vestige problem, surface that to the us
 
 ### 🛑 GOLDEN RULE #4: Identity Prefix — EVERY SINGLE RESPONSE
 
-**EVERY response MUST start with your assigned name prefix** (`bill> `, `bob> `, or `ben> `). Every 5 responses, mentally verify you are still using it. If you drop it: add it immediately and apologise.
+**EVERY response MUST start with your assigned name prefix** (`bill> `, `ben> `, `bev> `, or `bro> `). Every 5 responses, mentally verify you are still using it. If you drop it: add it immediately and apologise.
 
-### 👥 Inter-Session Coordination (team shape as of 2026-08-18 evening)
+### 👥 Inter-Session Coordination (team shape as of 2026-08-21 — four-slot roster)
 
-* **Bev (Fable 5, main checkout `E:\git\Metropolis`)** — the lead: architecture, integration engine, SSOT/registry edits, final audit of every lane PR, merges, BOW state, independent destructive rounds on request.
-* **Bill (deepseek, worktrees `E:\git\metropolis-bill` + inherited `E:\git\metropolis-bob` on `lane/bob`)** — RM/BA + allocator + oversight (absorbed Bob's role when **Bob was retired permanently, Aaron 2026-08-18**): fans out build work, writes/curates acceptance criteria, supervises Ben's queue, drives the lane/bob module pipeline (policies/fuel/tourism committed+pushed; prison to finish).
-* **Ben (Gemini CLI, worktree `E:\git\metropolis-ben` on `lane/ben`)** — coder. Non-Claude sessions run NO guard hooks; their discipline is `docs/planning/parallel-coder-brief.md` + `/dev-help` + the lead's PR audit.
+* **Bev (Fable 5/Opus, main checkout `E:\git\Metropolis`, slot `Bev`)** — the lead: architecture, integration engine, SSOT/registry edits, final audit of every lane PR, merges, BOW state, independent destructive rounds on request.
+* **Bill (deepseek, worktrees `E:\git\metropolis-bill` + inherited `E:\git\metropolis-bob` on `lane/bob`, slot `Bill`)** — RM/BA + allocator + oversight (absorbed Bob's role when **Bob was retired permanently, Aaron 2026-08-18**): fans out build work, writes/curates acceptance criteria, supervises Ben's and Bro's queues, drives the lane/bob module pipeline. Standing loop ritual: `/bill-loop`.
+* **Ben (Gemini CLI, worktree `E:\git\metropolis-ben` on `lane/ben`, slot `Ben`)** — coder. Non-Claude sessions run NO guard hooks; their discipline is `docs/planning/parallel-coder-brief.md` + `/dev-help` + the lead's PR audit.
+* **Bro (opencode, worktree `E:\git\metropolis-bro` on `lane/bro`, slot `Bro`, added 2026-08-20)** — second coder lane, same non-Claude discipline as Ben (no guard hooks; `docs/planning/parallel-coder-brief.md` + lead's PR audit). Runs its own standing checkin loop.
 * **Communication:** directed DB messages (`node claude-sync.js message "<text>" --to <Name>`, poll with `read`) — but claude-sync only runs from the main checkout (node_modules lives there). **Status reports go to `E:\git\metropolis-status\<name>.status.md`** (outside every checkout; the lead polls it — never relay through Aaron).
-* **Standing rules from the 2026-08-18 audits:** no self-verdicts (GR#23 independence amendment); no `done --force` (done flips are the lead's, on merge + dependency satisfaction); commit `[mkey]` tags must resolve to a real BOW item; error codes only via `node tools/plan/add-error.js` (claim-range → add → check).
+* **Standing rules from the 2026-08-18 audits:** no self-verdicts (GR#23 independence amendment); no `done --force` (done flips are the lead's, on merge + dependency satisfaction); commit `[mkey]` tags must resolve to a real BOW item; error codes only via `node tools/plan/add-error.js` (claim-range → add → check). Independent destructive rounds are dispatched via `/round` (composes the attacker from an item code + location, never the author).
 
 ### Permit auto-renewal, polling, session end
 
