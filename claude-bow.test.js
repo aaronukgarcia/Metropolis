@@ -2655,17 +2655,43 @@ test('BUG-221 AC-8 / BUG-223: `set --guid` reconciliation CASCADES to child rows
 // BUG-115: ensureSchema() (ALTER TABLE / CREATE TABLE / MODIFY COLUMN — all
 // MDL-locking DDL) must NOT run for read-only commands, but MUST still run
 // for write commands. Proven via a real subprocess + real MariaDB, query-
-// count based: MariaDB's GLOBAL STATUS counters (Com_alter_table,
-// Com_create_table) increment every time the server actually PARSES/EXECUTES
-// an ALTER TABLE / CREATE TABLE statement, regardless of whether it turns
-// out to be a no-op (the "IF NOT EXISTS" forms still count) — so diffing
-// these counters immediately before/after a spawned `node claude-bow.js
-// <command>` subprocess is a direct, non-mocked measurement of whether that
-// invocation's connection issued ensureSchema's DDL at all. Runs against the
-// suite's own already-fully-migrated TEST_DB (same one every other test in
-// this file uses), matching how this fix expects the real `metro` database
-// to be found in practice (migrated once, read many times) rather than
-// against a synthetic never-migrated database.
+// count based: every ALTER TABLE / CREATE TABLE statement the spawned `node
+// claude-bow.js <command>` subprocess sends is counted, regardless of whether
+// it turns out to be a no-op on the server (the "IF NOT EXISTS" forms still
+// count) — a direct, un-stubbed measurement of whether that invocation's
+// connection issued ensureSchema's DDL at all. Runs against the suite's own
+// already-fully-migrated TEST_DB (same one every other test in this file
+// uses), matching how this fix expects the real `metro` database to be found
+// in practice (migrated once, read many times) rather than against a
+// synthetic never-migrated database.
+//
+// BUG-320 (P1) — HOW THIS IS MEASURED, AND WHY IT CHANGED.
+// These tests originally read MariaDB's `SHOW GLOBAL STATUS` counters
+// (Com_alter_table / Com_create_table) before and after the spawn and
+// asserted the delta. Those counters are GLOBAL: instance-wide, incremented
+// by EVERY connection from EVERY process on the server. `node --test` runs
+// test FILES concurrently (default concurrency = availableParallelism() - 1;
+// CI passes no --test-concurrency), and ~a dozen sibling test files
+// (claude-sync.test.js, claude-bow-columns.test.js, claude-dispatch-log.
+// test.js, claude-destructive-guard.test.js, claude-agent-stop.test.js, ...)
+// spawn claude-sync.js / claude-bow.js write commands whose own ensureSchema
+// DDL hits the SAME MariaDB instance. A sibling's CREATE/ALTER landing inside
+// the before/after window inflated the delta and failed this file's
+// assertions — the 1-in-N red `node-test` gate seen on PR #85 (Go-only) and
+// PR #86 (Go + data/errors.json), neither of which touches any JavaScript.
+// The hazard ran in BOTH directions: the `assert.equal(..., 0)` cases flaked
+// RED, while the `assert.ok(after > before)` write-path cases could flake
+// GREEN off a sibling's DDL — i.e. pass without the code under test having
+// issued anything at all.
+//
+// The measurement is now causally scoped to the one subprocess under test:
+// `ddl-spy.fixture.js` is preloaded via `--require` into that subprocess and
+// wraps its OWN mysql2 connection (claude-db.js deliberately resolves
+// `.createConnection` at call time so a test can do exactly this), writing
+// the counts to a JSON file this test owns and deletes. It is structurally
+// incapable of observing another process's traffic, so the "exactly zero
+// DDL" property is still genuinely asserted but can no longer be perturbed
+// by concurrency. No retry, no loosened assertion, no test reordering.
 // ---------------------------------------------------------------------------
 
 test('BUG-115: READ_ONLY_COMMANDS is the exact enumerated set this fix classified as safe to skip ensureSchema for', () => {
@@ -2676,59 +2702,77 @@ test('BUG-115: READ_ONLY_COMMANDS is the exact enumerated set this fix classifie
   );
 });
 
-/** Global Com_alter_table + Com_create_table counters — incremented by the
- * server itself every time it parses/executes that statement type, on ANY
- * connection. Used to prove a spawned CLI subprocess did or did not issue
- * ensureSchema's DDL, without mocking or spying on the code under test. */
-async function ddlCounters(conn) {
-  const [rows] = await conn.query("SHOW GLOBAL STATUS WHERE Variable_name IN ('Com_alter_table', 'Com_create_table')");
-  const out = {};
-  for (const r of rows) out[r.Variable_name] = Number(r.Value);
-  return out;
+/** Path to the `--require` preload that counts a subprocess's own DDL. */
+const DDL_SPY = path.join(ROOT, 'ddl-spy.fixture.js');
+
+/**
+ * Spawn `node claude-bow.js <args>` with the DDL spy preloaded and return the
+ * spawnSync result augmented with `ddl: { alterTable, createTable, statements }`
+ * — the ALTER TABLE / CREATE TABLE statements THAT SUBPROCESS issued, and
+ * nothing else on the server (BUG-320).
+ *
+ * The spy writes its counts file eagerly, before the first query, so a missing
+ * file means the measurement never ran at all. That is a hard failure here
+ * rather than a silent zero: a gate that cannot evaluate must not report
+ * success, and "0 DDL" is exactly what a broken spy would look like.
+ */
+function bowCliDdl(args, extraEnv = {}) {
+  const outFile = path.join(os.tmpdir(), `metro-ddlspy-${process.pid}-${crypto.randomBytes(8).toString('hex')}.json`);
+  const result = spawnSync(process.execPath, ['--require', DDL_SPY, 'claude-bow.js', ...args], {
+    cwd: ROOT,
+    env: { ...process.env, METRO_DB_NAME: TEST_DB, ...extraEnv, METRO_DDL_SPY_OUT: outFile },
+    encoding: 'utf8',
+  });
+  let raw;
+  try {
+    raw = fs.readFileSync(outFile, 'utf8');
+  } catch (err) {
+    throw new Error(
+      `BUG-320: the DDL spy produced no counts file for \`claude-bow.js ${args.join(' ')}\` ` +
+      `(${err.code}) — the measurement did not run, so this test cannot report success. ` +
+      `stdout=${result.stdout} stderr=${result.stderr}`);
+  } finally {
+    try { fs.unlinkSync(outFile); } catch { /* best effort */ }
+  }
+  return { ...result, ddl: JSON.parse(raw) };
 }
 
-test('BUG-115: a read-only command (`list`) does NOT trigger ensureSchema\'s ALTER/CREATE TABLE statements', async () => {
-  const before = await ddlCounters(db);
-  const r = bowCli(['list', '--all']);
+test('BUG-115: a read-only command (`list`) does NOT trigger ensureSchema\'s ALTER/CREATE TABLE statements', () => {
+  const r = bowCliDdl(['list', '--all']);
   assert.equal(r.status, 0, `list must succeed: ${r.stderr}`);
-  const after = await ddlCounters(db);
 
-  assert.equal(after.Com_alter_table, before.Com_alter_table,
-    'BUG-115: `list` must not have caused any ALTER TABLE statement to run (Com_alter_table must be unchanged)');
-  assert.equal(after.Com_create_table, before.Com_create_table,
-    'BUG-115: `list` must not have caused any CREATE TABLE statement to run (Com_create_table must be unchanged)');
+  assert.equal(r.ddl.alterTable, 0,
+    `BUG-115: \`list\` must not have issued any ALTER TABLE statement, got: ${JSON.stringify(r.ddl.statements)}`);
+  assert.equal(r.ddl.createTable, 0,
+    `BUG-115: \`list\` must not have issued any CREATE TABLE statement, got: ${JSON.stringify(r.ddl.statements)}`);
 });
 
 test('BUG-115: another read-only command (`show`) also does NOT trigger ensureSchema\'s DDL', async () => {
   const guid = await insertItem({ code: 'BUG-9115', mkey: 'tool.planning' });
 
-  const before = await ddlCounters(db);
-  const r = bowCli(['show', 'BUG-9115']);
+  const r = bowCliDdl(['show', 'BUG-9115']);
   assert.equal(r.status, 0, `show must succeed: ${r.stderr}`);
-  const after = await ddlCounters(db);
 
-  assert.equal(after.Com_alter_table, before.Com_alter_table,
-    'BUG-115: `show` must not have caused any ALTER TABLE statement to run');
-  assert.equal(after.Com_create_table, before.Com_create_table,
-    'BUG-115: `show` must not have caused any CREATE TABLE statement to run');
+  assert.equal(r.ddl.alterTable, 0,
+    `BUG-115: \`show\` must not have issued any ALTER TABLE statement, got: ${JSON.stringify(r.ddl.statements)}`);
+  assert.equal(r.ddl.createTable, 0,
+    `BUG-115: \`show\` must not have issued any CREATE TABLE statement, got: ${JSON.stringify(r.ddl.statements)}`);
 
   await db.query('DELETE FROM bow_items WHERE guid = ?', [guid]);
 });
 
 test('BUG-115: a write command (`add`) still runs ensureSchema\'s DDL first — no regression to the write path', async () => {
-  const before = await ddlCounters(db);
-  const r = bowCli(['add', 'bug', 'BUG-115 write-path DDL proof', '--priority', 'P3']);
+  const r = bowCliDdl(['add', 'bug', 'BUG-115 write-path DDL proof', '--priority', 'P3']);
   assert.equal(r.status, 0, `add must succeed: ${r.stderr}`);
-  const after = await ddlCounters(db);
 
   // ensureSchema issues several ALTER TABLE statements (mkey/seq/... columns,
   // the item_type MODIFY, two ADD INDEX IF NOT EXISTS) and several CREATE
-  // TABLE IF NOT EXISTS statements every time it runs — both counters must
-  // have moved for a write command, proving ensureSchema executed.
-  assert.ok(after.Com_alter_table > before.Com_alter_table,
-    `BUG-115: \`add\` must still run ensureSchema's ALTER TABLE statements (before=${before.Com_alter_table}, after=${after.Com_alter_table})`);
-  assert.ok(after.Com_create_table > before.Com_create_table,
-    `BUG-115: \`add\` must still run ensureSchema's CREATE TABLE statements (before=${before.Com_create_table}, after=${after.Com_create_table})`);
+  // TABLE IF NOT EXISTS statements every time it runs — this invocation must
+  // have issued both, proving ensureSchema executed.
+  assert.ok(r.ddl.alterTable > 0,
+    `BUG-115: \`add\` must still run ensureSchema's ALTER TABLE statements (this invocation issued ${r.ddl.alterTable})`);
+  assert.ok(r.ddl.createTable > 0,
+    `BUG-115: \`add\` must still run ensureSchema's CREATE TABLE statements (this invocation issued ${r.ddl.createTable})`);
 
   const [rows] = await db.query('SELECT code FROM bow_items WHERE title = ?', ['BUG-115 write-path DDL proof']);
   assert.equal(rows.length, 1, 'the write itself must still have succeeded correctly, not just the DDL count');
@@ -2797,17 +2841,15 @@ test('BUG-170: the one-shot fresh-DB bootstrap runs ensureSchema\'s DDL exactly 
 
     // Second read against the NOW-migrated fresh DB: must behave exactly
     // like BUG-115's existing test against TEST_DB — zero DDL statements.
-    const before = await ddlCounters(boot);
-    const second = spawnSync(process.execPath, ['claude-bow.js', 'list'], {
-      cwd: ROOT, env: { ...process.env, METRO_DB_NAME: freshDb }, encoding: 'utf8',
-    });
+    // Counted inside that subprocess itself (BUG-320), so a sibling test file
+    // running concurrently against the same MariaDB cannot perturb it.
+    const second = bowCliDdl(['list'], { METRO_DB_NAME: freshDb });
     assert.equal(second.status, 0, `second list must succeed: ${second.stderr}`);
-    const after = await ddlCounters(boot);
 
-    assert.equal(after.Com_alter_table, before.Com_alter_table,
-      'BUG-170: a second `list` against the now-migrated DB must not re-run ensureSchema\'s ALTER TABLE statements');
-    assert.equal(after.Com_create_table, before.Com_create_table,
-      'BUG-170: a second `list` against the now-migrated DB must not re-run ensureSchema\'s CREATE TABLE statements');
+    assert.equal(second.ddl.alterTable, 0,
+      `BUG-170: a second \`list\` against the now-migrated DB must not re-run ensureSchema's ALTER TABLE statements, got: ${JSON.stringify(second.ddl.statements)}`);
+    assert.equal(second.ddl.createTable, 0,
+      `BUG-170: a second \`list\` against the now-migrated DB must not re-run ensureSchema's CREATE TABLE statements, got: ${JSON.stringify(second.ddl.statements)}`);
   } finally {
     await boot.query(`DROP DATABASE IF EXISTS \`${freshDb}\``);
     await boot.end();
@@ -2820,13 +2862,11 @@ test('BUG-170: `init` and a write command (`add`) against the already-migrated T
   assert.match(initResult.stdout, /metro BOW tables ready/,
     'BUG-170: init\'s existing message must be unchanged');
 
-  const before = await ddlCounters(db);
-  const addResult = bowCli(['add', 'bug', 'BUG-170 write-path unaffected', '--priority', 'P3']);
+  const addResult = bowCliDdl(['add', 'bug', 'BUG-170 write-path unaffected', '--priority', 'P3']);
   assert.equal(addResult.status, 0, `add must still succeed: ${addResult.stderr}`);
-  const after = await ddlCounters(db);
 
-  assert.ok(after.Com_alter_table > before.Com_alter_table,
-    'BUG-170: `add` against an already-migrated DB must still run ensureSchema unconditionally (unaffected by the fresh-DB retry path)');
+  assert.ok(addResult.ddl.alterTable > 0,
+    `BUG-170: \`add\` against an already-migrated DB must still run ensureSchema unconditionally (unaffected by the fresh-DB retry path); this invocation issued ${addResult.ddl.alterTable} ALTER TABLE statements`);
 
   const [rows] = await db.query('SELECT code FROM bow_items WHERE title = ?', ['BUG-170 write-path unaffected']);
   assert.equal(rows.length, 1, 'the write itself must still have succeeded');
