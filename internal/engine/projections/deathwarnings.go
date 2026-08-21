@@ -154,7 +154,7 @@ func (p *ProjectionsAPI) MarginToGhostCity(currentMonth int64) (MarginResult, er
 	}
 	provider, ok := raw.(GhostCityPeakProvider)
 	if !ok {
-		return MarginResult{}, errs.New(ErrGhostCityProviderShape, p.correlationID, map[string]any{
+		return MarginResult{}, errs.New(ErrCurveProviderMissingPeak, p.correlationID, map[string]any{
 			"commodity": CurveKeyGhostCityPopulation,
 			"field":     "HistoricPeak",
 		})

@@ -111,7 +111,7 @@ func TestMarginToGhostCityUnavailableBelowPeakFloor(t *testing.T) {
 	}
 }
 
-func TestMarginToGhostCityProviderShapeRejected(t *testing.T) {
+func TestMarginToGhostCityMissingPeakRejected(t *testing.T) {
 	api := NewProjectionsAPI()
 	// Registered under the reserved key but NOT implementing
 	// GhostCityPeakProvider (a plain fakeProvider has no HistoricPeak).
@@ -119,7 +119,7 @@ func TestMarginToGhostCityProviderShapeRejected(t *testing.T) {
 		t.Fatalf("RegisterCurveProvider: %v", err)
 	}
 	_, err := api.MarginToGhostCity(0)
-	assertCode(t, err, ErrGhostCityProviderShape)
+	assertCode(t, err, ErrCurveProviderMissingPeak)
 }
 
 // --- AC-19: WarningLedger records the crossing, not a permanent state ----
