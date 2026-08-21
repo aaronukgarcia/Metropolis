@@ -123,6 +123,22 @@
  * DB config via the same env vars as claude-sync.js:
  *   METRO_DB_HOST (127.0.0.1)  METRO_DB_PORT (3306)
  *   METRO_DB_USER (root)       METRO_DB_PASSWORD ('')      METRO_DB_NAME (metro)
+ *
+ * Column-length QoL fix (2026-08-20): every user-/plan-supplied text field
+ * this file writes is now checked against its real VARCHAR limit BEFORE the
+ * write, via the single validateLen() helper (BOW_COLUMN_MAX_LEN holds the
+ * full field/limit inventory, mirrored from ensureSchema()'s CREATE TABLE
+ * text). Single-row commands (add/set/comment/depend/ref/destructive/
+ * gate/gate-run) REJECT an over-length value up front with a clear one-line
+ * error naming the field, the limit and the actual length — exit 1, nothing
+ * written, so the caller can shorten it losslessly and retry. `import`
+ * (bulk) is the one exception: it TRUNCATES-with-ellipsis and prints a
+ * warning per truncated field instead of rejecting, because a bulk load
+ * dying mid-run leaves the database half-updated — the exact incident this
+ * fix exists for (a BOW import died on an over-length spec_ref AFTER its
+ * registry PR had already merged; `destructive`/`ref` also raw-driver-errored
+ * on attacker/note the same day). Never again should "Data too long for
+ * column X" reach a user as an unhandled MySQL error from this file.
  */
 
 'use strict';
@@ -561,23 +577,79 @@ function isTextFlagPathAllowed(filePath) {
 }
 
 /**
- * Shared overflow-check helper (BUG-151/BUG-173/BUG-027 -- GR#3: one
- * mechanism, not three near-duplicate length checks). Checks `text`'s
- * length against `maxLen` and, if it would exceed the column's real limit,
- * prints a clear, typed error naming the column, the limit, and the actual
- * length, then exits non-zero BEFORE any DB write is attempted -- never
- * lets a raw driver error ("Data too long for column '...'") leak through.
- * `context` is a short human string identifying what's being checked (e.g.
- * "closing note for BUG-145", "title for new bug item") so the message is
- * actionable, not generic. No-op for null/undefined/non-string text.
+ * 2026-08-20 column-length QoL fix (BOW: "Data too long for column X" broke
+ * a BOW import AFTER its registry PR merged (spec_ref), and killed
+ * `destructive`/`ref` writes three times the same day (attacker, note) --
+ * every one of those was a raw MySQL driver error surfacing mid-operation
+ * instead of a clean, typed rejection BEFORE any write was attempted).
+ *
+ * `validateLen` is now the ONE mechanism every write path in this file uses
+ * to check a user-supplied text value against its column's real VARCHAR
+ * limit (GR#3 -- one mechanism, not N re-hardcoded near-duplicates; this
+ * supersedes and subsumes the earlier BUG-151/BUG-173/BUG-027
+ * rejectIfOverColumnLimit, kept below as a thin back-compat wrapper so its
+ * existing call sites and tests keep working unchanged).
+ *
+ * Modes (`opts.mode`, default 'exit'):
+ *   - 'exit'    (single-row commands: add/set/comment/depend/ref/amend/
+ *                redact) -- prints a one-line error naming the field, the
+ *                limit, and the actual length, then process.exit(1) BEFORE
+ *                any DB write. REJECT, never truncate: the value came from
+ *                one caller who typed it and can shorten it losslessly and
+ *                retry -- silently mangling it would be worse than refusing it.
+ *   - 'throw'   same message/behaviour as 'exit' but throws an Error instead
+ *               of exiting the process -- for write paths
+ *               (recordDestructiveVerdict / recordGateVerdict) that are also
+ *               called in-process (not just via the CLI, e.g. by
+ *               claude-destructive-guard.js) and already use throw/catch for
+ *               every other validation failure, not process.exit.
+ *   - 'truncate' (BULK import ONLY, cmdImport) -- an import that dies
+ *               mid-run leaves the DB half-updated (the exact 2026-08-20
+ *               incident); a plan with hundreds of items must always run to
+ *               completion. Truncates to `max` chars (last char replaced
+ *               with an ellipsis so the result is exactly `max` chars long,
+ *               never longer) and prints a warning naming the field, the
+ *               item, the original length and the limit, then RETURNS the
+ *               truncated value for the caller to write -- never exits,
+ *               never throws.
+ *
+ * `field` is the column name (also used as the default context label).
+ * `opts.context` overrides the label with something more specific (e.g.
+ * "title for new bug item", "closing note for BUG-145", `item "data.x"`).
+ * No-op passthrough for null/undefined/non-string values or values at-or-
+ * under the limit -- returns `value` unchanged in every non-failing case.
+ */
+function validateLen(field, value, max, opts = {}) {
+  if (typeof value !== 'string' || value.length <= max) return value;
+  const mode = opts.mode || 'exit';
+  const context = opts.context || field;
+
+  if (mode === 'truncate') {
+    // Ellipsis is a single character, so slice(0, max - 1) + '…' is always
+    // exactly `max` characters long (never max+1), for any max >= 1.
+    const truncated = value.slice(0, Math.max(0, max - 1)) + '…';
+    console.warn(
+      `claude-bow warning: ${context} truncated for the "${field}" column: ` +
+      `${value.length} chars, maximum is ${max} -- kept the first ${truncated.length - 1} chars ` +
+      `(ellipsis appended). Fix the source plan value and re-run \`set\` to correct it losslessly.`);
+    return truncated;
+  }
+
+  const message =
+    `${context} is too long for the "${field}" column: ` +
+    `${value.length} chars, maximum is ${max}. Shorten it and try again -- nothing was written.`;
+  if (mode === 'throw') throw new Error(message);
+  console.error(`claude-bow error: ${message}`);
+  process.exit(1);
+}
+
+/**
+ * Back-compat wrapper (BUG-151/BUG-173/BUG-027) -- same call shape existing
+ * sites and tests already use, now implemented on top of validateLen's
+ * shared 'exit' mode so there is still exactly one length-check mechanism.
  */
 function rejectIfOverColumnLimit(text, maxLen, columnLabel, context) {
-  if (typeof text === 'string' && text.length > maxLen) {
-    console.error(
-      `claude-bow error: ${context} is too long for the "${columnLabel}" column: ` +
-      `${text.length} chars, maximum is ${maxLen}. Shorten it and try again -- nothing was written.`);
-    process.exit(1);
-  }
+  validateLen(columnLabel, text, maxLen, { mode: 'exit', context });
 }
 
 function resolveTextFlag(fieldName) {
@@ -663,6 +735,17 @@ async function cmdAdd(db) {
   // with a clear, typed message naming the limit and given length instead
   // of a raw "Data too long for column 'title'" driver error.
   rejectIfOverColumnLimit(title, BOW_COLUMN_MAX_LEN.title, 'title', `title for new ${type} item`);
+  // 2026-08-20 QoL fix: same reject-up-front treatment for every other
+  // VARCHAR-bounded field `add` can write, so an over-length --mkey/
+  // --milestone/--layer/--spec/--code-path/--codejson never reaches the
+  // INSERT as a raw driver error either.
+  validateLen('mkey', flags.mkey || null, BOW_COLUMN_MAX_LEN.mkey, { context: `mkey for new ${type} item` });
+  validateLen('milestone', flags.milestone || null, BOW_COLUMN_MAX_LEN.milestone, { context: `milestone for new ${type} item` });
+  validateLen('layer', flags.layer || null, BOW_COLUMN_MAX_LEN.layer, { context: `layer for new ${type} item` });
+  validateLen('spec_ref', flags.spec || null, BOW_COLUMN_MAX_LEN.spec_ref, { context: `spec_ref for new ${type} item` });
+  validateLen('code_path', flags['code-path'] || null, BOW_COLUMN_MAX_LEN.code_path, { context: `code_path for new ${type} item` });
+  validateLen('codejson_ref', flags.codejson || null, BOW_COLUMN_MAX_LEN.codejson_ref, { context: `codejson_ref for new ${type} item` });
+  validateLen('finding_class', flags.class || null, BOW_COLUMN_MAX_LEN.finding_class, { context: `finding_class for new ${type} item` });
   // BUG-090 (AC-1/AC-3): resolved BEFORE the code/guid are minted and BEFORE
   // the INSERT — a mutual-exclusion or unreadable-file rejection here exits
   // non-zero with no row ever written, matching --example-file's precedent.
@@ -780,9 +863,15 @@ async function cmdComment(db) {
     try { example = fs.readFileSync(flags['example-file'], 'utf8'); }
     catch (err) { console.error(`Cannot read --example-file: ${err.message}`); process.exit(1); }
   }
+  // 2026-08-20 QoL fix: author/code_language are both VARCHAR(32) -- reject
+  // BEFORE the INSERT rather than let a raw driver error surface.
+  const author = currentAuthor();
+  validateLen('author', author, BOW_COLUMN_MAX_LEN.comment_author, { context: `author for comment on ${item.code}` });
+  const lang = example ? (flags.lang || null) : null;
+  validateLen('code_language', lang, BOW_COLUMN_MAX_LEN.comment_language, { context: `--lang for comment on ${item.code}` });
   await db.query(
     'INSERT INTO bow_comments (item_guid, author, body, example_code, code_language) VALUES (?, ?, ?, ?, ?)',
-    [item.guid, currentAuthor(), body, example, example ? (flags.lang || null) : null]);
+    [item.guid, author, body, example, lang]);
   console.log(`Comment added to ${item.code}${example ? ' (with example code)' : ''}.`);
 }
 
@@ -792,6 +881,9 @@ async function cmdDepend(db) {
   const target = await requireItem(db, flags.on);
   if (target.guid === item.guid) { console.error('An item cannot depend on itself.'); process.exit(1); }
   const note = resolveTextFlag('note'); // BUG-090 (AC-2/AC-3)
+  // 2026-08-20 QoL fix: bow_dependencies.note is VARCHAR(255) -- reject
+  // BEFORE the REPLACE INTO rather than let a raw driver error surface.
+  validateLen('note', note, BOW_COLUMN_MAX_LEN.dependency_note, { context: `--note for ${item.code} depends-on ${target.code}` });
 
   // Cycle check: walk target's dependency closure; if item appears, reject.
   const [allDeps] = await db.query('SELECT item_guid, depends_on_guid FROM bow_dependencies');
@@ -833,9 +925,17 @@ async function cmdRef(db) {
     process.exit(1);
   }
   const note = resolveTextFlag('note'); // BUG-090 (AC-2/AC-3)
+  // 2026-08-20 QoL fix: this exact write ("ref") killed writes three times
+  // on 2026-08-20 with a raw "Data too long for column 'note'" driver error
+  // -- bow_git_refs.note is VARCHAR(255). Reject BEFORE the INSERT, same as
+  // every other column check in this file.
+  validateLen('note', note, BOW_COLUMN_MAX_LEN.ref_note, { context: `--note for commit ref on ${item.code}` });
   let branch = null;
   try { branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: __dirname, encoding: 'utf8', timeout: 5000 }).trim(); }
   catch { /* not fatal — branch is decoration */ }
+  validateLen('branch', branch, BOW_COLUMN_MAX_LEN.ref_branch, { context: `git branch name for commit ref on ${item.code}` });
+  // commit_hash is VARCHAR(40) and already regex-bounded to 7-40 hex chars
+  // above, so it can never exceed the column -- no runtime check needed.
   await db.query(
     'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note) VALUES (?, ?, ?, ?)',
     [item.guid, hash.toLowerCase(), branch, note]);
@@ -871,6 +971,14 @@ async function recordDestructiveVerdict(db, ref, opts = {}) {
   if (!attacker) {
     throw new Error('--attacker is required and must be non-empty — an unnamed attacker is not an audit trail');
   }
+  // 2026-08-20 QoL fix: this exact write ("destructive") killed writes three
+  // times on 2026-08-20 with a raw "Data too long for column 'attacker'"
+  // driver error -- bow_destructive_verdicts.attacker is VARCHAR(128). This
+  // function is called both from the CLI (cmdDestructive, which already
+  // catches and exits) and in-process by claude-destructive-guard.js, so it
+  // uses 'throw' mode like every other validation in here, not process.exit.
+  validateLen('attacker', attacker, BOW_COLUMN_MAX_LEN.verdict_attacker,
+    { mode: 'throw', context: `--attacker for verdict on ${item.code}` });
 
   const toList = (v) => {
     if (v == null) return [];
@@ -897,12 +1005,20 @@ async function recordDestructiveVerdict(db, ref, opts = {}) {
     }
   }
 
+  // weakness_classes/findings are stored as the comma-joined list -- check
+  // the JOINED string (what actually hits the column), not the array length.
+  const weaknessClassesVal = classes.length ? classes.join(',') : null;
+  const findingsVal = findingsList.length ? findingsList.join(',') : null;
+  validateLen('weakness_classes', weaknessClassesVal, BOW_COLUMN_MAX_LEN.verdict_weakness_classes,
+    { mode: 'throw', context: `--class list for verdict on ${item.code}` });
+  validateLen('findings', findingsVal, BOW_COLUMN_MAX_LEN.verdict_findings,
+    { mode: 'throw', context: `--findings list for verdict on ${item.code}` });
+
   const guid = crypto.randomUUID();
   await db.query(
     `INSERT INTO bow_destructive_verdicts (guid, item_guid, verdict, attacker, weakness_classes, findings, note)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [guid, item.guid, verdict, attacker, classes.length ? classes.join(',') : null,
-     findingsList.length ? findingsList.join(',') : null, opts.note || null]);
+    [guid, item.guid, verdict, attacker, weaknessClassesVal, findingsVal, opts.note || null]);
 
   return { guid, item, verdict, attacker, classes, findings: findingsList };
 }
@@ -2501,6 +2617,12 @@ async function recordGateVerdict(db, opts = {}) {
   if (!opts.mechanical && !runner.startsWith(`${MANUAL_OVERRIDE_TAG}:`)) {
     runner = `${MANUAL_OVERRIDE_TAG}:${runner}`;
   }
+  // 2026-08-20 QoL fix: bow_gate_verdicts.runner is VARCHAR(128) -- check the
+  // value AFTER the manual-override tag is prefixed (that's what actually
+  // hits the column). 'throw' mode: this function is called both from the
+  // CLI and internally by runGate's own five writes.
+  validateLen('runner', runner, BOW_COLUMN_MAX_LEN.gate_runner,
+    { mode: 'throw', context: `--runner for gate check ${checkNumber} (sprint ${sprint})` });
 
   const gateRunGuid = opts.gateRunGuid || crypto.randomUUID();
   const guid = crypto.randomUUID();
@@ -2766,7 +2888,13 @@ async function cmdSet(db) {
   if (flags.desc === '') { console.error('claude-bow: --desc \'\' (empty) is rejected -- description is free-form prose, not a short key, so clearing it to nothing is not supported as an implicit side effect of an empty value (this is almost always a mistake, e.g. a dangling flag or an accidentally-empty quoted string). Nothing was written.'); process.exit(1); }
   if ('mkey' in flags) {
     if (flags.mkey === '') { updates.push('mkey = NULL'); }
-    else { updates.push('mkey = ?'); params.push(flags.mkey); }
+    else {
+      // 2026-08-20 QoL fix: reject an over-length --mkey/--milestone/--layer/
+      // --spec/--code-path/--codejson BEFORE the UPDATE, same reject-up-front
+      // treatment `add` already has for these columns.
+      validateLen('mkey', flags.mkey, BOW_COLUMN_MAX_LEN.mkey, { context: `--mkey for ${item.code}` });
+      updates.push('mkey = ?'); params.push(flags.mkey);
+    }
   }
   if ('seq' in flags) {
     if (flags.seq === '') { updates.push('seq = NULL'); }
@@ -2818,14 +2946,31 @@ async function cmdSet(db) {
     }
     updates.push('guid = ?'); params.push(flags.guid);
   }
-  if (flags.milestone) { updates.push('milestone = ?'); params.push(flags.milestone); }
-  if (flags.layer) { updates.push('layer = ?'); params.push(flags.layer); }
-  if (flags.spec) { updates.push('spec_ref = ?'); params.push(flags.spec); }
+  if (flags.milestone) {
+    validateLen('milestone', flags.milestone, BOW_COLUMN_MAX_LEN.milestone, { context: `--milestone for ${item.code}` });
+    updates.push('milestone = ?'); params.push(flags.milestone);
+  }
+  if (flags.layer) {
+    validateLen('layer', flags.layer, BOW_COLUMN_MAX_LEN.layer, { context: `--layer for ${item.code}` });
+    updates.push('layer = ?'); params.push(flags.layer);
+  }
+  if (flags.spec) {
+    // 2026-08-20 QoL fix: this exact column (spec_ref) is what broke a BOW
+    // import mid-run AFTER its registry PR merged -- reject up front here too.
+    validateLen('spec_ref', flags.spec, BOW_COLUMN_MAX_LEN.spec_ref, { context: `--spec for ${item.code}` });
+    updates.push('spec_ref = ?'); params.push(flags.spec);
+  }
   if (flags['guid-in']) { updates.push('guid_in = ?'); params.push(flags['guid-in']); }
   if (flags['guid-out']) { updates.push('guid_out = ?'); params.push(flags['guid-out']); }
   if (flags.estimate != null) { updates.push('estimate_days = ?'); params.push(Number(flags.estimate)); }
-  if (flags['code-path']) { updates.push('code_path = ?'); params.push(String(flags['code-path'])); }
-  if (flags.codejson) { updates.push('codejson_ref = ?'); params.push(String(flags.codejson)); }
+  if (flags['code-path']) {
+    validateLen('code_path', String(flags['code-path']), BOW_COLUMN_MAX_LEN.code_path, { context: `--code-path for ${item.code}` });
+    updates.push('code_path = ?'); params.push(String(flags['code-path']));
+  }
+  if (flags.codejson) {
+    validateLen('codejson_ref', String(flags.codejson), BOW_COLUMN_MAX_LEN.codejson_ref, { context: `--codejson for ${item.code}` });
+    updates.push('codejson_ref = ?'); params.push(String(flags.codejson));
+  }
   // BUG-017: `set` previously had NO repair path for a corrupted
   // description (BUG-090's own class -- an unescaped `$(...)`/backtick in
   // an inline --desc value gets expanded by the OUTER shell before this
@@ -2873,13 +3018,36 @@ async function cmdSet(db) {
 // `boundary: true` patterns) are ported verbatim from the guard's own
 // lineMatchesWithBoundary so a hit here is the same hit the guard would have
 // blocked at commit time.
-// BUG-151/BUG-173/BUG-027 (GR#3 -- one source of truth for the real column
-// sizes, not three re-hardcoded copies of "255" and "512"): mirrors the
-// VARCHAR sizes declared in ensureSchema() above (bow_items.title
-// VARCHAR(255), bow_items.closed_note VARCHAR(512)). `description` and
-// `bow_comments.body` are TEXT/effectively unbounded, so they are
-// intentionally absent -- no check needed there.
-const BOW_COLUMN_MAX_LEN = { title: 255, closed_note: 512 };
+// BUG-151/BUG-173/BUG-027, extended 2026-08-20 (GR#3 -- one source of truth
+// for the real column sizes, not N re-hardcoded copies of "255" and "512"):
+// mirrors EVERY VARCHAR column ensureSchema() above declares that any
+// command in this file writes a user-supplied (or plan-supplied) value into.
+// TEXT/MEDIUMTEXT columns (bow_items.description, bow_comments.body,
+// bow_comments.example_code, bow_destructive_verdicts.note,
+// bow_gate_verdicts.detail) are intentionally absent -- their MySQL limit is
+// 65535+ chars, effectively unbounded for anything this tool writes in
+// practice, matching the pre-existing precedent for `description`/`body`
+// noted at cmdSet's and cmdAmend's own call sites.
+//
+// Field/limit inventory (column -> VARCHAR(N) in ensureSchema()):
+//   bow_items:       title(255) closed_note(512) mkey(64) milestone(16)
+//                     layer(32) spec_ref(200) code_path(255)
+//                     codejson_ref(128) finding_class(64) guid_in/guid_out(36)
+//   bow_dependencies: note(255)
+//   bow_comments:     author(32) code_language(32)
+//   bow_git_refs:     commit_hash(40) branch(128) note(255)
+//   bow_destructive_verdicts: attacker(128) weakness_classes(512) findings(512)
+//   bow_gate_verdicts: check_name(64) runner(128)
+const BOW_COLUMN_MAX_LEN = {
+  title: 255, closed_note: 512, mkey: 64, milestone: 16, layer: 32,
+  spec_ref: 200, code_path: 255, codejson_ref: 128, finding_class: 64,
+  guid: 36,
+  dependency_note: 255,
+  comment_author: 32, comment_language: 32,
+  ref_commit_hash: 40, ref_branch: 128, ref_note: 255,
+  verdict_attacker: 128, verdict_weakness_classes: 512, verdict_findings: 512,
+  gate_check_name: 64, gate_runner: 128,
+};
 // Back-compat alias for redact's field-keyed lookup below.
 const REDACT_FIELD_MAX_LEN = { title: BOW_COLUMN_MAX_LEN.title };
 
@@ -3387,6 +3555,17 @@ async function cmdImport(db) {
     if (!it.mkey || !/^[a-z0-9][a-z0-9._-]*$/i.test(it.mkey)) errors.push(`${where}: missing/invalid mkey`);
     else if (byKey.has(it.mkey)) errors.push(`${where}: duplicate mkey`);
     else byKey.set(it.mkey, it);
+    // 2026-08-20 QoL fix: mkey/guidIn/guidOut are identity/reference fields,
+    // not prose -- truncating any of them would silently corrupt an identity
+    // key or a real GUID reference (worse than failing loudly), so unlike
+    // title/milestone/layer/specRef below they are REJECTED here, in the
+    // same pre-flight, before-any-write validation pass every other
+    // structural check in this loop already uses (nothing is written yet at
+    // this point either way, so this still satisfies "import must complete
+    // or fail clean, never half-write").
+    if (it.mkey && it.mkey.length > BOW_COLUMN_MAX_LEN.mkey) errors.push(`${where}: mkey too long (${it.mkey.length} chars, max ${BOW_COLUMN_MAX_LEN.mkey})`);
+    if (it.guidIn && it.guidIn.length > BOW_COLUMN_MAX_LEN.guid) errors.push(`${where}: guidIn too long (${it.guidIn.length} chars, max ${BOW_COLUMN_MAX_LEN.guid})`);
+    if (it.guidOut && it.guidOut.length > BOW_COLUMN_MAX_LEN.guid) errors.push(`${where}: guidOut too long (${it.guidOut.length} chars, max ${BOW_COLUMN_MAX_LEN.guid})`);
     if (!TYPES.includes(it.type)) errors.push(`${where}: invalid type "${it.type}"`);
     if (!it.title) errors.push(`${where}: missing title`);
     if (it.priority && !PRIORITIES.includes(it.priority)) errors.push(`${where}: invalid priority "${it.priority}"`);
@@ -3432,13 +3611,28 @@ async function cmdImport(db) {
   let added = 0, updated = 0;
   const sorted = [...items].sort((a, b) => (a.seq ?? 1e9) - (b.seq ?? 1e9));
   for (const it of sorted) {
+    // 2026-08-20 QoL fix (the incident this fix exists for: a BOW import
+    // died mid-run with "Data too long for column 'spec_ref'" AFTER its
+    // registry PR had already merged, leaving the DB half-updated). Bulk
+    // import is the ONE write path that truncates-with-warning instead of
+    // rejecting -- an import that dies partway through is strictly worse
+    // than one that completes with a few shortened fields the plan can fix
+    // later. title/milestone/layer/specRef are the plan-supplied prose/
+    // categorical fields with VARCHAR limits; mkey/guidIn/guidOut were
+    // already rejected up front above (identity fields, never truncated).
+    const itemLabel = `import item "${it.mkey}"`;
+    const title = validateLen('title', it.title, BOW_COLUMN_MAX_LEN.title, { mode: 'truncate', context: itemLabel });
+    const milestone = validateLen('milestone', it.milestone || null, BOW_COLUMN_MAX_LEN.milestone, { mode: 'truncate', context: itemLabel });
+    const layer = validateLen('layer', it.layer || null, BOW_COLUMN_MAX_LEN.layer, { mode: 'truncate', context: itemLabel });
+    const specRef = validateLen('spec_ref', it.specRef || null, BOW_COLUMN_MAX_LEN.spec_ref, { mode: 'truncate', context: itemLabel });
+
     const [rows] = await db.query('SELECT guid FROM bow_items WHERE mkey = ?', [it.mkey]);
     if (rows.length) {
       await db.query(
         `UPDATE bow_items SET title = ?, description = ?, seq = ?, sprint = ?, priority = ?, milestone = ?,
            layer = ?, spec_ref = ?, guid_in = ?, guid_out = ? WHERE mkey = ?`,
-        [it.title, it.desc || null, it.seq ?? null, it.sprint ?? null, it.priority || 'P2', it.milestone || null,
-         it.layer || null, it.specRef || null, it.guidIn || null, it.guidOut || null, it.mkey]);
+        [title, it.desc || null, it.seq ?? null, it.sprint ?? null, it.priority || 'P2', milestone,
+         layer, specRef, it.guidIn || null, it.guidOut || null, it.mkey]);
       updated++;
     } else {
       const guid = it.guid || crypto.randomUUID();
@@ -3447,8 +3641,8 @@ async function cmdImport(db) {
         `INSERT INTO bow_items (guid, code, mkey, seq, sprint, item_type, title, description, priority,
            milestone, layer, spec_ref, guid_in, guid_out)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [guid, code, it.mkey, it.seq ?? null, it.sprint ?? null, it.type, it.title, it.desc || null, it.priority || 'P2',
-         it.milestone || null, it.layer || null, it.specRef || null, it.guidIn || null, it.guidOut || null]);
+        [guid, code, it.mkey, it.seq ?? null, it.sprint ?? null, it.type, title, it.desc || null, it.priority || 'P2',
+         milestone, layer, specRef, it.guidIn || null, it.guidOut || null]);
       added++;
     }
   }
@@ -3638,7 +3832,7 @@ module.exports = {
   // the shared path-scope and overflow-check helpers, in addition to the
   // required real-subprocess CLI tests.
   isPathUnderAnyRoot, isTextFlagPathAllowed, TEXT_FLAG_ALLOWED_ROOTS,
-  rejectIfOverColumnLimit, BOW_COLUMN_MAX_LEN,
+  rejectIfOverColumnLimit, validateLen, BOW_COLUMN_MAX_LEN,
   // BUG-061 (tool.bow `redact`): exported for direct unit testing of the
   // replace/count logic against fixture text, in addition to the required
   // real-subprocess contract tests (Aaron's ruling: verify the way Tester-2
