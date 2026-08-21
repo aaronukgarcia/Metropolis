@@ -59,7 +59,11 @@ bow-ui.html
 # Scratch/backup files agents leave beside source; the content belongs in a
 # BOW item or a commit, never as loose debris (sitrep 2026-08-17 A7).
 *.other-agent.bak
+*.bak
 _edges_scratch.txt
+# opencode lane launchers embed the deepseek API key inline ($env:ANTHROPIC_API_KEY)
+# — never commitable, same rule as .env (root scratch, not source).
+opencode-*.bat
 # coordination-keeper.js's silent renewal log
 .claude/keeper.log
 
