@@ -24,6 +24,11 @@
 //     the same compose.Wire.
 //   - feat.detgate      — see engine.core note above; not wired into this
 //     binary's runtime, verified via its own CI-gated test suite.
+//   - harness.headless  — MOD-015, no longer a seam: -headless dispatches
+//     into internal/harness/headless's full Run (seed/months/scenario/
+//     report/pool-size/debug), reaching the same compose.Wire-built
+//     engine.core as the interactive path (headless.go, run.go's -headless
+//     branch).
 //   - ui.core           — RenderLoop/InputLoop/ViewsLoop/ViewStore, the
 //     tcell.Screen owner (internal/ui/core).
 //   - ui.widgets        — widgets.DefaultPalette, the two-layer semantic
@@ -47,8 +52,7 @@
 //     run.go's isQuitInput doc comment.
 //   - ui.harness / harness.replay (MOD-014/MOD-013) — the keystroke-level
 //     "real terminal in, real Command out" leg (this item's AC-1b/AC-5b).
-//   - harness.headless (MOD-015) — see the -headless flag's seam in run.go
-//     (AC-6, supplementary).
+//     Not imported anywhere under cmd/metropolis.
 //
 // # What this binary does NOT prove (read before demoing it)
 //
