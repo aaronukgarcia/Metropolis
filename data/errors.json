@@ -1878,8 +1878,8 @@
     "MET-G108": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "ghost-city death-warning provider shape invalid: {detail}",
-      "remedy": "The ghost-city provider must supply both current and historic-peak values so the dual-threshold margin is computable; an incomplete shape is rejected, not defaulted (FEAT-068, AC-18)."
+      "message": "curve provider registered for commodity \"{commodity}\" does not implement the required peak-tracking field \"{field}\"",
+      "remedy": "The provider registered under CurveKeyGhostCityPopulation must additionally implement GhostCityPeakProvider (HistoricPeak) so AC-18's dual-threshold margin is computable; a provider missing that method is rejected, not defaulted (FEAT-068, AC-18)."
     },
     "MET-G109": {
       "severity": "error",

@@ -73,11 +73,25 @@ const (
 	// fail loudly anyway" convention engine.season/engine.market also use.
 	ErrEmbeddedConfigInvalid = "MET-G107"
 
-	// ErrGhostCityProviderShape: the provider registered under the
+	// ErrCurveProviderMissingPeak: the provider registered under the
 	// reserved MarginToGhostCity curve key does not additionally implement
 	// GhostCityPeakProvider (HistoricPeak), so AC-18's dual-threshold check
 	// cannot be evaluated.
-	ErrGhostCityProviderShape = "MET-G108"
+	//
+	// Renamed from ErrGhostCityProviderShape (ASM-1233, Aaron ruling
+	// 2026-08-20): the old name accidentally pattern-matched
+	// engine.spiral's genuine ghost-city death path (DeathGhostCity /
+	// ErrGhostCityNoWarning, MET-G1102) even though this error is a
+	// completely different failure mode -- a provider-registration shape
+	// mismatch in engine.projections, not a death condition. engine.
+	// spiral owns the "GhostCity" death-path name; this module's other
+	// GhostCity-prefixed identifiers (CurveKeyGhostCityPopulation,
+	// GhostCityPeakProvider, MarginToGhostCity) are unaffected -- they
+	// legitimately track spiral's own ghost-city population threshold
+	// from the outside and are not part of this collision. Still MET-G108
+	// (the registry code is stable identity; only the Go constant name
+	// changed, so no new registry entry was needed).
+	ErrCurveProviderMissingPeak = "MET-G108"
 
 	// ErrCopiedValue: a *ProjectionsAPI method was called on a
 	// struct-copied value, not the one NewProjectionsAPI constructed
