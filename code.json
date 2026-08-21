@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 165,
+  "moduleCount": 167,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -531,6 +531,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
@@ -569,6 +573,10 @@
           {
             "key": "feat.devmode",
             "outboundGuid": "fd1a00fd-bc5c-4f45-aaba-9228151168a5"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
           {
             "key": "feat.helper",
@@ -977,12 +985,20 @@
             "outboundGuid": "bed174ed-42bc-4b19-9381-939b51985b3b"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
           {
             "key": "harness.synth",
@@ -1221,6 +1237,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
@@ -1235,6 +1255,10 @@
           {
             "key": "feat.deathwave",
             "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
         ]
       },
@@ -2609,6 +2633,10 @@
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
@@ -2743,12 +2771,20 @@
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
           {
             "key": "ui.screen.demo",
@@ -3313,6 +3349,10 @@
             "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.tunnels",
             "outboundGuid": "2b5739de-8802-4887-8a6a-d0305a27c900"
           },
@@ -3397,6 +3437,10 @@
           {
             "key": "engine.traffic",
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
+          },
+          {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
           }
         ]
       },
@@ -4426,6 +4470,10 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
         ]
       },
@@ -4466,6 +4514,67 @@
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
             "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "ab40c86a-a7b1-4a03-82fe-5da475250869",
+      "key": "feat.faith",
+      "bowType": "feature",
+      "seq": 425,
+      "sprint": 11,
+      "title": "Faith & places of worship — a light background dimension of the people",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "FEAT-138 BOW desc",
+      "path": "internal/engine/faith/",
+      "inbound": {
+        "guid": "7468c6f6-ecfb-4ce1-a9bf-072666952e64",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2",
+        "calls": [
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "engine.wellbeing",
+            "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
+            "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
+          },
+          {
+            "key": "engine.social",
+            "moduleGuid": "b31dcdb1-b4f7-4d12-abec-9279e74412db",
+            "inboundGuid": "5f18ec56-65bd-45a8-a48d-ea42e07228e3"
           },
           {
             "key": "foundation.data",
@@ -6950,7 +7059,12 @@
         "name": "SocialAPI",
         "format": "Go package API + deltas",
         "pattern": "caseload generation decomposed; Slow-Fuse projections on cuts",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          }
+        ]
       },
       "outbound": {
         "guid": "a5ae75cf-b566-4ae4-a521-112d48426ef3",
@@ -7505,6 +7619,72 @@
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "4f81ea4d-ac85-4148-a5e7-520fccdf2d77",
+      "key": "engine.transit",
+      "bowType": "module",
+      "seq": 815,
+      "sprint": 10,
+      "title": "Public transport: lines, stops, depots, fleet & ridership",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "FEAT-161/FEAT-162 BOW desc; §19 (mode logit)",
+      "path": "internal/engine/transit/",
+      "inbound": {
+        "guid": "c895416d-8b7b-46a0-bd33-ac0cf3129553",
+        "name": "TransitAPI",
+        "format": "Go package API + deltas",
+        "pattern": "line/stop/depot/fleet accounting; saturation reports the binding bound; ridership feeds mode logit",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd",
+        "calls": [
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "engine.roads",
+            "moduleGuid": "0fa53b51-245f-426f-95fd-ba208a024a6c",
+            "inboundGuid": "6510e884-5a50-4b50-86c1-78a6329b26d0"
+          },
+          {
+            "key": "engine.traffic",
+            "moduleGuid": "f048ef78-9446-4fdb-845e-500fda1f2743",
+            "inboundGuid": "df65414a-b7cd-4003-b25d-0772bf9049d5"
+          },
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
           },
           {
             "key": "foundation.errors",
@@ -9653,6 +9833,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
@@ -9671,6 +9855,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
         ]
       },
