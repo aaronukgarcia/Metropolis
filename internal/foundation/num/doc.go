@@ -63,3 +63,24 @@
 //
 // Module key: foundation.num (see code.json; GUID 74ff5b3b-bfc6-4376-b461-267f4467a39f)
 package num
+
+// ASM-884 (confirm-and-close). Skills phantom num.SafeInt64/SafeFloat64/noCopy reconciled by updating skills to shipped ClampInt64FromFloat/GuardFinite/copy-guard names.
+//
+// ASM-982 (confirm-and-close). FEAT-135 / feat.securehelpers lands in this
+// package (reject-form coercion helpers) plus foundation.registry
+// (copy-guard); registered as foundation.num (MOD-079) with no separate
+// feat.securehelpers feature entry (per ES-1).
+//
+// ASM-985 (confirm-and-close). The F800-F899 error sub-range is reserved in
+// data/errors.json for foundation.num coercion errors (MET-F800 non-finite,
+// MET-F801 overflow); claimed at build time, not pre-allocated.
+//
+// ASM-1017 (confirm-and-close). BoundedFloat is fail-closed at the boundary:
+// a non-finite lo/hi bound is a defect and is rejected (SEC-093 applies to
+// the bound side as well as the value side) — GR#15 bounds derived from data
+// can carry NaN, so the reject form is mandatory.
+//
+// ASM-1030 (confirm-and-close). BoundedFloat reuses MET-F800 for a
+// non-finite bound rather than minting a dedicated bound code — the failure
+// class is identical (a non-finite value at a numeric boundary) and the
+// criterion only requires a registry-sourced error, not a distinct code.
