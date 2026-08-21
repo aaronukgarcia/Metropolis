@@ -139,12 +139,30 @@ func printBootError(stderr io.Writer, err error) {
 // w.screens.Activate last selected (a pointer swap, design §7(d) — no
 // re-subscribe, no reconstruction, so this closure's own cost per tick
 // never grows with how many screens are registered).
+// composeDraw builds the ONE core.DrawFunc runInteractive hands to
+// NewRenderLoop: the active screen draws first, then BUG-322's status line is
+// overlaid on the last row.
+//
+// A named function rather than a closure literal inside runInteractive
+// purely so it is testable: runInteractive itself needs a live tcell.Screen
+// and blocks until a quit key, so a status bar wired only in there could be
+// deleted without a single test going red — which is precisely the
+// "nothing on screen looks the same as nothing running" failure BUG-322 is
+// about. See TestBUG322_ComposedDrawIncludesTheStatusLine.
+//
+// Order is the contract: screen first, clock chrome on top, so the overlay
+// always wins the last row no matter what the active screen drew there.
+func composeDraw(w *skeletonWiring) core.DrawFunc {
+	statusDraw := statusBarDraw(w.statusBar)
+	return func(back *core.Buffer, vm *core.ViewModels) {
+		w.screens.ActiveDraw()(back, vm)
+		statusDraw(back, vm)
+	}
+}
+
 func runInteractive(w *skeletonWiring, screen tcell.Screen) {
 	inputLoop := core.NewInputLoop(screen, 32)
-	activeScreenDraw := func(back *core.Buffer, vm *core.ViewModels) {
-		w.screens.ActiveDraw()(back, vm)
-	}
-	renderLoop := core.NewRenderLoop(screen, w.viewStore, activeScreenDraw)
+	renderLoop := core.NewRenderLoop(screen, w.viewStore, composeDraw(w))
 
 	stop := make(chan struct{})
 	var stopOnce sync.Once

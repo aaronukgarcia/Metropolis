@@ -269,6 +269,14 @@ type skeletonWiring struct {
 
 	mapScreen *mapscreen.MapScreen
 
+	// statusBar is BUG-322's on-screen proof that time is moving: the
+	// live "engine.status" figures (tick, month, speed, paused), primed
+	// and router-bound exactly like financeScreen/servicesScreen, drawn
+	// as a one-line overlay under whichever screen is active (run.go).
+	// See statusbar.go for why this is a one-line overlay rather than
+	// ui.screens/chrome.
+	statusBar *statusBar
+
 	// debugState is feat.debugmode's (FEAT-008) single source of truth
 	// for whether debug mode is on, and devConsole is feat.devmode's
 	// (FEAT-065) pause-anywhere console wired against it (BUG-122). Both
@@ -371,6 +379,21 @@ func (w *skeletonWiring) EngineRunErr() error { return w.engineRunErr }
 // run() itself, not just bootCore directly (see run_test.go).
 var newBootRegistry = func() *registry.Registry { return registry.NewRegistry() }
 
+// bootSecondsPerMonthAt1x reads data/pacing.json's secondsPerMonthAt1x
+// (BUG-322). A package-level indirection for exactly the same reason
+// newBootRegistry above is one: it lets a test drive the REAL boot path —
+// bootCore, the real engine, the real transport, the real tick driver —
+// at a pacing a test can actually observe.
+//
+// At the shipped value (480 s/month) one tick is 16 real seconds, so a
+// test that waited for a tick through the production constant would have
+// to be a 16-second test, and CI would either be slow or the assertion
+// would be a wall-clock guess. Tests substitute a fast pacing constant
+// and count TICKS (BUG-031: never assert a wall-clock ceiling). Nothing
+// in production ever replaces this — the binary always reads the data
+// file, which is what GR#15 requires.
+var bootSecondsPerMonthAt1x = enginecore.LoadDefaultSecondsPerMonthAt1x
+
 // bootCore wires int.protocol + engine.core (via the composition root) +
 // ui.core + ui.screen.map + the module registry (AC-1a/AC-2/AC-5a) and
 // starts core.Engine.RunCommandLoop and ui.core.ViewsLoop.Run as
@@ -408,11 +431,40 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// header is wired and what that means for Enable today.
 	dbgState := debug.NewState()
 
+	// BUG-322: load the real-time pacing knob from data/pacing.json and give
+	// it to the engine. Until now this binary called a bare NewEngine, so the
+	// clock silently fell back to core.DefaultSecondsPerMonthAt1x and
+	// data/pacing.json — a file that exists, is validated, and is loaded by
+	// core.LoadDefaultSecondsPerMonthAt1x — was dead weight in the tree
+	// (GR#15: the value the simulation is paced by must come from data, not
+	// from a Go var that happens to hold the same number today).
+	//
+	// This ONE loaded value is handed to BOTH the engine (below) and the tick
+	// driver (further down) — never loaded twice, never re-derived, so the
+	// pacer and the clock it paces can never disagree (GR#3).
+	//
+	// A failure is a loud, registry-sourced boot failure, matching
+	// LoadSecondsPerMonthAt1x's own "never a silent fallback to
+	// DefaultSecondsPerMonthAt1x" contract: a binary whose pacing file is
+	// missing or corrupt must say so, not quietly run at a number nobody
+	// chose.
+	secondsPerMonthAt1x, err := bootSecondsPerMonthAt1x(correlationID)
+	if err != nil {
+		cancel()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "engine.core.LoadDefaultSecondsPerMonthAt1x",
+		})
+	}
+
 	// FEAT-082: build the real engine and wire the baseline-one hook set
 	// through the single composition path (AC-12/AC-13). A wiring failure
 	// (e.g. market.LoadDefault cannot resolve data/market.json) is a loud
 	// boot failure, never a partially-wired engine.
-	engine := enginecore.NewEngine(enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x))
+	engine := enginecore.NewEngine(
+		enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x),
+		enginecore.WithSecondsPerMonthAt1x(secondsPerMonthAt1x),
+	)
 	if _, err := compose.Wire(engine, nil); err != nil {
 		cancel()
 		_ = transport.Close()
@@ -428,6 +480,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		engine:        engine,
 		viewStore:     core.NewViewStore(),
 		mapScreen:     mapscreen.NewMapScreen(correlationID, widgets.DefaultPalette),
+		statusBar:     newStatusBar(),
 		ctx:           ctx,
 		cancel:        cancel,
 		engineDone:    make(chan struct{}),
@@ -541,6 +594,44 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.finance.Subscribe",
+		})
+	}
+
+	// BUG-322: prime + bind the "engine.status" subscription, through the
+	// SAME handshake, in the same pre-router.Run window. This is what puts
+	// the live tick/month/speed/paused figures on screen (statusbar.go) and
+	// closes the third arm of the bug: "a frozen sim and a broken binary
+	// look identical."
+	//
+	// "engine.status" is registered by NewEngine itself (engine.go — v1's
+	// one always-available view), NOT by compose.Wire, so unlike
+	// "f1.viewport" this Subscribe is genuinely served and a first Delta is
+	// genuinely produced; priming it is therefore correct rather than a
+	// guaranteed timeout. Its name comes from the engine's own exported
+	// constant, never a hand-typed "engine.status" literal (GR#3).
+	//
+	// bind is a no-op: statusBar holds ONE subscription and keys nothing by
+	// SubscriptionID (unlike finance/services, whose screens track their own
+	// ID). router.BindSubscription — which primeScreenSubscription performs
+	// itself — is what actually routes every subsequent delta here.
+	statusCorrID := errs.NewCorrelationID()
+	if err := primeScreenSubscription(transport, w.router, primed, statusCorrID, enginecore.EngineStatusViewName,
+		func() error {
+			return transport.SendCommand(protocol.Command{
+				ProtocolVersion: protocol.ProtocolVersion,
+				CorrelationID:   protocol.CorrelationID(statusCorrID),
+				Kind:            protocol.KindSubscribe,
+				Payload:         protocol.SubscribePayload{ViewName: enginecore.EngineStatusViewName},
+			})
+		},
+		func(protocol.SubscriptionID) {},
+		w.statusBar.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "engine.core.status.Subscribe",
 		})
 	}
 
@@ -660,6 +751,16 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F4"})
 	}
 
+	// BUG-322: the player's clock controls. Registered on the SAME chrome
+	// global grammar as F1/F2/F4, for the same reason — controlling time is
+	// not a per-screen action, it must work whatever is on screen.
+	if err := registerClockKeys(w); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, err
+	}
+
 	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's
 	// real, already-accepted Subscribe method — internal/ui/screens/map's
 	// own public API — never a hand-rolled Command literal standing in
@@ -688,7 +789,150 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	w.wg.Add(1)
 	go func() { defer w.wg.Done(); w.routerRunErr = w.router.Run(ctx) }()
 
+	// BUG-322: START THE CLOCK. Everything above this line was already true
+	// before this fix — a fully wired real engine with nine phase hooks, a
+	// live subscription pump, real router-bound screens — and the binary
+	// still sat at tick 0 forever, because nothing ever sent an
+	// AdvanceTicks. This goroutine is that missing connection.
+	//
+	// Started here, under the SAME ctx and the SAME WaitGroup as
+	// RunCommandLoop and router.Run, deliberately: shutdown() cancels ctx,
+	// wg.Wait()s every one of them, and only then closes the transport, so
+	// the driver is provably finished before the channels it sends on are
+	// closed (see tickdriver.go's shutdown section). It is NOT tied to the
+	// UI's stop channel or its 10 Hz render ticker — the simulation cadence
+	// and the frame cadence are independent by construction.
+	//
+	// secondsPerMonthAt1x is the SAME value handed to NewEngine above, from
+	// the same single data/pacing.json load.
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		newTickDriver(w.engine.Clock, transport.SendCommand, secondsPerMonthAt1x).Run(ctx)
+	}()
+
 	return w, nil
+}
+
+// registerClockKeys binds BUG-322's player-facing clock controls onto the
+// chrome global grammar: Space toggles pause/resume, ']' steps speed up and
+// '[' steps it down. Every one of them reaches the engine the ONLY sanctioned
+// way — as a real protocol.Command through the transport — never by poking
+// the Clock directly, so the same commands a replay log or a future scripted
+// test issues are the ones a keypress issues.
+//
+// # Why these keys
+//
+// Space is UI-SPEC §3's pause key and is not one of ui.keys' reserved tokens
+// (only <Esc>, '.', 'u', 'U' are), so it is bindable as a global. It arrives
+// from tcell as a plain rune (keys.Key{Rune: ' '}), which is why it is
+// registered as keys.KeyRune(' ') and not as a named special.
+//
+// Speed is bound to '[' and ']', NOT to the 1/2/3 digits UI-SPEC §3 names.
+// That is a deliberate, temporary divergence, and run.go's routeKeyInput doc
+// comment is where the reason is written out in full: chromeGrammar is fed
+// EVERY keystroke, and a bare digit at idle is claimed by ui.keys' count-
+// prefix accumulator, so digit globals here would both change speed AND
+// leave a count prefix on the active screen's grammar — silently breaking
+// services' existing counted actions ("3 s f +"). That comment states the
+// fix required to land digit speed keys safely (make chrome's fall-through
+// conditional on FeedResult, in the same commit as the digit globals);
+// making that change is a routing change with its own blast radius on the
+// services keys, and it is NOT this P0's scope. Bracket keys give the player
+// working speed control today without touching the routing rules; whoever
+// lands UI-SPEC §3's digits does both halves together, as that comment
+// requires.
+//
+// Speed8xDebug is deliberately NOT reachable from these keys: it is
+// debug-gated (engine.core's checkSpeed8xAllowed), and a debug-only speed
+// must not be one bracket press away from a player.
+func registerClockKeys(w *skeletonWiring) error {
+	bindings := []struct {
+		key    keys.Key
+		name   string
+		action func()
+	}{
+		{keys.KeyRune(' '), "Pause/Resume (Space)", func() { w.togglePause() }},
+		{keys.KeyRune(']'), "Faster (])", func() { w.stepSpeed(+1) }},
+		{keys.KeyRune('['), "Slower ([)", func() { w.stepSpeed(-1) }},
+	}
+	for _, b := range bindings {
+		run := b.action
+		if err := w.chromeGrammar.RegisterGlobal(b.key, keys.Action{Name: b.name, Run: func(keys.ActionArgs) { run() }}); err != nil {
+			return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
+				"component": "ui.keys.RegisterGlobal", "key": b.key.Token(),
+			})
+		}
+	}
+	return nil
+}
+
+// playerSpeeds is the speed ladder '[' and ']' walk, in ascending order —
+// engine.core's documented player-facing multipliers (clock.go's §3 speed
+// table) minus Speed8xDebug, which is debug-gated and must not be reachable
+// from a player keybinding. Named constants, never literals.
+var playerSpeeds = []enginecore.Speed{enginecore.Speed1x, enginecore.Speed2x, enginecore.Speed4x}
+
+// togglePause sends whichever of Pause/Resume flips the CURRENT clock state.
+// The state is read from the engine (Engine.Clock is documented safe for
+// concurrent use), never tracked locally in the UI: a locally-cached "am I
+// paused" flag is the classic way a toggle key drifts out of sync with the
+// thing it toggles, and the engine already owns the answer.
+//
+// Errors are deliberately not surfaced: Clock() only fails on a struct-copied
+// Engine (impossible for the pointer bootCore holds) and SendCommand only
+// fails on a full queue or a closed transport — in either case the key press
+// did not take effect, and the status line will keep showing the unchanged
+// state, which is the honest feedback. There is no error channel from a
+// keys.Action.Run (its signature returns nothing, the same constraint the
+// F-key globals above document).
+func (w *skeletonWiring) togglePause() {
+	c, err := w.engine.Clock()
+	if err != nil {
+		return
+	}
+	kind, payload := protocol.Kind(protocol.KindPause), protocol.CommandPayload(protocol.PausePayload{})
+	if c.Paused() {
+		kind, payload = protocol.KindResume, protocol.ResumePayload{}
+	}
+	_ = w.transport.SendCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.NewCorrelationID(),
+		Kind:            kind,
+		Payload:         payload,
+	})
+}
+
+// stepSpeed moves one rung along playerSpeeds (delta +1 faster, -1 slower)
+// and sends the resulting SetSpeed command. At either end of the ladder the
+// press is a no-op rather than wrapping around: a player holding ']' should
+// arrive at 4x and stay there, not silently fall back to 1x.
+//
+// An unrecognised current speed (only reachable if something set 8x through
+// the debug path) is treated as "start from the top of the ladder" so the
+// keys still work rather than dead-ending.
+func (w *skeletonWiring) stepSpeed(delta int) {
+	c, err := w.engine.Clock()
+	if err != nil {
+		return
+	}
+	idx := len(playerSpeeds) - 1
+	for i, s := range playerSpeeds {
+		if s == c.Speed() {
+			idx = i
+			break
+		}
+	}
+	next := idx + delta
+	if next < 0 || next >= len(playerSpeeds) {
+		return
+	}
+	_ = w.transport.SendCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.NewCorrelationID(),
+		Kind:            protocol.KindSetSpeed,
+		Payload:         protocol.SetSpeedPayload{Speed: int(playerSpeeds[next])},
+	})
 }
 
 // primeScreenSubscription performs the one synchronous handshake every

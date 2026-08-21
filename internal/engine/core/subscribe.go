@@ -33,6 +33,15 @@ import (
 // by.
 const engineStatusView = "engine.status"
 
+// EngineStatusViewName is engineStatusView exported for callers OUTSIDE
+// this package that need to Subscribe to it by name (BUG-322: the
+// composition root now subscribes to it so the live tick/month/speed/
+// paused figures reach the screen). Defined as an alias of the unexported
+// constant, never as a second string literal — GR#3: one spelling of the
+// view name in the tree, and a caller that hardcodes "engine.status" for
+// itself is drift waiting to happen.
+const EngineStatusViewName = engineStatusView
+
 // ViewPatchFunc computes the current JSON patch for one registered view.
 // Called only from the subscription pump goroutine (commands.go's
 // StartSubscriptionPump), at each publish cycle, off the main tick/
