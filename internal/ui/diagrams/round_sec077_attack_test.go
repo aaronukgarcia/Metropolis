@@ -1,6 +1,8 @@
 package diagrams
 
 import (
+	"encoding/binary"
+	"math"
 	"reflect"
 	"sync"
 	"testing"
@@ -131,31 +133,167 @@ func TestSEC077_PaletteNameNULInjectionCollides(t *testing.T) {
 	// Recorded as a passing property, not a finding.
 }
 
-// ATTACK 3b -- the same unescaped-separator class in the topology hashes that
-// feed layoutKey. ChainTopology.Hash joins caller strings with NUL and emits
-// VARIABLE-arity records ("n" = 3 fields, "e" = 5 fields) with no length
-// prefix and no escaping, so a node Label carrying NULs can impersonate a
-// whole edge record. Two structurally DIFFERENT chains -- one with an edge,
-// one without -- hash identically and share one cached layout.
+// ATTACK 3b -- BUG-319. Before the fix, the topology hashes that feed
+// layoutKey joined caller strings with a bare NUL and emitted VARIABLE-arity
+// records ("n" = 3 fields, "e" = 5 fields) with no length prefix and no
+// escaping, so a node Label carrying NULs could impersonate a whole edge
+// record: two structurally DIFFERENT chains -- one with an edge, one
+// without -- hashed identically and shared one cached layout.
+//
+// The fix (types.go, writeField): every Hash() now emits a one-byte tag
+// per record followed by a FIXED number of length-prefixed fields, the
+// prefix a real 8-byte big-endian byte count computed from len(s), never
+// copied from or influenced by the caller's bytes. This test proves the
+// original forgery is closed for all three topology kinds, and
+// TestBUG319_LengthPrefixForgeryAttempts below tries new forgeries
+// specifically shaped for the length-prefixed scheme.
 func TestSEC077_ChainHashNULRecordForgery(t *testing.T) {
-	// KNOWN DEFECT, pre-dating the SEC-077 height fix and out of its scope:
-	// the round that found it reported it to the lead for its own BOW item.
-	// Remove this Skip when the topology hashes gain escaping or length
-	// prefixes; the assertion below is the permanent regression test.
-	t.Skip("known defect: unescaped NUL framing in ChainTopology.Hash -- reported for a separate BOW item")
 	withEdge := ChainTopology{
 		Nodes: []ChainNode{{ID: "A", Label: "L"}},
 		Edges: []ChainEdge{{ID: "e1", From: "A", To: "A", Figure: "f"}},
 	}
-	// Same serialised bytes, no edge at all: the edge record is smuggled
-	// inside the node's Label.
+	// Same NUL-joined bytes the legacy scheme collapsed onto one record: the
+	// edge record smuggled inside the node's Label.
 	forged := ChainTopology{
 		Nodes: []ChainNode{{ID: "A", Label: "L\x00e\x00e1\x00A\x00A\x00f"}},
 	}
 	if withEdge.Hash() == forged.Hash() {
-		t.Fatalf("ChainTopology.Hash: unescaped, unlength-prefixed NUL framing -- a 1-node/1-edge "+
-			"chain and a 1-node/0-edge chain both hash to 0x%x, so one cached layout serves both",
+		t.Fatalf("BUG-319: ChainTopology.Hash still collides on the legacy NUL-record forgery -- "+
+			"a 1-node/1-edge chain and a 1-node/0-edge chain both hash to 0x%x",
 			withEdge.Hash())
+	}
+}
+
+// ATTACK 3c -- the same legacy-shaped forgery against NetworkTopology and
+// SankeyTopology, so a fix applied to Chain alone (BUG-319's stated risk)
+// would be caught here.
+func TestBUG319_NetworkAndSankeyHashNULRecordForgery(t *testing.T) {
+	netWithEdge := NetworkTopology{
+		Mode:  NetworkGrid,
+		Nodes: []NetworkNode{{ID: "A", Label: "L", X: 1, Y: 2}},
+		Edges: []NetworkEdge{{ID: "e1", From: "A", To: "A", Load: 0.5}},
+	}
+	netForged := NetworkTopology{
+		Mode:  NetworkGrid,
+		Nodes: []NetworkNode{{ID: "A", Label: "L\x00e\x00e1\x00A\x00A\x000.5", X: 1, Y: 2}},
+	}
+	if netWithEdge.Hash() == netForged.Hash() {
+		t.Fatalf("BUG-319: NetworkTopology.Hash collides on a legacy-shaped NUL-record forgery: 0x%x",
+			netWithEdge.Hash())
+	}
+
+	sankeyWithSink := SankeyTopology{
+		Sources: []SankeyFlow{{ID: "A", Name: "L", Amount: 1}},
+		Sinks:   []SankeyFlow{{ID: "k1", Name: "spend", Amount: 2}},
+	}
+	sankeyForged := SankeyTopology{
+		Sources: []SankeyFlow{{ID: "A", Name: "L\x00k\x00k1\x00spend\x002", Amount: 1}},
+	}
+	if sankeyWithSink.Hash() == sankeyForged.Hash() {
+		t.Fatalf("BUG-319: SankeyTopology.Hash collides on a legacy-shaped NUL-record forgery: 0x%x",
+			sankeyWithSink.Hash())
+	}
+}
+
+// ATTACK 3d -- forgeries aimed specifically at the NEW length-prefixed
+// scheme, not the old one. Per BUG-319's instructions: construct a forgery
+// against the fix before claiming it works. Three angles are tried:
+//
+//  1. Replay the exact legacy attack bytes (already covered above, repeated
+//     here for the completeness argument) -- the true length prefix in
+//     front of the (now longer) Label reports its real, longer length, so
+//     it can never be misread as the old NUL-joined tail.
+//  2. Embed a LITERAL 8-byte big-endian length prefix (chosen to look like
+//     a plausible field length) inside a Label, hoping the hasher somehow
+//     re-parses field content as framing. Hash() never re-parses its own
+//     output -- it only ever WRITES a length computed from Go's real
+//     len(s) -- so embedded bytes that merely resemble a length prefix stay
+//     inert content.
+//  3. Empty-field / zero-count boundary: two nodes with empty ID and Label
+//     against one node with empty ID and Label, probing whether an empty
+//     field can be "absorbed" by its neighbour's length count.
+//
+// None of these produce a collision. The reason is structural, not
+// empirical: writeField's length prefix is mechanically derived from
+// len(s) at write time and is never supplied, echoed, or influenced by the
+// caller's field content, so the byte offset of the next field or the next
+// record's tag is always truthfully encoded. Given a fixed field count per
+// tag ('n' always contributes exactly 2 fields, 'e' always exactly 4), the
+// stream decomposes into (tag, field, field, ...) in exactly one way, which
+// is what makes the encoding collision-free by construction (an FNV-1a hash
+// collision on top of that injective encoding remains theoretically
+// possible, as documented on hashString, but that is a different, far
+// weaker class of risk than the original structural forgery).
+func TestBUG319_LengthPrefixForgeryAttempts(t *testing.T) {
+	withEdge := ChainTopology{
+		Nodes: []ChainNode{{ID: "A", Label: "L"}},
+		Edges: []ChainEdge{{ID: "e1", From: "A", To: "A", Figure: "f"}},
+	}
+
+	// Angle 2: embed a real 8-byte big-endian encoding of 1 (a length value
+	// that matches "A"'s and "L"'s own true field lengths elsewhere in the
+	// stream) directly inside a Label, chasing re-interpretation as framing.
+	var fakeLenOne [8]byte
+	binary.BigEndian.PutUint64(fakeLenOne[:], 1)
+	forgedFakePrefix := ChainTopology{
+		Nodes: []ChainNode{{ID: "A", Label: "L" + string(fakeLenOne[:]) + "e"}},
+	}
+	if withEdge.Hash() == forgedFakePrefix.Hash() {
+		t.Fatal("BUG-319: a literal 8-byte length-prefix pattern embedded in Label forged a record boundary")
+	}
+
+	// Angle 3: empty-field boundary. A 2-node topology of all-empty fields
+	// must not collapse onto a 1-node topology of all-empty fields, or vice
+	// versa -- the record count must stay externally observable even when
+	// every field carries zero content bytes.
+	twoEmptyNodes := ChainTopology{Nodes: []ChainNode{{ID: "", Label: ""}, {ID: "", Label: ""}}}
+	oneEmptyNode := ChainTopology{Nodes: []ChainNode{{ID: "", Label: ""}}}
+	if twoEmptyNodes.Hash() == oneEmptyNode.Hash() {
+		t.Fatal("BUG-319: two all-empty-field nodes collapsed onto one all-empty-field node")
+	}
+
+	// Angle 3b: an edge count that could plausibly be misread as a length.
+	// A chain with exactly one 1-byte node ID ("A") followed by many edges
+	// must not collide with a chain whose single node's ID length happens
+	// to match the total byte count of those edge records -- i.e. no
+	// "node count read as a length" confusion is possible because node and
+	// edge records are never merged into a single length-prefixed field.
+	manyEdges := ChainTopology{
+		Nodes: []ChainNode{{ID: "A", Label: ""}},
+		Edges: []ChainEdge{
+			{ID: "1", From: "A", To: "A", Figure: ""},
+			{ID: "2", From: "A", To: "A", Figure: ""},
+		},
+	}
+	singleNodeOnly := ChainTopology{Nodes: []ChainNode{{ID: "A", Label: ""}}}
+	if manyEdges.Hash() == singleNodeOnly.Hash() {
+		t.Fatal("BUG-319: an edge-record sequence collapsed onto a bare node record")
+	}
+}
+
+// ATTACK 3e -- NaN/Inf folding in SankeyTopology.Hash is unaffected by the
+// BUG-319 length-prefix change: two Sankey topologies whose Amount is a
+// different NaN BIT PATTERN (but the same conceptual "not a number") must
+// still hash identically, because strconv.FormatFloat -- unchanged by this
+// fix -- collapses every NaN payload to the literal text "NaN" before that
+// text is length-prefixed and framed. Conversely, a real numeric Amount
+// must never collide with a NaN/Inf Amount.
+func TestBUG319_SankeyNaNInfFoldingUnaffected(t *testing.T) {
+	nan1 := math.NaN()                                       // canonical NaN
+	nan2 := math.Float64frombits(math.Float64bits(nan1) | 1) // different payload, still NaN
+	if !math.IsNaN(nan2) {
+		t.Fatal("test setup: nan2 is not NaN")
+	}
+	topoNaN1 := SankeyTopology{Sources: []SankeyFlow{{ID: "a", Name: "a", Amount: nan1}}}
+	topoNaN2 := SankeyTopology{Sources: []SankeyFlow{{ID: "a", Name: "a", Amount: nan2}}}
+	if topoNaN1.Hash() != topoNaN2.Hash() {
+		t.Fatal("BUG-319: two different NaN bit patterns for the identical topology hash differently")
+	}
+
+	topoInf := SankeyTopology{Sources: []SankeyFlow{{ID: "a", Name: "a", Amount: math.Inf(1)}}}
+	topoReal := SankeyTopology{Sources: []SankeyFlow{{ID: "a", Name: "a", Amount: 1}}}
+	if topoInf.Hash() == topoReal.Hash() || topoNaN1.Hash() == topoReal.Hash() || topoInf.Hash() == topoNaN1.Hash() {
+		t.Fatal("BUG-319: NaN/Inf/real Amount values must not collide with each other")
 	}
 }
 
