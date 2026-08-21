@@ -1353,6 +1353,33 @@
       }
     },
     {
+      "key": "feat.faith",
+      "type": "feature",
+      "seq": 425,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Faith & places of worship — a light background dimension of the people",
+      "desc": "Aaron ruling 2026-08-20 (FEAT-138, no master-plan section of its own): a light, auto-managed background dimension — no player build/manage path. Every citizen resolves to a deterministic affiliation (agnostic or a closed set of mainstream UK faiths); each faith community auto-builds its place of worship as its congregation crosses a data-driven threshold, denominational preference shaping the building. A place of worship raises local wellbeing/cohesion through the existing community-access surface (not a new wellbeing driver); the faithful's donations flow into social services' homelessness outreach as a real, conserved money transfer.",
+      "specRef": "FEAT-138 BOW desc",
+      "path": "internal/engine/faith/",
+      "deps": [
+        "engine.citizens",
+        "engine.wellbeing",
+        "engine.social"
+      ],
+      "calls": [
+        "engine.citizens",
+        "engine.wellbeing",
+        "engine.social",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
+      ],
+      "sprint": 11
+    },
+    {
       "key": "engine.extcommute",
       "type": "module",
       "seq": 430,
@@ -2760,6 +2787,46 @@
         "foundation.num"
       ],
       "sprint": 10
+    },
+    {
+      "key": "engine.transit",
+      "type": "module",
+      "seq": 815,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Public transport: lines, stops, depots, fleet & ridership",
+      "desc": "Aaron ruling 2026-08-20: depots and fleet are in scope for transit, not split into a separate module. Public-transport network: lines with unique deterministic route ids and named ordered stops; vehicle allocation scales from vehicles-available x line-length x waiting-demand, capped at whichever of demand/line-capacity/depot-units binds; a saturated line surfaces an expansion proposal (stated cost, chosen rate) rather than an automatic capacity change. Consumes the road/coarse-traffic surface for stop demand and route capacity rather than owning roads.",
+      "specRef": "FEAT-161/FEAT-162 BOW desc; §19 (mode logit)",
+      "path": "internal/engine/transit/",
+      "inbound": {
+        "name": "TransitAPI",
+        "format": "Go package API + deltas",
+        "pattern": "line/stop/depot/fleet accounting; saturation reports the binding bound; ridership feeds mode logit"
+      },
+      "deps": [
+        "engine.world",
+        "engine.roads",
+        "engine.traffic",
+        "engine.citizens"
+      ],
+      "calls": [
+        "engine.world",
+        "engine.roads",
+        "engine.traffic",
+        "engine.citizens",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
+      ],
+      "sprint": 10,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.roads",
+          "engine.traffic"
+        ]
+      }
     },
     {
       "key": "engine.destination",
