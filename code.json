@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 167,
+  "moduleCount": 168,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -107,6 +107,10 @@
           {
             "key": "feat.skeleton",
             "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           },
           {
             "key": "harness.headless",
@@ -603,6 +607,10 @@
             "outboundGuid": "4d387884-937a-4b9b-8e72-3eac16c86fee"
           },
           {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
+          },
+          {
             "key": "foundation.num",
             "outboundGuid": "e7339744-ee44-4976-9c14-93597479c227"
           },
@@ -999,6 +1007,10 @@
           {
             "key": "feat.faith",
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          },
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           },
           {
             "key": "harness.synth",
@@ -4716,6 +4728,10 @@
           {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          },
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           }
         ]
       },
@@ -4822,8 +4838,8 @@
       "path": "internal/ui/diagrams/",
       "inbound": {
         "guid": "ead88a71-8c91-4925-ae49-e847e77a810f",
-        "name": "DiagramAPI",
-        "format": "Go package API",
+        "name": "Engine",
+        "format": "Go package API (NewEngine() *Engine; methods Chain/Network/Sankey render+cache ChainTopology/NetworkTopology/SankeyTopology via RenderChain/RenderNetwork/RenderSankey)",
         "pattern": "topology in, cell-buffer layout out; cache keyed on topology hash",
         "consumers": []
       },
@@ -6599,10 +6615,6 @@
             "outboundGuid": "48638972-009e-4cce-8628-49612a88ec0b"
           },
           {
-            "key": "feat.factorytypes",
-            "outboundGuid": "10549936-e6f3-4d39-b3e8-ce49512a50f3"
-          },
-          {
             "key": "feat.megafacilities",
             "outboundGuid": "658df60a-b0f2-449a-83c5-9b853eb3270d"
           },
@@ -8339,7 +8351,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
+          }
+        ]
       },
       "outbound": {
         "guid": "d02049bd-50e8-46db-9b48-0602ee2d969b",
@@ -9604,13 +9621,7 @@
       },
       "outbound": {
         "guid": "10549936-e6f3-4d39-b3e8-ce49512a50f3",
-        "calls": [
-          {
-            "key": "engine.freight",
-            "moduleGuid": "093a00ae-97d6-47ce-bf38-4dbc7aa48c5a",
-            "inboundGuid": "3ce6d7c8-1aa6-46f4-94d1-07a20cf656e3"
-          }
-        ]
+        "calls": []
       },
       "securityScan": null
     },
@@ -9709,8 +9720,8 @@
       "path": "internal/foundation/num/",
       "inbound": {
         "guid": "74ff5b3b-bfc6-4376-b461-267f4467a39f",
-        "name": "Num",
-        "format": "Go package API",
+        "name": "SatAdd",
+        "format": "Go package API (function collection, no facade type: SatAdd/SatSub/SatAddChecked saturating; SafeInt64/SafeMul/SafeFloat64FromAny/SafeInt64FromAny reject-form; BoundedLedger/NewBoundedLedger; GuardFinite/IsFinite/ClampInt64FromFloat/ClampInt64FromUint64 guards)",
         "pattern": "safe coercion: saturating + reject-form helpers; registry-sourced errors on non-finite/overflow",
         "consumers": [
           {
@@ -9959,6 +9970,57 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "38b48487-f0e3-4f79-aa57-16b73b997bd1",
+      "key": "foundation.integration",
+      "bowType": "module",
+      "seq": 1000,
+      "sprint": 0,
+      "title": "Integration Engine: contract-driven, location-transparent deterministic shard executor + resilience substrate",
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "specRef": "FEAT-187..191; integration-engine.md",
+      "path": "internal/foundation/integration/",
+      "inbound": {
+        "guid": "1b6d1f3f-1984-4f39-b603-d5ca2cebb14e",
+        "name": "Integration",
+        "format": "Go package API (generic Integration[T,M] contract + Execute[T,M] entry point; WorkerPool/LocalPool/SerialPool dispatch seam; QueuedTransport/WAL/Connection/Registry support types)",
+        "pattern": "pure seeded RunShard per shard, deterministic ordered Merge via det.MergeInOrder/det.ApplyBarrier — byte-identical regardless of dispatch/location",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "91bd0f61-2f59-456b-ad7f-d870049717a5",
+        "calls": [
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "feat.checkpoint",
+            "moduleGuid": "9b46faf8-d4b8-4829-9633-860eef3c5b0e",
+            "inboundGuid": "ac14f052-a882-43b1-8a09-20d091b763bd"
+          },
+          {
+            "key": "feat.saveux",
+            "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
+            "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
           }
         ]
       },

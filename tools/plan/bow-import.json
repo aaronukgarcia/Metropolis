@@ -3116,6 +3116,28 @@
         "engine.staffing",
         "engine.traffic"
       ]
+    },
+    {
+      "mkey": "foundation.integration",
+      "type": "module",
+      "title": "Integration Engine: contract-driven, location-transparent deterministic shard executor + resilience substrate",
+      "desc": "The substrate every module plugs into (FEAT-187..191, 5 increments merged 2026-08-18): an Integration[T,M] contract (pure seeded RunShard, ordered Merge, T0/T1/T2 update class) run via a location-transparent WorkerPool (LocalPool/SerialPool now, RemotePool seam later) reusing det.MergeInOrder/det.ApplyBarrier for byte-identical merge regardless of dispatch strategy; a priority-tiered disk-backed overflow queue (T0/T1/T2, never-drop backpressure); a resilience state machine (retry/catch-up/reconnect+re-auth) with WAL-backed crash recovery replaying to the last checkpoint; a debug-gated local metrics dashboard. Not yet wired to any consumer — wiring 31 unwired modules onto it is later work. [spec: FEAT-187..191; integration-engine.md] [path: internal/foundation/integration/]",
+      "seq": 1000,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "specRef": "FEAT-187..191; integration-engine.md",
+      "guid": "38b48487-f0e3-4f79-aa57-16b73b997bd1",
+      "guidIn": "1b6d1f3f-1984-4f39-b603-d5ca2cebb14e",
+      "guidOut": "91bd0f61-2f59-456b-ad7f-d870049717a5",
+      "deps": [
+        "foundation.det",
+        "foundation.errors",
+        "int.protocol",
+        "feat.checkpoint",
+        "feat.saveux"
+      ]
     }
   ]
 }
