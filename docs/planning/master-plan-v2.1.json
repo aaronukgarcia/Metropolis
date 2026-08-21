@@ -312,7 +312,8 @@
       ],
       "calls": [
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "ui.keys"
       ],
       "sprint": 1
     },
