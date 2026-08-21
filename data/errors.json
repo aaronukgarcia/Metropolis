@@ -435,6 +435,30 @@
       "message": "RenderLoop method called on a struct-copied value (BUG-018): {method}",
       "remedy": "A *core.RenderLoop value was copied by assignment/passing instead of being used via the single pointer core.NewRenderLoop returned (owned is an atomic.Bool VALUE -- a copy gets its own independent atomic word, so a copy's CAS can succeed even while the original already owns the screen, giving two goroutines that each believe they hold T-RENDER's exclusive tcell.Screen access). The call was rejected rather than risking two writers to one terminal; construct exactly one RenderLoop via NewRenderLoop and pass its pointer everywhere instead of a dereferenced copy."
     },
+    "MET-U004": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "screen registry: duplicate ScreenID {id} already registered",
+      "remedy": "Each ScreenID may be registered exactly once via ScreenRegistry.Register (registration is boot-time, in a fixed order per GR#21). Fix the caller to register each screen once."
+    },
+    "MET-U005": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "screen registry: unknown ScreenID {id} (not registered)",
+      "remedy": "ScreenRegistry.Activate was called with a ScreenID no Register call ever registered. Register the screen at boot before activating it, or check the ID for a typo against the registered ScreenID set."
+    },
+    "MET-U006": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "ScreenRegistry method called on a struct-copied value: {method}",
+      "remedy": "A *core.ScreenRegistry value was copied by assignment/passing instead of being used via the single pointer core.NewScreenRegistry returned. The call was rejected rather than risking two independent registries disagreeing about which screen is active; construct exactly one ScreenRegistry via NewScreenRegistry and pass its pointer everywhere instead of a dereferenced copy."
+    },
+    "MET-U007": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "screen registry: ScreenEntry {id} has a nil Draw",
+      "remedy": "ScreenRegistry.Register was called with a ScreenEntry whose Draw is nil, which would render that screen as a blank terminal with no diagnostic. Supply the screen's real core.DrawFunc adapter (e.g. cmd/metropolis's mapDrawFunc/financeDrawFunc/servicesDrawFunc); a screen with nothing to draw is a wiring mistake, not a supported configuration."
+    },
     "MET-U100": {
       "severity": "warn",
       "module": "ui.screen.map",

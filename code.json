@@ -1572,6 +1572,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "ui.keys",
+            "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
+            "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
           }
         ]
       },
@@ -1785,6 +1790,10 @@
           {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
+          },
+          {
+            "key": "ui.core",
+            "outboundGuid": "b0b339f9-0052-469e-9138-0eb930798f69"
           },
           {
             "key": "ui.screen.menu",

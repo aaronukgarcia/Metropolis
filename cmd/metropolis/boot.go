@@ -5,6 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
+
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	enginecore "github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
@@ -97,6 +99,21 @@ const (
 )
 
 var feat208PilotFundingKeyPath = []string{"s", "f"}
+
+// screenID{Map,Finance,Services} are FEAT-211 increment 1's
+// core.ScreenID values (internal/ui/core/screen_registry.go) — the exact
+// set the design's own increment-1 scope names (design §7(f) point 1):
+// "map (F1), finance (F2), services (F4) — with the pilot funding keys
+// reachable from a real keyboard once F4 is active." Plain, short,
+// human-legible strings (ScreenID's own doc comment) rather than
+// F-key-numbered constants, since a future increment (trade/census/proj/
+// districts/menu/debug) will add more ScreenIDs than there are still-free
+// low F-keys worth memorising by number.
+const (
+	screenIDMap      core.ScreenID = "map"
+	screenIDFinance  core.ScreenID = "finance"
+	screenIDServices core.ScreenID = "services"
+)
 
 // skeletonModuleVersion is the placeholder semver every registerSkeletonModules
 // entry reports (none of these wrappers are independently versioned yet —
@@ -234,6 +251,21 @@ type skeletonWiring struct {
 	// being the only one ever rendered) — pre-existing screen-switching
 	// infrastructure this dispatch's rails do not cover.
 	keyGrammar *keys.KeyGrammar
+
+	// screens is FEAT-211 increment 1's ActiveScreen state owner
+	// (internal/ui/core/screen_registry.go, design doc
+	// E:\git\metropolis-status\active-screen-design.md): holds map/
+	// finance/services in registration order (GR#21), map first so it
+	// stays the initially active screen (matching this binary's
+	// pre-FEAT-211 baseline — mapScreen was always what rendered).
+	// chromeGrammar is the always-fed global grammar F1/F2/F4 are
+	// registered against (run.go's input routing feeds this FIRST, every
+	// keystroke, before the active screen's own grammar — design §7(b)):
+	// a screen switch is chrome-global by design, reachable regardless
+	// of which screen is currently active or what leader sequence it may
+	// have pending.
+	screens       *core.ScreenRegistry
+	chromeGrammar *keys.KeyGrammar
 
 	mapScreen *mapscreen.MapScreen
 
@@ -558,6 +590,76 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		})
 	}
 
+	// FEAT-211 increment 1: the ScreenRegistry (internal/ui/core/
+	// screen_registry.go) — the ActiveScreen state owner that makes
+	// finance/services (and the funding keys just registered above)
+	// actually reachable from a keyboard, closing the exact gap
+	// RegisterFundingAdjustKeys' own doc comment named ("pre-existing
+	// screen-switching infrastructure this pilot's rails do not cover").
+	// map is registered FIRST so it stays the initially active screen —
+	// Register's own documented default — matching this binary's
+	// pre-FEAT-211 baseline (mapScreen was always what rendered).
+	w.screens = core.NewScreenRegistry(correlationID)
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDMap, Draw: mapDrawFunc(w.mapScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDMap)})
+	}
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDFinance, Draw: financeDrawFunc(w.financeScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDFinance)})
+	}
+	// services registers its OWN w.keyGrammar (constructed above,
+	// carrying the real funding-adjust actions) — this is what makes "s
+	// f +"/"s f -" reachable once F4 is active: run.go's input routing
+	// feeds registry.ActiveGrammar() only when the chrome/global grammar
+	// did not itself dispatch for a given keystroke (design §7(b)).
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDServices, Draw: servicesDrawFunc(w.servicesScreen), Grammar: w.keyGrammar}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDServices)})
+	}
+
+	// chromeGrammar is the ALWAYS-fed global grammar (design §7(b)):
+	// F1/F2/F4 fire regardless of which screen is currently active or
+	// what leader sequence it may have pending (RegisterGlobal's own
+	// "fires even mid-sequence" contract, ui/keys/grammar.go). Each
+	// Action.Run calls straight back into w.screens.Activate — the ONE
+	// switch primitive both F-key switching and (a future increment's)
+	// drill-through share (design §7(e)) — and discards Activate's error
+	// deliberately: every ID registered here is one of the three IDs
+	// just registered above, in this same function, so an Activate
+	// failure here would mean w.screens itself is broken (defensive
+	// only, matches keys.Action.Run's signature, which cannot itself
+	// return an error — the same constraint RegisterFundingAdjustKeys'
+	// own countAdjust closure documents).
+	w.chromeGrammar = keys.NewKeyGrammar(nil, 0, 0, correlationID)
+	fKeyGlobal := func(id core.ScreenID, name string) keys.Action {
+		return keys.Action{Name: name, Run: func(keys.ActionArgs) { _ = w.screens.Activate(id) }}
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F1"}, fKeyGlobal(screenIDMap, "Switch to Map (F1)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F1"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F2"}, fKeyGlobal(screenIDFinance, "Switch to Finance (F2)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F2"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F4"}, fKeyGlobal(screenIDServices, "Switch to Services (F4)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F4"})
+	}
+
 	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's
 	// real, already-accepted Subscribe method — internal/ui/screens/map's
 	// own public API — never a hand-rolled Command literal standing in
@@ -851,5 +953,70 @@ func mapDrawFunc(ms *mapscreen.MapScreen) core.DrawFunc {
 		}
 		w, h := back.Size()
 		ms.Render(back, core.Rect{X: 0, Y: 0, W: w, H: h})
+	}
+}
+
+// financeDrawFunc adapts financescreen.Screen into a core.DrawFunc
+// (FEAT-211 increment 1, design §7(c)): unlike mapDrawFunc, it reads
+// nothing from vm — financeScreen's own state is kept live by
+// ApplyDelta, called directly from boot.go's router-bound priming/
+// binding (primeScreenSubscription), never through ui.core's
+// vm.Patches/vm.Stale path (that mechanism exists for "f1.viewport"
+// only, mapScreen's own pre-FEAT-208 wiring — see viewStore's doc
+// comment on skeletonWiring). This closure only lays out a 2x2 grid of
+// financescreen's existing Render* package functions (RenderPL,
+// RenderBalanceSheet, RenderLoans, RenderSliders — each a real, tested
+// entry point this package already exports; no new render logic is
+// invented here) over whatever the current terminal size is — no screen
+// interface change, mirroring mapDrawFunc's own closure-adapter pattern
+// exactly (design's own "no shim beyond the closure-adapter pattern
+// mapDrawFunc already establishes").
+func financeDrawFunc(fs *financescreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		col, row := w/2, h/2
+
+		pl, havePL := fs.PL()
+		financescreen.RenderPL(back, core.Rect{X: 0, Y: 0, W: col, H: row}, pl, havePL, style)
+
+		bs, haveBS := fs.BalanceSheet()
+		financescreen.RenderBalanceSheet(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, bs, haveBS, style)
+
+		loans, haveLoans := fs.Loans()
+		rating, _ := fs.CreditRating()
+		history, _ := fs.CreditRatingHistory()
+		financescreen.RenderLoans(back, core.Rect{X: 0, Y: row, W: col, H: h - row}, loans, rating, history, fs.LoanRejectedReason(), haveLoans, style)
+
+		sliders, haveSliders := fs.TaxSliders()
+		financescreen.RenderSliders(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, sliders, haveSliders, style)
+	}
+}
+
+// servicesDrawFunc adapts servicesscreen.Screen into a core.DrawFunc
+// (FEAT-211 increment 1, design §7(c)) — same shape and same rationale
+// as financeDrawFunc immediately above (servicesScreen's own state is
+// kept live by ApplyDelta via router.BindSubscription, never vm). Lays
+// out a 2x2 grid of servicesscreen's existing Render* package functions
+// (RenderSliders — SVC-1's funding sliders, the exact figures "s f +"/
+// "s f -" move — RenderCapacityDemand, RenderResponseTimes,
+// RenderWaitingLists).
+func servicesDrawFunc(ss *servicesscreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		col, row := w/2, h/2
+
+		sliders, haveSliders := ss.Sliders()
+		servicesscreen.RenderSliders(back, core.Rect{X: 0, Y: 0, W: col, H: row}, sliders, ss.FundingRejectedReason(), haveSliders, style)
+
+		cd, haveCD := ss.CapacityDemand()
+		servicesscreen.RenderCapacityDemand(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, cd, haveCD, widgets.DefaultPalette, style)
+
+		rt, haveRT := ss.ResponseTimes()
+		servicesscreen.RenderResponseTimes(back, core.Rect{X: 0, Y: row, W: col, H: h - row}, rt, haveRT, style)
+
+		wl, haveWL := ss.WaitingLists()
+		servicesscreen.RenderWaitingLists(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, wl, haveWL, style)
 	}
 }
