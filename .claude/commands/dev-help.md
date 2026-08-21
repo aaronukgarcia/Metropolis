@@ -36,7 +36,7 @@ git commit -m "feat: ... [engine.<name>]" → node claude-bow.js ref <CODE> <has
 Verify before commit: `gofmt -l`, `go build ./internal/engine/<name>/...`, `go vet`, `go test -race -count=2 ./internal/engine/<name>/...`. Never `go build ./...` (others' in-flight work may not compile — expected, not yours).
 
 ## Coordination cribs
-- Start: `node claude-sync.js checkin` → `node claude-sync.js claim internal/engine/<name>` per module → poll `node claude-sync.js read` every few actions.
+- Start: `node claude-sync.js checkin` (prints an UNREAD count only — it never delivers) → `node claude-sync.js claim internal/engine/<name>` per module → poll `node claude-sync.js read` every few actions. **`read` is the only command that delivers messages and advances your cursor**, so a nonzero unread count means run it before carrying on.
 - Before starting an item: `git log -10` + `node claude-bow.js show <CODE>` (has anyone touched it?).
 - Message the lead: `node claude-sync.js message "<text>" --to Bev` (or Bill/Bob/Ben).
 - Stuck / spec needs a new edge / gate blocks you: STOP and ask Aaron/Bev — never bypass a guard, never widen an allowlist, never disable a hook.
