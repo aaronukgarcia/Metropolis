@@ -38,6 +38,21 @@ Look at the BOW state above against what happened this session:
 
 ---
 
+### STEP 1C — SELF-EVALUATION (MANDATORY, Aaron 2026-08-21)
+
+**Do this every checkout, unprompted.** Aaron should never have to ask "any learnings for skills, hooks or memory?" — that question is now part of shutting down. It exists because the most valuable output of a long session is often the thing nobody wrote down, and context dies at the bounce.
+
+Answer all four in the sign-off, and ACT on anything cheap enough to land now (docs/skills changes are GR#23-exempt, so they land without a verdict):
+
+1. **Skills** — did you repeat the same multi-step instruction block more than twice this session? That is a skill waiting to be written. Did any existing skill give advice that turned out wrong or stale? Fix it. (Worked example: ~15 near-identical "commit exact paths → rebase → full gates → PR → watch → merge → verify → ref/done" dispatches in one session became the case for a `/land` skill.)
+2. **Hooks** — did a guard block something it should not have, or fail to block something it should have? Did a hook report something misleading? Both are defects; file them. (Worked examples: the destructive guard accepting any historical verdict (BUG-332); the startup summary reporting the main checkout's git state to every worker (BUG-338).)
+3. **Memory** — what did you learn that the next session cannot re-derive from the code, the BOW, or git history? Write it as a memory file NOW, not as a recommendation — you are about to lose the context that makes it writable. Operational gotchas (a path that gives a misleading error, a column that rejects at N characters) belong in the gotchas file; defect *classes* deserve their own pattern memory.
+4. **Rules** — did a Golden Rule get bent, and if so was the rule wrong or the behaviour wrong? Did a new standing rule emerge that belongs in CLAUDE.md?
+
+Bias toward writing it down badly over remembering it perfectly. If the item is too big to land now, file a BOW item so it is not lost to the bounce.
+
+---
+
 ### STEP 2 — Write session summary to Vestige
 
 Use `mcp__vestige__smart_ingest` to write a session summary. Include:
