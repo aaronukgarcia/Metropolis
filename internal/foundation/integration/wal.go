@@ -258,24 +258,24 @@ func writeCurrentSlot(root, slot, correlationID string) error {
 	}
 	tmp, err := os.CreateTemp(root, "wal-current-*.tmp")
 	if err != nil {
-		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"cause": err.Error()})
+		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"seq": slot, "cause": err.Error()})
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 
 	if _, err := tmp.WriteString(slot); err != nil {
 		_ = tmp.Close()
-		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"cause": err.Error()})
+		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"seq": slot, "cause": err.Error()})
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"cause": err.Error()})
+		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"seq": slot, "cause": err.Error()})
 	}
 	if err := tmp.Close(); err != nil {
-		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"cause": err.Error()})
+		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"seq": slot, "cause": err.Error()})
 	}
 	if err := os.Rename(tmpPath, walCurrentPath(root)); err != nil {
-		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"cause": err.Error()})
+		return errs.Wrap(ErrWALWriteFailed, correlationID, err, map[string]any{"seq": slot, "cause": err.Error()})
 	}
 	return nil
 }

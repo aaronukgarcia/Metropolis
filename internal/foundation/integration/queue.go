@@ -219,9 +219,9 @@ func newTierQueue(memCap int, diskRoot string, exhaustedCode string) *tierQueue 
 // checkNotCopied mirrors protocol.InProcTransport.checkNotCopied and
 // QueuedTransport.checkNotCopied exactly: a lock-free identity check,
 // safe to call before t.mu is ever touched.
-func (t *tierQueue) checkNotCopied(correlationID string) error {
+func (t *tierQueue) checkNotCopied(correlationID string, method string) error {
 	if t.self.Load() != t {
-		return errs.New(ErrQueueTransportCopied, correlationID, map[string]any{"type": "tierQueue"})
+		return errs.New(ErrQueueTransportCopied, correlationID, map[string]any{"method": method})
 	}
 	return nil
 }
@@ -240,7 +240,7 @@ func (t *tierQueue) depthLocked() (total, onDisk int) {
 // Depth reports this tier's total pending count and how many of those
 // are on disk (0 for a T0 tier, which never spills).
 func (t *tierQueue) Depth() (total, onDisk int) {
-	if err := t.checkNotCopied(errs.NewCorrelationID()); err != nil {
+	if err := t.checkNotCopied(errs.NewCorrelationID(), "Depth"); err != nil {
 		return 0, 0
 	}
 	t.mu.Lock()
@@ -336,7 +336,7 @@ func (t *tierQueue) commitLocked() {
 // (via QueuedTransport.commitTier) calls it standalone, exactly as peek
 // wraps peekLocked below.
 func (t *tierQueue) commit(correlationID string) {
-	if err := t.checkNotCopied(correlationID); err != nil {
+	if err := t.checkNotCopied(correlationID, "commit"); err != nil {
 		return
 	}
 	t.mu.Lock()
@@ -359,7 +359,7 @@ func (t *tierQueue) commit(correlationID string) {
 // non-blocking by contract, so this can never stall behind a slow
 // reader.
 func (t *tierQueue) sendOrEnqueue(inner protocol.Transport, correlationID string, cmd protocol.Command) error {
-	if err := t.checkNotCopied(correlationID); err != nil {
+	if err := t.checkNotCopied(correlationID, "sendOrEnqueue"); err != nil {
 		return err
 	}
 	t.mu.Lock()
@@ -719,7 +719,7 @@ func (q *QueuedTransport) peekHighestPriority() (tierIdx int, cmd protocol.Comma
 // holds the lock across both the empty-check and the direct-send
 // attempt.
 func (t *tierQueue) peek(correlationID string) (protocol.Command, bool, error) {
-	if err := t.checkNotCopied(correlationID); err != nil {
+	if err := t.checkNotCopied(correlationID, "peek"); err != nil {
 		return protocol.Command{}, false, err
 	}
 	t.mu.Lock()
