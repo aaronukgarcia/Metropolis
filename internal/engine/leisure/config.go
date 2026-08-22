@@ -1,6 +1,8 @@
 package leisure
 
 import (
+	"fmt"
+
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
@@ -71,6 +73,7 @@ func (c Config) validate(correlationID string) error {
 	if !num.IsFinite(c.HoursPerWeek) || c.HoursPerWeek <= 0 {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "hoursPerWeek", "value": c.HoursPerWeek,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "hoursPerWeek", c.HoursPerWeek),
 		})
 	}
 	for s := LifeStage(0); s < numLifeStages; s++ {
@@ -78,6 +81,7 @@ func (c Config) validate(correlationID string) error {
 			if !num.IsFinite(f) || f < 0 {
 				return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 					"field": "lifeStages." + s.String(), "value": f,
+					"cause": fmt.Sprintf("field %q has invalid value %v", "lifeStages."+s.String(), f),
 				})
 			}
 		}
@@ -85,39 +89,46 @@ func (c Config) validate(correlationID string) error {
 	if !num.IsFinite(c.AccessFreeMinutes) || c.AccessFreeMinutes < 0 {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "accessFreeMinutes", "value": c.AccessFreeMinutes,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "accessFreeMinutes", c.AccessFreeMinutes),
 		})
 	}
 	if !num.IsFinite(c.AccessBudgetMinutes) || c.AccessBudgetMinutes <= c.AccessFreeMinutes {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "accessBudgetMinutes", "value": c.AccessBudgetMinutes,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "accessBudgetMinutes", c.AccessBudgetMinutes),
 		})
 	}
 	if !num.IsFinite(c.OvertimeWageRate) || c.OvertimeWageRate < 0 {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "overtimeWageRate", "value": c.OvertimeWageRate,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "overtimeWageRate", c.OvertimeWageRate),
 		})
 	}
 	if !num.IsFinite(c.NoveltyDecayBase) || c.NoveltyDecayBase < 0 ||
 		!num.IsFinite(c.NoveltyDecayPerNovelty) || c.NoveltyDecayPerNovelty < 0 {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "noveltyDecay", "value": c.NoveltyDecayBase,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "noveltyDecay", c.NoveltyDecayBase),
 		})
 	}
 	if !num.IsFinite(c.FreshnessRecovery) || c.FreshnessRecovery < 0 || c.FreshnessRecovery > 1 {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "freshnessRecovery", "value": c.FreshnessRecovery,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "freshnessRecovery", c.FreshnessRecovery),
 		})
 	}
 	for k := EventKind(0); k < numEventKinds; k++ {
 		if c.EventCrowd[k] < 0 {
 			return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 				"field": "eventCrowd." + k.String(), "value": c.EventCrowd[k],
+				"cause": fmt.Sprintf("field %q has invalid value %v", "eventCrowd."+k.String(), c.EventCrowd[k]),
 			})
 		}
 	}
 	if !num.IsFinite(c.MatchThreshold) || c.MatchThreshold < 0 || c.MatchThreshold > 100 {
 		return errs.New(ErrLeisureDataInvalid, correlationID, map[string]any{
 			"field": "matchThreshold", "value": c.MatchThreshold,
+			"cause": fmt.Sprintf("field %q has invalid value %v", "matchThreshold", c.MatchThreshold),
 		})
 	}
 	return nil
