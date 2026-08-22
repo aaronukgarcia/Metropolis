@@ -43,15 +43,23 @@ func synthesizeTerrain(t *tile, c TileCoord) {
 				heights[row][col] = h
 			}
 			t.terrain.elevation[idx] = h
-			t.terrain.slope[idx] = classifySlope(heights, row, col)
-			if h < 0 {
-				t.terrain.surface[idx] = SurfaceWater
-			} else {
-				t.terrain.surface[idx] = SurfaceGrass
-			}
+			slope := classifySlope(heights, row, col)
+			t.terrain.slope[idx] = slope
+			gx := c.X*TileSizeCells + col
+			gy := c.Y*TileSizeCells + row
+			t.terrain.surface[idx] = classifySyntheticSurface(h, slope, row, col, gx, gy)
 		}
 	}
 }
+
+// syntheticSeaLevel is a placeholder offset (balance-number regime,
+// BUG-329) subtracted from the unsigned value-noise sum so some cells
+// on a land tile fall below 0 m AOD. Without it every reachable land
+// cell sits in [24.5, 70.2] and classifySurface can only ever emit
+// grass. This is not Folkestone — ASM-214 still owns the real OS
+// Terrain 50 import. Do not "fix" a later screenshot by retuning the
+// glyphs; retune this offset or replace the function.
+const syntheticSeaLevel = 32.0
 
 // syntheticElevation returns a smooth, deterministic pseudo-elevation
 // (metres AOD) for a global cell position, built from a small sum of
@@ -69,6 +77,7 @@ func syntheticElevation(gx, gy int) float32 {
 		{4000, 60, 0xA1},
 		{800, 15, 0xB2},
 		{150, 4, 0xC3},
+		{80, 12, 0xE1},
 	}
 	for _, s := range scales {
 		cellX := int(float64(gx) / s.wavelength)
@@ -83,7 +92,30 @@ func syntheticElevation(gx, gy int) float32 {
 		bot := h01*(1-fx) + h11*fx
 		total += (top*(1-fy) + bot*fy) * s.amplitude
 	}
-	return float32(total)
+	return float32(total - syntheticSeaLevel)
+}
+
+// classifySyntheticSurface picks a Surface for a synthesised land cell.
+// Sea tiles are forced to SurfaceWater by the caller (h set < 0).
+// Order is deliberate: water, then a southern shingle strip (the import
+// path's only non-grass land branch, now reachable on synth), then rock
+// on steep/unbuildable slopes, then hashed woodland patches, else grass.
+// Deterministic: a pure function of (elevation, slope, row, col, global
+// coordinates) via hashCoord. Placeholder, not a designed landscape.
+func classifySyntheticSurface(elevation float32, slope SlopeClass, row, col, globalX, globalY int) Surface {
+	if elevation < 0 {
+		return SurfaceWater
+	}
+	if row >= TileSizeCells-3 {
+		return SurfaceShingle
+	}
+	if slope == SlopeSteep || slope == SlopeUnbuildable {
+		return SurfaceRock
+	}
+	if hashCoord(globalX, globalY, 0xD4)%5 == 0 {
+		return SurfaceWoodland
+	}
+	return SurfaceGrass
 }
 
 func noiseCorner(cx, cy int, salt uint64) float64 {

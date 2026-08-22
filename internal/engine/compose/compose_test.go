@@ -10,6 +10,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
@@ -272,6 +273,28 @@ func TestHeadless_TwelveMonthsMoneyMoves(t *testing.T) {
 	wantTotal := int64(initialTreasury) + int64(initialCitizenWealth)
 	if got := comp.Treasury() + comp.CitizenWealth(); got != wantTotal {
 		t.Fatalf("total money = %d, want conserved %d", got, wantTotal)
+	}
+}
+
+// TestHeadless_TwelveMonthsLedgerMatchesSimState is BUG-355: the
+// FinanceAPI treasury the F2 screen reads must equal Composition.Treasury
+// after a real run. Before the fix the hook mutated simState only and
+// AccountBalance(AcctTreasury) stayed 0.
+func TestHeadless_TwelveMonthsLedgerMatchesSimState(t *testing.T) {
+	e, comp := newTestEngine(t, 42)
+	if err := e.AdvanceTicks(errs.NewCorrelationID(), testTicks); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+	led := ledgerBalance(comp.state.finance, finance.AcctTreasury)
+	if led != comp.Treasury() {
+		t.Fatalf("FinanceAPI treasury = %d, Composition.Treasury = %d — two money pots (BUG-355)", led, comp.Treasury())
+	}
+	if led == 0 {
+		t.Fatal("FinanceAPI treasury is 0 after 12 months — F2 would still render a zero sheet")
+	}
+	hh := ledgerBalance(comp.state.finance, finance.AcctHouseholds)
+	if hh != comp.CitizenWealth() {
+		t.Fatalf("FinanceAPI households = %d, Composition.CitizenWealth = %d", hh, comp.CitizenWealth())
 	}
 }
 

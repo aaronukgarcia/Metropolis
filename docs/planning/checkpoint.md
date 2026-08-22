@@ -1,5 +1,27 @@
 # HEAVY CHECKPOINT — session bounce point
 
+## REFRESH #14 — 2026-08-22 (Bev course-correction)
+
+**Why:** Aaron asked for a restore point then a course-correction off the 2026-08-22 review (`docs/grok/findings.md`).
+
+### Restore
+
+- Git branch `backup/bev-2026-08-22-precourse` @ `1d2331c`
+- Stash `bev-2026-08-22-precourse-dirty` (in-flight claude-sync/startup/errs — do not mix)
+- File copies: `E:\GoogleDrive\Projects\Metropolis\docs\grok\checkpoint-2026-08-22\`
+- How-to: `E:\GoogleDrive\Projects\Metropolis\docs\grok\checkpoint-2026-08-22.md`
+
+### In flight this refresh (not yet committed)
+
+- FEAT-226 parent + FEAT-227..231 filed in Maria BOW
+- BUG-329 synthesiser more than grass
+- BUG-355 financeHook posts through FinanceAPI
+- metro.bat identity → Bev
+- GDrive CLAUDE.md / checkpoint / team-board banner-stamped STALE
+- BUG-324 chrome **not** landed (pr76 still needs rebase onto BUG-323)
+
+Do not recover from the GDrive 2026-08-09 checkpoint. That file is stamped STALE.
+
 ## REFRESH #13 — 2026-08-17 (A7 checkpoint refresh; supersedes #12)
 
 **Why this refresh:** checkpoint REFRESH #12 is stale and would mislead a cold session (sitrep R5). This section corrects #12's falsehoods and is self-sufficient for recovery. Written as sitrep action A7. Full red-flag detail lives in `docs/planning/sitrep.md` (Bev's master review) — read it second.
