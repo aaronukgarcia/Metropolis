@@ -26,11 +26,28 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const { runAudit, normalizeModulePath, isGoTreePath, runAstinfo } = require('./codejson-audit.js');
+const {
+  runAudit, normalizeModulePath, isGoTreePath, runAstinfo,
+  parseGoImports, resolveDirOwners, isImportRegistered, unhedgedOwners, primaryOwner, isBenignSibling,
+} = require('./codejson-audit.js');
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+
+/** Runs a git command against ROOT and returns trimmed stdout. Only used to
+ * stage/unstage the Direction-D e2e fixture (D-1) — Direction D scans
+ * git-TRACKED files, so a filesystem-only fixture (the AC-4 pattern) would be
+ * invisible to it. `git add`/`git rm --cached` are safe here: they touch ONLY
+ * the throwaway fixture path, never other work. */
+function git(args) {
+  const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+  if (r.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${r.stderr || r.stdout}`);
+  }
+  return r.stdout.trim();
+}
 
 /**
  * BUG-207: the two AC-6 end-to-end tests below used to key off whichever
@@ -312,12 +329,15 @@ test('BUG-181: a third-party mutation of a scanned Go file DURING the run (not j
 
 // ── AC-9: every finding instance carries exactly one fix-route label ──────
 
-test('AC-9: every finding instance in every populated class carries exactly one of "master-plan-fix"/"code-side-defect"', async () => {
+test('AC-9: every finding instance in every populated class carries a valid fix-route label (master-plan-fix / code-side-defect / not-yet-built / informational / advisory)', async () => {
   const report = await runAudit();
+  // BUG-327 D-5/D-4 added two routes: not-yet-built (unbuilt from-module edges,
+  // the truth is "not written yet") and advisory (laundered-edge visibility).
+  const VALID = ['master-plan-fix', 'code-side-defect', 'not-yet-built', 'informational', 'advisory'];
   for (const [cls, data] of Object.entries(report.findingsByClass)) {
-    assert.ok(['master-plan-fix', 'code-side-defect'].includes(data.fixRoute), `class ${cls} must have a class-level fixRoute`);
+    assert.ok(VALID.includes(data.fixRoute), `class ${cls} must have a class-level fixRoute, got ${data.fixRoute}`);
     for (const inst of data.instances) {
-      assert.ok(['master-plan-fix', 'code-side-defect'].includes(inst.fixRoute), `every instance of ${cls} must carry a fixRoute label`);
+      assert.ok(VALID.includes(inst.fixRoute), `every instance of ${cls} must carry a fixRoute label, got ${inst.fixRoute}`);
     }
   }
 });
@@ -332,7 +352,7 @@ test('AC-10: fileFindingsToBow would file at most one BOW item per POPULATED cla
   // and is deliberately never called by this test suite or by the audit's
   // default run — see codejson-audit.js's --file flag and FEAT-062's
   // report-only scope).
-  assert.ok(populated.length <= 6, 'at most 6 classes are defined; filing must never exceed one item per class');
+  assert.ok(populated.length <= 8, 'at most 8 classes are defined; filing must never exceed one item per class');
   for (const [cls, data] of populated) {
     assert.ok(data.instanceCount >= 1);
     assert.ok(Array.isArray(data.instances) && data.instances.length === data.instanceCount);
@@ -366,4 +386,165 @@ test('isGoTreePath: only internal/ and cmd/ paths are Go-tree paths', () => {
   assert.equal(isGoTreePath('tools/plan'), false);
   assert.equal(isGoTreePath('.'), false);
   assert.equal(isGoTreePath(null), false);
+});
+
+// ── BUG-327: Direction-D reverse import-edge check (pure-unit helpers) ─────
+
+test('BUG-327 parseGoImports: parses single, aliased, dot, blank and grouped imports, ignores line/block comments, and stops at the first top-level declaration', () => {
+  const src = [
+    'package foo',
+    '',
+    '// leading line comment',
+    'import "github.com/x/internal/a"',
+    'import alias "github.com/x/internal/b"',
+    'import . "github.com/x/internal/c"',
+    'import _ "github.com/x/internal/d"',
+    'import (',
+    '\t"github.com/x/internal/e"',
+    '\tf "github.com/x/internal/f"',
+    ')',
+    '/* a block',
+    '   comment spanning lines */',
+    'var Marker = func() { _ = "import \\"not-a-real-import\\"" }',
+  ].join('\n');
+  assert.deepEqual(parseGoImports(src), [
+    'github.com/x/internal/a',
+    'github.com/x/internal/b',
+    'github.com/x/internal/c',
+    'github.com/x/internal/d',
+    'github.com/x/internal/e',
+    'github.com/x/internal/f',
+  ]);
+});
+
+test('BUG-327 parseGoImports: robust to non-canonical-but-compilable forms (same-line block, no-space, split import)', () => {
+  const sameLine = 'package x\nimport ("github.com/x/internal/a")\nvar V = 1\n';
+  assert.deepEqual(parseGoImports(sameLine), ['github.com/x/internal/a']);
+  const noSpace = 'package x\nimport"github.com/x/internal/b"\n';
+  assert.deepEqual(parseGoImports(noSpace), ['github.com/x/internal/b']);
+  const split = 'package x\nimport\n(\n\t"github.com/x/internal/c"\n)\n';
+  assert.deepEqual(parseGoImports(split), ['github.com/x/internal/c']);
+});
+
+test('BUG-327 resolveDirOwners: resolves a child dir to its nearest registered ancestor and returns ALL owners sharing that path (owner-set exposure, not single-winner)', () => {
+  const ownersByDir = new Map([
+    ['internal/engine/citizens', new Set(['engine.citizens', 'feat.deathwave'])],
+    ['internal/engine', new Set(['engine.core'])],
+  ]);
+  const registeredDirList = [...ownersByDir.keys()].sort((a, b) => (b.length - a.length) || a.localeCompare(b));
+  const child = resolveDirOwners(registeredDirList, ownersByDir, 'internal/engine/citizens/fertility');
+  assert.equal(child.path, 'internal/engine/citizens', 'deepest registered ancestor wins over a shallower one');
+  assert.deepEqual([...child.owners].sort(), ['engine.citizens', 'feat.deathwave'], 'both entries sharing the path must be exposed');
+  assert.equal(resolveDirOwners(registeredDirList, ownersByDir, 'internal/nowhere'), null, 'unregistered dir resolves to null');
+});
+
+test('BUG-327 isImportRegistered: ANY-owner — an edge held only by the FEATURE owner still counts as registered', () => {
+  const fromOwners = new Set(['engine.citizens', 'feat.deathwave']);
+  const toOwners = new Set(['foundation.num']);
+  const featureOnly = new Map([['feat.deathwave', new Set(['foundation.num'])]]);
+  assert.equal(isImportRegistered(fromOwners, toOwners, featureOnly), true, 'the feature owner holding the edge must register the import');
+  const nobody = new Map([['engine.citizens', new Set(['foundation.errors'])]]);
+  assert.equal(isImportRegistered(fromOwners, toOwners, nobody), false, 'no owner holding the edge means unregistered');
+});
+
+test('BUG-327 D-4 unhedgedOwners: ANY-owner laundering — a co-owner holding no edge is exposed even though the import registers via a housemate\'s edge', () => {
+  const fromOwners = new Set(['engine.citizens', 'feat.deathwave']);
+  const toOwners = new Set(['foundation.num']);
+  const featureOnly = new Map([['feat.deathwave', new Set(['foundation.num'])]]);
+  assert.deepEqual(unhedgedOwners(fromOwners, toOwners, featureOnly), ['engine.citizens'],
+    'engine.citizens holds no edge while feat.deathwave covers the import — the gap is laundered');
+  const both = new Map([
+    ['feat.deathwave', new Set(['foundation.num'])],
+    ['engine.citizens', new Set(['foundation.num'])],
+  ]);
+  assert.deepEqual(unhedgedOwners(fromOwners, toOwners, both), [], 'every owner hedged means no laundering');
+  assert.deepEqual(unhedgedOwners(fromOwners, toOwners, new Map()), ['engine.citizens', 'feat.deathwave'],
+    'no owner holding the edge is not laundering — it is the plain unregistered finding (caller only reports laundering when registered)');
+});
+
+test('BUG-327 primaryOwner: module-type wins over feature-type even when the feature sorts FIRST alphabetically (D-2 — rank must drive, not alphabetical tie-break)', () => {
+  // r3 REJECT re-fixture: the original used {engine.citizens, feat.deathwave}
+  // where the module is ALSO alphabetically first, so rank and alphabetical
+  // tie-break agreed and the module-over-feature rank could be deleted without
+  // any test noticing. `aaa.feature` sorts before `engine.citizens`, so the
+  // module must win by RANK alone — the only thing distinguishing it.
+  const byKey = new Map([
+    ['engine.citizens', { bowType: 'module' }],
+    ['aaa.feature', { bowType: 'feature' }],
+  ]);
+  assert.equal(primaryOwner(new Set(['aaa.feature', 'engine.citizens']), byKey), 'engine.citizens');
+  // And the alphabetical fallback still applies when ranks are equal (both features).
+  const bothFeats = new Map([
+    ['zz.feature', { bowType: 'feature' }],
+    ['aaa.feature', { bowType: 'feature' }],
+  ]);
+  assert.equal(primaryOwner(new Set(['zz.feature', 'aaa.feature']), bothFeats), 'aaa.feature');
+});
+
+test('BUG-327 isBenignSibling: only "descendant imports its module root" is benign; same-root NOT-benign rulings are the caller\'s D-8 intra-module skip (r4 F-1 reconciliation)', () => {
+  // child imports its parent module root (replay/gen -> replay) — benign, the
+  // sole case that reaches the classification step as a finding candidate.
+  assert.equal(isBenignSibling('internal/harness/replay', 'internal/harness/replay', 'internal/harness/replay'), true);
+  // Parent module root imports its own unregistered child — NOT benign at the
+  // function level, but the Direction D caller's D-8 skip drops it before
+  // classification (both sides resolve to the same registered root; intra-
+  // module, deliberately not a GR#20 module-crossing finding — the child's gap
+  // is Direction B's orphan class). The assertion documents the composed rule:
+  // the import is NOT surfaced, and this is deliberate.
+  assert.equal(isBenignSibling('internal/foo', 'internal/foo/bar', 'internal/foo'), false);
+  // Two distinct unregistered siblings under one coarse ancestor — NOT benign
+  // at the function level, equally dropped by the caller's D-8 skip when both
+  // sides collapse to the same registered root.
+  assert.equal(isBenignSibling('internal/foo', 'internal/foo/b', 'internal/foo'), false);
+  // The NOT-benign ruling DOES reach a finding when the two sides resolve to
+  // DIFFERENT registered roots — D-8's same-root test fails, so the edge is a
+  // real module-crossing candidate. (r4 F-1: this is the case the old docstring
+  // overgeneralised; the caller's D-8 skip only pre-empts the same-root ones.)
+  assert.equal(isBenignSibling('internal/foo/a', 'internal/bar/b', 'internal/bar'), false);
+});
+
+test('BUG-327 D-1: Direction D end-to-end — a real injected module-crossing PROD import with no registered edge is REPORTED, and clears once removed (r3 REJECT acceptance)', async () => {
+  // Pair verified at write-time (2026-08-22): engine.core is the sole owner of
+  // internal/engine/core and registers NO outbound.calls edge to foundation.num
+  // (sole owner of internal/foundation/num), so a real import from a child of
+  // the former to the latter MUST fire Direction D's import-edge-not-registered
+  // PROD class. The old suite only unit-tested helpers — a feature can be
+  // deleted and stay green; this e2e test makes Direction D fire against a real
+  // injected import (the same fixture create/remove shape as the AC-4 orphan
+  // test). Direction D scans git-TRACKED files, so the fixture is staged with
+  // `git add` for the scan to see it, then unstaged+removed in `finally`.
+  const fixtureDir = path.join(ROOT, 'internal', 'engine', 'core', '_fixture_dirD_e2e');
+  const fixtureFile = path.join(fixtureDir, 'imports_edge.go');
+  const relFile = 'internal/engine/core/_fixture_dirD_e2e/imports_edge.go';
+  const edge = { fromPath: 'internal/engine/core', toPath: 'internal/foundation/num' };
+  try {
+    fs.mkdirSync(fixtureDir, { recursive: true });
+    fs.writeFileSync(fixtureFile,
+      'package fixturedirde2e\n\n' +
+      '// BUG-327 D-1 e2e fixture — real import, no registered edge (test-managed).\n' +
+      'import _ "github.com/aaronukgarcia/Metropolis/internal/foundation/num"\n',
+      'utf8');
+    git(['add', '--', relFile]);
+
+    const withFixture = await runAudit();
+    const row = withFixture.directionD.rows.find(r => r.fromPath === edge.fromPath && r.toPath === edge.toPath);
+    assert.ok(row,
+      `expected a Direction-D row for ${edge.fromPath} -> ${edge.toPath}; got: ${JSON.stringify(withFixture.directionD.rows.map(r => `${r.fromPath}->${r.toPath}`))}`);
+    assert.equal(row.registered, false, 'a real import with no registered edge must be flagged unregistered');
+    assert.ok(row.prodFileCount > 0, `expected the fixture import to count as PROD (non-test), got prodFileCount=${row.prodFileCount}`);
+    const inst = withFixture.findingsByClass['import-edge-not-registered'].instances
+      .find(i => i.from === 'engine.core' && i.to === 'foundation.num');
+    assert.ok(inst, 'the fixture edge must surface in the import-edge-not-registered finding class');
+    assert.match(inst.detail, /PROD import edge/, 'the finding detail must describe a PROD (non-test) import');
+  } finally {
+    try { git(['rm', '--cached', '-q', '--', relFile]); } catch { /* fixture never staged — nothing to unstage */ }
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+  }
+
+  const withoutFixture = await runAudit();
+  const rowAfter = withoutFixture.directionD.rows.find(r => r.fromPath === edge.fromPath && r.toPath === edge.toPath);
+  assert.equal(rowAfter, undefined, 'the fixture edge must disappear from Direction-D rows once the file is removed');
+  const instAfter = withoutFixture.findingsByClass['import-edge-not-registered'].instances
+    .filter(i => i.from === 'engine.core' && i.to === 'foundation.num');
+  assert.equal(instAfter.length, 0, 'the fixture finding must clear once the file is removed');
 });
