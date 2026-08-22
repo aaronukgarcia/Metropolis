@@ -51,3 +51,27 @@ func (r *RenderLoop) checkNotCopied(correlationID string, ctx map[string]any) er
 	}
 	return nil
 }
+
+// ErrScreenAlreadyRegistered (MET-U004): ScreenRegistry.Register was
+// called with a ScreenID some earlier Register call on the SAME registry
+// already used. See screen_registry.go's Register doc comment for why
+// this is rejected rather than silently overwriting the earlier entry.
+const ErrScreenAlreadyRegistered = "MET-U004"
+
+// ErrScreenUnknown (MET-U005): ScreenRegistry.Activate was called with a
+// ScreenID no Register call on this registry ever registered. See
+// screen_registry.go's Activate doc comment.
+const ErrScreenUnknown = "MET-U005"
+
+// ErrScreenRegistryCopied (MET-U006): a *ScreenRegistry method was
+// called on a struct copy of the value NewScreenRegistry returned —
+// mirrors ErrRenderLoopCopied's own rationale, restated for
+// ScreenRegistry's self/mu pair (screen_registry.go's own doc comment
+// has the full mechanism).
+const ErrScreenRegistryCopied = "MET-U006"
+
+// ErrScreenNilDraw (MET-U007): ScreenRegistry.Register was called with a
+// ScreenEntry whose Draw is nil. Rejected at Register time (GR#1) — see
+// screen_registry.go's Register doc comment for why a nil adapter must
+// not be allowed to become a silently blank terminal.
+const ErrScreenNilDraw = "MET-U007"

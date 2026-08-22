@@ -66,4 +66,19 @@
 // claimed sub-range — see errors.go); nothing in this package reads the
 // wall clock (AC-14), and no map feeds an allocation/result order without
 // being sorted first (AC-13/GR#21).
+//
+// # Coverage & enumeration aggregate (AC-18…AC-25)
+//
+// [ServicesAPI.ServiceIDs], [ServicesAPI.ServiceKinds], and
+// [ServicesAPI.DistrictIDs] enumerate the registered surface in ascending
+// order (never Go map order). [ServicesAPI.CoverageSummary] folds the whole
+// city into one struct — ServiceCount, TotalCapacity (Σcapacity),
+// TotalDemand, CoverageRatio, MeanQuality — and
+// [ServicesAPI.CoverageByDistrict] / [ServicesAPI.CoverageForDistrict] give
+// the same per-district, computed from caller-pushed demand records
+// ([ServicesAPI.UpdateDistrictDemand]): the caller supplies district
+// identity + demand, and this package performs no spatial read. The ratio is
+// CoverageRatio = 1.0 when TotalDemand == 0, else clamp01(Σcapacity/Σdemand)
+// — the capacity/demand fraction of demand served, mirroring
+// [ComputeQuality]'s capacityFactor.
 package services

@@ -94,3 +94,12 @@ The deep-sea container terminal as a tier above `container_terminal`: berths × 
 
 ### ASM-1276 — intermodal conservation test exercises a VALID rail-road handoff (amends AC-4)
 `TestIntermodalTonnesConservation` was fixed via option 1 (a valid rail-road handoff) rather than option 2 (asserting below-min rejection): option 1 preserves the test's mass-conservation intent — it still asserts in == out + dwell for a VALID transfer — and mirrors `engine.rail`'s own conservation test surface. Option 2 would have kept only rail-road transfers and asserted sea-rail rejection, weakening the end-to-end valid-transfer conservation guard AC-4 exists to protect.
+
+## Assumptions logged (FEAT-084 CC folds)
+
+- **ASM-1088** — `ContainerPort.Tiers()` equal-rank tie-break is the tier key: the port ladder sorts by `(milestone, cost, key)` and uses `sort.SliceStable`, making the order total for two tiers sharing an equal `(milestone, cost)` rank — deterministic by key rather than map-iteration seed (GR#21). A peer key that is a strict string suffix of another (e.g. `deep_sea_terminal_peer` after `deep_sea_terminal`) sorts after it.
+- **ASM-1031** — permit and decommission obligations are inherited via dependency-inversion seams, not reimplemented: `ContainerPort.Build` consumes `PermitAuthority` and `DecommissionRegistrar` (FEAT-053/FEAT-054 are open with no package); a nil-unset seam rejects the build loudly, and no local permit-state or liability-provision field is declared on the type.
+
+- **ASM-1029 (FEAT-084 SF fold).** feat.containerport claims MET-G2000-G2099 (MET-G2000 build-rejected, MET-G2001 unknown-tier, MET-G2002 data-invalid), registered in data/errors.json reserved + codes; G1600-G1699 was taken by sibling engine.farming and G1700-G1799 is engine.rail's planned block.
+
+- **ASM-1033 (FEAT-084 CC fold).** data/containerport.json carries cargo_port_small + container_terminal figures mirroring data/buildings.json's PT catalogue and data/freight.json's active port (documented in the file's meta.ladderNote), so the deep-sea tier can be asserted a genuine rung above container_terminal for the AC-2/AC-3 scale ordering.

@@ -122,6 +122,24 @@ func ClampInt64FromFloat(f float64) int64 {
 	return int64(f)
 }
 
+// ClampInt64FromUint64 converts a uint64 to int64 with saturation at
+// math.MaxInt64 (GR#16), rather than a bare int64(x): for x >
+// math.MaxInt64, a bare conversion is well-defined by the Go spec (the
+// low 64 bits reinterpreted two's-complement) but numerically nonsensical
+// for a byte/count value read back from an untrusted source — it turns
+// into a large NEGATIVE int64, exactly the poisoned-input shape a
+// caller computing a delta or a duration from it must never see silently
+// (BUG-305: synth/baseline.go's alloc-delta casts). x is unsigned, so the
+// result is never negative on its own; the only failure mode this guards
+// is positive overflow, which is why it saturates high rather than
+// needing a low bound too.
+func ClampInt64FromUint64(x uint64) int64 {
+	if x > uint64(math.MaxInt64) {
+		return math.MaxInt64
+	}
+	return int64(x)
+}
+
 // IsFinite reports whether f is neither NaN nor ±Inf — the guard a caller
 // uses before feeding a float64 result into int64 arithmetic or conserved
 // accounting, so a non-finite value is rejected rather than silently

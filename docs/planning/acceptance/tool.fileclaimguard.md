@@ -64,3 +64,9 @@ Two fail-open PreToolUse hooks that make "two agents editing the same file" mech
 - **ASM-962 (confirm-and-close).** FEAT-136 r2 anchors relative `file_path` to the repo root via `path.resolve(ROOT, file_path)` where `ROOT = __dirname` on BOTH guard sides, so the claim-store and edit-time sides stay mutually consistent even if a session cwd diverged.
 - **ASM-963 (confirm-and-close).** FEAT-136 r2 leaves the bare `**` whole-repo over-block unchanged (classified over-block/DoS, not a bypass) — it can only fail-open over-block, never allow a foreign edit of the claimed bytes.
 - **ASM-988 (confirm-and-close).** The trailing-dot/space spelling gap (Win32 strips to the same on-disk path) is out-of-contract: reaching it needs a deliberately malformed path — an active attack, not the accidental collision FEAT-136 guards.
+
+- **ASM-986** — the 8.3 short-name spelling gap is out-of-contract on this machine: `NtfsDisable8dot3NameCreation=2` disables 8.3 names on the non-system E: volume (no `DOCS~1` exists for docs) and the dev dispatch/edit path emits canonical long-name paths, so `DOCS~1/x.md` never reaches a `docs/x.md` claim.
+
+- **ASM-959 (FEAT-084 CC fold).** A claimed glob is interpreted with shell semantics: a single star matches within one path segment, a double star crosses segments — internal/engine/consumption/*_test.go protects direct children (e.g. s6_endtoend_test.go) but not deeper descendants.
+
+- **ASM-901 (FEAT-084 CC fold).** File-claim ownership is keyed on session_id (per-terminal), not per-agent: two subagents dispatched by the same lead session onto overlapping paths are deliberately not blocked — this is the documented "different sessions" scope in claude-file-claim-guard.js/claude-dispatch-guard.js headers and is accepted as the Baseline One granularity. Per-agent identity waits on BUG-238 (stable per-terminal identity).

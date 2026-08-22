@@ -74,3 +74,15 @@ The five-stage production chain (refinery, petrochemical works, plastics convert
 
 - **ASM-1256 (confirm-and-close).** Operate clamps landed crude to `ThroughputTonnesPerDay` and reports the clamped value as `CrudeLanded` (processed tonnage, not the port raw landing); the raw figure reads from the freight seam, not `OperateResult`.
 - **ASM-1303 (confirm-and-close).** A negative freight landing is REJECTED with `ErrRefineryDataInvalid` rather than clamped to zero (SEC-165/FEAT-135 reject-not-silently-default at a structural boundary).
+
+## Assumptions logged (FEAT-084 CC folds)
+
+- **ASM-1285** — Refinery.Wire* signature change (void→error) breaks no production caller: all Wire* call sites live inside `internal/engine/chemicals` (test files only); the composition root does not call `Refinery.Wire*` yet, so the breaking change is contained.
+- **ASM-1298** — `Refinery.Chem()` returning `(*ChemAPI, error)` is a breaking signature change whose only callers are the two sites in `internal/engine/chemicals/refinery_test.go`; no other module or the composition root calls it yet.
+- **ASM-1299** — SEC-164 is closed by copy-guarding `Chem()` with an error return (`Chem() (*ChemAPI, error)`), not a defensive copy of the returned API.
+
+- **ASM-1257 (FEAT-084 CC fold).** SEC-137 overflow-bool-discarded class is fixed at both SafeMul sites: scaleTonnes now returns (int64, bool) and Operate rejects overflow with ErrRefineryDataInvalid — a structurally identical sibling of ImportRefined. If the data file can never overflow scaleTonnes the added rejection is harmless defense-in-depth; if it can, a saturated output would have silently over-fed the fuel seam. (Roster routed to engine.fuel; code home is engine.chemicals — folded here.)
+
+- **ASM-1297 (FEAT-084 CC fold).** Operate rejects only negative crudeTonnes; zero remains a valid no-crude-this-tick request producing zero output — matching ImportRefined tonnes < 0 (not <= 0) and scaleTonnes zero-for-landed<=0. Treating zero as invalid would forbid the legitimate idle-tick case and diverge from the sibling boundary. (Roster routed to engine.fuel; code home is engine.chemicals — folded here.)
+
+- **ASM-1312 (FEAT-084 CC fold).** SEC-170 fix serializes Build with a dedicated buildMu sync.Mutex held across the permit/decommission seams (exactly one liability registration, one built=true) rather than the naive re-acquire-r.mu check-and-set, which would let two concurrent Builds both pass the built==false snapshot and double-register the day-one decommission liability. If the build lock is rejected as over-serialization the fix must become a claim-before-seam protocol. (Code home engine.chemicals; roster routed to feat.decommission.)

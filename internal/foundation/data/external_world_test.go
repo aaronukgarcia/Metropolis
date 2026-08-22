@@ -123,6 +123,30 @@ func TestExternalWorld_ExternalRailUngatedRejected(t *testing.T) {
 	assertPlaceholderCode(t, err, CodeSchemaInvalid, "externalRail")
 }
 
+// TestExternalWorld_ExternalRailWhitespaceVariantUngatedRejected proves a
+// whitespace-padded "externalRail" channel name (a leading space, the typo
+// this finding is named for) is still caught by the tier-5 gate rather than
+// silently comparing unequal to the exact literal and being treated as an
+// ungated channel (SEC-059).
+func TestExternalWorld_ExternalRailWhitespaceVariantUngatedRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileExternalWorld, `{"version":1,"profiles":[{"id":"london","name":"London","capacityByEra":[{"era":1,"capacity":500}],"wageMicropounds":2900000000,"transportRequirement":[{"channel":" externalRail","availableFromTier":3}]}]}`)
+
+	_, err := LoadExternalWorld(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeSchemaInvalid, "externalRail")
+}
+
+// TestExternalWorld_BlankChannelRejected proves a whitespace-only channel
+// name is rejected as non-blank, not accepted as a distinct (empty-looking)
+// channel (SEC-057's shared root cause: requireNonEmptyString did not trim).
+func TestExternalWorld_BlankChannelRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileExternalWorld, `{"version":1,"profiles":[{"id":"london","name":"London","capacityByEra":[{"era":1,"capacity":500}],"wageMicropounds":2900000000,"transportRequirement":[{"channel":"   ","availableFromTier":1}]}]}`)
+
+	_, err := LoadExternalWorld(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeSchemaInvalid, "channel")
+}
+
 // TestExternalWorld_EmptyProfilesRejected proves an empty profiles list is
 // rejected.
 func TestExternalWorld_EmptyProfilesRejected(t *testing.T) {

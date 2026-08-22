@@ -23,11 +23,25 @@ type mockTransport struct {
 	full     bool
 	closed   bool
 	received []protocol.Command
+
+	// onSend, when set, is invoked synchronously for every SendCommand
+	// call, BEFORE the command is recorded/the lock's-worth of bookkeeping
+	// happens, and (critically) outside m.mu -- letting a test inject
+	// arbitrary queue-layer calls (e.g. a T2 SendCommand that overwrites
+	// the coalesceSlot) at the exact moment Drain's own peek->send->commit
+	// critical section is mid-flight, without any sleeps or extra
+	// goroutines: Drain calls q.inner.SendCommand synchronously between
+	// its peek and its commit, so a hook fired from inside that call lands
+	// deterministically between the two.
+	onSend func(cmd protocol.Command)
 }
 
 func newMockTransport() *mockTransport { return &mockTransport{} }
 
 func (m *mockTransport) SendCommand(cmd protocol.Command) error {
+	if m.onSend != nil {
+		m.onSend(cmd)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -366,6 +380,161 @@ func TestQueue_T2CoalescesToLatest(t *testing.T) {
 	}
 	if q.Depth().T2 {
 		t.Fatalf("Depth().T2 = true after Drain, want false")
+	}
+}
+
+// TestQueue_T2CoalesceGenerationRaceNeverLosesNewerCommand reproduces
+// BUG-302 (Bro audit, 2026-08-20) deterministically, without any sleeps or
+// extra goroutines: peekHighestPriority used to discard the generation it
+// peeked T2's pending command at, and commitTier used to RE-PEEK T2 to
+// recover a generation to commit -- which is always the CURRENT generation,
+// not the one that was actually offered to (and accepted by) the inner
+// transport. So if a newer SendCommand(B) landed in the coalesceSlot after
+// Drain peeked stale A but before Drain committed, the old code committed
+// B's generation, silently clearing the slot -- B was never sent to inner
+// and is now gone forever, which is the exact opposite of T2's "latest
+// value survives" contract (TestQueue_T2CoalescesToLatest above).
+//
+// The queue's own synchronous design makes this reproducible without any
+// timing games: Drain calls q.inner.SendCommand(cmd) synchronously, with
+// its drainMu held, strictly between its peek and its commit. mockTransport's
+// onSend hook fires from inside that exact call, so setting onSend to send a
+// SECOND SetSpeed through the SAME QueuedTransport lands the overwrite at
+// exactly the moment the race window used to exist -- deterministically,
+// every run, on every platform.
+func TestQueue_T2CoalesceGenerationRaceNeverLosesNewerCommand(t *testing.T) {
+	inner := newMockTransport()
+	q := newTestQueue(t, inner, Config{})
+
+	if err := q.SendCommand(setSpeedCmd("A", 1)); err != nil {
+		t.Fatalf("SendCommand(A): %v", err)
+	}
+
+	injected := false
+	inner.onSend = func(cmd protocol.Command) {
+		// Fire exactly once, only for the T2 SetSpeed Drain is mid-flight
+		// delivering (never for a T0/T1 command in a future test reusing
+		// this fixture) -- this is SendCommand(B) landing in the window
+		// between peekHighestPriority(A) and commitTier's commit.
+		if injected || cmd.Kind != protocol.KindSetSpeed {
+			return
+		}
+		injected = true
+		if err := q.SendCommand(setSpeedCmd("B", 2)); err != nil {
+			t.Fatalf("SendCommand(B) injected mid-drain: %v", err)
+		}
+	}
+
+	// First Drain: budget=1 so it stops after exactly one delivery -- this
+	// isolates the single peek->send->commit cycle the race targets (an
+	// unlimited-budget Drain would keep looping and pick B up in the SAME
+	// call once it becomes the new highest-priority pending command, which
+	// would still prove B isn't lost, but wouldn't isolate the commit-time
+	// defeat this test is pinning down). Must deliver stale A (it was
+	// already peeked before B landed -- A was legitimately in flight and is
+	// allowed to be sent at most once), and must NOT lose B: B must still
+	// be pending afterwards so the NEXT Drain call delivers it.
+	stats, err := q.Drain(1)
+	if err != nil {
+		t.Fatalf("Drain (first): %v", err)
+	}
+	if stats.Sent[2] != 1 {
+		t.Fatalf("Sent[T2] (first Drain) = %d, want 1 (A must be delivered)", stats.Sent[2])
+	}
+	got := inner.Received()
+	if len(got) != 1 {
+		t.Fatalf("received %d commands after first Drain, want 1 (A only)", len(got))
+	}
+	if speed := got[0].Payload.(protocol.SetSpeedPayload).Speed; speed != 1 {
+		t.Fatalf("first delivered SetSpeed.Speed = %d, want 1 (stale A)", speed)
+	}
+
+	// The critical assertion: B must NOT have been silently discarded by
+	// commitTier committing the wrong (current, not peek-time) generation.
+	if !q.Depth().T2 {
+		t.Fatalf("Depth().T2 = false after first Drain, want true -- B was silently lost (BUG-302)")
+	}
+
+	// Second Drain: B must now be delivered -- exactly once, with its own
+	// value, never re-delivering stale A.
+	inner.onSend = nil
+	stats, err = q.Drain(0)
+	if err != nil {
+		t.Fatalf("Drain (second): %v", err)
+	}
+	if stats.Sent[2] != 1 {
+		t.Fatalf("Sent[T2] (second Drain) = %d, want 1 (B must be delivered)", stats.Sent[2])
+	}
+	got = inner.Received()
+	if len(got) != 2 {
+		t.Fatalf("received %d commands total, want 2 (A then B, B never lost, neither re-sent)", len(got))
+	}
+	if speed := got[1].Payload.(protocol.SetSpeedPayload).Speed; speed != 2 {
+		t.Fatalf("second delivered SetSpeed.Speed = %d, want 2 (B, the newer command)", speed)
+	}
+	if q.Depth().T2 {
+		t.Fatalf("Depth().T2 = true after second Drain, want false")
+	}
+}
+
+// TestQueue_T2ThreeCommandRaceDeliversLatestOnly extends the BUG-302
+// regression above to a generation SKIP (independent destructive round,
+// 2026-08-20): A peeked+sent; B lands mid-send; C lands immediately after
+// B, still before Drain's commit -- generations go 1 -> 3. Commit(genA=1)
+// must refuse (slot generation is 3, not 1: coalesceSlot.Commit's
+// equality check fails for ANY newer generation, not just +1), the slot
+// must hold C ONLY (B legitimately coalesced away by C's Set --
+// latest-wins), and the next Drain must deliver C: never B, never A a
+// second time.
+func TestQueue_T2ThreeCommandRaceDeliversLatestOnly(t *testing.T) {
+	inner := newMockTransport()
+	q := newTestQueue(t, inner, Config{})
+
+	if err := q.SendCommand(setSpeedCmd("A", 1)); err != nil {
+		t.Fatalf("SendCommand(A): %v", err)
+	}
+
+	injected := false
+	inner.onSend = func(cmd protocol.Command) {
+		if injected || cmd.Kind != protocol.KindSetSpeed {
+			return
+		}
+		injected = true
+		if err := q.SendCommand(setSpeedCmd("B", 2)); err != nil {
+			t.Fatalf("SendCommand(B) injected mid-drain: %v", err)
+		}
+		if err := q.SendCommand(setSpeedCmd("C", 3)); err != nil {
+			t.Fatalf("SendCommand(C) injected mid-drain: %v", err)
+		}
+	}
+
+	stats, err := q.Drain(1)
+	if err != nil {
+		t.Fatalf("Drain (first): %v", err)
+	}
+	if stats.Sent[2] != 1 {
+		t.Fatalf("Sent[T2] first = %d, want 1 (A)", stats.Sent[2])
+	}
+	if !q.Depth().T2 {
+		t.Fatalf("Depth().T2 false after refused commit -- newest command lost (BUG-302)")
+	}
+
+	inner.onSend = nil
+	if _, err := q.Drain(0); err != nil {
+		t.Fatalf("Drain (second): %v", err)
+	}
+	got := inner.Received()
+	if len(got) != 2 {
+		t.Fatalf("received %d total, want 2 (A then C; B coalesced away, nothing re-sent)", len(got))
+	}
+	if s := got[0].Payload.(protocol.SetSpeedPayload).Speed; s != 1 {
+		t.Fatalf("first delivered speed = %d, want 1 (A)", s)
+	}
+	if s := got[1].Payload.(protocol.SetSpeedPayload).Speed; s != 3 {
+		t.Fatalf("second delivered speed = %d, want 3 (C, the LATEST -- got B or A instead)", s)
+	}
+	if q.Depth().T2 {
+		t.Fatalf("Depth().T2 true after second Drain, want false")
 	}
 }
 

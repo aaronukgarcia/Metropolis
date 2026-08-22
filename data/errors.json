@@ -106,7 +106,13 @@
       "G4700-G4799": "reserved for engine.shopping (internal/engine/shopping — module previously claimed G4300-G4399 in lane/bob's data/errors.json, which collided with engine.prison's earlier-registered claim of the same block; renumbered to the next free G-layer block, G4700-G4799, since prison's claim came first (first-claim-wins). Any MET-G43xx codes engine.shopping had begun using must be re-minted at MET-G47xx to match. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
       "G4800-G4899": "reserved for engine.extcommute (internal/engine/extcommute: MOD-035's finite off-map job pools, dormitory arithmetic, and the two-cap (pool/transport) assignment model. Module source (internal/engine/extcommute/errors.go) claims G4500-G4599, which collided with engine.traffic's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4800-G4899, since traffic's registered claim predates extcommute's unregistered source-comment claim (first-claim-wins). The 13 codes formerly MET-G4500..MET-G4512 are re-minted at MET-G4800..MET-G4812 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
       "G4900-G4999": "reserved for engine.airunits (internal/engine/airunits: MOD-074's rotary-wing police/fire/ambulance/VIP choppers — purchase, pilot qualification, dispatch, maintenance, and weather-grounding. Module source (internal/engine/airunits/errors.go) claims G4100-G4199, which collided with engine.staffing's registered claim (lane/ben, BUG-273 tool) of that same block; renumbered to the next free G-layer block, G4900-G4999, since staffing's registered claim predates airunits' unregistered source-comment claim (first-claim-wins). The 11 codes formerly MET-G4100..MET-G4110 are re-minted at MET-G4900..MET-G4910 with identical meanings/order — see STEP 2 registration below. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
-      "G5000-G5099": "reserved for engine.dispatch (internal/engine/dispatch: MOD-040's unified emergency & care dispatch — the parked module engine.airunits' ambulance role merges into, per GR#3. No prior claim of any kind existed on this block; pre-claimed here ahead of build so the module's eventual build does not need to run claim-range itself. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)"
+      "G5000-G5099": "reserved for engine.dispatch (internal/engine/dispatch: MOD-040's unified emergency & care dispatch — the parked module engine.airunits' ambulance role merges into, per GR#3. No prior claim of any kind existed on this block; pre-claimed here ahead of build so the module's eventual build does not need to run claim-range itself. BUG-276 cross-lane collision resolution 2026-08-18, first-claim-wins arbitration by Bev.)",
+      "G5100-G5199": "reserved for engine.cafe (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-18 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "V300-V399": "reserved for ui.screen.finance (lane/ben claim 2026-08-19, landed on main per the BUG-276 single-authority rule; codes MET-V300..V303 arrive with the finance PR)",
+      "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V500-V599": "reserved for ui.screen.services (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -429,6 +435,30 @@
       "message": "RenderLoop method called on a struct-copied value (BUG-018): {method}",
       "remedy": "A *core.RenderLoop value was copied by assignment/passing instead of being used via the single pointer core.NewRenderLoop returned (owned is an atomic.Bool VALUE -- a copy gets its own independent atomic word, so a copy's CAS can succeed even while the original already owns the screen, giving two goroutines that each believe they hold T-RENDER's exclusive tcell.Screen access). The call was rejected rather than risking two writers to one terminal; construct exactly one RenderLoop via NewRenderLoop and pass its pointer everywhere instead of a dereferenced copy."
     },
+    "MET-U004": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "screen registry: duplicate ScreenID {id} already registered",
+      "remedy": "Each ScreenID may be registered exactly once via ScreenRegistry.Register (registration is boot-time, in a fixed order per GR#21). Fix the caller to register each screen once."
+    },
+    "MET-U005": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "screen registry: unknown ScreenID {id} (not registered)",
+      "remedy": "ScreenRegistry.Activate was called with a ScreenID no Register call ever registered. Register the screen at boot before activating it, or check the ID for a typo against the registered ScreenID set."
+    },
+    "MET-U006": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "ScreenRegistry method called on a struct-copied value: {method}",
+      "remedy": "A *core.ScreenRegistry value was copied by assignment/passing instead of being used via the single pointer core.NewScreenRegistry returned. The call was rejected rather than risking two independent registries disagreeing about which screen is active; construct exactly one ScreenRegistry via NewScreenRegistry and pass its pointer everywhere instead of a dereferenced copy."
+    },
+    "MET-U007": {
+      "severity": "error",
+      "module": "ui.core",
+      "message": "screen registry: ScreenEntry {id} has a nil Draw",
+      "remedy": "ScreenRegistry.Register was called with a ScreenEntry whose Draw is nil, which would render that screen as a blank terminal with no diagnostic. Supply the screen's real core.DrawFunc adapter (e.g. cmd/metropolis's mapDrawFunc/financeDrawFunc/servicesDrawFunc); a screen with nothing to draw is a wiring mistake, not a supported configuration."
+    },
     "MET-U100": {
       "severity": "warn",
       "module": "ui.screen.map",
@@ -621,6 +651,30 @@
       "message": "Could not load secondsPerMonthAt1x from data/pacing.json: {cause}",
       "remedy": "Check that data/pacing.json exists at the resolved data directory, is well-formed JSON, has a positive 'version', and has a positive 'secondsPerMonthAt1x' value. This closes FEAT-030 / MOD-012's interim ruling: the pacing constant is sourced from this data file at boot, with internal/engine/core/clock.go's DefaultSecondsPerMonthAt1x kept only as a fallback default for callers that construct an Engine without loading data (e.g. isolated unit tests)."
     },
+    "MET-E017": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterView called twice for view {view}",
+      "remedy": "compose.Wire's viewRegistrationOrder must register each view name at most once"
+    },
+    "MET-E018": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "RegisterView called with a nil ViewPatchFunc for view {view}",
+      "remedy": "pass a non-nil ViewPatchFunc; compose.Wire's viewRegistrationOrder entries must all resolve to a real patch producer"
+    },
+    "MET-E019": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "StartSubscriptionPump called a second time on the same Engine (a pump is already running)",
+      "remedy": "call StartSubscriptionPump at most once per Engine; join the done channel it returns before starting a new one"
+    },
+    "MET-E020": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "NewClock rejected secondsPerMonthAt1x={seconds}: must be a positive, finite real-seconds pacing constant",
+      "remedy": "Pass a positive, finite secondsPerMonthAt1x (e.g. DefaultSecondsPerMonthAt1x, or a value loaded via LoadSecondsPerMonthAt1x/LoadDefaultSecondsPerMonthAt1x from data/pacing.json) -- a zero, negative, NaN, or +/-Inf pacing constant would silently produce zero or garbage SecondsPerMonth/TicksPerRealSecond figures instead of a loud rejection."
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",
@@ -656,6 +710,18 @@
       "module": "harness.headless",
       "message": "command {kind} could not be sent to the engine during a headless run: {cause}",
       "remedy": "SendCommand failed at the transport layer (a failed cmd.Validate(), protocol.ErrTransportClosed, or protocol.ErrCommandQueueFull from InProcTransport.SendCommand), so the command never reached the engine -- there is no engine.core rejection code to report (distinct from MET-H202, which surfaces a real engine rejection). Inspect {cause} for the transport failure and fix the command or the transport wiring."
+    },
+    "MET-H206": {
+      "severity": "warn",
+      "module": "harness.headless",
+      "message": "subscription pump goroutine did not exit within the shutdown join timeout ({timeoutMs}ms) - proceeding with transport.Close anyway",
+      "remedy": "check for a blocking or reentrant-into-Publish DeltaSink implementation (see engine.core's DeltaSink doc comment) - the pump goroutine may be permanently stuck"
+    },
+    "MET-H207": {
+      "severity": "error",
+      "module": "harness.headless",
+      "message": "invalid -months value {months}: {cause}",
+      "remedy": "Months must be positive, and months*DailyTicksPerMonth must fit in int64. cmd/metropolis's -months flag already enforces > 0 at the CLI layer; this is driveTicks' own library-level guard (BUG-305) against a caller that reaches Run directly with an out-of-range or overflow-inducing value."
     },
     "MET-E100": {
       "severity": "error",
@@ -1118,6 +1184,12 @@
       "module": "feat.skeleton",
       "message": "metropolis failed to boot: {component} failed to initialize: {cause}",
       "remedy": "Check the named component ({component}: e.g. tcell screen, harness.stub fixture load, or the module registry) for the underlying cause. cmd/metropolis exits non-zero and never renders a partial/blank screen on this path (AC-7) — rerun with the printed correlation ID to trace the full boot sequence in the log."
+    },
+    "MET-E901": {
+      "severity": "warn",
+      "module": "feat.skeleton",
+      "message": "subscription pump goroutine did not exit within the shutdown join timeout ({timeoutMs}ms) - proceeding with transport.Close anyway",
+      "remedy": "check for a blocking or reentrant-into-Publish DeltaSink implementation (see engine.core's DeltaSink doc comment) - the pump goroutine may be permanently stuck"
     },
     "MET-P000": {
       "severity": "error",
@@ -1782,13 +1854,13 @@
     "MET-G100": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "unknown curve key {key} queried from engine.projections",
-      "remedy": "Register a curve provider for {key} via RegisterCurveProvider before querying it; no zero-value curve is returned (AC-9)."
+      "message": "unknown curve key {commodity} queried from engine.projections",
+      "remedy": "Register a curve provider for {commodity} via RegisterCurveProvider before querying it; no zero-value curve is returned (AC-9)."
     },
     "MET-G101": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "month query out of bounds: {detail} (negative month before world epoch, or a from/to range wider than the max query width)",
+      "message": "month query out of bounds: month {monthIndex} ({cause})",
       "remedy": "Query a non-negative month within the allowed range width; the request is rejected rather than overflowing the result buffer (AC-9, BUG-214 bounds guard)."
     },
     "MET-G102": {
@@ -1800,7 +1872,7 @@
     "MET-G103": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "Slow-Fuse decision (FuseYears {value} > 5) submitted without a projected-consequence payload",
+      "message": "Slow-Fuse decision submitted without required payload: {field}",
       "remedy": "A decision whose principal effect lands >5 game-years out MUST carry a non-empty projected consequence before confirmation (A5, AC-5/AC-10)."
     },
     "MET-G104": {
@@ -1824,14 +1896,14 @@
     "MET-G107": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "embedded projections config invalid at load: {detail}",
+      "message": "embedded projections config invalid at load: {curve} ({cause})",
       "remedy": "Fix the embedded horizon.json/deathwarnings.json (malformed JSON or missing disclosure); the package fails loudly rather than defaulting (AC-12/AC-20)."
     },
     "MET-G108": {
       "severity": "error",
       "module": "engine.projections",
-      "message": "ghost-city death-warning provider shape invalid: {detail}",
-      "remedy": "The ghost-city provider must supply both current and historic-peak values so the dual-threshold margin is computable; an incomplete shape is rejected, not defaulted (FEAT-068, AC-18)."
+      "message": "curve provider registered for commodity \"{commodity}\" does not implement the required peak-tracking field \"{field}\"",
+      "remedy": "The provider registered under CurveKeyGhostCityPopulation must additionally implement GhostCityPeakProvider (HistoricPeak) so AC-18's dual-threshold margin is computable; a provider missing that method is rejected, not defaulted (FEAT-068, AC-18)."
     },
     "MET-G109": {
       "severity": "error",
@@ -2229,6 +2301,12 @@
       "message": "composition root: id-namespace ranges overlap (fertilityChildIDBase={fertilityChildIDBase}, migrantIDBase={migrantIDBase})",
       "remedy": "Wire-time assertion (FEAT-169 destructive-review REJECT finding): citizens.FertilityChildIDBase must be at least 2x attract.MigrantIDBase so the three-package disjoint id map (compose seeds [1, 2^62), attract migrants [2^62, 2^63), citizens fertility children [2^63, ...)) actually holds. This should never fire in production -- both sides are compile-time constants -- but a future edit to either package's base constant that breaks the convention now fails loudly at every Wire call instead of silently overlapping the two id ranges (the original bug: both bases independently started at 1<<62). See citizens/doc.go and compose/doc.go for the full id map."
     },
+    "MET-G807": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "extcommute finance seam rejected a non-positive money amount ({amount} micropounds) for {verb}",
+      "remedy": "A FinanceSeam verb (RecordOffMapWage/RemoveOffMapWage/RecordBusinessRates/RecordCorpShare/RecordWageLeakage) was called with a negative amountMicropounds. A negative amount posted through the debit/credit pair would reverse the credit flow (money conservation, GR#16) -- the seam rejects it loudly instead of posting a sign-flipped transaction. Fix the caller (engine.extcommute) so it never derives a negative wage/amount."
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",
@@ -2474,6 +2552,12 @@
       "module": "engine.services",
       "message": "net fiscal cost clawback overflowed (gross {gross}, rate {rate})",
       "remedy": "NetFiscalCost's gross-wage × income-tax-rate intermediate product overflowed int64, so the clawback (and therefore the honest net) cannot be computed. The gross wage bill is too large for the fixed-point arithmetic to represent its tax clawback; reduce the staffing/wage magnitude or surface the figure differently (SEC-094)."
+    },
+    "MET-G1211": {
+      "severity": "error",
+      "module": "engine.services",
+      "message": "district {district} has never had demand pushed",
+      "remedy": "CoverageForDistrict or UpdateDistrictDemand was called with a district identity that has never been seeded via UpdateDistrictDemand. Never a zero-value coverage silently read as an empty-but-existing district (AC-23)."
     },
     "MET-G1400": {
       "severity": "error",
@@ -4083,6 +4167,60 @@
       "message": "PoliciesAPI method {method} was called on a struct copy of the value NewPoliciesAPI/Load returned",
       "remedy": "Always use the *PoliciesAPI pointer NewPoliciesAPI/Load returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased library/district/active maps but has its own independent mutexes, the SEC-020-class hazard every Register-shaped module in this codebase rejects before any lock is touched."
     },
+    "MET-G4013": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "simulation month regression: requested month {month} is before the current month {current}",
+      "remedy": "AdvanceMonth is monotonic: pass a month equal to or later than the current simulation month. A month regression is rejected, never silently rewound."
+    },
+    "MET-G4014": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "checkpoint month {checkpoint} precedes the current month {current}",
+      "remedy": "Checkpoint is monotonic: pass a month equal to or later than the current simulation month. A checkpoint before the current month is rejected, never silently rewound."
+    },
+    "MET-G4015": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "preview range is inverted: from {fromMonth} to {toMonth}",
+      "remedy": "Request a preview whose toMonth is at least fromMonth. An inverted range is rejected, never silently returned empty."
+    },
+    "MET-G4016": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "a district cannot be created with an empty name",
+      "remedy": "Pass a non-empty district name to CreateDistrict. An empty name is rejected rather than silently stored."
+    },
+    "MET-G4017": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "a district must contain at least one cell",
+      "remedy": "Pass at least one cell reference to CreateDistrict. A cell set that resolves to nothing would be a resolved-to-empty-set false success (AC-13), so it is rejected."
+    },
+    "MET-G4018": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "a road cannot be registered with an empty road ID",
+      "remedy": "Pass a non-empty RoadID to RegisterRoad. An empty ID is rejected rather than silently stored."
+    },
+    "MET-G4019": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "road {road} must contain at least one edge",
+      "remedy": "Pass at least one edge reference to RegisterRoad. A road that resolves to no edges is rejected rather than silently stored."
+    },
+    "MET-G4020": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "road {road} is already registered",
+      "remedy": "RegisterRoad rejects a duplicate RoadID rather than silently overwriting the existing edge set. Use a distinct RoadID or remove the existing registration first."
+    },
+    "MET-G4021": {
+      "severity": "error",
+      "module": "engine.policies",
+      "message": "rename name must be non-empty for district {district}",
+      "remedy": "Pass a non-empty name to RenameDistrict. Renaming preserves the district's ID and scoping, so an empty name is rejected rather than erasing the name."
+    },
     "MET-G4400": {
       "severity": "error",
       "module": "engine.tourism",
@@ -4184,6 +4322,60 @@
       "module": "engine.fuel",
       "message": "A setter/query input was outside its documented domain ({field}={value})",
       "remedy": "Tanker throughput and strategic-reserve levels must be finite and non-negative; forecourt counts and populations must be non-negative; requested delivery quantities must be non-negative. A malformed input is rejected, never clamped to a silently-plausible value (weakness pattern #4)."
+    },
+    "MET-G4300": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "data/prison.json could not be loaded or failed schema validation: {cause}",
+      "remedy": "Check that data/prison.json exists under the resolved data directory and passes engine.prison schema validation (positive version; three categories open/standard/highSecurity; base rates and effects in [0,1]; fuseYears in [5,15]). engine.prison never falls back to a partial or default-substituted config (GR#15/GR#7)."
+    },
+    "MET-G4301": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "citizen {citizen} is not present in CitizensAPI",
+      "remedy": "Admit only real citizens. engine.prison rejects an unknown citizen outright and never creates a placeholder inmate record (AC-10)."
+    },
+    "MET-G4302": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "unknown prison category {category}",
+      "remedy": "The category is not one of data/prison.json's categories (open/standard/highSecurity). Never a silently-created placeholder category (AC-10)."
+    },
+    "MET-G4303": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "inmate {citizen} is already released",
+      "remedy": "Release is rejected for an already-released (or never-admitted) inmate — never a silent no-op (AC-11)."
+    },
+    "MET-G4304": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "invalid regime funding: line {line}, amount {amount}",
+      "remedy": "The line must be one of education/work/addictionTreatment and the amount non-negative. Never silently clamped (AC-11)."
+    },
+    "MET-G4305": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "PrisonAPI method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *PrisonAPI pointer New returned — do not dereference-and-reassign it or pass it by value (SEC-020)."
+    },
+    "MET-G4306": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "invalid admission: field {field}",
+      "remedy": "The admission carried an invalid offence class, a non-positive sentence length, or a negative capacity/sold-places figure (GR#16)."
+    },
+    "MET-G4307": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "rehab-spend rejected by the Slow-Fuse pre-submission check: {reason}",
+      "remedy": "Attach a FuseYears tag in the documented [5,15] range and a locally-computed projected-consequence value (AC-9 interim, BUG-058 block)."
+    },
+    "MET-G4308": {
+      "severity": "error",
+      "module": "engine.prison",
+      "message": "invalid re-entry support value for {kind}: {value}",
+      "remedy": "The re-entry support sub-input must be in [0,1]. Never silently clamped (AC-5)."
     },
     "MET-G4800": {
       "severity": "error",
@@ -4329,6 +4521,96 @@
       "message": "a numeric command input was outside its documented domain (a negative amount, a negative month advance, a negative weather wind speed)",
       "remedy": "Rejected, never silently clamped (GR#16, AC-11)."
     },
+    "MET-G4911": {
+      "severity": "error",
+      "module": "engine.airunits",
+      "message": "Pilot is already assigned to another aircraft",
+      "remedy": "Release the pilot from their current aircraft (RemovePilot) before assigning them to a new one; a pilot flies exactly one unit at a time."
+    },
+    "MET-G5101": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "unknown centre: {centre}",
+      "remedy": "Ensure centre is registered."
+    },
+    "MET-G5102": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "failed to read config file",
+      "remedy": "Check file exists."
+    },
+    "MET-G5103": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "malformed vitality config",
+      "remedy": "Check JSON structure."
+    },
+    "MET-G5104": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative weight in config",
+      "remedy": "Fix weight."
+    },
+    "MET-G5105": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "safety value out of bounds [0, 1]",
+      "remedy": "Ensure safety is between 0 and 1."
+    },
+    "MET-G5106": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid centre area: {area}",
+      "remedy": "Ensure area is valid."
+    },
+    "MET-G5107": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid base capacity: {baseCapacity}",
+      "remedy": "Ensure base capacity is valid."
+    },
+    "MET-G5108": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative patronage count",
+      "remedy": "Ensure count is non-negative."
+    },
+    "MET-G5109": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative venue count",
+      "remedy": "Ensure count is non-negative."
+    },
+    "MET-G5110": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "negative dwell quality",
+      "remedy": "Ensure quality is non-negative."
+    },
+    "MET-G5111": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid sociability range",
+      "remedy": "Ensure range is valid."
+    },
+    "MET-G5112": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "invalid access range",
+      "remedy": "Ensure range is valid."
+    },
+    "MET-G5113": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "failed to push to wellbeing",
+      "remedy": "Check wellbeing service."
+    },
+    "MET-G5199": {
+      "severity": "error",
+      "module": "engine.cafe",
+      "message": "cafe method {method} was called on a struct copy of the value New returned",
+      "remedy": "Do not copy structs."
+    },
     "MET-G4600": {
       "severity": "error",
       "module": "engine.destination",
@@ -4364,6 +4646,228 @@
       "module": "engine.destination",
       "message": "an operation that needs a registered outbound dependency (tourism for regional draw, mining for reclamation/blight, parking for demand) was issued before that seam was wired",
       "remedy": "Fail closed, never a silent zero (GR#17)."
+    },
+    "MET-G4101": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "citizen lacks required qualification for role",
+      "remedy": "Ensure the citizen has completed the educational stage matching the role requirements (university for nurses/teachers, trades/technical-college for repair staff) before assignment."
+    },
+    "MET-G4102": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "target object has no staffing demand",
+      "remedy": "Verify that the target building demands real operators or repair staff of the specified kind before making an assignment."
+    },
+    "MET-G4103": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "finite contractor pool exhausted",
+      "remedy": "Hiring off-map contractors is finite and era-scaled. Manage your local labour pool and training programs to ensure local citizen supply."
+    },
+    "MET-G4104": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "invalid staffing input parameter: {value}",
+      "remedy": "Verify input parameters are non-negative and positive where required."
+    },
+    "MET-G4199": {
+      "severity": "error",
+      "module": "engine.staffing",
+      "message": "staffing method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *StaffingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
+    },
+    "MET-G4701": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "unregistered home cell ID: {cell}",
+      "remedy": "Ensure that the home cell ID has been successfully registered and initialized with active household format-access data before querying."
+    },
+    "MET-G4702": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "invalid travel-time or price input: {value}",
+      "remedy": "Travel time, price, and freshness parameters must be finite and non-negative. Recompute or validate inputs at the model boundary."
+    },
+    "MET-G4703": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "online-delivery share {share} is out of bounds [0, 1]",
+      "remedy": "The online-delivery share represents a probability factor and must be strictly in range [0, 1] (0% to 100%)."
+    },
+    "MET-G4799": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "shopping method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *ShoppingAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased fields but has its own independent mutexes, which is exactly the SEC-020-class hazard checkNotCopied guards exist to reject."
+    },
+    "MET-G4704": {
+      "severity": "error",
+      "module": "engine.shopping",
+      "message": "invalid format weight input: {field}={value}",
+      "remedy": "Format weight fields (cornerShopWeight/marketHallWeight/supermarketWeight/retailParkWeight) must be zero (explicitly disables that format) or a finite non-negative number; NaN and negative values are rejected fail-closed at LoadConfig time."
+    },
+    "MET-V300": {
+      "severity": "error",
+      "module": "ui.screen.finance",
+      "message": "malformed finance patch",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V301": {
+      "severity": "error",
+      "module": "ui.screen.finance",
+      "message": "stale or unknown subscription",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V302": {
+      "severity": "fatal",
+      "module": "ui.screen.finance",
+      "message": "finance screen called on copied value",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V303": {
+      "severity": "error",
+      "module": "ui.screen.finance",
+      "message": "loan request rejected: {reason}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V400": {
+      "severity": "warn",
+      "module": "ui.router",
+      "message": "no registered route matched {kind} correlation/subscription/kind key {key} (tick {tick})",
+      "remedy": "This is a routing-table miss: the router received a CommandResult/Delta/Event whose key (CorrelationID, SubscriptionID, or Event.Kind prefix) matches no RegisterResultHandler/BindSubscription/RegisterEventRoute entry. Check that the sending screen registered a route before issuing the command/subscribing, or that the event Kind matches a registered prefix."
+    },
+    "MET-V401": {
+      "severity": "warn",
+      "module": "ui.router",
+      "message": "delta gap detected for subscription {subscriptionId}: {gap} delta(s) missed before seq {seq} (tick {tick})",
+      "remedy": "The transport's evict-oldest drop policy discarded one or more Deltas for this subscription before the router observed them. This is expected under sustained back-pressure (transport.go); no resubscribe-to-heal protocol exists in v1 -- the staleness dot (UI-SPEC S1) reflects this until the next in-order Delta arrives."
+    },
+    "MET-V402": {
+      "severity": "error",
+      "module": "ui.router",
+      "message": "Router method called on a struct copy (correlation {correlationId})",
+      "remedy": "A *router.Router value was copied (dereference-and-copy, or constructed via new(Router)/Router{} instead of New) rather than used via the pointer New returned. Use the *Router New gave you; never copy it by value."
+    },
+    "MET-V403": {
+      "severity": "error",
+      "module": "ui.router",
+      "message": "receiver panicked handling routed {kind} for key {key} (tick {tick}): {cause}",
+      "remedy": "The registered receiver (ResultReceiver/DeltaReceiver/EventReceiver) panicked while handling this routed message. The router recovers, logs, and continues routing subsequent messages (T2 lossy-by-design -- one poisoned message must never stop routing); the panic is the receiving screen's own bug to fix, not the router's. Check the named receiver kind + routing key's own ApplyResult/ApplyDelta/ApplyEvent implementation."
+    },
+    "MET-G4501": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "citizen {citizen} is not a valid citizen ID for a traffic query",
+      "remedy": "Pass a non-zero citizen ID. Citizen ID 0 is never valid and is rejected rather than silently answering with a fabricated commute time."
+    },
+    "MET-G4502": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "invalid traffic input ({context})",
+      "remedy": "Reject negative trip/demand counts, negative or non-finite link lengths/volumes, and config values that fail validateConfig (finite, positive/non-negative per field) rather than silently accepting them (GR#7/GR#15/GR#16)."
+    },
+    "MET-G4503": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "link {link} BPR travel time computation would be non-finite",
+      "remedy": "LinkTravelTime rejects a non-positive/non-finite capacity, a negative/non-finite volume, or a non-finite computed travel time (overflowing V/C^beta) rather than returning +Inf/NaN with a nil error (MOD-023 r2 destructive verdict)."
+    },
+    "MET-G4599": {
+      "severity": "error",
+      "module": "engine.traffic",
+      "message": "TrafficAPI method {method} was called on a struct copy of the value New returned",
+      "remedy": "Always use the *TrafficAPI pointer New returned -- do not dereference-and-reassign it or pass it by value. A copy shares the aliased demand/node/link maps but has its own independent mutex, the SEC-020-class hazard every Register-shaped module in this codebase rejects before any lock is touched."
+    },
+    "MET-V500": {
+      "severity": "error",
+      "module": "ui.screen.services",
+      "message": "f4.services patch failed to decode: {cause}",
+      "remedy": "check the engine's f4.services patch encoder for schema drift"
+    },
+    "MET-V501": {
+      "severity": "warn",
+      "module": "ui.screen.services",
+      "message": "delta received for unknown/stale subscription {subscriptionId}",
+      "remedy": "verify the subscription was bound via BindSubscription before deltas are applied"
+    },
+    "MET-V502": {
+      "severity": "fatal",
+      "module": "ui.screen.services",
+      "message": "services.Screen method called on a struct-copied receiver",
+      "remedy": "always operate on the *Screen returned by services.New, never a value copy"
+    },
+    "MET-V503": {
+      "severity": "error",
+      "module": "ui.screen.services",
+      "message": "invalid funding slider request: {reason}",
+      "remedy": "check the slider value is finite, non-negative, and within the documented min/max"
+    },
+    "MET-V504": {
+      "severity": "error",
+      "module": "ui.screen.services",
+      "message": "F4 funding-adjust command failed to send: {cause}",
+      "remedy": "Retry the funding adjustment once the connection to the engine recovers; the command never reached the engine, so no state changed."
+    },
+    "MET-V505": {
+      "severity": "warn",
+      "module": "ui.screen.services",
+      "message": "F4 funding request for {id} was evicted before its CommandResult arrived (pendingFunding at capacity {cap}); its outcome is now unknown",
+      "remedy": "This is a bounded-memory safeguard, not an engine error -- if funding changes are failing to confirm, check engine/transport health; the display value has reverted to the last confirmed state where safe."
+    },
+    "MET-V600": {
+      "severity": "error",
+      "module": "ui.screen.districts",
+      "message": "F8 districts screen received a malformed patch for view {view}: {cause}",
+      "remedy": "Verify the engine's f8.districts view emits schemaVersion 1 within the size cap; the screen keeps its last-known-good state."
+    },
+    "MET-V601": {
+      "severity": "warn",
+      "module": "ui.screen.districts",
+      "message": "F8 districts screen received a delta for unknown/stale subscription {subscriptionId}",
+      "remedy": "Delta dropped; verify the subscription was bound before the engine pushed it."
+    },
+    "MET-V602": {
+      "severity": "fatal",
+      "module": "ui.screen.districts",
+      "message": "A districts.Screen method was called on a struct-copied value (method {method})",
+      "remedy": "Always operate on the *Screen returned by New(); never take a value copy."
+    },
+    "MET-V603": {
+      "severity": "error",
+      "module": "ui.screen.districts",
+      "message": "SetDistrictMultiplier request rejected locally for district {district} instrument {instrument}: multiplier {multiplier} is invalid",
+      "remedy": "Send a finite multiplier >= 0; the engine additionally caps the resulting effective rate (see engine.tax.md AC-6)."
+    },
+    "MET-V700": {
+      "severity": "error",
+      "module": "ui.screen.census",
+      "message": "f6.census patch failed to decode: {cause}",
+      "remedy": "check the engine's f6.census patch encoder for schema drift"
+    },
+    "MET-V701": {
+      "severity": "error",
+      "module": "ui.screen.census",
+      "message": "delta for an unknown/stale f6.census subscription: {subscriptionId}",
+      "remedy": "check the subscription lifecycle -- BindSubscription must run before ApplyDelta"
+    },
+    "MET-V702": {
+      "severity": "error",
+      "module": "ui.screen.census",
+      "message": "census screen method called on a struct-copied Screen value",
+      "remedy": "always operate through the *Screen returned by New, never a copy"
+    },
+    "MET-V703": {
+      "severity": "warn",
+      "module": "ui.screen.census",
+      "message": "KPI {key} unavailable: {reason}",
+      "remedy": "the engine rejected the KPI/source query (MET-G2701/G2702) -- check the aggregate key and that the KPI's source data is present"
+    },
+    "MET-V704": {
+      "severity": "warn",
+      "module": "ui.screen.census",
+      "message": "citizen bio {guid} unavailable: {reason}",
+      "remedy": "the engine rejected the citizen bio query (MET-G2701) -- check the GUID is a known tracked citizen"
     }
   }
 }

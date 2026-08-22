@@ -176,3 +176,5 @@ Logged via `node claude-bow.js add assumption` (see BOW):
 - **ASM-582 (confirm-and-close).** ASM-226 fail-open path (deriveScanLimit returns ceiling on failed rev-list --count) has no automated regression test, judged non-blocking.
 - **ASM-624 (confirm-and-close).** deriveScanLimit repo commit count is the TRUNK branch count (matches what historyEmails actually scans), not HEAD count.
 - **ASM-625 (confirm-and-close).** The destructive-reject standard covers false-DENY of a legit repeat committer (availability), not only allow-bypasses.
+
+- **ASM-911 (FEAT-084 CC fold).** claude-author-identity.js header line 6 still cites BOW mkey candidate tool.committhook while the module key is tool.authoridentity per code.json; the candidate wording predates the re-key.

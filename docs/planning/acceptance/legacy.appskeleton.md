@@ -43,3 +43,5 @@ No build, vet, or test gates apply — there is no code to build for a cancelled
 ## Escalations
 
 - None. The cancellation decision is recorded on the BOW item itself.
+
+- **ASM-923 (FEAT-084 CC fold).** Header Status is RETIRED but BOW MOD-001 status is cancelled; no RETIRED status exists in the BOW enum — align header wording to cancelled.

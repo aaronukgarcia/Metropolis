@@ -134,3 +134,14 @@ At `engine.logistics`'s stub-for-baseline depth (no junction slot ledger), the r
 
 Snapshotting dependencies under RLock is a point-in-time snapshot: a concurrent `Wire` that runs immediately after replaces the field under Lock and the in-flight method keeps the old pointer until it returns. This is accepted because AC-17 requires race-freedom and invariant preservation (not cross-instance coherence during a re-wire), and `Wire` is a boot-time operation in practice. Concurrent re-wiring mid-tick could mix two logistics instances within one operation — outside AC-17's contract.
 
+- **Assumption logged — ASM-1231 (CC, SEC-138 closure).** SEC-138 is closed by defensively copying the `*MissCause` VALUE at each snapshot site while KEEPING the pointer type, rather than migrating `BinStock.MissCause` / `TickerEvent.MissCause` to a value type.
+
+- **ASM-879 (CC fold).** Still-absent edges sit outside the c36778b collaborations gate coverage: engine.farming (tourism/attract/wellbeing consumers), engine.mining (refuse reclamation and four blight-source classes), engine.dispatch and engine.refuse (both to engine.invariant), and engine.refuse to engine.news. The gate enforces only declared-but-unwired edges, so these absent edges will not be auto-caught until declared in master-plan-v2.1.json. BUG-058 is closed; acceptance files cite the gate instead of pending BUG-058.
+
+- **ASM-1020 (FEAT-084 CC fold).** engine.refuse claims MET-G1900-G1999 (codes G1900-G1908 registered in data/errors.json): G1500 crime / G1600 farming / G1700 rail / G1800 education were claimed by parallel sibling modules, so G1900-G1999 was the next free four-digit G block.
+
+- **ASM-1025 (FEAT-084 SF fold).** The section 17 consumption-coefficient-derived waste rate is expressed as data/refuse.json wasteRates per land use because engine.consumption is NOT a registered outbound of engine.refuse (GR#25 flag: engine.refuse -> engine.consumption edge unregistered in code.json); when that edge lands, the rate should be sourced from engine.consumption instead.
+
+- **ASM-1112 (FEAT-084 CC fold).** Duplicate site registration reuses ErrDisposalSiteUnavailable (MET-G1906, site-domain, carries the site field) over ErrInvalidOverride (round-domain). data/errors.json wording was not updated (file claim held elsewhere); the code stays registry-sourced and the errors.go doc comment carries the rationale. (Roster routed to data.errors; code home is engine.refuse — folded here.)
+
+- **ASM-1116 (FEAT-084 CC fold).** ensureSiteShelf TOCTOU fix holds r.mu (write) across the provisioned-flag check, logistics.Provision, and the provisioned=true flag-set as one critical section; deadlock-safe because engine.logistics is a downstream dependency of engine.refuse that never calls back in, so no r.mu->l.mu->r.mu lock-order cycle exists.

@@ -91,3 +91,7 @@ The connectivity-era ladder and its capability gates (office tiers, data centres
 
 `engine.comms` claims error range G3300-G3399 (not the `MET-E` range AC-10's prose says), because the E layer is exhausted and the G layer is the engine overflow block under BUG-234's three-to-four-digit widening. The registry code format `MET-<layer><NNN/4>` mandates the next free G block (engine.maintenance's G3200-G3299 was the prior highest). Same registry-sourced guarantee (GR#7); reallocating an existing E sub-range would be a registry ruling, not a code change.
 
+
+## Assumptions logged (FEAT-084 CC folds)
+
+- **ASM-1359** — SEC-173 deadlock tests use a 5s wall-clock timeout as a fail-safe bound (not a deadlock-detection mechanism; a hung mutex surfaces as a test timeout rather than a dedicated detector).

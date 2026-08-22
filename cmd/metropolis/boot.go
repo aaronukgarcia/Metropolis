@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"sync"
+	"time"
+
+	"github.com/gdamore/tcell/v2"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	enginecore "github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -11,8 +14,12 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/keys"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/router"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
+	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
 	mapscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/map"
+	servicesscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/services"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
@@ -23,6 +30,90 @@ import (
 // which wired dependency failed, so a startup failure is always traceable
 // to a specific piece of the skeleton, never just "something broke."
 const codeBootFailure = "MET-E900"
+
+// codePumpShutdownTimeout is MET-E901 (data/errors.json, feat.skeleton's
+// E900-E949 range): logged, never returned as a boot failure, when
+// shutdown()'s bounded join on the subscription pump goroutine's done
+// channel (F2/R3, FEAT-208 increment 1) times out — see shutdown()'s own
+// doc comment for why this can happen (a DeltaSink that blocks
+// indefinitely or reenters Publish, both prohibited by
+// engine/core.DeltaSink's contract but not mechanically preventable) and
+// why proceeding with transport.Close() anyway, rather than hanging
+// forever, is the correct degrade.
+const codePumpShutdownTimeout = "MET-E901"
+
+// pumpShutdownJoinTimeout bounds shutdown()'s wait on the subscription
+// pump goroutine's done channel (R3, independent round r2/r3, FEAT-208
+// increment 1). No existing shutdown-timeout idiom was found elsewhere
+// in this codebase to mirror (checked cmd/, internal/harness/headless —
+// neither had one before this), so this uses the round's own
+// fallback value. A package-level var, not a const, ONLY so
+// feat208_pump_shutdown_test.go can lower it for a fast, deterministic
+// proof of the timeout path itself (a real 5s wait would make that test
+// needlessly slow) — production code never reassigns it; it is 5s for
+// every real caller.
+var pumpShutdownJoinTimeout = 5 * time.Second
+
+// feat208PrimeTimeout bounds bootCore's synchronous Subscribe-priming
+// handshake for each FEAT-208 increment-2 router-bound screen (finance,
+// services) — see primeScreenSubscription's doc comment for why this
+// handshake exists at all: protocol.CommandResult carries no
+// SubscriptionID field, so the only way a caller learns the
+// SubscriptionID a Subscribe command produced is from the FIRST Delta
+// that echoes the Subscribe command's own CorrelationID
+// (engine/core/subscribe.go's pendingCorrID discipline, "echoed on the
+// next delta only, then cleared"). This handshake must complete BEFORE
+// router.Router.Run starts draining the transport (a second concurrent
+// reader of the same transport channels would split delivery
+// non-deterministically — ui/router/doc.go's "single writer of the front
+// snapshot" rule, GR#21) — bootCore is therefore the ONLY reader of
+// transport.Deltas()/Results() during this window. Wall-clock bounded,
+// not sim-Tick bounded, because this runs entirely at boot before the
+// sim clock or Router are driving anything — mirrors
+// pumpShutdownJoinTimeout's identical wall-clock-at-the-seam precedent
+// immediately above. A package-level var, not a const, so a test can
+// lower it for a fast, deterministic proof of the timeout path.
+var feat208PrimeTimeout = 5 * time.Second
+
+// feat208PilotServiceID/feat208PilotFundingStep/feat208PilotFundingKeyPath
+// configure FEAT-208 increment 3's F4 funding-adjust input call site
+// (servicesscreen.RegisterFundingAdjustKeys, wired in bootCore below).
+// "clinic-1" is a documented PLACEHOLDER target, not a data-file-sourced
+// roster read: engine.build has no automatic bridge into
+// engine.services' instance registry yet in baseline one (the same
+// documented gap compose/services_publish.go's own doc comment names for
+// the capacityDemand publish side), so no real registered ServiceID is
+// guaranteed live at boot time regardless of which one this constant
+// names — a real multi-service slider selector is out of this pilot's
+// rails (RegisterFundingAdjustKeys' own doc comment). The mnemonic path
+// ("s" "f" as the leader prefix — "services funding" — "+"/"-" as the two
+// terminal actions) is a plain leader-tree path, deliberately NOT
+// digit-led: ui.keys' grammar.go Feed reserves every bare digit token at
+// idle for its count-prefix accumulation (AC-5), so a path starting "4"
+// (as in "F4") could never actually be reached via Feed — this is not a
+// spec-mandated binding either way, since UI-SPEC names no funding-adjust
+// keybinding today.
+const (
+	feat208PilotServiceID   = "clinic-1"
+	feat208PilotFundingStep = 0.05
+)
+
+var feat208PilotFundingKeyPath = []string{"s", "f"}
+
+// screenID{Map,Finance,Services} are FEAT-211 increment 1's
+// core.ScreenID values (internal/ui/core/screen_registry.go) — the exact
+// set the design's own increment-1 scope names (design §7(f) point 1):
+// "map (F1), finance (F2), services (F4) — with the pilot funding keys
+// reachable from a real keyboard once F4 is active." Plain, short,
+// human-legible strings (ScreenID's own doc comment) rather than
+// F-key-numbered constants, since a future increment (trade/census/proj/
+// districts/menu/debug) will add more ScreenIDs than there are still-free
+// low F-keys worth memorising by number.
+const (
+	screenIDMap      core.ScreenID = "map"
+	screenIDFinance  core.ScreenID = "finance"
+	screenIDServices core.ScreenID = "services"
+)
 
 // skeletonModuleVersion is the placeholder semver every registerSkeletonModules
 // entry reports (none of these wrappers are independently versioned yet —
@@ -84,20 +175,107 @@ func registerSkeletonModules(reg *registry.Registry, correlationID string) error
 // skeletonWiring bundles every live component feat.skeleton wires
 // together once boot succeeds: the module registry, the real
 // int.protocol Transport, the real harness.stub StubEngine driving it,
-// ui.core's ViewStore/ViewsLoop consuming its Delta stream, and the real
-// ui.screen.map MapScreen subscribed to "f1.viewport" — exactly AC-1a's
-// "real components end to end, nothing mocked." Screen/render/input
-// wiring (the tcell-dependent half) is deliberately NOT part of this
-// struct — see run.go — so tests can exercise this whole slice headless,
-// without a terminal (tcell.Screen is only needed once rendering starts).
+// ui.router's Router (FEAT-208 increment 2 — see router field's own doc
+// comment for the ViewsLoop-to-Router transition this dispatch performs)
+// draining its Delta/Result/Event stream, and the real
+// ui.screen.finance/ui.screen.services/ui.screen.map screens bound
+// against it — exactly AC-1a's "real components end to end, nothing
+// mocked." Screen/render/input wiring (the tcell-dependent half) is
+// deliberately NOT part of this struct — see run.go — so tests can
+// exercise this whole slice headless, without a terminal (tcell.Screen is
+// only needed once rendering starts).
 type skeletonWiring struct {
 	correlationID string
 	registry      *registry.Registry
 	transport     *protocol.InProcTransport
 	engine        *enginecore.Engine
-	viewStore     *core.ViewStore
-	viewsLoop     *core.ViewsLoop
-	mapScreen     *mapscreen.MapScreen
+
+	// viewStore is ui.core's ViewStore — kept ONLY because
+	// core.NewRenderLoop's constructor (run.go) still requires one as a
+	// parameter for mapDrawFunc's vm.Patches/vm.Stale reads. FEAT-208
+	// increment 2 retires ui.core.ViewsLoop as this binary's transport
+	// consumer (replaced by router, below) — viewStore is therefore now
+	// PERMANENTLY EMPTY in this binary (NewViewStore's own initial empty
+	// snapshot, never published to again): nothing writes into it any
+	// more. This is not a functional regression — "f1.viewport" was
+	// already never a served view before this increment (mapScreen's own
+	// Subscribe call below is fire-and-forget and has always been
+	// rejected by the real engine, see mapScreen's doc comment), so
+	// ViewsLoop was already never populating viewStore with anything in
+	// this binary even before the swap. A future increment that adds
+	// "f1.viewport" to compose's viewRegistrationOrder (design's §6 last
+	// fast-follow) will need to either (a) prime+bind mapScreen through
+	// router the same way financeScreen/servicesScreen are primed below
+	// and give mapDrawFunc a router-fed adapter instead of viewStore, or
+	// (b) teach ui.core to expose a writable ViewStore surface router can
+	// publish through (doc.go's own "widening core's exported surface...
+	// is a ui.core change, out of scope here" note) — not decided here,
+	// flagged for that follow-up.
+	viewStore *core.ViewStore
+
+	// router is ui.router's Router (BOW MOD-115, ASM-1482), FEAT-208
+	// increment 2's boot-time swap: it now owns the transport's
+	// Results()/Deltas()/Events() drain in place of ui.core's ViewsLoop
+	// (which this binary constructed but never actually needed — see
+	// viewStore's doc comment above). router.Run(ctx) is started as the
+	// ONE dedicated transport-draining goroutine (ui/router/doc.go's
+	// single-writer rule) only AFTER financeScreen/servicesScreen have
+	// each been primed and bound (below) — never concurrently with the
+	// priming reads, which read the SAME transport channels directly and
+	// would otherwise race Router.Run for delivery (GR#21).
+	router *router.Router
+
+	// financeScreen/servicesScreen are FEAT-208 increment 2's two real,
+	// router-bound F-screens: internal/ui/screens/finance's Screen
+	// subscribed to "f2.finance" and internal/ui/screens/services'
+	// Screen subscribed to "f4.services", each bound into router via
+	// BindSubscription once primeScreenSubscription has learned their
+	// real SubscriptionID (see that function's doc comment). Neither is
+	// wired into any render/input path yet in this dispatch's scope
+	// (that is F2/F4's own screen-rendering integration, not this
+	// composition-root increment) — they exist here so their Delta
+	// stream is genuinely live end to end, provable via HaveData()/
+	// BalanceSheet()/CapacityDemand() from a test that reaches into
+	// skeletonWiring, exactly as mapScreen already is for "f1.viewport".
+	financeScreen  *financescreen.Screen
+	servicesScreen *servicesscreen.Screen
+
+	// keyGrammar is ui.keys' leader-key state machine (MOD-011), FEAT-208
+	// increment 3's own real input call site for F4's funding sliders
+	// (servicesscreen.RegisterFundingAdjustKeys, registered below against
+	// this SAME instance). See that method's own doc comment for the
+	// honestly-recorded scope boundary: this is a real, tested,
+	// production KeyGrammar with a real action registered on it — but
+	// run.go does not yet feed live tcell key events into it (no F-screen
+	// has a "currently active" concept in this binary yet, mapScreen
+	// being the only one ever rendered) — pre-existing screen-switching
+	// infrastructure this dispatch's rails do not cover.
+	keyGrammar *keys.KeyGrammar
+
+	// screens is FEAT-211 increment 1's ActiveScreen state owner
+	// (internal/ui/core/screen_registry.go, design doc
+	// E:\git\metropolis-status\active-screen-design.md): holds map/
+	// finance/services in registration order (GR#21), map first so it
+	// stays the initially active screen (matching this binary's
+	// pre-FEAT-211 baseline — mapScreen was always what rendered).
+	// chromeGrammar is the always-fed global grammar F1/F2/F4 are
+	// registered against (run.go's input routing feeds this FIRST, every
+	// keystroke, before the active screen's own grammar — design §7(b)):
+	// a screen switch is chrome-global by design, reachable regardless
+	// of which screen is currently active or what leader sequence it may
+	// have pending.
+	screens       *core.ScreenRegistry
+	chromeGrammar *keys.KeyGrammar
+
+	mapScreen *mapscreen.MapScreen
+
+	// statusBar is BUG-322's on-screen proof that time is moving: the
+	// live "engine.status" figures (tick, month, speed, paused), primed
+	// and router-bound exactly like financeScreen/servicesScreen, drawn
+	// as a one-line overlay under whichever screen is active (run.go).
+	// See statusbar.go for why this is a one-line overlay rather than
+	// ui.screens/chrome.
+	statusBar *statusBar
 
 	// debugState is feat.debugmode's (FEAT-008) single source of truth
 	// for whether debug mode is on, and devConsole is feat.devmode's
@@ -153,16 +331,38 @@ type skeletonWiring struct {
 	engineRunErr error
 
 	// engineDone is closed the instant the Run goroutine returns,
-	// independently of viewsLoop's own goroutine and of wg.Wait() (which
+	// independently of router's own Run goroutine and of wg.Wait() (which
 	// blocks on BOTH). It exists so a caller can synchronize on "Run has
 	// exited and engineRunErr is now readable" without first having to
 	// cancel ctx (which would also be racing to stop the engine loop, the
 	// exact hazard Run's own doc comment warns about) or wait for
-	// viewsLoop to stop too. shutdown()'s w.wg.Wait() remains the primary,
+	// router.Run to stop too. shutdown()'s w.wg.Wait() remains the primary,
 	// production shutdown path; engineDone is the narrower signal
 	// BUG-020's regression test needs to observe a premature Commands()
 	// close deterministically, before anything cancels ctx.
 	engineDone chan struct{}
+
+	// pumpDone is the done channel StartSubscriptionPump returns (F2,
+	// independent round r1, FEAT-208 increment 1): closed exactly once,
+	// when the subscription pump goroutine actually exits. Previously
+	// nothing tracked or joined this goroutine at shutdown at all —
+	// shutdown() now selects on this before closing the transport,
+	// mirroring engineDone's own close-then-select join idiom above,
+	// applied to the pump goroutine instead of RunCommandLoop's.
+	pumpDone <-chan struct{}
+
+	// routerRunErr is router.Router.Run's return value, written exactly
+	// once by the goroutine bootCore starts for it, mirroring
+	// engineRunErr's own "write once, read only after the owning
+	// goroutine is known to have exited" discipline. Router.Run returns
+	// ctx.Err() (context.Canceled) on the ordinary shutdown path — that
+	// is expected, not a failure — or nil if the transport's channels
+	// were closed first (transport.Close() called before ctx cancel).
+	// Not surfaced through a dedicated done channel the way engineDone
+	// is: nothing in this binary today needs to observe router's exit
+	// before shutdown()'s own w.wg.Wait() returns (unlike BUG-020's
+	// engineDone need, which predates router's existence).
+	routerRunErr error
 }
 
 // EngineRunErr returns the error core.Engine.RunCommandLoop exited with
@@ -178,6 +378,21 @@ func (w *skeletonWiring) EngineRunErr() error { return w.engineRunErr }
 // pre-populated Registry and exercise AC-7's boot-failure path through
 // run() itself, not just bootCore directly (see run_test.go).
 var newBootRegistry = func() *registry.Registry { return registry.NewRegistry() }
+
+// bootSecondsPerMonthAt1x reads data/pacing.json's secondsPerMonthAt1x
+// (BUG-322). A package-level indirection for exactly the same reason
+// newBootRegistry above is one: it lets a test drive the REAL boot path —
+// bootCore, the real engine, the real transport, the real tick driver —
+// at a pacing a test can actually observe.
+//
+// At the shipped value (480 s/month) one tick is 16 real seconds, so a
+// test that waited for a tick through the production constant would have
+// to be a 16-second test, and CI would either be slow or the assertion
+// would be a wall-clock guess. Tests substitute a fast pacing constant
+// and count TICKS (BUG-031: never assert a wall-clock ceiling). Nothing
+// in production ever replaces this — the binary always reads the data
+// file, which is what GR#15 requires.
+var bootSecondsPerMonthAt1x = enginecore.LoadDefaultSecondsPerMonthAt1x
 
 // bootCore wires int.protocol + engine.core (via the composition root) +
 // ui.core + ui.screen.map + the module registry (AC-1a/AC-2/AC-5a) and
@@ -216,11 +431,40 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// header is wired and what that means for Enable today.
 	dbgState := debug.NewState()
 
+	// BUG-322: load the real-time pacing knob from data/pacing.json and give
+	// it to the engine. Until now this binary called a bare NewEngine, so the
+	// clock silently fell back to core.DefaultSecondsPerMonthAt1x and
+	// data/pacing.json — a file that exists, is validated, and is loaded by
+	// core.LoadDefaultSecondsPerMonthAt1x — was dead weight in the tree
+	// (GR#15: the value the simulation is paced by must come from data, not
+	// from a Go var that happens to hold the same number today).
+	//
+	// This ONE loaded value is handed to BOTH the engine (below) and the tick
+	// driver (further down) — never loaded twice, never re-derived, so the
+	// pacer and the clock it paces can never disagree (GR#3).
+	//
+	// A failure is a loud, registry-sourced boot failure, matching
+	// LoadSecondsPerMonthAt1x's own "never a silent fallback to
+	// DefaultSecondsPerMonthAt1x" contract: a binary whose pacing file is
+	// missing or corrupt must say so, not quietly run at a number nobody
+	// chose.
+	secondsPerMonthAt1x, err := bootSecondsPerMonthAt1x(correlationID)
+	if err != nil {
+		cancel()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "engine.core.LoadDefaultSecondsPerMonthAt1x",
+		})
+	}
+
 	// FEAT-082: build the real engine and wire the baseline-one hook set
 	// through the single composition path (AC-12/AC-13). A wiring failure
 	// (e.g. market.LoadDefault cannot resolve data/market.json) is a loud
 	// boot failure, never a partially-wired engine.
-	engine := enginecore.NewEngine(enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x))
+	engine := enginecore.NewEngine(
+		enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x),
+		enginecore.WithSecondsPerMonthAt1x(secondsPerMonthAt1x),
+	)
 	if _, err := compose.Wire(engine, nil); err != nil {
 		cancel()
 		_ = transport.Close()
@@ -229,18 +473,48 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		})
 	}
 
+	// BUG-323: mapScreen now mints its OWN correlation ID, exactly as
+	// financeScreen/servicesScreen do below, because it is now primed
+	// through primeScreenSubscription — which matches its screen's first
+	// Delta/CommandResult by exactly this value, and which fails the boot
+	// loud on any FOREIGN CorrelationID observed during the priming
+	// window. Reusing bootCore's shared correlationID (its pre-BUG-323
+	// construction) would make that match ambiguous against anything else
+	// that ever used the shared ID.
+	mapCorrID := errs.NewCorrelationID()
 	w := &skeletonWiring{
 		correlationID: correlationID,
 		registry:      reg,
 		transport:     transport,
 		engine:        engine,
 		viewStore:     core.NewViewStore(),
-		mapScreen:     mapscreen.NewMapScreen(correlationID, widgets.DefaultPalette),
+		mapScreen:     mapscreen.NewMapScreen(mapCorrID, widgets.DefaultPalette),
+		statusBar:     newStatusBar(),
 		ctx:           ctx,
 		cancel:        cancel,
 		engineDone:    make(chan struct{}),
 	}
-	w.viewsLoop = core.NewViewsLoop(transport, w.viewStore, correlationID)
+	// FEAT-208 increment 2: router replaces ui.core.ViewsLoop as this
+	// binary's transport consumer — see the router/viewStore field doc
+	// comments above for the full rationale. Constructing it here does
+	// NOT start it draining anything yet (router.New never touches the
+	// transport's channels until Run is called) — Run is deliberately
+	// started further below, only after financeScreen/servicesScreen
+	// have been primed and bound via primeScreenSubscription, which reads
+	// the same channels directly and must be the transport's ONLY reader
+	// until it finishes (see feat208PrimeTimeout's doc comment).
+	w.router = router.New(transport, router.WithCorrelationID(correlationID))
+	// Each screen mints its OWN correlation ID (never bootCore's shared
+	// correlationID param, which mapScreen below still reuses per its
+	// pre-existing, pre-FEAT-208 construction) so each Subscribe command
+	// below carries a distinct CorrelationID — primeScreenSubscription
+	// matches its own screen's first Delta/Result by exactly this value,
+	// and a shared ID across two concurrent Subscribes would make that
+	// match ambiguous.
+	financeCorrID := errs.NewCorrelationID()
+	servicesCorrID := errs.NewCorrelationID()
+	w.financeScreen = financescreen.New(financeCorrID)
+	w.servicesScreen = servicesscreen.New(servicesCorrID)
 	w.debugState = dbgState
 	w.devConsole = devmode.New(
 		devmode.WithRequireConsole(w.debugState.RequireConsole),
@@ -254,31 +528,585 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		}),
 	)
 
-	w.wg.Add(2)
+	// FEAT-208: start the subscription pump so registered views (today:
+	// "engine.status", plus whatever compose.Wire's viewRegistrationOrder
+	// added — see internal/engine/compose/services_publish.go) actually
+	// publish deltas. Previously never started in this binary at all
+	// (the FEAT-208 design survey's own finding: "even engine.status is
+	// not live in the shipped binary today") — StartSubscriptionPump can
+	// only fail on a struct-copied Engine (BUG-019) or a second call on
+	// the same Engine (F1a, ErrSubscriptionPumpAlreadyStarted), neither
+	// of which engine here ever is/does, so this call cannot fail in
+	// practice; wrapped the same loud-not-silent way every other
+	// bootCore failure is (MET-E900) rather than assumed infallible.
+	// pumpDone (F2) is stored on w below and joined in shutdown() before
+	// transport.Close().
+	pumpDone, err := engine.StartSubscriptionPump(ctx, transport)
+	if err != nil {
+		cancel()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "engine.core.StartSubscriptionPump",
+		})
+	}
+	w.pumpDone = pumpDone
+
+	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
 		w.engineRunErr = engine.RunCommandLoop(ctx, transport)
 		close(w.engineDone)
 	}()
-	go func() { defer w.wg.Done(); w.viewsLoop.Run(ctx.Done()) }()
 
-	// F1's own "f1.viewport" subscribe (AC-1a: issued through MapScreen's
-	// real, already-accepted Subscribe method — internal/ui/screens/map's
-	// own public API — never a hand-rolled Command literal standing in
-	// for it). With the real engine, "f1.viewport" is not yet a served view
-	// (v1 serves "engine.status" only), so this Subscribe is issued and the
-	// engine rejects it — the honest baseline-one state, recorded here: the
-	// map screen's real viewport rendering is its own follow-up, not this
-	// flip's scope.
-	if err := w.mapScreen.Subscribe(transport.SendCommand); err != nil {
-		w.shutdown()
+	// FEAT-208 increment 2: prime + bind financeScreen ("f2.finance") and
+	// servicesScreen ("f4.services") BEFORE router.Run starts (this is
+	// the only window in which bootCore itself reads transport.Deltas()/
+	// Results() directly — see primeScreenSubscription's doc comment).
+	// Both views are real, registered compose.Wire entries
+	// (viewRegistrationOrder, internal/engine/compose/{finance,services}_publish.go)
+	// as of this increment, so both Subscribes are expected to be
+	// accepted and to produce a first Delta — unlike mapScreen's
+	// "f1.viewport" below, which is NOT registered and is not primed.
+	//
+	// primed is the shared "already bound during this priming window"
+	// forwarding table both calls below share — see primeScreenSubscription's
+	// doc comment for why this is required: signalSubscriptionPump's
+	// coalescing means a SINGLE pump wake can publish deltas for EVERY
+	// currently-live subscription in one cycle (subscribe.go's Publish
+	// iterates all of them), not just the one just-subscribed. Priming
+	// servicesScreen first and financeScreen second means financeScreen's
+	// own Subscribe call can (and, empirically, sometimes does) wake a
+	// pump cycle that ALSO republishes servicesScreen's already-bound
+	// subscription — that second services delta must reach servicesScreen
+	// too, not be silently dropped just because its CorrelationID isn't
+	// financeScreen's.
+	primed := make(map[protocol.SubscriptionID]func(protocol.Delta))
+	if err := primeScreenSubscription(transport, w.router, primed, servicesCorrID, servicesscreen.ViewSubscriptionName,
+		func() error { return w.servicesScreen.Subscribe(transport.SendCommand) },
+		w.servicesScreen.BindSubscription,
+		w.servicesScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.services.Subscribe",
+		})
+	}
+	if err := primeScreenSubscription(transport, w.router, primed, financeCorrID, financescreen.ViewSubscriptionName,
+		func() error { return w.financeScreen.Subscribe(transport.SendCommand) },
+		w.financeScreen.BindSubscription,
+		w.financeScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.finance.Subscribe",
+		})
+	}
+	// BUG-323: F1 ("f1.viewport") is primed and bound the SAME way, now
+	// that compose.Wire registers a real view behind it
+	// (viewRegistrationOrder / internal/engine/compose/viewport_publish.go).
+	// Before this, mapScreen's Subscribe was issued fire-and-forget below
+	// this block and the engine rejected it outright — no Delta ever
+	// arrived, every cell stayed Known=false, and the game's DEFAULT
+	// screen rendered as an empty field of spaces. Priming it here means
+	// the first full terrain snapshot is applied before bootCore returns,
+	// so the very first frame the player sees has real terrain on it
+	// rather than one frame of blank.
+	if err := primeScreenSubscription(transport, w.router, primed, mapCorrID, mapscreen.ViewSubscriptionName,
+		func() error { return w.mapScreen.Subscribe(transport.SendCommand) },
+		w.mapScreen.BindSubscription,
+		w.mapScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.map.Subscribe",
 		})
 	}
 
+	// BUG-322: prime + bind the "engine.status" subscription, through the
+	// SAME handshake, in the same pre-router.Run window. This is what puts
+	// the live tick/month/speed/paused figures on screen (statusbar.go) and
+	// closes the third arm of the bug: "a frozen sim and a broken binary
+	// look identical."
+	//
+	// "engine.status" is registered by NewEngine itself (engine.go — v1's
+	// one always-available view), NOT by compose.Wire, so unlike
+	// "f1.viewport" this Subscribe is genuinely served and a first Delta is
+	// genuinely produced; priming it is therefore correct rather than a
+	// guaranteed timeout. Its name comes from the engine's own exported
+	// constant, never a hand-typed "engine.status" literal (GR#3).
+	//
+	// bind is a no-op: statusBar holds ONE subscription and keys nothing by
+	// SubscriptionID (unlike finance/services, whose screens track their own
+	// ID). router.BindSubscription — which primeScreenSubscription performs
+	// itself — is what actually routes every subsequent delta here.
+	statusCorrID := errs.NewCorrelationID()
+	if err := primeScreenSubscription(transport, w.router, primed, statusCorrID, enginecore.EngineStatusViewName,
+		func() error {
+			return transport.SendCommand(protocol.Command{
+				ProtocolVersion: protocol.ProtocolVersion,
+				CorrelationID:   protocol.CorrelationID(statusCorrID),
+				Kind:            protocol.KindSubscribe,
+				Payload:         protocol.SubscribePayload{ViewName: enginecore.EngineStatusViewName},
+			})
+		},
+		func(protocol.SubscriptionID) {},
+		w.statusBar.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "engine.core.status.Subscribe",
+		})
+	}
+
+	// FEAT-208 increment 3: the F4 funding-slider INPUT call site
+	// (servicesscreen.RegisterFundingAdjustKeys' own doc comment has the
+	// full scope note — this constructs the real, production
+	// keys.KeyGrammar it registers against, and wires a send function
+	// that ALSO registers the outgoing command's CorrelationID with
+	// w.router BEFORE sending it, so its CommandResult is routed back to
+	// servicesScreen.ApplyResult (router.RegisterResultHandler's own
+	// contract: register before or at the SendCommand call, never after).
+	//
+	// Destructive round r1 correction (finding F-A): an earlier version of
+	// this comment said servicesScreen reused ONE fixed CorrelationID
+	// (s.correlationID) for every SetFunding command, mirroring
+	// financescreen.BorrowLoan/RepayLoan/SetTaxRate's own convention. That
+	// was a real, reachable bug for THIS screen specifically: two
+	// SetFunding commands sharing one CorrelationID collapse onto
+	// router.RegisterResultHandler's ONE pending-result slot per
+	// CorrelationID (its own contract — "one CommandResult per registered
+	// CorrelationID, then consumed"), so the second command's
+	// CommandResult became an unrecoverable router.ErrRouteMiss, never
+	// reaching ApplyResult — proven reachable through this EXACT
+	// sendServicesCommand/RegisterFundingAdjustKeys call pattern (a
+	// same-key double-press before the first result returns) by
+	// cmd/metropolis/feat208_inc3_destructive_test.go's
+	// TestRegression_DuplicateCorrelationID_BothCommandResultsDelivered.
+	// servicesscreen.Screen.SetFunding now mints a FRESH
+	// protocol.CorrelationID per call (screen.go) instead — this closure's
+	// per-call RegisterResultHandler registration was already correct in
+	// SHAPE (it always re-registers before every send, exactly as needed);
+	// the bug was that every registration used the SAME key, silently
+	// overwriting the previous one's still-pending entry. No change was
+	// needed here beyond this correction — see screen.go for the actual
+	// fix.
+	w.keyGrammar = keys.NewKeyGrammar(nil, 0, 0, correlationID)
+	sendServicesCommand := func(cmd protocol.Command) error {
+		w.router.RegisterResultHandler(cmd.CorrelationID, w.servicesScreen)
+		return transport.SendCommand(cmd)
+	}
+	if err := w.servicesScreen.RegisterFundingAdjustKeys(w.keyGrammar, sendServicesCommand, feat208PilotServiceID, feat208PilotFundingStep, feat208PilotFundingKeyPath); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.services.RegisterFundingAdjustKeys",
+		})
+	}
+
+	// FEAT-211 increment 1: the ScreenRegistry (internal/ui/core/
+	// screen_registry.go) — the ActiveScreen state owner that makes
+	// finance/services (and the funding keys just registered above)
+	// actually reachable from a keyboard, closing the exact gap
+	// RegisterFundingAdjustKeys' own doc comment named ("pre-existing
+	// screen-switching infrastructure this pilot's rails do not cover").
+	// map is registered FIRST so it stays the initially active screen —
+	// Register's own documented default — matching this binary's
+	// pre-FEAT-211 baseline (mapScreen was always what rendered).
+	w.screens = core.NewScreenRegistry(correlationID)
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDMap, Draw: mapDrawFunc(w.mapScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDMap)})
+	}
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDFinance, Draw: financeDrawFunc(w.financeScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDFinance)})
+	}
+	// services registers its OWN w.keyGrammar (constructed above,
+	// carrying the real funding-adjust actions) — this is what makes "s
+	// f +"/"s f -" reachable once F4 is active: run.go's input routing
+	// feeds registry.ActiveGrammar() only when the chrome/global grammar
+	// did not itself dispatch for a given keystroke (design §7(b)).
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDServices, Draw: servicesDrawFunc(w.servicesScreen), Grammar: w.keyGrammar}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDServices)})
+	}
+
+	// chromeGrammar is the ALWAYS-fed global grammar (design §7(b)):
+	// F1/F2/F4 fire regardless of which screen is currently active or
+	// what leader sequence it may have pending (RegisterGlobal's own
+	// "fires even mid-sequence" contract, ui/keys/grammar.go). Each
+	// Action.Run calls straight back into w.screens.Activate — the ONE
+	// switch primitive both F-key switching and (a future increment's)
+	// drill-through share (design §7(e)) — and discards Activate's error
+	// deliberately: every ID registered here is one of the three IDs
+	// just registered above, in this same function, so an Activate
+	// failure here would mean w.screens itself is broken (defensive
+	// only, matches keys.Action.Run's signature, which cannot itself
+	// return an error — the same constraint RegisterFundingAdjustKeys'
+	// own countAdjust closure documents).
+	w.chromeGrammar = keys.NewKeyGrammar(nil, 0, 0, correlationID)
+	fKeyGlobal := func(id core.ScreenID, name string) keys.Action {
+		return keys.Action{Name: name, Run: func(keys.ActionArgs) { _ = w.screens.Activate(id) }}
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F1"}, fKeyGlobal(screenIDMap, "Switch to Map (F1)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F1"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F2"}, fKeyGlobal(screenIDFinance, "Switch to Finance (F2)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F2"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F4"}, fKeyGlobal(screenIDServices, "Switch to Services (F4)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F4"})
+	}
+
+	// BUG-322: the player's clock controls. Registered on the SAME chrome
+	// global grammar as F1/F2/F4, for the same reason — controlling time is
+	// not a per-screen action, it must work whatever is on screen.
+	if err := registerClockKeys(w); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, err
+	}
+
+	// (BUG-323: F1's own "f1.viewport" Subscribe used to sit HERE, issued
+	// fire-and-forget and rejected by the engine because no view was
+	// registered behind the name. It now runs through
+	// primeScreenSubscription with F2/F4 above — see that call site.)
+
+	// NOW start router.Run — the ONE dedicated transport-draining
+	// goroutine for the rest of this process's life (ui/router/doc.go).
+	// Priming above is complete, so router.Run is the transport's only
+	// reader from this point forward.
+	w.wg.Add(1)
+	go func() { defer w.wg.Done(); w.routerRunErr = w.router.Run(ctx) }()
+
+	// BUG-322: START THE CLOCK. Everything above this line was already true
+	// before this fix — a fully wired real engine with nine phase hooks, a
+	// live subscription pump, real router-bound screens — and the binary
+	// still sat at tick 0 forever, because nothing ever sent an
+	// AdvanceTicks. This goroutine is that missing connection.
+	//
+	// Started here, under the SAME ctx and the SAME WaitGroup as
+	// RunCommandLoop and router.Run, deliberately: shutdown() cancels ctx,
+	// wg.Wait()s every one of them, and only then closes the transport, so
+	// the driver is provably finished before the channels it sends on are
+	// closed (see tickdriver.go's shutdown section). It is NOT tied to the
+	// UI's stop channel or its 10 Hz render ticker — the simulation cadence
+	// and the frame cadence are independent by construction.
+	//
+	// secondsPerMonthAt1x is the SAME value handed to NewEngine above, from
+	// the same single data/pacing.json load.
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		newTickDriver(w.engine.Clock, transport.SendCommand, secondsPerMonthAt1x).Run(ctx)
+	}()
+
 	return w, nil
 }
+
+// registerClockKeys binds BUG-322's player-facing clock controls onto the
+// chrome global grammar: Space toggles pause/resume, ']' steps speed up and
+// '[' steps it down. Every one of them reaches the engine the ONLY sanctioned
+// way — as a real protocol.Command through the transport — never by poking
+// the Clock directly, so the same commands a replay log or a future scripted
+// test issues are the ones a keypress issues.
+//
+// # Why these keys
+//
+// Space is UI-SPEC §3's pause key and is not one of ui.keys' reserved tokens
+// (only <Esc>, '.', 'u', 'U' are), so it is bindable as a global. It arrives
+// from tcell as a plain rune (keys.Key{Rune: ' '}), which is why it is
+// registered as keys.KeyRune(' ') and not as a named special.
+//
+// Speed is bound to '[' and ']', NOT to the 1/2/3 digits UI-SPEC §3 names.
+// That is a deliberate, temporary divergence, and run.go's routeKeyInput doc
+// comment is where the reason is written out in full: chromeGrammar is fed
+// EVERY keystroke, and a bare digit at idle is claimed by ui.keys' count-
+// prefix accumulator, so digit globals here would both change speed AND
+// leave a count prefix on the active screen's grammar — silently breaking
+// services' existing counted actions ("3 s f +"). That comment states the
+// fix required to land digit speed keys safely (make chrome's fall-through
+// conditional on FeedResult, in the same commit as the digit globals);
+// making that change is a routing change with its own blast radius on the
+// services keys, and it is NOT this P0's scope. Bracket keys give the player
+// working speed control today without touching the routing rules; whoever
+// lands UI-SPEC §3's digits does both halves together, as that comment
+// requires.
+//
+// Speed8xDebug is deliberately NOT reachable from these keys: it is
+// debug-gated (engine.core's checkSpeed8xAllowed), and a debug-only speed
+// must not be one bracket press away from a player.
+func registerClockKeys(w *skeletonWiring) error {
+	bindings := []struct {
+		key    keys.Key
+		name   string
+		action func()
+	}{
+		{keys.KeyRune(' '), "Pause/Resume (Space)", func() { w.togglePause() }},
+		{keys.KeyRune(']'), "Faster (])", func() { w.stepSpeed(+1) }},
+		{keys.KeyRune('['), "Slower ([)", func() { w.stepSpeed(-1) }},
+	}
+	for _, b := range bindings {
+		run := b.action
+		if err := w.chromeGrammar.RegisterGlobal(b.key, keys.Action{Name: b.name, Run: func(keys.ActionArgs) { run() }}); err != nil {
+			return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
+				"component": "ui.keys.RegisterGlobal", "key": b.key.Token(),
+			})
+		}
+	}
+	return nil
+}
+
+// playerSpeeds is the speed ladder '[' and ']' walk, in ascending order —
+// engine.core's documented player-facing multipliers (clock.go's §3 speed
+// table) minus Speed8xDebug, which is debug-gated and must not be reachable
+// from a player keybinding. Named constants, never literals.
+var playerSpeeds = []enginecore.Speed{enginecore.Speed1x, enginecore.Speed2x, enginecore.Speed4x}
+
+// togglePause sends whichever of Pause/Resume flips the CURRENT clock state.
+// The state is read from the engine (Engine.Clock is documented safe for
+// concurrent use), never tracked locally in the UI: a locally-cached "am I
+// paused" flag is the classic way a toggle key drifts out of sync with the
+// thing it toggles, and the engine already owns the answer.
+//
+// Errors are deliberately not surfaced: Clock() only fails on a struct-copied
+// Engine (impossible for the pointer bootCore holds) and SendCommand only
+// fails on a full queue or a closed transport — in either case the key press
+// did not take effect, and the status line will keep showing the unchanged
+// state, which is the honest feedback. There is no error channel from a
+// keys.Action.Run (its signature returns nothing, the same constraint the
+// F-key globals above document).
+func (w *skeletonWiring) togglePause() {
+	c, err := w.engine.Clock()
+	if err != nil {
+		return
+	}
+	kind, payload := protocol.Kind(protocol.KindPause), protocol.CommandPayload(protocol.PausePayload{})
+	if c.Paused() {
+		kind, payload = protocol.KindResume, protocol.ResumePayload{}
+	}
+	_ = w.transport.SendCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.NewCorrelationID(),
+		Kind:            kind,
+		Payload:         payload,
+	})
+}
+
+// stepSpeed moves one rung along playerSpeeds (delta +1 faster, -1 slower)
+// and sends the resulting SetSpeed command. At either end of the ladder the
+// press is a no-op rather than wrapping around: a player holding ']' should
+// arrive at 4x and stay there, not silently fall back to 1x.
+//
+// An unrecognised current speed (only reachable if something set 8x through
+// the debug path) is treated as "start from the top of the ladder" so the
+// keys still work rather than dead-ending.
+func (w *skeletonWiring) stepSpeed(delta int) {
+	c, err := w.engine.Clock()
+	if err != nil {
+		return
+	}
+	idx := len(playerSpeeds) - 1
+	for i, s := range playerSpeeds {
+		if s == c.Speed() {
+			idx = i
+			break
+		}
+	}
+	next := idx + delta
+	if next < 0 || next >= len(playerSpeeds) {
+		return
+	}
+	_ = w.transport.SendCommand(protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.NewCorrelationID(),
+		Kind:            protocol.KindSetSpeed,
+		Payload:         protocol.SetSpeedPayload{Speed: int(playerSpeeds[next])},
+	})
+}
+
+// primeScreenSubscription performs the one synchronous handshake every
+// FEAT-208 increment-2 router-bound screen needs at boot: it calls
+// subscribe() (the screen's own real Subscribe method, e.g.
+// financeScreen.Subscribe(transport.SendCommand)), then reads
+// transport.Results()/Deltas() DIRECTLY (bypassing router — router has
+// not started yet, see w.router's own doc comment) until it has observed
+// BOTH the accepted CommandResult and the first Delta carrying
+// correlationID (the exact CorrelationID the screen's Subscribe call
+// used) — subscribe.go's "pendingCorrID... echoed on the next delta
+// only" contract is what makes this possible: the first Delta for a
+// fresh Subscribe always carries the causing command's own
+// CorrelationID, exactly once.
+//
+// Once both are observed, it calls bind(subscriptionID) (the screen's own
+// BindSubscription) AND router.BindSubscription(subscriptionID, ...) so
+// every SUBSEQUENT delta for this subscription — which router.Run will
+// see once it starts — is routed to the same screen; then it calls
+// applyDelta(firstDelta) directly (since router never saw this first
+// delta — it was consumed here, before Run started) so the screen's
+// first real data is not lost. It also registers subscriptionID into
+// primed (see below) so a LATER call to primeScreenSubscription (priming
+// a different screen) can still forward deltas belonging to THIS
+// subscription if one arrives during its own wait.
+//
+// This exists because protocol.CommandResult has no SubscriptionID field
+// (envelope.go) — router.RegisterResultHandler only delivers
+// CommandResults, not Deltas, so it cannot by itself learn a Subscribe's
+// resulting SubscriptionID. This handshake is boot.go's own bridge across
+// that gap, not a router or protocol change (out of this dispatch's
+// scope — see the FEAT-208 build brief).
+//
+// primed is a shared map every sequential primeScreenSubscription call in
+// the same bootCore invocation passes the SAME instance of (bootCore's
+// own `primed := make(map[...])`, threaded through both calls). It exists
+// because engine.core's signalSubscriptionPump is coalescing
+// (commands.go's own doc comment: "multiple commands... collapse into a
+// single recompute") and subscribe.go's Publish republishes EVERY live
+// subscription on each pump wake, not just the one that just subscribed
+// — so priming a SECOND screen can (and, empirically, sometimes does)
+// observe a pump cycle that ALSO republishes the FIRST screen's
+// already-bound subscription (its Seq advancing past 1). Without
+// forwarding, that delta's CorrelationID would not match `want` (only a
+// subscription's very first delta ever carries one) and it would be
+// silently dropped — losing a real update for the first screen AND
+// leaving router's own SeqTracker (once it starts) expecting a Seq it
+// will never see, misreporting a gap. Every delta whose SubscriptionID is
+// already in primed is therefore forwarded to its owner's applyDelta
+// directly here, exactly mirroring what router.handleDelta will do for
+// every later delta once Run starts (minus router's own SeqTracker
+// bookkeeping, which is irrelevant here since nothing has bound through
+// router's Observe path yet during priming).
+//
+// applyDelta's type is func(protocol.Delta), matching every real screen's
+// exported ApplyDelta method exactly (finance.Screen, services.Screen) —
+// passed as a bound method value, never wrapped, so a panic inside a
+// screen's own ApplyDelta during priming surfaces exactly as it would
+// during a normal boot failure (loud, not swallowed) rather than being
+// silently absorbed by an adapter.
+func primeScreenSubscription(
+	transport *protocol.InProcTransport,
+	rt *router.Router,
+	primed map[protocol.SubscriptionID]func(protocol.Delta),
+	correlationID string,
+	viewName string,
+	subscribe func() error,
+	bind func(protocol.SubscriptionID),
+	applyDelta func(protocol.Delta),
+) error {
+	if err := subscribe(); err != nil {
+		return err
+	}
+	want := protocol.CorrelationID(correlationID)
+	deadline := time.After(feat208PrimeTimeout)
+	gotResult, gotDelta := false, false
+	for !gotResult || !gotDelta {
+		select {
+		case r, ok := <-transport.Results():
+			if !ok {
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName, "cause": "transport.Results() closed while priming",
+				})
+			}
+			if r.CorrelationID != want {
+				// A CommandResult for a CorrelationID that is NOT this
+				// handshake's own — and not any earlier handshake's
+				// either, since each command produces exactly one
+				// CommandResult and an already-primed screen's own
+				// Subscribe result was already consumed by ITS OWN prior
+				// primeScreenSubscription call. bootCore is documented
+				// (and, for as long as priming runs, REQUIRED) to be the
+				// transport's only reader — no other command can
+				// legitimately be in flight during this window (mapScreen's
+				// own Subscribe is issued strictly AFTER both primes
+				// complete; render/input, which could issue arbitrary
+				// commands, only start after bootCore returns). A stray
+				// result here therefore means some caller broke that
+				// invariant — a programming error, not a droppable event:
+				// silently discarding it (the previous behaviour) would
+				// consume a real Go channel receive that a router-
+				// registered handler could never be delivered afterward
+				// (GR#23 independent round r2/r3 finding — see
+				// feat208_priming_destructive_test.go's own attack). Fail
+				// loud instead, naming the foreign CorrelationID, so this
+				// constraint violation surfaces as a boot failure rather
+				// than a silently eaten result.
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName,
+					"cause":                "observed a CommandResult for a foreign CorrelationID during the priming window — bootCore must be the transport's only reader while priming runs; a third concurrent command at boot is a programming error, not a droppable event",
+					"foreignCorrelationID": string(r.CorrelationID),
+				})
+			}
+			if !r.Accepted {
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName, "cause": "Subscribe rejected",
+				})
+			}
+			gotResult = true
+		case d, ok := <-transport.Deltas():
+			if !ok {
+				return errs.New(codeBootFailure, correlationID, map[string]any{
+					"component": "primeScreenSubscription", "view": viewName, "cause": "transport.Deltas() closed while priming",
+				})
+			}
+			if d.CorrelationID != want {
+				// Not this handshake's own first delta. If it belongs to
+				// an already-primed subscription (coalesced pump wake —
+				// see primed's own doc comment above), forward it to that
+				// subscription's owner directly rather than dropping it.
+				if fn, ok := primed[d.SubscriptionID]; ok {
+					fn(d)
+				}
+				continue
+			}
+			bind(d.SubscriptionID)
+			rt.BindSubscription(d.SubscriptionID, deltaReceiverFunc(applyDelta))
+			primed[d.SubscriptionID] = applyDelta
+			applyDelta(d)
+			gotDelta = true
+		case <-deadline:
+			return errs.New(codeBootFailure, correlationID, map[string]any{
+				"component": "primeScreenSubscription", "view": viewName, "cause": "timed out waiting for Subscribe's own Result/Delta",
+			})
+		}
+	}
+	return nil
+}
+
+// deltaReceiverFunc adapts a bare func(protocol.Delta) into
+// router.DeltaReceiver (an ApplyDelta(protocol.Delta) method), so
+// primeScreenSubscription can bind router.BindSubscription directly
+// against a screen's exported ApplyDelta method value without router
+// needing to import (or know about) any concrete screen package —
+// preserving ui/router/doc.go's "never imports a concrete screen
+// package" contract.
+type deltaReceiverFunc func(protocol.Delta)
+
+func (f deltaReceiverFunc) ApplyDelta(d protocol.Delta) { f(d) }
 
 // sendPauseCommand sends a real protocol.KindPause Command through
 // transport (feat.devmode AC-DM2: opening the console pauses the sim) —
@@ -302,24 +1130,60 @@ func sendPauseCommand(transport protocol.Transport, correlationID string) error 
 }
 
 // shutdown cancels the background goroutines bootCore started, waits for
-// both to fully exit, and only then closes the transport.
+// ALL of them (RunCommandLoop, ViewsLoop.Run, AND — F2, independent
+// round r1 — the subscription pump) to fully exit, and only then closes
+// the transport.
 //
-// Order matters here: StubEngine.Run and ui.core.ViewsLoop.Run both
-// select on ctx.Done() as well as their respective channels, so
-// cancelling ctx is sufficient to stop them without needing
-// transport.Close() at all — and closing the transport BEFORE they have
-// actually exited would race the engine goroutine's still-in-flight
+// Order matters here: RunCommandLoop, ui.core.ViewsLoop.Run, and the
+// subscription pump goroutine all select on ctx.Done() as well as their
+// respective channels, so cancelling ctx is sufficient to stop all three
+// without needing transport.Close() at all — and closing the transport
+// BEFORE they have actually exited would race their still-in-flight
 // SendResult/SendDelta calls against Close()'s channel-close, which
 // protocol.InProcTransport's own SendResult docs don't guarantee is race-
 // free (the "stops accepting commands" check races the send it guards,
 // same shape as any check-then-act on a separate signal channel).
-// Waiting for both goroutines to return before closing sidesteps that
+// Waiting for every goroutine to return before closing sidesteps that
 // window entirely rather than depending on a fix to that package (which,
 // per this item's scope, belongs to int.protocol's own loop, not
-// feat.skeleton's).
+// feat.skeleton's). Previously (before F2) w.pumpDone did not exist at
+// all and the pump goroutine was never joined here — a leak this
+// function's own "waits for both to fully exit" claim did not actually
+// keep.
+//
+// BOUNDED join on w.pumpDone (R3, independent round r2/r3, FEAT-208
+// increment 1): w.wg.Wait() above still blocks unconditionally on
+// RunCommandLoop/ViewsLoop.Run (both are engine.core's own, trusted
+// code, and ctx cancellation is proven sufficient to stop them promptly
+// — no external DeltaSink implementation can misbehave there). The pump
+// goroutine is different: it calls a caller-supplied DeltaSink
+// (transport here, but SubscriptionServer.Publish's contract on
+// DeltaSink — commands.go — is a caller-facing seam, not an internal
+// implementation detail), and r2's independent round proved a
+// DeltaSink that blocks indefinitely or reenters Publish (both
+// documented-prohibited, neither mechanically preventable) can hang the
+// pump goroutine forever. Waiting on w.pumpDone with NO timeout would
+// therefore hang process shutdown forever too — exactly what r2's
+// TestAttack_ReentrantDeltaSink_DeadlocksThePumpGoroutine warned about.
+// pumpShutdownJoinTimeout bounds that wait: on timeout, MET-E901 is
+// logged (registry-sourced, GR#1/GR#7 — never a silent give-up) and
+// shutdown proceeds to transport.Close() anyway rather than hanging.
+// transport is not InProcTransport for this binary today, so this is a
+// belt-and-braces degrade against a future DeltaSink swap, not a
+// currently-reachable production hang (InProcTransport's own SendDelta
+// is documented non-blocking and never re-enters anything).
 func (w *skeletonWiring) shutdown() {
 	w.cancel()
 	w.wg.Wait()
+	if w.pumpDone != nil {
+		select {
+		case <-w.pumpDone:
+		case <-time.After(pumpShutdownJoinTimeout):
+			_ = errs.New(codePumpShutdownTimeout, w.correlationID, map[string]any{
+				"timeoutMs": pumpShutdownJoinTimeout.Milliseconds(),
+			})
+		}
+	}
 	_ = w.transport.Close()
 }
 
@@ -340,13 +1204,90 @@ func (w *skeletonWiring) shutdown() {
 // noted here rather than silently generalized, since inventing that
 // routing is out of this item's scope (only one F-screen exists yet).
 func mapDrawFunc(ms *mapscreen.MapScreen) core.DrawFunc {
-	return func(back *core.Buffer, vm *core.ViewModels) {
-		for id, patch := range vm.Patches {
-			ms.ApplyPatch(patch)
-			ms.SetStale(vm.Stale[id])
-			break
-		}
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		// BUG-323: this closure used to range vm.Patches and feed the
+		// first entry into ms.ApplyPatch/ms.SetStale — ui.core's
+		// ViewStore path, which FEAT-208 increment 2 left PERMANENTLY
+		// EMPTY in this binary when router replaced ViewsLoop (see
+		// skeletonWiring.viewStore's doc comment). mapScreen's terrain
+		// now arrives through router-bound ApplyDelta, exactly like
+		// financeScreen's and servicesScreen's, so this reads nothing
+		// from vm at all — same shape as financeDrawFunc. Leaving the
+		// old loop in place would be dead code today and a
+		// double-application hazard the moment anything ever published
+		// into viewStore again.
+		//
+		// Known consequence, recorded rather than hidden: nothing calls
+		// ms.SetStale any more, so the staleness dot renders its
+		// "fresh" glyph permanently. router owns per-subscription
+		// staleness now and exposing it to a DrawFunc is a ui.router/
+		// ui.core surface change — out of this fix's scope.
 		w, h := back.Size()
 		ms.Render(back, core.Rect{X: 0, Y: 0, W: w, H: h})
+	}
+}
+
+// financeDrawFunc adapts financescreen.Screen into a core.DrawFunc
+// (FEAT-211 increment 1, design §7(c)): unlike mapDrawFunc, it reads
+// nothing from vm — financeScreen's own state is kept live by
+// ApplyDelta, called directly from boot.go's router-bound priming/
+// binding (primeScreenSubscription), never through ui.core's
+// vm.Patches/vm.Stale path (that mechanism exists for "f1.viewport"
+// only, mapScreen's own pre-FEAT-208 wiring — see viewStore's doc
+// comment on skeletonWiring). This closure only lays out a 2x2 grid of
+// financescreen's existing Render* package functions (RenderPL,
+// RenderBalanceSheet, RenderLoans, RenderSliders — each a real, tested
+// entry point this package already exports; no new render logic is
+// invented here) over whatever the current terminal size is — no screen
+// interface change, mirroring mapDrawFunc's own closure-adapter pattern
+// exactly (design's own "no shim beyond the closure-adapter pattern
+// mapDrawFunc already establishes").
+func financeDrawFunc(fs *financescreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		col, row := w/2, h/2
+
+		pl, havePL := fs.PL()
+		financescreen.RenderPL(back, core.Rect{X: 0, Y: 0, W: col, H: row}, pl, havePL, style)
+
+		bs, haveBS := fs.BalanceSheet()
+		financescreen.RenderBalanceSheet(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, bs, haveBS, style)
+
+		loans, haveLoans := fs.Loans()
+		rating, _ := fs.CreditRating()
+		history, _ := fs.CreditRatingHistory()
+		financescreen.RenderLoans(back, core.Rect{X: 0, Y: row, W: col, H: h - row}, loans, rating, history, fs.LoanRejectedReason(), haveLoans, style)
+
+		sliders, haveSliders := fs.TaxSliders()
+		financescreen.RenderSliders(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, sliders, haveSliders, style)
+	}
+}
+
+// servicesDrawFunc adapts servicesscreen.Screen into a core.DrawFunc
+// (FEAT-211 increment 1, design §7(c)) — same shape and same rationale
+// as financeDrawFunc immediately above (servicesScreen's own state is
+// kept live by ApplyDelta via router.BindSubscription, never vm). Lays
+// out a 2x2 grid of servicesscreen's existing Render* package functions
+// (RenderSliders — SVC-1's funding sliders, the exact figures "s f +"/
+// "s f -" move — RenderCapacityDemand, RenderResponseTimes,
+// RenderWaitingLists).
+func servicesDrawFunc(ss *servicesscreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		col, row := w/2, h/2
+
+		sliders, haveSliders := ss.Sliders()
+		servicesscreen.RenderSliders(back, core.Rect{X: 0, Y: 0, W: col, H: row}, sliders, ss.FundingRejectedReason(), haveSliders, style)
+
+		cd, haveCD := ss.CapacityDemand()
+		servicesscreen.RenderCapacityDemand(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, cd, haveCD, widgets.DefaultPalette, style)
+
+		rt, haveRT := ss.ResponseTimes()
+		servicesscreen.RenderResponseTimes(back, core.Rect{X: 0, Y: row, W: col, H: h - row}, rt, haveRT, style)
+
+		wl, haveWL := ss.WaitingLists()
+		servicesscreen.RenderWaitingLists(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, wl, haveWL, style)
 	}
 }

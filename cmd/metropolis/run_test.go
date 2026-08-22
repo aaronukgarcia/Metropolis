@@ -133,6 +133,22 @@ func TestIsQuitInput(t *testing.T) {
 // screen_test.go use) — proves runInteractive actually renders through
 // the real RenderLoop/InputLoop, not just bootCore's headless slice.
 
+// TestRunInteractive_RendersAndQuitsOnEscape covers Esc's
+// process-lifecycle meaning at IDLE, which is the only state it had
+// before FEAT-211 increment 1 made leader sequences reachable from a real
+// keyboard. That increment's destructive round (finding 2) showed Esc was
+// also keys.KeyGrammar's reserved abort token and could never reach it,
+// so OnDelivered now routes Esc to the grammars instead of quitting
+// whenever a sequence is pending.
+//
+// This test is deliberately kept exactly as it was, not weakened: with
+// nothing pending — which is the state a freshly booted binary is in, and
+// the state this test exercises — Esc must still quit, and that is
+// precisely the half of the behaviour the fix must not break. The other
+// half (Esc aborts rather than quits while a sequence IS pending, and the
+// NEXT Esc then quits) is asserted by
+// TestRouting_EscAbortsPendingSequenceThenQuits in
+// feat211_inc1_destructive_test.go. Read the two together as one contract.
 func TestRunInteractive_RendersAndQuitsOnEscape(t *testing.T) {
 	reg := registry.NewRegistry()
 	w, err := bootCore("interactive-test", reg)

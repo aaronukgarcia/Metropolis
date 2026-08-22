@@ -3,14 +3,48 @@ package headless
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
+
+// pumpShutdownJoinTimeout bounds the shutdown closure's wait on the
+// subscription pump goroutine's done channel (R3, independent round
+// r2/r3, FEAT-208 increment 1) — mirrors cmd/metropolis/boot.go's
+// identical constant/value exactly (no existing shutdown-timeout idiom
+// was found elsewhere in this codebase to reuse instead; both packages
+// independently fall back to the round's own 5s value). See
+// ErrPumpShutdownTimeout's doc comment (errors.go) for why an unbounded
+// wait here would be a real production hang, not a hypothetical one. A
+// package-level var, not a const, ONLY so a test can lower it for a
+// fast, deterministic proof of the timeout path itself — production
+// code never reassigns it; it is 5s for every real caller.
+var pumpShutdownJoinTimeout = 5 * time.Second
+
+// joinPumpDone waits for the subscription pump goroutine's done channel
+// to close, bounded by pumpShutdownJoinTimeout (R3, independent round
+// r2/r3, FEAT-208 increment 1) — extracted from Run's shutdown closure
+// into its own package-level function so
+// feat208_pump_shutdown_test.go can exercise the timeout path directly,
+// without driving a full Run() invocation just to reach it. On timeout,
+// ErrPumpShutdownTimeout is logged (registry-sourced, GR#1/GR#7) and
+// this function returns anyway — never blocks its caller past the
+// bound.
+func joinPumpDone(pumpDone <-chan struct{}, correlationID string) {
+	select {
+	case <-pumpDone:
+	case <-time.After(pumpShutdownJoinTimeout):
+		_ = errs.New(ErrPumpShutdownTimeout, correlationID, map[string]any{
+			"timeoutMs": pumpShutdownJoinTimeout.Milliseconds(),
+		})
+	}
+}
 
 // Config specifies one headless run (AC-1, harness.headless.md). Seed
 // and Months carry no defaults of their own — a caller (cmd/metropolis's
@@ -22,11 +56,13 @@ type Config struct {
 	Seed uint64
 
 	// Months is the number of in-game months to advance. Must be
-	// positive; Months <= 0 advances zero ticks and still writes a
-	// tick-0 snapshot (not an error — a caller wanting "months is
-	// required" enforced as a hard failure, per AC-2, does that check
-	// itself before calling Run, the same way cmd/metropolis's -headless
-	// flag does).
+	// positive: Months <= 0, or a Months so large months*
+	// core.DailyTicksPerMonth would overflow int64, is rejected by
+	// driveTicks (MET-H207, BUG-305) rather than either advancing zero
+	// ticks silently or wrapping into a bogus tick count — cmd/metropolis's
+	// -headless flag also enforces > 0 at the CLI layer (AC-2), but Run is
+	// a library entry point any other caller can reach directly, so the
+	// guard lives here too rather than being trusted to every caller.
 	Months int64
 
 	// OutDir is the bundle directory Run writes the -out snapshot to
@@ -197,18 +233,55 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	)
 
 	loopCtx, cancel := context.WithCancel(ctx)
+
+	// FEAT-208: start the subscription pump so any view compose.Wire
+	// registered (viewRegistrationOrder) actually publishes deltas
+	// against this headless run too, not only the interactive binary —
+	// mirrors cmd/metropolis/boot.go's identical call, same ordering
+	// (after compose.Wire/transport construction, before the command
+	// loop starts). StartSubscriptionPump can only fail on a
+	// struct-copied Engine (BUG-019) or a second call on the same Engine
+	// (F1a, ErrSubscriptionPumpAlreadyStarted), neither of which e here
+	// ever is/does. pumpDone (F2, independent round r1) is joined by the
+	// shutdown closure below, before transport.Close() — previously
+	// (before F2) this goroutine was never tracked or joined at all.
+	pumpDone, err := e.StartSubscriptionPump(loopCtx, transport)
+	if err != nil {
+		cancel()
+		_ = transport.Close()
+		return Result{}, err
+	}
+
 	loopDone := make(chan error, 1)
 	go func() { loopDone <- e.RunCommandLoop(loopCtx, transport) }()
 
 	// shutdown implements the documented caller-side contract exactly:
-	// cancel, WAIT for RunCommandLoop's goroutine to return (join), and
-	// only THEN close the transport (AC-5's ordering requirement, and
-	// StubEngine.Run's identical "cancel(); wg.Wait(); Close()" contract).
-	// Called on every exit path below, success or failure, so this
-	// package never leaks the command-loop goroutine.
+	// cancel, WAIT for RunCommandLoop's goroutine (unconditionally — it
+	// is engine.core's own trusted code, and ctx cancellation is proven
+	// sufficient to stop it promptly) AND the subscription pump
+	// goroutine (F2) to return (join), and only THEN close the transport
+	// (AC-5's ordering requirement, and StubEngine.Run's identical
+	// "cancel(); wg.Wait(); Close()" contract). Called on every exit
+	// path below, success or failure, so this package never leaks
+	// either goroutine.
+	//
+	// BOUNDED join on pumpDone (R3, independent round r2/r3): the pump
+	// goroutine calls a caller-supplied DeltaSink (transport here), and
+	// r2's independent round proved a DeltaSink that blocks indefinitely
+	// or reenters Publish (both documented-prohibited on
+	// engine/core.DeltaSink, neither mechanically preventable) can hang
+	// that goroutine forever. Waiting on pumpDone with no timeout would
+	// therefore hang Run's shutdown — and so Run itself — forever too.
+	// pumpShutdownJoinTimeout bounds that wait: on timeout,
+	// ErrPumpShutdownTimeout is logged (registry-sourced, GR#1/GR#7) and
+	// shutdown proceeds to transport.Close() anyway. transport here is
+	// InProcTransport, whose SendDelta is documented non-blocking and
+	// never re-enters anything, so this is belt-and-braces against a
+	// future DeltaSink swap, not a currently-reachable hang.
 	shutdown := func() error {
 		cancel()
 		err := <-loopDone
+		joinPumpDone(pumpDone, correlationID)
 		_ = transport.Close()
 		return err
 	}
@@ -229,7 +302,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
-	ticksAdvanced, err := driveTicks(transport, cfg.Months)
+	ticksAdvanced, err := driveTicks(transport, cfg.Months, correlationID)
 	if err != nil {
 		_ = shutdown()
 		return Result{}, err
@@ -301,8 +374,46 @@ func sendAndAwait(t *protocol.InProcTransport, cmd protocol.Command, correlation
 // either one over-limit command (rejected by the engine, AC-11 of
 // engine.core.md) or one command per tick (needlessly many round trips).
 // Returns the number of ticks actually advanced before any error.
-func driveTicks(t *protocol.InProcTransport, months int64) (int64, error) {
-	total := months * core.DailyTicksPerMonth
+//
+// # BUG-305: months*DailyTicksPerMonth is REJECTED on overflow, never wrapped
+//
+// months is caller-supplied (cmd/metropolis's -months flag already
+// enforces > 0 at the CLI layer, headless.go's runHeadless, but Run/
+// driveTicks is also a library entry point any OTHER caller can reach
+// directly, bypassing that CLI-only check). A bare `months *
+// core.DailyTicksPerMonth` int64 multiply silently wraps on a
+// sufficiently large or negative months — Go's defined two's-complement
+// truncation, not a panic — which is exactly the poisoned-perf-baseline
+// shape this fix closes: driveTicks would return a SUCCESSFUL Result
+// carrying a wrapped, bogus TicksAdvanced instead of failing loudly.
+// num.SafeMul (internal/foundation/num) is reused rather than
+// reimplemented here — it already returns the overflow bool this
+// function needs; the fix is to REJECT on that bool rather than accept
+// SafeMul's saturated value, since saturating months into "advance the
+// maximum representable number of ticks" would be exactly as wrong a
+// silent substitution as the wrap it replaces (this substrate must never
+// paper over an operator/caller error with a plausible-looking number).
+// Non-positive months is rejected explicitly and separately, before the
+// multiply, for the same reason: zero or negative ticks is never a
+// legitimate "advance the simulation" request, and a caller-supplied
+// negative months would otherwise reach SafeMul and either be flagged as
+// overflow (large |months|) or silently produce a negative/zero total
+// that the loop below simply never enters (small negative months) —
+// hiding the caller error as "ran fine, advanced 0 ticks" instead of
+// surfacing it as MET-H207.
+func driveTicks(t *protocol.InProcTransport, months int64, correlationID string) (int64, error) {
+	if months <= 0 {
+		return 0, errs.New(ErrInvalidMonths, correlationID, map[string]any{
+			"months": months, "cause": "months must be positive",
+		})
+	}
+	total, overflowed := num.SafeMul(months, core.DailyTicksPerMonth)
+	if overflowed {
+		return 0, errs.New(ErrInvalidMonths, correlationID, map[string]any{
+			"months": months, "dailyTicksPerMonth": core.DailyTicksPerMonth,
+			"cause": "months*DailyTicksPerMonth overflows int64",
+		})
+	}
 	remaining := total
 	for remaining > 0 {
 		n := core.MaxAdvanceTicksPerCall

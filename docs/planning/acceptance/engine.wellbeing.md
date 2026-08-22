@@ -80,6 +80,10 @@ Two per-citizen 0-100 tracks (physical, mental) with driver-decomposed, drill-th
 - **ASM-1284 (confirm-and-close).** SEC-158 physicality re-validated inline in AttributeCitizen (mirroring satisfactionScore), keeping the public DriverInputs surface unchanged.
 - **ASM-1120 (confirm-and-close).** SEC-093 saturation bound is signed float64 finite extremes, NOT a [0,100] track clamp — legitimate finite results stay unclamped.
 
+- **ASM-1109 (FEAT-084 CC fold).** HealthcareAccess (engine.services), GreenSpace400m/Noise (engine.world overlays not yet carried), and venue-access inputs (community/sport/leisure) are consumed through local seams or ContextInputs pushed by the composition root, mirroring engine.attract TermInputs, because no registered outbound call can compute them yet. (Roster routed this to engine.attract, but code.json/code home is engine.wellbeing — folded here.)
+
+- **ASM-1245 (FEAT-084 CC fold; roster had data.errors/SF, re-verified as CC).** An out-of-range satisfaction component is rejected with the existing ErrInvalidInput (MET-G2201, field satisfaction + index detail) rather than a new code — component-level rejection is the same error class as the satisfaction-mean rejection in validateDriverInputs, so one code keeps one error shape for satisfaction (AC-13/GR#7). A distinct component-level code would need a data/errors.json addition. (Code home engine.wellbeing.)
+
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
 
 > Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).

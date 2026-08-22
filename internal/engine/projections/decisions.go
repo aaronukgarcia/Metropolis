@@ -265,7 +265,7 @@ func (p *ProjectionsAPI) CancelDecision(id string) error {
 		return err
 	}
 	if _, ok := p.decisions[id]; !ok {
-		return errs.New(ErrUnknownDecision, p.correlationID, map[string]any{"actionID": id})
+		return errs.New(ErrUnknownDecision, p.correlationID, map[string]any{"id": id})
 	}
 	delete(p.decisions, id)
 	return nil

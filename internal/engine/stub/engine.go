@@ -361,7 +361,7 @@ func (s *StubEngine) handle(cmd protocol.Command) {
 		result = s.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		result = s.handleDebug(cmd)
-	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish:
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding:
 		result = s.handleGameplay(cmd)
 	default:
 		// Defensive: see codes.go's codeUnknownKind doc. Every Kind that
@@ -612,9 +612,10 @@ func (s *StubEngine) handleDebug(cmd protocol.Command) protocol.CommandResult {
 	return s.acceptAt(cmd, tick)
 }
 
-// handleGameplay accepts the four gameplay-intent commands (Buy, Zone,
-// Build, Demolish — added to the protocol vocabulary by the ASM-485
-// extension, internal/protocol/commands.go) as no-ops. The stub computes
+// handleGameplay accepts the gameplay-intent commands (Buy, Zone, Build,
+// Demolish — added to the protocol vocabulary by the ASM-485 extension;
+// SetFunding — added FEAT-208 increment 3, internal/protocol/commands.go)
+// as no-ops. The stub computes
 // nothing and owns no build/finance/ownership state to accept or reject
 // against, so it cannot adjudicate BLD-7's "engine rejects and the reason
 // surfaces" path — that is engine.build/engine.finance's job when those

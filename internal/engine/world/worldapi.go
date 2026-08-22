@@ -116,6 +116,70 @@ func (a *WorldAPI) ImportAndPlaceStartTile(src *SourceGrid, correlationID string
 	return nil
 }
 
+// TileCells returns a Cell snapshot for EVERY cell of tile c, in
+// localIndex order (row-major: index = row*TileSizeCells + col), with
+// exactly the same per-cell contract CellAt documents below.
+//
+// It exists (BUG-323) because reading a whole tile through CellAt is
+// pathologically expensive, and a whole tile is precisely what the
+// "f1.viewport" view publishes: CellAt mints a fresh correlation ID
+// (errs.NewCorrelationID — a UUID) and allocates a context map on EVERY
+// call via ensureTile's own defence-in-depth checkNotCopied, and takes
+// and releases w.mu once per cell. Across a 200x200 tile that measured
+// 241ms and 40,000 lock round-trips per call — on engine.core's single
+// subscription-pump goroutine, which serves every OTHER registered view
+// too, so one map publish would stall the whole UI's delta stream for a
+// quarter of a second. This method does the identity check and the lock
+// acquisition ONCE for the whole tile, which is the only thing that
+// actually differs; the per-cell values it returns are identical to what
+// CellAt returns for the same coordinates (proven by
+// worldapi_test.go's own equivalence test).
+//
+// It is deliberately NOT a general windowing API (no origin/width/height
+// parameters): a whole tile is the unit every current caller wants, and
+// a partial window has no use case yet to shape it correctly.
+func (a *WorldAPI) TileCells(c TileCoord, correlationID string) ([]Cell, error) {
+	// BUG-064 (AC-28): identity check BEFORE a.w.mu is touched at all —
+	// see World.checkNotCopied's doc comment (grid.go).
+	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+		return nil, err
+	}
+	if !c.InExtent() {
+		return nil, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+	}
+
+	a.w.mu.Lock()
+	defer a.w.mu.Unlock()
+	// Defence-in-depth re-check under the lock.
+	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+		return nil, err
+	}
+	tl, err := a.w.ensureTile(c)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Cell, CellsPerTile)
+	for idx := range out {
+		out[idx] = Cell{
+			Elevation: tl.terrain.elevation[idx],
+			Slope:     tl.terrain.slope[idx],
+			Surface:   tl.terrain.surface[idx],
+		}
+		if tl.sim != nil {
+			out[idx].Owner = tl.sim.owner[idx]
+			out[idx].Zoning = tl.sim.zoning[idx]
+			out[idx].StructureRef = tl.sim.structureRef[idx]
+			out[idx].LandValue = tl.sim.landValue[idx]
+			out[idx].Overlay = OverlayScratch{
+				Traffic: tl.sim.traffic[idx], UtilityCoverage: tl.sim.utility[idx],
+				Pollution: tl.sim.pollution[idx], Decay: tl.sim.decay[idx],
+			}
+		}
+	}
+	return out, nil
+}
+
 // CellAt returns the Cell snapshot at a global position (tile + local
 // coordinate). Terrain fields are always populated; ownership/zoning/
 // structureRef/landValue/overlay-scratch read as zero values for an

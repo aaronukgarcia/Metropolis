@@ -75,3 +75,6 @@ The `FirmsEdge` seam drops `Fail` entirely rather than keeping it alongside `Rem
 ## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
 
 - **ASM-1198 (confirm-and-close).** `ResolveBid` rejects a negative education output with the existing `ErrEducationOutputUnavailable` (MET-G2502) rather than a new registry code — `data/errors.json` is a shared file outside this package's ownership, and MET-G2502 is the education-output error in the G2500-G2505 block the brief named; a dedicated observability code is a follow-up if ever wanted.
+- **ASM-1196 (FEAT-084 CC fold).** NewPharma now returns (*Pharma, error), validating PharmaCampusParams on the entry path (SEC-122/SEC-123) per the brief; grep confirms zero callers outside internal/engine/fdi, so the breaking signature has no blast radius beyond this package tests.
+
+- **ASM-1197 (FEAT-084 CC fold).** Compensating inverses RemoveGraduateDemand/RemoveExports were added to the EducationEdge/TradeEdge seams for transactional Win rollback (SEC-121), mirroring engine.accelerator FdiSource Add+Remove precedent; the composition root must adapt real education.EducationAPI/freight.FreightAPI to these methods. With three fallible append-only edges, at most two can be ordered atomically, so some compensating inverse is required regardless.

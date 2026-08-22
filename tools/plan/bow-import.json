@@ -671,6 +671,24 @@
       ]
     },
     {
+      "mkey": "feat.deathwave",
+      "type": "feature",
+      "title": "Mortality smoothing: bounded monthly death budget + weather-driven variation",
+      "desc": "FEAT-087: smooths engine.citizens' Gompertz-Makeham realised deaths through a bounded monthly death budget (hazard selects, enqueues, releases at most the data-sourced budget per month) so a same-birth-month cohort crossing the mortality cliff together drains over a window of months rather than a single-tick population cliff; a declared weather emergency (drought/winter, routed through the engine.season edge per AC-7/ASM-579) suspends the budget for a non-smoothed major death event; exposes a deterministic FIFO handoff (citizenId, deathMonth, emergencyFlag) that engine.deathservices drains at its own funeral throughput. Lives inside internal/engine/citizens/ (deathwave.go) as a package-homed feature — the feat.refinery-in-chemicals precedent — not a standalone module. [spec: §5.1; §5.2; §9; §10; §H] [path: internal/engine/citizens/]",
+      "seq": 265,
+      "sprint": 7,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "specRef": "§5.1; §5.2; §9; §10; §H",
+      "guid": "10ec4106-06a3-47a6-936c-34599d5544c3",
+      "guidIn": "7ffa5eb5-b79b-492a-812c-8613db43b1c5",
+      "guidOut": "b2c58228-c94f-4864-b778-5c06d9ca2034",
+      "deps": [
+        "engine.citizens"
+      ]
+    },
+    {
       "mkey": "engine.invariant",
       "type": "module",
       "title": "Invariant checker: conservation asserts every tick",
@@ -1036,6 +1054,26 @@
       ]
     },
     {
+      "mkey": "feat.faith",
+      "type": "feature",
+      "title": "Faith & places of worship — a light background dimension of the people",
+      "desc": "Aaron ruling 2026-08-20 (FEAT-138, no master-plan section of its own): a light, auto-managed background dimension — no player build/manage path. Every citizen resolves to a deterministic affiliation (agnostic or a closed set of mainstream UK faiths); each faith community auto-builds its place of worship as its congregation crosses a data-driven threshold, denominational preference shaping the building. A place of worship raises local wellbeing/cohesion through the existing community-access surface (not a new wellbeing driver); the faithful's donations flow into social services' homelessness outreach as a real, conserved money transfer. [spec: FEAT-138 BOW desc] [path: internal/engine/faith/]",
+      "seq": 425,
+      "sprint": 11,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "FEAT-138 BOW desc",
+      "guid": "ab40c86a-a7b1-4a03-82fe-5da475250869",
+      "guidIn": "7468c6f6-ecfb-4ce1-a9bf-072666952e64",
+      "guidOut": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2",
+      "deps": [
+        "engine.citizens",
+        "engine.wellbeing",
+        "engine.social"
+      ]
+    },
+    {
       "mkey": "engine.extcommute",
       "type": "module",
       "title": "External commuting: finite off-map job pools, dormitory arithmetic",
@@ -1349,6 +1387,24 @@
       ]
     },
     {
+      "mkey": "ui.screen.census",
+      "type": "feature",
+      "title": "F6 Census screen: demographics/KPI drill-in",
+      "desc": "Demographics/KPI drill-in rendering over engine.census's CensusAPI (splines, GDP, happiness, employment); consumes the living-census/life-history read surface without holding world state itself (ASM-642/643 split: engine-side data model stays MOD-078/engine.census, this item is UI rendering only). [spec: §13-F6; §45; §46; UI-SPEC §4/§5.2] [path: internal/ui/screens/census/]",
+      "seq": 595,
+      "sprint": 9,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "specRef": "§13-F6; §45; §46; UI-SPEC §4/§5.2",
+      "guid": "237188fd-8a17-4dc0-94a4-afe8321cbfcf",
+      "guidIn": "22a5b5d8-bc90-4474-aa57-2fac3583d2e3",
+      "guidOut": "6e2b573b-26d2-44c8-b397-3c3cf3217906",
+      "deps": [
+        "ui.dash"
+      ]
+    },
+    {
       "mkey": "engine.refuse",
       "type": "module",
       "title": "Refuse rounds & the waste-health loop",
@@ -1365,6 +1421,25 @@
       "deps": [
         "engine.logistics",
         "engine.services"
+      ]
+    },
+    {
+      "mkey": "engine.deathservices",
+      "type": "module",
+      "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
+      "desc": "FEAT-088: turns feat.deathwave's released death queue into a conserved body stock and disposes of it through three mutually-exclusive terminal methods — burial (consumes a graveyard plot, reusable only after a data-sourced reuse horizon), cremation (space-free, costed, throughput-bounded), and emergency dispensation (multi-body van/truck transport + 24x7 operation, gated on feat.deathwave's weather-driven major death event); hearses carry exactly one body per trip, so funeral throughput caps the disposal rate and a death surge drains as a queryable backlog rather than vanishing in one tick. Does not own mortality/smoothing (feat.deathwave) or hearse pathfinding (engine.logistics owns the routing). [spec: Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H; §25; §26] [path: internal/engine/deathservices/]",
+      "seq": 605,
+      "sprint": 9,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H; §25; §26",
+      "guid": "75256c06-b41b-4094-a064-5db1282d4b98",
+      "guidIn": "ba1fe880-21b7-46c0-bd56-257c0f6c223d",
+      "guidOut": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49",
+      "deps": [
+        "feat.deathwave",
+        "engine.build"
       ]
     },
     {
@@ -1964,6 +2039,27 @@
       "deps": [
         "engine.traffic",
         "engine.freight"
+      ]
+    },
+    {
+      "mkey": "engine.transit",
+      "type": "module",
+      "title": "Public transport: lines, stops, depots, fleet & ridership",
+      "desc": "Aaron ruling 2026-08-20: depots and fleet are in scope for transit, not split into a separate module. Public-transport network: lines with unique deterministic route ids and named ordered stops; vehicle allocation scales from vehicles-available x line-length x waiting-demand, capped at whichever of demand/line-capacity/depot-units binds; a saturated line surfaces an expansion proposal (stated cost, chosen rate) rather than an automatic capacity change. Consumes the road/coarse-traffic surface for stop demand and route capacity rather than owning roads. [spec: FEAT-161/FEAT-162 BOW desc; §19 (mode logit)] [path: internal/engine/transit/]",
+      "seq": 815,
+      "sprint": 10,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "FEAT-161/FEAT-162 BOW desc; §19 (mode logit)",
+      "guid": "4f81ea4d-ac85-4148-a5e7-520fccdf2d77",
+      "guidIn": "c895416d-8b7b-46a0-bd33-ac0cf3129553",
+      "guidOut": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd",
+      "deps": [
+        "engine.world",
+        "engine.roads",
+        "engine.traffic",
+        "engine.citizens"
       ]
     },
     {
@@ -3019,6 +3115,28 @@
         "engine.wellbeing",
         "engine.staffing",
         "engine.traffic"
+      ]
+    },
+    {
+      "mkey": "foundation.integration",
+      "type": "module",
+      "title": "Integration Engine: contract-driven, location-transparent deterministic shard executor + resilience substrate",
+      "desc": "The substrate every module plugs into (FEAT-187..191, 5 increments merged 2026-08-18): an Integration[T,M] contract (pure seeded RunShard, ordered Merge, T0/T1/T2 update class) run via a location-transparent WorkerPool (LocalPool/SerialPool now, RemotePool seam later) reusing det.MergeInOrder/det.ApplyBarrier for byte-identical merge regardless of dispatch strategy; a priority-tiered disk-backed overflow queue (T0/T1/T2, never-drop backpressure); a resilience state machine (retry/catch-up/reconnect+re-auth) with WAL-backed crash recovery replaying to the last checkpoint; a debug-gated local metrics dashboard. Not yet wired to any consumer — wiring 31 unwired modules onto it is later work. [spec: FEAT-187..191; integration-engine.md] [path: internal/foundation/integration/]",
+      "seq": 1000,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "specRef": "FEAT-187..191; integration-engine.md",
+      "guid": "38b48487-f0e3-4f79-aa57-16b73b997bd1",
+      "guidIn": "1b6d1f3f-1984-4f39-b603-d5ca2cebb14e",
+      "guidOut": "91bd0f61-2f59-456b-ad7f-d870049717a5",
+      "deps": [
+        "foundation.det",
+        "foundation.errors",
+        "int.protocol",
+        "feat.checkpoint",
+        "feat.saveux"
       ]
     }
   ]

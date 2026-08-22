@@ -4,7 +4,7 @@
   "meta": {
     "specRefs": ["§5.1", "§18", "§19.3", "§21", "§26", "§42", "§52", "§54"],
     "design": "Aaron 2026-08-16 design: time patterns (9-5 core-hours/teacher model, 24x7 shift/nurse model, any-time), schedule-driven commute, a 40h-vs-996 working-week policy, and the overwork trade.",
-    "balance": "PLACEHOLDERS pending Aaron's balance pass (ASM-953). Default working week ~40h (hoursPerDay × daysPerWeek = 8 × 5, per pattern). 996 = 9-to-9 across 6 days = 72h/week. Wage multiplier and wellbeing weight are directional placeholders.",
+    "balance": "PLACEHOLDERS pending Aaron's balance pass (ASM-953). Default working week ~40h for core-hours/any-time (hoursPerDay × daysPerWeek = 8 × 5). The shift/nurse pattern is 24x7 (8 × 7 = 56h default, ASM-1172 fix — daysPerWeek was 5, contradicting the 24x7 disclosure and AC-4's 'no hour unstaffed' roster requirement). 996 = 9-to-9 across 6 days = 72h/week. Wage multiplier and wellbeing weight are directional placeholders.",
     "units": {
       "hoursPerDay": "hours/day",
       "daysPerWeek": "days/week",
@@ -38,7 +38,7 @@
       "label": "Shift (24x7 nurse model)",
       "hoursPerDay": 8,
       "hoursPerDayUnit": "hours/day",
-      "daysPerWeek": 5,
+      "daysPerWeek": 7,
       "daysPerWeekUnit": "days/week",
       "coverageSpanHours": 24,
       "rotations": [
@@ -47,8 +47,8 @@
         { "startHour": 16, "endHour": 24 }
       ],
       "placeholder": false,
-      "disclosure": "Not a balance placeholder: this is the documented 24x7 shift pattern from the Aaron 2026-08-16 design (three 8h rotations tiling the day). Rotation length/count are directional placeholders (ASM-954) pending the master-plan sync.",
-      "specRef": "Aaron 2026-08-16 design: 24x7 shift (nurse model), three 8h rotations"
+      "disclosure": "Not a balance placeholder: this is the documented 24x7 shift pattern from the Aaron 2026-08-16 design (three 8h rotations tiling the day, every day of the week per AC-4's 'no hour unstaffed' roster requirement — ASM-1172/engine.worklife.md AC-4). Rotation length/count are directional placeholders (ASM-954) pending the master-plan sync.",
+      "specRef": "Aaron 2026-08-16 design: 24x7 shift (nurse model), three 8h rotations, 7 days/week per AC-4"
     },
     {
       "id": "any-time",

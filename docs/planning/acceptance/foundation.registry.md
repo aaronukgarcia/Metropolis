@@ -63,6 +63,8 @@ The module registry: registration API (name, semver, spec_ref/feature-flag sourc
 - **ASM-874 (confirm-and-close).** Copy-guard + defensive-copy wrappers live in foundation/registry as a reusable generic (F100-F106 taken, F107+ free), not a new foundation/copyguard package.
 - **ASM-1019 (confirm-and-close).** MOD-079 CloneMap/CloneSlice are documented **shallow**, so nested reference-value aliasing after a clone is expected and not a defect; the exported `Bind` re-arm after a byte-copy is out of the accidental-copy threat model and is recorded as an observation only, not a rejection.
 
+- **ASM-882 (CC fold).** Copy-guard/defensive-copy wrappers home in foundation.registry (Proposal A1); a dedicated package is escalated, not decided. No existing hand-rolled checkNotCopied site is migrated - the wrapper is proven via fixtures only. If Bill wanted a real migration or a different package, that is a mechanical rename or under-delivery.
+
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
 
 > Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).

@@ -92,4 +92,10 @@ const (
 	// computed honestly. Surfaced rather than silently returning a net
 	// that reads ≈gross at a 100% rate (SEC-094).
 	ErrFiscalOverflow = "MET-G1210"
+
+	// ErrUnknownDistrict: CoverageForDistrict queried, or UpdateDistrictDemand
+	// named, a district that has never been pushed (or an empty district id)
+	// — never a zero-value coverage silently read as "the district exists but
+	// is empty" (AC-23).
+	ErrUnknownDistrict = "MET-G1211"
 )

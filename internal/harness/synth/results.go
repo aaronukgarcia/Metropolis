@@ -163,6 +163,59 @@ type CorruptLine struct {
 	Err    error
 }
 
+// ScreenRecordProvenance applies the BUG-073 (Measured) and BUG-085
+// (ImplausibleReason) provenance checks LoadLatestBaseline's replay loop
+// applies to every candidate record it considers trusting as a baseline —
+// extracted (BUG-305) so any OTHER read boundary that treats an
+// AppendResult-written results-file record as authoritative applies the
+// IDENTICAL screen, rather than a second, driftable reimplementation.
+// metricsdash.readLastRecordForPreset is the motivating second caller: it
+// scans the same file to report the dashboard's "last measurement for
+// this preset" and, before this fix, trusted whatever record it found
+// verbatim — a hand-edited or corrupted Measured=false/implausible record
+// would display on the dashboard exactly as if LoadLatestBaseline had
+// accepted it as a genuine baseline, when LoadLatestBaseline itself would
+// have rejected that same record.
+//
+// rec is the candidate record (already confirmed to be for the preset the
+// caller cares about); lineNo is the 1-based line number, used only to
+// build a precise, attributable error message. Returns nil when rec
+// passes both checks; otherwise a descriptive error naming which check
+// rejected it and why — deliberately NOT itself a *errs.E (this is a
+// pure, dependency-free predicate a caller wraps into whatever shape it
+// needs: LoadLatestBaseline wraps it in a CorruptLine, and so does
+// metricsdash.readLastRecordForPreset).
+//
+// It does NOT include the AcceptedRegression/AcceptedReason corroboration
+// checks (BUG-083/BUG-095) — those are about whether a record may
+// override the reconstructed BASELINE/ANCHOR reference points, a decision
+// specific to LoadLatestBaseline's replay, not part of "is this record a
+// plausible genuine measurement at all", which is the narrower question
+// every reader of this file needs answered identically.
+func ScreenRecordProvenance(rec PerfRecord, lineNo int) error {
+	// BUG-073: AppendResult enforces Measured==true BEFORE a record is
+	// ever written (MET-H308) — but that enforcement lives only at the
+	// write boundary. Any syntactically-valid PerfRecord JSON line
+	// reaching this file by any OTHER route (a hand edit, a corrupted-
+	// cache restore resurrecting a foreign/old file, a manual merge-
+	// conflict resolution, a re-uploaded and edited artifact) would
+	// otherwise be accepted verbatim as a genuine measurement. Re-checked
+	// HERE, at the boundary that actually matters — the moment this data
+	// becomes a decision input — not only at the write boundary that a
+	// second, non-AppendResult writer can simply bypass.
+	if !rec.Result.Measured {
+		return fmt.Errorf("record at line %d for preset %q has Measured=false — refusing to trust an unmeasured/hand-injected record as a baseline (BUG-073)", lineNo, rec.Preset)
+	}
+	// BUG-085: Measured is a self-reported bool with no structural
+	// backing — also re-check plausibility HERE, for the identical
+	// "a second writer can bypass AppendResult" reason BUG-073's check
+	// above exists.
+	if reason := rec.Result.ImplausibleReason(); reason != "" {
+		return fmt.Errorf("record at line %d for preset %q is not a plausible genuine measurement: %s (BUG-085)", lineNo, rec.Preset, reason)
+	}
+	return nil
+}
+
 // maxResultsLineBytes is ASM-355's finite ceiling on a single NDJSON
 // results line (measured on the raw line, INCLUDING its trailing '\n').
 // The BUG-074 fix removed bufio.Scanner's 64KiB token cap entirely by
@@ -177,6 +230,15 @@ type CorruptLine struct {
 // same recovery contract as a torn line — rather than read unbounded or
 // allowed to abort the whole scan.
 const maxResultsLineBytes = 1 << 20 // 1 MiB
+
+// MaxResultsLineBytes is the exported form of maxResultsLineBytes (ASM-355)
+// — the finite per-line ceiling any OTHER reader of an AppendResult-written
+// results file must apply too (BUG-305: metricsdash.readLastRecordForPreset
+// used to scan the same file with bufio.Reader.ReadString('\n') directly,
+// which has no ceiling at all, reintroducing the exact unbounded-read
+// exposure ASM-355 closed here). See maxResultsLineBytes' doc comment for
+// the full sizing rationale.
+const MaxResultsLineBytes = maxResultsLineBytes
 
 // readResultsLine reads one '\n'-terminated line from r without trusting
 // the file's line lengths: it accumulates the line incrementally and, the
@@ -210,6 +272,18 @@ func readResultsLine(r *bufio.Reader) (line []byte, oversized bool, err error) {
 		// finding '\n', so this line continues — loop to read (and, once
 		// oversized, discard) the next fragment.
 	}
+}
+
+// ReadResultsLine is the exported form of readResultsLine (ASM-355's
+// finite per-line ceiling), shared with any OTHER package that scans an
+// AppendResult-written NDJSON results file directly (BUG-305:
+// metricsdash.readLastRecordForPreset) so a second reader inherits the
+// identical generous-but-finite bound this package enforces on itself,
+// rather than reimplementing an unbounded bufio.Reader.ReadString('\n')
+// loop of its own. See readResultsLine's doc comment for the full
+// rationale and return-value contract.
+func ReadResultsLine(r *bufio.Reader) (line []byte, oversized bool, err error) {
+	return readResultsLine(r)
 }
 
 // LoadLatestBaseline reads path (an AppendResult-written NDJSON file)
@@ -418,37 +492,17 @@ func LoadLatestBaseline(path, preset string, accepted AcceptedRegistry) (baselin
 				otherPresetRecordSeen = true
 			} else {
 				corruptBefore := len(corrupt)
+				// BUG-073/BUG-085: re-checked HERE, at the read boundary
+				// that actually matters, via the shared
+				// ScreenRecordProvenance screen (BUG-305 extracted it so
+				// metricsdash.readLastRecordForPreset applies the
+				// IDENTICAL Measured/implausible checks rather than a
+				// second, driftable reimplementation) — see that
+				// function's doc comment for the full rationale.
+				provErr := ScreenRecordProvenance(rec, lineNo)
 				switch {
-				// BUG-073: AppendResult enforces Measured==true BEFORE
-				// a record is ever written (MET-H308) — but that
-				// enforcement lived only at the write boundary. Any
-				// syntactically-valid PerfRecord JSON line reaching
-				// this file by any OTHER route (a hand edit, a
-				// corrupted-cache restore resurrecting a foreign/old
-				// file, a manual merge-conflict resolution, a
-				// re-uploaded and edited artifact) was accepted
-				// verbatim as the latest measurement with zero error
-				// and zero CorruptLine flag. Re-check provenance HERE,
-				// at the boundary that actually matters — the moment
-				// this data becomes a decision input — not only at
-				// the write boundary that a second, non-AppendResult
-				// writer can simply bypass.
-				case !rec.Result.Measured:
-					corrupt = append(corrupt, CorruptLine{
-						LineNo: lineNo,
-						Err:    fmt.Errorf("record at line %d for preset %q has Measured=false — refusing to trust an unmeasured/hand-injected record as a baseline (BUG-073)", lineNo, preset),
-					})
-				// BUG-085: Measured is a self-reported bool with no
-				// structural backing — also re-check plausibility HERE,
-				// at the read boundary, for the identical "a second
-				// writer can bypass AppendResult" reason BUG-073's fix
-				// re-checks Measured here rather than trusting the
-				// write-boundary check alone.
-				case rec.Result.ImplausibleReason() != "":
-					corrupt = append(corrupt, CorruptLine{
-						LineNo: lineNo,
-						Err:    fmt.Errorf("record at line %d for preset %q is not a plausible genuine measurement: %s (BUG-085)", lineNo, preset, rec.Result.ImplausibleReason()),
-					})
+				case provErr != nil:
+					corrupt = append(corrupt, CorruptLine{LineNo: lineNo, Err: provErr})
 				// BUG-083: an override with no recorded justification
 				// is exactly as untrustworthy as an unmeasured record —
 				// see PerfRecord.AcceptedRegression's doc comment.

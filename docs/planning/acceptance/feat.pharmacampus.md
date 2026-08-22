@@ -76,7 +76,7 @@ The `pharma_r_d_campus` catalogue row enriched into a distinct, typed, data-sour
 ## Cross-check (edges this feature sits on / feeds)
 
 - **Sits on `engine.fdi` (MOD-059).** The pharma campus is one of the eight §46 archetypes MOD-059 generates prospects for; this feature supplies the education-output term (AC-3) into MOD-059's bid resolution and reads the won-anchor firm (AC-5/AC-6). `engine.fdi`'s outbound edges already include `engine.firms` and `engine.build`; whether FEAT-101 needs its own registered edge to `engine.fdi`/`engine.education`/`engine.firms` is the open registration question (see ES-1/ASM-695).
-- **Feeds and is fed by `engine.education` (MOD-041).** MOD-041's graduates/research-points output (its AC-8/US-8 — "the eventual mega-project gate ... has a real number to consume") is the education term AC-3 consumes; AC-4 emits graduate/research demand back. The two BAs must agree the demand/consumption contract shape before either dispatches a junior (same cross-module obligation as `feat.maintenance.md` AC-8/AC-9 to FEAT-090).
+- **Feeds and is fed by `engine.education` (MOD-041).** MOD-041's graduates/research-points output (its AC-8/US-8 — "the eventual mega-project gate ... has a real number to consume") is the education term AC-3 consumes; AC-4 emits graduate/research demand back. The two BAs must agree the demand/consumption contract shape before either dispatches a junior (same cross-module obligation as `engine.maintenance.md` AC-8/AC-9 to `engine.staffing`/MOD-073).
 - **Shares the pharma campus with `feat.commoditymarket` (FEAT-052).** FEAT-052 AC-5 owns the manufacture-side stage; ASM-488/ASM-696 keep the split clean. A developer building FEAT-101 must not create a second pharma-output stage, and a developer building FEAT-052 must not create a second anchor-firm registration.
 - **Inherits `feat.facilitypermits` (FEAT-053) and `feat.decommission` (FEAT-054).** Neither is in FEAT-101's BOW dependency list (which names only FEAT-053, MOD-041, MOD-059), yet the design's "permit + decommission" is inherited from §7 — see ES-2.
 
@@ -92,6 +92,19 @@ The `pharma_r_d_campus` catalogue row enriched into a distinct, typed, data-sour
 
 - **ASM-1177 (confirm-and-close).** Win() emits demand/exports before firm registration so a failed registration can leak them with no inverse on the education/trade edges — accepted as a defensive path only (real FirmsAPI cannot fail for positive staff); the AC-8 atomicity guarantee (zero firms on any failure) still holds.
 
+- **ASM-927 (FEAT-084 SF fold).** Spec refs two lines stale: coal-mine-scale closure shock + blight model is at section 32 line 462 (not 460), and money enters the city economy at section 54 line 682 (not 680).
+
+- **ASM-1132 (FEAT-084 CC fold).** MOD-041 EducationAPI has no graduate-demand/output method yet, so feat.pharmacampus consumes a local EducationEdge seam (GraduateOutput returns int64+ok; AddGraduateDemand takes int64) over the registered feat.pharmacampus -> engine.education edge; the composition root adapts the real EducationAPI once ASM-698 settles graduates-vs-research-points. Tests inject a fake.
+
+- **ASM-1133 (FEAT-084 CC fold).** feat.pharmacampus shares internal/engine/fdi with engine.fdi and has no separate inbound contract — it surfaces through MOD-059 FdiAPI. code.json registers the feature with null inbound and outbound calls engine.fdi, engine.education, engine.firms.
+
+- **ASM-1134 (FEAT-084 CC fold).** feat.pharmacampus opens error range G2500-G2599 (MET-G2500..G2504 registered in data/errors.json) because G2400-G2499 was claimed by engine.accelerator and G2300-G2399 by engine.news. (Roster attributed this to engine.accelerator; code home is feat.pharmacampus — folded here.)
+
+- **ASM-1135 (FEAT-084 CC fold).** Pharma exports are surfaced as Pharma.Exports() in t/day, data-sourced, rather than posted to the freight balance-of-trade, because no feat.pharmacampus -> engine.freight edge is registered (GR#25 flag); the composition root wires the trade edge when it lands.
+
+- **ASM-1163 (FEAT-084 SF fold).** AC-6 requires campus exports to be queryable through the registered trade/freight edge, but the implementation exposes Pharma.Exports() as a local data-sourced accessor (exportsTPerDay) with no feat.pharmacampus -> engine.freight edge registered — outbound edges are only engine.fdi / engine.education / engine.firms (ASM-695). TestPharmaFirmAndClosure asserts only win.Exports != 0, never query-through-trade-surface. (GR#25: feat.pharmacampus -> engine.freight edge unregistered.) The trade/freight edge must land before AC-6 can be fully satisfied.
+
+- **ASM-1176 (FEAT-084 CC fold).** TradeEdge.AddExports(tonnes) deliberately carries only tonnage; the output commodity and freight mode are chosen by the composition-root adapter because the manufacture-side pharma output chain stage is feat.commoditymarket (FEAT-052, per ASM-488/ASM-696) — feat.pharmacampus must not invent a pharma output commodity. (Roster routed to feat.commoditymarket; code home is feat.pharmacampus — folded here.)
 
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
 
@@ -125,4 +138,3 @@ Supply-chain firms spawn through the real `FirmsAPI.RegisterFirm` path (count = 
 
 
 Win() rolls back partial anchor/supply-chain registrations through `FirmsAPI.Fail`, engine.firms' only firm-removal method today. On a freshly-registered stage firm this removes the firm from the registry but also increments `failedCount` and emits `EventFailed` (a rollback artifact). AC-8 still holds — no firm remains registered after a failed win; a dedicated `UnregisterFirm` on engine.firms would be the durable fix.
-

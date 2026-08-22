@@ -249,6 +249,38 @@
       "sprint": 0
     },
     {
+      "key": "foundation.integration",
+      "type": "module",
+      "seq": 1000,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "title": "Integration Engine: contract-driven, location-transparent deterministic shard executor + resilience substrate",
+      "desc": "The substrate every module plugs into (FEAT-187..191, 5 increments merged 2026-08-18): an Integration[T,M] contract (pure seeded RunShard, ordered Merge, T0/T1/T2 update class) run via a location-transparent WorkerPool (LocalPool/SerialPool now, RemotePool seam later) reusing det.MergeInOrder/det.ApplyBarrier for byte-identical merge regardless of dispatch strategy; a priority-tiered disk-backed overflow queue (T0/T1/T2, never-drop backpressure); a resilience state machine (retry/catch-up/reconnect+re-auth) with WAL-backed crash recovery replaying to the last checkpoint; a debug-gated local metrics dashboard. Not yet wired to any consumer — wiring 31 unwired modules onto it is later work.",
+      "specRef": "FEAT-187..191; integration-engine.md",
+      "path": "internal/foundation/integration/",
+      "inbound": {
+        "name": "Integration",
+        "format": "Go package API (generic Integration[T,M] contract + Execute[T,M] entry point; WorkerPool/LocalPool/SerialPool dispatch seam; QueuedTransport/WAL/Connection/Registry support types)",
+        "pattern": "pure seeded RunShard per shard, deterministic ordered Merge via det.MergeInOrder/det.ApplyBarrier — byte-identical regardless of dispatch/location"
+      },
+      "deps": [
+        "foundation.det",
+        "foundation.errors",
+        "int.protocol",
+        "feat.checkpoint",
+        "feat.saveux"
+      ],
+      "calls": [
+        "foundation.det",
+        "foundation.errors",
+        "int.protocol",
+        "feat.checkpoint",
+        "feat.saveux"
+      ],
+      "sprint": 0
+    },
+    {
       "key": "tool.bow",
       "type": "module",
       "seq": 95,
@@ -312,7 +344,8 @@
       ],
       "calls": [
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "ui.keys"
       ],
       "sprint": 1
     },
@@ -344,6 +377,8 @@
         "ui.screen.map",
         "ui.screen.proj",
         "ui.screen.trade",
+        "ui.screen.services",
+        "ui.screen.districts",
         "ui.alerts",
         "ui.screen.ticker",
         "foundation.errors"
@@ -494,7 +529,22 @@
         "feat.detgate"
       ],
       "calls": [
-        "int.protocol"
+        "int.protocol",
+        "engine.core",
+        "feat.compositionroot",
+        "feat.debugmode",
+        "foundation.buildinfo",
+        "foundation.errors",
+        "foundation.registry",
+        "harness.headless",
+        "feat.devmode",
+        "ui.core",
+        "ui.keys",
+        "ui.router",
+        "ui.screen.finance",
+        "ui.screen.map",
+        "ui.screen.services",
+        "ui.widgets"
       ],
       "sprint": 1
     },
@@ -713,6 +763,27 @@
           "engine.invariant"
         ]
       }
+    },
+    {
+      "key": "feat.deathwave",
+      "type": "feature",
+      "seq": 265,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "title": "Mortality smoothing: bounded monthly death budget + weather-driven variation",
+      "desc": "FEAT-087: smooths engine.citizens' Gompertz-Makeham realised deaths through a bounded monthly death budget (hazard selects, enqueues, releases at most the data-sourced budget per month) so a same-birth-month cohort crossing the mortality cliff together drains over a window of months rather than a single-tick population cliff; a declared weather emergency (drought/winter, routed through the engine.season edge per AC-7/ASM-579) suspends the budget for a non-smoothed major death event; exposes a deterministic FIFO handoff (citizenId, deathMonth, emergencyFlag) that engine.deathservices drains at its own funeral throughput. Lives inside internal/engine/citizens/ (deathwave.go) as a package-homed feature — the feat.refinery-in-chemicals precedent — not a standalone module.",
+      "specRef": "§5.1; §5.2; §9; §10; §H",
+      "path": "internal/engine/citizens/",
+      "deps": [
+        "engine.citizens"
+      ],
+      "calls": [
+        "engine.season",
+        "foundation.data",
+        "foundation.errors"
+      ],
+      "sprint": 7
     },
     {
       "key": "engine.invariant",
@@ -1119,6 +1190,7 @@
         "engine.extcommute",
         "engine.services",
         "engine.firms",
+        "engine.dispatch",
         "foundation.errors",
         "foundation.num",
         "int.protocol"
@@ -1314,6 +1386,33 @@
       }
     },
     {
+      "key": "feat.faith",
+      "type": "feature",
+      "seq": 425,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Faith & places of worship — a light background dimension of the people",
+      "desc": "Aaron ruling 2026-08-20 (FEAT-138, no master-plan section of its own): a light, auto-managed background dimension — no player build/manage path. Every citizen resolves to a deterministic affiliation (agnostic or a closed set of mainstream UK faiths); each faith community auto-builds its place of worship as its congregation crosses a data-driven threshold, denominational preference shaping the building. A place of worship raises local wellbeing/cohesion through the existing community-access surface (not a new wellbeing driver); the faithful's donations flow into social services' homelessness outreach as a real, conserved money transfer.",
+      "specRef": "FEAT-138 BOW desc",
+      "path": "internal/engine/faith/",
+      "deps": [
+        "engine.citizens",
+        "engine.wellbeing",
+        "engine.social"
+      ],
+      "calls": [
+        "engine.citizens",
+        "engine.wellbeing",
+        "engine.social",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
+      ],
+      "sprint": 11
+    },
+    {
       "key": "engine.extcommute",
       "type": "module",
       "seq": 430,
@@ -1441,8 +1540,8 @@
       "specRef": "UI-SPEC §2 (diagrams)",
       "path": "internal/ui/diagrams/",
       "inbound": {
-        "name": "DiagramAPI",
-        "format": "Go package API",
+        "name": "Engine",
+        "format": "Go package API (NewEngine() *Engine; methods Chain/Network/Sankey render+cache ChainTopology/NetworkTopology/SankeyTopology via RenderChain/RenderNetwork/RenderSankey)",
         "pattern": "topology in, cell-buffer layout out; cache keyed on topology hash"
       },
       "deps": [
@@ -1525,7 +1624,10 @@
       "calls": [
         "engine.finance",
         "engine.tax",
-        "engine.fiscal"
+        "engine.fiscal",
+        "int.protocol",
+        "ui.dash",
+        "ui.diagrams"
       ],
       "sprint": 8
     },
@@ -1570,7 +1672,10 @@
       ],
       "calls": [
         "engine.services",
-        "engine.dispatch"
+        "engine.dispatch",
+        "int.protocol",
+        "ui.dash",
+        "ui.keys"
       ],
       "sprint": 8
     },
@@ -1715,7 +1820,33 @@
       ],
       "calls": [
         "engine.policies",
-        "engine.tax"
+        "engine.tax",
+        "int.protocol",
+        "ui.dash"
+      ],
+      "sprint": 9
+    },
+    {
+      "key": "ui.screen.census",
+      "type": "feature",
+      "seq": 595,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "title": "F6 Census screen: demographics/KPI drill-in",
+      "desc": "Demographics/KPI drill-in rendering over engine.census's CensusAPI (splines, GDP, happiness, employment); consumes the living-census/life-history read surface without holding world state itself (ASM-642/643 split: engine-side data model stays MOD-078/engine.census, this item is UI rendering only).",
+      "specRef": "§13-F6; §45; §46; UI-SPEC §4/§5.2",
+      "path": "internal/ui/screens/census/",
+      "deps": [
+        "ui.dash"
+      ],
+      "calls": [
+        "ui.core",
+        "ui.widgets",
+        "int.protocol",
+        "foundation.errors",
+        "engine.census",
+        "ui.dash"
       ],
       "sprint": 9
     },
@@ -1780,7 +1911,8 @@
         "engine.traffic",
         "engine.services",
         "engine.world",
-        "engine.projections"
+        "engine.projections",
+        "engine.invariant"
       ],
       "sprint": 9,
       "collaborations": {
@@ -1788,6 +1920,38 @@
           "engine.projections"
         ]
       }
+    },
+    {
+      "key": "engine.deathservices",
+      "type": "module",
+      "seq": 605,
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
+      "desc": "FEAT-088: turns feat.deathwave's released death queue into a conserved body stock and disposes of it through three mutually-exclusive terminal methods — burial (consumes a graveyard plot, reusable only after a data-sourced reuse horizon), cremation (space-free, costed, throughput-bounded), and emergency dispensation (multi-body van/truck transport + 24x7 operation, gated on feat.deathwave's weather-driven major death event); hearses carry exactly one body per trip, so funeral throughput caps the disposal rate and a death surge drains as a queryable backlog rather than vanishing in one tick. Does not own mortality/smoothing (feat.deathwave) or hearse pathfinding (engine.logistics owns the routing).",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H; §25; §26",
+      "path": "internal/engine/deathservices/",
+      "inbound": {
+        "name": "DeathServicesAPI",
+        "format": "Go package API + deltas",
+        "pattern": "body intake keyed off feat.deathwave's released death queue; disposal/triage commands (bury/cremate/dispense), no directly-writable exported fields"
+      },
+      "deps": [
+        "feat.deathwave",
+        "engine.build"
+      ],
+      "calls": [
+        "engine.citizens",
+        "feat.deathwave",
+        "engine.services",
+        "engine.world",
+        "engine.build",
+        "engine.logistics",
+        "foundation.data",
+        "foundation.errors"
+      ],
+      "sprint": 9
     },
     {
       "key": "engine.education",
@@ -2657,6 +2821,46 @@
         "foundation.num"
       ],
       "sprint": 10
+    },
+    {
+      "key": "engine.transit",
+      "type": "module",
+      "seq": 815,
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "title": "Public transport: lines, stops, depots, fleet & ridership",
+      "desc": "Aaron ruling 2026-08-20: depots and fleet are in scope for transit, not split into a separate module. Public-transport network: lines with unique deterministic route ids and named ordered stops; vehicle allocation scales from vehicles-available x line-length x waiting-demand, capped at whichever of demand/line-capacity/depot-units binds; a saturated line surfaces an expansion proposal (stated cost, chosen rate) rather than an automatic capacity change. Consumes the road/coarse-traffic surface for stop demand and route capacity rather than owning roads.",
+      "specRef": "FEAT-161/FEAT-162 BOW desc; §19 (mode logit)",
+      "path": "internal/engine/transit/",
+      "inbound": {
+        "name": "TransitAPI",
+        "format": "Go package API + deltas",
+        "pattern": "line/stop/depot/fleet accounting; saturation reports the binding bound; ridership feeds mode logit"
+      },
+      "deps": [
+        "engine.world",
+        "engine.roads",
+        "engine.traffic",
+        "engine.citizens"
+      ],
+      "calls": [
+        "engine.world",
+        "engine.roads",
+        "engine.traffic",
+        "engine.citizens",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
+      ],
+      "sprint": 10,
+      "collaborations": {
+        "consumesFrom": [
+          "engine.roads",
+          "engine.traffic"
+        ]
+      }
     },
     {
       "key": "engine.destination",
@@ -3900,9 +4104,7 @@
         "engine.freight",
         "engine.firms"
       ],
-      "calls": [
-        "engine.freight"
-      ],
+      "calls": [],
       "sprint": 10
     },
     {
@@ -3956,8 +4158,8 @@
       "specRef": "GR#7; SEC-080; SEC-093; FEAT-086",
       "path": "internal/foundation/num/",
       "inbound": {
-        "name": "Num",
-        "format": "Go package API",
+        "name": "SatAdd",
+        "format": "Go package API (function collection, no facade type: SatAdd/SatSub/SatAddChecked saturating; SafeInt64/SafeMul/SafeFloat64FromAny/SafeInt64FromAny reject-form; BoundedLedger/NewBoundedLedger; GuardFinite/IsFinite/ClampInt64FromFloat/ClampInt64FromUint64 guards)",
         "pattern": "safe coercion: saturating + reject-form helpers; registry-sourced errors on non-finite/overflow"
       },
       "deps": [

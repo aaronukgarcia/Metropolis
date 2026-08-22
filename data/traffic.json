@@ -1,0 +1,10 @@
+{
+  "baseCommuteHours": 5.0,
+  "baseAccessMinutes": 15.0,
+  "baseCommuteMinutes": 30.0,
+  "baseActiveTravelShare": 0.1,
+  "bprAlpha": 0.15,
+  "bprBeta": 4.0,
+  "capacityPerLanePerHour": 1200.0,
+  "_disclosure": "GR#15: V/C volume-delay curve parameters (BPR alpha/beta) and lane capacities are data-driven here. bprAlpha/bprBeta must be finite and strictly positive -- LoadConfig rejects zero, negative, or NaN values fail-closed (MOD-023 r2 destructive verdict)."
+}

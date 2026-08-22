@@ -79,8 +79,26 @@ func WithPoolSize(n int) Option {
 // WithSecondsPerMonthAt1x overrides the clock's real-time pacing
 // constant (see clock.go's DefaultSecondsPerMonthAt1x doc comment for
 // why this is an Option rather than a hardcoded value).
+//
+// BUG-303: NewClock now rejects a <= 0 (or, per its own comment, a
+// future non-finite) seconds value with ErrInvalidPacingConstant
+// (MET-E020) instead of silently constructing a garbage-pacing Clock.
+// Option is `func(*Engine)` (no error return) across every other Option
+// in this file, so this deliberately does NOT change that shared shape
+// for one caller's sake; instead a rejected value is logged loudly
+// (GR#1 — never silently swallowed) and e.clock is left as whatever
+// NewEngine already set it to (its own DefaultSecondsPerMonthAt1x
+// construction, which is always valid), rather than replaced with a
+// zero-value Clock that would then silently report 0 pacing everywhere.
 func WithSecondsPerMonthAt1x(seconds int64) Option {
-	return func(e *Engine) { e.clock = NewClock(seconds) }
+	return func(e *Engine) {
+		c, err := NewClock(seconds)
+		if err != nil {
+			_ = errs.Wrap(ErrInvalidPacingConstant, errs.NewCorrelationID(), err, map[string]any{"seconds": seconds})
+			return
+		}
+		e.clock = c
+	}
 }
 
 // WithPhaseObserver installs a PhaseObserver (see phase.go).
@@ -321,6 +339,16 @@ type Engine struct {
 	// a queued history of every signal.
 	deltaSignal chan struct{}
 
+	// pumpStarted is F1a's mechanical single-start guard (independent
+	// round r1, FEAT-208 increment 1): StartSubscriptionPump
+	// CompareAndSwaps this false->true before ever starting the pump
+	// goroutine, so a second call on the same Engine is rejected
+	// (ErrSubscriptionPumpAlreadyStarted) rather than silently starting
+	// a second, concurrently-running pump — see StartSubscriptionPump's
+	// doc comment (commands.go) for the ordering-corruption finding this
+	// closes.
+	pumpStarted atomic.Bool
+
 	// tickCounter is an atomic, lock-free observation point: it counts
 	// completed daily ticks, independent of mu, so a concurrency test
 	// (or future telemetry) can observe tick progress without taking
@@ -335,8 +363,17 @@ type Engine struct {
 // registry, and zero registered PhaseHooks (the walking-skeleton
 // property, M0-ENG §2).
 func NewEngine(opts ...Option) *Engine {
+	// DefaultSecondsPerMonthAt1x is a fixed, always-positive package
+	// constant (clock.go), so NewClock cannot actually reject it here —
+	// the error is checked anyway (GR#1: never assume a call that returns
+	// an error cannot fail) and logged loudly rather than silently
+	// discarded if that invariant is ever broken by a future edit.
+	clock, err := NewClock(DefaultSecondsPerMonthAt1x)
+	if err != nil {
+		_ = errs.Wrap(ErrInvalidPacingConstant, errs.NewCorrelationID(), err, map[string]any{"seconds": DefaultSecondsPerMonthAt1x})
+	}
 	e := &Engine{
-		clock:       NewClock(DefaultSecondsPerMonthAt1x),
+		clock:       clock,
 		poolSize:    defaultPoolSize(),
 		hooks:       make(map[PhaseKind][]PhaseHook),
 		deltaSignal: make(chan struct{}, 1),
@@ -349,6 +386,25 @@ func NewEngine(opts ...Option) *Engine {
 	}
 	if e.subs == nil {
 		e.subs = NewSubscriptionServer()
+	}
+	// FEAT-208: "engine.status" is v1's one always-available view,
+	// registered here rather than left to a caller (compose.Wire only
+	// registers the ADDITIONAL views baseline-one wires — see
+	// viewRegistrationOrder) so every NewEngine, including the many
+	// tests in this package that never call compose.Wire at all (e.g.
+	// subscribe_test.go's TestSubscription_EngineStatusDeltas_MonotonicSeq),
+	// keeps Subscribe("engine.status") working exactly as it did before
+	// Subscribe became table-driven. e.engineStatusViewPatch (a bound
+	// method value, not an inline closure literal — see its own doc
+	// comment) always reads live state through EngineStatusView's own
+	// guarded Clock()/registry.List() reads. Unreachable in practice: a
+	// fresh SubscriptionServer's views table is empty and engineStatusView
+	// is a fixed, well-formed constant, so RegisterView can only fail
+	// here if that invariant is ever broken — logged loudly rather than
+	// silently ignored (GR#1) since there is no correlationID/caller to
+	// propagate a NewEngine-time failure to otherwise.
+	if err := e.subs.RegisterView(engineStatusView, e.engineStatusViewPatch); err != nil {
+		_ = errs.Wrap(ErrViewAlreadyRegistered, errs.NewCorrelationID(), err, map[string]any{"view": engineStatusView})
 	}
 	// Stored exactly once, here, before e is returned to any caller —
 	// no goroutine can have a reference to e to race this Store against
@@ -498,6 +554,27 @@ func (e *Engine) RegisterPhaseHook(kind PhaseKind, hook PhaseHook) error {
 	}
 	e.hooks[kind] = append(e.hooks[kind], hook)
 	return nil
+}
+
+// RegisterView registers fn as the patch producer for the given view
+// name (FEAT-208) — the Engine-level forwarding wrapper compose.Wire
+// calls, mirroring RegisterPhaseHook's own shape/discipline exactly:
+// identity-checked before ever touching e.subs (SEC-016's ordering,
+// applied here for the same reason), then, explicitly and directly
+// (SEC-019, not merely relying on the transitive guard
+// SubscriptionServer.RegisterView already applies internally — astgate's
+// syntactic, no-call-graph scan cannot see across that call, the same
+// documented blind spot every *Locked-helper precedent in this codebase
+// already works around), a second identity check against e.subs itself
+// before delegating.
+func (e *Engine) RegisterView(name string, fn ViewPatchFunc) error {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), map[string]any{"view": name}); err != nil {
+		return err
+	}
+	if err := e.subs.checkNotCopied(errs.NewCorrelationID(), map[string]any{"view": name}); err != nil {
+		return err
+	}
+	return e.subs.RegisterView(name, fn)
 }
 
 // seal permanently closes hook registration. Called at the top of

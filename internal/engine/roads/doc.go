@@ -24,31 +24,32 @@
 // this package computes and exposes the capacity delta only (see
 // [RoadsAPI.PreviewCapacityDelta]).
 //
-// # Upgrade compatibility rule (AC-4 — provisional pending Aaron)
+// # Upgrade compatibility rule (AC-4 — RATIFIED, Aaron 2026-08-20)
 //
 // §51 says "any road converts to any compatible type" without defining
 // "compatible". The escalation (step-through-adjacent-rungs vs any-to-any
-// with cost scaling) is Aaron's decision, not the junior's. The provisional
-// rule implemented here — and the one [RoadsAPI.ApplyUpgradeCommand]
-// documents and enforces — is ANY-TO-ANY: every distinct class is a
-// compatible upgrade target, and the rung distance is priced rather than
-// gated (cost = delta + rebuild disruption + rung-distance scaling, all
-// data-driven from data/roads.json's "upgrade" block). This is logged as
-// ASM-1451 and is deliberately trivial to flip to
-// step-through-adjacent (a one-line predicate change in applyUpgrade)
-// once Aaron rules. The one transition ALWAYS rejected is same-class
-// (a no-op, returned idempotently) and an invalid class (rejected).
+// with cost scaling) was Aaron's decision to make; ASM-1451 records the
+// ruling (interview, 2026-08-20): ANY-TO-ANY, as shipped, stands. The rule
+// implemented here — and the one [RoadsAPI.ApplyUpgradeCommand] documents
+// and enforces — is ANY-TO-ANY: every distinct class is a compatible
+// upgrade target, and the rung distance is priced rather than gated
+// (cost = delta + rebuild disruption + rung-distance scaling, all
+// data-driven from data/roads.json's "upgrade" block). The one transition
+// ALWAYS rejected is same-class (a no-op, returned idempotently) and an
+// invalid class (rejected).
 //
-// # Civic-building naming eligibility (AC-10 — provisional pending Aaron)
+// # Civic-building naming eligibility (AC-10 — RATIFIED, Aaron 2026-08-20)
 //
 // §20 says civic buildings are "named for notable deceased citizens ... or
-// toponym + type" without an eligibility algorithm for "notable". The
-// eligibility/ranking rule is escalated to Aaron; this package implements
-// the DETERMINISTIC TOPONYM+TYPE fallback only (a Kentish toponym + a
-// civic-type word, both drawn from seed+id via the counter-RNG). The
-// "notable deceased citizen" half is out of scope here — the underlying
-// mortality/tenure data belongs to engine.citizens, and ranking it is the
-// escalated decision. Logged as ASM-1452.
+// toponym + type" without an eligibility algorithm for "notable". ASM-1452
+// records Aaron's ruling (interview, 2026-08-20): the toponym+type
+// fallback implemented here is RATIFIED as this package's full naming
+// behaviour; the "notable deceased citizen" half is not provisional
+// scope left for this package to pick up — it becomes its own feature,
+// filed separately, once the engine.citizens edge is registered properly.
+// This package implements the DETERMINISTIC TOPONYM+TYPE fallback (a
+// Kentish toponym + a civic-type word, both drawn from seed+id via the
+// counter-RNG) and nothing else.
 //
 // # Tie-break rules (AC-16)
 //

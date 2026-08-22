@@ -75,6 +75,10 @@ The tax instrument panel: residential (council-tax bands by typology, per-distri
 - **ASM-596 (confirm-and-close).** councilTax/businessRates maxPercent 400 is a baseline-multiplier (100%=baseline), not an out-of-band absolute rate — documented in-file convention, not a numeric defect.
 - **ASM-978 (confirm-and-close).** Incidence shares renormalised to sum 1.0 within 1e-9, matching foundation/data file-validation tolerance.
 
+- **ASM-974 (FEAT-084 CC fold).** Ledger payer and finance tax category are derived from the instrument's data category; the property category holds two instruments with different payers, so it is split by incidence bearer set (owner/landlord/tenant = residential to households; firm/consumer = commercial to firms).
+
+- **ASM-976 (FEAT-084 SF fold).** AC-9 names a fuel-duty instrument FEAT-056 did not ship; built a generic per-instrument base-erosion mechanism (SetEVShare + InstrumentInfo.EVShare) demonstrated on an existing instrument. When a real fuel-duty instrument is added, its EV-share wiring may need a different shape.
+
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
 
 > Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).

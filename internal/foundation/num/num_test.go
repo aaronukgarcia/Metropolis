@@ -132,6 +132,30 @@ func TestClampInt64FromFloatNeverWraps(t *testing.T) {
 	}
 }
 
+// TestClampInt64FromUint64NeverWraps proves BUG-305's guard: a bare
+// int64(x) for x > math.MaxInt64 wraps into a large NEGATIVE value
+// (well-defined truncation, but numerically wrong for a byte/count
+// delta) -- ClampInt64FromUint64 must saturate at MaxInt64 instead. This
+// test fails against a naive int64(x) implementation, proving it can
+// catch the regression it guards against.
+func TestClampInt64FromUint64NeverWraps(t *testing.T) {
+	cases := []struct {
+		x    uint64
+		want int64
+	}{
+		{0, 0},
+		{1, 1},
+		{math.MaxInt64, math.MaxInt64},
+		{math.MaxInt64 + 1, math.MaxInt64}, // would wrap to MinInt64 via a bare int64(x)
+		{math.MaxUint64, math.MaxInt64},
+	}
+	for _, c := range cases {
+		if got := ClampInt64FromUint64(c.x); got != c.want {
+			t.Errorf("ClampInt64FromUint64(%d) = %d, want %d", c.x, got, c.want)
+		}
+	}
+}
+
 func TestIsFiniteAndGuardFinite(t *testing.T) {
 	for _, f := range []float64{0, 1, -1, math.MaxFloat64, math.SmallestNonzeroFloat64} {
 		if !IsFinite(f) {

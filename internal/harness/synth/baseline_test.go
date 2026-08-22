@@ -1,6 +1,7 @@
 package synth
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -269,6 +270,51 @@ func TestCompareToBaseline_CumulativeAllocDriftCaught(t *testing.T) {
 	}
 	if !cmp.Regressed {
 		t.Fatal("CumulativeRegressed must still drive the overall Regressed verdict")
+	}
+}
+
+// TestCompareToBaseline_ZeroBaselineAllocBytes_NoNaN is BUG-305's 0/0
+// case: baseline.AllocBytes == 0 (a real, if unusual, measurement — the
+// synth run allocated zero net bytes on this metric) with current also
+// 0. A bare float64(0)/float64(0) division is NaN, which would then
+// silently poison DeltaFraction/StepRegressed/every %.1f%% message built
+// from it — and NaN's comparisons are always false, so `NaN >
+// RegressionThreshold` never fires either, letting corruption slip past
+// undetected. This proves the guarded path returns a finite 0, not NaN.
+func TestCompareToBaseline_ZeroBaselineAllocBytes_NoNaN(t *testing.T) {
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: safeAllocCount, AllocBytes: 0}
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: safeAllocCount, AllocBytes: 0}
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if math.IsNaN(cmp.AllocBytesDeltaFraction) {
+		t.Fatalf("AllocBytesDeltaFraction is NaN (0/0) — must be a finite value, got %v", cmp.AllocBytesDeltaFraction)
+	}
+	if cmp.AllocBytesDeltaFraction != 0 {
+		t.Errorf("AllocBytesDeltaFraction = %v, want 0 (baseline and current both measured zero)", cmp.AllocBytesDeltaFraction)
+	}
+	if cmp.StepRegressed {
+		t.Errorf("StepRegressed should be false — no genuine bytes growth (0 -> 0) and count delta is also 0")
+	}
+}
+
+// TestCompareToBaseline_ZeroBaselineAllocBytesGrowth_RegressedNotNaN
+// covers the other 0-baseline branch: baseline measured zero bytes but
+// current measured a real, positive amount — genuine unbounded
+// proportional growth. This must be reported as a regression (+Inf, not
+// NaN), never silently pass a NaN-poisoned comparison.
+func TestCompareToBaseline_ZeroBaselineAllocBytesGrowth_RegressedNotNaN(t *testing.T) {
+	baseline := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: safeAllocCount, AllocBytes: 0}
+	current := PerfResult{CitizenCount: 1000, Months: 12, AllocCount: safeAllocCount, AllocBytes: 500_000}
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if math.IsNaN(cmp.AllocBytesDeltaFraction) {
+		t.Fatalf("AllocBytesDeltaFraction is NaN — must be a finite/Inf value that still compares correctly, got %v", cmp.AllocBytesDeltaFraction)
+	}
+	if !cmp.StepRegressed {
+		t.Fatalf("growth from a zero baseline to a real positive AllocBytes must be reported as regressed: %s", cmp.Message)
+	}
+	if !cmp.Regressed {
+		t.Fatal("StepRegressed must drive the overall Regressed verdict")
 	}
 }
 

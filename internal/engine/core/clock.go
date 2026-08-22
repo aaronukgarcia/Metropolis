@@ -1,5 +1,7 @@
 package core
 
+import "github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+
 // This file implements the two-layer clock (§3, AC-1): one calendar
 // month = one day-night cycle = DailyTicksPerMonth logistics day-ticks.
 // Nothing in this file reads the wall clock — see doc.go and AC-12.
@@ -12,10 +14,24 @@ package core
 // the day-tick *count* per month is a fixed rule of the simulation.
 const DailyTicksPerMonth int64 = 30
 
-// DefaultSecondsPerMonthAt1x is the master doc §3 pacing default: "1
-// game month ~= 8 real minutes (config: secondsPerMonthAt1x, default
-// 480)". AC-1 requires this be a single named, non-hardcoded value
-// rather than a magic number sprinkled through the codebase.
+// DefaultSecondsPerMonthAt1x is an Aaron-approved watchability
+// placeholder (FEAT-215, 2026-08-21), not a designed pace: at the
+// master doc §3 original default of 480 (1 game month ~= 8 real
+// minutes) a daily tick landed only every 16 real seconds, too static
+// to be watchable for the watch-it-live milestone. 30 makes one tick
+// roughly one real second and a month roughly 30 real seconds. Like
+// its 480 predecessor, this is a balance-number-regime placeholder —
+// the real pacing constant is a later Aaron-reviewed tuning pass, not
+// this value.
+//
+// This constant is deliberately kept EQUAL to data/pacing.json's
+// secondsPerMonthAt1x. internal/engine/core/pacing_test.go's
+// TestLoadSecondsPerMonthAt1x_ReadsRealDataFile asserts the loaded
+// data value equals this fallback and is the drift guard that enforces
+// it — change one of the pair and update the other in the same commit,
+// or that test goes red. AC-1 requires this be a single named,
+// non-hardcoded value rather than a magic number sprinkled through the
+// codebase.
 //
 // FEAT-030 (2026-08-13) closes MOD-012's interim ruling below: the
 // pacing constant is now genuinely sourced from data/pacing.json at
@@ -25,7 +41,7 @@ const DailyTicksPerMonth int64 = 30
 // bare NewEngine()/NewClock(DefaultSecondsPerMonthAt1x) that has not
 // (or cannot, e.g. an isolated unit test with no data/ directory)
 // loaded data/pacing.json — it is no longer the sole source of the
-// value, and no other line in this package repeats 480 regardless.
+// value, and no other line in this package repeats it regardless.
 //
 // Former decision record (MOD-012, 2026-08-09, superseded by the
 // above): foundation.data's original eight §24 config files
@@ -34,7 +50,7 @@ const DailyTicksPerMonth int64 = 30
 // the time. pacing.json (foundation/data/pacing.go) is that home now,
 // added the same way market.json was (MOD-020 ruling 1) rather than
 // growing the eight-file set's own doc comment.
-var DefaultSecondsPerMonthAt1x int64 = 480
+var DefaultSecondsPerMonthAt1x int64 = 30
 
 // Speed is the simulation pacing multiplier control (§3's speed table).
 // Per M0-ENG §1.1 and this item's brief, Speed affects nothing
@@ -80,12 +96,30 @@ type Clock struct {
 // NewClock constructs a Clock at genesis (tick 0), paused, at Speed1x,
 // with the given pacing constant (pass DefaultSecondsPerMonthAt1x for
 // the master doc §3 default).
-func NewClock(secondsPerMonthAt1x int64) Clock {
+//
+// BUG-303 (Bro audit, 2026-08-20): secondsPerMonthAt1x must be > 0 (and,
+// per GR#16 boundary discipline, finite — moot for the current int64
+// parameter type, which cannot hold NaN/Inf, but checked in the shape a
+// future float widening would need so this validation does not silently
+// stop covering that case). An unvalidated <= 0 value previously produced
+// a Clock whose SecondsPerMonth/TicksPerRealSecond queries silently
+// return garbage or zero pacing figures (TicksPerRealSecond's own <= 0
+// guard papers over the *symptom*, dividing by zero would panic, but a
+// negative constant sails straight through as plausible-looking garbage)
+// instead of failing loudly at construction, where the bad value
+// actually originated. Rejected with the registry-sourced
+// ErrInvalidPacingConstant (MET-E020) rather than a bare error, per GR#7.
+func NewClock(secondsPerMonthAt1x int64) (Clock, error) {
+	if secondsPerMonthAt1x <= 0 {
+		return Clock{}, errs.New(ErrInvalidPacingConstant, errs.NewCorrelationID(), map[string]any{
+			"seconds": secondsPerMonthAt1x,
+		})
+	}
 	return Clock{
 		speed:               Speed1x,
 		paused:              true,
 		secondsPerMonthAt1x: secondsPerMonthAt1x,
-	}
+	}, nil
 }
 
 // Tick returns the total elapsed daily-tick count since genesis.

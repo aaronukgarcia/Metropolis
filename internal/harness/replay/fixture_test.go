@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +105,54 @@ func TestFixtureNameTraversalRejectedOnSave(t *testing.T) {
 		})
 	}
 }
+
+// TestSaveCloseErr_SurfacesOnSuccessPath is BUG-305's proof: a shard
+// file's f.Close() error must be surfaced as Save's own return value when
+// Save otherwise had no other error to report -- previously discarded
+// unconditionally via `_ = f.Close()`, a flush/close failure (disk full,
+// a late I/O error surfacing only at Close) was reported as a clean Save
+// regardless. errClose below stands in for a real Close failure since
+// there is no portable, reliable way to force *os.File.Close() to fail
+// across this codebase's supported platforms.
+func TestSaveCloseErr_SurfacesOnSuccessPath(t *testing.T) {
+	errClose := errors.New("simulated close failure: short write on flush")
+	err := saveCloseErr(errClose, nil, "/fake/shard/path.ndjson.gz")
+	if err == nil {
+		t.Fatal("saveCloseErr(closeErr, nil, ...) = nil, want a non-nil error surfacing the close failure")
+	}
+	if !strings.Contains(err.Error(), codeFixtureLoadFailed) {
+		t.Errorf("error %q does not carry %s", err.Error(), codeFixtureLoadFailed)
+	}
+	if !strings.Contains(err.Error(), errClose.Error()) {
+		t.Errorf("error %q does not name the underlying close cause %q", err.Error(), errClose.Error())
+	}
+}
+
+// TestSaveCloseErr_NilCloseErrIsANoOp is the ordinary happy path: Close
+// succeeding must never manufacture an error out of nothing.
+func TestSaveCloseErr_NilCloseErrIsANoOp(t *testing.T) {
+	if err := saveCloseErr(nil, nil, "/fake/shard/path.ndjson.gz"); err != nil {
+		t.Errorf("saveCloseErr(nil, nil, ...) = %v, want nil", err)
+	}
+}
+
+// TestSaveCloseErr_PriorErrTakesPrecedence proves a close failure never
+// MASKS a more specific, earlier failure Save already had to report (a
+// write, encode, or header error) -- Save's error is whatever went wrong
+// first, not whichever error happened to occur last in the defer chain.
+func TestSaveCloseErr_PriorErrTakesPrecedence(t *testing.T) {
+	priorErr := errors.New("a more specific earlier failure")
+	errClose := errors.New("simulated close failure")
+	got := saveCloseErr(errClose, priorErr, "/fake/shard/path.ndjson.gz")
+	if got != priorErr {
+		t.Errorf("saveCloseErr(closeErr, priorErr, ...) = %v, want the unchanged priorErr %v", got, priorErr)
+	}
+}
+
+// TestSaveLoadFixtureRoundTrip's happy path already proves Save calling
+// f.Close() with a real, succeeding *os.File never surfaces a spurious
+// error (TestSaveCloseErr_NilCloseErrIsANoOp covers that at the unit
+// level too) -- see that test above for the integration-level coverage.
 
 // TestLoadRejectsHostileFixtureNames is AC-2b's Load-side counterpart.
 func TestFixtureNameTraversalRejectedOnLoad(t *testing.T) {
@@ -232,5 +281,16 @@ func TestLoadRejectsProtocolVersionMismatch(t *testing.T) {
 		t.Fatal("Load with a mismatched ProtocolVersion: expected rejection, got nil")
 	} else if !strings.Contains(err.Error(), codeFixtureVersionMismatch) {
 		t.Errorf("error %q does not carry %s", err.Error(), codeFixtureVersionMismatch)
+	}
+}
+
+// TestSaveCloseErr_PriorErrPreservedWhenCloseSucceeds completes the
+// masking matrix's fourth cell (BUG-305 Destructive round): closeErr nil
+// with a prior error set must return the prior error unchanged -- a
+// succeeding Close must never launder away the failure Save already had.
+func TestSaveCloseErr_PriorErrPreservedWhenCloseSucceeds(t *testing.T) {
+	prior := errors.New("earlier write failure")
+	if got := saveCloseErr(nil, prior, "/fake/shard"); got != prior {
+		t.Errorf("saveCloseErr(nil, prior) = %v, want the unchanged prior error", got)
 	}
 }

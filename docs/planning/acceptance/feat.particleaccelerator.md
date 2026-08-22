@@ -106,6 +106,14 @@ The accelerator's facility-specific mechanics: a massive electricity + water dra
 - **For Bill/Aaron — GR#15 data-file naming.** This file assumes `data/accelerator.json` for draw/multiplier/spillover/prestige/threshold (AC-3/AC-5/AC-7/AC-8/AC-9/AC-10/AC-18), following the `data/*.json` convention and the sibling `data/spaceport.json`/`data/megafacilities.json` proposals. Not registered anywhere — flagging for confirmation.
 - **For Aaron — balance numbers (standing regime, no new ASM).** Every figure is spec-qualitative (§MP's "2B"/"research rate ××" are placeholders). ACs check shape/direction/presence only, never a target. A developer should propose placeholders in `data/accelerator.json` and file the balance pass separately.
 
+- **ASM-1123 (FEAT-084 SF fold).** engine.accelerator claims error range G2400-G2499 (MET-G2400..G2407 registered in data/errors.json with a G2400-G2499 ranges.reserved entry), NOT the MET-E range AC-13 literal wording assumes — the E layer is fully claimed and G2300-G2399 was taken by engine.news (BUG-234 widening). AC-13 MET-E wording is stale BA shorthand; the registry convention governs.
+
+- **ASM-1124 (FEAT-084 SF fold).** AC-1 catalogue reconciliation resolved to shape (a): the accelerator IS the existing hadron_research_ring mega-project entry (data/buildings.json), enriched in place — id/name/milestone M10/cost 2B byte-equivalent, only consumptionRef changes to the new accelerator class in data/consumption.json; no second particle-accelerator entry exists (documented in internal/engine/accelerator/doc.go). ASM-715 stays open for Aaron ratification of the shape choice.
+
+- **ASM-1178 (FEAT-084 CC fold).** FDI anchor draw compensation is a new FdiSource.RemoveAnchorProspect removal inverse on the consumer-driven FdiSource seam (unbuilt engine.fdi, MOD-059), rather than reusing AddAnchorProspect(-draw) which is semantically ambiguous; if real engine.fdi cannot provide prospect removal, the composition root cannot wire the compensation and a decommission-accrual failure would leave a phantom FDI draw. (Code home engine.accelerator; seam contract is engine.fdi to provide.)
+
+- **ASM-1180 (FEAT-084 CC fold).** PeakDemand does not re-check finiteness of the peak-multiplied power draw — a Destructive minor non-reject observation. The overflow case is unreachable at realistic magnitudes (cfg.ElectricityPeakMultiplier validated finite and >1; d.Power finite from the consumption solve; product only +Inf near 1e308), and fixing it needs a new MET-G24xx registry code in shared data/errors.json (outside module ownership). Accepted risk documented; a near-1e308 consumption coefficient would silently return +Inf. (Roster routed to engine.consumption; code home is engine.accelerator — folded here.)
+
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
 
 > Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
@@ -120,4 +128,3 @@ The wired `ExpertGate` threshold is intentionally not cross-validated against `c
 
 
 An `engine.fdi` seam error during `Build` is a realistic AC-13 rejection path; the decommission liability accrued before the FDI draw is orphaned partial state if that draw fails (Destructive-MOD077 attack assumption). AC-13's no-partial-state guarantee covers the facility record / draw / research-health-FDI spillover; the already-accrued liability posting is the residual to reason about at the composition root.
-

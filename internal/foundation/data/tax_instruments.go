@@ -24,18 +24,17 @@ import (
 // renders "field {field}: {rule}") — never a silent default and never a
 // silently-dropped instrument.
 //
-// # Instrument-ID convention (SEC-090 — see the logged ASM)
+// # Instrument-ID convention (SEC-090)
 //
-// data.taxinstruments.md AC-1 lists the six instrument IDs as vat,
-// importDuties, corporationTax, paye, councilTax, businessRates AND, in the
-// same sentence, demands they match engine.roads' lowercase-slug
-// "buildingIDPattern" convention. Those two halves contradict each other:
-// four of the six IDs are camelCase, not lowercase slugs. Per the dispatch
-// brief, this loader accepts the six exact IDs as-authored and does NOT
-// reject the file over the casing conflict; the criteria contradiction is
-// flagged to Bill as an ASM rather than silently renaming the data (which
-// would break the file's own meta assumptions and any future engine.tax
-// lookup key).
+// The six instrument IDs are lowercase slugs in engine.roads'
+// "buildingIDPattern" domain (weakness pattern #4 — these IDs become
+// engine.tax lookup keys, so a spelling/casing variant is hostile input,
+// never normalised): vat, import-duties, corporation-tax, paye,
+// council-tax, business-rates. SEC-090's original camelCase IDs
+// (importDuties, corporationTax, councilTax, businessRates) were renamed
+// to kebab-case because data.taxinstruments.md AC-1 demands the
+// buildingIDPattern domain even though its own prose listed the camelCase
+// spellings; the prose-vs-domain contradiction remains logged as ASM-652.
 
 // FileTaxInstruments is data/tax_instruments.json's filename, relative to
 // the resolved data directory (see ResolveDataDir). Added per the same
@@ -46,16 +45,16 @@ const FileTaxInstruments = "tax_instruments.json"
 
 // taxInstrumentIDs is the accepted six-instrument ID set FEAT-056 names
 // (AC-1 / US-1), in a fixed order so the "missing required instrument"
-// check and the "accepted set" error text are deterministic (GR#21). The
-// IDs are accepted EXACTLY as authored in data/tax_instruments.json — see
-// the package-level doc comment for the SEC-090 casing conflict.
+// check and the "accepted set" error text are deterministic (GR#21). Every
+// ID is a lowercase slug in buildingIDPattern's domain (SEC-090); the
+// accepted-set check in Validate rejects any unknown/casing-variant ID.
 var taxInstrumentIDs = []string{
 	"vat",
-	"importDuties",
-	"corporationTax",
+	"import-duties",
+	"corporation-tax",
 	"paye",
-	"councilTax",
-	"businessRates",
+	"council-tax",
+	"business-rates",
 }
 
 // taxInstrumentCategories is the closed category enum observed across the
@@ -100,8 +99,9 @@ type TaxInstruments struct {
 	Instruments map[string]TaxInstrument `json:"instruments"`
 }
 
-// TaxInstrument is one instrument entry (vat, importDuties, corporationTax,
-// paye, councilTax, businessRates). RateRange, Elasticity, BearerWeights
+// TaxInstrument is one instrument entry (vat, import-duties,
+// corporation-tax, paye, council-tax, business-rates). RateRange,
+// Elasticity, BearerWeights
 // and NIRates are pointers so "absent" and "present-but-zero" are
 // distinguishable (GR#16/GR#17): a missing required block is rejected, not
 // silently decoded to a zero value.
@@ -341,9 +341,21 @@ func (ins TaxInstrument) validate(id string) error {
 	return nil
 }
 
+// nonFinite reports whether v is NaN or ±Inf — the guard every float64
+// validate check runs FIRST, so a non-finite figure is rejected as a data
+// error rather than silently passing a raw <0/>1 range comparison (which is
+// false for NaN and would let it propagate into the tax math, GR#16).
+func nonFinite(v float64) bool { return math.IsNaN(v) || math.IsInf(v, 0) }
+
 func (rr RateRange) validate(prefix string) error {
+	if nonFinite(rr.MinPercent) {
+		return fieldErr(prefix+".minPercent", fmt.Sprintf("must be finite, got %v", rr.MinPercent))
+	}
 	if rr.MinPercent < 0 {
 		return fieldErr(prefix+".minPercent", fmt.Sprintf("must be >= 0, got %v", rr.MinPercent))
+	}
+	if nonFinite(rr.MaxPercent) {
+		return fieldErr(prefix+".maxPercent", fmt.Sprintf("must be finite, got %v", rr.MaxPercent))
 	}
 	if rr.MaxPercent < rr.MinPercent {
 		return fieldErr(prefix+".maxPercent",
@@ -358,6 +370,9 @@ func (bw BearerWeights) validate(prefix string, rr *RateRange) error {
 	}
 	for i, rp := range bw.RatePoints {
 		rpPrefix := fmt.Sprintf("%s.ratePoints[%d]", prefix, i)
+		if nonFinite(rp.RatePercent) {
+			return fieldErr(rpPrefix+".ratePercent", fmt.Sprintf("must be finite, got %v", rp.RatePercent))
+		}
 		if rp.RatePercent < rr.MinPercent || rp.RatePercent > rr.MaxPercent {
 			return fieldErr(rpPrefix+".ratePercent",
 				fmt.Sprintf("must be within rateRange [%v, %v], got %v", rr.MinPercent, rr.MaxPercent, rp.RatePercent))
@@ -369,6 +384,10 @@ func (bw BearerWeights) validate(prefix string, rr *RateRange) error {
 		for j, b := range rp.Bearers {
 			if err := requireNonEmptyString(fmt.Sprintf("%s.bearers[%d].category", rpPrefix, j), b.Category); err != nil {
 				return err
+			}
+			if nonFinite(b.Share) {
+				return fieldErr(fmt.Sprintf("%s.bearers[%d].share", rpPrefix, j),
+					fmt.Sprintf("must be finite, got %v", b.Share))
 			}
 			if b.Share < 0 || b.Share > 1 {
 				return fieldErr(fmt.Sprintf("%s.bearers[%d].share", rpPrefix, j),
@@ -394,6 +413,9 @@ func (b IncomeTaxBand) validate(prefix string) error {
 			fmt.Sprintf("must be > lowerBoundMicroPounds (%d), got %d (or null for no upper bound)",
 				b.LowerBoundMicroPounds, *b.UpperBoundMicroPounds))
 	}
+	if nonFinite(b.RatePercent) {
+		return fieldErr(prefix+".ratePercent", fmt.Sprintf("must be finite, got %v", b.RatePercent))
+	}
 	if b.RatePercent < 0 {
 		return fieldErr(prefix+".ratePercent", fmt.Sprintf("must be >= 0, got %v", b.RatePercent))
 	}
@@ -401,8 +423,14 @@ func (b IncomeTaxBand) validate(prefix string) error {
 }
 
 func (n NIRates) validate(prefix string) error {
+	if nonFinite(n.EmployeePercent) {
+		return fieldErr(prefix+".employeePercent", fmt.Sprintf("must be finite, got %v", n.EmployeePercent))
+	}
 	if n.EmployeePercent < 0 {
 		return fieldErr(prefix+".employeePercent", fmt.Sprintf("must be >= 0, got %v", n.EmployeePercent))
+	}
+	if nonFinite(n.EmployerPercent) {
+		return fieldErr(prefix+".employerPercent", fmt.Sprintf("must be finite, got %v", n.EmployerPercent))
 	}
 	if n.EmployerPercent < 0 {
 		return fieldErr(prefix+".employerPercent", fmt.Sprintf("must be >= 0, got %v", n.EmployerPercent))
@@ -414,11 +442,11 @@ func (z ZoneOverride) validate(prefix string) error {
 	if z.RateMultiplier == nil && z.ReliefPercent == nil {
 		return fieldErr(prefix, "must specify rateMultiplier or reliefPercent")
 	}
-	if z.RateMultiplier != nil && *z.RateMultiplier < 0 {
-		return fieldErr(prefix+".rateMultiplier", fmt.Sprintf("must be >= 0, got %v", *z.RateMultiplier))
+	if z.RateMultiplier != nil && (nonFinite(*z.RateMultiplier) || *z.RateMultiplier < 0) {
+		return fieldErr(prefix+".rateMultiplier", fmt.Sprintf("must be finite and >= 0, got %v", *z.RateMultiplier))
 	}
-	if z.ReliefPercent != nil && (*z.ReliefPercent < 0 || *z.ReliefPercent > 100) {
-		return fieldErr(prefix+".reliefPercent", fmt.Sprintf("must be in [0, 100], got %v", *z.ReliefPercent))
+	if z.ReliefPercent != nil && (nonFinite(*z.ReliefPercent) || *z.ReliefPercent < 0 || *z.ReliefPercent > 100) {
+		return fieldErr(prefix+".reliefPercent", fmt.Sprintf("must be finite and in [0, 100], got %v", *z.ReliefPercent))
 	}
 	return nil
 }

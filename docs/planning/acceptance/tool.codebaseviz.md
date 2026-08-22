@@ -68,6 +68,8 @@ The builder logged ASM-656..665 (status precedence, build extension set, heat-ma
 - **ASM-658 (confirm-and-close).** Heat-map area = working-tree code lines (Go+JS+JSON+data) with a 1-line floor, scaled proportionally to fill a fixed container.
 - **ASM-657 (confirm-and-close).** Build stage counts any code file (Go, JS, JSON, data), not only *.go — a JS tooling module would otherwise mislabel null.
 
+- **ASM-892 (FEAT-084 CC fold).** BA-story gate resolves feature-key docs two data-derived ways: the module-key layer-stripped name stem (engine.X -> feat.X) and the acceptance file's own header-declared BOW code (e.g. feat.helicopters.md declares MOD-074). No hardcoded module-to-file map.
+
 ## Confirm-and-close folds (FEAT-084 CC wave, 2026-08-20)
 
 - **ASM-803 (confirm-and-close).** `generate.js` error-traps its non-BOW inputs (malformed code.json, missing modules array, null module entry, missing go.mod, empty/non-git repo) as graceful WARN + exit 0, consistent with the existing BOW/go-test warn-and-continue posture instead of a raw stack-trace crash.

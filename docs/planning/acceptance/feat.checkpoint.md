@@ -92,6 +92,10 @@ The following are logged via `node claude-bow.js add assumption ...`; summarised
 - **ASM-1370 (confirm-and-close).** SEC-190 auto-prune failure is NON-FATAL (checkpoint already promoted); prune failure surfaced via new Manager.LastPruneError() accessor.
 - **ASM-1386 (confirm-and-close).** SEC-196 derived fork name bounded at maxSaveNameLen (255); a 255-byte fork is created but re-forking it rejects loudly pre-mutation.
 
+- **ASM-1338 (FEAT-084 CC fold).** feat.checkpoint error codes use MET-G3500..G3510 (range G3500-G3599), renumbered because G3300-G3399 (engine.comms) and G3400-G3499 (engine.capexport) were claimed concurrently mid-build; the errs source-scan test flags a range-collision if another agent claims G3500-G3599 too.
+
+- **ASM-1387 (FEAT-084 CC fold).** A new MET-G3515-class checkpoint code necessarily touches the shared data/errors.json (GR#7 + the errs TestSourceCodesAreRegisteredAndInRange gate); the module adds only its single hunk within the already-reserved G3500-G3599 range and, per BUG-030, the lead reviews the staged hunk rather than git-add-ing the file wholesale. Reusing an existing code instead would conflate a fork-name failure with a create-name failure.
+
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-19)
 
 > Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF). All six fold from the FEAT-084 re-baseline roster (classified there under feat.saveux/feat.checkpoint; re-read attributes all six to feat.checkpoint — `internal/engine/checkpoint/`, `code.json: feat.checkpoint`).

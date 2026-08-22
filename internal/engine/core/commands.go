@@ -22,13 +22,47 @@ import (
 // DeltaSink is the minimal push surface T-SUBSCR (subscribe.go) needs
 // from a transport. *protocol.InProcTransport satisfies it today via
 // SendDelta; a future gRPC-backed Transport implementation would too.
+//
+// CONTRACT (independent round r2/r3, FEAT-208 increment 1 — this
+// contract previously lived only on protocol.Transport's own doc
+// comment, not here on the interface Publish actually depends on; r2's
+// attack proved that gap was real, not academic):
+//
+//   - SendDelta MUST NOT block indefinitely. subscribe.go's Publish
+//     calls SendDelta while holding SubscriptionServer.publishMu for
+//     the duration of the whole delivery pass (never s.mu — see
+//     publishMu's own doc comment for the R3 two-mutex split this
+//     replaces r1's "hold s.mu across SendDelta" fix with) — a
+//     SendDelta implementation that blocks unboundedly stalls every
+//     subsequent Publish call (they queue on publishMu), though it can
+//     no longer stall Subscribe/Unsubscribe/RegisterView (those only
+//     ever take s.mu). *protocol.InProcTransport satisfies this via its
+//     documented evict-oldest, non-blocking send.
+//   - SendDelta MUST NOT call back into Publish (directly, or
+//     transitively through anything that itself calls Publish) on the
+//     same goroutine. Go's sync.Mutex is not reentrant: a SendDelta
+//     call that re-entered Publish would self-deadlock permanently on
+//     publishMu, since nothing else can ever unlock a mutex for the
+//     goroutine that already holds it. Calling back into
+//     Subscribe/Unsubscribe/RegisterView from within SendDelta IS safe
+//     (they take only s.mu, which the calling goroutine is not holding
+//     at that point) — the prohibition is specifically and only against
+//     re-entering Publish itself.
+//
+// Nothing in this interface's method signature enforces either rule —
+// both are attacker-verified conventions
+// (internal/engine/core/feat208_r2_destructive_test.go originally
+// proved the pre-R3 hazard; feat208_destructive_test.go's R3-era
+// regression tests now prove the fixed behaviour holds and that the one
+// remaining prohibition is honestly documented, not silently assumed).
 type DeltaSink interface {
 	SendDelta(protocol.Delta) bool
 }
 
 // GameplayCommandHandler is the injected seam HandleCommand consults for
-// the four gameplay-intent commands (Buy, Zone, Build, Demolish — the
-// build screen's vocabulary, internal/protocol/commands.go). engine.core
+// the gameplay-intent commands (Buy, Zone, Build, Demolish — the build
+// screen's vocabulary; SetFunding — F4's funding-slider vocabulary, added
+// FEAT-208 increment 3 — internal/protocol/commands.go). engine.core
 // neither owns nor imports the modules that adjudicate those commands
 // (engine.build, engine.finance, engine.world); the composition root
 // (internal/engine/compose) — the one package permitted to know all
@@ -124,18 +158,19 @@ func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
 		return e.handleInspectEntity(cmd)
 	case protocol.KindDebug:
 		return e.handleDebug(cmd)
-	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish:
+	case protocol.KindBuy, protocol.KindZone, protocol.KindBuild, protocol.KindDemolish, protocol.KindSetFunding:
 		return e.handleGameplay(cmd, correlationID)
 	default:
 		return e.reject(cmd, errs.New(ErrUnhandledCommandKind, correlationID, map[string]any{"kind": string(cmd.Kind)}))
 	}
 }
 
-// handleGameplay dispatches the four gameplay-intent commands (Buy, Zone,
-// Build, Demolish) to the injected GameplayCommandHandler. It is the
-// deny-by-default counterpart to handleSetSpeed's checkSpeed8xAllowed:
-// with no handler wired (the bare-NewEngine case) every gameplay kind is
-// rejected with ErrUnhandledCommandKind rather than silently accepted,
+// handleGameplay dispatches the gameplay-intent commands (Buy, Zone,
+// Build, Demolish, SetFunding) to the injected GameplayCommandHandler. It
+// is the deny-by-default counterpart to handleSetSpeed's
+// checkSpeed8xAllowed: with no handler wired (the bare-NewEngine case)
+// every gameplay kind is rejected with ErrUnhandledCommandKind rather
+// than silently accepted,
 // and with a handler wired, the handler's error (nil or registry-sourced)
 // decides accept/reject. engine.core never adjudicates the gameplay
 // itself — that is engine.build/engine.finance/engine.world's job, reached
@@ -361,46 +396,103 @@ func (e *Engine) signalSubscriptionPump() {
 }
 
 // StartSubscriptionPump starts the goroutine that computes and pushes
-// engine.status deltas (subscribe.go) in response to signals from
-// signalSubscriptionPump, off the command/tick path (AC-7). It returns
-// immediately; the goroutine runs until ctx is done. Safe to call at
-// most once per Engine (a second call would start a second, redundant
-// pump) — NewEngine does not start one automatically, since not every
-// caller (e.g. a headless harness driving AdvanceTicks with no live
-// UI) needs one.
+// engine.status (and, once compose.Wire has registered more views via
+// RegisterView, every other registered view's) deltas (subscribe.go) in
+// response to signals from signalSubscriptionPump, off the command/tick
+// path (AC-7). It returns immediately; the returned done channel is
+// closed exactly once, when the goroutine actually exits (ctx.Done()
+// observed) — callers join on it at shutdown (F2, independent round r1:
+// previously nothing tracked or waited for this goroutine at all; see
+// cmd/metropolis/boot.go's shutdown() and internal/harness/headless's
+// Run() shutdown closure, both of which now select on it before closing
+// their transport, mirroring skeletonWiring.engineDone's identical
+// close-then-select join idiom for RunCommandLoop's own goroutine).
 //
-// BUG-019: identity-checked BEFORE the goroutine is started — one of
-// this package's e.mu.Lock()-adjacent entry points missed by SEC-018's
-// enumeration (that pass covered every direct e.mu.Lock() call site;
-// this one only touches e.mu transitively via EngineStatusView(), which
-// already guards itself). Without this check, a struct-copied Engine
-// (e2 := *e) calling e2.StartSubscriptionPump would start a live
+// Mechanically restricted to at most once per Engine (F1a, independent
+// round r1, FEAT-208 increment 1): previously this was a documented-only
+// contract ("safe to call at most once per Engine") with no enforcement
+// — a second call started a SECOND, concurrently-running pump goroutine,
+// both reading the same e.deltaSignal and both able to call
+// SubscriptionServer.Publish concurrently, which is exactly the
+// precondition the independent round's attack test exploited to
+// reproduce out-of-order delivery (see subscribe.go's Publish doc
+// comment). A second call now returns ErrSubscriptionPumpAlreadyStarted
+// and starts no goroutine at all — never a silent second pump. NewEngine
+// does not start one automatically, since not every caller (e.g. a
+// headless harness driving AdvanceTicks with no live UI) needs one.
+//
+// BUG-019: identity-checked BEFORE the started flag is even touched —
+// one of this package's e.mu.Lock()-adjacent entry points missed by
+// SEC-018's enumeration (that pass covered every direct e.mu.Lock() call
+// site; this one only touches e.mu transitively via EngineStatusView(),
+// which already guards itself). Without this check, a struct-copied
+// Engine (e2 := *e) calling e2.StartSubscriptionPump would start a live
 // goroutine reading e2.deltaSignal — a copied channel HEADER aliasing
 // the same underlying channel as the original — and call
-// e2.subs.PublishEngineStatus(). Because e2.subs is the SAME POINTER as
-// e.subs (not itself a copy), PublishEngineStatus's own checkNotCopied
-// guard would never fire, so the failure mode is not a crash or a hang
-// but silently WRONG DATA: published engine.status deltas built from
-// e2.EngineStatusView()'s degrade-to-zero path (a copy's Clock() is
-// itself guarded and returns a zeroed Clock). Rejecting the copy here,
-// before the goroutine is ever started, closes that off at the same
-// entry point SEC-016/SEC-018 established for every other guarded
-// method on this type.
-func (e *Engine) StartSubscriptionPump(ctx context.Context, sink DeltaSink) error {
+// e2.subs.Publish. Because e2.subs is the SAME POINTER as e.subs (not
+// itself a copy), Publish's own checkNotCopied guard would never fire,
+// so the failure mode is not a crash or a hang but silently WRONG DATA:
+// published engine.status deltas built from e2.EngineStatusView()'s
+// degrade-to-zero path (a copy's Clock() is itself guarded and returns a
+// zeroed Clock). Rejecting the copy here, before the goroutine is ever
+// started, closes that off at the same entry point SEC-016/SEC-018
+// established for every other guarded method on this type. Note this
+// also means a copy's e2.pumpStarted CompareAndSwap is never reached —
+// e2.pumpStarted is itself a copy of e's own atomic.Bool value, so even
+// if this check were skipped, a copy attempting to "start the pump
+// twice" would not collide with the original's own started-flag; the
+// identity check is rejected first regardless, for the data-corruption
+// reason above, not because of pumpStarted's copy semantics.
+func (e *Engine) StartSubscriptionPump(ctx context.Context, sink DeltaSink) (done <-chan struct{}, err error) {
 	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
-		return err
+		return nil, err
 	}
+	if !e.pumpStarted.CompareAndSwap(false, true) {
+		return nil, errs.New(ErrSubscriptionPumpAlreadyStarted, errs.NewCorrelationID(), nil)
+	}
+	doneCh := make(chan struct{})
 	go func() {
+		defer close(doneCh)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-e.deltaSignal:
-				e.subs.PublishEngineStatus(sink, e.EngineStatusView())
+				e.subs.Publish(sink, e.pumpTick())
 			}
 		}
 	}()
-	return nil
+	return doneCh, nil
+}
+
+// pumpTick reads the engine's current Tick for the subscription pump's
+// Publish call (commands.go's StartSubscriptionPump) — replaces the old
+// PublishEngineStatus(sink, e.EngineStatusView()) call, which derived
+// Tick from the "engine.status" view's own Tick field specifically; now
+// that Publish serves N registered views uniformly, the pump reads Tick
+// directly off the engine's own clock once per cycle (§4 of the design:
+// "Publish reads Tick once per cycle ... never a per-delta wall-clock or
+// independently-advancing counter"). Degrades to Tick(0) on the same
+// unreachable-in-practice copied-Engine path EngineStatusView's own
+// Clock() failure branch already documents — never the wall clock (GR#21).
+func (e *Engine) pumpTick() protocol.Tick {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	// Direct, explicit guard against e.subs too (SEC-019) — this method
+	// is called from the same pump-goroutine closure that calls
+	// e.subs.Publish, so astgate's syntactic scan reaches it through
+	// that field chain; not because pumpTick itself touches e.subs.
+	// Mirrors engineStatusViewPatch's identical defensive pattern
+	// (subscribe.go).
+	if err := e.subs.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return 0
+	}
+	c, err := e.Clock()
+	if err != nil {
+		return 0
+	}
+	return protocol.Tick(c.Tick())
 }
 
 // CommandSource is the minimal pull surface RunCommandLoop needs from a

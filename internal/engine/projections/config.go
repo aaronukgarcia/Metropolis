@@ -104,6 +104,7 @@ func loadHorizonConfig(correlationID string) (horizonConfig, error) {
 		if horizonCfg.BaseHorizonMonths <= 0 {
 			horizonErr = errs.New(ErrEmbeddedConfigInvalid, correlationID, map[string]any{
 				"curve": "horizon.json",
+				"cause": "baseHorizonMonths must be positive",
 			})
 		}
 	})
@@ -125,6 +126,7 @@ func loadDeathWarningConfig(correlationID string) (deathWarningConfig, error) {
 		if deathWarningCfg.Insolvency.Disclosure == "" || deathWarningCfg.GhostCity.Disclosure == "" {
 			deathWarningErr = errs.New(ErrEmbeddedConfigInvalid, correlationID, map[string]any{
 				"curve": "deathwarnings.json",
+				"cause": "insolvency and ghostCity entries must both carry a non-empty disclosure field (AC-20)",
 			})
 		}
 	})

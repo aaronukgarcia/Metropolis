@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,44 @@ func TestLoadScenario_MalformedJSON_ReturnsRegistryError(t *testing.T) {
 	wantErrCode(t, err, ErrScenarioReadFailed)
 }
 
+// TestLoadScenario_OversizedFile_RejectedNotReadUnbounded is BUG-305's
+// unbounded-read proof: an -scenario file over maxScenarioFileBytes must
+// be rejected via a Stat-based size check BEFORE os.ReadFile ever reads
+// it into memory, never read in full regardless of size. A temp file
+// just past the ceiling proves the rejection fires without this test
+// itself needing to allocate anything close to a pathological multi-GB
+// fixture.
+func TestLoadScenario_OversizedFile_RejectedNotReadUnbounded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "oversized.json")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("creating oversized scenario fixture: %v", err)
+	}
+	// Sparse-write past the ceiling: Truncate extends the file without
+	// this test having to actually write maxScenarioFileBytes+1 real
+	// bytes, keeping the fixture cheap to create.
+	if err := f.Truncate(maxScenarioFileBytes + 1); err != nil {
+		_ = f.Close()
+		t.Fatalf("truncating oversized scenario fixture: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("closing oversized scenario fixture: %v", err)
+	}
+
+	_, err = LoadScenario("corr-test", path)
+	wantErrCode(t, err, ErrScenarioReadFailed)
+	// A sparse-truncated file also happens to fail json.Unmarshal (it is
+	// all zero bytes, not valid JSON) -- that alone would return the same
+	// ErrScenarioReadFailed code and could pass even WITHOUT the size
+	// bound in place, silently proving nothing. Require the message to
+	// specifically name the size-bound rejection (maxScenarioFileBytes),
+	// so this test actually distinguishes "rejected before ever being
+	// read" from "read in full, then failed to parse".
+	if err == nil || !strings.Contains(err.Error(), "maxScenarioFileBytes") {
+		t.Fatalf("error = %v, want a message naming maxScenarioFileBytes (proves the Stat-based bound fired, not an incidental parse failure on the sparse content)", err)
+	}
+}
+
 func TestLoadScenario_UnknownCommandKind_ReturnsRegistryError(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "unknown-kind.json")
 	body := `[{"protocolVersion":"1.0","correlationId":"x","kind":"NotARealKind","payload":{}}]`
@@ -254,20 +293,65 @@ func TestRun_NoReport_IsANoOp(t *testing.T) {
 	}
 }
 
-// --- AC-2 (harness.headless.md, engine.headless.md AC-1/AC-9): Months <=
-// 0 is legal library-level behaviour (zero ticks); cmd/metropolis's flag
-// layer, not this package, is where "-months is required and must be
-// positive" is enforced as a hard usage error -- see
-// cmd/metropolis/run_test.go's TestRun_Headless_ZeroMonths_ReturnsExitCode2. ---
+// --- BUG-305: Months <= 0 is now REJECTED by driveTicks itself (MET-H207),
+// not just by cmd/metropolis's CLI flag layer -- see
+// cmd/metropolis/run_test.go's TestRun_Headless_ZeroMonths_ReturnsExitCode2
+// for the CLI-layer check, which remains in place as a separate,
+// earlier-firing guard. Superseded the old "Months <= 0 is legal
+// library-level behaviour (zero ticks)" contract: a caller reaching Run
+// directly (bypassing the CLI) must get the same hard failure, not a
+// silently-successful zero-tick run, per the BUG-305 audit finding that
+// this package's own doc comments already claimed the refusal
+// ("Run itself only refuses a non-positive Months") without actually
+// enforcing it. ---
 
-func TestRun_ZeroMonths_AdvancesNoTicks(t *testing.T) {
+func TestRun_ZeroMonths_IsRejected(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "snap")
-	result, err := Run(context.Background(), Config{Seed: 1, Months: 0, OutDir: dir})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	_, err := Run(context.Background(), Config{Seed: 1, Months: 0, OutDir: dir})
+	wantErrCode(t, err, ErrInvalidMonths)
+	if _, statErr := os.Stat(dir); statErr == nil {
+		t.Errorf("Run wrote %s despite rejecting Months=0 -- a rejected run must never produce a partial/bogus bundle", dir)
 	}
-	if result.TicksAdvanced != 0 {
-		t.Errorf("TicksAdvanced = %d, want 0", result.TicksAdvanced)
+}
+
+func TestRun_NegativeMonths_IsRejected(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "snap")
+	_, err := Run(context.Background(), Config{Seed: 1, Months: -5, OutDir: dir})
+	wantErrCode(t, err, ErrInvalidMonths)
+}
+
+// TestDriveTicks_OverflowingMonths_RejectsRatherThanWraps is BUG-305's
+// critical case: the poisoned-perf-baseline shape the whole fix exists to
+// close. Before this fix, months*core.DailyTicksPerMonth was an unguarded
+// int64 multiply -- a months value large enough to overflow wrapped
+// silently (Go's defined two's-complement truncation) and driveTicks
+// returned that wrapped total as a SUCCESSFUL, small-looking (or even
+// negative) TicksAdvanced with a nil error, exactly the shape a
+// downstream perf-CI consumer would trust as a genuine measurement. This
+// test proves the overflow path now REJECTS -- a huge months value must
+// error, never succeed with a garbage tick count.
+func TestDriveTicks_OverflowingMonths_RejectsRatherThanWraps(t *testing.T) {
+	// math.MaxInt64/core.DailyTicksPerMonth + 1 is the smallest months
+	// value whose product with DailyTicksPerMonth overflows int64.
+	overflowMonths := math.MaxInt64/core.DailyTicksPerMonth + 1
+	ticks, err := driveTicks(nil, overflowMonths, "test-correlation")
+	wantErrCode(t, err, ErrInvalidMonths)
+	if ticks != 0 {
+		t.Errorf("driveTicks on overflowing months returned ticks=%d, want 0 (must not report any advancement on a rejected call)", ticks)
+	}
+}
+
+// TestDriveTicks_NegativeOverflowingMonths_RejectsRatherThanWraps mirrors
+// the prior test on the negative side (BUG-305's "large/negative months
+// wraps silently" wording): a very negative months also either fails the
+// months<=0 guard directly or, for a magnitude large enough, would
+// overflow int64 the other direction -- both must be rejected, never
+// wrapped into a plausible-looking positive tick count.
+func TestDriveTicks_NegativeOverflowingMonths_RejectsRatherThanWraps(t *testing.T) {
+	ticks, err := driveTicks(nil, math.MinInt64, "test-correlation")
+	wantErrCode(t, err, ErrInvalidMonths)
+	if ticks != 0 {
+		t.Errorf("driveTicks on MinInt64 months returned ticks=%d, want 0", ticks)
 	}
 }
 
@@ -304,3 +388,75 @@ var (
 	_ = Result{Header: serialize.Header{}, TicksAdvanced: 0, ScenarioCommands: 0, ReportWriteErr: nil}
 	_ = protocol.ProtocolVersion
 )
+
+// --- BUG-305 Destructive round (independent attacker) permanent regressions ---
+
+// probeDriveTicksGuard distinguishes guard-REJECT (returns an error, no
+// panic) from guard-PASS (proceeds into the advance loop, where the nil
+// transport panics in sendAndAwait before any tick could occur). The nil
+// transport makes the guard-PASS boundary cases cheap to probe: a passed
+// guard can never actually try to advance MaxInt64/30 months of ticks.
+func probeDriveTicksGuard(months int64) (didPanic bool, err error) {
+	defer func() {
+		if recover() != nil {
+			didPanic = true
+		}
+	}()
+	_, err = driveTicks(nil, months, "destructive-probe")
+	return
+}
+
+// TestDriveTicks_MonthsBoundarySweep pins BUG-305's exact acceptance
+// boundary: months = MaxInt64/DailyTicksPerMonth (the largest
+// non-overflowing value) must PASS the guard, months+1 and every
+// non-positive value must REJECT with MET-H207. Guards the guard against
+// a later over-tightening (rejecting legal large months) as much as a
+// loosening.
+func TestDriveTicks_MonthsBoundarySweep(t *testing.T) {
+	maxMonths := math.MaxInt64 / core.DailyTicksPerMonth
+
+	if p, err := probeDriveTicksGuard(1); !p {
+		t.Errorf("months=1 did not reach the transport; guard wrongly rejected it: %v", err)
+	}
+	if p, err := probeDriveTicksGuard(maxMonths); !p {
+		t.Errorf("months=%d (exact largest non-overflowing) did not reach the transport; guard wrongly rejected it: %v", maxMonths, err)
+	}
+	if p, err := probeDriveTicksGuard(maxMonths + 1); p {
+		t.Errorf("months=%d (max+1) PASSED the guard -- overflow accepted", maxMonths+1)
+	} else {
+		wantErrCode(t, err, ErrInvalidMonths)
+	}
+	for _, m := range []int64{0, -1, math.MinInt64} {
+		if p, err := probeDriveTicksGuard(m); p {
+			t.Errorf("months=%d PASSED the guard", m)
+		} else {
+			wantErrCode(t, err, ErrInvalidMonths)
+		}
+	}
+}
+
+// TestLoadScenario_ExactlyMaxBytesIsReadNotSizeRejected pins the
+// boundary's off-by-one direction: a file at EXACTLY maxScenarioFileBytes
+// must pass the size gate (strict >) and proceed to the read/parse -- the
+// resulting error must be the content parse failure, never the size-bound
+// message.
+func TestLoadScenario_ExactlyMaxBytesIsReadNotSizeRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "exact.json")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := f.Truncate(maxScenarioFileBytes); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	_, err = LoadScenario("corr-probe", path)
+	if err == nil {
+		t.Fatal("expected a parse error on maxScenarioFileBytes of zero bytes")
+	}
+	if strings.Contains(err.Error(), "maxScenarioFileBytes") {
+		t.Errorf("size bound fired at EXACTLY %d bytes -- off-by-one, the bound must be strict >: %v", maxScenarioFileBytes, err)
+	}
+}

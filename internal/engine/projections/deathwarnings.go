@@ -107,7 +107,10 @@ func (p *ProjectionsAPI) MarginToInsolvency(currentMonth int64) (MarginResult, e
 		return MarginResult{}, err
 	}
 	if currentMonth < 0 {
-		return MarginResult{}, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{"monthIndex": currentMonth})
+		return MarginResult{}, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{
+			"monthIndex": currentMonth,
+			"cause":      "currentMonth is negative (before the world's epoch)",
+		})
 	}
 
 	p.mu.RLock()
@@ -143,7 +146,10 @@ func (p *ProjectionsAPI) MarginToGhostCity(currentMonth int64) (MarginResult, er
 		return MarginResult{}, err
 	}
 	if currentMonth < 0 {
-		return MarginResult{}, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{"monthIndex": currentMonth})
+		return MarginResult{}, errs.New(ErrNegativeMonthQuery, p.correlationID, map[string]any{
+			"monthIndex": currentMonth,
+			"cause":      "currentMonth is negative (before the world's epoch)",
+		})
 	}
 
 	p.mu.RLock()
@@ -154,7 +160,7 @@ func (p *ProjectionsAPI) MarginToGhostCity(currentMonth int64) (MarginResult, er
 	}
 	provider, ok := raw.(GhostCityPeakProvider)
 	if !ok {
-		return MarginResult{}, errs.New(ErrGhostCityProviderShape, p.correlationID, map[string]any{
+		return MarginResult{}, errs.New(ErrCurveProviderMissingPeak, p.correlationID, map[string]any{
 			"commodity": CurveKeyGhostCityPopulation,
 			"field":     "HistoricPeak",
 		})

@@ -4,7 +4,7 @@
  *
  * Runs against a scratch database (METRO_DB_NAME=metro_test_syncmsg), created
  * and dropped by this suite. The real `metro` database — the one this very
- * session's own Bill/Bob/Ben coordination depends on — is NEVER written to by
+ * session's own Bill/Bev/Ben coordination depends on — is NEVER written to by
  * any DB query in this file. The one unavoidable filesystem side effect
  * (acquire() -> writeIdentityFiles() writes .claude/.identity + a per-window
  * .claude/.identity-<id> file, independent of which DB backs the permit) is
@@ -14,19 +14,30 @@
  * could collide with a live window's).
  *
  * Covers, per docs/planning/acceptance/tool.syncmsg.md:
- *   AC-1  schema idempotency + cursor seeded with exactly 3 rows
+ *   AC-1  schema idempotency + cursor seeded with exactly 4 rows (one per NAMES entry)
  *   AC-2  message requires an active permit; from_name mandatory, never NULL
- *   AC-3  broadcast (--to omitted) vs directed (--to Bob) to_name switch
+ *   AC-3  broadcast (--to omitted) vs directed (--to Bev) to_name switch
  *   AC-4  unknown --to rejected, no partial write, exact reused error string
  *   AC-5  argv parser actually consumes --to's value (no body corruption)
  *   AC-6  --body-file byte-identical read; inline+--body-file mutually excl.
- *   AC-7  checkin delivers unread + advances cursor (DB-verified, not just stdout)
- *   AC-8  offline-at-send-time identity still gets delivery on next checkin,
- *         even from a different window/session id
- *   AC-9  sender's own message never re-surfaces to the sender; recipient still sees it
+ *   AC-7  FEAT-107 delivery split: checkin shows an UNREAD COUNT only (never
+ *         message bodies) and does NOT advance the cursor; `read` is the sole
+ *         delivering + cursor-advancing path (DB-verified, not just stdout).
+ *         Includes an explicit false-pass guard (body absent from checkin
+ *         stdout AND a subsequent `read` still delivers it) — see FEAT-107's
+ *         root cause: checkin's own stdout is routinely piped/redirected, and
+ *         when checkin both delivered AND advanced the cursor, that silently
+ *         destroyed nine unread messages on 2026-08-20.
+ *   AC-8  offline-at-send-time identity still gets its COUNT on the next
+ *         checkin (even from a different window/session id) and its BODY on
+ *         the next `read`
+ *   AC-9  sender's own message never re-surfaces to the sender (neither as a
+ *         checkin count nor a read delivery); recipient still sees it via read
  *   AC-10 broadcast delivery is independent per identity (separate cursor rows)
- *   AC-11 unread messages surface oldest-first (ascending id)
- *   AC-12 delivery fires on checkin only, never on `renew --auto`
+ *   AC-11 unread messages surface oldest-first (ascending id) via `read`
+ *   AC-12 `renew --auto` never surfaces or consumes unread messages; a
+ *         genuine (non-auto) checkin only ever shows the count, never the
+ *         body — only `read` delivers
  *   AC-13 header comment documents the new command
  *
  * Also covers FEAT-070 (tool.looparm) Destructive REJECT fix-round regression
@@ -101,6 +112,12 @@ function checkin(name, sessionId) {
   return run(['checkin', '--name', name], sessionId);
 }
 
+/** FEAT-107: `read` is the sole delivering + cursor-advancing command — this
+ *  is the helper the AC-7..AC-12 estate uses to actually receive messages. */
+function readCmd(sessionId) {
+  return run(['read'], sessionId);
+}
+
 test.before(async () => {
   // Snapshot the shared identity fallback file so this suite's synthetic
   // acquire() calls (unavoidable side effect of exercising `checkin` as a
@@ -149,7 +166,7 @@ test.beforeEach(async () => {
 
 // ── AC-1: schema idempotency ────────────────────────────────────────────────
 
-test('AC-1: ensureSchema is idempotent and seeds exactly 3 read-cursor rows', async () => {
+test('AC-1: ensureSchema is idempotent and seeds exactly 4 read-cursor rows', async () => {
   const AC1_DB = `${TEST_DB}_ac1`;
   const boot = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
   await boot.query(`DROP DATABASE IF EXISTS \`${AC1_DB}\``);
@@ -174,14 +191,14 @@ test('AC-1: ensureSchema is idempotent and seeds exactly 3 read-cursor rows', as
 
   const check = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: AC1_DB });
   const [[row1]] = await check.query('SELECT COUNT(*) AS n FROM sync_read_cursor');
-  assert.equal(row1.n, 3, 'sync_read_cursor must have exactly 3 rows immediately after first ensureSchema run');
+  assert.equal(row1.n, 4, 'sync_read_cursor must have exactly 4 rows (one per NAMES entry) immediately after first ensureSchema run');
 
   const second = runInit();
   assert.equal(second.status, 0, `second init (already-migrated DB) should also exit 0, no duplicate-table error: ${second.stderr}`);
   const [[row2]] = await check.query('SELECT COUNT(*) AS n FROM sync_read_cursor');
-  assert.equal(row2.n, 3, 'a second ensureSchema run must not change the row count (false-pass guard: not just "did not crash")');
+  assert.equal(row2.n, 4, 'a second ensureSchema run must not change the row count (false-pass guard: not just "did not crash")');
   const [[permitsRow]] = await check.query('SELECT COUNT(*) AS n FROM sync_permits');
-  assert.equal(permitsRow.n, 3, 'sync_permits row count also unchanged by the second run');
+  assert.equal(permitsRow.n, 4, 'sync_permits row count also unchanged by the second run');
 
   await check.end();
   const drop = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
@@ -205,12 +222,12 @@ test('AC-2a: no row written when permit missing (DB-verified)', async () => {
 
 test('AC-2b: sent message records the caller\'s own resolved identity as from_name', async () => {
   const sid = 'ac2-bob-session';
-  const ci = checkin('Bob', sid);
+  const ci = checkin('Bev', sid);
   assert.equal(ci.status, 0, `checkin should succeed: ${ci.stderr}`);
   const msg = run(['message', 'hi'], sid);
   assert.equal(msg.status, 0, `message should succeed: ${msg.stderr}`);
   const [rows] = await db.query('SELECT from_name FROM sync_messages ORDER BY id DESC LIMIT 1');
-  assert.equal(rows[0].from_name, 'Bob');
+  assert.equal(rows[0].from_name, 'Bev');
 });
 
 // ── AC-3: broadcast vs directed ──────────────────────────────────────────────
@@ -223,12 +240,12 @@ test('AC-3a: message with no --to writes to_name IS NULL (broadcast)', async () 
   assert.equal(rows[0].to_name, null);
 });
 
-test('AC-3b: message --to Bob writes to_name = Bob', async () => {
+test('AC-3b: message --to Bev writes to_name = Bev', async () => {
   const sid = 'ac3-directed-session';
   assert.equal(checkin('Bill', sid).status, 0);
-  assert.equal(run(['message', 'directed text', '--to', 'Bob'], sid).status, 0);
+  assert.equal(run(['message', 'directed text', '--to', 'Bev'], sid).status, 0);
   const [rows] = await db.query('SELECT to_name FROM sync_messages ORDER BY id DESC LIMIT 1');
-  assert.equal(rows[0].to_name, 'Bob');
+  assert.equal(rows[0].to_name, 'Bev');
 });
 
 // ── AC-4: unknown --to rejected ──────────────────────────────────────────────
@@ -239,7 +256,7 @@ test('AC-4: unknown --to target rejected, no partial write, exact reused string'
   const [[before]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
   const res = run(['message', 'hi', '--to', 'Nobody'], sid);
   assert.notEqual(res.status, 0);
-  assert.match(res.stderr, /Unknown slot name "Nobody"\. Valid: Bill, Bob, Ben/);
+  assert.match(res.stderr, /Unknown slot name "Nobody"\. Valid: Bill, Ben, Bev, Bro/);
   const [[after]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
   assert.equal(after.n, before.n);
 });
@@ -249,10 +266,10 @@ test('AC-4: unknown --to target rejected, no partial write, exact reused string'
 test('AC-5: --to consumes its value; body is not corrupted with the target name', async () => {
   const sid = 'ac5-session';
   assert.equal(checkin('Bill', sid).status, 0);
-  assert.equal(run(['message', 'hi', '--to', 'Bob'], sid).status, 0);
+  assert.equal(run(['message', 'hi', '--to', 'Bev'], sid).status, 0);
   const [rows] = await db.query('SELECT body, to_name FROM sync_messages ORDER BY id DESC LIMIT 1');
-  assert.equal(rows[0].body, 'hi', 'body must be exactly "hi", not "hi Bob" or similar concatenation');
-  assert.equal(rows[0].to_name, 'Bob');
+  assert.equal(rows[0].body, 'hi', 'body must be exactly "hi", not "hi Bev" or similar concatenation');
+  assert.equal(rows[0].to_name, 'Bev');
 });
 
 // ── AC-6: --body-file ─────────────────────────────────────────────────────────
@@ -264,7 +281,7 @@ test('AC-6a: --body-file reads the body byte-identically, including shell-specia
   const tmpFile = path.join(os.tmpdir(), `claude-sync-test-body-${Date.now()}.txt`);
   fs.writeFileSync(tmpFile, tricky, 'utf8');
   try {
-    const res = run(['message', '--to', 'Bob', '--body-file', tmpFile], sid);
+    const res = run(['message', '--to', 'Bev', '--body-file', tmpFile], sid);
     assert.equal(res.status, 0, `message --body-file should succeed: ${res.stderr}`);
     const [rows] = await db.query('SELECT body FROM sync_messages ORDER BY id DESC LIMIT 1');
     assert.equal(rows[0].body, tricky, 'stored body must be byte-identical to the file content');
@@ -278,7 +295,7 @@ test('AC-6b: inline text + --body-file together is rejected, no row written', as
   fs.writeFileSync(tmpFile, 'file body', 'utf8');
   try {
     const [[before]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
-    const res = run(['message', 'inline text', '--to', 'Bob', '--body-file', tmpFile], 'ac6b-session');
+    const res = run(['message', 'inline text', '--to', 'Bev', '--body-file', tmpFile], 'ac6b-session');
     assert.notEqual(res.status, 0);
     const [[after]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
     assert.equal(after.n, before.n);
@@ -287,117 +304,164 @@ test('AC-6b: inline text + --body-file together is rejected, no row written', as
   }
 });
 
-// ── AC-7: checkin delivers + advances cursor ────────────────────────────────
+// ── AC-7: FEAT-107 delivery split — checkin shows a COUNT, read delivers ───
 
-test('AC-7: checkin surfaces unread messages and advances the cursor (DB-verified)', async () => {
+test('AC-7: checkin shows an UNREAD COUNT (never the body) and does not advance the cursor', async () => {
   const [result] = await db.query(
-    "INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bob', 'hello Bob')"
+    "INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bev', 'hello Bev')"
   );
   const msgId = result.insertId;
-  const res = checkin('Bob', 'ac7-session');
+  const res = checkin('Bev', 'ac7-session');
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /hello Bob/);
-  const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bob"');
-  assert.ok(Number(rows[0].last_read_id) >= msgId, 'cursor must have advanced to at least the delivered message id');
+  assert.match(res.stdout, /UNREAD: 1 message\(s\) - run read to receive them\./, 'checkin must show the count line verbatim');
+  assert.doesNotMatch(res.stdout, /hello Bev/, 'checkin must NEVER print the message body — that is read\'s job only (FEAT-107)');
+  const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
+  assert.equal(Number(rows[0].last_read_id), 0, 'checkin must NOT advance the cursor — only read does (FEAT-107)');
+  assert.ok(msgId > 0); // sanity: the message really was inserted
 });
 
-test('AC-7 false-pass guard: a second checkin does not re-print the already-delivered message', async () => {
-  await db.query("INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bob', 'once only please')");
+test('AC-7 false-pass guard: body absent from checkin output AND a subsequent read still delivers it', async () => {
+  await db.query("INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bev', 'once only please')");
   const sid = 'ac7b-session';
-  const first = checkin('Bob', sid);
-  assert.match(first.stdout, /once only please/);
-  const second = checkin('Bob', sid); // renew-of-self path
-  assert.doesNotMatch(second.stdout, /once only please/);
+
+  // A false pass would be a test that only checks "body absent from checkin"
+  // without also proving the message is NOT lost — i.e. it must still be
+  // retrievable via read. Both halves are asserted here, in one test, so
+  // neither can silently regress without failing this test.
+  const ci = checkin('Bev', sid);
+  assert.match(ci.stdout, /UNREAD: 1 message\(s\)/, 'checkin must report the count');
+  assert.doesNotMatch(ci.stdout, /once only please/, 'checkin must not leak the body');
+
+  const first = readCmd(sid);
+  assert.equal(first.status, 0, `read should succeed: ${first.stderr}`);
+  assert.match(first.stdout, /once only please/, 'read must deliver the body checkin withheld');
+
+  // Re-reading must not re-print the now-delivered message (cursor advanced).
+  const second = readCmd(sid);
+  assert.doesNotMatch(second.stdout, /once only please/, 'a second read must not re-deliver an already-read message');
 });
 
 // ── AC-8: offline identity, delivered to a different window later ──────────
 
-test('AC-8: message to an offline identity persists and delivers on a later checkin from a different window', async () => {
+test('AC-8: message to an offline identity persists — checkin (from a different window) shows the count, read delivers the body', async () => {
   // No active Ben permit exists (beforeEach reset everyone to FREE).
   const sid1 = 'ac8-sender-session';
   assert.equal(checkin('Bill', sid1).status, 0);
   assert.equal(run(['message', 'hi Ben, are you there?', '--to', 'Ben'], sid1).status, 0);
 
-  // Deliver via a DIFFERENT, never-before-seen window/session id.
+  // Checkin via a DIFFERENT, never-before-seen window/session id — shows the
+  // count only.
   const sid2 = 'ac8-different-window-session';
   const res = checkin('Ben', sid2);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /hi Ben, are you there\?/);
+  assert.match(res.stdout, /UNREAD: 1 message\(s\)/);
+  assert.doesNotMatch(res.stdout, /hi Ben, are you there\?/, 'checkin must not deliver the body even for an offline-at-send-time identity');
+
+  // read (same window) delivers the body.
+  const readRes = readCmd(sid2);
+  assert.match(readRes.stdout, /hi Ben, are you there\?/);
 });
 
 // ── AC-9: sender suppression ─────────────────────────────────────────────────
 
-test('AC-9: sender never sees their own message on their next checkin; recipient does', async () => {
+test('AC-9: sender never sees their own message (count or body); recipient sees both via checkin count + read body', async () => {
   const billSid = 'ac9-bill-session';
   assert.equal(checkin('Bill', billSid).status, 0);
-  assert.equal(run(['message', 'note', '--to', 'Bob'], billSid).status, 0);
+  assert.equal(run(['message', 'note', '--to', 'Bev'], billSid).status, 0);
 
-  // Bill checks in again (renew-of-self path) — must NOT see "note".
+  // Bill checks in again (renew-of-self path) — must show NO unread count at
+  // all for his own just-sent message.
   const billAgain = checkin('Bill', billSid);
   assert.equal(billAgain.status, 0);
-  assert.doesNotMatch(billAgain.stdout, /note/, 'sender must never see their own just-sent message flagged unread');
+  assert.doesNotMatch(billAgain.stdout, /UNREAD:/, 'sender must never see an unread count for their own just-sent message');
+  const billRead = readCmd(billSid);
+  assert.doesNotMatch(billRead.stdout, /note/, 'sender must never see their own just-sent message body via read either');
 
-  // Control case: Bob's checkin DOES see it.
-  const bobSid = 'ac9-bob-session';
-  const bobCi = checkin('Bob', bobSid);
-  assert.match(bobCi.stdout, /note/, 'the actual recipient must still see the message');
+  // Control case: Bev's checkin shows the count, and Bev's read shows the body.
+  const bevSid = 'ac9-bev-session';
+  const bevCi = checkin('Bev', bevSid);
+  assert.match(bevCi.stdout, /UNREAD: 1 message\(s\)/, 'the actual recipient must see the count on checkin');
+  const bevRead = readCmd(bevSid);
+  assert.match(bevRead.stdout, /note/, 'the actual recipient must see the body via read');
 });
 
 // ── AC-10: broadcast delivery independent per identity ──────────────────────
 
-test('AC-10: broadcast is delivered independently to each identity (separate cursor rows)', async () => {
+test('AC-10: broadcast is delivered independently to each identity (separate cursor rows), via read', async () => {
   const senderSid = 'ac10-sender-session';
   assert.equal(checkin('Bill', senderSid).status, 0);
   assert.equal(run(['message', 'broadcast to everyone'], senderSid).status, 0);
 
-  const bobCi = checkin('Bob', 'ac10-bob-session');
-  assert.match(bobCi.stdout, /broadcast to everyone/);
+  const bevSid = 'ac10-bev-session';
+  const bevCi = checkin('Bev', bevSid);
+  assert.match(bevCi.stdout, /UNREAD: 1 message\(s\)/);
+  const bevRead = readCmd(bevSid);
+  assert.match(bevRead.stdout, /broadcast to everyone/);
 
   // Ben must STILL receive it — one identity's cursor advancing must not
   // mark it read for another (the single-shared-scalar bug class).
-  const benCi = checkin('Ben', 'ac10-ben-session');
-  assert.match(benCi.stdout, /broadcast to everyone/, "Ben's independent cursor must still be behind the broadcast");
+  const benSid = 'ac10-ben-session';
+  const benCi = checkin('Ben', benSid);
+  assert.match(benCi.stdout, /UNREAD: 1 message\(s\)/, "Ben's independent cursor must still show the broadcast as unread");
+  const benRead = readCmd(benSid);
+  assert.match(benRead.stdout, /broadcast to everyone/, "Ben's independent cursor must still deliver the broadcast");
 });
 
 // ── AC-11: chronological ordering ────────────────────────────────────────────
 
-test('AC-11: multiple unread messages surface oldest-first', async () => {
+test('AC-11: multiple unread messages surface oldest-first, via read', async () => {
   const senderSid = 'ac11-sender-session';
   assert.equal(checkin('Bill', senderSid).status, 0);
-  assert.equal(run(['message', 'first', '--to', 'Bob'], senderSid).status, 0);
-  assert.equal(run(['message', 'second', '--to', 'Bob'], senderSid).status, 0);
-  assert.equal(run(['message', 'third', '--to', 'Bob'], senderSid).status, 0);
+  assert.equal(run(['message', 'first', '--to', 'Bev'], senderSid).status, 0);
+  assert.equal(run(['message', 'second', '--to', 'Bev'], senderSid).status, 0);
+  assert.equal(run(['message', 'third', '--to', 'Bev'], senderSid).status, 0);
 
-  const bobCi = checkin('Bob', 'ac11-bob-session');
-  const out = bobCi.stdout;
+  const sid = 'ac11-bev-session';
+  const bevCi = checkin('Bev', sid);
+  assert.match(bevCi.stdout, /UNREAD: 3 message\(s\)/, 'checkin count must reflect all 3 pending messages');
+  assert.doesNotMatch(bevCi.stdout, /first|second|third/, 'checkin must not leak any body text');
+
+  const bevRead = readCmd(sid);
+  const out = bevRead.stdout;
   const iFirst = out.indexOf('first');
   const iSecond = out.indexOf('second');
   const iThird = out.indexOf('third');
-  assert.ok(iFirst >= 0 && iSecond >= 0 && iThird >= 0, 'all three messages must be present in stdout');
+  assert.ok(iFirst >= 0 && iSecond >= 0 && iThird >= 0, 'all three messages must be present in read stdout');
   assert.ok(iFirst < iSecond, '"first" must appear before "second"');
   assert.ok(iSecond < iThird, '"second" must appear before "third"');
 });
 
-// ── AC-12: checkin-only delivery, never renew --auto ────────────────────────
+// ── AC-12: renew --auto never touches messages; only read delivers ─────────
 
-test('AC-12: renew --auto never surfaces or consumes unread messages', async () => {
+test('AC-12: renew --auto never surfaces or consumes unread messages; a genuine checkin only shows the count, read delivers', async () => {
   const sid = 'ac12-session';
-  assert.equal(checkin('Bob', sid).status, 0); // Bob's permit now active with ~5min remaining
+  assert.equal(checkin('Bev', sid).status, 0); // Bev's permit now active with ~5min remaining
 
   const senderSid = 'ac12-sender-session';
   assert.equal(checkin('Bill', senderSid).status, 0);
-  assert.equal(run(['message', 'mid-session arrival', '--to', 'Bob'], senderSid).status, 0);
+  assert.equal(run(['message', 'mid-session arrival', '--to', 'Bev'], senderSid).status, 0);
 
   const autoRenew = run(['renew', '--auto'], sid);
   assert.equal(autoRenew.status, 0, `renew --auto should succeed: ${autoRenew.stderr}`);
   assert.equal(autoRenew.stdout.trim(), '', 'renew --auto must stay silent, matching today\'s heartbeat-only behaviour');
 
-  const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bob"');
+  const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
   assert.equal(Number(rows[0].last_read_id), 0, 'cursor must NOT advance on renew --auto — message still pending');
 
-  // A genuine subsequent checkin (renew-of-self path) DOES deliver it.
-  const genuineCheckin = checkin('Bob', sid);
-  assert.match(genuineCheckin.stdout, /mid-session arrival/);
+  // A genuine subsequent checkin (renew-of-self path, permit still active —
+  // NOT wake recovery) shows the count only, per FEAT-107; it must NOT
+  // deliver the body and must NOT advance the cursor either.
+  const genuineCheckin = checkin('Bev', sid);
+  assert.match(genuineCheckin.stdout, /UNREAD: 1 message\(s\)/);
+  assert.doesNotMatch(genuineCheckin.stdout, /mid-session arrival/, 'checkin must not deliver the body even on a genuine (non-auto) checkin');
+  const [rows2] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
+  assert.equal(Number(rows2[0].last_read_id), 0, 'checkin must still not advance the cursor');
+
+  // Only read delivers + advances.
+  const genuineRead = readCmd(sid);
+  assert.match(genuineRead.stdout, /mid-session arrival/);
+  const [rows3] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
+  assert.ok(Number(rows3[0].last_read_id) > 0, 'read must advance the cursor');
 });
 
 // ── AC-13: documentation ─────────────────────────────────────────────────────
@@ -489,7 +553,7 @@ test('Finding #1: loop-clear and loop-show are equally rejected via bare (non-se
 
 test('Finding #1 false-pass guard: a window presenting its OWN real session secret can still loop-set/show/clear its own row', async () => {
   const sid = 'f1-legit-session';
-  const ci = checkin('Bob', sid);
+  const ci = checkin('Bev', sid);
   assert.equal(ci.status, 0);
   const secret = captureSessionSecret(ci);
 
@@ -503,7 +567,7 @@ test('Finding #1 false-pass guard: a window presenting its OWN real session secr
   const clear = loopClear(secret);
   assert.equal(clear.status, 0, `legit loop-clear should succeed: ${clear.stderr}`);
 
-  const [rows] = await db.query('SELECT spec FROM sync_loop_config WHERE name="Bob"');
+  const [rows] = await db.query('SELECT spec FROM sync_loop_config WHERE name="Bev"');
   assert.equal(rows.length, 0, 'own-secret clear must actually remove the row');
 });
 
@@ -771,7 +835,7 @@ test('Culvert regression: `message "text" --to` (no value, end of argv) is a har
 test('Culvert regression: `--body-file` with no value (end of argv) is a hard parse error, no partial write', async () => {
   const sid = 'culvert-repro-bodyfile';
   checkin('Bill', sid);
-  const res = run(['message', '--to', 'Bob', '--body-file'], sid);
+  const res = run(['message', '--to', 'Bev', '--body-file'], sid);
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /--body-file requires a value/i);
   const [rows] = await db.query('SELECT * FROM sync_messages');
@@ -801,15 +865,15 @@ test('Culvert regression: same missing-value bug fixed for --name and --session 
   assert.match(resSession.stderr, /--session requires a value/i);
 });
 
-test('Sanity: normal usage is unaffected — `--to Bob` and `--body-file <path>` still parse and work', async () => {
+test('Sanity: normal usage is unaffected — `--to Bev` and `--body-file <path>` still parse and work', async () => {
   const sid = 'sanity-normal-usage';
   checkin('Bill', sid);
-  assert.equal(run(['message', 'normal directed message', '--to', 'Bob'], sid).status, 0);
+  assert.equal(run(['message', 'normal directed message', '--to', 'Bev'], sid).status, 0);
 
   const tmpFile = path.join(os.tmpdir(), `culvert-sanity-${Date.now()}.txt`);
   fs.writeFileSync(tmpFile, 'normal body-file content', 'utf8');
   try {
-    const res = run(['message', '--to', 'Bob', '--body-file', tmpFile], sid);
+    const res = run(['message', '--to', 'Bev', '--body-file', tmpFile], sid);
     assert.equal(res.status, 0, `body-file message should still succeed: ${res.stderr}`);
   } finally {
     fs.unlinkSync(tmpFile);
@@ -817,8 +881,213 @@ test('Sanity: normal usage is unaffected — `--to Bob` and `--body-file <path>`
 
   const [rows] = await db.query('SELECT to_name, body FROM sync_messages ORDER BY id ASC');
   assert.equal(rows.length, 2);
-  assert.equal(rows[0].to_name, 'Bob');
+  assert.equal(rows[0].to_name, 'Bev');
   assert.equal(rows[0].body, 'normal directed message');
-  assert.equal(rows[1].to_name, 'Bob');
+  assert.equal(rows[1].to_name, 'Bev');
   assert.equal(rows[1].body, 'normal body-file content');
+});
+
+// ── Retire-Bob checkin fix (Aaron, 2026-08-18/19) ───────────────────────────
+// Incident: Bob was retired permanently, but the slot still existed, so a
+// woken window with a lapsed/mismatched reservation could land on Bob via
+// plain first-free-in-NAMES-order, whose stale role text told it to do
+// nothing. Second incident: a lead window's reservation kept getting
+// resurrected onto a DIFFERENT identity than the one it actually held, via a
+// stale sync_window_map row.  These tests cover: NAMES no longer contains
+// Bob, --name Bob / message --to Bob are rejected with the retirement
+// message (not the generic "Unknown slot name"), no-name checkin prefers a
+// window's own mapped identity over blind first-free, ensureSchema seeds
+// only current NAMES, and wake recovery fails loudly instead of
+// cross-assigning to a different name.
+
+test('NAMES no longer contains Bob; RETIRED lists exactly Bob', () => {
+  const sync = require('./claude-sync.js');
+  assert.deepEqual(sync.NAMES, ['Bill', 'Ben', 'Bev', 'Bro'], 'NAMES must be exactly the current four slots (Bro added 2026-08-20, Aaron-directed)');
+  assert.ok(!sync.NAMES.includes('Bob'), 'Bob must not be a checkin-able slot any more');
+  assert.deepEqual(sync.RETIRED, ['Bob']);
+  assert.ok(sync.isRetired('bob'), 'isRetired must be case-insensitive');
+  assert.ok(!sync.isRetired('Ben'), 'a live slot must never be reported retired');
+});
+
+test('checkin --name Bob is rejected with the retirement message, not a generic error, and no permit is granted', async () => {
+  const sid = 'retire-bob-checkin';
+  const res = run(['checkin', '--name', 'Bob'], sid);
+  assert.notEqual(res.status, 0, 'checkin --name Bob must fail');
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/, 'must be the specific retirement message');
+  assert.match(res.stderr, /Bev=lead.*Bill=RM\/BA\/allocator\+oversight.*Ben=coder/,
+    'retirement message must state the current team shape');
+  assert.doesNotMatch(res.stdout, /YOU ARE:/, 'no identity may be granted on a retired-name request');
+
+  // False-pass guard: prove no row anywhere in sync_permits was touched by
+  // the rejected request (not just that this window got no permit).
+  const [rows] = await db.query('SELECT window_id FROM sync_permits WHERE window_id=?', [sid]);
+  assert.equal(rows.length, 0, 'a rejected retired-name checkin must not have written this window_id onto any slot');
+});
+
+test('CLAUDE_IDENTITY=Bob is equally rejected with the retirement message (not just --name)', () => {
+  const res = spawnSync(process.execPath, ['claude-sync.js', 'checkin'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
+      METRO_DB_NAME: TEST_DB,
+      CLAUDE_CODE_SESSION_ID: 'retire-bob-env-identity',
+      CLAUDE_SESSION_ID: '',
+      CLAUDE_IDENTITY: 'Bob',
+    },
+  });
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+});
+
+test('message --to Bob is rejected with the retirement message, no row written', async () => {
+  const sid = 'retire-bob-message';
+  assert.equal(checkin('Bill', sid).status, 0);
+  const [[before]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
+  const res = run(['message', 'hi', '--to', 'Bob'], sid);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+  const [[after]] = await db.query('SELECT COUNT(*) AS n FROM sync_messages');
+  assert.equal(after.n, before.n, 'no message row may be written for a retired --to target');
+});
+
+test('checkout --force Bob is rejected with the retirement message', () => {
+  const res = run(['checkout', '--force', 'Bob'], '');
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+});
+
+test('status/read never lists Bob as a slot', async () => {
+  const res = run(['status'], '');
+  assert.equal(res.status, 0);
+  assert.doesNotMatch(res.stdout, /^\s*Bob\s/m, 'Bob must not appear as a slot row in status output');
+});
+
+// ── No-name checkin prefers the window-mapped identity over first-free ─────
+
+test('no-name checkin prefers this window\'s own mapped identity over blind first-free-in-NAMES-order', async () => {
+  const sid = 'winmap-pref-session';
+  // Simulate a window whose OWN identity (per the persistent sync_window_map,
+  // which survives reservation lapse — see that table's own schema comment)
+  // is "Bev", not the first name in NAMES ("Bill"). All three slots are FREE
+  // (beforeEach resets everyone) so blind first-free-in-NAMES-order would
+  // hand this window "Bill" if the map preference were not consulted.
+  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
+    [sid, 'Bev', Date.now()]);
+  const res = run(['checkin'], sid); // no --name, no CLAUDE_IDENTITY
+  assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bev/, 'must honour the window-mapped identity, not first-free (Bill)');
+});
+
+test('false-pass guard: no-name checkin with NO window map falls back to plain first-free (Bill)', async () => {
+  const res = run(['checkin'], 'winmap-nopref-session');
+  assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bill/, 'absent a window map, first-free-in-NAMES-order must still be Bill');
+});
+
+test('window-mapped preference is skipped when the mapped slot is unavailable — falls back to first-free', async () => {
+  const holderSid = 'winmap-holder-session';
+  assert.equal(checkin('Bill', holderSid).status, 0); // Bill now ACTIVE, held by a different window
+
+  const sid = 'winmap-unavailable-session';
+  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
+    [sid, 'Bill', Date.now()]);
+  const res = run(['checkin'], sid);
+  assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Ben/, 'Bill (mapped but live-held elsewhere) must be skipped in favour of the next free slot');
+});
+
+test('window-mapped preference never resurrects a retired name (defensive — map should never hold Bob, but code must not trust it blindly)', async () => {
+  const sid = 'winmap-retired-session';
+  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
+    [sid, 'Bob', Date.now()]);
+  const res = run(['checkin'], sid);
+  assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
+  assert.doesNotMatch(res.stdout, /YOU ARE: Bob/, 'a Bob-mapped window must never be granted the Bob identity');
+  assert.match(res.stdout, /YOU ARE: Bill/, 'must fall back to plain first-free instead');
+});
+
+// ── ensureSchema seeding: only current NAMES, Bob never (re)seeded ─────────
+
+test('ensureSchema seeds rows only for current NAMES — Bob is never seeded on a fresh DB', async () => {
+  const SEED_DB = `${TEST_DB}_seed`;
+  const boot = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
+  await boot.query(`DROP DATABASE IF EXISTS \`${SEED_DB}\``);
+  await boot.query(`CREATE DATABASE \`${SEED_DB}\``);
+  await boot.end();
+
+  const check = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD, database: SEED_DB });
+  const sync = require('./claude-sync.js');
+  await sync.ensureSchema(check);
+  const [rows] = await check.query('SELECT name FROM sync_permits ORDER BY name');
+  const names = rows.map(r => r.name);
+  assert.deepEqual(names.slice().sort(), ['Ben', 'Bev', 'Bill', 'Bro'], 'seeding must create exactly the current NAMES');
+  assert.ok(!names.includes('Bob'), 'Bob must never be (re)seeded by ensureSchema on a fresh DB');
+
+  await check.end();
+  const drop = await mysql.createConnection({ host: DB_HOST, port: DB_PORT, user: DB_USER, password: DB_PASSWORD });
+  await drop.query(`DROP DATABASE IF EXISTS \`${SEED_DB}\``);
+  await drop.end();
+});
+
+test('ensureSchema never deletes a pre-existing stale Bob row (operator handles DB cleanup, never code — GR#24)', async () => {
+  await db.query("INSERT IGNORE INTO sync_permits (name) VALUES ('Bob')");
+  const sync = require('./claude-sync.js');
+  await sync.ensureSchema(db); // every CLI command re-runs this — must stay idempotent and non-destructive
+  const [rows] = await db.query("SELECT name FROM sync_permits WHERE name='Bob'");
+  assert.equal(rows.length, 1, 'a pre-existing Bob row must survive ensureSchema untouched');
+  await db.query("DELETE FROM sync_permits WHERE name='Bob'"); // test-only cleanup, not production behaviour
+});
+
+// ── Wake recovery: never cross-assign to a different identity ──────────────
+
+test('wake recovery on a genuinely-unavailable previous slot fails loudly and never adopts a different name', async () => {
+  const sidA = 'wakefail-A';
+  const sidB = 'wakefail-B';
+  // Window A originally held Ben (also seeds sync_window_map: sidA -> Ben).
+  assert.equal(checkin('Ben', sidA).status, 0);
+  // Simulate A's reservation having lapsed past RESERVE_MS: its Ben row goes
+  // back to FREE, but sync_window_map's sidA -> Ben mapping is untouched
+  // (that table is explicitly designed to survive slot reassignment).
+  await db.query("UPDATE sync_permits SET released=1 WHERE name='Ben'");
+  // Window B then legitimately takes the now-free Ben slot for itself.
+  assert.equal(checkin('Ben', sidB).status, 0);
+
+  // Window A wakes and calls renew — it holds no active permit of its own
+  // any more (Ben's row now belongs to window B).
+  const res = run(['renew'], sidA);
+  assert.notEqual(res.status, 0, 'must fail loudly, never silently succeed under a different name');
+  assert.doesNotMatch(res.stdout, /YOU ARE:/, 'no identity may be printed as granted');
+  assert.doesNotMatch(res.stdout, /IDENTITY CHANGED/, 'the old silent cross-assign message must be gone');
+  assert.match(res.stderr, /Your previous slot "Ben" is held/);
+  assert.match(res.stderr, /checkin --name Ben/);
+
+  // False-pass guard: window A must not have been silently granted ANY slot
+  // (Bill or Bev), which is exactly what the pre-fix cross-assign did.
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sidA]);
+  assert.equal(rows.length, 0, 'window A must hold no slot at all after the rejected wake recovery');
+});
+
+test('wake recovery false-pass guard: previous slot genuinely FREE still reclaims the SAME name', async () => {
+  const sid = 'wakeok-session';
+  assert.equal(checkin('Bill', sid).status, 0);
+  // Simulate idle-past-reservation expiry: row goes FREE, window_map keeps
+  // sid -> Bill.
+  await db.query("UPDATE sync_permits SET released=1 WHERE name='Bill'");
+  const res = run(['renew'], sid);
+  assert.equal(res.status, 0, `wake recovery onto a genuinely-free previous slot must still succeed: ${res.stderr}`);
+  assert.match(res.stdout, /re-acquired Bill/);
+});
+
+test('wake recovery on a stale window_map entry pointing at retired Bob fails loudly with a re-checkin instruction, never adopts another name', async () => {
+  const sid = 'wake-retired-map-session';
+  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
+    [sid, 'Bob', Date.now()]);
+  const res = run(['renew'], sid);
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /Your previous slot "Bob" no longer exists/);
+  assert.doesNotMatch(res.stdout, /YOU ARE:/);
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
+  assert.equal(rows.length, 0, 'no slot may be silently granted when the mapped previous name is retired');
 });

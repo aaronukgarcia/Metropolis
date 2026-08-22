@@ -49,6 +49,11 @@
 //     T-RENDER's reads can never tear (AC-4).
 //   - screen.go   — NewScreen: tcell.Screen construction + Init with a
 //     registry-sourced, non-panicking error path (AC-8).
+//   - screen_registry.go — ScreenRegistry (FEAT-211 increment 1): the
+//     ActiveScreen state owner. Holds every registered (Draw, Grammar)
+//     ScreenEntry in registration order (GR#21), and the one runtime
+//     mutation, Activate, is a pointer swap only — no subscription,
+//     transport, or tcell.Screen state moves on a switch.
 //   - harness_test.go / *_test.go — tests, all headless via
 //     tcell.NewSimulationScreen (no real terminal in CI).
 //

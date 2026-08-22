@@ -120,6 +120,7 @@ A time-pattern model (CoreHours / Shift / AnyTime, data-driven), the per-tick de
 
 - **ASM-956 (confirm-and-close).** Overwork (996) wellbeing hit routes through `engine.wellbeing`'s registered `WellbeingAPI`, mapping onto existing drivers (leisure-fit via the 168-hour budget, commute-time); a new overwork driver would be a Bill/Aaron call before dispatch.
 
+- **ASM-1125 (FEAT-084 CC fold).** engine.worklife tick is an absolute simulation-hour index: hourOfDay=tick%24, dayOfWeek=(tick/24)%7 (0=Monday), weekIndex=tick/(24*7). The composition-root tick-to-hour mapping is a worklife-local convention pending the two-layer clock definition; the bridge is documented at wiring time.
 
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-20)
 
@@ -129,4 +130,3 @@ A time-pattern model (CoreHours / Shift / AnyTime, data-driven), the per-tick de
 
 
 `engine.worklife` claims MET-G2900..G2906 (registry range G2900-G2999). During build a concurrent `engine.spaceport` initially claimed the same block and moved itself to G3000-G3099, resolving the collision. Flags the BUG-008 class: per-module error subranges are claimed ad hoc and concurrent waves collide; a mechanical next-free-range allocator would prevent recurrence.
-

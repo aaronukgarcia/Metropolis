@@ -73,3 +73,7 @@ A CLI (`metropolis -headless ...`) and library wrapping `engine.core`'s orchestr
 ## Escalations
 
 - None at draft time. `status: draft-ahead` — depends on `engine.core` (`MOD-012`); refresh AC-1/AC-3/AC-5 against `engine.core`'s actual exported orchestrator API once it lands, and against `int.serializer`'s finalized bundle-write API (already frozen in Sprint 0, low risk of drift).
+
+- **ASM-850 (CC fold).** MOD-015 dedup: harness.headless.md and engine.headless.md both open with BOW code MOD-015. This split was ruled intentional in MOD-015 comments (ASM-119/ASM-120, Bill 2026-08-10), but neither file header cross-references the other, so a future dispatch-guard/codejson-audit pass may flag a duplicate-criteria/file-ownership overlap. Recommend a one-line cross-reference in each header.
+
+- **ASM-860 (SF fold).** BOW MOD-015 Desc still shows the CLI example `-out snap.json` (single file), which ASM-158 (Bill 2026-08-10) ruled wrong: `-out` is a bundle DIRECTORY (header.json plus shards/). The acceptance file AC-1 was amended, but the BOW item description was never corrected to match; the BOW Desc needs updating to the bundle-directory form.

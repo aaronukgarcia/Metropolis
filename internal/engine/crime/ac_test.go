@@ -500,83 +500,16 @@ func TestNoRandomSpamFundingDampensProbability(t *testing.T) {
 }
 
 // AC-12 (§28 justice-chain conservation identity — pipeline of identifiable
-// people): every month, per district, the three identities hold exactly, with
-// every term independently sourced and the prison cross-check against an
-// independent intake ledger.
-func TestJusticeChainConservation(t *testing.T) {
-	a := testAPI(t)
-	// Drive arrests: high active crime + clearance.
-	d := defaultDistrict(1)
-	d.DetectiveCapacity = 20 // clearance ceiling
-	d.CourthouseThroughput = 5
-	// An independent prison intake ledger, keyed by (district, month) —
-	// simulating engine.prison's own counting, fed ONLY from the emitted
-	// sentence records (not from crime's aggregate).
-	ledger := &fakePrisonIntake{counts: map[DistrictID]map[int64]int64{}}
-	if err := a.SetPrisonIntake(ledger); err != nil {
-		t.Fatalf("SetPrisonIntake: %v", err)
-	}
-
-	for m := int64(0); m < 6; m++ {
-		advance(t, a, m, d)
-		arrested, _ := a.OffendersArrested(1)
-		charged, _ := a.OffendersCharged(1)
-		releasedNC, _ := a.OffendersReleasedNoCharge(1)
-		convicted, _ := a.OffendersConvicted(1)
-		acquitted, _ := a.OffendersAcquitted(1)
-		awaiting, _ := a.OffendersAwaitingTrial(1)
-		toPrison, _ := a.OffendersSentencedToPrison(1)
-		nonCustodial, _ := a.OffendersSentencedNonCustodial(1)
-
-		// Identity 1: arrested == charged + releasedNoCharge.
-		if arrested != charged+releasedNC {
-			t.Fatalf("month %d identity 1 violated: arrested=%d charged=%d releasedNoCharge=%d", m, arrested, charged, releasedNC)
-		}
-		// Identity 2: charged == convicted + acquitted + awaitingTrial.
-		if charged != convicted+acquitted+awaiting {
-			t.Fatalf("month %d identity 2 violated: charged=%d convicted=%d acquitted=%d awaiting=%d", m, charged, convicted, acquitted, awaiting)
-		}
-		// Identity 3: convicted == sentencedToPrison + sentencedNonCustodial.
-		if convicted != toPrison+nonCustodial {
-			t.Fatalf("month %d identity 3 violated: convicted=%d prison=%d nonCustodial=%d", m, convicted, toPrison, nonCustodial)
-		}
-
-		// Prison cross-check: feed the prison ledger from crime's own sentence
-		// records, then verify crime's aggregate matches the independent count.
-		ledger.record(m, toPrison)
-		ok, err := a.VerifyPrisonIntake(1, m)
-		if err != nil {
-			t.Fatalf("VerifyPrisonIntake(%d): %v", m, err)
-		}
-		if !ok {
-			t.Fatalf("month %d prison cross-check failed: crime=%d intake=%d", m, toPrison, ledger.count(1, m))
-		}
-	}
-}
-
-// fakePrisonIntake is the test double for engine.prison's independent intake
-// ledger (AC-12's cross-check seam).
-type fakePrisonIntake struct {
-	counts map[DistrictID]map[int64]int64
-}
-
-func (f *fakePrisonIntake) IntakeCount(d DistrictID, month int64) int64 {
-	return f.count(d, month)
-}
-
-func (f *fakePrisonIntake) count(d DistrictID, month int64) int64 {
-	if f.counts[d] == nil {
-		return 0
-	}
-	return f.counts[d][month]
-}
-
-func (f *fakePrisonIntake) record(month, n int64) {
-	if f.counts[1] == nil {
-		f.counts[1] = map[int64]int64{}
-	}
-	f.counts[1][month] = n
-}
+// people): every month, per district, the three crime-side identities hold
+// exactly, AND crime's sentenced-to-prison figure is cross-checked against a
+// REAL engine.prison instance's independent intake ledger (not a settable
+// fake — engine.prison (MOD-056) has landed since this test was first
+// written). TestJusticeChainConservation lives in ac12_prison_test.go as an
+// external (package crime_test) test: it needs to import engine.prison,
+// which itself imports engine.crime, so it cannot live in this white-box
+// file without an import cycle. Other packages split cross-engine
+// composition tests the same way (e.g. attract/s6_endtoend_test.go,
+// package attract_test).
 
 // AC-13 (§28 courthouse backlog releases offenders): saturate throughput →
 // backlog grows → a distinct released-on-backlog outcome appears → the

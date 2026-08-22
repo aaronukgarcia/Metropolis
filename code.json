@@ -39,7 +39,7 @@
       "Can a long bet be made on it?"
     ]
   },
-  "moduleCount": 162,
+  "moduleCount": 168,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -109,6 +109,10 @@
             "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
+          },
+          {
             "key": "harness.headless",
             "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
           },
@@ -145,8 +149,20 @@
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
           },
           {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
+          },
+          {
             "key": "ui.screen.demo",
             "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
+          },
+          {
+            "key": "ui.screen.districts",
+            "outboundGuid": "30ce8c12-6843-4876-8405-756280e23988"
+          },
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
           },
           {
             "key": "ui.screen.map",
@@ -159,6 +175,10 @@
           {
             "key": "ui.screen.proj",
             "outboundGuid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -407,6 +427,10 @@
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -511,6 +535,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
@@ -535,6 +563,10 @@
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
+            "key": "feat.deathwave",
+            "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
+          },
+          {
             "key": "feat.debugmode",
             "outboundGuid": "ac1e5b30-d9e6-4ffd-917d-e933e2c07f8d"
           },
@@ -545,6 +577,10 @@
           {
             "key": "feat.devmode",
             "outboundGuid": "fd1a00fd-bc5c-4f45-aaba-9228151168a5"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
           {
             "key": "feat.helper",
@@ -559,12 +595,20 @@
             "outboundGuid": "086886fe-ec35-40a5-b653-910632dc7302"
           },
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "foundation.data",
             "outboundGuid": "c2cbe598-733e-4c5b-9e16-b19f1fc41750"
           },
           {
             "key": "foundation.det",
             "outboundGuid": "4d387884-937a-4b9b-8e72-3eac16c86fee"
+          },
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           },
           {
             "key": "foundation.num",
@@ -629,6 +673,10 @@
           {
             "key": "ui.screen.build",
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
+          },
+          {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
           },
           {
             "key": "ui.screen.debug",
@@ -728,6 +776,10 @@
           {
             "key": "engine.core",
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.synth",
@@ -941,12 +993,24 @@
             "outboundGuid": "bed174ed-42bc-4b19-9381-939b51985b3b"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          },
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           },
           {
             "key": "harness.synth",
@@ -1001,6 +1065,10 @@
           {
             "key": "engine.news",
             "outboundGuid": "179c218a-f221-4785-8c7d-55d67df1e7b6"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "ui.screen.debug",
@@ -1093,6 +1161,10 @@
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -1177,6 +1249,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
@@ -1187,6 +1263,14 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.deathwave",
+            "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
         ]
       },
@@ -1423,6 +1507,10 @@
         "pattern": "single-goroutine screen ownership (T-RENDER); widgets draw to back buffer only",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
           },
@@ -1445,6 +1533,10 @@
           {
             "key": "ui.screen.build",
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
+          },
+          {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
           },
           {
             "key": "ui.screen.debug",
@@ -1492,6 +1584,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "ui.keys",
+            "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
+            "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
           }
         ]
       },
@@ -1522,7 +1619,12 @@
         "name": "Router",
         "format": "Go package API (func New(transport protocol.Transport, ...) + Run(ctx))",
         "pattern": "single transport-owning goroutine; sole writer of the ViewStore front snapshot; screens register handlers, never read channels",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          }
+        ]
       },
       "outbound": {
         "guid": "e1580ada-2265-4f39-845a-1f8f645350aa",
@@ -1563,6 +1665,16 @@
             "inboundGuid": "f3f4ea48-a0eb-473e-964c-5fcd9dd5b17f"
           },
           {
+            "key": "ui.screen.services",
+            "moduleGuid": "beb58fc8-35c7-4df4-8eb9-dcdffe0de7f3",
+            "inboundGuid": "8dacbb29-593a-4015-9821-44f67ea2db67"
+          },
+          {
+            "key": "ui.screen.districts",
+            "moduleGuid": "b1e7c2bb-1f1b-4e5c-b9e4-6bea6c737266",
+            "inboundGuid": "8c91b423-a2b6-440d-b82f-b3663076b5d0"
+          },
+          {
             "key": "ui.alerts",
             "moduleGuid": "11ff0bf0-e0c2-45e2-bc90-41c2981a6028",
             "inboundGuid": "c7b99511-9c8c-48ea-a74a-0c265514e2fe"
@@ -1600,6 +1712,10 @@
         "pattern": "custom widgets over RenderScreen; no allocation on draw paths",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
           },
@@ -1614,6 +1730,10 @@
           {
             "key": "ui.screen.build",
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
+          },
+          {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
           },
           {
             "key": "ui.screen.debug",
@@ -1676,12 +1796,24 @@
         "pattern": "leader-key state machine; every action registered with mnemonic path",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.alerts",
             "outboundGuid": "a273467a-350b-488b-9c0f-cff42db9e994"
           },
           {
+            "key": "ui.core",
+            "outboundGuid": "b0b339f9-0052-469e-9138-0eb930798f69"
+          },
+          {
             "key": "ui.screen.menu",
             "outboundGuid": "0166a389-86a1-4ffc-bc18-fff6dd3ec8b7"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -1754,6 +1886,10 @@
           {
             "key": "feat.detgate",
             "outboundGuid": "f3b59855-9e6a-4fd0-8a6a-4fcca269e7a9"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.headless",
@@ -1890,6 +2026,10 @@
             "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
           },
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.router",
             "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
@@ -1966,6 +2106,81 @@
             "key": "int.protocol",
             "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "engine.core",
+            "moduleGuid": "0bef8af8-0883-4604-bf98-71212100fffb",
+            "inboundGuid": "62889f18-fa2a-4ae9-a48c-22de5f632c28"
+          },
+          {
+            "key": "feat.compositionroot",
+            "moduleGuid": "fae40226-71d0-4836-be99-854c7b41eb4a",
+            "inboundGuid": "542d181a-9253-4392-9cdb-be59f10d8913"
+          },
+          {
+            "key": "feat.debugmode",
+            "moduleGuid": "d46840c1-b7d1-480b-a46d-e93d58fd7aa4",
+            "inboundGuid": "f1e42494-7f80-47c7-b4b4-5f7aab76880b"
+          },
+          {
+            "key": "foundation.buildinfo",
+            "moduleGuid": "d1961465-562b-4340-af79-2ebc7f6965d7",
+            "inboundGuid": "7f744a93-4823-440d-a2de-551ba87a70e5"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.registry",
+            "moduleGuid": "d6460761-184d-4bee-aac7-5f1408242a0c",
+            "inboundGuid": "1c1aac4c-1234-438a-be11-6733e50ec945"
+          },
+          {
+            "key": "harness.headless",
+            "moduleGuid": "94fcac3b-a76c-40a8-8bb6-6add9ebc9496",
+            "inboundGuid": "19f100f8-a43d-4571-a940-304eec18235f"
+          },
+          {
+            "key": "feat.devmode",
+            "moduleGuid": "7d49d8f6-f29e-48fe-af76-e67d6b15f501",
+            "inboundGuid": "61fbd7fa-acff-4e20-9099-02025feb7cda"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.keys",
+            "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
+            "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
+          },
+          {
+            "key": "ui.router",
+            "moduleGuid": "3675f77a-18b2-424b-9b95-a73b1d33f1d2",
+            "inboundGuid": "500b5f46-c02f-49f8-a44c-b89e03e42db9"
+          },
+          {
+            "key": "ui.screen.finance",
+            "moduleGuid": "237d6c7a-77af-405f-a2b7-e6164210ab83",
+            "inboundGuid": "d7978dd2-7f40-48cf-97f8-3f6ab17b1b6a"
+          },
+          {
+            "key": "ui.screen.map",
+            "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
+            "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
+          },
+          {
+            "key": "ui.screen.services",
+            "moduleGuid": "beb58fc8-35c7-4df4-8eb9-dcdffe0de7f3",
+            "inboundGuid": "8dacbb29-593a-4015-9821-44f67ea2db67"
+          },
+          {
+            "key": "ui.widgets",
+            "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
+            "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
           }
         ]
       },
@@ -2061,6 +2276,10 @@
           {
             "key": "feat.metricsdash",
             "outboundGuid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.headless",
@@ -2208,6 +2427,10 @@
           {
             "key": "balance.harness",
             "outboundGuid": "a1cfc2f4-847a-40cb-b269-e15f4e7c3ae1"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
           {
             "key": "harness.synth",
@@ -2383,6 +2606,10 @@
             "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -2425,6 +2652,10 @@
           {
             "key": "engine.traffic",
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
+          },
+          {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
           },
           {
             "key": "engine.wellbeing",
@@ -2513,6 +2744,10 @@
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
@@ -2557,12 +2792,20 @@
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.wellbeing",
             "outboundGuid": "68b2b938-d835-4ffb-9933-8ed0b118e42b"
           },
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           },
           {
             "key": "ui.screen.demo",
@@ -2607,6 +2850,52 @@
       "securityScan": null
     },
     {
+      "guid": "10ec4106-06a3-47a6-936c-34599d5544c3",
+      "key": "feat.deathwave",
+      "bowType": "feature",
+      "seq": 265,
+      "sprint": 7,
+      "title": "Mortality smoothing: bounded monthly death budget + weather-driven variation",
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "engine",
+      "specRef": "§5.1; §5.2; §9; §10; §H",
+      "path": "internal/engine/citizens/",
+      "inbound": {
+        "guid": "7ffa5eb5-b79b-492a-812c-8613db43b1c5",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": [
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "b2c58228-c94f-4864-b778-5c06d9ca2034",
+        "calls": [
+          {
+            "key": "engine.season",
+            "moduleGuid": "5a348a85-15ba-46d9-aa61-0605f12785f1",
+            "inboundGuid": "a85f49a1-4a31-44a1-9a7d-08defdad3011"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
       "guid": "3abafe05-7606-4067-8ab0-54007248b802",
       "key": "engine.invariant",
       "bowType": "module",
@@ -2627,6 +2916,10 @@
           {
             "key": "engine.citizens",
             "outboundGuid": "c128a4e1-80d2-46f8-ae99-aa902f806983"
+          },
+          {
+            "key": "engine.dispatch",
+            "outboundGuid": "6f3eb944-48a3-4135-abef-bf21f4ee1260"
           },
           {
             "key": "engine.finance",
@@ -3077,6 +3370,10 @@
             "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.tunnels",
             "outboundGuid": "2b5739de-8802-4887-8a6a-d0305a27c900"
           },
@@ -3161,6 +3458,10 @@
           {
             "key": "engine.traffic",
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
+          },
+          {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
           }
         ]
       },
@@ -3221,6 +3522,10 @@
           {
             "key": "engine.comms",
             "outboundGuid": "1d50fe0a-ed87-4db8-b0f4-9bcda783d308"
+          },
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
           },
           {
             "key": "engine.freight",
@@ -3306,6 +3611,10 @@
           {
             "key": "engine.cafe",
             "outboundGuid": "e9809660-e6e5-4ccb-a62d-b782ec32b41a"
+          },
+          {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
           },
           {
             "key": "engine.defence",
@@ -3449,6 +3758,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.deathwave",
+            "outboundGuid": "b2c58228-c94f-4864-b778-5c06d9ca2034"
           }
         ]
       },
@@ -3616,6 +3929,10 @@
         "pattern": "single wiring path (AC-1/AC-13): registers the fixed baseline-one hook set in one call and returns a read-only Composition handle (Population/MoneyFlows/Treasury/CitizenWealth/PopulationHash/ConsumptionDelivered/NetMigration); a second call on an already-composed engine, a failed module construction, or a call after seal all fail loudly with zero hooks left behind — never a silent partial wire",
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "harness.headless",
             "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
           },
@@ -3722,6 +4039,11 @@
             "key": "engine.firms",
             "moduleGuid": "df06bec1-ea6c-456d-9d06-690cb18fa2a0",
             "inboundGuid": "f6c47094-fae7-4d93-8267-653b15cc1a2a"
+          },
+          {
+            "key": "engine.dispatch",
+            "moduleGuid": "351b5c05-1b42-4438-b495-c0aaf6855194",
+            "inboundGuid": "ffb9d07e-1f14-4cfa-8573-192efaca1e3f"
           },
           {
             "key": "foundation.errors",
@@ -4030,6 +4352,10 @@
             "outboundGuid": "24cdc0fa-0cc2-45c2-9c45-4cd3778ab136"
           },
           {
+            "key": "engine.deathservices",
+            "outboundGuid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49"
+          },
+          {
             "key": "engine.dispatch",
             "outboundGuid": "6f3eb944-48a3-4135-abef-bf21f4ee1260"
           },
@@ -4165,6 +4491,10 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
         ]
       },
@@ -4205,6 +4535,67 @@
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
             "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "ab40c86a-a7b1-4a03-82fe-5da475250869",
+      "key": "feat.faith",
+      "bowType": "feature",
+      "seq": 425,
+      "sprint": 11,
+      "title": "Faith & places of worship — a light background dimension of the people",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "FEAT-138 BOW desc",
+      "path": "internal/engine/faith/",
+      "inbound": {
+        "guid": "7468c6f6-ecfb-4ce1-a9bf-072666952e64",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2",
+        "calls": [
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "engine.wellbeing",
+            "moduleGuid": "486813c7-b04b-4510-b05f-6148da76ef8e",
+            "inboundGuid": "da2c5c2a-495b-43b5-b496-2b641a5ec16a"
+          },
+          {
+            "key": "engine.social",
+            "moduleGuid": "b31dcdb1-b4f7-4d12-abec-9279e74412db",
+            "inboundGuid": "5f18ec56-65bd-45a8-a48d-ea42e07228e3"
           },
           {
             "key": "foundation.data",
@@ -4337,6 +4728,10 @@
           {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          },
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
           }
         ]
       },
@@ -4443,10 +4838,15 @@
       "path": "internal/ui/diagrams/",
       "inbound": {
         "guid": "ead88a71-8c91-4925-ae49-e847e77a810f",
-        "name": "DiagramAPI",
-        "format": "Go package API",
+        "name": "Engine",
+        "format": "Go package API (NewEngine() *Engine; methods Chain/Network/Sankey render+cache ChainTopology/NetworkTopology/SankeyTopology via RenderChain/RenderNetwork/RenderSankey)",
         "pattern": "topology in, cell-buffer layout out; cache keyed on topology hash",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          }
+        ]
       },
       "outbound": {
         "guid": "c7e55045-c1d0-4f5b-b73d-8dba5658a982",
@@ -4497,12 +4897,28 @@
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
           },
           {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
+          },
+          {
+            "key": "ui.screen.districts",
+            "outboundGuid": "30ce8c12-6843-4876-8405-756280e23988"
+          },
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          },
+          {
             "key": "ui.screen.menu",
             "outboundGuid": "0166a389-86a1-4ffc-bc18-fff6dd3ec8b7"
           },
           {
             "key": "ui.screen.proj",
             "outboundGuid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -4626,6 +5042,10 @@
         "pattern": null,
         "consumers": [
           {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
             "key": "ui.router",
             "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
           }
@@ -4648,6 +5068,21 @@
             "key": "engine.fiscal",
             "moduleGuid": "7c79679c-1e54-4415-b176-f646fea3054b",
             "inboundGuid": "124c2742-157f-413e-a6f9-570d1415fd6f"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          },
+          {
+            "key": "ui.diagrams",
+            "moduleGuid": "f1dc63b8-98e3-4a0b-b629-a924dd27597b",
+            "inboundGuid": "ead88a71-8c91-4925-ae49-e847e77a810f"
           }
         ]
       },
@@ -4736,7 +5171,16 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
+          },
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "96581f8a-77b4-449e-a592-3a7a3ea149e5",
@@ -4750,6 +5194,21 @@
             "key": "engine.dispatch",
             "moduleGuid": "351b5c05-1b42-4438-b495-c0aaf6855194",
             "inboundGuid": "ffb9d07e-1f14-4cfa-8573-192efaca1e3f"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          },
+          {
+            "key": "ui.keys",
+            "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
+            "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
           }
         ]
       },
@@ -5087,7 +5546,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.router",
+            "outboundGuid": "e1580ada-2265-4f39-845a-1f8f645350aa"
+          }
+        ]
       },
       "outbound": {
         "guid": "30ce8c12-6843-4876-8405-756280e23988",
@@ -5101,6 +5565,72 @@
             "key": "engine.tax",
             "moduleGuid": "0b7ec47b-a0bc-4ead-b39e-296c9fb39142",
             "inboundGuid": "ce583be9-355d-4989-be63-cf08a3395f14"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "237188fd-8a17-4dc0-94a4-afe8321cbfcf",
+      "key": "ui.screen.census",
+      "bowType": "feature",
+      "seq": 595,
+      "sprint": 9,
+      "title": "F6 Census screen: demographics/KPI drill-in",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "ui",
+      "specRef": "§13-F6; §45; §46; UI-SPEC §4/§5.2",
+      "path": "internal/ui/screens/census/",
+      "inbound": {
+        "guid": "22a5b5d8-bc90-4474-aa57-2fac3583d2e3",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "6e2b573b-26d2-44c8-b397-3c3cf3217906",
+        "calls": [
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.widgets",
+            "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
+            "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "engine.census",
+            "moduleGuid": "e181626c-f1e0-4bb0-9033-15af7e4ae247",
+            "inboundGuid": "b1ff934b-5ea2-4ed8-96d4-0a07be8aec28"
+          },
+          {
+            "key": "ui.dash",
+            "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
+            "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
           }
         ]
       },
@@ -5182,6 +5712,72 @@
       "securityScan": null
     },
     {
+      "guid": "75256c06-b41b-4094-a064-5db1282d4b98",
+      "key": "engine.deathservices",
+      "bowType": "module",
+      "seq": 605,
+      "sprint": 9,
+      "title": "Death services: graveyards (space+reuse), cremation, hearses, emergency dispensation",
+      "priority": "P1",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "Part IV structure catalogue (Cemetery/Crematorium/Memorial woodland); §H; §25; §26",
+      "path": "internal/engine/deathservices/",
+      "inbound": {
+        "guid": "ba1fe880-21b7-46c0-bd56-257c0f6c223d",
+        "name": "DeathServicesAPI",
+        "format": "Go package API + deltas",
+        "pattern": "body intake keyed off feat.deathwave's released death queue; disposal/triage commands (bury/cremate/dispense), no directly-writable exported fields",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "a418fa7d-47d6-4a4c-a50c-df5a0ddcdb49",
+        "calls": [
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "feat.deathwave",
+            "moduleGuid": "10ec4106-06a3-47a6-936c-34599d5544c3",
+            "inboundGuid": "7ffa5eb5-b79b-492a-812c-8613db43b1c5"
+          },
+          {
+            "key": "engine.services",
+            "moduleGuid": "ab443390-0a8a-459a-ae5a-4b8a35308751",
+            "inboundGuid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e"
+          },
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "engine.build",
+            "moduleGuid": "046d98bc-3850-4b7d-b909-a97b7eab0920",
+            "inboundGuid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4"
+          },
+          {
+            "key": "engine.logistics",
+            "moduleGuid": "c59ecb6e-443f-4012-a0f0-b031de444335",
+            "inboundGuid": "26abfa77-3b11-43d0-a631-539a04e3a5f8"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
       "guid": "351b5c05-1b42-4438-b495-c0aaf6855194",
       "key": "engine.dispatch",
       "bowType": "module",
@@ -5206,6 +5802,10 @@
           {
             "key": "engine.chemicals",
             "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "ui.screen.services",
@@ -5235,6 +5835,11 @@
             "key": "engine.projections",
             "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
             "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
+          },
+          {
+            "key": "engine.invariant",
+            "moduleGuid": "3abafe05-7606-4067-8ab0-54007248b802",
+            "inboundGuid": "4a4b44ab-9ed0-4322-8a2a-ad4b0178302f"
           }
         ]
       },
@@ -6020,10 +6625,6 @@
             "outboundGuid": "48638972-009e-4cce-8628-49612a88ec0b"
           },
           {
-            "key": "feat.factorytypes",
-            "outboundGuid": "10549936-e6f3-4d39-b3e8-ce49512a50f3"
-          },
-          {
             "key": "feat.megafacilities",
             "outboundGuid": "658df60a-b0f2-449a-83c5-9b853eb3270d"
           },
@@ -6489,7 +7090,12 @@
         "name": "SocialAPI",
         "format": "Go package API + deltas",
         "pattern": "caseload generation decomposed; Slow-Fuse projections on cuts",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          }
+        ]
       },
       "outbound": {
         "guid": "a5ae75cf-b566-4ae4-a521-112d48426ef3",
@@ -7044,6 +7650,72 @@
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "4f81ea4d-ac85-4148-a5e7-520fccdf2d77",
+      "key": "engine.transit",
+      "bowType": "module",
+      "seq": 815,
+      "sprint": 10,
+      "title": "Public transport: lines, stops, depots, fleet & ridership",
+      "priority": "P2",
+      "milestone": "M4",
+      "layer": "engine",
+      "specRef": "FEAT-161/FEAT-162 BOW desc; §19 (mode logit)",
+      "path": "internal/engine/transit/",
+      "inbound": {
+        "guid": "c895416d-8b7b-46a0-bd33-ac0cf3129553",
+        "name": "TransitAPI",
+        "format": "Go package API + deltas",
+        "pattern": "line/stop/depot/fleet accounting; saturation reports the binding bound; ridership feeds mode logit",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd",
+        "calls": [
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "engine.roads",
+            "moduleGuid": "0fa53b51-245f-426f-95fd-ba208a024a6c",
+            "inboundGuid": "6510e884-5a50-4b50-86c1-78a6329b26d0"
+          },
+          {
+            "key": "engine.traffic",
+            "moduleGuid": "f048ef78-9446-4fdb-845e-500fda1f2743",
+            "inboundGuid": "df65414a-b7cd-4003-b25d-0772bf9049d5"
+          },
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
           },
           {
             "key": "foundation.errors",
@@ -7617,6 +8289,10 @@
           {
             "key": "feat.metricsdash",
             "outboundGuid": "ce21ea4e-fb6b-4c9d-bae1-453d8cea8132"
+          },
+          {
+            "key": "feat.skeleton",
+            "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           }
         ]
       },
@@ -7685,7 +8361,12 @@
         "name": null,
         "format": null,
         "pattern": null,
-        "consumers": []
+        "consumers": [
+          {
+            "key": "foundation.integration",
+            "outboundGuid": "91bd0f61-2f59-456b-ad7f-d870049717a5"
+          }
+        ]
       },
       "outbound": {
         "guid": "d02049bd-50e8-46db-9b48-0602ee2d969b",
@@ -8950,13 +9631,7 @@
       },
       "outbound": {
         "guid": "10549936-e6f3-4d39-b3e8-ce49512a50f3",
-        "calls": [
-          {
-            "key": "engine.freight",
-            "moduleGuid": "093a00ae-97d6-47ce-bf38-4dbc7aa48c5a",
-            "inboundGuid": "3ce6d7c8-1aa6-46f4-94d1-07a20cf656e3"
-          }
-        ]
+        "calls": []
       },
       "securityScan": null
     },
@@ -8977,7 +9652,12 @@
         "name": "CensusAPI",
         "format": "Go package API",
         "pattern": "stats/history/consistency/findings query surfaces + object bios + splines + KPI drill",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "ui.screen.census",
+            "outboundGuid": "6e2b573b-26d2-44c8-b397-3c3cf3217906"
+          }
+        ]
       },
       "outbound": {
         "guid": "2908149e-de4c-4284-a0a3-f6227c84e30e",
@@ -9050,8 +9730,8 @@
       "path": "internal/foundation/num/",
       "inbound": {
         "guid": "74ff5b3b-bfc6-4376-b461-267f4467a39f",
-        "name": "Num",
-        "format": "Go package API",
+        "name": "SatAdd",
+        "format": "Go package API (function collection, no facade type: SatAdd/SatSub/SatAddChecked saturating; SafeInt64/SafeMul/SafeFloat64FromAny/SafeInt64FromAny reject-form; BoundedLedger/NewBoundedLedger; GuardFinite/IsFinite/ClampInt64FromFloat/ClampInt64FromUint64 guards)",
         "pattern": "safe coercion: saturating + reject-form helpers; registry-sourced errors on non-finite/overflow",
         "consumers": [
           {
@@ -9183,6 +9863,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.transit",
+            "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
+          },
+          {
             "key": "engine.unlocks",
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
@@ -9201,6 +9885,10 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
+            "key": "feat.faith",
+            "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
           }
         ]
       },
@@ -9292,6 +9980,57 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "38b48487-f0e3-4f79-aa57-16b73b997bd1",
+      "key": "foundation.integration",
+      "bowType": "module",
+      "seq": 1000,
+      "sprint": 0,
+      "title": "Integration Engine: contract-driven, location-transparent deterministic shard executor + resilience substrate",
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "foundation",
+      "specRef": "FEAT-187..191; integration-engine.md",
+      "path": "internal/foundation/integration/",
+      "inbound": {
+        "guid": "1b6d1f3f-1984-4f39-b603-d5ca2cebb14e",
+        "name": "Integration",
+        "format": "Go package API (generic Integration[T,M] contract + Execute[T,M] entry point; WorkerPool/LocalPool/SerialPool dispatch seam; QueuedTransport/WAL/Connection/Registry support types)",
+        "pattern": "pure seeded RunShard per shard, deterministic ordered Merge via det.MergeInOrder/det.ApplyBarrier — byte-identical regardless of dispatch/location",
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "91bd0f61-2f59-456b-ad7f-d870049717a5",
+        "calls": [
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "int.protocol",
+            "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
+            "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "feat.checkpoint",
+            "moduleGuid": "9b46faf8-d4b8-4829-9633-860eef3c5b0e",
+            "inboundGuid": "ac14f052-a882-43b1-8a09-20d091b763bd"
+          },
+          {
+            "key": "feat.saveux",
+            "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
+            "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
           }
         ]
       },

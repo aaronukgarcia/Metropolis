@@ -9,7 +9,9 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
@@ -17,6 +19,8 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
@@ -63,16 +67,21 @@ const (
 	baselineOneGasCapacity   = 1_000_000.0
 
 	// attract master-dial inputs. A_world (40) is a neutral-ish placeholder.
-	// baselineOneTermValue is now the FLAT placeholder for only the two
-	// §11 terms this integration deliberately leaves unwired
-	// (ServiceCoverage/JobAvailability — no real signal exists in any
-	// built module yet, docs/planning/icd/engine.attract-terms.md §3/§12
-	// open decision 3). Safety/LeisureFit/Environment are real, computed
-	// per month by safetyTerm/leisureFitTerm/environmentTerm below.
+	// All seven §11 terms are now real, computed per month: Safety/
+	// LeisureFit/Environment by safetyTerm/leisureFitTerm/environmentTerm
+	// (FEAT-167 wave 1), ServiceCoverage/JobAvailability by
+	// serviceCoverageTerm/jobAvailabilityTerm (servicesfirms_wire.go,
+	// FEAT-167 completion), HousingAffordability/Reputation inside
+	// attract itself. The old flat baselineOneTermValue=50.0 placeholder
+	// (docs/planning/icd/engine.attract-terms.md §3/§12 open decision 3)
+	// is gone: nothing in this package references it any more (its last
+	// use was the two ServiceCoverage/JobAvailability SetTermInputs
+	// fields below and the tripwire test that guarded them, both replaced
+	// — see servicesfirms_wire_test.go's proof that no term reads the old
+	// flat value after a warmed-up run).
 	baselineOneAWorld        = 40.0
 	baselineOneMigrationRate = 1.0
-	baselineOneTermValue     = 50.0 // ServiceCoverage/JobAvailability placeholder (ICD §3)
-	baselineOneMonthlyRent   = 0    // micropounds; vacant city rent placeholder
+	baselineOneMonthlyRent   = 0 // micropounds; vacant city rent placeholder
 
 	// attract capacity constraints (people / dwelling units). Unbounded
 	// placeholders — the real housing-vacancy and junction-throughput
@@ -153,6 +162,38 @@ type Deps struct {
 	Crime   *crime.CrimeAPI
 	Leisure *leisure.LeisureAPI
 	Refuse  *refuse.RefuseAPI
+
+	// ExtCommute overrides construction of the FEAT-207 off-map
+	// external-commuting module (default: extcommute.LoadDefault). nil is
+	// the common boot case; the test seam lets a caller inject a
+	// pre-configured instance (docs/planning/icd/engine.extcommute-compose.md
+	// §11's end-to-end unblock test).
+	ExtCommute *extcommute.ExtCommuteAPI
+
+	// Services overrides construction of the FEAT-167-completion
+	// ServiceCoverage source module (default: services.LoadDefault). nil
+	// is the common boot case; the test seam lets a caller inject a
+	// pre-registered instance to prove ServiceCoverage actually moves
+	// when its source module's state changes
+	// (docs/planning/icd/engine.services-coverage.md §11).
+	Services *services.ServicesAPI
+
+	// Firms overrides construction of the FEAT-167-completion
+	// JobAvailability source module (default: firms.LoadDefault). nil is
+	// the common boot case; the test seam lets a caller inject a
+	// pre-registered instance to prove JobAvailability actually moves
+	// when its source module's state changes
+	// (docs/planning/icd/engine.firms-labourmarket.md §11).
+	Firms *firms.FirmsAPI
+
+	// LoadTraffic overrides construction of the FEAT-206 engine.traffic
+	// dependency (defaults to loadDefaultTraffic — traffic.New() +
+	// LoadConfig against the resolved data/ dir, mirroring LoadMarket's
+	// shape above). nil is the common boot case; the test seam lets a
+	// caller inject a failing loader and assert Wire returns
+	// ErrModuleFailed naming "traffic" with zero hooks left behind (AC-4's
+	// discipline, docs/planning/icd/engine.traffic-tick.md §2/§8).
+	LoadTraffic func(correlationID string) (*traffic.TrafficAPI, error)
 }
 
 // moduleRegistration is one fixed slot in the composition order.
@@ -177,6 +218,18 @@ type moduleRegistration struct {
 // alone on PhasePopulation now that citizens has moved off it.
 var registrationOrder = []moduleRegistration{
 	{name: "world", phase: core.PhaseProduction, hook: func(st *simState) core.PhaseHook { return noopHook{name: "world", st: st} }},
+	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): traffic's
+	// AdvanceTick registers on PhaseDailyTick, and MUST come before every
+	// other PhaseDailyTick registration below it in this slice (citizens,
+	// build, invariant) — traffic's own doc.go "Day-boundary contract"
+	// requires the reset to run "before that day's demand-generating
+	// systems... run their own tick logic for the day". Placed
+	// immediately after "world" (a different, monthly phase — its
+	// position relative to traffic carries no ordering meaning) so the
+	// slice reads world -> traffic -> citizens -> ... and, restricted to
+	// just the PhaseDailyTick subset, traffic -> citizens -> build ->
+	// invariant.
+	{name: "traffic", phase: core.PhaseDailyTick, hook: func(st *simState) core.PhaseHook { return &trafficTickHook{st: st} }},
 	// FEAT-169: citizens registers on the DAILY tick (not PhasePopulation)
 	// because CitizensAPI.AdvanceDayTick is itself a once-per-day-tick call
 	// (its own amortised 1/30-shards-per-day cold pass) and the ICD's T0
@@ -224,6 +277,55 @@ func RegistrationOrder() []string {
 // core.Engine.HookCount() after Wire; this mirrors it for callers that
 // need the declared figure without constructing an engine (AC-14).
 func BaselineOneHookCount() int { return len(registrationOrder) }
+
+// viewRegistration is one fixed slot in the FEAT-208 view-publishing
+// order, parallel to moduleRegistration above (AC-2's "zero hooks left
+// behind" discipline extended to "zero views left behind"). fn resolves
+// this view's ViewPatchFunc against the wired simState — it is not
+// called until Wire actually registers it, mirroring
+// moduleRegistration.hook's deferred-construction shape.
+type viewRegistration struct {
+	name string
+	fn   func(st *simState) core.ViewPatchFunc
+}
+
+// viewRegistrationOrder is the fixed, documented FEAT-208 view
+// registration order (AC-2 extended) — a slice, NEVER a map: this
+// package never ranges a view registration table (GR#21), matching
+// registrationOrder's own discipline above. Increment 1 (the FEAT-208
+// design's §6 recommended first slice) registered exactly one view:
+// "f4.services", serving only its capacityDemand sub-view
+// (buildServicesCapacityDemandPatch, services_publish.go). Increment 2
+// adds "f2.finance", serving only its balanceSheet sub-view
+// (buildFinanceBalanceSheetPatch, finance_publish.go) — the design's §6
+// fast-follow list's next entry, chosen because engine.finance is
+// already composed and ui.screen.finance's ApplyDelta already exists.
+// BUG-323 adds "f1.viewport", serving the start tile's real
+// engine.world terrain (buildViewportPatch, viewport_publish.go) — the
+// design's §6 fast-follow list's next entry, pulled forward to P0
+// because F1 is the DEFAULT screen at boot and, with no view registered
+// here, engine.core rejected its Subscribe and it rendered entirely
+// blank. Later increments (f8.districts, f5.trade, f7.projections) are
+// documented, deliberate fast-follows — see the design's §6 — each
+// adding one more entry here, in the SAME slice, never a new
+// registration mechanism.
+var viewRegistrationOrder = []viewRegistration{
+	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
+	{name: financeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildFinanceBalanceSheetPatch }},
+	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
+}
+
+// RegisteredViewNames returns a defensive copy of the fixed view
+// registration order (view names), in the order Wire registers them —
+// mirrors RegistrationOrder() above, for a test or future harness that
+// needs the declared FEAT-208 view set without constructing an engine.
+func RegisteredViewNames() []string {
+	out := make([]string, len(viewRegistrationOrder))
+	for i, r := range viewRegistrationOrder {
+		out[i] = r.name
+	}
+	return out
+}
 
 // Composition is the read-only handle Wire returns once the baseline-one
 // hook set is registered. It exposes the composition's own live state
@@ -294,6 +396,29 @@ func (c *Composition) VitalBirths() int64 {
 // citizens cold pass has produced and folded into peopleDelta so far.
 func (c *Composition) VitalDeaths() int64 {
 	return c.state.vitalDeaths
+}
+
+// ExtCommute returns the wired FEAT-207 off-map external-commuting handle
+// (docs/planning/icd/engine.extcommute-compose.md). Baseline one routes no
+// gameplay command to Assign/Release/InCommute yet (ICD §12 open decision
+// 4 — command routing is a later, separate item); this accessor is the
+// seam a future gameplay handler, or a test driving the end-to-end
+// assign/release proof, reaches it through.
+func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
+	return c.state.extCommute
+}
+
+// Traffic returns the wired FEAT-206 engine.traffic handle
+// (docs/planning/icd/engine.traffic-tick.md). Baseline one routes no other
+// demand-generating module (engine.shopping, engine.dispatch — neither
+// exists in this codebase yet) through it besides this package's own
+// AdvanceTick hook and extcommute's read-only Congestion seam
+// (traffic_wire.go); this accessor is the seam a future demand-generating
+// module's SetTraffic wiring, and today's tests (the AC-required
+// unbounded-demand regression and day-boundary ordering proofs), reach the
+// composed instance through — mirrors ExtCommute() above.
+func (c *Composition) Traffic() *traffic.TrafficAPI {
+	return c.state.traffic
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -493,6 +618,113 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract_terms_data"})
 	}
 
+	// FEAT-167 completion (docs/planning/icd/engine.services-coverage.md,
+	// docs/planning/icd/engine.firms-labourmarket.md): construct the two
+	// remaining §11 term source modules. Resolved BEFORE the first hook
+	// registers, like every other required module above (AC-4).
+	servicesAPI := deps.Services
+	if servicesAPI == nil {
+		var sErr error
+		servicesAPI, sErr = services.LoadDefault(cid)
+		if sErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, sErr, map[string]any{"module": "services"})
+		}
+	}
+
+	firmsAPI := deps.Firms
+	if firmsAPI == nil {
+		var fErr error
+		firmsAPI, fErr = firms.LoadDefault(e.WorldSeed(), cid)
+		if fErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, fErr, map[string]any{"module": "firms"})
+		}
+	}
+	// JobAvailability's LabourMarket() fails closed (MET-G1409) without
+	// citizens wired (labourmarket.go's TotalVacancies alone needs no
+	// dependency, but LabourMarket's Workforce side does). Finance/market/
+	// build are wired too — cheap given all three are already constructed
+	// above, and required for any future firm-lifecycle work this module
+	// owns beyond the JobAvailability aggregate (out of this ICD's scope).
+	if err := firmsAPI.SetCitizens(c); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+	if err := firmsAPI.SetFinance(financeAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+	if err := firmsAPI.SetMarket(m); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+	if err := firmsAPI.SetBuild(buildAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "firms"})
+	}
+
+	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): construct the
+	// real engine.traffic dependency BEFORE extcommute below, so its
+	// TrafficSeam adapter (extCommuteTrafficSeamAdapter, traffic_wire.go)
+	// can be built against a live instance instead of the old free-flow
+	// stub. Resolved before the first hook registers, like every other
+	// required module above (AC-4 — no partially-wired engine on a
+	// construction failure).
+	loadTraffic := deps.LoadTraffic
+	if loadTraffic == nil {
+		loadTraffic = loadDefaultTraffic
+	}
+	trafficAPI, err := loadTraffic(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "traffic"})
+	}
+	trafficSeam, err := newExtCommuteTrafficSeamAdapter(trafficAPI, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "traffic"})
+	}
+
+	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
+	// Wire-time identity-map cross-check MUST run before extcommute's
+	// citizens-seam adapter is ever exercised (§3/§11 "identity-map
+	// conformance") — checked here, before extcommute is even constructed,
+	// so a drift fails loudly with zero hooks left behind (AC-4's
+	// discipline extended to this assertion).
+	if err := extCommuteEmploymentStatesIdentical(cid); err != nil {
+		return nil, err
+	}
+	extCommuteAPI := deps.ExtCommute
+	if extCommuteAPI == nil {
+		var xErr error
+		extCommuteAPI, xErr = extcommute.LoadDefault(cid)
+		if xErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, xErr, map[string]any{"module": "extcommute"})
+		}
+	}
+	if err := extCommuteAPI.SetSeed(e.WorldSeed()); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+	if err := extCommuteAPI.SetCitizensSeam(&extCommuteCitizensSeam{api: c, cid: cid}); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+	// FEAT-206: TrafficSeam is now the real derivation off the composed
+	// *traffic.TrafficAPI (traffic_wire.go's extCommuteTrafficSeamAdapter),
+	// replacing the old always-0.0 extCommuteTrafficSeamStub free-flow
+	// placeholder (ICD §12 open decision 2 is now closed for this seam;
+	// extCommuteTrafficSeamStub itself is left in extcommute_wire.go,
+	// unused by Wire, as the documented historical baseline
+	// TestExtCommute_TrafficSeamStub_IsFreeFlow still pins).
+	if err := extCommuteAPI.SetTrafficSeam(trafficSeam); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+	if err := extCommuteAPI.SetFinanceSeam(&extCommuteFinanceSeam{
+		api: financeAPI,
+		cid: cid,
+		monthFn: func() int64 {
+			clock, cErr := e.Clock()
+			if cErr != nil {
+				return 0
+			}
+			return clock.Month()
+		},
+	}); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -518,9 +750,14 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		gasNet:                  gasNet,
 		buildAPI:                buildAPI,
 		attract:                 attractAPI,
+		finance:                 financeAPI,
 		crime:                   crimeAPI,
 		leisure:                 leisureAPI,
 		refuse:                  refuseAPI,
+		services:                servicesAPI,
+		firms:                   firmsAPI,
+		traffic:                 trafficAPI,
+		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
 		treasury:                initialTreasury,
@@ -553,6 +790,22 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 			continue
 		}
 		if err := e.RegisterPhaseHook(reg.phase, reg.hook(st)); err != nil {
+			return nil, wrapSeal(cid, err, reg.name)
+		}
+	}
+
+	// FEAT-208: register every view compose publishes, in the fixed,
+	// documented viewRegistrationOrder — same "resolve every producer
+	// before the first RegisterView call" discipline the phase-hook loop
+	// above already applies (AC-4's "zero hooks left behind" extended to
+	// "zero views left behind"): every fn(st) closure above was already
+	// built when viewRegistrationOrder's literal was constructed, so a
+	// RegisterView failure here (e.g. a duplicate name — cannot happen
+	// today, the slice's names are all distinct literals) never leaves a
+	// partially-registered view table any more than a phase-hook failure
+	// leaves a partially-wired engine.
+	for _, reg := range viewRegistrationOrder {
+		if err := e.RegisterView(reg.name, reg.fn(st)); err != nil {
 			return nil, wrapSeal(cid, err, reg.name)
 		}
 	}
@@ -599,13 +852,37 @@ func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool 
 //
 // # No mutex, by the same discipline as invariant.Hook
 //
-// simState holds no sync.Mutex. Every access is single-goroutine by
-// construction: only shard 0 of each hook's RunShard touches it (the
-// invariant's SnapshotProvider, the spawn/finance ApplyEffect barrier
-// work), and the phase pipeline runs phases sequentially — the daily
-// phase's det.RunPhase joins its workers before the monthly phases start.
-// A mutex here would be a copy hazard with no copy risk to guard (and
-// would make this type an astgate SEC-020 candidate for nothing).
+// simState holds no sync.Mutex. Every access to simState's OWN plain
+// fields (treasury, citizenWealth, peopleDelta, moneyDelta, ...) is
+// single-goroutine by construction: only shard 0 of each hook's RunShard
+// touches them (the invariant's SnapshotProvider, the spawn/finance
+// ApplyEffect barrier work), and the phase pipeline runs phases
+// sequentially — the daily phase's det.RunPhase joins its workers before
+// the monthly phases start.
+//
+// CORRECTION (F3, independent round r1, FEAT-208 increment 1): this
+// "single-goroutine by construction" property does NOT extend to
+// buildServicesCapacityDemandPatch (services_publish.go) or any future
+// view-publishing method this file adds — those run on the subscription
+// pump goroutine (engine/core.StartSubscriptionPump), CONCURRENTLY with
+// the phase-pipeline goroutines this comment describes, not sequenced
+// with them. That is safe ONLY because those methods read through the
+// held module's OWN synchronization (st.services is a
+// *services.ServicesAPI, and every accessor it exposes — ServiceIDs,
+// Capacity, Demand — takes its own sync.RWMutex internally); they never
+// touch simState's own unguarded plain fields. See
+// engine/core.ViewPatchFunc's doc comment (subscribe.go) for the general
+// contract this specific case satisfies. A future ViewPatchFunc-backed
+// method that read one of simState's own plain fields directly (e.g.
+// st.treasury) WOULD be a real, unguarded data race against the phase
+// pipeline — this file's discipline (§3.3 of the design) of only ever
+// reading through an already-guarded *XxxAPI accessor is load-bearing,
+// not incidental.
+//
+// A mutex on simState itself would be a copy hazard with no copy risk to
+// guard (and would make this type an astgate SEC-020 candidate for
+// nothing) — the fix for the concurrency gap above is "read through the
+// module's own lock," never "add a lock here."
 type simState struct {
 	e    *core.Engine
 	cid  string
@@ -628,6 +905,13 @@ type simState struct {
 	buildAPI *build.BuildAPI
 	attract  *attract.AttractAPI
 
+	// finance is the shared *finance.FinanceAPI instance constructed in
+	// Wire and handed to attract (SetFinance) and, since FEAT-207, to
+	// extcommute's FinanceSeam adapter (extCommuteFinanceSeam). Stored here
+	// too so any future compose-owned poster (and tests) can reach the
+	// same ledger without re-threading it through every hook constructor.
+	finance *finance.FinanceAPI
+
 	// FEAT-167 (docs/planning/icd/engine.attract-terms.md): the three real
 	// Safety/LeisureFit/Environment source modules, plus this integration's
 	// one new data-driven balance file. attractTerms is read-only after
@@ -637,6 +921,31 @@ type simState struct {
 	leisure      *leisure.LeisureAPI
 	refuse       *refuse.RefuseAPI
 	attractTerms attractTermsData
+
+	// FEAT-167 completion (docs/planning/icd/engine.services-coverage.md,
+	// docs/planning/icd/engine.firms-labourmarket.md): the two remaining
+	// §11 term source modules, constructed in Wire alongside
+	// crime/leisure/refuse above.
+	services *services.ServicesAPI
+	firms    *firms.FirmsAPI
+
+	// FEAT-206 (docs/planning/icd/engine.traffic-tick.md): the composed
+	// engine.traffic dependency (traffic_wire.go). trafficTickHook calls
+	// AdvanceTick on it once per simulated day; extCommuteTrafficSeamAdapter
+	// (constructed in Wire, held by extCommute's TrafficSeam field, not
+	// here) reads its CommuteHours live. Stored here too — mirroring
+	// finance's own doc comment above — so a future demand-generating
+	// hook this package adds, and today's tests via Composition.Traffic(),
+	// can reach the same instance without re-threading it.
+	traffic *traffic.TrafficAPI
+
+	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
+	// off-map external-commuting module, wired with its three seam
+	// adapters (extcommute_wire.go). Baseline one routes no gameplay
+	// command to Assign/Release/InCommute yet (ICD §12 open decision 4 —
+	// out of this ICD's scope); this field exists so a future gameplay
+	// seam, and today's tests, can reach it.
+	extCommute *extcommute.ExtCommuteAPI
 
 	// leisureVenuesRegistered tracks which completed engine.build
 	// ZoneEntertainment order IDs are CURRENTLY bridged into an open
@@ -1124,14 +1433,20 @@ func (h *attractHook) ApplyEffect(eff core.Effect) {
 // Effect ever emitted comes from shard 0.
 func (h *attractHook) SingleShard() bool { return true }
 
-// applyMigration pushes the five §11 terms the composition root owns, then
-// runs one monthly migration step. Safety/LeisureFit/Environment are real,
-// computed this same month from engine.crime/engine.leisure/engine.refuse
-// (FEAT-167, docs/planning/icd/engine.attract-terms.md); JobAvailability/
-// ServiceCoverage remain the documented flat placeholder — no real signal
-// exists in any built module yet (ICD §3/§12 open decision 3).
-// HousingVacancy/JunctionThroughput are unbounded placeholders until
-// households/logistics produce real capacity signals.
+// applyMigration pushes all five compose-owned §11 terms, then runs one
+// monthly migration step. Safety/LeisureFit/Environment are real, computed
+// this same month from engine.crime/engine.leisure/engine.refuse (FEAT-167
+// wave 1, docs/planning/icd/engine.attract-terms.md). ServiceCoverage/
+// JobAvailability are ALSO now real (FEAT-167 completion,
+// docs/planning/icd/engine.services-coverage.md /
+// engine.firms-labourmarket.md), computed from engine.services/
+// engine.firms — see serviceCoverageTerm/jobAvailabilityTerm
+// (servicesfirms_wire.go) for the honest scope-limit each carries (no
+// automatic build->services/firm-founding bridge is wired into compose
+// yet, so both read their formula's zero-signal edge case until that
+// separate integration lands). HousingVacancy/JunctionThroughput are
+// unbounded placeholders until households/logistics produce real capacity
+// signals.
 func (st *simState) applyMigration(month int64) (attract.MigrationResult, error) {
 	safety, err := st.safetyTerm(month)
 	if err != nil {
@@ -1145,10 +1460,18 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 	if err != nil {
 		return attract.MigrationResult{}, err
 	}
+	serviceCoverage, err := st.serviceCoverageTerm()
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
+	jobAvailability, err := st.jobAvailabilityTerm()
+	if err != nil {
+		return attract.MigrationResult{}, err
+	}
 
 	if err := st.attract.SetTermInputs(attract.TermInputs{
-		JobAvailability:        baselineOneTermValue,
-		ServiceCoverage:        baselineOneTermValue,
+		JobAvailability:        jobAvailability,
+		ServiceCoverage:        serviceCoverage,
 		Environment:            environment,
 		LeisureFit:             leisureFit,
 		Safety:                 safety,
@@ -1264,15 +1587,19 @@ func (st *simState) currentMonth() (int64, error) {
 	return clock.Month(), nil
 }
 
-// --- gameplay command seam (Buy/Zone/Build/Demolish -> build/world) ---
+// --- gameplay command seam (Buy/Zone/Build/Demolish/SetFunding -> build/world/services) ---
 
 // handleGameplay is the injected core.GameplayCommandHandler. It maps the
-// four gameplay-intent protocol commands onto the build/world command
+// gameplay-intent protocol commands onto the owning modules' command
 // surfaces: Buy -> world.PurchaseTile, Zone/Build/Demolish ->
-// BuildAPI.Submit*Command. A nil return accepts the command (core turns it
-// into an Accepted CommandResult); a non-nil registry error rejects it with
-// that code. This is the ONE place gameplay intent meets the real modules
-// (AC-1/GR#20): no runnable path routes these kinds around compose.
+// BuildAPI.Submit*Command, SetFunding -> ServicesAPI.SetFunding (FEAT-208
+// increment 3, the pilot command promoting services.set-funding off
+// protocol.KindDebug's no-op escape hatch onto this real seam — see
+// ui/screens/services/doc.go's gating note, now closed). A nil return
+// accepts the command (core turns it into an Accepted CommandResult); a
+// non-nil registry error rejects it with that code. This is the ONE place
+// gameplay intent meets the real modules (AC-1/GR#20): no runnable path
+// routes these kinds around compose.
 func (st *simState) handleGameplay(cmd protocol.Command) error {
 	switch cmd.Kind {
 	case protocol.KindBuy:
@@ -1355,6 +1682,25 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		st.moneyFlows = num.SatAdd(st.moneyFlows, res.Compensation)
 		st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(res.Compensation, res.Compensation))
 		return nil
+	case protocol.KindSetFunding:
+		p, ok := cmd.Payload.(protocol.SetFundingPayload)
+		if !ok {
+			return st.gameplayReject(cmd.Kind, "malformed payload")
+		}
+		// FEAT-208 increment 3, the pilot command (lead ruling): forwards
+		// verbatim to ServicesAPI.SetFunding — no validation duplicated
+		// here (GR#3's "the engine validates once"; api.go's SetFunding
+		// already hard-rejects non-finite/out-of-[0,1] levels, an
+		// unregistered ServiceID, and a not-yet-unlocked service's
+		// milestone gate). SetFunding's own errors are already
+		// *errs.E values built via serviceErr against this codebase's
+		// registered error registry (GR#7), so returning err directly
+		// (rather than re-wrapping under a compose-owned code) preserves
+		// the already-rendered registry code/display verbatim on the
+		// CommandResult — core/commands.go's toErrorRef type-asserts
+		// *errs.E directly, exactly the same shape Zone/Build/Demolish's
+		// own pass-through errors already take above.
+		return st.services.SetFunding(services.ServiceID(p.ServiceID), p.Level)
 	default:
 		return st.gameplayReject(cmd.Kind, "unhandled gameplay kind")
 	}

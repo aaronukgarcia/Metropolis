@@ -47,4 +47,54 @@
 // staleness indicator — key BINDING (o/O/f/Enter) is ui.keys' later job
 // (US in the acceptance doc); this package exposes the plain Go API
 // (Pan, MoveCursor, Inspect) that binding will eventually drive.
+//
+// # Overlay cycle (FEAT-031, AC-3/AC-4)
+//
+// FEAT-031 landed the overlay CYCLE MECHANISM in full: Overlay
+// (overlay.go, ten constants in the exact order the BOW item's overlay
+// list quotes), MapScreen.ActiveOverlay/CycleOverlay (the plain Go API
+// "o"/"O" binding will eventually drive, same posture as Pan/MoveCursor
+// above), and paintOverlay (overlay_data.go) — the background-only paint
+// mechanism AC-4 describes, delegating per-cell to widgets.Heatmap so its
+// own "never touches Rune" contract holds per cell, not just in
+// aggregate. overlay_paint_internal_test.go proves that mechanism's full
+// AC-4 contract (foreground invariance, cross-overlay background
+// difference, per-cell differential isolation) with synthetic data.
+//
+// What did NOT land, and why, is exactly what a direct investigation at
+// dispatch found: NONE of the ten named overlays (ownership, land value,
+// zoning, utilities, traffic, pollution, decay, per-service coverage,
+// parking occupancy, vitality) have a live per-cell data source reaching
+// this screen today. "f1.viewport" (patch.go's wireCell: terrain,
+// elevation, road, building only) is the ONLY view wired to real content
+// anywhere in the codebase — confirmed against internal/protocol
+// (ValidateViewName is a syntax grammar, not a registry — any view name
+// validates, but internal/engine/stub/engine.go only ever scripts real
+// content for "f1.viewport" itself; every other name gets an empty
+// acknowledgement stub) and internal/engine/compose (compose.Wire wires
+// engine.traffic and engine.services into the daily tick and the
+// attract-terms pipeline respectively, but never touches
+// protocol.SubscriptionServer or any Delta-publishing path at all — the
+// composition root has no view-wiring code yet, for anything). Per GR#25,
+// code.json's ui.screen.map module (see code.json) also registers no
+// engine.traffic/engine.services/engine.parking/etc. outbound edge, so
+// even a hypothetical future Delta path could not be called from this
+// package without that edge landing first.
+//
+// overlay_data.go's overlayLiveValue therefore reports have=false for
+// every overlay, and overlayBlockedReason documents each one
+// individually: three (traffic, per-service coverage, parking occupancy)
+// have a real, tick-wired candidate engine module blocked purely on the
+// missing code.json edge + missing Delta path — tripwire_test.go makes
+// the code.json half of that mechanical, mirroring
+// internal/ui/screens/services/tripwire_test.go's SVC-6 pattern. The
+// other seven have no engine module or code.json node at all yet — no
+// stable detection point exists to tripwire (mirroring that same file's
+// SVC-3 reasoning for the same package's own per-service-coverage-map
+// gap), so they are documented, not fabricated.
+//
+// FEAT-031's BOW item also lists AC-6 (citizen follow) among the ACs it
+// re-opens; this dispatch's scope was the overlay cycle only (its title
+// and detailed brief) — AC-6 remains untouched by this work and is not
+// claimed done here.
 package mapscreen

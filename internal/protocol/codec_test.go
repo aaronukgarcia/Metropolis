@@ -103,6 +103,13 @@ func fixtureCommands(t *testing.T) map[Kind]Command {
 			Kind:            KindDemolish,
 			Payload:         DemolishPayload{Cell: CellRef{X: 3, Y: 7}},
 		},
+		KindSetFunding: {
+			ProtocolVersion: ProtocolVersion,
+			CorrelationID:   corr,
+			IssuedAtTick:    110,
+			Kind:            KindSetFunding,
+			Payload:         SetFundingPayload{ServiceID: "clinic-1", Level: 0.5},
+		},
 	}
 }
 

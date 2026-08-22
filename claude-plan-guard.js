@@ -54,6 +54,7 @@
 
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 
 const checker = require('./claude-plan-checker.js');
@@ -254,6 +255,30 @@ process.stdin.on('end', () => {
     // correction): that machinery belongs to claude-author-guard.js only.
     if (!GIT_COMMIT_RE.test(command)) {
       process.exit(0);
+    }
+
+    // BUG-291: test-only escape hatch, same pattern as BUG-165's
+    // CLAUDE_AUTHOR_GUARD_FORCE_TOKENIZE_ERROR in claude-author-guard.js —
+    // lets a test PROVE this guard's trigger actually fired (i.e. execution
+    // reached the checkPlan() call below) without resorting to a wall-clock
+    // elapsed-time assertion (BUG-031: count work, not time — a fast CI
+    // runner previously made an elapsed>100ms assertion false-fail an
+    // innocent PR). When CLAUDE_PLAN_GUARD_TEST_MARKER names a non-empty
+    // path, touch that file right before invoking the real check. Wrapped in
+    // its own try/catch, fail-open: a marker-write failure (bad path,
+    // read-only disk, permissions) must NEVER affect production behaviour or
+    // abort the guard — it is purely an out-of-band signal for tests.
+    // SECURITY (BUG-291 round finding): never point the marker at a file the
+    // guard itself trusts (code.json, the master plan, generate.js) — the
+    // fixed-payload write lands BEFORE checkPlan() reads them. Doing so
+    // corrupts the target and fail-closed DENIES every commit until repaired
+    // (a self-DoS, never a bypass, because the payload is a fixed literal).
+    if (process.env.CLAUDE_PLAN_GUARD_TEST_MARKER) {
+      try {
+        fs.writeFileSync(process.env.CLAUDE_PLAN_GUARD_TEST_MARKER, 'plan-guard-trigger-fired\n');
+      } catch {
+        // Deliberately swallowed — test-only escape hatch, must fail open.
+      }
     }
 
     // Delegate the actual drift check to the extracted checker module

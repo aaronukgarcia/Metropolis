@@ -83,3 +83,4 @@ Under current data — **sea min 3000t, rail max 1000t, road max 25t** — every
 
 The intermodal transfer point enforces the smaller of the source and destination modes' `maxTonnesPerMovement` from `data/freight.json` (road 25 / rail 1000 / sea 40000). Only MAX caps are enforced at the transfer point; sea's 3kt minimum is **not** enforced because a handoff is a leg, not the whole sea movement. Over-cap is rejected (AC-13 reject-don't-clamp), never clamped.
 
+- **ASM-1074 (FEAT-084 CC fold).** NewRailAPI self-loads modal caps by resolving the data dir and reading data/freight.json modalCaps itself (returns (*RailAPI, error), MET-G1702 on failure) — the stub-for-baseline self-contained pattern used by freight.Load and mining.LoadDepositParams; MOD-060 real RailAPI build should replace it with proper dependency injection of the caps.

@@ -117,4 +117,46 @@ const (
 	// foundation/data error unchanged, mirroring engine.season's
 	// ErrSeasonalDataInvalid (MET-E500).
 	ErrPacingDataInvalid = "MET-E016"
+
+	// ErrViewAlreadyRegistered: RegisterView was called twice for the same
+	// view name (FEAT-208). compose.Wire's viewRegistrationOrder discipline
+	// (mirroring registrationOrder) registers each view name exactly once;
+	// a duplicate is a programming error at the composition root, rejected
+	// loudly rather than silently overwriting the first registration's
+	// ViewPatchFunc (which would leave the earlier caller's Subscribe/
+	// Publish reads pointed at a producer nobody documented).
+	ErrViewAlreadyRegistered = "MET-E017"
+
+	// ErrNilViewPatchFunc: RegisterView was called with a nil
+	// ViewPatchFunc (FEAT-208). Every viewRegistrationOrder entry must
+	// resolve to a real patch producer before Wire ever calls
+	// RegisterView, mirroring RegisterPhaseHook's ErrNilPhaseHook check.
+	ErrNilViewPatchFunc = "MET-E018"
+
+	// ErrSubscriptionPumpAlreadyStarted: StartSubscriptionPump was called
+	// a second time on the same Engine (independent round r1, FEAT-208
+	// increment 1 finding F1a). The design's single-pump-goroutine
+	// ordering argument (subscribe.go's Publish doc comment) was
+	// previously a documented-only contract ("safe to call at most once
+	// per Engine"), not a mechanically enforced one — a second call
+	// started a second, concurrently-running pump goroutine, both
+	// reading the same e.deltaSignal and both able to call Publish
+	// concurrently. Now mechanically rejected: the second call returns
+	// this error and starts no goroutine, rather than silently doubling
+	// up.
+	ErrSubscriptionPumpAlreadyStarted = "MET-E019"
+
+	// ErrInvalidPacingConstant: NewClock was constructed with a
+	// secondsPerMonthAt1x that is <= 0 or non-finite (NaN/+-Inf).
+	// BUG-303 (Bro audit, 2026-08-20): NewClock previously accepted any
+	// int64 unvalidated, so a bad caller-supplied pacing constant (e.g. a
+	// zero from an uninitialised config struct) silently produced a Clock
+	// whose SecondsPerMonth/TicksPerRealSecond report garbage or zero
+	// pacing figures instead of failing loudly at construction — the
+	// point GR#16 boundary discipline says a caller-supplied value must
+	// be validated, not trusted. Note secondsPerMonthAt1x is int64, so
+	// NaN/Inf can only actually arise if a future caller widens the
+	// parameter type; the finiteness check exists for that boundary too,
+	// per this bug's own wording ("+ finite").
+	ErrInvalidPacingConstant = "MET-E020"
 )

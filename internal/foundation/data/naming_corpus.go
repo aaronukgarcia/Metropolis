@@ -1,6 +1,11 @@
 package data
 
-import "fmt"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 // This file is engine.roads / §20's own: the deterministic auto-naming
 // corpus (a Kentish road place-name list plus a per-road-class suffix
@@ -79,6 +84,28 @@ type RoadSuffixes struct {
 	DualCarriageway   []string `json:"dual_carriageway"`
 }
 
+// UnmarshalJSON gives RoadSuffixes strict decoding (SEC-058): the package
+// doc comment above already claims a struct schema "lets Validate reject an
+// entirely unknown class key", but plain encoding/json silently drops
+// unknown struct keys, so an extra or misspelled class key (e.g.
+// "eleventh_class" alongside the nine real ones) previously loaded
+// successfully with the extra key silently discarded and no load-time
+// signal. Decoding through a json.Decoder with DisallowUnknownFields turns
+// that into an immediate error, the same effect DisallowUnknownFields has
+// on any other struct-shaped decode target in the standard library. A
+// local roadSuffixes alias avoids infinite recursion into this same method.
+func (s *RoadSuffixes) UnmarshalJSON(b []byte) error {
+	type roadSuffixesAlias RoadSuffixes
+	var alias roadSuffixesAlias
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&alias); err != nil {
+		return err
+	}
+	*s = RoadSuffixes(alias)
+	return nil
+}
+
 // roadClassList is the fixed, ordered enumeration of the nine
 // non-numbered road classes, paired with each struct field. Validate
 // walks it in this fixed order rather than iterating a map, so the
@@ -124,7 +151,9 @@ func (n *NamingCorpus) Validate() error {
 	}
 	seenNames := make(map[string]bool, len(names))
 	for i, name := range names {
-		if name == "" {
+		// Non-blank, not just non-empty (SEC-057): a whitespace-only name
+		// ("   ", a tab, a newline) is not a real place name either.
+		if strings.TrimSpace(name) == "" {
 			return fieldErr(fmt.Sprintf("categories.roadPlaceNames[%d]", i), "required, must be non-empty")
 		}
 		if seenNames[name] {
@@ -139,7 +168,9 @@ func (n *NamingCorpus) Validate() error {
 		}
 		seen := make(map[string]bool, len(c.suffixes))
 		for i, suffix := range c.suffixes {
-			if suffix == "" {
+			// Same non-blank contract as the place-name list above
+			// (SEC-057): a whitespace-only suffix must not pass.
+			if strings.TrimSpace(suffix) == "" {
 				return fieldErr(fmt.Sprintf("categories.roadSuffixes.%s[%d]", c.name, i), "required, must be non-empty")
 			}
 			if seen[suffix] {

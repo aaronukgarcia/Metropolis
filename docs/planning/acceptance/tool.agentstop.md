@@ -165,3 +165,7 @@ Logged via `node claude-bow.js add assumption` (see BOW):
   `tool.agentlog`/`tool.dispatchlog` scope — see `tool.agentlog.md`.
 - The `util` command and hourly utilisation table live in `claude-sync.js` /
   `claude-dispatch-log.js`, not this hook script.
+
+- **ASM-910 (FEAT-084 CC fold).** claude-agent-stop.js header line 5 still cites BOW mkey tool.agentlog while the module key is tool.agentstop per code.json (re-keying theme; drift recorded here).
+
+- **ASM-925 (FEAT-084 SF fold).** Header opening paragraph still frames the SubagentStop re-wiring as a conditional future fallback, but the code comment (lines 82-88) and live .claude/settings.json confirm the wiring is LIVE as of 2026-08-13; criteria AC-1/AC-2 document the live state correctly — the header paragraph is stale.

@@ -87,3 +87,5 @@ The factory-type catalogue itself: eight typed facility entries (assembler, stee
 
 - **ASM-682 (confirm-and-close).** `feat.factorytypes` lands in the shared `internal/engine/freight` package with no separate inbound contract, resolving through `engine.freight`'s `FreightAPI`.
 - **ASM-990 (confirm-and-close).** The eight-type taxonomy maps onto §33 stages + §46 FDI archetypes non-one-to-one: steelMill↔steel chain anchor, cement↔cementPlant, foodProcessing↔flourMill (single anchor; food family spans stages), electronics↔semiconductor fab, chemicalsConverter↔chemicals complex; assembler/textiles/glass carry inline params (glass output → `lightGoods` placeholder, no glass freight commodity yet) — the mapping is data-driven and the ES-3 flag for the non-§33 types is recorded above.
+
+- **ASM-989 (FEAT-084 SF fold).** AC-5 SSOT direction resolved to option (a): stage-mapped factory types carry ONLY a stageRef and re-export the stage's input-output/jobs/power/water/blight by reference; footprint (cells) lives in data/factorytypes.json for every type; the resolver rejects a stageRef entry that also carries a duplicate inline copy.

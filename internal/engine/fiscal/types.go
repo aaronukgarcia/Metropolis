@@ -101,9 +101,13 @@ func (b TaxBreakdown) Total() finance.Money {
 
 // ChildcareNetLine is §54's "childcare subsidy shown as a net line" (AC-6):
 // the gross subsidy spend, the income-tax yield the subsidy unlocks via
-// higher second-earner participation, and the net (spend minus yield), as
-// three distinct queryable values — never a single number the player has to
-// trust is "mostly self-funding".
+// higher second-earner participation, and the net, as three distinct
+// queryable values — never a single number the player has to trust is
+// "mostly self-funding". Net = max(0, GrossSpend − TaxYield) (SEC-149,
+// GR#16 money-is-never-negative): when TaxYield exceeds GrossSpend the line
+// clamps to zero rather than going negative, and that surplus is not
+// redistributed anywhere — callers must not reconstruct GrossSpend from
+// Net + TaxYield.
 type ChildcareNetLine struct {
 	GrossSpend finance.Money
 	TaxYield   finance.Money

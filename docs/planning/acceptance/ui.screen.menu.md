@@ -63,3 +63,5 @@ The F10 screen: save/load browser, settings, keymap/layout profiles, new game se
 - **ASM-602 (confirm-and-close).** SEC-079 nil-keymap/nil-grammar share ONE registry code MET-U607 distinguished by {argument} ctx, per the package one-code-per-failure-mode pattern.
 - **ASM-591 (confirm-and-close).** OpenLayoutEditor hands the wired editor a defensive copy of the selected profile, not the live internal pointer (SEC-066 class).
 - **ASM-1444 (confirm-and-close).** SEC-213 reuses ErrLayoutEditorUnavailable (MET-U606) for no-profile-selected with a generalised {cause} message rather than a second code.
+
+- **ASM-1443 (FEAT-084 CC fold).** SEC-212's read-path fix adds a NEW registry code `MET-U608` (`ErrProfileReadFailed`) rather than reusing an existing menu code, because none of MET-U600..U607 semantically covers a profile READ/parse failure (U605 is write-only, U601 wire-patch, U604 save-listing) — reusing U605 for a read failure would itself be a misleading GR#7/GR#3 violation a re-attack would flag. One-line revert if the lead wants reuse regardless of semantic mismatch.

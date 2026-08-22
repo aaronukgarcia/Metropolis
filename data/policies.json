@@ -1,4 +1,173 @@
 {
-  "version": 1,
-  "entries": []
+  "$comment": "Metropolis policy library (MOD-064, engine.policies). Spec §52 'Policies v2 & Named Districts' and §II.7. Every policy states its mechanism as data-defined coefficient moves (key, delta) — the 'modelled instruments' claim, never narrative flavour dressed as a mechanic. Cost/enforcement figures are placeholders (ASM-284: placeholder cost/effect values pending the M2 balance harness, not final balance content). conflictsWith pairs are BA-invented placeholders for testability, not final balance content (ASM-288). The combination rule and the PreviewDrift tolerance/cadence are data-declared (ASM-286: PreviewDrift tolerance +/-10% of the previewed trajectory, checked QUARTERLY post-enactment; both stored here, GR#15).",
+  "meta": {
+    "specRef": "§52; §II.7",
+    "categories": ["movement", "layout & wellbeing", "economy", "social"],
+    "combination": "multiplicative",
+    "previewDrift": {
+      "tolerance": 0.10,
+      "checkpointMonths": 3
+    },
+    "disclosures": {
+      "ASM-284": "placeholder cost/effect values pending M2 balance harness",
+      "ASM-286": "PreviewDrift tolerance +/-10% of the previewed trajectory, checked quarterly post-enactment",
+      "ASM-288": "conflict pairs are BA-invented placeholders for testability, not final balance content"
+    }
+  },
+  "version": 2,
+  "entries": [
+    {
+      "key": "cyclePriorityNetwork",
+      "name": "Cycle Priority Network",
+      "category": "movement",
+      "scope": "citywide",
+      "mechanism": {
+        "coefficients": [
+          { "key": "movement.cycling.share", "delta": 0.15 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 4000000,
+        "opexMonthlyMicroPounds": 200000
+      },
+      "conflictsWith": [],
+      "disclosure": "Placeholder effect (ASM-284). Moves the cycling mode-share coefficient; the modal-split machinery lives in engine.roads/engine.market (out of scope)."
+    },
+    {
+      "key": "lowEmissionZone",
+      "name": "Low Emission Zone",
+      "category": "movement",
+      "scope": "district",
+      "mechanism": {
+        "coefficients": [
+          { "key": "movement.car.share", "delta": -0.20 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 6000000,
+        "opexMonthlyMicroPounds": 300000
+      },
+      "conflictsWith": ["congestionCharge"],
+      "disclosure": "Placeholder effect (ASM-284). A district-scoped car-share suppression. Conflict pair with congestionCharge is BA-invented (ASM-288)."
+    },
+    {
+      "key": "congestionCharge",
+      "name": "Congestion Charge",
+      "category": "movement",
+      "scope": "citywide",
+      "mechanism": {
+        "coefficients": [
+          { "key": "movement.car.share", "delta": -0.10 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 2500000,
+        "opexMonthlyMicroPounds": 100000
+      },
+      "conflictsWith": ["lowEmissionZone"],
+      "disclosure": "Placeholder effect (ASM-284). Conflict pair with lowEmissionZone is BA-invented (ASM-288)."
+    },
+    {
+      "key": "fifteenMinuteNeighbourhood",
+      "name": "15-Minute Neighbourhood",
+      "category": "layout & wellbeing",
+      "scope": "citywide",
+      "mechanism": {
+        "coefficients": [
+          { "key": "wellbeing.composite", "delta": 0.10 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 8000000,
+        "opexMonthlyMicroPounds": 150000
+      },
+      "conflictsWith": [],
+      "disclosure": "Placeholder effect (ASM-284). 15-minute design-code wellbeing uplift, expressed as a wellbeing-composite coefficient move."
+    },
+    {
+      "key": "parkAccessProgramme",
+      "name": "Park Access Programme",
+      "category": "layout & wellbeing",
+      "scope": "district",
+      "mechanism": {
+        "coefficients": [
+          { "key": "wellbeing.parkAccess", "delta": 0.20 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 1200000,
+        "opexMonthlyMicroPounds": 60000
+      },
+      "conflictsWith": [],
+      "disclosure": "Placeholder effect (ASM-284). District-scoped park-access wellbeing uplift."
+    },
+    {
+      "key": "freeportTaxFreeHarbour",
+      "name": "Tax-Free Harbour freeport",
+      "category": "economy",
+      "scope": "district",
+      "mechanism": {
+        "coefficients": [
+          { "key": "tax.businessRates.districtMultiplier", "delta": -1.0, "taxInstrument": "business-rates", "taxMode": "districtMultiplier" }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 20000000,
+        "opexMonthlyMicroPounds": 500000
+      },
+      "conflictsWith": [],
+      "disclosure": "Placeholder effect (ASM-284). A freeport suppresses business rates in its district (district multiplier 1.0 + delta -1.0 = 0.0) via engine.tax's TaxAPI — the name feeds firm location/reputation (Sprint 10) and carries smuggling exposure (§52)."
+    },
+    {
+      "key": "nationalMinimumWage",
+      "name": "National Minimum Wage",
+      "category": "economy",
+      "scope": "citywide",
+      "mechanism": {
+        "coefficients": [
+          { "key": "economy.wage.level", "delta": 0.05 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 1000000,
+        "opexMonthlyMicroPounds": 50000
+      },
+      "conflictsWith": ["fortyHourWorkingWeek"],
+      "disclosure": "Placeholder effect (ASM-284). Conflict pair with fortyHourWorkingWeek is BA-invented (ASM-288)."
+    },
+    {
+      "key": "fortyHourWorkingWeek",
+      "name": "40-Hour Working Week",
+      "category": "economy",
+      "scope": "citywide",
+      "mechanism": {
+        "coefficients": [
+          { "key": "worklife.weeklyHours", "delta": -10.0 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 2000000,
+        "opexMonthlyMicroPounds": 80000
+      },
+      "conflictsWith": ["nationalMinimumWage"],
+      "disclosure": "Placeholder effect (ASM-284). The 40h-vs-996 working-week policy (MOD-080 consumer). Conflict pair with nationalMinimumWage is BA-invented (ASM-288)."
+    },
+    {
+      "key": "socialHousingGrant",
+      "name": "Social Housing Grant",
+      "category": "social",
+      "scope": "citywide",
+      "mechanism": {
+        "coefficients": [
+          { "key": "housing.affordable", "delta": 0.15 }
+        ]
+      },
+      "cost": {
+        "enactmentMicroPounds": 15000000,
+        "opexMonthlyMicroPounds": 400000
+      },
+      "conflictsWith": [],
+      "disclosure": "Placeholder effect (ASM-284). Affordable-housing supply uplift."
+    }
+  ]
 }

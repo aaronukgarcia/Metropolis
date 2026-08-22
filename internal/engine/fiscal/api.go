@@ -176,7 +176,16 @@ func (f *FiscalAPI) moneyTimesRate(amount finance.Money, ratePercent float64) (f
 	if !num.IsFinite(ratePercent) || ratePercent < 0 {
 		return 0, errs.New(ErrInvalidInput, f.correlationID, map[string]any{"field": "rate", "value": ratePercent})
 	}
-	bp := int64(math.Round(ratePercent * 100))
+	bp := num.ClampInt64FromFloat(math.Round(ratePercent * 100))
+	if bp < 0 {
+		// ratePercent was already rejected above if negative, so a negative
+		// bp here can only mean the float->int64 conversion saturated
+		// (SEC-147) — treat it as an overflow rather than silently
+		// defeating the negative-rate guard downstream.
+		return 0, errs.New(ErrFiscalOverflow, f.correlationID, map[string]any{
+			"amount": int64(amount), "ratePercent": ratePercent,
+		})
+	}
 	if bp == 0 {
 		return 0, nil
 	}

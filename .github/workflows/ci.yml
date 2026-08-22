@@ -355,9 +355,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v6-${{ github.run_id }}
+          key: perf-results-1m-smoke-v7-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-smoke-v6-
+            perf-results-1m-smoke-v7-
 
       # BUG-071: cmd/perfci now exits a DISTINCT code (3) when the gate
       # could not evaluate a regression (ScaleMismatch or, live-verified
@@ -411,7 +411,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v6-${{ github.run_id }}
+          key: perf-results-1m-smoke-v7-${{ github.run_id }}
 
       # BUG-097: this job's save key above is unique per run (github.run_id)
       # because actions/cache/save cannot overwrite an existing key -- but
@@ -441,7 +441,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-smoke-v6-"
+          $prefix = "perf-results-1m-smoke-v7-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
@@ -588,9 +588,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v6-${{ github.run_id }}
+          key: perf-results-1m-real-v7-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-real-v6-
+            perf-results-1m-real-v7-
 
       - name: Build perfci
         run: go build -o perfci.exe ./internal/harness/synth/cmd/perfci
@@ -676,7 +676,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v6-${{ github.run_id }}
+          key: perf-results-1m-real-v7-${{ github.run_id }}
 
       # BUG-097: identical rationale to perf-smoke's own pruning step —
       # this job's cache key is also unique-per-run and would otherwise
@@ -692,7 +692,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-real-v6-"
+          $prefix = "perf-results-1m-real-v7-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
