@@ -199,7 +199,7 @@ A data-driven instrument taxonomy layered on top of MOD-022's existing loan/cred
 **Date:** 2026-08-22
 **Status:** ready — pay/ cluster B1. A1 drafted in `engine.staffing.md` (AC-17–19); A2/A3 blocked on GR#25 edges (see bro.status.md); A4/C blocked on Aaron.
 **AC numbering:** continues the file-global sequence (MOD-022 AC-1..18, FEAT-057 AC-19..28, FEAT-068 AC-29..32) at AC-33..36.
-**Edges:** all registered — this cluster surfaces M1 from `TotalMoneyInCirculation`/`MoneyStock`/`CatWages`/`CatTax*` lines MOD-022 already posts (plus `engine.invariant`'s `FindConservationViolations`, already a registered inbound consumer); no new code.json outbound edges required.
+**Edges:** all registered — this cluster surfaces M1 from `TotalMoneyInCirculation`/`MoneyStock`/`CatWages`/`CatTax*` lines MOD-022 already posts, and its conservation check rides the existing `FinanceAPI.FindConservationViolations()` → `engine.invariant` `MoneyInvariant` feed (that `engine.finance → engine.invariant` edge is already registered per ASM-219); no new code.json outbound edges required.
 
 ## Acceptance criteria
 
