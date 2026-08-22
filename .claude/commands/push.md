@@ -7,7 +7,7 @@ allowed-tools: Bash(git *), Bash(gh *), Bash(node *)
 
 - Sync state: !`git status -sb | head -1`
 - Unpushed commits: !`git rev-list --count @{u}..HEAD 2>/dev/null || git rev-list --count origin/main..HEAD 2>/dev/null || echo "?"`
-- Authorship of unpushed commits: !`git log @{u}..HEAD --format='%ae' 2>/dev/null | sort -u`
+- Authorship of unpushed commits: !`git log @{u}..HEAD --format='%ae%n%ce' 2>/dev/null | sort -u`
 
 ## Your task
 
@@ -23,7 +23,7 @@ Steps:
 
 4. **Local sanity (fast).** If the working tree has staged/committed code changes not yet validated this session, run the cheap gates that fit the disk/time budget: `go build ./...` and the relevant `node --test <files>`. Skip only if the commits were already validated this session.
 
-5. **Push.** `git push origin HEAD:main` (or the current branch). `main` is branch-protected — a fast-forward push from the CLI is the sanctioned path (never a squash-merge). Then verify: `git rev-list --count origin/main..main` must be `0`, and re-confirm `git log origin/main --format='%ae' | sort -u` is exactly the noreply address.
+5. **Push.** `git push origin HEAD:main` (or the current branch). `main` is branch-protected — a fast-forward push from the CLI is the sanctioned path (never a squash-merge). Then verify: `git rev-list --count origin/main..main` must be `0`, and re-confirm `git log origin/main --format='%ae%n%ce' | sort -u` is exactly the noreply address — BOTH fields, never `%ae` alone (BUG-353: a server-side rebase leaks via the COMMITTER field, which an `%ae`-only check cannot see).
 
 6. **Confirm.** Report the pushed range and the new sync state. If CI is watchable (`gh pr checks` / `gh run watch`), note it; do not block on it for a small direct push, but flag if a required check later goes red.
 
