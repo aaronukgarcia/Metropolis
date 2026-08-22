@@ -3,6 +3,7 @@ package errs
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -137,6 +138,49 @@ func TestLoadRegistry_CachedAfterFirstLoad(t *testing.T) {
 	}
 	if len(entries1) != len(entries2) {
 		t.Errorf("expected cached registry to be unchanged, got %d vs %d entries", len(entries1), len(entries2))
+	}
+}
+
+func TestLoadRegistry_MalformedTemplateToken(t *testing.T) {
+	// BUG-357 step 2: a message token renderTemplate can never substitute
+	// ({command!q} is looked up literally, not in ctx, so it renders as
+	// "{command!q}" to the user) must fail the load. This is the regression
+	// guard for the 6 {x!y} codes (MET-U304-307/U401-402) folded out of the
+	// real data/errors.json.
+	cases := map[string]string{
+		"format verb":    `{"version":1,"codes":{"MET-F910":{"severity":"error","module":"m","message":"bad token {value!q} here","remedy":"r"}}}`,
+		"brace-wrapped":  `{"version":1,"codes":{"MET-F910":{"severity":"error","module":"m","message":"ok","remedy":"array of {finding, reason} objects"}}}`,
+		"empty token":    `{"version":1,"codes":{"MET-F910":{"severity":"error","module":"m","message":"ok","remedy":"zero value {} here"}}}`,
+		"non-ident char": `{"version":1,"codes":{"MET-F910":{"severity":"error","module":"m","message":"{a-b} is not a token","remedy":"r"}}}`,
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := writeRegistry(t, dir, content)
+			t.Setenv(registryPathEnv, path)
+			resetRegistryForTest()
+			t.Cleanup(resetRegistryForTest)
+
+			if _, err := loadRegistry(); err == nil {
+				t.Fatal("expected error for malformed template token")
+			} else if !strings.Contains(err.Error(), "malformed template token") {
+				t.Fatalf("error must name the malformed token, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRegistry_WellFormedTokensAccept(t *testing.T) {
+	// Plain-identifier tokens (including the always-resolvable code and
+	// correlationId) must still load fine — the validation must not over-reject.
+	dir := t.TempDir()
+	path := writeRegistry(t, dir, `{"version":1,"codes":{"MET-F911":{"severity":"error","module":"m","message":"{code} / {correlationId} / {thing} {thing_2}","remedy":"plain {word}"}}}`)
+	t.Setenv(registryPathEnv, path)
+	resetRegistryForTest()
+	t.Cleanup(resetRegistryForTest)
+
+	if _, err := loadRegistry(); err != nil {
+		t.Fatalf("well-formed tokens must load: %v", err)
 	}
 }
 
