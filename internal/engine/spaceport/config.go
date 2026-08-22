@@ -1,6 +1,8 @@
 package spaceport
 
 import (
+	"fmt"
+
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -61,57 +63,68 @@ func (c Config) validate(correlationID string) error {
 	if c.CatalogueAnchor == "" {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "catalogueAnchor", "rule": "required, must be non-empty",
+			"cause": fmt.Sprintf("field %q %s", "catalogueAnchor", "required, must be non-empty"),
 		})
 	}
 	if c.BlightClass == "" {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "blightClass", "rule": "required, must be non-empty",
+			"cause": fmt.Sprintf("field %q %s", "blightClass", "required, must be non-empty"),
 		})
 	}
 	if c.BuildMonths < 1 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "buildMonths", "value": c.BuildMonths, "rule": "must be >= 1",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "buildMonths", "must be >= 1", c.BuildMonths),
 		})
 	}
 	if c.LaunchCadenceMonths < 1 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "launchCadenceMonths", "value": c.LaunchCadenceMonths, "rule": "must be >= 1",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "launchCadenceMonths", "must be >= 1", c.LaunchCadenceMonths),
 		})
 	}
 	if c.ExportPerLaunch < 0 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "exportValuePerLaunch", "value": c.ExportPerLaunch, "rule": "must be >= 0",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "exportValuePerLaunch", "must be >= 0", c.ExportPerLaunch),
 		})
 	}
 	if c.PrestigePerLaunch < 0 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "prestigePerLaunch", "value": c.PrestigePerLaunch, "rule": "must be >= 0",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "prestigePerLaunch", "must be >= 0", c.PrestigePerLaunch),
 		})
 	}
 	if c.FdiDrawAmount < 0 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "fdiDrawAmount", "value": c.FdiDrawAmount, "rule": "must be >= 0",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "fdiDrawAmount", "must be >= 0", c.FdiDrawAmount),
 		})
 	}
 	if c.TourismDrawAmount < 0 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "tourismDrawAmount", "value": c.TourismDrawAmount, "rule": "must be >= 0",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "tourismDrawAmount", "must be >= 0", c.TourismDrawAmount),
 		})
 	}
 	if c.ExclusionRadius < 0 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "exclusionRadiusCells", "value": c.ExclusionRadius, "rule": "must be >= 0",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "exclusionRadiusCells", "must be >= 0", c.ExclusionRadius),
 		})
 	}
 	if c.ExclusionFactorPerMille < 0 || c.ExclusionFactorPerMille > 1000 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "exclusionLandFactorPerMille", "value": c.ExclusionFactorPerMille,
-			"rule": "must be in [0, 1000] (per-mille factor)",
+			"rule":  "must be in [0, 1000] (per-mille factor)",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "exclusionLandFactorPerMille", "must be in [0, 1000] (per-mille factor)", c.ExclusionFactorPerMille),
 		})
 	}
 	if c.ExpertThreshold < 0 {
 		return errs.New(ErrSpaceportDataInvalid, correlationID, map[string]any{
 			"field": "expertThreshold", "value": c.ExpertThreshold, "rule": "must be >= 0",
+			"cause": fmt.Sprintf("field %q %s (got %v)", "expertThreshold", "must be >= 0", c.ExpertThreshold),
 		})
 	}
 	return nil
