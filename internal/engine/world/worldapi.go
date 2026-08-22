@@ -145,7 +145,7 @@ func (a *WorldAPI) TileCells(c TileCoord, correlationID string) ([]Cell, error) 
 		return nil, err
 	}
 	if !c.InExtent() {
-		return nil, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return nil, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 
 	a.w.mu.Lock()
@@ -192,14 +192,14 @@ func (a *WorldAPI) CellAt(t TileCoord, local CellLocal, correlationID string) (C
 		return Cell{}, err
 	}
 	if !t.InExtent() {
-		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t})
+		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t, "sizeKm": ExpansionSizeM / 1000})
 	}
 	// BUG-063: validate Col/Row INDIVIDUALLY before ever computing the
 	// composite index — a composite-only check lets an out-of-domain
 	// Col/Row combination alias back into range and silently read the
 	// wrong cell. See CellLocal.InBounds's doc comment (hydrology.go).
 	if !local.InBounds() {
-		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t, "local": local})
+		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t, "local": local, "sizeKm": ExpansionSizeM / 1000})
 	}
 	idx := localIndex(local.Col, local.Row)
 
@@ -248,7 +248,7 @@ func (a *WorldAPI) TileAt(c TileCoord, correlationID string) (TileInfo, error) {
 		return TileInfo{}, err
 	}
 	if !c.InExtent() {
-		return TileInfo{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return TileInfo{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
@@ -299,7 +299,7 @@ func (a *WorldAPI) ApplyOwnershipCommand(cmd OwnershipCommand) protocol.CommandR
 		return result(false, err)
 	}
 	if !cmd.Tile.InExtent() {
-		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile}))
+		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "sizeKm": ExpansionSizeM / 1000}))
 	}
 
 	a.w.mu.Lock()
@@ -317,7 +317,7 @@ func (a *WorldAPI) ApplyOwnershipCommand(cmd OwnershipCommand) protocol.CommandR
 	// BUG-063: same individual Col/Row validation as CellAt — reject
 	// BEFORE computing the composite index, never after.
 	if !cmd.Local.InBounds() {
-		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "local": cmd.Local}))
+		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "local": cmd.Local, "sizeKm": ExpansionSizeM / 1000}))
 	}
 	idx := localIndex(cmd.Local.Col, cmd.Local.Row)
 	tl.sim.owner[idx] = cmd.NewOwner
@@ -385,7 +385,7 @@ func (a *WorldAPI) TilePrice(c TileCoord, correlationID string) (float64, error)
 		return 0, err
 	}
 	if !c.InExtent() {
-		return 0, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return 0, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
@@ -411,7 +411,7 @@ func (a *WorldAPI) Prospect(c TileCoord, correlationID string) error {
 		return err
 	}
 	if !c.InExtent() {
-		return errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
@@ -463,7 +463,7 @@ func (a *WorldAPI) PocketGeology(c TileCoord, correlationID string) (GeologyKind
 		return GeologyUnknown, err
 	}
 	if !c.InExtent() {
-		return GeologyUnknown, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return GeologyUnknown, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
