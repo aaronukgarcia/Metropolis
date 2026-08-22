@@ -108,8 +108,39 @@ function run(args, sessionId) {
   });
 }
 
+/** BUG-354 r4/r5 F3: the per-window session-key file path for a test window id.
+ *  The subprocess's claude-sync writes `.session-key-<windowId>-<METRO_DB_NAME>`
+ *  into the PER-USER os.homedir()/.claude/session-keys directory (r5 moved it
+ *  out of the shared checkout — a git repo every lane shares). The DB tag keeps
+ *  a test run's key files from ever colliding with a live window's (which are
+ *  untagged), and makes cleanup safe to glob. */
+function sessionKeyFile(sessionId) {
+  return path.join(os.homedir(), '.claude', 'session-keys', `.session-key-${sessionId}-${TEST_DB}`);
+}
+
+/** BUG-354 r4: read a window's per-window session secret, mirroring the ping /
+ *  startup hooks. Returns '' for a fresh window with no key file yet. */
+function readSessionSecret(sessionId) {
+  try { return fs.readFileSync(sessionKeyFile(sessionId), 'utf8').trim(); } catch { return ''; }
+}
+
 function checkin(name, sessionId) {
-  return run(['checkin', '--name', name], sessionId);
+  // BUG-354 r4: present the per-window session secret explicitly, exactly as
+  // the startup hook now does. Without it, a checkin on a HELD row resolves as
+  // a fresh acquire (secret-less callers cannot claim any held/reserved row).
+  const args = ['checkin', '--name', name];
+  const secret = readSessionSecret(sessionId);
+  if (secret) args.push('--session', secret);
+  return run(args, sessionId);
+}
+
+/** AC-12: renew --auto exactly as the PostToolUse ping hook now invokes it —
+ *  with the per-window session secret presented explicitly (BUG-354 r4). */
+function renewAuto(sessionId) {
+  const args = ['renew', '--auto'];
+  const secret = readSessionSecret(sessionId);
+  if (secret) args.push('--session', secret);
+  return run(args, sessionId);
 }
 
 /** FEAT-107: `read` is the sole delivering + cursor-advancing command — this
@@ -147,6 +178,25 @@ test.after(async () => {
   try {
     if (identitySnapshotExisted) fs.writeFileSync(IDENTITY_FILE, identitySnapshot, 'utf8');
   } catch { /* best-effort restore — never fail the suite over this */ }
+  // BUG-354 r4/r5 F3: remove this run's per-window session-key files. They are
+  // DB-tagged (`-<TEST_DB>`), so only files this test run wrote are touched —
+  // live windows' untagged key files are never globbed. r5 moved the files to
+  // the per-user os.homedir()/.claude/session-keys dir; clean BOTH the per-user
+  // dir and any legacy checkout-path files a pre-r5 run may have left behind.
+  const keyDirs = [
+    path.join(os.homedir(), '.claude', 'session-keys'),
+    path.join(ROOT, '.claude'),
+  ];
+  for (const dir of keyDirs) {
+    try {
+      if (!fs.existsSync(dir)) continue;
+      for (const f of fs.readdirSync(dir)) {
+        if (f.startsWith('.session-key-') && f.endsWith(`-${TEST_DB}`)) {
+          try { fs.unlinkSync(path.join(dir, f)); } catch { /* best-effort */ }
+        }
+      }
+    } catch { /* best-effort cleanup — never fail the suite over it */ }
+  }
 });
 
 test.beforeEach(async () => {
@@ -344,22 +394,22 @@ test('AC-7 false-pass guard: body absent from checkin output AND a subsequent re
 // ── AC-8: offline identity, delivered to a different window later ──────────
 
 test('AC-8: message to an offline identity persists — checkin (from a different window) shows the count, read delivers the body', async () => {
-  // No active Ben permit exists (beforeEach reset everyone to FREE).
+  // No active Bro permit exists (beforeEach reset everyone to FREE).
   const sid1 = 'ac8-sender-session';
   assert.equal(checkin('Bill', sid1).status, 0);
-  assert.equal(run(['message', 'hi Ben, are you there?', '--to', 'Ben'], sid1).status, 0);
+  assert.equal(run(['message', 'hi Bro, are you there?', '--to', 'Bro'], sid1).status, 0);
 
   // Checkin via a DIFFERENT, never-before-seen window/session id — shows the
   // count only.
   const sid2 = 'ac8-different-window-session';
-  const res = checkin('Ben', sid2);
+  const res = checkin('Bro', sid2);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
   assert.match(res.stdout, /UNREAD: 1 message\(s\)/);
-  assert.doesNotMatch(res.stdout, /hi Ben, are you there\?/, 'checkin must not deliver the body even for an offline-at-send-time identity');
+  assert.doesNotMatch(res.stdout, /hi Bro, are you there\?/, 'checkin must not deliver the body even for an offline-at-send-time identity');
 
   // read (same window) delivers the body.
   const readRes = readCmd(sid2);
-  assert.match(readRes.stdout, /hi Ben, are you there\?/);
+  assert.match(readRes.stdout, /hi Bro, are you there\?/);
 });
 
 // ── AC-9: sender suppression ─────────────────────────────────────────────────
@@ -398,13 +448,13 @@ test('AC-10: broadcast is delivered independently to each identity (separate cur
   const bevRead = readCmd(bevSid);
   assert.match(bevRead.stdout, /broadcast to everyone/);
 
-  // Ben must STILL receive it — one identity's cursor advancing must not
+  // Bro must STILL receive it — one identity's cursor advancing must not
   // mark it read for another (the single-shared-scalar bug class).
-  const benSid = 'ac10-ben-session';
-  const benCi = checkin('Ben', benSid);
-  assert.match(benCi.stdout, /UNREAD: 1 message\(s\)/, "Ben's independent cursor must still show the broadcast as unread");
-  const benRead = readCmd(benSid);
-  assert.match(benRead.stdout, /broadcast to everyone/, "Ben's independent cursor must still deliver the broadcast");
+  const broSid = 'ac10-bro-session';
+  const broCi = checkin('Bro', broSid);
+  assert.match(broCi.stdout, /UNREAD: 1 message\(s\)/, "Bro's independent cursor must still show the broadcast as unread");
+  const broRead = readCmd(broSid);
+  assert.match(broRead.stdout, /broadcast to everyone/, "Bro's independent cursor must still deliver the broadcast");
 });
 
 // ── AC-11: chronological ordering ────────────────────────────────────────────
@@ -441,7 +491,7 @@ test('AC-12: renew --auto never surfaces or consumes unread messages; a genuine 
   assert.equal(checkin('Bill', senderSid).status, 0);
   assert.equal(run(['message', 'mid-session arrival', '--to', 'Bev'], senderSid).status, 0);
 
-  const autoRenew = run(['renew', '--auto'], sid);
+  const autoRenew = renewAuto(sid); // --session from the per-window key file, as the ping hook does (BUG-354 r4)
   assert.equal(autoRenew.status, 0, `renew --auto should succeed: ${autoRenew.stderr}`);
   assert.equal(autoRenew.stdout.trim(), '', 'renew --auto must stay silent, matching today\'s heartbeat-only behaviour');
 
@@ -582,7 +632,7 @@ test('Finding #1 false-pass guard: a window presenting its OWN real session secr
 
 test('Finding A: an attacker who merely knows the victim\'s WINDOW_ID (CLAUDE_CODE_SESSION_ID), with ZERO flags, cannot read the victim\'s loop', async () => {
   const victimSid = 'fA-victim-window-id';
-  const victimCi = checkin('Ben', victimSid);
+  const victimCi = checkin('Bro', victimSid);
   assert.equal(victimCi.status, 0);
   const realSecret = captureSessionSecret(victimCi);
   assert.equal(loopSet(realSecret, '15m /victim-loop').status, 0);
@@ -597,7 +647,7 @@ test('Finding A: an attacker who merely knows the victim\'s WINDOW_ID (CLAUDE_CO
 
 test('Finding A: the same WINDOW_ID-spoofing attacker cannot overwrite or delete the victim\'s loop', async () => {
   const victimSid = 'fA-victim-window-id-2';
-  const victimCi = checkin('Ben', victimSid);
+  const victimCi = checkin('Bro', victimSid);
   assert.equal(victimCi.status, 0);
   const realSecret = captureSessionSecret(victimCi);
   assert.equal(loopSet(realSecret, '15m /victim-loop').status, 0);
@@ -608,7 +658,7 @@ test('Finding A: the same WINDOW_ID-spoofing attacker cannot overwrite or delete
   const attackClear = run(['loop-clear'], victimSid);
   assert.notEqual(attackClear.status, 0, 'loop-clear via WINDOW_ID spoofing must be rejected');
 
-  const [rows] = await db.query('SELECT spec FROM sync_loop_config WHERE name="Ben"');
+  const [rows] = await db.query('SELECT spec FROM sync_loop_config WHERE name="Bro"');
   assert.equal(rows.length, 1, 'the victim\'s row must survive the WINDOW_ID-spoofing attack completely untouched');
   assert.equal(rows[0].spec, '15m /victim-loop');
 });
@@ -968,14 +1018,17 @@ test('status/read never lists Bob as a slot', async () => {
 
 test('no-name checkin prefers this window\'s own mapped identity over blind first-free-in-NAMES-order', async () => {
   const sid = 'winmap-pref-session';
-  // Simulate a window whose OWN identity (per the persistent sync_window_map,
-  // which survives reservation lapse — see that table's own schema comment)
-  // is "Bev", not the first name in NAMES ("Bill"). All three slots are FREE
-  // (beforeEach resets everyone) so blind first-free-in-NAMES-order would
-  // hand this window "Bill" if the map preference were not consulted.
-  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
-    [sid, 'Bev', Date.now()]);
-  const res = run(['checkin'], sid); // no --name, no CLAUDE_IDENTITY
+  // A window that previously acquired a permit holds a per-window session
+  // secret (minted by acquire, written to its key file). Its permit then
+  // lapses and is released wholesale; the persistent sync_window_map still
+  // records Bev as this window's identity. Waking and re-checking-in WITHOUT
+  // a name but WITH its secret — exactly how the startup hook presents it
+  // (BUG-354 r4) — must land on Bev, not blind first-free-in-NAMES-order Bill.
+  assert.equal(checkin('Bev', sid).status, 0);
+  await db.query('UPDATE sync_permits SET released=1 WHERE name=?', ['Bev']);
+  const secret = readSessionSecret(sid);
+  assert.ok(secret, 'precondition: the window holds its per-window session secret');
+  const res = run(['checkin', '--session', secret], sid);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
   assert.match(res.stdout, /YOU ARE: Bev/, 'must honour the window-mapped identity, not first-free (Bill)');
 });
@@ -995,7 +1048,7 @@ test('window-mapped preference is skipped when the mapped slot is unavailable �
     [sid, 'Bill', Date.now()]);
   const res = run(['checkin'], sid);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /YOU ARE: Ben/, 'Bill (mapped but live-held elsewhere) must be skipped in favour of the next free slot');
+  assert.match(res.stdout, /YOU ARE: Bev/, 'Bill (mapped but live-held elsewhere) must be skipped, and parked Ben excluded, in favour of the next live free slot (Bev)');
 });
 
 test('window-mapped preference never resurrects a retired name (defensive — map should never hold Bob, but code must not trust it blindly)', async () => {
@@ -1045,23 +1098,25 @@ test('ensureSchema never deletes a pre-existing stale Bob row (operator handles 
 test('wake recovery on a genuinely-unavailable previous slot fails loudly and never adopts a different name', async () => {
   const sidA = 'wakefail-A';
   const sidB = 'wakefail-B';
-  // Window A originally held Ben (also seeds sync_window_map: sidA -> Ben).
-  assert.equal(checkin('Ben', sidA).status, 0);
-  // Simulate A's reservation having lapsed past RESERVE_MS: its Ben row goes
-  // back to FREE, but sync_window_map's sidA -> Ben mapping is untouched
+  // Window A originally held Bev (also seeds sync_window_map: sidA -> Bev).
+  assert.equal(checkin('Bev', sidA).status, 0);
+  // Simulate A's reservation having lapsed past RESERVE_MS: its Bev row goes
+  // back to FREE, but sync_window_map's sidA -> Bev mapping is untouched
   // (that table is explicitly designed to survive slot reassignment).
-  await db.query("UPDATE sync_permits SET released=1 WHERE name='Ben'");
-  // Window B then legitimately takes the now-free Ben slot for itself.
-  assert.equal(checkin('Ben', sidB).status, 0);
+  await db.query("UPDATE sync_permits SET released=1 WHERE name='Bev'");
+  // Window B then legitimately takes the now-free Bev slot for itself.
+  assert.equal(checkin('Bev', sidB).status, 0);
 
   // Window A wakes and calls renew — it holds no active permit of its own
-  // any more (Ben's row now belongs to window B).
-  const res = run(['renew'], sidA);
+  // any more (Ben's row now belongs to window B). BUG-354 r5: the ping hook
+  // presents the window's key-file secret, so the test must too — only then
+  // does the hadName path get consulted at all.
+  const res = run(['renew', '--session', readSessionSecret(sidA)], sidA);
   assert.notEqual(res.status, 0, 'must fail loudly, never silently succeed under a different name');
   assert.doesNotMatch(res.stdout, /YOU ARE:/, 'no identity may be printed as granted');
   assert.doesNotMatch(res.stdout, /IDENTITY CHANGED/, 'the old silent cross-assign message must be gone');
-  assert.match(res.stderr, /Your previous slot "Ben" is held/);
-  assert.match(res.stderr, /checkin --name Ben/);
+  assert.match(res.stderr, /Your previous slot "Bev" is held/);
+  assert.match(res.stderr, /checkin --name Bev/);
 
   // False-pass guard: window A must not have been silently granted ANY slot
   // (Bill or Bev), which is exactly what the pre-fix cross-assign did.
@@ -1075,7 +1130,9 @@ test('wake recovery false-pass guard: previous slot genuinely FREE still reclaim
   // Simulate idle-past-reservation expiry: row goes FREE, window_map keeps
   // sid -> Bill.
   await db.query("UPDATE sync_permits SET released=1 WHERE name='Bill'");
-  const res = run(['renew'], sid);
+  // BUG-354 r5: the ping hook renews WITH the key-file secret; without it the
+  // renew is a clean no-op, so the test must present it exactly as the hook does.
+  const res = run(['renew', '--session', readSessionSecret(sid)], sid);
   assert.equal(res.status, 0, `wake recovery onto a genuinely-free previous slot must still succeed: ${res.stderr}`);
   assert.match(res.stdout, /re-acquired Bill/);
 });
@@ -1084,10 +1141,618 @@ test('wake recovery on a stale window_map entry pointing at retired Bob fails lo
   const sid = 'wake-retired-map-session';
   await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
     [sid, 'Bob', Date.now()]);
-  const res = run(['renew'], sid);
+  // BUG-354 r5: the map is consulted only under key-file proof — write this
+  // window's key file and renew with the secret exactly as the ping hook does.
+  const secret = 'wake-retired-map-secret';
+  fs.writeFileSync(sessionKeyFile(sid), secret, 'utf8');
+  const res = run(['renew', '--session', secret], sid);
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /Your previous slot "Bob" no longer exists/);
   assert.doesNotMatch(res.stdout, /YOU ARE:/);
   const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
   assert.equal(rows.length, 0, 'no slot may be silently granted when the mapped previous name is retired');
+});
+
+// ── BUG-354: identity is operator-enforceable ─────────────────────────────────
+// (Aaron, 2026-08-22: "when I tell you that you're Bev you will be Bev?" —
+// the honest answer today is NO.) Three defects, all silent, all exit 0.
+//   D1  checkin --name <X> is silently ignored when the window holds a permit.
+//   D2  wake recovery / first-free / --any can assign a PARKED slot (Ben).
+//   D3  windowed checkin rewrites the shared .identity (last-checkin-wins
+//       across windows), so another window's prefix hook reads a file this
+//       session does not own.
+// These tests must FAIL against today's code (pre-fix) — Bev's acceptance:
+// "you must SHOW BOTH TESTS FAILING against today's code before the fix."
+
+test('BUG-354 D1a: --name is authoritative — holding a permit, an explicit different --name SWAPS the slot (operator instruction wins)', async () => {
+  const sid = 'bug354-d1a-session';
+  assert.equal(checkin('Bill', sid).status, 0);
+  const res = checkin('Bev', sid); // operator: "you are Bev" while this window holds Bill
+  assert.equal(res.status, 0, `--name Bev must succeed when the target is free: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bev/, '--name must win over the held Bill permit');
+  const [rows] = await db.query('SELECT name, released FROM sync_permits WHERE window_id=?', [sid]);
+  assert.deepEqual(rows.map(r => [r.name, r.released]).sort(),
+    [['Bev', 0], ['Bill', 1]].sort(),
+    'window must hold exactly Bev, with the old Bill slot released');
+});
+
+test('BUG-354 D1b: --name fails LOUDLY when the target slot is held live by another window (never silently keeps the old identity)', async () => {
+  assert.equal(checkin('Bev', 'bug354-d1b-holder').status, 0); // Bev live-held elsewhere
+  const sid = 'bug354-d1b-session';
+  assert.equal(checkin('Bill', sid).status, 0); // this window holds Bill
+  const res = checkin('Bev', sid);              // operator: "you are Bev" — Bev is taken
+  assert.notEqual(res.status, 0, 'must fail loudly, never silently renew Bill and exit 0');
+  assert.match(res.stderr, /SLOT IS OCCUPIED/, 'clear non-zero rejection naming the unavailable target');
+  const [rows] = await db.query('SELECT name, released FROM sync_permits WHERE window_id=?', [sid]);
+  assert.deepEqual(rows.map(r => [r.name, r.released]).sort(),
+    [['Bill', 0]].sort(),
+    'the window must still hold Bill, unchanged, with no identity swap');
+});
+
+test('BUG-354 D2a: wake recovery must never re-acquire a PARKED slot (Ben) via sync_window_map — fails loudly', async () => {
+  const sid = 'bug354-d2-wake-session';
+  // Window's persistent map says it last held Ben (the exact cross-assign
+  // mechanism from the live incident — "landed this window in Ben twice");
+  // Ben's permit is FREE (beforeEach reset everyone to released).
+  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
+    [sid, 'Ben', Date.now()]);
+  // BUG-354 r5: the map is consulted only under key-file proof — write this
+  // window's key file and renew with the secret exactly as the ping hook does.
+  const secret = 'bug354-d2a-wake-secret';
+  fs.writeFileSync(sessionKeyFile(sid), secret, 'utf8');
+  const res = run(['renew', '--session', secret], sid);
+  assert.notEqual(res.status, 0, 'must fail loudly — a parked slot must never be (re)assigned');
+  assert.doesNotMatch(res.stdout, /re-acquired Ben/);
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
+  assert.equal(rows.length, 0, 'no slot may be silently granted by wake recovery onto a parked slot');
+});
+
+test('BUG-354 D2b: first-free / --any checkin must skip a PARKED slot (Ben) and take the next live free slot', async () => {
+  const sid = 'bug354-d2b-session';
+  // Occupy Bill and Bev; Ben is FREE but PARKED; Bro is free. First-free in
+  // NAMES order would pick Ben unless parked is excluded.
+  assert.equal(checkin('Bill', 'bug354-d2b-w1').status, 0);
+  assert.equal(checkin('Bev', 'bug354-d2b-w2').status, 0);
+  const res = run(['checkin'], sid); // no --name, no CLAUDE_IDENTITY -> first-free
+  assert.equal(res.status, 0, `checkin should succeed via a remaining live slot: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bro/, 'must skip parked Ben and take the next live free slot');
+});
+
+test('BUG-354 D2c: explicit checkin --name Ben is rejected as PARKED with a clear message (isRetired-like treatment)', async () => {
+  const sid = 'bug354-d2c-session';
+  const res = checkin('Ben', sid);
+  assert.notEqual(res.status, 0, 'a parked slot must not be occupiable even by explicit --name');
+  assert.match(res.stderr, /parked/i, 'rejection must name the parked state');
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
+  assert.equal(rows.length, 0, 'no permit may be granted for a parked slot');
+});
+
+test('BUG-354 D3: windowed checkin writes the per-window identity marker and must NOT clobber the shared .identity', async () => {
+  const sid = 'bug354-d3-session';
+  const perWindow = path.join(ROOT, '.claude', `.identity-${sid}`);
+  // Seed a sentinel shared .identity so the no-clobber assertion is
+  // unconditional — on a clean tree the shared file may not exist, which made
+  // the old "if (before !== null)" assertion vacuous (attacker round Aegis).
+  const hadShared = fs.existsSync(IDENTITY_FILE);
+  const priorShared = hadShared ? fs.readFileSync(IDENTITY_FILE, 'utf8') : null;
+  fs.writeFileSync(IDENTITY_FILE, 'sentinel-bug354-d3', 'utf8');
+  try {
+    assert.equal(checkin('Bev', sid).status, 0);
+    assert.equal(fs.readFileSync(perWindow, 'utf8').trim(), 'bev',
+      'per-window identity marker (.identity-<window>) must be written on acquire');
+    assert.equal(fs.readFileSync(IDENTITY_FILE, 'utf8'), 'sentinel-bug354-d3',
+      'shared .identity must be untouched by a windowed acquire (it is cross-window state)');
+  } finally {
+    if (hadShared) fs.writeFileSync(IDENTITY_FILE, priorShared, 'utf8');
+    else fs.rmSync(IDENTITY_FILE, { force: true });
+  }
+});
+
+// ── BUG-354 round 2 (attacker Cinder) — F1/F2/F3 in the D1 swap path ────────
+// Every test below is written against the BUG-354 acceptance bar from
+// bev-to-bill.md ("show both tests failing against today's code before the fix
+// lands") — each must FAIL on the pre-fix code and PASS on the fixed code.
+//   F1 (HIGH)   — checkin accepts the undocumented --session flag; findMine's
+//                 session fallback lets a permit-less attacker who knows a
+//                 victim's server-issued secret make the D1 swap release the
+//                 VICTIM's permit. Fixed: checkin rejects --session outright
+//                 (+ the swap refuses to release a row it does not own).
+//   F2 (MEDIUM) — the fresh-acquire path takes a new slot WITHOUT releasing
+//                 the window's own stale RESERVED row (idle expiry), leaving
+//                 one window holding two live rows. Fixed: releaseOtherRows
+//                 ForWindow() runs before every acquire in cmdCheckin.
+//   F3 (MED-HI) — hadName includes released=1 rows, so after a D1 swap the
+//                 released pre-swap slot (still carrying the window id) shadows
+//                 sync_window_map and wake recovery reclaims the WRONG identity.
+//                 Fixed: hadName excludes released rows.
+
+test('BUG-354 r4 F1: env-spoofed checkin --name cannot evict the victim via the swap (Warden repro #1)', async () => {
+  const victimSid = 'bug354-f1-holder';
+  // Victim window holds Bev.
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const [before] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(before[0].released, 0, 'precondition: victim holds Bev live');
+  // Attacker: no permit of their own, sets CLAUDE_CODE_SESSION_ID to the
+  // victim's EXACT value, requests Bill. r2's F1 blocked this by rejecting
+  // --session outright; r4 (Warden round 3) removes WINDOW_ID as identity
+  // authority, so the swap path must not even resolve the victim's row as
+  // "mine" without the server-issued secret. Env-spoofing alone grants zero.
+  const res = run(['checkin', '--name', 'Bill'], victimSid);
+  const [after] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'victim permit must remain live — the swap must not have released it');
+  assert.equal(after[0].session_id, before[0].session_id, 'victim secret must be untouched');
+});
+
+test('BUG-354 F2: acquiring a new slot must first release any stale non-FREE row still belonging to this window (RESERVED own-slot leak)', async () => {
+  const sid = 'bug354-f2-session';
+  assert.equal(checkin('Bill', sid).status, 0);
+  // Simulate idle expiry: Bill is now expired-but-within-reserve for this window.
+  await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
+    [Date.now() - 1000, Date.now() - 1000, 'Bill']);
+  const [b] = await db.query('SELECT expires_ms, window_id, released FROM sync_permits WHERE name=?', ['Bill']);
+  assert.equal(b[0].window_id, sid, 'precondition: Bill still belongs to this window');
+  assert.equal(b[0].released, 0, 'precondition: Bill is not yet released');
+  // The window re-checks-in on a DIFFERENT free slot while Bill is reserved.
+  const res = checkin('Bev', sid);
+  assert.equal(res.status, 0, `Bev is free and must be acquirable: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bev/);
+  const [rows] = await db.query('SELECT name, released FROM sync_permits WHERE window_id=?', [sid]);
+  assert.deepEqual(rows.map(r => [r.name, r.released]).sort(),
+    [['Bev', 0], ['Bill', 1]],
+    'the stale reserved Bill row must be released, not left occupying the reserve window');
+});
+
+test('BUG-354 F3: wake recovery after a D1 swap reclaims the LAST-HELD identity (swap target), never the pre-swap slot left released', async () => {
+  const sid = 'bug354-f3-session';
+  assert.equal(checkin('Bill', sid).status, 0);
+  const swap = checkin('Bev', sid); // D1 swap Bill -> Bev (operator --name)
+  assert.equal(swap.status, 0, `swap must succeed: ${swap.stderr}`);
+  assert.match(swap.stdout, /YOU ARE: Bev/);
+  // Simulate the window going fully idle: its Bev permit lapses and is released
+  // wholesale, so neither `mine` nor the stale-RESERVED path fires — but the
+  // released Bill row (still carrying this window's id) shadows hadName unless
+  // released rows are excluded. sync_window_map still records Bev.
+  await db.query('UPDATE sync_permits SET released=1 WHERE name=?', ['Bev']);
+  const [map] = await db.query('SELECT name FROM sync_window_map WHERE window_id=?', [sid]);
+  assert.equal(map[0].name, 'Bev', 'precondition: persistent map records Bev as the last-held identity');
+  // BUG-354 r5: the ping hook renews WITH the key-file secret; without it the
+  // renew is a clean no-op. readSessionSecret returns the post-swap secret the
+  // acquire wrote into this window's key file.
+  const res = run(['renew', '--session', readSessionSecret(sid)], sid);
+  assert.equal(res.status, 0, `wake recovery must succeed: ${res.stderr}`);
+  assert.match(res.stdout, /re-acquired Bev/, 'wake recovery must reclaim the swap target Bev, never the pre-swap Bill');
+  // The window must hold exactly ONE active slot: Bev. (The released Bill row
+  // retains its window_id by design — released rows are filtered by hadName,
+  // never scrubbed — so assert on the live rows only.)
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=? AND released=0', [sid]);
+  assert.deepEqual(rows.map(r => r.name).sort(), ['Bev'],
+    'the window must end holding exactly Bev');
+});
+
+test('BUG-354 r4 F1-extended: env-spoofed checkout cannot release the victim\'s permit (Warden repro #2)', async () => {
+  const holderSid = 'bug354-f1co-holder';
+  assert.equal(checkin('Bev', holderSid).status, 0); // victim window holds Bev
+  const [before] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  // Attacker: no permit, env set to the victim's exact value, bare checkout.
+  // r2's F1-extended guard (mine.row.window_id !== WINDOW_ID) is vacuous when
+  // WINDOW_ID is the spoofed env value; r4 resolves checkout identity by the
+  // server-issued secret only, so a secret-less attacker must not release it.
+  const res = run(['checkout'], holderSid);
+  const [after] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'victim permit must stay live');
+  assert.equal(after[0].session_id, before[0].session_id, 'victim secret must be untouched');
+});
+
+test('BUG-354 r4 W-3: env-spoofed renew cannot wake-recover the victim\'s expired RESERVED row (Warden repro #3)', async () => {
+  const victimSid = 'bug354-r4-w3-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  // Idle expiry: Bev is now expired-but-within-reserve for the victim's window.
+  await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
+    [Date.now() - 1000, Date.now() - 1000, 'Bev']);
+  const [before] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.ok(before[0].session_id, 'precondition: the reserved row carries the victim\'s server-issued secret');
+  // Attacker: env = victim's value, no --session. The r2 code's allowStale
+  // window-id match would wake-recover the victim's row and mint a NEW secret
+  // under attacker control — full identity theft. r4 must not.
+  const res = run(['renew', '--auto'], victimSid);
+  const [after] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].session_id, before[0].session_id,
+    'wake recovery must NOT re-mint the victim\'s permit secret for an env-spoofing attacker');
+  assert.equal(after[0].released, 0, 'the victim\'s reserved row must remain exactly as it was');
+});
+
+test('BUG-354 r4 W-4: env-spoofed --any cannot renew/hijack the victim\'s ACTIVE permit (Warden repro #4)', async () => {
+  const victimSid = 'bug354-r4-w4-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const [before] = await db.query('SELECT session_id, expires_ms, heartbeat_ms FROM sync_permits WHERE name=?', ['Bev']);
+  // Attacker: env = victim's value, no --session, --any. The r2 code resolves
+  // the victim's ACTIVE row as "mine" and silently renews it (the attacker now
+  // believes it is Bev and holds her lease). r4 must not touch her row at all.
+  const res = run(['checkin', '--any'], victimSid);
+  const [after] = await db.query('SELECT session_id, expires_ms, heartbeat_ms FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].session_id, before[0].session_id, 'victim secret must be untouched');
+  assert.equal(Number(after[0].expires_ms), Number(before[0].expires_ms), 'victim permit must not have been renewed');
+  assert.equal(Number(after[0].heartbeat_ms), Number(before[0].heartbeat_ms), 'victim heartbeat must not have been touched');
+});
+
+test('BUG-354 r4 W-5: checkin with a --session matching NO permit cannot evict anyone (secret must prove ownership)', async () => {
+  const victimSid = 'bug354-r4-w5-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const [before] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  // Attacker presents a made-up secret (matches no permit) AND the victim's env
+  // id. The secret — not the env — is the identity authority, so this must be a
+  // plain fresh acquire that leaves the victim untouched.
+  const res = run(['checkin', '--name', 'Bill', '--session', 'r4-w5-nonexistent-secret'], victimSid);
+  const [after] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'victim permit must remain live');
+  assert.equal(after[0].session_id, before[0].session_id, 'victim secret must be untouched');
+});
+
+test('BUG-354 r5 W-6 (r4 F2): an env-spoofed fresh acquire is REFUSED while a live row claims the window — no attacker mint, no hook-renew redirect', async () => {
+  const victimSid = 'bug354-r5-w6-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const keyFile = sessionKeyFile(victimSid);
+  const victimKey = fs.readFileSync(keyFile, 'utf8').trim();
+  assert.ok(victimKey, 'precondition: the victim\'s per-window key file holds the server secret');
+  // Attacker: env = the victim's window id, no --session, claims a FREE slot.
+  // r4 let this mint an attacker row beside the victim's live one (the W-6 guard
+  // only refused to CLOBBER the key file; deleting the key file first then minted
+  // the attacker's secret into the victim's path — r4 REJECT F2). r5 refuses the
+  // acquire outright: ONE live row per window id.
+  const res = run(['checkin', '--name', 'Bill'], victimSid);
+  assert.notEqual(res.status, 0, 'the acquire must be REFUSED — the attacker cannot mint a row beside the victim\'s live one');
+  const afterKey = fs.existsSync(keyFile) ? fs.readFileSync(keyFile, 'utf8').trim() : '';
+  assert.equal(afterKey, victimKey, 'the victim\'s key file must survive untouched');
+  const [bev] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(bev[0].released, 0, 'the victim\'s permit must remain live');
+  assert.equal(bev[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+  const [bill] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bill']);
+  assert.equal(bill[0].released, 1, 'the attacker must have minted NO row');
+  assert.equal(bill[0].session_id, null, 'Bill must carry no attacker secret');
+});
+
+// BUG-354 r7: the r5 F1 test below was REPLACED by H2. Its scenario — an
+// attacker-constructed ghost ACTIVE row under the victim's window, then a gated
+// swap — was exactly round 6's H2 ghost-shadowing hole: the NAMES-first claim
+// scan saw the ghost (proven by the attacker's own secret) and missed the
+// victim's real Bev, so the swap minted a second live row. r7 refuses ANY
+// unprovable live row, so the old "swap must run" assertion became the
+// vulnerability itself and is inverted below. The r5 F1 session-scoped-release
+// semantic survives in code (releaseOtherRowsForWindow still refuses ACTIVE
+// rows) but is no longer reachable through this shape — F2 blocks the ghost at
+// the door before any release runs.
+test('BUG-354 r7 H2: a ghost ACTIVE row under the victim\'s window cannot be leveraged to mint a 2nd live row via the gated swap — ANY unprovable live row refuses, not just the NAMES-first', async () => {
+  const sid = 'bug354-r7-h2-window';
+  assert.equal(checkin('Bev', sid).status, 0); // victim holds Bev live under this window
+  const [victimBefore] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  // Construct the attacker's ghost ACTIVE row under the SAME window id with a
+  // secret the attacker controls. Bill sorts before Bev in NAMES order, so a
+  // first-only scan sees the ghost as the (provable) claim and hides Bev.
+  const bootId = String(Math.round((Date.now() - os.uptime() * 1000) / 10000));
+  const attSecret = 'r7-h2-attacker-secret';
+  await db.query(
+    `UPDATE sync_permits SET session_id=?, window_id=?, acquired_ms=?, expires_ms=?, heartbeat_ms=?, boot_id=?, released=0 WHERE name=?`,
+    [attSecret, sid, Date.now(), Date.now() + 300000, Date.now(), bootId, 'Bill']);
+  const res = run(['checkin', '--name', 'Bro', '--session', attSecret], sid);
+  assert.notEqual(res.status, 0, `the swap must be REFUSED — Bev's live row is unprovable to this caller even though the ghost Bill is provable: ${res.stdout}${res.stderr}`);
+  const [bro] = await db.query('SELECT released, session_id FROM sync_permits WHERE name=?', ['Bro']);
+  assert.equal(bro[0].released, 1, 'Bro must NOT be minted');
+  assert.equal(bro[0].session_id, null, 'Bro must carry no attacker secret');
+  const [bev] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(bev[0].released, 0, 'the victim\'s live row must remain live');
+  assert.equal(bev[0].session_id, victimBefore[0].session_id, 'the victim\'s secret must be untouched');
+  assert.equal(bev[0].window_id, sid, 'the victim\'s window claim must be intact');
+  const [bill] = await db.query('SELECT released, session_id, window_id FROM sync_permits WHERE name=?', ['Bill']);
+  assert.equal(bill[0].released, 0, 'the refused swap must leave the ghost row untouched');
+  assert.equal(bill[0].session_id, attSecret, 'the ghost row must keep its secret');
+  assert.equal(bill[0].window_id, sid, 'the ghost row must not have moved windows');
+});
+
+test('BUG-354 r7 H1: --force --human-ok (a plain flag with no human proof) cannot mint a ghost row beside a live claim this caller cannot secret-prove', async () => {
+  const victimSid = 'bug354-r7-h1-victim';
+  const broSid = 'bug354-r7-h1-bro';
+  assert.equal(checkin('Bev', victimSid).status, 0); // victim live under victimSid
+  assert.equal(checkin('Bro', broSid).status, 0); // Bro ACTIVE under ITS OWN window
+  const broBefore = (await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bro']))[0][0];
+  // Attacker spoofs the victim's window id and force-evicts Bro with NO secret
+  // at all. r6 left the four --force --human-ok acquire branches unguarded, so
+  // this minted Bro live beside the victim's Bev. r7 gates every force acquire:
+  // the window already carries Bev, which this secret-less caller cannot prove.
+  const res = run(['checkin', '--name', 'Bro', '--force', '--human-ok'], victimSid);
+  assert.notEqual(res.status, 0, `the force acquire must be REFUSED — no second live row may be minted beside the victim's Bev: ${res.stdout}${res.stderr}`);
+  const [broAfter] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bro']);
+  assert.equal(broAfter[0].released, 0, 'the real Bro holder must NOT be evicted');
+  assert.equal(broAfter[0].session_id, broBefore.session_id, 'the real Bro secret must be untouched');
+  assert.equal(broAfter[0].window_id, broSid, 'the real Bro must stay in its own window');
+  const [bev] = await db.query('SELECT released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(bev[0].released, 0, 'the victim\'s permit must remain live');
+  assert.equal(bev[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+});
+
+test('BUG-354 r7 H6: renew wake-recovery from a spoofed window id cannot re-acquire the caller\'s own lapsed row live under the VICTIM\'s window', async () => {
+  const victimSid = 'bug354-r7-h6-victim';
+  const attSid = 'bug354-r7-h6-attacker';
+  assert.equal(checkin('Bev', victimSid).status, 0); // victim live under victimSid
+  assert.equal(checkin('Bill', attSid).status, 0); // attacker holds Bill under its own window
+  const attSecret = readSessionSecret(attSid);
+  assert.ok(attSecret, 'precondition: the attacker\'s Bill key file holds a real server-issued secret');
+  // Let the attacker's permit lapse -> Bill becomes RESERVED (its own window's
+  // idle-leftover shape, secret known from its key file).
+  await db.query('UPDATE sync_permits SET expires_ms=? WHERE name=?', [Date.now() - 60000, 'Bill']);
+  // Attacker spoofs the VICTIM's window id and renews with its OWN Bill secret.
+  // r6 left the stale-permit wake-recovery acquire unguarded, so this
+  // re-acquired Bill live under victimSid, beside the victim's Bev. r7 gates it.
+  const res = run(['renew', '--auto', '--session', attSecret], victimSid);
+  assert.notEqual(res.status, 0, `wake recovery must be REFUSED — Bill cannot be re-acquired live under the victim's window: ${res.stdout}${res.stderr}`);
+  const [bill] = await db.query('SELECT released, session_id, window_id FROM sync_permits WHERE name=?', ['Bill']);
+  assert.equal(bill[0].released, 0, 'Bill must stay released=0 (still RESERVED to its own window)');
+  assert.equal(bill[0].session_id, attSecret, 'Bill must keep the server-issued secret');
+  assert.equal(bill[0].window_id, attSid, 'Bill must NOT have been moved to the victim\'s window');
+  const [bev] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(bev[0].released, 0, 'the victim\'s permit must remain live');
+  assert.equal(bev[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+});
+
+// BUG-354 r8 (r7 REJECT, attacker ac9ff2cc): the F2 gate keys to the AMBIENT
+// window, but force-evict/checkout-force target a row BY NAME — so a fresh (or
+// no) window id has zero live claims under it, the F2 gate passes vacuously,
+// and a no-secret rogue process evicts any identity. r8 requires force surfaces
+// to authenticate the TARGET row's server-issued session secret (the identity
+// authority). Each P-break is a distinct window-shape the r7 code failed:
+//   P1 fresh window + no secret -> checkin --name Bev --force --human-ok
+//   P2 fresh window + no secret -> force-evict a third party (Bro)
+//   P3 any window + no secret   -> checkout --force Bev
+//   P4 own-secret + fresh window -> force-evict the victim's own row
+//   P8 fresh window + no secret -> force-override a RESERVED row
+//   P11 NO window id + no secret -> force-evict the victim's own row
+test('BUG-354 r8 P1: a fresh-window process with NO secret cannot force-evict a live holder (checkin --name X --force --human-ok)', async () => {
+  const victimSid = 'bug354-r8-p1-victim';
+  const freshSid = 'bug354-r8-p1-fresh';
+  assert.equal(checkin('Bev', victimSid).status, 0); // victim live under victimSid
+  const [before] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  // Fresh window, NO --session, NO key file — the r7 F2 gate sees no claims
+  // under the fresh window and passes vacuously, so the force acquire proceeds.
+  const res = run(['checkin', '--name', 'Bev', '--force', '--human-ok'], freshSid);
+  assert.notEqual(res.status, 0, `force-evict without the target's secret must be REFUSED: ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'the victim must NOT be evicted');
+  assert.equal(after[0].session_id, before[0].session_id, 'the victim\'s secret must be untouched');
+  assert.equal(after[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+});
+
+test('BUG-354 r8 P2: a fresh-window process with NO secret cannot force-evict a THIRD-PARTY holder by name', async () => {
+  const victimSid = 'bug354-r8-p2-victim';
+  const broSid = 'bug354-r8-p2-bro';
+  const freshSid = 'bug354-r8-p2-fresh';
+  assert.equal(checkin('Bev', victimSid).status, 0); // victim live
+  assert.equal(checkin('Bro', broSid).status, 0); // third-party Bro live under its OWN window
+  const [before] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bro']);
+  const res = run(['checkin', '--name', 'Bro', '--force', '--human-ok'], freshSid);
+  assert.notEqual(res.status, 0, `force-evict of a third party without the target's secret must be REFUSED: ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bro']);
+  assert.equal(after[0].released, 0, 'Bro must NOT be evicted');
+  assert.equal(after[0].session_id, before[0].session_id, 'Bro\'s secret must be untouched');
+  assert.equal(after[0].window_id, broSid, 'Bro must stay in its own window');
+});
+
+test('BUG-354 r8 P3: checkout --force with NO secret cannot release a live permit', async () => {
+  const victimSid = 'bug354-r8-p3-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const [before] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  const res = run(['checkout', '--force', 'Bev'], 'bug354-r8-p3-any');
+  assert.notEqual(res.status, 0, `checkout --force without the target's secret must be REFUSED: ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'the victim must NOT be released');
+  assert.equal(after[0].session_id, before[0].session_id, 'the victim\'s secret must be untouched');
+  assert.equal(after[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+});
+
+test('BUG-354 r8 P4: a caller presenting its OWN live secret from a fresh window cannot force-evict the victim\'s row', async () => {
+  const victimSid = 'bug354-r8-p4-victim';
+  const attackerSid = 'bug354-r8-p4-attacker';
+  const freshSid = 'bug354-r8-p4-fresh';
+  assert.equal(checkin('Bev', victimSid).status, 0); // victim live
+  assert.equal(checkin('Bill', attackerSid).status, 0); // attacker holds Bill under ITS OWN window
+  const attSecret = readSessionSecret(attackerSid);
+  assert.ok(attSecret, 'precondition: the attacker\'s Bill key file holds a real server-issued secret');
+  const [before] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  // Attacker has its OWN live secret but NOT the target's. From a fresh window
+  // the F2 gate sees no claims under it, so the r7 swap-force proceeds.
+  const res = run(['checkin', '--name', 'Bev', '--force', '--human-ok', '--session', attSecret], freshSid);
+  assert.notEqual(res.status, 0, `force-evict with the WRONG (own) secret must be REFUSED: ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'the victim must NOT be evicted');
+  assert.equal(after[0].session_id, before[0].session_id, 'the victim\'s secret must be untouched');
+  assert.equal(after[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+});
+
+test('BUG-354 r8 P8: a fresh-window process with NO secret cannot force-override a RESERVED row', async () => {
+  const victimSid = 'bug354-r8-p8-victim';
+  const freshSid = 'bug354-r8-p8-fresh';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  // Victim goes idle -> Bev becomes RESERVED (its own window's stale shape).
+  await db.query('UPDATE sync_permits SET expires_ms=? WHERE name=?', [Date.now() - 60000, 'Bev']);
+  const [before] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  const res = run(['checkin', '--name', 'Bev', '--force', '--human-ok'], freshSid);
+  assert.notEqual(res.status, 0, `force-override of a RESERVED row without the target's secret must be REFUSED: ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'the reserved row must NOT be evicted');
+  assert.equal(after[0].session_id, before[0].session_id, 'the reserved row\'s secret must be untouched');
+  assert.equal(after[0].window_id, victimSid, 'the reserved row must stay in its own window');
+});
+
+test('BUG-354 r8 P11: a process with NO window id and NO secret cannot force-evict the victim\'s row', async () => {
+  const victimSid = 'bug354-r8-p11-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const [before] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  // run(..., '') sets CLAUDE_CODE_SESSION_ID to the empty string — NO window id
+  // at all. liveWindowClaims is skipped entirely (`if (WINDOW_ID)`), F2 passes.
+  const res = run(['checkin', '--name', 'Bev', '--force', '--human-ok'], '');
+  assert.notEqual(res.status, 0, `force-evict with NO window id and NO secret must be REFUSED: ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 0, 'the victim must NOT be evicted');
+  assert.equal(after[0].session_id, before[0].session_id, 'the victim\'s secret must be untouched');
+  assert.equal(after[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+});
+
+test('BUG-354 r8 CONTROL: checkout --force WITH the target\'s server-issued secret still releases it (legit operator path preserved)', async () => {
+  const victimSid = 'bug354-r8-ctrl-victim';
+  assert.equal(checkin('Bev', victimSid).status, 0);
+  const bevSecret = readSessionSecret(victimSid);
+  assert.ok(bevSecret, 'precondition: the victim key file holds a real server-issued secret');
+  const res = run(['checkout', '--force', 'Bev', '--session', bevSecret], 'bug354-r8-ctrl-op');
+  assert.equal(res.status, 0, `checkout --force with the target's secret must succeed (operator recovery): ${res.stdout}${res.stderr}`);
+  const [after] = await db.query('SELECT released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].released, 1, 'the target permit must be released');
+});
+
+test('BUG-354 r5 F3: session-key files live in the per-user .claude/session-keys dir, NEVER the shared checkout', async () => {
+  const sid = 'bug354-r5-f3-window';
+  assert.equal(checkin('Bev', sid).status, 0);
+  const checkoutPath = path.join(ROOT, '.claude', `.session-key-${sid}-${TEST_DB}`);
+  assert.ok(!fs.existsSync(checkoutPath), 'no session-key file may be written to the shared checkout');
+  const perUser = sessionKeyFile(sid);
+  assert.ok(fs.existsSync(perUser), 'the per-user session-key file must exist');
+  const secret = fs.readFileSync(perUser, 'utf8').trim();
+  assert.ok(secret, 'the per-user key file must hold a server-issued secret');
+  const [bev] = await db.query('SELECT session_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(secret, bev[0].session_id, 'the key file must hold exactly this permit\'s secret');
+});
+
+test('BUG-354 r5 F4: renew wake-recovery requires the session secret — ambient WINDOW_ID alone cannot re-acquire a released slot', async () => {
+  const sid = 'bug354-r5-f4-window';
+  assert.equal(checkin('Bev', sid).status, 0);
+  const [before] = await db.query('SELECT session_id FROM sync_permits WHERE name=?', ['Bev']);
+  // Victim goes fully idle: row released wholesale (beyond reserve), so neither
+  // `mine` nor the stale-RESERVED path can fire — only the ambient hadName path
+  // could re-acquire, and it must not without the secret (r4 REJECT F4).
+  await db.query('UPDATE sync_permits SET released=1, expires_ms=? WHERE name=?', [Date.now() - 60000, 'Bev']);
+  const res = run(['renew', '--auto'], sid);
+  const [after] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(after[0].session_id, before[0].session_id,
+    'wake recovery must NOT mint a fresh secret under the victim\'s name for an env-spoofer');
+  assert.equal(after[0].released, 1, 'the released row must stay released (no silent re-acquire)');
+});
+
+test('BUG-354 r6 R1a (r5 P1): the swap acquire is F2-guarded — an attacker holding a secret-proven row in a DIFFERENT window cannot mint a 2nd live row under the victim\'s window', async () => {
+  const victimSid = 'bug354-r6-swap-victim';
+  const attackerSid = 'bug354-r6-swap-attacker';
+  assert.equal(checkin('Bev', victimSid).status, 0); // victim live under victimSid
+  assert.equal(checkin('Bill', attackerSid).status, 0); // attacker holds Bill under ITS OWN window
+  const attSecret = readSessionSecret(attackerSid);
+  assert.ok(attSecret, 'precondition: the attacker\'s Bill key file holds a real server-issued secret');
+  const [victimBefore] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  // Attacker spoofs the VICTIM's window id and swaps its own Bill -> Bro. The
+  // swap acquire stamps Bro live under victimSid WITHOUT consulting the
+  // live-claim guard in r5 (fix bar: apply liveWindowClaimRefusal at the swap
+  // acquire site). With the guard, the window already carries Bev (a live row
+  // this caller cannot secret-prove) -> the swap must be REFUSED.
+  const res = run(['checkin', '--name', 'Bro', '--session', attSecret], victimSid);
+  assert.notEqual(res.status, 0, `the swap must be REFUSED under F2 — the attacker cannot mint Bro beside the victim's live Bev: ${res.stdout}${res.stderr}`);
+  const [bro] = await db.query('SELECT released, session_id FROM sync_permits WHERE name=?', ['Bro']);
+  assert.equal(bro[0].released, 1, 'Bro must NOT be acquired');
+  assert.equal(bro[0].session_id, null, 'Bro must carry no attacker secret');
+  const [bevAfter] = await db.query('SELECT session_id, released, window_id FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(bevAfter[0].released, 0, 'the victim must remain live');
+  assert.equal(bevAfter[0].session_id, victimBefore[0].session_id, 'the victim\'s secret must be untouched');
+  assert.equal(bevAfter[0].window_id, victimSid, 'the victim\'s window claim must be intact');
+  const [bill] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bill']);
+  assert.equal(bill[0].released, 0, 'the attacker\'s own Bill row must be untouched');
+  assert.equal(bill[0].session_id, attSecret, 'the attacker\'s own secret must be intact');
+});
+
+test('BUG-354 r6 R1b (r5 P1): renew wake-recovery hadName acquire is F2-guarded — a released row under the victim\'s window cannot re-acquire a name while the victim holds the window live', async () => {
+  const sid = 'bug354-r6-hadname-window';
+  assert.equal(checkin('Bev', sid).status, 0); // victim live under sid
+  const [victimBefore] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  // Attacker constructs a RELEASED Bill row under the victim's window with a
+  // secret it controls (the shape a pre-r5 ghost-row leak would leave). The
+  // renew hadName path would re-acquire Bill (state FREE) WITHOUT the F2 guard
+  // (fix bar: apply liveWindowClaimRefusal at the renew hadName acquire site).
+  const attSecret = 'r6-hadname-attacker-secret';
+  const bootId = String(Math.round((Date.now() - os.uptime() * 1000) / 10000));
+  await db.query(
+    `UPDATE sync_permits SET session_id=?, window_id=?, acquired_ms=?, expires_ms=?, heartbeat_ms=?, boot_id=?, released=1 WHERE name=?`,
+    [attSecret, sid, Date.now() - 120000, Date.now() - 60000, Date.now() - 120000, bootId, 'Bill']);
+  const res = run(['renew', '--auto', '--session', attSecret], sid);
+  assert.notEqual(res.status, 0, `the hadName wake-recovery must be REFUSED under F2 — the window already holds the victim's live Bev: ${res.stdout}${res.stderr}`);
+  const [bill] = await db.query('SELECT released, session_id FROM sync_permits WHERE name=?', ['Bill']);
+  assert.equal(bill[0].released, 1, 'Bill must stay released — no wake-recovery mint beside the victim\'s live row');
+  assert.equal(bill[0].session_id, attSecret, 'Bill must keep the attacker\'s secret, not a fresh server mint');
+  const [bev] = await db.query('SELECT session_id, released FROM sync_permits WHERE name=?', ['Bev']);
+  assert.equal(bev[0].released, 0, 'the victim\'s permit must remain live');
+  assert.equal(bev[0].session_id, victimBefore[0].session_id, 'the victim\'s secret must be untouched');
+});
+
+test('BUG-354 r6 R2 (r5 P1): fresh machine with NO session-keys dir does not self-lockout — acquire and ensureSessionKey mkdir the per-user dir', async () => {
+  const freshHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-fresh-home-'));
+  const sid = 'bug354-r6-fresh-home';
+  try {
+    // Point os.homedir() at a brand-new home: USERPROFILE is Node's win32
+    // homedir source, and a fresh home has NO .claude/session-keys. r5 found
+    // acquire/ensureSessionKey writeFileSync without mkdirSync -> ENOENT was
+    // swallowed by the convenience catch -> first checkin on a fresh machine
+    // silently produced NO key file -> the window could never renew (GR#17
+    // silent-failure family). After the fix, the dir is created.
+    const env = {
+      ...process.env,
+      USERPROFILE: freshHome,
+      METRO_DB_HOST: DB_HOST,
+      METRO_DB_PORT: String(DB_PORT),
+      METRO_DB_USER: DB_USER,
+      METRO_DB_PASSWORD: DB_PASSWORD,
+      METRO_DB_NAME: TEST_DB,
+      CLAUDE_CODE_SESSION_ID: sid,
+      CLAUDE_SESSION_ID: '',
+      CLAUDE_IDENTITY: '',
+    };
+    const res = spawnSync(process.execPath, ['claude-sync.js', 'checkin', '--name', 'Bev'], { cwd: ROOT, encoding: 'utf8', env });
+    assert.equal(res.status, 0, `fresh-machine checkin must succeed: ${res.stderr}`);
+    const keyFile = path.join(freshHome, '.claude', 'session-keys', `.session-key-${sid}-${TEST_DB}`);
+    assert.ok(fs.existsSync(keyFile),
+      'acquire must mkdir the per-user session-keys dir and write the key file on a fresh machine (r5 R2: silent ENOENT -> no key -> self-lockout)');
+    const secret = fs.readFileSync(keyFile, 'utf8').trim();
+    assert.ok(secret, 'the fresh-machine key file must hold a server-issued secret');
+    // ensureSessionKey path: wipe the key dir and force a REAL renewal (expire
+    // the permit near-now — renew --auto with plenty of TTL takes the
+    // heartbeat-only fast path, which never touches the key file). The renewal
+    // path calls ensureSessionKey, which must mkdir the dir and rewrite the key.
+    fs.rmSync(path.join(freshHome, '.claude'), { recursive: true, force: true });
+    await db.query('UPDATE sync_permits SET expires_ms=? WHERE name=?', [Date.now() + 1000, 'Bev']);
+    const res2 = spawnSync(process.execPath, ['claude-sync.js', 'renew', '--auto', '--session', secret], { cwd: ROOT, encoding: 'utf8', env });
+    assert.equal(res2.status, 0, `renew --auto after a wiped key dir must succeed: ${res2.stderr}`);
+    assert.ok(fs.existsSync(keyFile), 'ensureSessionKey must mkdir the dir and rewrite the key on a real renewal (r5 R2)');
+  } finally {
+    try { fs.rmSync(freshHome, { recursive: true, force: true }); } catch { /* best-effort cleanup */ }
+  }
+});
+
+test('BUG-354 r6 R3 (r5 P2 = BUG-360): findMine window-id fallback requires key-file possession — a key-less env-spoofer cannot read the victim\'s messages or advance their cursor', async () => {
+  const sid = 'bug354-r6-bug360-window';
+  assert.equal(checkin('Bev', sid).status, 0); // victim live under sid; key file written
+  const victimSecret = readSessionSecret(sid);
+  assert.ok(victimSecret, 'precondition: the victim\'s key file holds the server secret');
+  // A message TO the victim from a permitted sender, so there is something to steal.
+  const senderSid = 'bug354-r6-bug360-sender';
+  assert.equal(checkin('Bill', senderSid).status, 0);
+  const send = run(['message', 'BUG-360-TOP-SECRET', '--to', 'Bev'], senderSid);
+  assert.equal(send.status, 0, `message send must succeed: ${send.stderr}`);
+  const [cursorBefore] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name=?', ['Bev']);
+  // Attacker: knows the victim's window id but possesses NO key file (it is
+  // deleted — possession of the per-user key file is the only thing r6 trusts).
+  fs.unlinkSync(sessionKeyFile(sid));
+  const res = run(['read'], sid);
+  // Pre-fix (BUG-360): findMine matched Bev by bare ambient WINDOW_ID and the
+  // spoofer's read delivered the victim's messages and advanced their cursor.
+  // Post-fix: no key-file possession -> no match -> no delivery, cursor untouched.
+  assert.ok(!res.stdout.includes('BUG-360-TOP-SECRET'),
+    `the key-less spoofer must NOT receive the victim's message body: ${res.stdout}`);
+  const [cursorAfter] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name=?', ['Bev']);
+  assert.equal(Number(cursorAfter[0].last_read_id), Number(cursorBefore[0].last_read_id),
+    'the key-less spoofer must NOT advance the victim\'s read cursor');
+  // False-pass guard: the victim, WITH the key file restored, still receives it.
+  await fs.promises.writeFile(sessionKeyFile(sid), victimSecret, 'utf8');
+  const readBack = run(['read'], sid);
+  assert.ok(readBack.stdout.includes('BUG-360-TOP-SECRET'),
+    `the victim with key-file possession must still receive the message: ${readBack.stdout}`);
 });
