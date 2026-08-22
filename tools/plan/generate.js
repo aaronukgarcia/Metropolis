@@ -44,6 +44,11 @@ const BOW_IMPORT_PATH = path.join(__dirname, 'bow-import.json');
 const TYPES = ['module', 'feature', 'interface', 'bug'];
 const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
 const MILESTONES = ['M0', 'M1', 'M2', 'M3', 'M4', 'future'];
+// Units registry (2026-08-22): the dimensions a code.json `units` entry may
+// declare. Every unit of measurement in use across the codebase must be
+// registered (the /units-lint skill enforces it); the registry is carried
+// from the master plan into code.json verbatim, like `conventions`.
+const DIMENSIONS = ['money', 'mass', 'volume', 'energy', 'power', 'length', 'area', 'time', 'speed', 'ratio', 'count', 'noise'];
 
 function fail(code, msg) {
   console.error(`[${code}] ${msg}`);
@@ -179,6 +184,28 @@ for (const it of items) {
     errors.push(`MET-T024 dependency cycle among: ${[...indeg.entries()].filter(([, d]) => d > 0).map(([k]) => k).join(', ')}`);
   }
 }
+// ── Units registry validation (2026-08-22) ───────────────────────────────────
+// code.json carries a top-level `units` array sourced verbatim from the master
+// plan's `units` (same flow as `conventions`). Every unit in use must be
+// registered; validate the entries here so a malformed/duplicate registry fails
+// the plan before any output is written (GR#1), mirroring the item checks above.
+if (plan.units !== undefined) {
+  if (!Array.isArray(plan.units)) {
+    errors.push('MET-T032 "units": must be an array (or omitted)');
+  } else {
+    const unitKeys = new Set();
+    for (const u of plan.units) {
+      const id = u.key || u.name || '?';
+      if (!u.key || !/^[a-z0-9][a-z0-9._-]*$/.test(u.key)) errors.push(`MET-T033 unit "${id}": missing/invalid key`);
+      else if (unitKeys.has(u.key)) errors.push(`MET-T034 unit "${id}": duplicate key "${u.key}"`);
+      else unitKeys.add(u.key);
+      if (!u.name) errors.push(`MET-T035 unit "${id}": missing name`);
+      if (!u.symbol) errors.push(`MET-T036 unit "${id}": missing symbol`);
+      if (!DIMENSIONS.includes(u.dimension)) errors.push(`MET-T037 unit "${id}": invalid dimension "${u.dimension}" (allowed: ${DIMENSIONS.join(', ')})`);
+      if (u.scale !== undefined && (!Number.isInteger(u.scale) || u.scale <= 0)) errors.push(`MET-T038 unit "${id}": scale must be a positive integer when present`);
+    }
+  }
+}
 if (errors.length) {
   console.error(`master plan FAILED validation with ${errors.length} error(s):`);
   for (const e of errors) console.error(`  - ${e}`);
@@ -302,6 +329,7 @@ const codeJson = {
   updated: plan.updated,
   conventions: plan.conventions,
   designNorthStar: plan.designNorthStar,
+  units: plan.units || [],
   moduleCount: modules.length,
   modules,
 };

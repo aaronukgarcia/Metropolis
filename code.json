@@ -39,6 +39,523 @@
       "Can a long bet be made on it?"
     ]
   },
+  "units": [
+    {
+      "key": "money.micropound",
+      "name": "micro-pound",
+      "symbol": "µ£",
+      "dimension": "money",
+      "scale": 1,
+      "definedAt": "internal/engine/finance/money.go:21",
+      "note": "BASE money unit (this registry's convention: scale = how many base units make one of this unit). The only fixed-point money representation on the tick path. Declared four times: finance.MicropoundsPerPound / micropoundsScale, det.MicropoundsPerPound, unlocks.micropoundsPerPound, market.Micropounds (type, prose)."
+    },
+    {
+      "key": "money.pence",
+      "name": "pence",
+      "symbol": "p",
+      "dimension": "money",
+      "scale": 10000,
+      "baseUnit": "money.micropound",
+      "definedAt": "internal/engine/fuel/fuel.go:361",
+      "note": "1 pence = 10,000 micro-pounds (the 10000 literal at fuel.go:361)."
+    },
+    {
+      "key": "money.pound",
+      "name": "pound sterling",
+      "symbol": "£",
+      "dimension": "money",
+      "scale": 1000000,
+      "baseUnit": "money.micropound",
+      "note": "Whole pounds. 1 GBP = 100 pence = 1,000,000 micro-pounds."
+    },
+    {
+      "key": "ratio.per-mille",
+      "name": "per-mille",
+      "symbol": "‰",
+      "dimension": "ratio",
+      "scale": 1000,
+      "definedAt": "internal/engine/finance/land.go:26",
+      "note": "Fixed-point fraction denominator 1000 = 1.0× (factorScale, sizePerMilleUnit, SizePerMille)."
+    },
+    {
+      "key": "ratio.basis-point",
+      "name": "basis point",
+      "symbol": "bp",
+      "dimension": "ratio",
+      "scale": 10000,
+      "definedAt": "internal/engine/finance/stages.go:15",
+      "note": "10000 bp = 100%. Duplicated as fiscal.basisPointScale and services.incomeTaxBasisPointScale."
+    },
+    {
+      "key": "ratio.percent",
+      "name": "percent",
+      "symbol": "%",
+      "dimension": "ratio",
+      "scale": 100,
+      "note": "Float percent fields (tax_instruments.go) and prose; not a single fixed-point scale."
+    },
+    {
+      "key": "time.day-tick",
+      "name": "simulation day-tick",
+      "symbol": "tick",
+      "dimension": "time",
+      "scale": 1,
+      "definedAt": "internal/engine/core/clock.go:15",
+      "note": "Base sim-time unit. DailyTicksPerMonth = 30 day-ticks per calendar month (duplicated as citizens.DaysPerMonth)."
+    },
+    {
+      "key": "time.month",
+      "name": "calendar month",
+      "symbol": "mo",
+      "dimension": "time",
+      "baseUnit": "time.day-tick",
+      "scale": 30,
+      "note": "One calendar month = 30 day-ticks."
+    },
+    {
+      "key": "time.year",
+      "name": "year",
+      "symbol": "y",
+      "dimension": "time",
+      "baseUnit": "time.month",
+      "scale": 12,
+      "note": "monthsPerYear = 12 (declared in census and season)."
+    },
+    {
+      "key": "time.millisecond",
+      "name": "millisecond",
+      "symbol": "ms",
+      "dimension": "time",
+      "scale": 1,
+      "note": "Base wall-clock unit; time.Duration pacing (boot.go, tick-driver nanosPerTick)."
+    },
+    {
+      "key": "time.real-second",
+      "name": "real wall-clock second",
+      "symbol": "s",
+      "dimension": "time",
+      "baseUnit": "time.millisecond",
+      "scale": 1000,
+      "definedAt": "internal/engine/core/clock.go:53",
+      "note": "DefaultSecondsPerMonthAt1x = 30 real seconds per game month at 1× speed; 1 s = 1000 ms."
+    },
+    {
+      "key": "time.minute",
+      "name": "simulation minute",
+      "symbol": "min",
+      "dimension": "time",
+      "note": "Helicopter travel/hospital-landing SIMULATION-minutes (airSpeedMinutesPerUnit, hospitalLandingReductionMinutes)."
+    },
+    {
+      "key": "time.hour",
+      "name": "hour",
+      "symbol": "h",
+      "dimension": "time",
+      "scale": 1,
+      "note": "Base calendar-time unit; hoursPerWeek = 168."
+    },
+    {
+      "key": "time.day",
+      "name": "calendar day",
+      "symbol": "d",
+      "dimension": "time",
+      "baseUnit": "time.hour",
+      "scale": 24,
+      "definedAt": "internal/engine/worklife/clock.go:12",
+      "note": "hoursPerDay = 24; 1 day = 24 hours."
+    },
+    {
+      "key": "mass.tonne",
+      "name": "tonne",
+      "symbol": "t",
+      "dimension": "mass",
+      "note": "Freight/airport/build throughput (tonnes/day, t/hr, t/ship); data-string unit in market.json."
+    },
+    {
+      "key": "mass.kilogram",
+      "name": "kilogram",
+      "symbol": "kg",
+      "dimension": "mass",
+      "note": "Consumption waste, foodStaples/foodFresh, refuse bin capacities."
+    },
+    {
+      "key": "volume.litre",
+      "name": "litre",
+      "symbol": "L",
+      "dimension": "volume",
+      "note": "Water/fuel/gas volume (waterLitresPerPersonPerDay, aquifer)."
+    },
+    {
+      "key": "volume.cubic-metre",
+      "name": "cubic metre",
+      "symbol": "m³",
+      "dimension": "volume",
+      "note": "Per-class consumption m3 units (sewage/desalination)."
+    },
+    {
+      "key": "energy.kilowatt-hour",
+      "name": "kilowatt-hour",
+      "symbol": "kWh",
+      "dimension": "energy",
+      "scale": 1,
+      "note": "Power/gas consumption (elecKWh, gasKWh); base energy unit."
+    },
+    {
+      "key": "energy.megawatt-hour",
+      "name": "megawatt-hour",
+      "symbol": "MWh",
+      "dimension": "energy",
+      "baseUnit": "energy.kilowatt-hour",
+      "scale": 1000,
+      "note": "Unlock import-price-per-MWh; 1 MWh = 1000 kWh."
+    },
+    {
+      "key": "power.kilowatt",
+      "name": "kilowatt",
+      "symbol": "kW",
+      "dimension": "power",
+      "scale": 1,
+      "note": "Pharmacampus utilityPowerKW; base power unit."
+    },
+    {
+      "key": "power.megawatt",
+      "name": "megawatt",
+      "symbol": "MW",
+      "dimension": "power",
+      "baseUnit": "power.kilowatt",
+      "scale": 1000,
+      "note": "Building/unlock capacity strings (150 MW, 2,000 MW); 1 MW = 1000 kW."
+    },
+    {
+      "key": "length.metre",
+      "name": "metre",
+      "symbol": "m",
+      "dimension": "length",
+      "scale": 1,
+      "note": "Grid cell size, footprint radii; data-string only, no Go constant; base length unit."
+    },
+    {
+      "key": "length.kilometre",
+      "name": "kilometre",
+      "symbol": "km",
+      "dimension": "length",
+      "baseUnit": "length.metre",
+      "scale": 1000,
+      "note": "Road/cost strings, expansion sizeKm."
+    },
+    {
+      "key": "length.mile",
+      "name": "mile",
+      "symbol": "mi",
+      "dimension": "length",
+      "note": "Census annual mileage (miles/year)."
+    },
+    {
+      "key": "area.hectare",
+      "name": "hectare",
+      "symbol": "ha",
+      "dimension": "area",
+      "note": "Airport landFootprintHectares."
+    },
+    {
+      "key": "area.square-metre",
+      "name": "square metre",
+      "symbol": "m²",
+      "dimension": "area",
+      "note": "Consumption shop m2SalesPer10 unit."
+    },
+    {
+      "key": "count.cell",
+      "name": "grid cell",
+      "symbol": "cell",
+      "dimension": "count",
+      "note": "World grid coordinate/count unit; no metres-per-cell constant."
+    },
+    {
+      "key": "count.worker-day",
+      "name": "worker-day",
+      "symbol": "worker-day",
+      "dimension": "count",
+      "note": "Build labour, engineer-days-per-year."
+    },
+    {
+      "key": "count.pax",
+      "name": "passenger",
+      "symbol": "pax",
+      "dimension": "count",
+      "note": "Airport PaxPerRunwayPerDay / PaxPerGatePerDay."
+    },
+    {
+      "key": "count.head",
+      "name": "livestock head",
+      "symbol": "head",
+      "dimension": "count",
+      "note": "Farm stocking density headPerCell."
+    },
+    {
+      "key": "count.household",
+      "name": "household",
+      "symbol": "hh",
+      "dimension": "count",
+      "note": "Buildings capacityRaw hh/ha density strings."
+    },
+    {
+      "key": "speed.knot",
+      "name": "knot",
+      "symbol": "kn",
+      "dimension": "speed",
+      "definedAt": "internal/engine/airunits/types.go:195",
+      "note": "Airunit/helicopter wind speed (WindKnots, GroundingWindKnots); water mode in modes.json."
+    },
+    {
+      "key": "speed.kilometre-per-hour",
+      "name": "kilometre per hour",
+      "symbol": "km/h",
+      "dimension": "speed",
+      "note": "Traffic mode speedUrbanKmh, building/unlock speed strings."
+    },
+    {
+      "key": "count.bed-day",
+      "name": "bed-day",
+      "symbol": "bed-day",
+      "dimension": "count",
+      "note": "Compound count×time denominator — capexport hospital-beds £/bed-day."
+    },
+    {
+      "key": "count.student-yr",
+      "name": "student-year",
+      "symbol": "student-yr",
+      "dimension": "count",
+      "note": "Compound count×time denominator — capexport university-places £/student-yr."
+    },
+    {
+      "key": "count.prisoner-yr",
+      "name": "prisoner-year",
+      "symbol": "prisoner-yr",
+      "dimension": "count",
+      "note": "Compound count×time denominator — capexport prison-places £/prisoner-yr."
+    },
+    {
+      "key": "count.service",
+      "name": "service",
+      "symbol": "service",
+      "dimension": "count",
+      "note": "Capexport crematorium £/service per-service rate."
+    },
+    {
+      "key": "count.retainer",
+      "name": "standby retainer",
+      "symbol": "retainer",
+      "dimension": "count",
+      "note": "Capexport mutual-aid flat standby retainer (lump sum, not per-unit)."
+    },
+    {
+      "key": "count.person",
+      "name": "person",
+      "symbol": "person",
+      "dimension": "count",
+      "note": "Per-capita denominator — waterLitresPerPersonPerDay, electricityKWhPerPersonPerDay, …"
+    },
+    {
+      "key": "count.worker",
+      "name": "worker",
+      "symbol": "worker",
+      "dimension": "count",
+      "note": "Consumption per-worker denominator (lightIndustry/heavyIndustry)."
+    },
+    {
+      "key": "count.pupil",
+      "name": "pupil",
+      "symbol": "pupil",
+      "dimension": "count",
+      "note": "Consumption school per-pupil denominator."
+    },
+    {
+      "key": "count.student",
+      "name": "student",
+      "symbol": "student",
+      "dimension": "count",
+      "note": "Consumption university per-student denominator."
+    },
+    {
+      "key": "count.visit",
+      "name": "visit",
+      "symbol": "visit",
+      "dimension": "count",
+      "note": "Consumption clinic per-visit denominator."
+    },
+    {
+      "key": "count.bed",
+      "name": "bed",
+      "symbol": "bed",
+      "dimension": "count",
+      "note": "Consumption hospital per-bed denominator."
+    },
+    {
+      "key": "count.resident",
+      "name": "resident",
+      "symbol": "resident",
+      "dimension": "count",
+      "note": "Consumption elderCareHome per-resident denominator."
+    },
+    {
+      "key": "count.desk",
+      "name": "desk",
+      "symbol": "desk",
+      "dimension": "count",
+      "note": "Consumption office per-desk denominator."
+    },
+    {
+      "key": "count.cover",
+      "name": "cover",
+      "symbol": "cover",
+      "dimension": "count",
+      "note": "Consumption restaurantCafe per-cover denominator."
+    },
+    {
+      "key": "count.room-night",
+      "name": "room-night",
+      "symbol": "room-night",
+      "dimension": "count",
+      "note": "Consumption hotel per-room-night denominator."
+    },
+    {
+      "key": "count.visitor",
+      "name": "visitor",
+      "symbol": "visitor",
+      "dimension": "count",
+      "note": "Consumption leisureVenue/stadium per-visitor denominator."
+    },
+    {
+      "key": "count.spectator-event",
+      "name": "spectator-event",
+      "symbol": "spectator-event",
+      "dimension": "count",
+      "note": "Consumption stadium per-spectator-event denominator."
+    },
+    {
+      "key": "count.boarding",
+      "name": "boarding",
+      "symbol": "boarding",
+      "dimension": "count",
+      "note": "Consumption stationRailMetro/airport per-boarding/passenger denominator."
+    },
+    {
+      "key": "count.facility",
+      "name": "facility",
+      "symbol": "facility",
+      "dimension": "count",
+      "note": "Consumption accelerator per-facility denominator."
+    },
+    {
+      "key": "count.child",
+      "name": "child",
+      "symbol": "child",
+      "dimension": "count",
+      "note": "Fertility maxChildrenPerHousehold; defence childrenPerQuarter."
+    },
+    {
+      "key": "count.married-quarter",
+      "name": "married quarter",
+      "symbol": "quarter",
+      "dimension": "count",
+      "note": "Defence married-quarters dwelling (a quarter is a pair); childrenPerQuarter denominator."
+    },
+    {
+      "key": "count.case",
+      "name": "case",
+      "symbol": "case",
+      "dimension": "count",
+      "note": "Coastal hotelCostPerCase / departureCostPerCase denominator."
+    },
+    {
+      "key": "count.staff",
+      "name": "staff member",
+      "symbol": "staff",
+      "dimension": "count",
+      "note": "Services wagePerStaffPerMonthMicropounds denominator."
+    },
+    {
+      "key": "count.place",
+      "name": "childcare place",
+      "symbol": "place",
+      "dimension": "count",
+      "note": "Fiscal subsidyPerPlacePerMonthMicroPounds denominator."
+    },
+    {
+      "key": "count.offender",
+      "name": "offender",
+      "symbol": "offender",
+      "dimension": "count",
+      "note": "Prison adultCostPerOffender denominator."
+    },
+    {
+      "key": "count.engineer-day",
+      "name": "engineer-day",
+      "symbol": "engineer-day",
+      "dimension": "count",
+      "note": "Maintenance crew/contractor cost per engineer day (count×time, sibling of worker-day)."
+    },
+    {
+      "key": "count.unit",
+      "name": "unit",
+      "symbol": "unit",
+      "dimension": "count",
+      "note": "Generic per-unit denominator — holdingCostMicropoundsPerUnitPerTick, PricePerUnitMicropounds."
+    },
+    {
+      "key": "count.tile",
+      "name": "world tile",
+      "symbol": "tile",
+      "dimension": "count",
+      "note": "basePricePerTile denominator."
+    },
+    {
+      "key": "count.milestone",
+      "name": "milestone",
+      "symbol": "milestone",
+      "dimension": "count",
+      "note": "Grant/award per milestone (M1–M12) denominator."
+    },
+    {
+      "key": "count.detective",
+      "name": "detective",
+      "symbol": "detective",
+      "dimension": "count",
+      "note": "RatePerDetective denominator."
+    },
+    {
+      "key": "count.vermin",
+      "name": "vermin",
+      "symbol": "vermin",
+      "dimension": "count",
+      "note": "Refuse landValuePenaltyPerVermin denominator."
+    },
+    {
+      "key": "count.severity",
+      "name": "severity level",
+      "symbol": "severity",
+      "dimension": "count",
+      "note": "DemolitionCostPerSeverityMicropounds denominator."
+    },
+    {
+      "key": "time.week",
+      "name": "week",
+      "symbol": "wk",
+      "dimension": "time",
+      "baseUnit": "time.day",
+      "scale": 7,
+      "definedAt": "internal/engine/worklife/clock.go:15",
+      "note": "daysPerWeek = 7; hoursPerWeek = 168."
+    },
+    {
+      "key": "noise.decibel",
+      "name": "decibel",
+      "symbol": "dBA",
+      "dimension": "noise",
+      "note": "Noise level — airport noiseLevelDBA, mining blight noiseRadius dBA."
+    }
+  ],
   "moduleCount": 168,
   "modules": [
     {
@@ -2760,6 +3277,10 @@
             "outboundGuid": "d4dbc368-2df9-4eb9-8ddb-8f424d46a47a"
           },
           {
+            "key": "engine.finance",
+            "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
+          },
+          {
             "key": "engine.firms",
             "outboundGuid": "fd65035a-1204-45e0-bdb7-5b9196c77b4f"
           },
@@ -3306,6 +3827,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
           }
         ]
       },
@@ -3700,6 +4226,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.staffing",
+            "moduleGuid": "13eff6db-c51c-4307-b84e-3cfd2ce671af",
+            "inboundGuid": "8de22d17-1d58-4ca8-995f-89f2c98d4fb5"
           }
         ]
       },
@@ -6757,6 +7288,10 @@
           {
             "key": "engine.airunits",
             "outboundGuid": "bba25b12-a2ef-404a-96b4-de6dc739ba49"
+          },
+          {
+            "key": "engine.build",
+            "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
           }
         ]
       },

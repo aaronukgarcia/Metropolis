@@ -342,3 +342,75 @@ test('generate.js passes validation when a declared collaboration DOES have a ma
     cleanup();
   }
 });
+
+// ── units registry validation (MET-T032..T038) ─────────────────────────────
+// The F4 reject finding: the units validation shipped with no regression test,
+// so nothing pinned the fail-closed behaviour against drift. Each case mutates
+// a COPY of the plan (never the live SSOT) and asserts generate.js exits 1 with
+// the matching MET-T0xx code AND writes nothing.
+
+function runUnitsCheck(plan, mutate) {
+  const { fixturePath, cleanup } = makePlanFixture();
+  try {
+    const p = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+    mutate(p);
+    fs.writeFileSync(fixturePath, JSON.stringify(p, null, 2) + '\n', 'utf8');
+    const result = spawnSync(process.execPath, [GENERATE_PATH, '--check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, MET_PLAN_PATH: fixturePath },
+    });
+    return { result, cleanup };
+  } catch (e) {
+    cleanup();
+    throw e;
+  }
+}
+
+test('generate.js FAILS units validation on a duplicate unit key (MET-T034)', () => {
+  const { result, cleanup } = runUnitsCheck(null, p => {
+    p.units = (p.units || []).concat([{ ...p.units[0] }]); // duplicate key
+  });
+  try {
+    assert.notEqual(result.status, 0, `expected exit 1 on duplicate unit key, got ${result.status}`);
+    assert.match(result.stderr, /MET-T034/, `expected MET-T034; stderr:\n${result.stderr}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('generate.js FAILS units validation on an invalid dimension (MET-T037)', () => {
+  const { result, cleanup } = runUnitsCheck(null, p => {
+    p.units = (p.units || []).concat([{ key: 'test.bogus', name: 'Bogus', symbol: 'X', dimension: 'not-a-dimension' }]);
+  });
+  try {
+    assert.notEqual(result.status, 0, `expected exit 1 on invalid dimension, got ${result.status}`);
+    assert.match(result.stderr, /MET-T037/, `expected MET-T037; stderr:\n${result.stderr}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('generate.js FAILS units validation on a non-positive-integer scale (MET-T038)', () => {
+  const { result, cleanup } = runUnitsCheck(null, p => {
+    p.units = (p.units || []).concat([{ key: 'test.badscale', name: 'BadScale', symbol: 'X', dimension: 'money', scale: 0 }]);
+  });
+  try {
+    assert.notEqual(result.status, 0, `expected exit 1 on scale 0, got ${result.status}`);
+    assert.match(result.stderr, /MET-T038/, `expected MET-T038; stderr:\n${result.stderr}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('generate.js FAILS units validation on a missing name/symbol (MET-T035/T036)', () => {
+  const { result, cleanup } = runUnitsCheck(null, p => {
+    p.units = (p.units || []).concat([{ key: 'test.noname', symbol: 'X', dimension: 'money' }]);
+  });
+  try {
+    assert.notEqual(result.status, 0, `expected exit 1 on missing name, got ${result.status}`);
+    assert.match(result.stderr, /MET-T035/, `expected MET-T035; stderr:\n${result.stderr}`);
+  } finally {
+    cleanup();
+  }
+});
