@@ -132,10 +132,12 @@ func NewKeyGrammar(clock Clock, idleTimeout time.Duration, dimAfterUses int, cor
 }
 
 // checkNotCopied mirrors Harness.checkNotCopied / InProcTransport's
-// identity guard exactly (see KeyGrammar.self's doc comment).
-func (g *KeyGrammar) checkNotCopied() error {
+// identity guard exactly (see KeyGrammar.self's doc comment). method names
+// the calling *KeyGrammar method so the MET-U308 message renders which call
+// was rejected (the template's {method} placeholder).
+func (g *KeyGrammar) checkNotCopied(method string) error {
 	if g.self.Load() != g {
-		return errs.New(codeGrammarCopied, g.correlationID, nil)
+		return errs.New(codeGrammarCopied, g.correlationID, map[string]any{"method": method})
 	}
 	return nil
 }
@@ -156,13 +158,11 @@ func joinPath(path []string) string { return strings.Join(path, "\x1f") }
 //     continuation — UI-SPEC §3 names no such tiebreak, so the ambiguity
 //     is avoided structurally instead of resolved arbitrarily.
 func (g *KeyGrammar) Register(path []string, action Action) error {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("Register"); err != nil {
 		return err
 	}
 	if len(path) == 0 {
-		return errs.New(codeRegisterPrefixConflict, g.correlationID, map[string]any{
-			"path": path, "cause": "empty mnemonic path",
-		})
+		return errs.New(codeRegisterEmptyPath, g.correlationID, map[string]any{"path": path})
 	}
 	if reservedTokens[path[0]] {
 		return errs.New(codeReservedToken, g.correlationID, map[string]any{"token": path[0], "path": path})
@@ -212,7 +212,7 @@ func (g *KeyGrammar) Register(path []string, action Action) error {
 // duplicate global token is rejected the same way Register rejects a
 // duplicate mnemonic path (MET-U300).
 func (g *KeyGrammar) RegisterGlobal(k Key, action Action) error {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("RegisterGlobal"); err != nil {
 		return err
 	}
 	tok := k.Token()
@@ -234,7 +234,7 @@ func (g *KeyGrammar) RegisterGlobal(k Key, action Action) error {
 // whether it registers a hook at all and what that hook's bool return
 // means (true: something was undone/redone; false: nothing to do).
 func (g *KeyGrammar) RegisterUndo(fn func() bool) error {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("RegisterUndo"); err != nil {
 		return err
 	}
 	g.mu.Lock()
@@ -244,7 +244,7 @@ func (g *KeyGrammar) RegisterUndo(fn func() bool) error {
 }
 
 func (g *KeyGrammar) RegisterRedo(fn func() bool) error {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("RegisterRedo"); err != nil {
 		return err
 	}
 	g.mu.Lock()
@@ -287,7 +287,7 @@ type pendingAction struct {
 // which resets to idle without ever falling through to the nearest
 // registered prefix.
 func (g *KeyGrammar) Feed(k Key) FeedResult {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("Feed"); err != nil {
 		return FeedResult{Status: NoOp}
 	}
 	pending := g.computeFeed(k)
@@ -486,7 +486,7 @@ func (g *KeyGrammar) resetLocked() {
 // without synthesizing a key event (e.g. a screen switch). Returns
 // whether anything was actually pending to abort.
 func (g *KeyGrammar) Abort() bool {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("Abort"); err != nil {
 		return false
 	}
 	g.mu.Lock()
@@ -504,7 +504,7 @@ func (g *KeyGrammar) Abort() bool {
 // advancing a fake Clock and calling this directly. Returns true if a
 // pending sequence was aborted.
 func (g *KeyGrammar) CheckIdleTimeout() bool {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("CheckIdleTimeout"); err != nil {
 		return false
 	}
 	g.mu.Lock()
@@ -525,7 +525,7 @@ func (g *KeyGrammar) CheckIdleTimeout() bool {
 // synchronously — no async delay — and returned in a stable, sorted
 // order (AC-15: determinism, no map-iteration-order leakage).
 func (g *KeyGrammar) Continuations() []Continuation {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("Continuations"); err != nil {
 		return nil
 	}
 	g.mu.Lock()
@@ -558,7 +558,7 @@ func (g *KeyGrammar) Continuations() []Continuation {
 // which-key HUD's cue to stop showing an entry the player has clearly
 // learned.
 func (g *KeyGrammar) ShouldDimHUD(path []string) bool {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("ShouldDimHUD"); err != nil {
 		return false
 	}
 	g.mu.Lock()
@@ -570,7 +570,7 @@ func (g *KeyGrammar) ShouldDimHUD(path []string) bool {
 // joined path for deterministic ordering (AC-15) — the palette's listing
 // source (AC-9) and useful for tests/diagnostics generally.
 func (g *KeyGrammar) AllActions() []Dispatch {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("AllActions"); err != nil {
 		return nil
 	}
 	g.mu.Lock()
@@ -598,7 +598,7 @@ func (g *KeyGrammar) AllActions() []Dispatch {
 // IsPending reports whether a leader sequence or count prefix is
 // currently in progress.
 func (g *KeyGrammar) IsPending() bool {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("IsPending"); err != nil {
 		return false
 	}
 	g.mu.Lock()

@@ -10,10 +10,7 @@ import (
 
 // Terrain glyphs — the foreground rune drawn for each terrain string the
 // "f1.viewport" schema can carry, overridden by an overlay glyph when the
-// cell also carries a road or building (cellStyleAndRune below). An
-// unrecognised/empty terrain string (a not-yet-known cell, or a future
-// terrain kind this package hasn't been taught) falls back to blankGlyph
-// rather than guessing.
+// cell also carries a road or building (cellStyleAndRune below).
 //
 // TWO vocabularies are recognised, deliberately:
 //
@@ -32,11 +29,21 @@ import (
 //     rather than having the engine re-label its terrain into the older
 //     fixture vocabulary: the engine publishes what it holds, and the
 //     renderer is taught to read it.
+//
+// What an unrecognised/empty terrain string draws depends on whether the
+// cell is known at all (BUG-334): a not-yet-known cell — no data — stops
+// at cellStyleAndRune's Known gate and draws blankGlyph, while a known
+// cell whose terrain string this build does not recognise (Terrain 50
+// added a new class, or a patch carried an out-of-range enum) reaches
+// terrainGlyph's default and draws glyphUnknown ('?') — so "no data" and
+// "unrecognised terrain" stay visually distinct, and a grid of a new
+// surface never reads as a blank, broken screen.
 const (
 	glyphShore      = '~'
 	glyphShelf      = '.'
 	glyphMotorway   = '='
 	glyphEscarpment = '^'
+	glyphUnknown    = '?'
 	blankGlyph      = ' '
 
 	// engine.world Surface glyphs (BUG-323). glyphWater reuses shore's
@@ -124,7 +131,12 @@ func terrainGlyph(terrain string) rune {
 	case "rock":
 		return glyphRock
 	default:
-		return blankGlyph
+		// BUG-334: an unrecognised surface is unknown-terrain, drawn as a
+		// visible '?' — never silent blankGlyph, which would make a whole
+		// grid of a new surface indistinguishable from an empty/broken
+		// screen. (Logging of the unknown string is cellStyleAndRune's
+		// reportUnknown callback, not this pure function.)
+		return glyphUnknown
 	}
 }
 
@@ -185,7 +197,28 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	snap := m.snapshotLocked()
 	m.mu.Unlock()
 
-	drawViewport(buf, viewportRect, snap, m.palette)
+	// BUG-330: a screen with no applied snapshot (haveSnapshot == false —
+	// the already-maintained no-data bit) must not draw a blank grid that
+	// reads identically to a broken screen. Render the honest centred
+	// "NO TERRAIN DATA" empty state instead, mirroring finance's
+	// RenderBalanceSheet "unavailable" posture. The staleness dot is still
+	// drawn (it is a status-bar indicator, independent of grid data).
+	if !snap.haveSnapshot {
+		drawNoTerrainData(buf, viewportRect, m.palette)
+		drawStalenessDot(buf, rect, snap.stale, m.palette)
+		return
+	}
+
+	// reportUnknown binds this screen's dedupe set, its lock, and its
+	// correlation ID into the draw functions' reportUnknown callback
+	// (BUG-334). m.mu is passed in for the dedupe write (round D6) — this
+	// closure runs after Render's snapshot lock is released, so locking
+	// mu here is not re-entrant.
+	reportUnknown := func(terrain string) {
+		logUnknownTerrainOnce(m.unknownTerrainSeen, &m.mu, m.correlationID, terrain)
+	}
+
+	drawViewport(buf, viewportRect, snap, m.palette, reportUnknown)
 	// AC-4: the active overlay paints ONLY the background layer, after
 	// terrain/road/building have already painted both layers — never the
 	// foreground glyph (paintOverlay never touches Rune; see its own doc
@@ -196,9 +229,34 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	// than a special case.
 	paintOverlay(buf, viewportRect, snap, snap.activeOverlay, overlayLiveValue, 0, 1, widgets.DefaultHeatRamp(m.palette))
 	if minimapRect.H > 0 {
-		drawMinimap(buf, minimapRect, snap, m.palette)
+		drawMinimap(buf, minimapRect, snap, m.palette, reportUnknown)
 	}
 	drawStalenessDot(buf, rect, snap.stale, m.palette)
+}
+
+// drawNoTerrainData paints the no-snapshot empty state (BUG-330): a
+// centred "NO TERRAIN DATA" line in place of the grid, so an empty or
+// rejected view reads as an honest empty state rather than a blank grid
+// indistinguishable from a broken one. A rect too narrow for the whole
+// message still prints the left-aligned prefix (Buffer.Set ignores
+// out-of-range columns) — never a panic, mirroring drawText's posture.
+func drawNoTerrainData(buf *core.Buffer, rect core.Rect, palette widgets.Palette) {
+	const msg = "NO TERRAIN DATA"
+	if buf == nil || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	x := rect.X + (rect.W-len(msg))/2
+	if x < rect.X {
+		x = rect.X
+	}
+	y := rect.Y + rect.H/2
+	if y >= rect.Y+rect.H {
+		y = rect.Y + rect.H - 1
+	}
+	style := palette.Style(widgets.TokenWarning)
+	for i, r := range msg {
+		buf.Set(x+i, y, r, style)
+	}
 }
 
 // splitRect divides rect into the main viewport area and the minimap
@@ -227,6 +285,11 @@ type renderSnapshot struct {
 	cursorX, cursorY int
 	stale            bool
 	activeOverlay    Overlay
+
+	// haveSnapshot mirrors MapScreen.haveSnapshot — false until the first
+	// full snapshot is applied. Render uses it to draw the honest
+	// "NO TERRAIN DATA" empty state (BUG-330) instead of a blank grid.
+	haveSnapshot bool
 }
 
 func (m *MapScreen) snapshotLocked() renderSnapshot {
@@ -251,6 +314,7 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 		cursorY:       m.cursorY,
 		stale:         m.stale,
 		activeOverlay: overlayOrder[m.overlayIdx],
+		haveSnapshot:  m.haveSnapshot,
 	}
 }
 
@@ -265,12 +329,14 @@ func (s renderSnapshot) cellAt(x, y int) cellData {
 
 // drawViewport paints the visible grid window (snap.offsetX/Y,
 // viewportW x viewportH) into rect, then overlays the cursor highlight.
-func drawViewport(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette widgets.Palette) {
+// reportUnknown (may be nil) receives each unrecognised terrain string
+// once per cell it is found in, so the caller can log it (BUG-334).
+func drawViewport(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette widgets.Palette, reportUnknown func(string)) {
 	for row := 0; row < rect.H; row++ {
 		for col := 0; col < rect.W; col++ {
 			gx, gy := snap.offsetX+col, snap.offsetY+row
 			c := snap.cellAt(gx, gy)
-			style, r := cellStyleAndRune(c, palette)
+			style, r := cellStyleAndRune(c, palette, reportUnknown)
 			buf.Set(rect.X+col, rect.Y+row, r, style)
 		}
 	}
@@ -289,8 +355,11 @@ func drawViewport(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette
 // present, the road/building overlay glyph (a building takes visual
 // priority over a road, since Folkestone-64 never places both on the
 // same cell in practice, but a building is the more specific feature
-// when it does).
-func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
+// when it does). When c.Terrain is an unrecognised surface (terrainToken
+// reports no token), reportUnknown (may be nil) is called with the string
+// so the caller can log it once (BUG-334); the cell still draws
+// glyphUnknown ('?') via terrainGlyph.
+func cellStyleAndRune(c cellData, palette widgets.Palette, reportUnknown func(string)) (tcell.Style, rune) {
 	if !c.Known {
 		return tcell.StyleDefault, blankGlyph
 	}
@@ -298,6 +367,8 @@ func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
 	style := tcell.StyleDefault
 	if tok, ok := terrainToken(c.Terrain); ok {
 		style = style.Background(palette.Color(tok))
+	} else if reportUnknown != nil {
+		reportUnknown(c.Terrain)
 	}
 
 	r := terrainGlyph(c.Terrain)
@@ -318,7 +389,7 @@ func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
 // represented (a "strip", not a 2D minimap, per this item's brief) —
 // each strip cell instead samples the dominant terrain of its column
 // band across all Y, giving a recognisable silhouette of the fixture.
-func drawMinimap(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette widgets.Palette) {
+func drawMinimap(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette widgets.Palette, reportUnknown func(string)) {
 	if snap.width <= 0 || snap.height <= 0 {
 		for col := 0; col < rect.W; col++ {
 			buf.Set(rect.X+col, rect.Y, blankGlyph, tcell.StyleDefault)
@@ -331,7 +402,7 @@ func drawMinimap(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette 
 	for col := 0; col < rect.W; col++ {
 		gx0, gx1 := minimapColumnRange(col, rect.W, snap.width)
 		terrain := dominantTerrain(snap, gx0, gx1)
-		style, r := cellStyleAndRune(cellData{Terrain: terrain, Known: terrain != ""}, palette)
+		style, r := cellStyleAndRune(cellData{Terrain: terrain, Known: terrain != ""}, palette, reportUnknown)
 		if col >= viewStart && col < viewEnd {
 			style = palette.SelectionStyle(style)
 		}

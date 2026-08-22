@@ -88,6 +88,18 @@ type MapScreen struct {
 	width, height int // last full snapshot's extent
 	grid          []cellData
 
+	// unknownTerrainSeen dedupes BUG-334's unknown-terrain log line (see
+	// logUnknownTerrainOnce): one MET-U102 per distinct unrecognised
+	// surface string for the life of this screen, never one per cell — a
+	// 40,000-cell grid of a new surface logs once, not 40,000 times.
+	// Bounded at maxUnknownTerrainSeen entries (limits.go, round D5) so a
+	// hostile stream of distinct surface strings cannot grow it forever.
+	// Initialised in NewMapScreen; written only from Render's draw
+	// functions via reportUnknown, but guarded by mu (round D6) — Render
+	// is reachable from more than one goroutine (the concurrent tests
+	// drive it that way), so the write is synchronised.
+	unknownTerrainSeen map[string]bool
+
 	offsetX, offsetY     int // viewport pan origin, in grid coordinates
 	viewportW, viewportH int // last known visible viewport size (Render/SetViewportSize)
 
@@ -120,8 +132,9 @@ type MapScreen struct {
 // two-layer contract, reusing ui.widgets rather than hardcoding colour).
 func NewMapScreen(correlationID string, palette widgets.Palette) *MapScreen {
 	m := &MapScreen{
-		correlationID: correlationID,
-		palette:       palette,
+		correlationID:      correlationID,
+		palette:            palette,
+		unknownTerrainSeen: make(map[string]bool),
 	}
 	// Stored once, last, before m ever escapes to a caller — see the
 	// self field's doc comment and copyguard.go for why this is what
@@ -324,6 +337,43 @@ func (m *MapScreen) applySparseLocked(p wirePatch) {
 func (m *MapScreen) logMalformed(cause error) {
 	_ = errs.New("MET-U100", m.correlationID, map[string]any{
 		"cause": cause.Error(),
+	})
+}
+
+// logUnknownTerrainOnce is Render's reportUnknown callback body (BUG-334):
+// it reports an unrecognised terrain surface string through MET-U102
+// (ErrUnknownTerrainSurface) exactly ONCE per distinct string for the
+// life of the screen — a 40,000-cell grid of a new, not-yet-taught
+// surface produces a single log line, not 40,000 (dedupe keyed by
+// surface string, never by cell). MET-U102, NOT MET-U100 (round D1): the
+// patch was applied successfully — this is an unknown CLASS, not a
+// malformed patch, so the MET-U100 "malformed f1.viewport patch" template
+// would be a lie and its remedy would misdirect. The cell still draws
+// glyphUnknown ('?', render.go) so the player sees unknown-terrain rather
+// than a blank screen. seen is the MapScreen's per-screen dedupe set,
+// bounded at maxUnknownTerrainSeen entries (round D5); mu guards the
+// check-and-set (round D6) because Render can run on more than one
+// goroutine (the concurrent tests drive it that way), so the write is
+// synchronised rather than the old "single-goroutine, needs no mu" claim
+// the round disproved. correlationID is the screen's immutable ID. A free
+// function rather than a *MapScreen method so astgate's copyguard ratchet
+// has no new receiver method to flag: it is reached only from Render,
+// which is itself guarded twice (logMalformed's accepted-findings
+// precedent covers the identical already-guarded-reachability reasoning).
+// mu is NOT re-entrant here: Render releases m.mu before the draw
+// functions call reportUnknown, so locking it again inside is safe.
+func logUnknownTerrainOnce(seen map[string]bool, mu *sync.Mutex, correlationID, terrain string) {
+	mu.Lock()
+	defer mu.Unlock()
+	if seen[terrain] {
+		return
+	}
+	if len(seen) >= maxUnknownTerrainSeen {
+		return
+	}
+	seen[terrain] = true
+	_ = errs.New(ErrUnknownTerrainSurface, correlationID, map[string]any{
+		"terrain": terrain,
 	})
 }
 

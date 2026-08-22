@@ -27,7 +27,10 @@ func drawText(buf *core.Buffer, rect core.Rect, x, y int, text string, style tce
 
 // RenderSliders draws SVC-1's per-service funding sliders. rejected (SVC-8,
 // empty when there is nothing to report) surfaces the engine's rejection
-// reason rather than a silent revert.
+// reason rather than a silent revert. have=false (the view never
+// delivered) renders "unavailable"; have=true with an EMPTY roster
+// renders "no data" (BUG-330) — an empty roster must never read as blank
+// rows indistinguishable from a broken screen.
 func RenderSliders(buf *core.Buffer, rect core.Rect, sliders []ServiceSlider, rejected string, have bool, style tcell.Style) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return
@@ -35,6 +38,10 @@ func RenderSliders(buf *core.Buffer, rect core.Rect, sliders []ServiceSlider, re
 	drawText(buf, rect, rect.X, rect.Y, "SERVICE FUNDING", style.Bold(true))
 	if !have {
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
+		return
+	}
+	if rejected == "" && len(sliders) == 0 {
+		drawText(buf, rect, rect.X, rect.Y+1, "no data", style.Italic(true))
 		return
 	}
 
@@ -69,6 +76,10 @@ func RenderCapacityDemand(buf *core.Buffer, rect core.Rect, cd []CapacityDemand,
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
 		return
 	}
+	if len(cd) == 0 {
+		drawText(buf, rect, rect.X, rect.Y+1, "no data", style.Italic(true))
+		return
+	}
 
 	y := rect.Y + 2
 	for _, c := range cd {
@@ -96,6 +107,10 @@ func RenderResponseTimes(buf *core.Buffer, rect core.Rect, rt []ResponseTimeStat
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
 		return
 	}
+	if len(rt) == 0 {
+		drawText(buf, rect, rect.X, rect.Y+1, "no data", style.Italic(true))
+		return
+	}
 
 	y := rect.Y + 2
 	for _, r := range rt {
@@ -117,6 +132,10 @@ func RenderWaitingLists(buf *core.Buffer, rect core.Rect, wl []WaitingList, have
 	drawText(buf, rect, rect.X, rect.Y, "WAITING LISTS", style.Bold(true))
 	if !have {
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
+		return
+	}
+	if len(wl) == 0 {
+		drawText(buf, rect, rect.X, rect.Y+1, "no data", style.Italic(true))
 		return
 	}
 
@@ -148,6 +167,10 @@ func RenderPublicServicePie(buf *core.Buffer, rect core.Rect, pie PublicServiceP
 	drawText(buf, rect, rect.X, rect.Y, "PUBLIC SERVICE PIE (per 1,000 population)", style.Bold(true))
 	if !have {
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
+		return
+	}
+	if len(pie.Slices) == 0 {
+		drawText(buf, rect, rect.X, rect.Y+1, "no data", style.Italic(true))
 		return
 	}
 

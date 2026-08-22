@@ -1,6 +1,69 @@
 package citizens
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+)
+
+// TestLoadFertilityConfigFailurePathsRenderRule (BUG-314): MET-G008's
+// message template is "data/fertility.json is missing, malformed, or fails
+// schema validation: {rule}", but the file-read and JSON-decode failure
+// paths in LoadFertilityConfig supplied only path/cause, never rule — so
+// {rule} rendered literally on the two likeliest failure paths (a missing
+// file, or malformed JSON). This test triggers BOTH paths and asserts the
+// rendered Display() names the actual rule with no literal "{rule}"
+// surviving — rendered, not read (the "reads correct, renders broken"
+// disease class).
+func TestLoadFertilityConfigFailurePathsRenderRule(t *testing.T) {
+	t.Run("file-read", func(t *testing.T) {
+		_, err := LoadFertilityConfig(filepath.Join(t.TempDir(), "no-such-dir"), "corr")
+		if err == nil {
+			t.Fatal("expected an error loading fertility.json from a missing directory")
+		}
+		var e *errs.E
+		if !errors.As(err, &e) {
+			t.Fatalf("error %v is not a registry-sourced *errs.E", err)
+		}
+		if e.Code != ErrFertilityDataInvalid {
+			t.Fatalf("code = %q, want %q", e.Code, ErrFertilityDataInvalid)
+		}
+		if strings.Contains(e.Display(), "{rule}") {
+			t.Fatalf("Display() = %q renders {rule} literally; want the actual rule", e.Display())
+		}
+		if !strings.Contains(e.Display(), "must exist and be readable") {
+			t.Fatalf("Display() = %q does not name the file-read rule", e.Display())
+		}
+	})
+
+	t.Run("json-decode", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, FileFertility), []byte("{not valid json"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		_, err := LoadFertilityConfig(dir, "corr")
+		if err == nil {
+			t.Fatal("expected an error decoding malformed fertility.json")
+		}
+		var e *errs.E
+		if !errors.As(err, &e) {
+			t.Fatalf("error %v is not a registry-sourced *errs.E", err)
+		}
+		if e.Code != ErrFertilityDataInvalid {
+			t.Fatalf("code = %q, want %q", e.Code, ErrFertilityDataInvalid)
+		}
+		if strings.Contains(e.Display(), "{rule}") {
+			t.Fatalf("Display() = %q renders {rule} literally; want the actual rule", e.Display())
+		}
+		if !strings.Contains(e.Display(), "must decode as valid JSON") {
+			t.Fatalf("Display() = %q does not name the JSON-decode rule", e.Display())
+		}
+	})
+}
 
 // mkFertilityCouple seeds two cold citizens (id, id+1) at the given
 // birthMonth (so both partners share exactly the same age at any given sim

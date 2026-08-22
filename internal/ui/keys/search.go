@@ -19,7 +19,7 @@ type NameIndex interface {
 // into this KeyGrammar, e.g. to log via a registered action) — only the
 // bookkeeping afterward is locked.
 func (g *KeyGrammar) Search(query string, index NameIndex) []string {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("Search"); err != nil {
 		return nil
 	}
 	matches := index.Search(query)
@@ -33,7 +33,7 @@ func (g *KeyGrammar) Search(query string, index NameIndex) []string {
 // NextMatch steps forward through the current search-match set,
 // wrapping. ok is false if there are no matches.
 func (g *KeyGrammar) NextMatch() (string, bool) {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("NextMatch"); err != nil {
 		return "", false
 	}
 	g.mu.Lock()
@@ -48,7 +48,7 @@ func (g *KeyGrammar) NextMatch() (string, bool) {
 // PrevMatch steps backward through the current search-match set,
 // wrapping. ok is false if there are no matches.
 func (g *KeyGrammar) PrevMatch() (string, bool) {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("PrevMatch"); err != nil {
 		return "", false
 	}
 	g.mu.Lock()

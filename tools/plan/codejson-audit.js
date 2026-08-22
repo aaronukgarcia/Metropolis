@@ -239,13 +239,20 @@ async function runAudit(opts = {}) {
   const runId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
 
+  // Test-only override: point the audit at a sandboxed copy of code.json so a
+  // mutation test does NOT rewrite the real code.json on disk (round D9 — a
+  // mutate-then-restore against the real file races parallel node --test runs:
+  // another test can read the half-mutated file). No production caller passes
+  // this; it defaults to the real path.
+  const codeJsonPath = opts.codeJsonPath || CODE_JSON_PATH;
+
   // AC-7/AC-8 read-only self-check: snapshot everything we must never touch,
   // BEFORE doing any work, so a mid-run mutation (not just an unreverted one)
   // is caught. NOTE (BUG-184): this is a two-point-in-time compare, not
   // continuous monitoring — see the "KNOWN LIMITATION" block in this file's
   // header comment for the accepted mutate-then-revert-inside-the-window gap.
   const preHashes = {
-    codeJson: sha256File(CODE_JSON_PATH),
+    codeJson: sha256File(codeJsonPath),
     masterPlan: sha256File(MASTER_PLAN_PATH),
   };
   const preGitStatus = execFileSync('git', ['status', '--porcelain', '--', 'code.json', 'docs/planning/master-plan-v2.1.json', 'internal', 'cmd'],
@@ -268,7 +275,7 @@ async function runAudit(opts = {}) {
 
   const commitHash = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
   const goModule = readGoModule();
-  const codeJson = JSON.parse(fs.readFileSync(CODE_JSON_PATH, 'utf8'));
+  const codeJson = JSON.parse(fs.readFileSync(codeJsonPath, 'utf8'));
   const modules = codeJson.modules;
   const byKey = new Map(modules.map(m => [m.key, m]));
 
@@ -477,7 +484,7 @@ async function runAudit(opts = {}) {
 
   // ── AC-7/AC-8 read-only self-check, taken again at the end ───────────────
   const postHashes = {
-    codeJson: sha256File(CODE_JSON_PATH),
+    codeJson: sha256File(codeJsonPath),
     masterPlan: sha256File(MASTER_PLAN_PATH),
   };
   const postGitStatus = execFileSync('git', ['status', '--porcelain', '--', 'code.json', 'docs/planning/master-plan-v2.1.json', 'internal', 'cmd'],

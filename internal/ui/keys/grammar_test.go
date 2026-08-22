@@ -1,10 +1,14 @@
 package keys
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // fakeClock is a manually-advanced Clock for deterministic timeout tests
@@ -427,6 +431,37 @@ func TestRegisterRejectsDuplicatePath(t *testing.T) {
 	err := g.Register([]string{"b", "r", "s"}, Action{Name: "second"})
 	if err == nil {
 		t.Fatalf("duplicate Register at the same path did not error")
+	}
+}
+
+// TestRegisterEmptyPathRejectedWithU309: Register with an empty mnemonic
+// path is rejected with MET-U309 (codeRegisterEmptyPath), NOT MET-U301
+// (codeRegisterPrefixConflict). The U301 template requires a conflictsWith
+// value that an empty path cannot have — reusing it here would render a
+// literal "{conflictsWith}" (the BUG-317 D3 REJECT finding). The error code
+// and rendered display are both asserted.
+func TestRegisterEmptyPathRejectedWithU309(t *testing.T) {
+	g := newTestGrammar()
+	err := g.Register([]string{}, Action{Name: "nothing"})
+	if err == nil {
+		t.Fatal("Register([]string{}) did not error")
+	}
+	var e *errs.E
+	if !errors.As(err, &e) {
+		t.Fatalf("Register empty-path error %v is not a registry-sourced *errs.E", err)
+	}
+	if e.Code != codeRegisterEmptyPath {
+		t.Errorf("empty-path error code = %q, want %q (MET-U301 must NOT be reused here)", e.Code, codeRegisterEmptyPath)
+	}
+	if e.Code == codeRegisterPrefixConflict {
+		t.Errorf("empty-path error must not be MET-U301: its template needs a conflictsWith this path does not have")
+	}
+	display := e.Display()
+	if strings.Contains(display, "{conflictsWith}") || strings.Contains(display, "{path}") {
+		t.Fatalf("empty-path Display() = %q renders a template key literally", display)
+	}
+	if !strings.Contains(display, "empty") {
+		t.Errorf("empty-path Display() = %q does not mention the empty path", display)
 	}
 }
 

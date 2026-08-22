@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -364,4 +365,30 @@ func TestRunCommandLoop_CtxDoneBeforeClose_TakesCleanPath(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for RunCommandLoop to return")
 	}
+}
+
+func TestToErrorRef_RegistryError_PreservesCode(t *testing.T) {
+	e := errs.New(ErrUnhandledCommandKind, errs.NewCorrelationID(), map[string]any{"kind": "test"})
+	ref := toErrorRef(e)
+	if ref == nil {
+		t.Fatal("toErrorRef(*errs.E) returned nil")
+	}
+	if ref.Code != ErrUnhandledCommandKind {
+		t.Errorf("toErrorRef(*errs.E).Code = %q, want %q", ref.Code, ErrUnhandledCommandKind)
+	}
+}
+
+func TestToErrorRef_NonRegistryError_LabelsUnexpected(t *testing.T) {
+	plain := errors.New("plain gameplay-handler error")
+	ref := toErrorRef(plain)
+	if ref == nil {
+		t.Fatal("toErrorRef(non-*errs.E) returned nil")
+	}
+	// BUG-310: a non-*errs.E is an internal invariant break and must be
+	// labelled the unexpected-error, NEVER the "unhandled command kind" the
+	// pre-fix code wrongly attached to every defensive fallback.
+	if ref.Code == ErrUnhandledCommandKind {
+		t.Fatalf("toErrorRef(non-*errs.E).Code = %q; the BUG-310 mislabel regression is back", ref.Code)
+	}
+	wantPlaceholderCode(t, ref, ErrUnexpectedError)
 }

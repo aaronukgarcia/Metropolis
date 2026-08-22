@@ -474,8 +474,13 @@
     "MET-U101": {
       "severity": "error",
       "module": "ui.screen.map",
-      "message": "MapScreen method called on a struct-copied value (SEC-020): {cause}",
-      "remedy": "A *mapscreen.MapScreen value was copied by assignment/passing instead of being used via the single pointer mapscreen.NewMapScreen returned (mu is a sync.Mutex VALUE and grid is an aliased slice — a copy is a second, independent lock racing the original over the same backing array). The call was rejected rather than risking a lock-order hang or a torn grid read; construct exactly one MapScreen via NewMapScreen and pass its pointer everywhere instead of a dereferenced copy."
+      "message": "MapScreen method called on a struct-copied value (SEC-020): {method}",
+      "remedy": "A *mapscreen.MapScreen value was copied by assignment/passing instead of being used via the single pointer mapscreen.NewMapScreen returned (mu is a sync.Mutex VALUE and grid is an aliased slice â€” a copy is a second, independent lock racing the original over the same backing array). The call was rejected rather than risking a lock-order hang or a torn grid read; construct exactly one MapScreen via NewMapScreen and pass its pointer everywhere instead of a dereferenced copy."    },
+    "MET-U102": {
+      "severity": "warn",
+      "module": "ui.screen.map",
+      "message": "unrecognised terrain surface {terrain} (drawing '?')",
+      "remedy": "The engine produced a terrain surface string this build does not recognise (Terrain 50 import added a new class, or a patch carried an out-of-range enum). The cell renders as an unknown-terrain glyph so the map stays visible; teach the renderer the new surface (render.go terrainGlyph) and it renders properly next build."
     },
     "MET-U200": {
       "severity": "warn",
@@ -498,9 +503,8 @@
     "MET-U203": {
       "severity": "error",
       "module": "ui.screen.debug",
-      "message": "Screen method called on a struct-copied value (SEC-020): {cause}",
-      "remedy": "A *debug.Screen value was copied by assignment/passing instead of being used via the single pointer debug.NewScreen returned (mu is a sync.Mutex VALUE and reg/events are aliased pointer/slice fields — a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one Screen via NewScreen and pass its pointer everywhere instead of a dereferenced copy."
-    },
+      "message": "Screen method called on a struct-copied value (SEC-020): {method}",
+      "remedy": "A *debug.Screen value was copied by assignment/passing instead of being used via the single pointer debug.NewScreen returned (mu is a sync.Mutex VALUE and reg/events are aliased pointer/slice fields â€” a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one Screen via NewScreen and pass its pointer everywhere instead of a dereferenced copy."    },
     "MET-U300": {
       "severity": "error",
       "module": "ui.keys",
@@ -552,8 +556,13 @@
     "MET-U308": {
       "severity": "error",
       "module": "ui.keys",
-      "message": "KeyGrammar method called on a struct-copied value (SEC-020): {cause}",
-      "remedy": "A *keys.KeyGrammar value was copied by assignment/passing instead of being used via the single pointer NewKeyGrammar returned (mu is a sync.Mutex VALUE and the trie/usage/marks maps are aliased reference fields — a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one KeyGrammar via NewKeyGrammar and pass its pointer everywhere instead of a dereferenced copy."
+      "message": "KeyGrammar method called on a struct-copied value (SEC-020): {method}",
+      "remedy": "A *keys.KeyGrammar value was copied by assignment/passing instead of being used via the single pointer NewKeyGrammar returned (mu is a sync.Mutex VALUE and the trie/usage/marks maps are aliased reference fields â€” a copy is a second, independent lock racing the original over the same referents). The call was rejected rather than risking a lock-order hang or a torn read; construct exactly one KeyGrammar via NewKeyGrammar and pass its pointer everywhere instead of a dereferenced copy."    },
+    "MET-U309": {
+      "severity": "error",
+      "module": "ui.keys",
+      "message": "Register rejected: mnemonic path is empty — an action cannot be registered under zero keys",
+      "remedy": "See the module's documentation for remediation guidance."
     },
     "MET-E000": {
       "severity": "error",

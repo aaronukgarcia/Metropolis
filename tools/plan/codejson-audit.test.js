@@ -350,6 +350,61 @@ test('AC-12: report header states the exact commit hash and content hashes it ra
   assert.match(report.masterPlanSha256, /^[0-9a-f]{64}$/);
 });
 
+// ── BUG-309: edge-GUID well-formedness scan is actually exercised ──────────
+
+test('BUG-309: a malformed edge GUID (outbound.calls[].moduleGuid) is caught by the well-formedness scan, and clears on revert', async () => {
+  // The edge-GUID scan (codejson-audit.js:329-353) is the path the original
+  // BUG-309 fix broke with a temporal-dead-zone ReferenceError — and no test
+  // caught it, because every fixture happened to carry no outbound.calls[]
+  // edge GUIDs at all, so the loop body never ran. This test mutates a
+  // SANDBOXED COPY of code.json's edge GUID to a non-UUID and proves the scan
+  // flags it, closing the "green tests that never execute the path" gap.
+  //
+  // The copy, NOT the real code.json (round D9): a mutate-then-restore against
+  // the real file races other tests under `node --test`, which runs files in
+  // parallel — a concurrent test can read the half-mutated file. runAudit
+  // accepts opts.codeJsonPath to read the sandbox copy instead; the audit's
+  // own AC-7/AC-8 self-check then compares pre/post hashes of the same sandbox
+  // file (which this test does not touch mid-run), so the invariant holds.
+  const sandboxPath = path.join(ROOT, 'code.json.d9-sandbox.tmp');
+  const original = fs.readFileSync(path.join(ROOT, 'code.json'), 'utf8');
+  fs.writeFileSync(sandboxPath, original, 'utf8');
+
+  try {
+    const codeJson = JSON.parse(original);
+
+    let target = null;
+    for (const m of codeJson.modules) {
+      for (const call of (m.outbound && m.outbound.calls) || []) {
+        if (call.moduleGuid) { target = call; break; }
+      }
+      if (target) break;
+    }
+    assert.ok(target, 'code.json must contain at least one outbound.calls[].moduleGuid to exercise the edge-GUID scan');
+    assert.ok(target.moduleGuid, 'fixture edge GUID must be non-empty');
+
+    target.moduleGuid = 'not-a-uuid-v4';
+    fs.writeFileSync(sandboxPath, JSON.stringify(codeJson, null, 2), 'utf8');
+
+    const report = await runAudit({ codeJsonPath: sandboxPath });
+    const malformed = report.directionA.guids.malformed;
+    assert.ok(
+      malformed.some((f) => f.guid === 'not-a-uuid-v4'),
+      `expected the malformed edge GUID to be flagged; malformed GUIDs seen: ${JSON.stringify(malformed.map((f) => f.guid))}`
+    );
+
+    // Prove the finding clears once the edge GUID is well-formed again.
+    fs.writeFileSync(sandboxPath, original, 'utf8');
+    const after = await runAudit({ codeJsonPath: sandboxPath });
+    assert.ok(
+      !after.directionA.guids.malformed.some((f) => f.guid === 'not-a-uuid-v4'),
+      'the malformed edge GUID must disappear from findings once reverted'
+    );
+  } finally {
+    fs.rmSync(sandboxPath, { force: true });
+  }
+});
+
 // ── normalizeModulePath / isGoTreePath unit coverage ───────────────────────
 
 test('normalizeModulePath: repo-root path "/" normalizes to "." (a real, always-existing path), not null', () => {

@@ -18,7 +18,7 @@ func ValidMarkID(id string) bool {
 // identifier (anything outside a-l) is rejected (MET-U305) rather than
 // silently overwriting an existing slot or expanding the address space.
 func (g *KeyGrammar) SetMark(id string, loc any) error {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("SetMark"); err != nil {
 		return err
 	}
 	if !ValidMarkID(id) {
@@ -35,7 +35,7 @@ func (g *KeyGrammar) SetMark(id string, loc any) error {
 // distinguish "invalid identifier" from "nothing recorded yet" should
 // call ValidMarkID first.
 func (g *KeyGrammar) GetMark(id string) (any, bool) {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("GetMark"); err != nil {
 		return nil, false
 	}
 	if !ValidMarkID(id) {

@@ -53,3 +53,13 @@ func errPatchTooLarge(gotBytes, maxBytes int) error {
 func errTooManyCells(got, max int) error {
 	return fmt.Errorf("mapscreen: f1.viewport patch carries %d cells, exceeding the %d-cell ceiling (SEC-039) — rejected before applying", got, max)
 }
+
+// ErrUnknownTerrainSurface is the registry code (MET-U102) for an
+// unrecognised terrain surface reaching the render path (BUG-334). It is
+// deliberately NOT MET-U100: a surface string this build doesn't teach
+// is not a malformed f1.viewport patch — the patch applied fine and the
+// grid rendered, the engine simply produced a class this renderer
+// doesn't know (a sixth real surface, or a corrupt wire byte). The cell
+// still draws glyphUnknown ('?'); only the log line differs. Registered
+// in data/errors.json's MET-U102 slot (ui.screen.map range U100-U199).
+const ErrUnknownTerrainSurface = "MET-U102"

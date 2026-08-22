@@ -205,18 +205,38 @@ func (e *E) toEntry(level string) Entry {
 // other {key} not present in ctx is left as a visible literal
 // "{key}" — a missing template value degrades to visible text, never a
 // silent drop or a panic.
+//
+// A "!q" quote-suffix ({key!q}) resolves the bare key exactly as above
+// and wraps the resulting value in double quotes, so a registry message
+// can render a user-supplied token distinguishably from the surrounding
+// prose (BUG-317). A missing {key!q} degrades to the full visible
+// literal "{key!q}" — suffix included — never a silent drop.
 func renderTemplate(tmpl, code, correlationID string, ctx map[string]any) string {
-	resolve := func(key string) string {
+	resolve := func(token string) string {
+		key := token
+		quoted := false
+		if strings.HasSuffix(token, "!q") {
+			key = token[:len(token)-len("!q")]
+			quoted = true
+		}
+
+		var value string
 		if v, ok := ctx[key]; ok {
-			return fmt.Sprint(v)
+			value = fmt.Sprint(v)
+		} else {
+			switch key {
+			case "code":
+				value = code
+			case "correlationId":
+				value = correlationID
+			default:
+				return "{" + token + "}"
+			}
 		}
-		switch key {
-		case "code":
-			return code
-		case "correlationId":
-			return correlationID
+		if quoted {
+			return `"` + value + `"`
 		}
-		return "{" + key + "}"
+		return value
 	}
 
 	var sb strings.Builder
@@ -224,8 +244,8 @@ func renderTemplate(tmpl, code, correlationID string, ctx map[string]any) string
 	for i < len(tmpl) {
 		if tmpl[i] == '{' {
 			if j := strings.IndexByte(tmpl[i:], '}'); j >= 0 {
-				key := tmpl[i+1 : i+j]
-				sb.WriteString(resolve(key))
+				token := tmpl[i+1 : i+j]
+				sb.WriteString(resolve(token))
 				i += j + 1
 				continue
 			}

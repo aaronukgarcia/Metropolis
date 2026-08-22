@@ -148,7 +148,7 @@ type KeymapEntryError struct {
 // since a well-formed file with one bad entry is not the "malformed
 // file" condition AC-13/MET-U302 covers.
 func (g *KeyGrammar) ApplyKeymap(km *Keymap) []KeymapEntryError {
-	if err := g.checkNotCopied(); err != nil {
+	if err := g.checkNotCopied("ApplyKeymap"); err != nil {
 		return nil
 	}
 

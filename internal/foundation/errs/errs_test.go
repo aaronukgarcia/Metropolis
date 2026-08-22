@@ -181,3 +181,64 @@ func TestRenderTemplate_MissingPlaceholderStaysVisible(t *testing.T) {
 		t.Errorf("renderTemplate = %q, want %q", got, want)
 	}
 }
+
+func TestRenderTemplate_QuoteSuffixWrapsValueInDoubleQuotes(t *testing.T) {
+	got := renderTemplate("{name!q}", "MET-F900", "corr-9", map[string]any{"name": "value"})
+	want := `"value"`
+	if got != want {
+		t.Errorf("renderTemplate = %q, want %q", got, want)
+	}
+}
+
+func TestRenderTemplate_PlainPlaceholderStaysUnquoted(t *testing.T) {
+	got := renderTemplate("{name}", "MET-F900", "corr-9", map[string]any{"name": "value"})
+	want := "value"
+	if got != want {
+		t.Errorf("renderTemplate = %q, want %q", got, want)
+	}
+}
+
+func TestRenderTemplate_MissingQuoteSuffixStaysVisible(t *testing.T) {
+	got := renderTemplate("{name!q}", "MET-F900", "corr-9", nil)
+	want := "{name!q}"
+	if got != want {
+		t.Errorf("renderTemplate = %q, want %q (a missing !q token must degrade to the visible literal, suffix included)", got, want)
+	}
+}
+
+func TestRenderTemplate_QuoteSuffixAppliesToBuiltins(t *testing.T) {
+	got := renderTemplate("code={code!q} corr={correlationId!q}", "MET-F900", "corr-9", nil)
+	want := `code="MET-F900" corr="corr-9"`
+	if got != want {
+		t.Errorf("renderTemplate = %q, want %q", got, want)
+	}
+}
+
+// TestRenderTemplate_UnknownModifierSuffixStaysVisible is the round-D7
+// guard against the NEXT modifier drift. BUG-317 happened because the
+// "!q" convention was used in templates while errs had no !q support —
+// the token degraded to a visible literal, but nothing detected it. If a
+// future template invents a new suffix ({name!u}, {name!foo}, ...), it
+// must STILL degrade to the full visible literal INCLUDING the suffix, so
+// the rendersweep gate's `\{[^}]+\}` detector (rendersweep.go, the
+// widened regex) can see it and fail RED. The alternative — silently
+// stripping an unknown suffix, or resolving the bare key — would let a
+// new modifier render "successfully" while the sweep stays green, which
+// is exactly the BUG-317 class returning under a new costume.
+func TestRenderTemplate_UnknownModifierSuffixStaysVisible(t *testing.T) {
+	cases := []struct {
+		tmpl string
+		ctx  map[string]any
+	}{
+		{"{name!u}", map[string]any{"name": "value"}},
+		{"{name!foo}", map[string]any{"name": "value"}},
+		{"{name!q!q}", map[string]any{"name": "value"}}, // double suffix, not the real one
+		{"{name!U}", map[string]any{"name": "value"}},   // case matters: !q is lowercase
+	}
+	for _, tc := range cases {
+		got := renderTemplate(tc.tmpl, "MET-F900", "corr-9", tc.ctx)
+		if got != tc.tmpl {
+			t.Errorf("renderTemplate(%q) = %q, want the visible literal %q (unknown modifier must not resolve or strip; the sweep gate needs it to stay visible)", tc.tmpl, got, tc.tmpl)
+		}
+	}
+}

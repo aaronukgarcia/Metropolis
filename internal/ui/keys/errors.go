@@ -55,4 +55,11 @@ const (
 	// of the value NewKeyGrammar constructed (SEC-020-class guard, mirrors
 	// harness.uitest's Harness/harness.replay's Recorder).
 	codeGrammarCopied = "MET-U308"
+
+	// codeRegisterEmptyPath: Register was called with an empty mnemonic
+	// path. This is NOT a prefix conflict (MET-U301) — there is no other
+	// path to conflict with — so it gets its own code rather than reusing
+	// codeRegisterPrefixConflict with a fabricated conflictsWith (which the
+	// MET-U301 template would render as a literal {conflictsWith}).
+	codeRegisterEmptyPath = "MET-U309"
 )

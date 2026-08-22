@@ -166,6 +166,7 @@ func registerSkeletonModules(reg *registry.Registry, correlationID string) error
 			return errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 				"component": "foundation.registry",
 				"key":       key,
+				"cause":     err.Error(),
 			})
 		}
 	}
@@ -454,6 +455,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "engine.core.LoadDefaultSecondsPerMonthAt1x",
+			"cause":     err.Error(),
 		})
 	}
 
@@ -470,6 +472,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "engine.compose",
+			"cause":     err.Error(),
 		})
 	}
 
@@ -547,6 +550,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "engine.core.StartSubscriptionPump",
+			"cause":     err.Error(),
 		})
 	}
 	w.pumpDone = pumpDone
@@ -591,6 +595,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.services.Subscribe",
+			"cause":     err.Error(),
 		})
 	}
 	if err := primeScreenSubscription(transport, w.router, primed, financeCorrID, financescreen.ViewSubscriptionName,
@@ -603,6 +608,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.finance.Subscribe",
+			"cause":     err.Error(),
 		})
 	}
 	// BUG-323: F1 ("f1.viewport") is primed and bound the SAME way, now
@@ -625,6 +631,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.map.Subscribe",
+			"cause":     err.Error(),
 		})
 	}
 
@@ -663,6 +670,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "engine.core.status.Subscribe",
+			"cause":     err.Error(),
 		})
 	}
 
@@ -709,6 +717,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.services.RegisterFundingAdjustKeys",
+			"cause":     err.Error(),
 		})
 	}
 
@@ -726,13 +735,21 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDMap)})
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.core.ScreenRegistry.Register",
+			"id":        string(screenIDMap),
+			"cause":     err.Error(),
+		})
 	}
 	if err := w.screens.Register(core.ScreenEntry{ID: screenIDFinance, Draw: financeDrawFunc(w.financeScreen)}); err != nil {
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDFinance)})
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.core.ScreenRegistry.Register",
+			"id":        string(screenIDFinance),
+			"cause":     err.Error(),
+		})
 	}
 	// services registers its OWN w.keyGrammar (constructed above,
 	// carrying the real funding-adjust actions) — this is what makes "s
@@ -743,7 +760,11 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDServices)})
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.core.ScreenRegistry.Register",
+			"id":        string(screenIDServices),
+			"cause":     err.Error(),
+		})
 	}
 
 	// chromeGrammar is the ALWAYS-fed global grammar (design §7(b)):
@@ -767,19 +788,31 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F1"})
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.keys.RegisterGlobal",
+			"key":       "F1",
+			"cause":     err.Error(),
+		})
 	}
 	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F2"}, fKeyGlobal(screenIDFinance, "Switch to Finance (F2)")); err != nil {
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F2"})
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.keys.RegisterGlobal",
+			"key":       "F2",
+			"cause":     err.Error(),
+		})
 	}
 	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F4"}, fKeyGlobal(screenIDServices, "Switch to Services (F4)")); err != nil {
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
-		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F4"})
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.keys.RegisterGlobal",
+			"key":       "F4",
+			"cause":     err.Error(),
+		})
 	}
 
 	// BUG-322: the player's clock controls. Registered on the SAME chrome
@@ -876,6 +909,7 @@ func registerClockKeys(w *skeletonWiring) error {
 		if err := w.chromeGrammar.RegisterGlobal(b.key, keys.Action{Name: b.name, Run: func(keys.ActionArgs) { run() }}); err != nil {
 			return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
 				"component": "ui.keys.RegisterGlobal", "key": b.key.Token(),
+				"cause": err.Error(),
 			})
 		}
 	}

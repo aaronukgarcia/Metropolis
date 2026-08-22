@@ -102,3 +102,23 @@ var maxGridSide = int(math.Sqrt(float64(maxGridCells)))
 // project's real terrain/road/building name content ever grows enough
 // to approach this ceiling for a legitimately large full-grid patch.
 const maxPatchWireBytes = 2 * maxGridBudgetBytes
+
+// maxUnknownTerrainSeen bounds the number of DISTINCT unrecognised
+// terrain surface strings this screen will remember for BUG-334's
+// log-once dedupe (logUnknownTerrainOnce). The dedupe exists so a
+// 40,000-cell grid of a new, not-yet-taught surface logs once, not once
+// per cell; but the map must not grow without bound either (round D5) —
+// a hostile or corrupt engine stream could otherwise mint unbounded
+// distinct surface strings and grow unknownTerrainSeen forever. The
+// cap: the real Terrain 50 class set is small and closed (today five:
+// grass, woodland, water, shingle, rock — render.go terrainGlyph), so a
+// dozen-ish distinct unknowns already means a genuinely novel class or
+// a corrupt stream; 64 distinct surfaces is far past any legitimate
+// signal while still bounding the map at a couple hundred bytes. Past
+// the cap, logUnknownTerrainOnce stops recording new surfaces entirely —
+// they still draw glyphUnknown ('?') but are not logged — so a
+// pathological stream can neither grow the map without bound nor trigger
+// a per-cell log storm (the 40,000-line case the dedupe exists to
+// prevent). GR#15: derived from the renderer's own known-class
+// population (terrainGlyph's switch arms), never a hand-picked constant.
+const maxUnknownTerrainSeen = 64

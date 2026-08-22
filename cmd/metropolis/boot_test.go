@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"errors"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -62,6 +66,114 @@ func TestBootCore_DuplicateModuleRegistration_FailsCleanly(t *testing.T) {
 	}
 	if e.CorrelationID != "test-correlation" {
 		t.Errorf("error correlation ID = %q, want %q", e.CorrelationID, "test-correlation")
+	}
+}
+
+// --- BUG-335: MET-E900 boot-failure message renders the real cause, not a
+// literal {cause} ---
+//
+// The MET-E900 template is "metropolis failed to boot: {component} failed
+// to initialize: {cause}", but every boot-time errs.Wrap call site supplied
+// only "component", never "cause" — so {cause} rendered literally on exactly
+// the boot-failure paths that matter (map/finance/services prime, compose,
+// pump, registry). The wrap ctx was the wrong side; the template is right.
+
+// TestBootFailureRendersCauseNotLiteral triggers the cheapest real boot
+// failure (a colliding module registration, the AC-7 path) and asserts the
+// rendered Display() carries the underlying registry error verbatim with no
+// literal "{cause}" or "{component}" surviving — rendered, not read.
+func TestBootFailureRendersCauseNotLiteral(t *testing.T) {
+	reg := registry.NewRegistry()
+	if err := reg.Register("harness.stub", nil, wiredModule{name: "harness.stub"}); err != nil {
+		t.Fatalf("seeding collision: %v", err)
+	}
+
+	w, err := bootCore("boot-render-cause", reg)
+	if err == nil {
+		t.Fatal("bootCore: expected an error on duplicate module registration, got nil")
+	}
+	if w != nil {
+		t.Fatal("bootCore: expected nil wiring on failure")
+	}
+
+	var e *errs.E
+	if !errors.As(err, &e) {
+		t.Fatalf("bootCore error %v is not a registry-sourced *errs.E", err)
+	}
+	if e.Code != codeBootFailure {
+		t.Errorf("error code = %q, want %q", e.Code, codeBootFailure)
+	}
+
+	display := e.Display()
+	if strings.Contains(display, "{cause}") {
+		t.Fatalf("Display() = %q renders {cause} literally; want the real reason", display)
+	}
+	if strings.Contains(display, "{component}") {
+		t.Fatalf("Display() = %q renders {component} literally; want the component name", display)
+	}
+	if e.Wrapped == nil {
+		t.Fatal("boot failure must wrap the underlying registry error")
+	}
+	if !strings.Contains(display, e.Wrapped.Error()) {
+		t.Fatalf("Display() = %q does not contain the wrapped cause %q", display, e.Wrapped.Error())
+	}
+}
+
+// TestBootFailureWrapSitesAllSupplyCause is a STRUCTURAL gate over boot.go's
+// own source: every errs.Wrap(codeBootFailure, ...) call site must carry both
+// the "component" and "cause" keys in its ctx map, so the MET-E900 template
+// ("metropolis failed to boot: {component} failed to initialize: {cause}")
+// renders the real failure reason instead of a literal {cause}.
+//
+// This is deliberately a source-structure check, not a runtime drive. The
+// non-registry wrap sites (engine.compose, StartSubscriptionPump, the
+// Subscribe/RegisterFundingAdjustKeys prime paths, the ScreenRegistry/
+// RegisterGlobal wiring) can only fail on states a test cannot reach through
+// bootCore — an already-composed engine, a struct-copied engine, a broken
+// transport — so a runtime proof would be a fabricated harness (the original
+// TestBootFailureWrapComponentsRenderCause built its own inline ctx and
+// tested errs.Wrap, not boot.go). What CAN be checked honestly is that every
+// site supplies the keys: remove "cause" from ANY boot-failure site and this
+// test fails RED. The registry site's rendered-output proof lives in
+// TestBootFailureRendersCauseNotLiteral above, which drives a real bootCore
+// failure end to end.
+//
+// The site count is deliberately NOT asserted (GR#15): the invariant is that
+// EVERY errs.Wrap(codeBootFailure, ...) site supplies the keys, whatever the
+// count is. A hardcoded count would silently go stale as bootCore grows new
+// failure paths (as it did when FEAT-211's ScreenRegistry.Register and
+// RegisterGlobal wraps landed on main).
+func TestBootFailureWrapSitesAllSupplyCause(t *testing.T) {
+	src, err := os.ReadFile("boot.go")
+	if err != nil {
+		t.Fatalf("read boot.go: %v", err)
+	}
+
+	// Every site is a flat ctx map literal with no nested braces:
+	//   errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+	//       "component": "...",
+	//       "cause":     err.Error(),
+	//   })
+	// (the foundation.registry site additionally carries "key"; the
+	// chromeGrammar loop site passes w.correlationID rather than the
+	// function-local correlationID). A negated brace class cleanly captures
+	// the map through its "})" close.
+	wrapSite := regexp.MustCompile(`errs\.Wrap\(codeBootFailure, (?:correlationID|w\.correlationID), err, map\[string\]any\{[^}]*\}\)`)
+
+	sites := wrapSite.FindAll(src, -1)
+	if len(sites) == 0 {
+		t.Fatal("no errs.Wrap(codeBootFailure, ...) sites found in boot.go — the regex has gone stale")
+	}
+	for i, site := range sites {
+		if !bytes.Contains(site, []byte(`"component":`)) {
+			t.Errorf("wrap site %d lacks a \"component\" key:\n%s", i, site)
+		}
+		if !bytes.Contains(site, []byte(`"cause":`)) {
+			t.Errorf("wrap site %d lacks a \"cause\" key (MET-E900 would render literal {cause}):\n%s", i, site)
+		}
+		if !bytes.Contains(site, []byte(`err.Error()`)) {
+			t.Errorf("wrap site %d does not source its cause from err.Error():\n%s", i, site)
+		}
 	}
 }
 
