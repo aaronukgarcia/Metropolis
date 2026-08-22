@@ -189,3 +189,37 @@ A data-driven instrument taxonomy layered on top of MOD-022's existing loan/cred
 - **For Bill.** AC-30's "warning cleared" requirement is this BA's own addition beyond what the FEAT-068 brief asked for verbatim — the brief asked for lead-time and anti-cosmetic-wiring checks specifically, not a no-stale-warning requirement. Added because a permanently-latching warning would otherwise trivially satisfy AC-29 without giving the player a real signal, which seemed load-bearing enough to include rather than leave as a gap for a later Destructive finding. Flagging in case Bill judges it out of this item's intended scope and wants it split into its own follow-up.
 
 - **ASM-768 (FEAT-057 fold).** Borrowing instruments extend engine.finance existing CreditRating and IsInsolvent mechanics inside the existing module at internal/engine/finance via FinanceAPI; no separate engine.borrowing module. mkey feat.borrowing already registered; consumers feat.facilitypermits and feat.decommission already consume FinanceAPI so no new inbound edges are needed.
+
+---
+
+# B1 — M1 as a named aggregate (extends MOD-022; pay/ cluster B1)
+
+**BOW code:** MOD-022 (extension)
+**Source:** Bro BA draft 2026-08-22 (`E:/git/metropolis-status/pay-criteria-a1-b1-draft.md`); Aaron's ruling — M1 += civic salaries paid, M1 −= taxes collected.
+**Date:** 2026-08-22
+**Status:** ready — pay/ cluster B1. A1 drafted in `engine.staffing.md` (AC-17–19); A2/A3 blocked on GR#25 edges (see bro.status.md); A4/C blocked on Aaron.
+**AC numbering:** continues the file-global sequence (MOD-022 AC-1..18, FEAT-057 AC-19..28, FEAT-068 AC-29..32) at AC-33..36.
+**Edges:** all registered — this cluster surfaces M1 from `TotalMoneyInCirculation`/`MoneyStock`/`CatWages`/`CatTax*` lines MOD-022 already posts (plus `engine.invariant`'s `FindConservationViolations`, already a registered inbound consumer); no new code.json outbound edges required.
+
+## Acceptance criteria
+
+### Functional — M1 as a named aggregate
+
+- **AC-33 (B1; M1 is a named aggregate over the EXISTING ledger — surfacing, not building).** `engine.finance` exposes `M1() Money` as a queryable aggregate derived from the existing ledger (Aaron's ruling: M1 += civic salaries paid, M1 −= taxes collected), using `TotalMoneyInCirculation()`, `MoneyStock()`, and the `CatWages`/`CatTax*` category lines that already exist. Check: `go doc ./internal/engine/finance FinanceAPI` lists `M1`; a passing test asserts `M1` is computable with zero new ledger machinery — the internal state it reads is the same fields `MoneyStock()`/`TotalMoneyInCirculation()` read (`grep -rn "func Test.*M1\|func Test.*[Mm]oneySupply" internal/engine/finance/*_test.go`).
+
+- **AC-34 (B1; injection/extraction semantics are directional — Aaron's ruling).** Posting wages RAISES M1; collecting tax LOWERS it. Check: a passing test does `f.PostWages(x)` and asserts `M1_after > M1_before`, then `f.CollectTax(...)` and asserts `M1_final < M1_after` (`grep -rn "func Test.*M1.*[Ww]age\|func Test.*M1.*[Tt]ax" internal/engine/finance/*_test.go`). **No magnitude asserted** (D-14); the direction is the contract.
+
+- **AC-35 (B1; conservation holds — INV-1).** M1 is a derived VIEW, never a second pot of money: after any wage→tax→spend cycle, `FindConservationViolations()` stays empty and M1 equals its recomputed value from the ledger (nothing drifts, no new balance to reconcile). Check: a passing test runs a full cycle and asserts `FindConservationViolations()` is empty AND `M1() == RecomputeMoneyStock()-derived value` (`grep -rn "func Test.*M1.*[Cc]onservation\|func Test.*[Mm]oneySupply.*[Cc]onserve" internal/engine/finance/*_test.go`).
+
+- **AC-36 (B1; GR#7 — no silent zero).** If the ledger has never opened a month, `M1()` returns the zero value explicitly (documented "no data yet" — mirroring the existing `MoneyStock` zero-before-BeginMonth contract), never a fabricated nonzero figure. Check: a passing test constructs a fresh `FinanceAPI`, calls `M1()` before any `BeginMonth`, and asserts it equals 0 with the same documented-before-BeginMonth semantics `MoneyStock()` already has (`grep -rn "func Test.*M1.*[Bb]eginMonth\|func Test.*M1.*Zero" internal/engine/finance/*_test.go`).
+
+## Out of scope (B1 section)
+
+- Any liquidity-trap response — that is pay/ cluster B2, not this item.
+- Any new ledger machinery — AC-33 requires M1 to be derived from the existing ledger, never a new balance/account to reconcile.
+- Any UI for M1 — that is pay/ cluster C4 / `ui.screen.finance` F2, a separate `ui.screen.*` item.
+- Any magnitude or target for M1 — D-14 placeholders; the direction is the contract (AC-34), never a number.
+
+## Escalations (B1 section)
+
+- **For Bill / Architect.** pay/ A2 (per-citizen wage crediting) and A3 (the Generosity slider) remain blocked on GR#25 unregistered call edges — flagged to Bev 2026-08-22 (exact edges recorded in `E:/git/metropolis-status/bro.status.md`). B1 deliberately avoids needing them: it reads only what MOD-022 already posts.
