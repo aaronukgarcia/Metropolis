@@ -328,8 +328,12 @@ const FertilityChildIDBase = fertilityChildIDBase
 // completed, so every cross-shard read here is safe (single goroutine, no
 // concurrent shard mutation in flight). Only the "acting" partner (the
 // couple's lower citizen id) is processed, so a couple split across two
-// scheduled shards is never double-processed. Returns the number of births
-// applied this call.
+// scheduled shards is never double-processed. Elevated HOT/WARM citizens
+// are NOT skipped here (BUG-270): every citizen — elevated or not — lives
+// in the cold store, so iterating its rows covers both tiers through the
+// single source of truth, and the once-per-month shard schedule guarantees
+// a couple draws exactly once regardless of tier. Returns the number of
+// births applied this call.
 func (c *CitizensAPI) applyFertilityLocked(seed uint64, month int64, shards []int, correlationID string) int {
 	births := 0
 	for _, shard := range shards {
@@ -346,9 +350,6 @@ func (c *CitizensAPI) applyFertilityLocked(seed uint64, month int64, shards []in
 			}
 			if partner < id {
 				continue // not the acting (lower-id) partner: skip, avoid double-processing
-			}
-			if _, ok := c.hot[id]; ok {
-				continue // elevated citizens are out of the cold pass's scope, mirrors mortality's isHot skip
 			}
 			partnerRec, ok := c.coldRecord(partner)
 			if !ok {

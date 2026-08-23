@@ -122,8 +122,10 @@ func runShardsParallel(workers int, shards []int, fn func(shard int) passTotals)
 // hardcoded). It is a pure function of (seed, the shard's own columns,
 // month, params): no shared RNG, no wall clock, no cross-shard reads
 // (AC-15/AC-17). isHot, when non-nil, identifies citizens currently
-// elevated to HOT/WARM: those are advanced by the daily path, not the
-// monthly cold pass, so they are skipped here (never double-advanced).
+// elevated to HOT/WARM: their mortality is drawn by applyHotMortalityLocked
+// and their fertility by applyFertilityLocked on the same shard-derived
+// schedule, so the column-drift updates here are skipped for them (never
+// double-advanced; BUG-270).
 func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool) passTotals {
 	var tot passTotals
 	i := 0

@@ -1795,4 +1795,9 @@
     "finding": "internal/ui/screens/services/screen.go|*Screen|receiver method|evictOldestPendingFundingLocked|s|*Screen",
     "reason": "FEAT-208 increment 3 destructive round r2 fix: unexported *Locked-suffixed helper, called only from SetFunding, which holds s.mu at the call site (checkNotCopied is called before SetFunding ever takes s.mu) and whose own doc comment states this method's precondition is 'caller must hold s.mu'. Never reachable independently -- same precedent as fundingHasOtherOutstandingLocked above."
   }
+,
+  {
+    "finding": "internal/engine/citizens/hotpass.go|*CitizensAPI|receiver method|applyHotMortalityLocked|c|*CitizensAPI",
+    "reason": "BUG-270 fix: new unexported *Locked-suffixed helper (mirrors the accepted applyFertilityLocked precedent), called only from AdvanceDayTick, which itself calls c.checkNotCopied(correlationID, 'AdvanceDayTick') before doing anything else and holds c.mu for the whole tick. Astgate's syntactic, no-call-graph analysis cannot distinguish this from a genuine unguarded entry point (doc.go's known blind spots)."
+  }
 ]

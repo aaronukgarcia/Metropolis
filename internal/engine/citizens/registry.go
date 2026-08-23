@@ -504,6 +504,15 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	}
 	c.curMonthDeaths += tot.deaths
 
+	// Elevated-citizen mortality (BUG-270): the cold pass above skips every
+	// HOT/WARM citizen, so their monthly mortality draw runs here instead,
+	// on the same shard-derived schedule and stream the cold pass would have
+	// used. Sequenced BEFORE fertility (mirroring the cold pass's own
+	// mortality-then-fertility order) so a just-deceased elevated partner
+	// can never conceive this tick.
+	dayHotDeaths := c.applyHotMortalityLocked(seed, month, c.dayTick, params)
+	c.curMonthDeaths += dayHotDeaths
+
 	// Fertility (FEAT-160): a deterministic SEQUENTIAL pass over the same
 	// scheduled shards, run only after the parallel mortality/education/job
 	// pass above has fully completed — see applyFertilityLocked's doc
@@ -530,7 +539,7 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 		c.curMonthBirths = 0
 		c.curMonthDeaths = 0
 	}
-	return dayBirths, tot.deaths, nil
+	return dayBirths, tot.deaths + dayHotDeaths, nil
 }
 
 // VitalEvents returns the fertility births and mortality deaths tallied
