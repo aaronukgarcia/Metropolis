@@ -2,6 +2,7 @@ package compose
 
 import (
 	"errors"
+	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
@@ -312,6 +313,15 @@ type viewRegistration struct {
 var viewRegistrationOrder = []viewRegistration{
 	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
 	{name: financeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildFinanceBalanceSheetPatch }},
+	// BUG-324: "chrome.topbar" — the global chrome's top-bar figures
+	// (chrome_publish.go). Not one of the design's §6 F-screen
+	// fast-follows: it is the view the ALWAYS-visible chrome renders
+	// from, and internal/ui/screens/chrome could not be registered in
+	// cmd/metropolis at all until it existed, because an unregistered
+	// view's Subscribe is rejected and the top bar would have rendered
+	// permanently empty — the same failure mode "f1.viewport" shows
+	// today.
+	{name: chromeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildChromeTopBarPatch }},
 	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
 }
 
@@ -760,10 +770,15 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
-		treasury:                initialTreasury,
 		citizenWealth:           initialCitizenWealth,
 		nextCitizenID:           1,
 	}
+	// treasury is seeded through setTreasury (never as a struct-literal
+	// field above) so the BUG-324 publish mirror is correct from before
+	// the engine ever ticks — a bar that reads £0 for the first frame
+	// and then jumps is the same class of wrong number as one that
+	// always reads £0.
+	st.setTreasury(initialTreasury)
 
 	// Establish the non-zero seed population (AC-8's precondition).
 	if err := st.spawnCitizens(0, seedCitizenCount); err != nil {
@@ -883,6 +898,22 @@ func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool 
 // guard (and would make this type an astgate SEC-020 candidate for
 // nothing) — the fix for the concurrency gap above is "read through the
 // module's own lock," never "add a lock here."
+//
+// BUG-324 addendum: the top bar needs the player's MONEY, and the
+// correction above is precisely why it could not simply read
+// st.treasury. It also could not read engine.finance's AcctTreasury
+// ledger account instead: baseline one never funds that account (Wire
+// seeds st.treasury, and financeHook moves st.treasury — the finance
+// ledger's own accounts stay at zero, which is why "f2.finance"'s
+// balance sheet publishes zeros today too). So the money the player
+// actually has lives in an unguarded plain field, and both honest
+// alternatives — publish a zero, or drop money from the bar — were
+// worse than making the real figure safely readable. treasuryPub below
+// is that: a publish-only atomic MIRROR of st.treasury, written by
+// setTreasury alongside every st.treasury write, read lock-free by the
+// subscription pump. It is not a second source of truth (nothing in the
+// simulation ever reads it) and it cannot drift, because st.treasury is
+// never assigned outside setTreasury.
 type simState struct {
 	e    *core.Engine
 	cid  string
@@ -964,6 +995,14 @@ type simState struct {
 	moneyDelta    int64
 	treasury      int64
 	citizenWealth int64
+
+	// treasuryPub is the BUG-324 publish-only mirror of treasury — see
+	// this type's own doc comment for why it exists and why it cannot
+	// drift. Write it ONLY via setTreasury; read it ONLY from a
+	// ViewPatchFunc (publishedTreasury). The simulation itself must keep
+	// reading treasury, so that a stale/forgotten mirror can never
+	// change a simulated outcome, only a displayed one.
+	treasuryPub atomic.Int64
 
 	// cumulative gross money flow (AC-9)
 	moneyFlows int64
@@ -1191,11 +1230,11 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 	st := h.st
 
 	// pay wages: treasury -> citizens
-	st.treasury = num.SatSub(st.treasury, monthlyWages)
+	st.setTreasury(num.SatSub(st.treasury, monthlyWages))
 	st.citizenWealth = num.SatAdd(st.citizenWealth, monthlyWages)
 	// collect tax: citizens -> treasury (budget closes: wages == tax)
 	st.citizenWealth = num.SatSub(st.citizenWealth, monthlyTax)
-	st.treasury = num.SatAdd(st.treasury, monthlyTax)
+	st.setTreasury(num.SatAdd(st.treasury, monthlyTax))
 
 	// gross flow (AC-9 "money moved"); net delta is zero by construction
 	// but tracked so the invariant verifies it against the store.
@@ -1677,7 +1716,7 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		// against the store. The city compensates the owner for the
 		// demolished structure's land value; total money is unchanged (a
 		// transfer, not a creation), so moneyDelta's net contribution is 0.
-		st.treasury = num.SatSub(st.treasury, res.Compensation)
+		st.setTreasury(num.SatSub(st.treasury, res.Compensation))
 		st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
 		st.moneyFlows = num.SatAdd(st.moneyFlows, res.Compensation)
 		st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(res.Compensation, res.Compensation))
