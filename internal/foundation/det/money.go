@@ -63,10 +63,11 @@ func Sub(correlationID string, a, b Micropounds) (Micropounds, error) {
 }
 
 // MulRat returns a scaled by the rational num/den (integer division,
-// truncating toward zero, applied after the checked multiply — so the
-// only overflow surface is the a*num step, not the division), or a
-// registry-sourced error (ErrMoneyOverflow) if a*num overflows int64, or
-// if den is zero. This is the fixed-point helper for "money * rate"
+// truncating toward zero, applied after the checked multiply), or a
+// registry-sourced error (ErrMoneyOverflow) if a*num overflows int64, if
+// the product/den step itself overflows int64 (product == MinInt64 with
+// den == -1 — mathematically +2^63), or if den is zero. This is the
+// fixed-point helper for "money * rate"
 // computations (tax rates, interest, splits) that must never touch
 // float64.
 func MulRat(correlationID string, a Micropounds, num, den int64) (Micropounds, error) {
@@ -77,6 +78,11 @@ func MulRat(correlationID string, a Micropounds, num, den int64) (Micropounds, e
 	}
 	product, ok := checkedMul64(int64(a), num)
 	if !ok {
+		return 0, errs.New(ErrMoneyOverflow, correlationID, map[string]any{
+			"op": "mulrat", "a": int64(a), "num": num, "den": den,
+		})
+	}
+	if product == math.MinInt64 && den == -1 {
 		return 0, errs.New(ErrMoneyOverflow, correlationID, map[string]any{
 			"op": "mulrat", "a": int64(a), "num": num, "den": den,
 		})

@@ -71,6 +71,16 @@ func TestMulRat_Overflow(t *testing.T) {
 	}
 }
 
+// AC-11: the MinInt64/-1 division itself overflows even when the multiply
+// does not — MulRat(MinInt64, 1, -1) is mathematically +2^63, which must
+// error rather than silently wrap back to MinInt64.
+func TestMulRat_DivisionOverflow(t *testing.T) {
+	_, err := MulRat("corr-money-9", Micropounds(math.MinInt64), 1, -1)
+	if err == nil {
+		t.Fatal("MulRat(MinInt64, 1, -1): want overflow error, got nil")
+	}
+}
+
 func TestMulRat_DivisionByZero(t *testing.T) {
 	_, err := MulRat("corr-money-6", Micropounds(100), 1, 0)
 	if err == nil {
