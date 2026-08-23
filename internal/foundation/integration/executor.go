@@ -57,7 +57,12 @@ func Execute[T any, M any](correlationID string, pool WorkerPool, in Integration
 		return in.Zero(), err
 	}
 
-	det.ApplyBarrier(messages, in.ApplyMessage)
+	if err := det.ApplyBarrier(correlationID, messages, in.ApplyMessage); err != nil {
+		// A barrier-level failure (e.g. det.ErrShardDuplicate on a
+		// repeated (shard, sequence) key) is already a registry-sourced
+		// *errs.E from the det package — propagate unchanged.
+		return in.Zero(), err
+	}
 
 	return merged, nil
 }

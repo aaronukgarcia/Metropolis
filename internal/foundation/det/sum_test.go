@@ -23,8 +23,14 @@ func TestSumInShardOrder_CanonicalRegardlessOfInputOrder(t *testing.T) {
 		{Shard: 2, Value: 0.3},
 	}
 
-	want := SumInShardOrder(canonical)
-	got := SumInShardOrder(outOfOrder)
+	want, err := SumInShardOrder("corr-sum-canonical", canonical)
+	if err != nil {
+		t.Fatalf("SumInShardOrder(canonical): unexpected error: %v", err)
+	}
+	got, err := SumInShardOrder("corr-sum-canonical", outOfOrder)
+	if err != nil {
+		t.Fatalf("SumInShardOrder(outOfOrder): unexpected error: %v", err)
+	}
 
 	if got != want {
 		t.Fatalf("SumInShardOrder(outOfOrder) = %v, want bit-identical %v (canonical order)", got, want)
@@ -37,7 +43,27 @@ func TestSumInShardOrder_Value(t *testing.T) {
 		{Shard: 1, Value: 2.0},
 		{Shard: 2, Value: 3.0},
 	}
-	if got := SumInShardOrder(values); got != 6.0 {
+	got, err := SumInShardOrder("corr-sum-value", values)
+	if err != nil {
+		t.Fatalf("SumInShardOrder: unexpected error: %v", err)
+	}
+	if got != 6.0 {
 		t.Fatalf("SumInShardOrder = %v, want 6.0", got)
+	}
+}
+
+// BUG-287: two values for the same shard have no intrinsic tiebreak —
+// their relative order would be submission order, and float64 addition is
+// not associative, so the result would be scheduling-dependent.
+// SumInShardOrder rejects duplicates fail-closed (MergeInOrder's
+// strictness, AC-10) rather than return a plausible-looking wrong sum.
+func TestSumInShardOrder_DuplicateShardRejected(t *testing.T) {
+	values := []ShardFloat{
+		{Shard: 3, Value: 0.25},
+		{Shard: 1, Value: 0.5},
+		{Shard: 3, Value: 0.75},
+	}
+	if _, err := SumInShardOrder("corr-sum-dup", values); err == nil {
+		t.Fatal("SumInShardOrder with duplicate shard: want error, got nil")
 	}
 }

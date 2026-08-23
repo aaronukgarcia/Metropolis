@@ -77,7 +77,9 @@ func RunPhase[T any, M any](correlationID string, workers int, zero T, shardFn S
 		return zero, err
 	}
 
-	ApplyBarrier(messages, applyMsg)
+	if err := ApplyBarrier(correlationID, messages, applyMsg); err != nil {
+		return zero, err
+	}
 
 	return merged, nil
 }
