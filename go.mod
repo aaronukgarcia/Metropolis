@@ -2,7 +2,10 @@ module github.com/aaronukgarcia/Metropolis
 
 go 1.25
 
-require github.com/gdamore/tcell/v2 v2.13.10
+require (
+	github.com/coder/websocket v1.8.15
+	github.com/gdamore/tcell/v2 v2.13.10
+)
 
 require (
 	github.com/gdamore/encoding v1.0.1 // indirect

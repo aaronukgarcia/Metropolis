@@ -112,7 +112,9 @@
       "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V500-V599": "reserved for ui.screen.services (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "P100-P199": "reserved for int.transport (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-23 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"P\")"
+    
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -4868,6 +4870,36 @@
       "module": "ui.screen.census",
       "message": "citizen bio {guid} unavailable: {reason}",
       "remedy": "the engine rejected the citizen bio query (MET-G2701) -- check the GUID is a known tracked citizen"
+    },
+    "MET-P100": {
+      "severity": "warn",
+      "module": "int.transport",
+      "message": "int.transport: WebSocket frame was not a valid protocol Command envelope (cause={cause})",
+      "remedy": "Send a JSON protocol.Command envelope (protocolVersion/correlationId/issuedAtTick/kind/payload) per internal/protocol codec.go; the frame was dropped, not applied."
+    },
+    "MET-P101": {
+      "severity": "error",
+      "module": "int.transport",
+      "message": "int.transport: outbound message could not be routed to a client session ({kind}={key})",
+      "remedy": "The connection that issued the command or subscription is gone; the message was dropped. Reconnect and re-subscribe."
+    },
+    "MET-P102": {
+      "severity": "error",
+      "module": "int.transport",
+      "message": "int.transport: client session outbound buffer overflowed; connection closed (correlationId={correlationId})",
+      "remedy": "A slow WebSocket consumer fell behind the engine's delta stream. The server closed the connection rather than blocking the pump; reconnect to resume."
+    },
+    "MET-P103": {
+      "severity": "warn",
+      "module": "int.transport",
+      "message": "int.transport: WebSocket handshake failed ({cause})",
+      "remedy": "The HTTP request was not upgradeable as a WebSocket connection; only same-origin GET upgrades are served."
+    },
+    "MET-P104": {
+      "severity": "error",
+      "module": "int.transport",
+      "message": "int.transport: Server method called on a struct-copied Server value",
+      "remedy": "Always use the *Server pointer NewServer returned. A struct copy aliases the session/pending/awaiting/subs maps while carrying its own independent mu, so its locking protects nothing shared (the SEC-020 class). Mirrors InProcTransport/Engine checkNotCopied discipline."
     }
   }
 }

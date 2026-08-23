@@ -1,0 +1,109 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #14161a;
+  color: #d8dbe0;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 1rem;
+  background: #1d2026;
+  border-bottom: 1px solid #2c313a;
+}
+
+.shell-header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.conn-connected { color: #6fbf5a; }
+.conn-connecting { color: #d8b74a; }
+.conn-disconnected { color: #c0574a; }
+
+.shell-main {
+  display: grid;
+  grid-template-columns: 240px 1fr 260px;
+  gap: 8px;
+  padding: 8px;
+  min-height: 0;
+  flex: 1;
+}
+
+.shell-left,
+.shell-right {
+  overflow-y: auto;
+  background: #1d2026;
+  border: 1px solid #2c313a;
+  border-radius: 4px;
+  padding: 8px;
+}
+
+.shell-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.map-canvas {
+  position: relative;
+}
+
+.map-canvas canvas {
+  image-rendering: pixelated;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #2c313a;
+}
+
+.panel h3 {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9aa3af;
+}
+
+.placeholder {
+  color: #6b7280;
+  font-style: italic;
+}
+
+.panel-buildmove {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  background: #1d2026;
+  border-top: 1px solid #2c313a;
+}
+
+.panel-buildmove button {
+  background: #2b6a9b;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.panel-buildmove button:hover {
+  background: #357db5;
+}
