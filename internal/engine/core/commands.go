@@ -254,11 +254,10 @@ func (e *Engine) handleSetSpeed(cmd protocol.Command, correlationID string) prot
 	if !ValidSpeed(speed) {
 		return e.reject(cmd, errs.New(ErrInvalidSpeed, correlationID, map[string]any{"speed": payload.Speed}))
 	}
-	if speed == Speed8xDebug {
-		if err := e.checkSpeed8xAllowed(correlationID); err != nil {
-			return e.reject(cmd, err)
-		}
-	}
+	// FEAT-157: Speed8x is a production speed — no gate consult. The
+	// former BUG-009 debug gate (checkSpeed8xAllowed/WithSpeed8xGate/
+	// MET-E015) was removed in the same commit that promoted the rung;
+	// ValidSpeed above remains the only validity check a SetSpeed needs.
 	// SEC-018: identity-checked BEFORE e.mu — one of eight e.mu.Lock()
 	// sites in this package's non-test files. Also caught by
 	// HandleCommand's own entry-point check (defence in depth, not the
@@ -273,34 +272,6 @@ func (e *Engine) handleSetSpeed(cmd protocol.Command, correlationID string) prot
 	result := e.accept(cmd)
 	e.signalSubscriptionPump()
 	return result
-}
-
-// checkSpeed8xAllowed is BUG-009's enforcement point: Speed8xDebug is
-// reserved for feat.debugmode (clock.go's Speed8xDebug doc comment) and
-// must never be reachable with debug off. engine.core does not import
-// feat.debugmode to check this (see Speed8xGate's doc comment,
-// engine.go) — it calls whatever gate a caller injected via
-// WithSpeed8xGate, or refuses by default if none was.
-//
-// The default-deny branch returns ErrSpeed8xGateNotConfigured
-// (MET-E015), a dedicated registry code distinct from ErrInvalidSpeed
-// (MET-E002): Speed8xDebug's VALUE is valid (it is a documented
-// multiplier once a debug gate has accepted it) — the failure here is
-// that no gate was wired to authorise it at all, a genuinely different
-// triage case from an out-of-range speed value. BUG-011 (closing
-// ASM-012): this used to reuse MET-E002 with an unregistered
-// "reason: no_gate_configured" context field as a deliberate stopgap
-// while BUG-008 was concurrently rewriting the whole error registry;
-// that justification expired once BUG-008 landed and data/errors.json
-// stabilised. See ASM-* in the BUG-009 dispatch report for the original
-// reasoning this superseded.
-func (e *Engine) checkSpeed8xAllowed(correlationID string) error {
-	if e.speed8xGate == nil {
-		return errs.New(ErrSpeed8xGateNotConfigured, correlationID, map[string]any{
-			"speed": int(Speed8xDebug),
-		})
-	}
-	return e.speed8xGate(correlationID)
 }
 
 // handlePause pauses the clock. Idempotent (per PausePayload's doc

@@ -106,34 +106,6 @@ func WithPhaseObserver(obs PhaseObserver) Option {
 	return func(e *Engine) { e.observer = obs }
 }
 
-// Speed8xGate is the injected seam handleSetSpeed (commands.go)
-// consults before accepting Speed8xDebug (BUG-009). engine.core does
-// not know or care who backs this — feat.debugmode's
-// *debug.State.AllowSpeed8x method value satisfies this exact
-// signature today, but engine.core imports nothing from
-// internal/engine/debug to make that true (GR#20: modules consume each
-// other only via registered interfaces, never a direct import across
-// the engine.core <-> feat.debugmode seam). The caller that owns both
-// modules (cmd/metropolis's bootstrap) is where the two sides actually
-// meet: it constructs a *debug.State and passes
-// WithSpeed8xGate(state.AllowSpeed8x) when building the Engine.
-//
-// A nil correlationID string is never passed; gate implementations are
-// expected to thread it straight into any registry-sourced error they
-// construct, the same way every other rejection in this package does.
-type Speed8xGate func(correlationID string) error
-
-// WithSpeed8xGate installs the gate handleSetSpeed consults before
-// accepting Speed8xDebug. Unset (the default an Engine boots with when
-// no caller supplies this option — e.g. a bare NewEngine() in a test,
-// or a release build that forgot to wire feat.debugmode) means
-// deny-by-default: Speed8xDebug is refused, never silently permitted,
-// until a caller explicitly wires a gate. See checkSpeed8xAllowed in
-// commands.go for where that default is enforced.
-func WithSpeed8xGate(gate Speed8xGate) Option {
-	return func(e *Engine) { e.speed8xGate = gate }
-}
-
 // WithRegistry installs a pre-constructed module registry instead of
 // the default empty one NewEngine creates. Mainly for tests that want
 // to register modules before wiring an Engine, or that want a shared
@@ -300,13 +272,6 @@ type Engine struct {
 	worldSeed uint64
 	poolSize  int
 	observer  PhaseObserver
-
-	// speed8xGate is BUG-009's injected debug-speed gate (see
-	// Speed8xGate's doc comment above). nil until WithSpeed8xGate wires
-	// it — nil is read as "no gate configured, deny Speed8xDebug"
-	// (ErrSpeed8xGateNotConfigured, MET-E015) by checkSpeed8xAllowed
-	// (commands.go), never as "no gate configured, allow it".
-	speed8xGate Speed8xGate
 
 	// assertSingleShard is BUG-269's opt-in dev-mode safety net for the
 	// SingleShardHook fast path — see WithSingleShardAssert's doc

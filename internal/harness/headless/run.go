@@ -94,15 +94,11 @@ type Config struct {
 
 	// Debug enables feat.debugmode (FEAT-008/FEAT-035) for this run via
 	// debug.State's SourceFlag enable path (cmd/metropolis's -debug
-	// flag). This is the wiring FEAT-035 exists to close: enabling it
-	// sticky-flags the header this run's Snapshot writes to
-	// OutDir/header.json (debug.WithHeader against the exact prior
-	// header this call merges forward — see the doc comment on Run
-	// below), and injects debug.State.AllowSpeed8x as this run's
-	// core.Engine's Speed8xGate (AC-E3) so Speed8xDebug is genuinely
-	// gated rather than always-denied (the default with no gate wired
-	// at all) or always-allowed (the false-pass shape AC-E3 warns
-	// against).
+	// flag). Enabling it sticky-flags the header this run's Snapshot
+	// writes to OutDir/header.json (debug.WithHeader against the exact
+	// prior header this call merges forward — see the doc comment on Run
+	// below). Since FEAT-157 it no longer gates Speed8x — that is a
+	// production speed, accepted ungated by engine.core.
 	Debug bool
 
 	// InDir, if non-empty, names a prior headless bundle directory
@@ -156,13 +152,12 @@ type Result struct {
 // engine.headless.md — never Engine.AdvanceTicks directly), then writes
 // the -out snapshot bundle (AC-3).
 //
-// FEAT-035: this is also feat.debugmode's real wiring point. A
-// debug.State is always constructed (debug.WithHeader against a small
-// in-process header this function owns) and its AllowSpeed8x method is
-// always injected as the Engine's Speed8xGate (core.WithSpeed8xGate) —
-// this is what makes AC-E3's two-sided check possible: with cfg.Debug
-// false, Speed8xDebug is denied because the (real, configured) gate
-// says no, never because no gate was configured at all. If cfg.InDir
+// FEAT-035: a debug.State is always constructed (debug.WithHeader against
+// a small in-process header this function owns) so debug-enabled runs
+// still sticky-flag their snapshot bundle. It is NO LONGER injected as the
+// Engine's Speed8xGate: FEAT-157 promoted 8x to a production speed and
+// removed engine.core's gate machinery, so scenario SetSpeed(8) works
+// regardless of cfg.Debug. If cfg.InDir
 // names a prior bundle, its header's DebugTouched flag is read and
 // merged into this run's own debug header BEFORE cfg.Debug is applied,
 // so a prior debug-touched save carries forward even when this run
@@ -204,7 +199,6 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	opts := []core.Option{
 		core.WithWorldSeed(cfg.Seed),
 		core.WithPhaseObserver(rw.phaseObserver()),
-		core.WithSpeed8xGate(dbgState.AllowSpeed8x),
 	}
 	if cfg.PoolSize > 0 {
 		opts = append(opts, core.WithPoolSize(cfg.PoolSize))

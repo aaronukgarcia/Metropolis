@@ -197,11 +197,17 @@ func TestBUG322_SpeedKeysStepTheLadder(t *testing.T) {
 	pressKey(w, ']')
 	waitForSpeed(enginecore.Speed4x)
 
+	// FEAT-157: 8x is the production "fastest" rung, so ']' keeps climbing.
+	pressKey(w, ']')
+	waitForSpeed(enginecore.Speed8x)
+
 	// Top of the ladder: another ']' must be a no-op, never a wrap to 1x.
 	pressKey(w, ']')
 	time.Sleep(200 * time.Millisecond)
-	waitForSpeed(enginecore.Speed4x)
+	waitForSpeed(enginecore.Speed8x)
 
+	pressKey(w, '[')
+	waitForSpeed(enginecore.Speed4x)
 	pressKey(w, '[')
 	waitForSpeed(enginecore.Speed2x)
 	pressKey(w, '[')

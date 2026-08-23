@@ -1,28 +1,16 @@
 package core
 
-// BUG-009: proves handleSetSpeed actually consults a debug gate before
-// accepting Speed8xDebug, from three angles — no gate wired at all
-// (default-deny), a real feat.debugmode gate with debug off (refused),
-// and the same real gate with debug on (accepted). Every assertion goes
-// through the real command path (HandleCommand -> handleSetSpeed), not
-// a direct call to the gate or to clock.setSpeed, per the BUG-009
-// dispatch report's requirement 2/3/4.
-//
-// This file deliberately imports internal/engine/debug (a white-box
-// "package core" test, exactly like debug's own
-// TestTogglingDebugDoesNotAffectEngineState imports internal/engine/core
-// the other direction). Neither package's PRODUCTION source imports the
-// other — engine.core only depends on the Speed8xGate function type it
-// declares itself (engine.go) — so this is a test-only cross-module
-// wire-up, not a GR#20 violation: nothing in commands.go, engine.go, or
-// any other non-_test.go file here names feat.debugmode. See
-// engine.go's Speed8xGate doc comment for the full reasoning, and
-// ASM-* (BUG-009 dispatch report) for the assumption this rests on.
+// FEAT-157: Speed8x (formerly Speed8xDebug) is a PRODUCTION speed — the
+// top of the player-facing ladder ("fastest"), promoted out of BUG-009's
+// debug gate. These tests prove SetSpeed(Speed8x) is accepted through the
+// real command path (HandleCommand -> handleSetSpeed, never a direct
+// clock.setSpeed) on a bare NewEngine() with no gate wired and no debug
+// state anywhere in the picture — the exact construction that was
+// default-deny (MET-E015) before the promotion.
+
 import (
 	"testing"
 
-	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/serialize"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -31,93 +19,128 @@ func speed8xCommand() protocol.Command {
 		ProtocolVersion: protocol.ProtocolVersion,
 		CorrelationID:   mustCorrID(),
 		Kind:            protocol.KindSetSpeed,
-		Payload:         protocol.SetSpeedPayload{Speed: int(Speed8xDebug)},
+		Payload:         protocol.SetSpeedPayload{Speed: int(Speed8x)},
 	}
 }
 
-func newTestDebugState(t *testing.T) *debug.State {
-	t.Helper()
-	h := serialize.NewHeader(1, 0, 0, "test")
-	return debug.NewState(debug.WithHeader(&h))
-}
-
-// TestHandleCommand_SetSpeed_Speed8x_DefaultDeny is requirement 4: an
-// Engine built with no Speed8xGate injected at all (a bare NewEngine(),
-// exactly what a caller who forgot to wire feat.debugmode would produce)
-// refuses Speed8xDebug rather than silently permitting it — the safe
-// default a release build must fall back to. BUG-011: this must return
-// the dedicated ErrSpeed8xGateNotConfigured (MET-E015), not the reused
-// ErrInvalidSpeed (MET-E002) — see TestHandleCommand_SetSpeed in
-// commands_test.go for the genuinely-invalid-value case (speed 3) that
-// still correctly returns MET-E002.
-func TestHandleCommand_SetSpeed_Speed8x_DefaultDeny(t *testing.T) {
+// TestHandleCommand_SetSpeed_Speed8x_AcceptedUngated is FEAT-157's core
+// assertion: a bare NewEngine() — no WithSpeed8xGate, no feat.debugmode,
+// the same shape cmd/metropolis's production boot now produces — accepts
+// SetSpeed(Speed8x) and the clock actually lands at 8x.
+func TestHandleCommand_SetSpeed_Speed8x_AcceptedUngated(t *testing.T) {
 	e := NewEngine()
 
 	result := e.HandleCommand(speed8xCommand())
-	if result.Accepted {
-		t.Fatal("SetSpeed(8x) with no gate injected: accepted, want rejected (unsafe default)")
+	if !result.Accepted {
+		t.Fatalf("SetSpeed(8x) on a bare production Engine: rejected, error = %+v (8x is a production speed since FEAT-157)", result.Error)
 	}
-	wantPlaceholderCode(t, result.Error, ErrSpeed8xGateNotConfigured)
-	if clockOrFatal(t, e).Speed() != Speed1x {
-		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged Speed1x (%d)", clockOrFatal(t, e).Speed(), Speed1x)
+	if clockOrFatal(t, e).Speed() != Speed8x {
+		t.Errorf("Speed() = %d after accepted SetSpeed(8x), want %d", clockOrFatal(t, e).Speed(), Speed8x)
 	}
 }
 
-// TestHandleCommand_SetSpeed_Speed8x_RefusedWithDebugOff is requirement
-// 2, wired through feat.debugmode's REAL gate (not a bespoke fake) with
-// debug left off: HandleCommand rejects a genuine SetSpeed(Speed8xDebug)
-// command and the clock's speed does not change. This also proves the
-// other v1 speeds are untouched by the gate: 4x is accepted first, then
-// the 8x attempt is rejected without disturbing it.
-func TestHandleCommand_SetSpeed_Speed8x_RefusedWithDebugOff(t *testing.T) {
-	dbg := newTestDebugState(t)
-	// Deliberately never call dbg.Enable — debug stays off (AC-2's
-	// default), which is the condition under test.
-	e := NewEngine(WithSpeed8xGate(dbg.AllowSpeed8x))
+// TestHandleCommand_SetSpeed_Speed8x_WalksFullLadder proves the whole
+// production ladder pause/1x/2x/4x/8x is traversable in both directions
+// through the command path, with every rung landing exactly.
+func TestHandleCommand_SetSpeed_Speed8x_WalksFullLadder(t *testing.T) {
+	e := NewEngine()
 
-	setFour := e.HandleCommand(protocol.Command{
+	ladder := []Speed{Speed1x, Speed2x, Speed4x, Speed8x}
+	for _, want := range ladder {
+		result := e.HandleCommand(protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   mustCorrID(),
+			Kind:            protocol.KindSetSpeed,
+			Payload:         protocol.SetSpeedPayload{Speed: int(want)},
+		})
+		if !result.Accepted {
+			t.Fatalf("SetSpeed(%d): rejected, error = %+v", int(want), result.Error)
+		}
+		if got := clockOrFatal(t, e).Speed(); got != want {
+			t.Fatalf("Speed() = %d after SetSpeed(%d), want %d", got, int(want), want)
+		}
+	}
+	for i := len(ladder) - 2; i >= 0; i-- {
+		want := ladder[i]
+		result := e.HandleCommand(protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   mustCorrID(),
+			Kind:            protocol.KindSetSpeed,
+			Payload:         protocol.SetSpeedPayload{Speed: int(want)},
+		})
+		if !result.Accepted {
+			t.Fatalf("downward SetSpeed(%d): rejected, error = %+v", int(want), result.Error)
+		}
+		if got := clockOrFatal(t, e).Speed(); got != want {
+			t.Fatalf("Speed() = %d after downward SetSpeed(%d), want %d", got, int(want), want)
+		}
+	}
+}
+
+// TestHandleCommand_SetSpeed_Speed8x_PauseSemanticsUnchanged pins the
+// §3.1 contract at the new top rung: Pause/Resume remain distinct from
+// SetSpeed, a fresh Engine boots paused at 8x too, and the queryable
+// pacing figures treat paused-at-8x exactly like paused-at-1x (zero
+// real-time progress) while resumed 8x runs eight times 1x's rate.
+func TestHandleCommand_SetSpeed_Speed8x_PauseSemanticsUnchanged(t *testing.T) {
+	e := NewEngine()
+	if !clockOrFatal(t, e).Paused() {
+		t.Fatal("fresh Engine: Paused() = false, want true (NewClock starts paused)")
+	}
+
+	send := func(kind protocol.Kind, payload protocol.CommandPayload) protocol.CommandResult {
+		return e.HandleCommand(protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   mustCorrID(),
+			Kind:            kind,
+			Payload:         payload,
+		})
+	}
+
+	if res := send(protocol.KindSetSpeed, protocol.SetSpeedPayload{Speed: int(Speed8x)}); !res.Accepted {
+		t.Fatalf("SetSpeed(8x): rejected, error = %+v", res.Error)
+	}
+	if got := clockOrFatal(t, e).TicksPerRealSecond(); got != 0 {
+		t.Fatalf("TicksPerRealSecond() = %v while paused at 8x, want 0", got)
+	}
+
+	if res := send(protocol.KindResume, protocol.ResumePayload{}); !res.Accepted {
+		t.Fatalf("Resume: rejected, error = %+v", res.Error)
+	}
+	c := clockOrFatal(t, e)
+	if c.Paused() {
+		t.Fatal("Paused() = true after Resume, want false")
+	}
+	if c.Speed() != Speed8x {
+		t.Fatalf("Speed() = %d after Resume, want unchanged %d", c.Speed(), Speed8x)
+	}
+
+	if res := send(protocol.KindSetSpeed, protocol.SetSpeedPayload{Speed: int(Speed1x)}); !res.Accepted {
+		t.Fatalf("SetSpeed(1x): rejected, error = %+v", res.Error)
+	}
+	// SecondsPerMonth floors its division by the multiplier, so the 8x
+	// rate is not exactly 8 x the 1x rate in general — pin the contract
+	// that matters: resumed pacing is nonzero and strictly faster than 1x.
+	// Each rate is read while its own speed is active.
+	rate8 := clockAtSpeed(t, e, Speed8x).TicksPerRealSecond()
+	rate1 := clockAtSpeed(t, e, Speed1x).TicksPerRealSecond()
+	if rate1 <= 0 || rate8 <= rate1 {
+		t.Fatalf("TicksPerRealSecond at 1x = %v, at 8x = %v, want 0 < 1x < 8x", rate1, rate8)
+	}
+}
+
+// clockAtSpeed sets e's clock to s through the real command path and
+// returns it.
+func clockAtSpeed(t *testing.T, e *Engine, s Speed) Clock {
+	t.Helper()
+	result := e.HandleCommand(protocol.Command{
 		ProtocolVersion: protocol.ProtocolVersion,
 		CorrelationID:   mustCorrID(),
 		Kind:            protocol.KindSetSpeed,
-		Payload:         protocol.SetSpeedPayload{Speed: int(Speed4x)},
+		Payload:         protocol.SetSpeedPayload{Speed: int(s)},
 	})
-	if !setFour.Accepted {
-		t.Fatalf("SetSpeed(4x) with debug off: rejected, error = %+v (4x must be unaffected by the 8x gate)", setFour.Error)
-	}
-	if clockOrFatal(t, e).Speed() != Speed4x {
-		t.Fatalf("Speed() = %d after SetSpeed(4x), want %d", clockOrFatal(t, e).Speed(), Speed4x)
-	}
-
-	result := e.HandleCommand(speed8xCommand())
-	if result.Accepted {
-		t.Fatal("SetSpeed(8x) with debug off (real feat.debugmode gate): accepted, want rejected")
-	}
-	if result.Error == nil || result.Error.Code != debug.ErrDebugRequired {
-		t.Errorf("SetSpeed(8x) with debug off: error = %+v, want code %s (feat.debugmode's own registry code)", result.Error, debug.ErrDebugRequired)
-	}
-	if clockOrFatal(t, e).Speed() != Speed4x {
-		t.Errorf("Speed() = %d after a rejected SetSpeed(8x), want unchanged %d", clockOrFatal(t, e).Speed(), Speed4x)
-	}
-}
-
-// TestHandleCommand_SetSpeed_Speed8x_AcceptedWithDebugOn is requirement
-// 3: the same real feat.debugmode gate, this time with debug switched
-// on via dbg.Enable, accepts a genuine SetSpeed(Speed8xDebug) command
-// and the clock's speed actually becomes Speed8xDebug — proving
-// engine.core and feat.debugmode fit together end to end, not just that
-// engine.core's own default-deny path works.
-func TestHandleCommand_SetSpeed_Speed8x_AcceptedWithDebugOn(t *testing.T) {
-	dbg := newTestDebugState(t)
-	if err := dbg.Enable(debug.SourceFlag, "corr-enable"); err != nil {
-		t.Fatalf("dbg.Enable: %v", err)
-	}
-	e := NewEngine(WithSpeed8xGate(dbg.AllowSpeed8x))
-
-	result := e.HandleCommand(speed8xCommand())
 	if !result.Accepted {
-		t.Fatalf("SetSpeed(8x) with debug on (real feat.debugmode gate): rejected, error = %+v", result.Error)
+		t.Fatalf("SetSpeed(%d): rejected, error = %+v", int(s), result.Error)
 	}
-	if clockOrFatal(t, e).Speed() != Speed8xDebug {
-		t.Errorf("Speed() = %d after accepted SetSpeed(8x), want %d", clockOrFatal(t, e).Speed(), Speed8xDebug)
-	}
+	return clockOrFatal(t, e)
 }

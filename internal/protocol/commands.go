@@ -78,7 +78,8 @@ type AdvanceTicksPayload struct {
 func (AdvanceTicksPayload) commandKind() Kind { return KindAdvanceTicks }
 
 // SetSpeedPayload sets the running simulation speed multiplier (GDD §3:
-// 1/2/3, plus 8 in debug builds). Pausing is its own command (Pause), not
+// 1/2/4, plus 8 as the production "fastest" rung since FEAT-157). Pausing
+// is its own command (Pause), not
 // Speed=0, because Pause/Resume is a distinct, more urgent control path
 // (e.g. bound directly to Space in UI-SPEC §3) that must not be confused
 // with "speed zero."

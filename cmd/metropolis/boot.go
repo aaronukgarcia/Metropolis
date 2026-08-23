@@ -424,11 +424,12 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// BUG-122: construct feat.debugmode's State first so its AllowSpeed8x
-	// method can be injected as the real Engine's Speed8xGate (the same
-	// wiring headless.Run uses), then wire feat.devmode's Console against
-	// it — see the debugState/devConsole field doc comment for why no
-	// header is wired and what that means for Enable today.
+	// FEAT-157: feat.debugmode's State is still constructed first (the
+	// devConsole below is wired against it), but it is NO LONGER injected
+	// as the Engine's Speed8xGate — 8x was promoted to a production speed
+	// ("fastest", the top of playerSpeeds) and engine.core's gate
+	// machinery was removed in the same commit. A production Engine is a
+	// bare NewEngine + pacing, exactly what the tests assert.
 	dbgState := debug.NewState()
 
 	// BUG-322: load the real-time pacing knob from data/pacing.json and give
@@ -462,7 +463,6 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// (e.g. market.LoadDefault cannot resolve data/market.json) is a loud
 	// boot failure, never a partially-wired engine.
 	engine := enginecore.NewEngine(
-		enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x),
 		enginecore.WithSecondsPerMonthAt1x(secondsPerMonthAt1x),
 	)
 	if _, err := compose.Wire(engine, nil); err != nil {
@@ -858,9 +858,10 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 // lands UI-SPEC §3's digits does both halves together, as that comment
 // requires.
 //
-// Speed8xDebug is deliberately NOT reachable from these keys: it is
-// debug-gated (engine.core's checkSpeed8xAllowed), and a debug-only speed
-// must not be one bracket press away from a player.
+// The ladder tops out at Speed8x, FEAT-157's production "fastest" rung:
+// since its promotion out of debug-gating there is no gate between a
+// player's ']' presses and 8x — it is pure pacing (GR#21-safe), the same
+// determinism contract as 1x/2x/4x.
 func registerClockKeys(w *skeletonWiring) error {
 	bindings := []struct {
 		key    keys.Key
@@ -883,10 +884,10 @@ func registerClockKeys(w *skeletonWiring) error {
 }
 
 // playerSpeeds is the speed ladder '[' and ']' walk, in ascending order —
-// engine.core's documented player-facing multipliers (clock.go's §3 speed
-// table) minus Speed8xDebug, which is debug-gated and must not be reachable
-// from a player keybinding. Named constants, never literals.
-var playerSpeeds = []enginecore.Speed{enginecore.Speed1x, enginecore.Speed2x, enginecore.Speed4x}
+// engine.core's documented production multipliers (clock.go's §3 speed
+// table), topped by FEAT-157's ungated Speed8x "fastest". Named
+// constants, never literals.
+var playerSpeeds = []enginecore.Speed{enginecore.Speed1x, enginecore.Speed2x, enginecore.Speed4x, enginecore.Speed8x}
 
 // togglePause sends whichever of Pause/Resume flips the CURRENT clock state.
 // The state is read from the engine (Engine.Clock is documented safe for
@@ -921,11 +922,12 @@ func (w *skeletonWiring) togglePause() {
 // stepSpeed moves one rung along playerSpeeds (delta +1 faster, -1 slower)
 // and sends the resulting SetSpeed command. At either end of the ladder the
 // press is a no-op rather than wrapping around: a player holding ']' should
-// arrive at 4x and stay there, not silently fall back to 1x.
+// arrive at 8x and stay there, not silently fall back to 1x.
 //
-// An unrecognised current speed (only reachable if something set 8x through
-// the debug path) is treated as "start from the top of the ladder" so the
-// keys still work rather than dead-ending.
+// An unrecognised current speed (not a value in playerSpeeds — defensive
+// only, since FEAT-157 every ValidSpeed value IS in the ladder) is treated
+// as "start from the top of the ladder" so the keys still work rather than
+// dead-ending.
 func (w *skeletonWiring) stepSpeed(delta int) {
 	c, err := w.engine.Clock()
 	if err != nil {

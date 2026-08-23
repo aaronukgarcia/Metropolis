@@ -61,20 +61,30 @@ var DefaultSecondsPerMonthAt1x int64 = 30
 // requested speed.
 type Speed int
 
-// The documented speed multipliers (§3). Speed8xDebug is reserved for
-// feat.debugmode; this package exposes the value and accepts it via
-// SetSpeed but does not itself enforce the debug-mode gate (AC-2).
+// The documented speed multipliers (§3). Since FEAT-157 (2026-08-23)
+// Speed8x is a PRODUCTION speed — the "fastest" rung of the player
+// ladder — promoted out of the BUG-009 debug gate it previously sat
+// behind as Speed8xDebug. Pure pacing: a multiplier only ever changes
+// how often an outside driver calls AdvanceTicks, never what a tick
+// computes (GR#21 determinism-safe).
 const (
-	Speed1x      Speed = 1
-	Speed2x      Speed = 2
-	Speed4x      Speed = 4
-	Speed8xDebug Speed = 8
+	Speed1x Speed = 1
+	Speed2x Speed = 2
+	Speed4x Speed = 4
+	Speed8x Speed = 8
 )
+
+// Speed8xDebug is Speed8x's former name, kept as an alias so existing
+// references keep compiling. It is no longer debug-reserved: FEAT-157
+// removed engine.core's Speed8xGate/checkSpeed8xAllowed machinery
+// entirely, so nothing gates this value anywhere. New code should name
+// Speed8x.
+const Speed8xDebug = Speed8x
 
 // ValidSpeed reports whether s is one of the documented multipliers.
 func ValidSpeed(s Speed) bool {
 	switch s {
-	case Speed1x, Speed2x, Speed4x, Speed8xDebug:
+	case Speed1x, Speed2x, Speed4x, Speed8x:
 		return true
 	default:
 		return false
