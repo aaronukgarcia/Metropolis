@@ -654,6 +654,11 @@ func (e *Engine) seal(correlationID string) error {
 // unchanged (AC-10) — the caller (commands.go's HandleCommand) is
 // responsible for turning it into a rejected CommandResult.
 //
+// BUG-289: a failure in a MONTHLY phase additionally rolls the clock and
+// tickCounter back to month-start (see advanceOneDailyTick), so the
+// uncommitted-tick invariant above holds on the monthly path too — the
+// caller may simply retry the AdvanceTicks call.
+//
 // Also returns ErrEngineCopied (SEC-014) and runs zero phases if called
 // on a struct-copied Engine value — see seal()'s doc comment for why
 // this check happens before any phase ever runs.
@@ -682,6 +687,14 @@ func (e *Engine) AdvanceTicks(correlationID string, n int64) error {
 // which allocate a fresh copy on every call and exist for external
 // callers only.
 //
+// BUG-289: the commit above is provisional until the monthly pipeline
+// finishes. If any monthly phase errors, the clock and tickCounter are
+// restored to their month-start values before the error propagates, so
+// a failed month leaves state exactly as it was before day 30 ran and
+// the caller's next AdvanceTicks re-runs that day plus the full monthly
+// settlement. See the rollback site below for why the snapshot is taken
+// inside the advanceOneDay critical section.
+//
 // SEC-018 enumeration note: this is the 8th of this package's eight
 // e.mu.Lock() sites (see engine.go/commands.go/persist.go), and it is
 // the one deliberately left WITHOUT its own checkNotCopied call.
@@ -702,13 +715,34 @@ func (e *Engine) advanceOneDailyTick(correlationID string) error {
 	}
 
 	e.mu.Lock()
+	// BUG-289: snapshot the PRE-advance tick so a monthly-phase failure
+	// below can restore the engine to exact month-start state. savedClock
+	// is a plain Clock struct copy taken under mu immediately before
+	// advanceOneDay mutates it — the same value-copy pattern Clock()
+	// already uses as a snapshot — and savedTicks pairs with it so both
+	// engine-owned observation points roll back together.
+	savedClock := e.clock
 	monthCompleted := e.clock.advanceOneDay()
 	e.mu.Unlock()
+	savedTicks := e.tickCounter.Load()
 	e.tickCounter.Add(1)
 
 	if monthCompleted {
 		for _, phase := range monthlyPhaseOrder {
 			if err := e.runPhase(correlationID, phase); err != nil {
+				// BUG-289 rollback: without this, the tick was already
+				// committed past the month boundary while its settlement
+				// phases did not finish — the next AdvanceTicks proceeded
+				// into day 1 of the new month with no way to re-run the
+				// incomplete one. Restoring clock + tickCounter leaves the
+				// engine exactly at month-start, so a retried AdvanceTicks
+				// re-runs this day's daily phase and the whole monthly
+				// pipeline. The hook error itself is still returned
+				// unchanged (AC-10).
+				e.mu.Lock()
+				e.clock = savedClock
+				e.mu.Unlock()
+				e.tickCounter.Store(savedTicks)
 				return err
 			}
 		}
