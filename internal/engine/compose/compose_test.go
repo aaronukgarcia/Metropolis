@@ -10,6 +10,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
@@ -272,6 +273,106 @@ func TestHeadless_TwelveMonthsMoneyMoves(t *testing.T) {
 	wantTotal := int64(initialTreasury) + int64(initialCitizenWealth)
 	if got := comp.Treasury() + comp.CitizenWealth(); got != wantTotal {
 		t.Fatalf("total money = %d, want conserved %d", got, wantTotal)
+	}
+}
+
+// TestHeadless_TwelveMonthsLedgerMatchesSimState is BUG-355: the
+// FinanceAPI treasury the F2 screen reads must equal Composition.Treasury
+// after a real run. Before the fix the hook mutated simState only and
+// AccountBalance(AcctTreasury) stayed 0.
+func TestHeadless_TwelveMonthsLedgerMatchesSimState(t *testing.T) {
+	e, comp := newTestEngine(t, 42)
+	if err := e.AdvanceTicks(errs.NewCorrelationID(), testTicks); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+	led := ledgerBalance(comp.state.finance, finance.AcctTreasury)
+	if led != comp.Treasury() {
+		t.Fatalf("FinanceAPI treasury = %d, Composition.Treasury = %d — two money pots (BUG-355)", led, comp.Treasury())
+	}
+	if led == 0 {
+		t.Fatal("FinanceAPI treasury is 0 after 12 months — F2 would still render a zero sheet")
+	}
+	hh := ledgerBalance(comp.state.finance, finance.AcctHouseholds)
+	if hh != comp.CitizenWealth() {
+		t.Fatalf("FinanceAPI households = %d, Composition.CitizenWealth = %d", hh, comp.CitizenWealth())
+	}
+}
+
+// TestBUG355_WagesPosted_IsPerMonthNotCumulative probes WagesPosted —
+// the aggregate attract's HousingAffordability divides by household count
+// (attract/api.go snapshotTerms) — at each month boundary of a real run.
+// With no production BeginMonth caller nothing ever clears FinanceAPI's
+// per-tick transaction log, so the probe reads an ALL-TIME cumulative sum
+// growing linearly forever (1e6 -> 2e6 -> 3e6 ...): migrant attractiveness
+// drifts up every month and the log leaks memory unboundedly. The compose
+// finance hook must open the monthly tick, keeping the figure at exactly
+// one month's wage bill.
+func TestBUG355_WagesPosted_IsPerMonthNotCumulative(t *testing.T) {
+	e, comp := newTestEngine(t, 42)
+	for m := int64(1); m <= 3; m++ {
+		if err := e.AdvanceTicks(errs.NewCorrelationID(), core.DailyTicksPerMonth); err != nil {
+			t.Fatalf("AdvanceTicks(month %d): %v", m, err)
+		}
+		if got := int64(comp.state.finance.WagesPosted()); got != monthlyWages {
+			t.Fatalf("WagesPosted after month %d = %d, want exactly one month's wage bill %d (per-month, not cumulative)", m, got, monthlyWages)
+		}
+	}
+}
+
+// TestBUG355_PostRejection_SimStateMirrorsLedgerAtMonthEnd forces a
+// PostWages rejection (treasury drained below the wage bill — trivially
+// reachable given the opening grant vs £1/month wage) and proves the
+// failure path keeps the two pots IDENTICAL at month end. The old legacy
+// fallback mutated simState only; the next successful syncMoneyFromLedger
+// silently wiped those deltas and a drained ledger froze F2 on diverged
+// figures.
+func TestBUG355_PostRejection_SimStateMirrorsLedgerAtMonthEnd(t *testing.T) {
+	e, comp := newTestEngine(t, 42)
+	drain := initialTreasury - monthlyWages + 1 // leaves 999_999 < one wage bill
+	if _, err := comp.state.finance.SettleConstruction(finance.Money(drain)); err != nil {
+		t.Fatalf("SettleConstruction(drain): %v", err)
+	}
+	if err := e.AdvanceTicks(errs.NewCorrelationID(), core.DailyTicksPerMonth); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st {
+		t.Fatalf("month end after rejected post: FinanceAPI treasury = %d, Composition.Treasury = %d — pots diverged", led, st)
+	}
+	if led, st := ledgerBalance(comp.state.finance, finance.AcctHouseholds), comp.CitizenWealth(); led != st {
+		t.Fatalf("month end after rejected post: FinanceAPI households = %d, Composition.CitizenWealth = %d — pots diverged", led, st)
+	}
+}
+
+// TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger pins the
+// non-atomic PostWages->CollectTax pair against its thinnest reachable
+// pot: households drained to one micropound short of the wage bill before
+// the month runs. The pair stays all-or-nothing today BECAUSE the tax
+// debit is computed on the wages credited moments earlier (rate <= 100%,
+// so the CollectTax leg can never overdraft households) — this test
+// freezes that boundary: month end must still find the two pots
+// identical, at the ledger's own exact figures.
+func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
+	e, comp := newTestEngine(t, 42)
+	drain := initialCitizenWealth - monthlyWages + 1 // leaves households monthlyWages-1
+	if _, err := comp.state.finance.Post(finance.Transaction{
+		Description: "test drain of household wealth",
+		Entries: []finance.Entry{
+			{Account: finance.AcctHouseholds, Side: finance.SideDebit, Amount: finance.Money(drain), Category: finance.Category("opening.capital")},
+			{Account: finance.AcctExternal, Side: finance.SideCredit, Amount: finance.Money(drain), Category: finance.Category("opening.capital")},
+		},
+	}); err != nil {
+		t.Fatalf("Post(household drain): %v", err)
+	}
+	if err := e.AdvanceTicks(errs.NewCorrelationID(), core.DailyTicksPerMonth); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+	wantHH := int64(monthlyWages - 1) // wage in, tax out, net zero over the thinnest pot
+	if led, st := ledgerBalance(comp.state.finance, finance.AcctHouseholds), comp.CitizenWealth(); led != st || led != wantHH {
+		t.Fatalf("month end: FinanceAPI households = %d, Composition.CitizenWealth = %d, want both %d", led, st, wantHH)
+	}
+	wantTr := int64(initialTreasury)
+	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st || led != wantTr {
+		t.Fatalf("month end: FinanceAPI treasury = %d, Composition.Treasury = %d, want both %d", led, st, wantTr)
 	}
 }
 

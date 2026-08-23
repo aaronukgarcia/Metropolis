@@ -556,6 +556,9 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	}
 
 	financeAPI := finance.NewFinanceAPI(cid)
+	if err := seedOpeningBalances(financeAPI, initialTreasury, initialCitizenWealth); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "finance", "step": "seedOpeningBalances"})
+	}
 	householdsAPI, err := households.LoadDefault(cid)
 	if err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "households"})
@@ -760,8 +763,8 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
-		treasury:                initialTreasury,
-		citizenWealth:           initialCitizenWealth,
+		treasury:                ledgerBalance(financeAPI, finance.AcctTreasury),
+		citizenWealth:           ledgerBalance(financeAPI, finance.AcctHouseholds),
 		nextCitizenID:           1,
 	}
 
@@ -1190,17 +1193,104 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 	}
 	st := h.st
 
-	// pay wages: treasury -> citizens
-	st.treasury = num.SatSub(st.treasury, monthlyWages)
-	st.citizenWealth = num.SatAdd(st.citizenWealth, monthlyWages)
-	// collect tax: citizens -> treasury (budget closes: wages == tax)
-	st.citizenWealth = num.SatSub(st.citizenWealth, monthlyTax)
-	st.treasury = num.SatAdd(st.treasury, monthlyTax)
+	// BUG-355: the ledger F2 reads is FinanceAPI. Open the monthly
+	// finance tick FIRST (finance.BeginMonth resets the per-tick
+	// transaction log that WagesPosted/TaxRevenue aggregate over) — with
+	// no BeginMonth caller the log never cleared, WagesPosted read an
+	// ALL-TIME cumulative sum, and attract's HousingAffordability divided
+	// that ever-growing figure by households: migrant attractiveness grew
+	// linearly forever and the log leaked memory unboundedly. PhaseFinance
+	// is the LAST monthly phase (core.MonthlyPhaseOrder), so the tick
+	// opened here holds exactly this month's posts when NEXT month's
+	// population phase reads WagesPosted — always one month's wage bill.
+	var flowed int64
+	if st.finance != nil {
+		clock, cErr := st.e.Clock()
+		if cErr != nil {
+			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "cause": cErr.Error()})
+			return
+		}
+		if err := st.finance.BeginMonth(clock.Month()); err != nil {
+			// BeginMonth only fails on a copied handle, which compose's
+			// single-owner field makes unreachable; log loudly rather
+			// than swallow (GR#1) and skip this month's posting rather
+			// than post into a stale tick window.
+			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "cause": err.Error()})
+			return
+		}
+		if _, err := st.finance.PostWages(finance.Money(monthlyWages)); err == nil {
+			flowed = monthlyWages
+			if _, err := st.finance.CollectTax(finance.TaxRates{IncomeRate: 10000}, finance.Money(monthlyWages), 0, 0); err == nil {
+				flowed += monthlyTax
+			}
+		}
+	}
+	// Mirror the LEDGER unconditionally — on success and on rejection
+	// alike. A rejected Post leaves the ledger unchanged by contract
+	// (finance.Post validates before mutating, never a partial post), so
+	// syncing is honest on every path: simState can never diverge from
+	// the pot F2 actually reads, and a future partial post (a leg landing
+	// without its pair) would be mirrored exactly as it landed rather
+	// than replayed from stale fallback deltas. The pair is all-or-nothing
+	// today because CollectTax's debit is computed on the wages credited
+	// moments earlier (rate <= 100% can never overdraft households).
+	st.syncMoneyFromLedger()
 
-	// gross flow (AC-9 "money moved"); net delta is zero by construction
+	// gross flow (AC-9 "money moved") counts only what actually posted;
+	// net delta is zero by construction (both legs are internal transfers)
 	// but tracked so the invariant verifies it against the store.
-	st.moneyFlows = num.SatAdd(st.moneyFlows, num.SatAdd(monthlyWages, monthlyTax))
+	if flowed > 0 {
+		st.moneyFlows = num.SatAdd(st.moneyFlows, flowed)
+	}
 	st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(monthlyTax, monthlyWages))
+}
+
+// seedOpeningBalances posts the baseline-one opening grant into the
+// FinanceAPI ledger so F2 is not a permanent zero sheet (BUG-355).
+// External is the outside-world source; it is not part of the money stock.
+func seedOpeningBalances(f *finance.FinanceAPI, treasury, households int64) error {
+	if treasury > 0 {
+		if _, err := f.Post(finance.Transaction{
+			Description: "baseline-one opening treasury",
+			Entries: []finance.Entry{
+				{Account: finance.AcctTreasury, Side: finance.SideCredit, Amount: finance.Money(treasury), Category: finance.Category("opening.capital")},
+				{Account: finance.AcctExternal, Side: finance.SideDebit, Amount: finance.Money(treasury), Category: finance.Category("opening.capital")},
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	if households > 0 {
+		if _, err := f.Post(finance.Transaction{
+			Description: "baseline-one opening household wealth",
+			Entries: []finance.Entry{
+				{Account: finance.AcctHouseholds, Side: finance.SideCredit, Amount: finance.Money(households), Category: finance.Category("opening.capital")},
+				{Account: finance.AcctExternal, Side: finance.SideDebit, Amount: finance.Money(households), Category: finance.Category("opening.capital")},
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ledgerBalance(f *finance.FinanceAPI, id finance.AccountID) int64 {
+	if f == nil {
+		return 0
+	}
+	bal, ok := f.AccountBalance(id)
+	if !ok {
+		return 0
+	}
+	return int64(bal)
+}
+
+func (st *simState) syncMoneyFromLedger() {
+	if st.finance == nil {
+		return
+	}
+	st.treasury = ledgerBalance(st.finance, finance.AcctTreasury)
+	st.citizenWealth = ledgerBalance(st.finance, finance.AcctHouseholds)
 }
 
 // SingleShard implements core.SingleShardHook (BUG-269): RunShard
@@ -1671,14 +1761,27 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		// BUG-266: demolish returns a LandPrice-sourced Compensation
 		// (build.go's SubmitDemolishCommand doc: "never a bare deletion
 		// with no financial consequence"). Credit it treasury -> citizen
-		// wealth, the same transfer idiom financeHook uses for wages/tax:
-		// SatAdd/SatSub on the two pots, gross flow tallied in moneyFlows,
-		// net delta tracked in moneyDelta so the invariant verifies it
-		// against the store. The city compensates the owner for the
-		// demolished structure's land value; total money is unchanged (a
-		// transfer, not a creation), so moneyDelta's net contribution is 0.
-		st.treasury = num.SatSub(st.treasury, res.Compensation)
-		st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
+		// wealth. BUG-355: post the same transfer through FinanceAPI so
+		// the ledger F2 reads moves with the sim. Fallback keeps the
+		// simState pots consistent if the post is rejected (demolish
+		// already landed in build).
+		if res.Compensation > 0 && st.finance != nil {
+			if _, err := st.finance.Post(finance.Transaction{
+				Description: "demolish compensation",
+				Entries: []finance.Entry{
+					{Account: finance.AcctTreasury, Side: finance.SideDebit, Amount: finance.Money(res.Compensation), Category: finance.Category("demolish.compensation")},
+					{Account: finance.AcctHouseholds, Side: finance.SideCredit, Amount: finance.Money(res.Compensation), Category: finance.Category("demolish.compensation")},
+				},
+			}); err == nil {
+				st.syncMoneyFromLedger()
+			} else {
+				st.treasury = num.SatSub(st.treasury, res.Compensation)
+				st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
+			}
+		} else {
+			st.treasury = num.SatSub(st.treasury, res.Compensation)
+			st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
+		}
 		st.moneyFlows = num.SatAdd(st.moneyFlows, res.Compensation)
 		st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(res.Compensation, res.Compensation))
 		return nil
