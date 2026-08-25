@@ -4290,6 +4290,12 @@
       "message": "invalid input: {field} = {value} ({reason})",
       "remedy": "A numeric or enum input (month index, access tier, bed count, reputation scale) was outside its documented domain. It is rejected rather than silently clamped or wrapped (FEAT-086)."
     },
+    "MET-G4408": {
+      "severity": "error",
+      "module": "engine.tourism",
+      "message": "concurrent AdvanceMonth detected: month snapshot {snapshot} no longer matches current month {current}",
+      "remedy": "Tourism AdvanceMonth callers must be serialised by the composition root; a second overlapping caller is rejected before any mutation. Re-run the month advance after the in-flight one completes."
+    },
     "MET-G4200": {
       "severity": "error",
       "module": "engine.fuel",

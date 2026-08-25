@@ -809,6 +809,19 @@ func (t *TourismAPI) AdvanceMonth() error {
 	// completed lock-free above.
 	t.mu.Lock()
 	defer t.mu.Unlock()
+
+	// BUG-372 TOCTOU guard: m was snapshotted under the read lock before the
+	// seam calls; if another caller advanced the month in the RUnlock→Lock
+	// gap, every figure above (seasonal, and lagRep via m below) belongs to a
+	// month that has already been consumed. Reject this caller before ANY
+	// mutation rather than duplicating the month or diverging state.
+	if t.month != m {
+		return errs.New(ErrConcurrentAdvance, t.correlationID, map[string]any{
+			"snapshot": m,
+			"current":  t.month,
+		})
+	}
+
 	t.repHistory = append(t.repHistory, rep)
 
 	// lagRep/draw/desired are local math, computed under the lock to preserve

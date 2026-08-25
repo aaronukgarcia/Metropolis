@@ -55,4 +55,11 @@ const (
 	// ErrInvalidInput: a numeric/enum input (month index, access tier, bed
 	// count, reputation scale) was outside its documented domain.
 	ErrInvalidInput = "MET-G4407"
+
+	// ErrConcurrentAdvance: AdvanceMonth detected a concurrent caller (the
+	// month snapshot taken under the read lock no longer matches the current
+	// month under the write lock). The stale caller is rejected BEFORE any
+	// mutation — never a duplicated month or silently diverged state
+	// (BUG-372).
+	ErrConcurrentAdvance = "MET-G4408"
 )

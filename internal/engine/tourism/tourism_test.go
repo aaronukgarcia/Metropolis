@@ -146,6 +146,60 @@ func TestAdvanceMonthDoesNotHoldLockAcrossSeams(t *testing.T) {
 	}
 }
 
+// concurrentAttract is the BUG-372 TOCTOU probe: its first Reputation call
+// completes a FULL nested AdvanceMonth while the outer caller sits in the
+// RUnlock→Lock gap between its seam calls and its mutation phase — a
+// deterministic simulation of a competing concurrent caller.
+type concurrentAttract struct {
+	api   *tourism.TourismAPI
+	calls int
+}
+
+func (c *concurrentAttract) Reputation() float64 {
+	c.calls++
+	if c.calls == 1 {
+		if err := c.api.AdvanceMonth(); err != nil {
+			panic("nested AdvanceMonth failed: " + err.Error())
+		}
+	}
+	return 0
+}
+
+// TestAdvanceMonthRejectsStaleConcurrentCaller is the BUG-372 regression: an
+// AdvanceMonth whose month snapshot goes stale before it takes the write lock
+// is rejected with the dedicated MET-G4408 code BEFORE any mutation — never a
+// duplicated month or silently diverged history.
+func TestAdvanceMonthRejectsStaleConcurrentCaller(t *testing.T) {
+	api, _ := newTestAPI(t)
+	cb := &concurrentAttract{api: api}
+	if err := api.SetAttract(cb); err != nil {
+		t.Fatalf("SetAttract(callback): %v", err)
+	}
+
+	err := api.AdvanceMonth()
+	if err == nil {
+		t.Fatal("stale concurrent AdvanceMonth was accepted — BUG-372 regression")
+	}
+	if code := registryCode(t, err); code != tourism.ErrConcurrentAdvance {
+		t.Fatalf("expected %s, got %s: %v", tourism.ErrConcurrentAdvance, code, err)
+	}
+
+	// Exactly one month advanced (the nested caller's): the rejected caller
+	// must not increment, append reputation, or admit/depart visitors.
+	if got := api.Month(); got != 1 {
+		t.Fatalf("month = %d after rejected stale caller; want 1", got)
+	}
+	assertConserved(t, api)
+
+	// The API stays healthy: a fresh advance succeeds normally.
+	if err := api.AdvanceMonth(); err != nil {
+		t.Fatalf("post-rejection AdvanceMonth: %v", err)
+	}
+	if got := api.Month(); got != 2 {
+		t.Fatalf("month = %d after recovery advance; want 2", got)
+	}
+}
+
 func realSeason(t *testing.T) *season.SeasonAPI {
 	t.Helper()
 	dir, err := data.ResolveDataDir(testCorrelationID)
