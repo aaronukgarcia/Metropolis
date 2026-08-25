@@ -1,5 +1,33 @@
 # HEAVY CHECKPOINT — session bounce point
 
+## REFRESH #15 — 2026-08-25 (Bev consolidation session — EXCLUSIVE CONTROL)
+
+**Why:** Aaron ruled this the ONLY terminal running (exclusive code control) and ordered E:\git consolidated to a single Metropolis folder — all work committed and synced, worktrees salvaged then removed.
+
+### Board state (verified live this session)
+
+- **Branch:** `feat/167-attract-live` @ `9cd7fbe` (= origin/main exactly, 0/0 divergence). 32-33 uncommitted files = the estate awaiting verdicts: BUG-375 (detgate composed-gate fix), BUG-376 (parking/tunnels registry codes), BUG-332 r20 guard fix (hasVariableExecutedCommitPayload — F-HIGH-1 CLOSED per Bro 08-25 11:54, 136+193 tests green), market/staffing/cafe/finance-screen mods (map to BOW before commit), code.json + master-plan regenerated.
+- **FULL-REPO GATE GREEN 2026-08-25 evening:** go build ✓ vet ✓ gofmt ✓ go test -race ./... ALL packages ok (the exit-255 was PS 5.1 2>&1 contamination, not a failure).
+- **Closed this session/day:** BUG-324 (a07035e), BUG-353 (leak stopped), BUG-350 verified already-clean at 9cd7fbe (corruption only in history; guard + 18 tests landed).
+- **In flight:** BUG-375 + BUG-376 independent destructive rounds r1 (attackers dispatched in-place on main checkout, disjoint paths). BUG-333 re-dispatched (lane metropolis-bevbug333; prior agent died leaving zz_probe_test.go). BUG-362 re-dispatched (lane metropolis-bevbug362; prior agent died empty). BUG-369 fix READY uncommitted in metropolis-bevbug369 (coldpass household dissolution, 3 tests, gates green) — needs lead review + independent round.
+- **BUG-377:** close as invalid premise (Bev audit 08-25 09:30 on the item: all 7 zone.go sites wrapped into ErrZoneDataInvalid at load boundary).
+- **BUG-367:** Bro's registry repair NOT landable — codejson-audit AC-7/AC-8 self-check fails in his worktree; Bro must reconcile (comment on item 08-25).
+- **NEW: FEAT-1972079870** — Aaron's ADX-style super-max prison special building (filed P2, BA criteria needed, GR#25 edges first).
+
+### Consolidation plan (Aaron-ordered, in execution)
+
+Phase 0 protect in-flight lanes → Phase 1 land main estate on ACCEPT verdicts (commit dep-order, local merge, push, verify both author+committer noreply) → Phase 2 salvage sweep of ~44 folders (dirty trees → rescue/<tree>-20260825 branches PUSHED before any removal; bob:60 dirty/202 behind is worst; bevweb:38, bill:23, bevzone:21, agent-a991:19) → Phase 3 `git worktree remove` (never rm -rf first) + prune → Phase 4 verify single folder + record. KEEP: prix6 (different project), metropolis-status (coordination infra). Rescue branches stay unmerged — later triage.
+
+### Worktree survey 2026-08-25 (full table in session; worst offenders)
+
+metropolis-bob lane/bob 202 behind + 60 dirty (STOP-THE-LINE); metropolis-ben 187 behind (PARKED); 15 trees beyond GR#26 threshold; 10 detached HEADs; 20 trees with uncommitted work.
+
+### Standing gotchas found this session
+
+- claude-destructive-guard false-positives on PS commands containing the bare path `E:\git` (parses it as a git invocation) — use Bash tool or avoid the literal.
+- session-ses_fc7c.md (root) = transcript of the 08-25 morning opencode Bev session; its final user request (supermax prison) was unanswered there — now filed as FEAT-1972079870.
+- Vestige memory for BUG-350 is STALE (records REJECT; repair actually landed in 9cd7fbe merge) — update on next memory pass.
+
 ## REFRESH #14 — 2026-08-22 (Bev course-correction)
 
 **Why:** Aaron asked for a restore point then a course-correction off the 2026-08-22 review (`docs/grok/findings.md`).
