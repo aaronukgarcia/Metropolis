@@ -27,6 +27,42 @@ type registryEntry struct {
 // while every existing three-digit code stays valid unchanged.
 var codeFormat = regexp.MustCompile(`^MET-[A-Z]\d{3,4}$`)
 
+// tokenFormat is the only template-token shape renderTemplate (errs.go) can
+// substitute: a plain identifier (letters, digits, underscore), looked up in
+// the error's ctx (plus the always-resolvable "code"/"correlationId"). A
+// token with anything else — a Go-style format verb ({x!q}), prose wrapped in
+// braces ({finding, reason}), or an empty brace pair ({}) — is left as a
+// visible literal, so it renders verbatim to users. BUG-357 step 2: the
+// registry now rejects malformed tokens at load, so a code that will render
+// "{token!q}" to a user is a load failure, not a silent cosmetic defect.
+var tokenFormat = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// malformedTemplateToken returns the first `{...}` token in tmpl that is not a
+// plain identifier, or "" when every token is well-formed. Mirrors
+// renderTemplate's brace scan exactly (a '{' without a closing '}' is not a
+// token and is left alone). An empty token is reported as "{}" — the empty
+// string must stay the unambiguous "no malformed token" sentinel.
+func malformedTemplateToken(tmpl string) string {
+	for i := 0; i < len(tmpl); i++ {
+		if tmpl[i] != '{' {
+			continue
+		}
+		j := strings.IndexByte(tmpl[i:], '}')
+		if j < 0 {
+			continue // no closing brace — renderTemplate leaves it literal too
+		}
+		token := tmpl[i+1 : i+j]
+		if token == "" {
+			return "{}"
+		}
+		if !tokenFormat.MatchString(token) {
+			return token
+		}
+		i += j
+	}
+	return ""
+}
+
 var (
 	regOnce    sync.Once
 	regData    map[string]registryEntry
@@ -54,8 +90,9 @@ const relRegistryPath = "data/errors.json"
 //
 // Validation performed on load: every code matches MET-<layer><NNN>,
 // every code is unique (JSON's own object-key collapsing would otherwise
-// silently hide a duplicate — see decodeCodes), and every entry has all
-// four required fields populated.
+// silently hide a duplicate — see decodeCodes), every entry has all
+// four required fields populated, and every message/remedy template token is
+// a plain identifier (BUG-357 step 2 — malformed tokens render literally).
 func loadRegistry() (map[string]registryEntry, error) {
 	regOnce.Do(func() {
 		regData, regLoadErr = doLoadRegistry()
@@ -97,6 +134,20 @@ func doLoadRegistry() (map[string]registryEntry, error) {
 		}
 		if entry.Severity == "" || entry.Module == "" || entry.Message == "" || entry.Remedy == "" {
 			return nil, fmt.Errorf("code %q in %s is missing a required field (severity/module/message/remedy)", code, path)
+		}
+		// BUG-357 step 2: reject template tokens that renderTemplate can never
+		// substitute. A malformed token ({x!q}, prose-in-braces, {}) is a
+		// literal that reaches the user verbatim — a load-time failure beats a
+		// cosmetic defect that ships. Both message and remedy are scanned;
+		// remedy prose occasionally borrows brace syntax descriptively (e.g.
+		// Go composite literals), and those sites are reworded in the data.
+		for _, field := range []struct{ name, text string }{
+			{"message", entry.Message},
+			{"remedy", entry.Remedy},
+		} {
+			if bad := malformedTemplateToken(field.text); bad != "" {
+				return nil, fmt.Errorf("code %q in %s has a malformed template token %q in %s — tokens must be plain identifiers (no format verbs, no brace-wrapped prose, no empty {})", code, path, bad, field.name)
+			}
 		}
 	}
 

@@ -181,9 +181,12 @@ func NewWorld(startCoord TileCoord) *World {
 // never stored) is treated the same as a mismatch and rejected the same
 // way — every documented construction path is NewWorld, so an unset
 // self is itself a misuse this same error correctly names.
-func (w *World) checkNotCopied(correlationID string, ctx map[string]any) error {
+func (w *World) checkNotCopied(correlationID string, tile *TileCoord) error {
 	if w.self.Load() != w {
-		return errs.New(ErrWorldCopied, correlationID, ctx)
+		if tile != nil {
+			return errs.New(ErrWorldCopied, correlationID, map[string]any{"tile": *tile})
+		}
+		return errs.New(ErrWorldCopied, correlationID, nil)
 	}
 	return nil
 }
@@ -209,7 +212,7 @@ func (w *World) checkNotCopied(correlationID string, ctx map[string]any) error {
 // than panicking (GR#1: match engine.core's established failure mode,
 // never invent a new one).
 func (w *World) ensureTile(c TileCoord) (*tile, error) {
-	if err := w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": c}); err != nil {
+	if err := w.checkNotCopied(errs.NewCorrelationID(), &c); err != nil {
 		return nil, err
 	}
 	if t := w.tiles[c]; t != nil {

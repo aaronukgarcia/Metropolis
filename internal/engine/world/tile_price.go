@@ -63,7 +63,7 @@ func milestoneTierFactor(tier int) float64 {
 // is correct even though every *WorldAPI caller already checks before
 // taking the lock.
 func (w *World) tilePrice(t *tile) (float64, error) {
-	if err := w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": t.coord}); err != nil {
+	if err := w.checkNotCopied(errs.NewCorrelationID(), &t.coord); err != nil {
 		return 0, err
 	}
 	ownedNeighbors := 0

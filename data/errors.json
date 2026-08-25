@@ -367,7 +367,7 @@
       "severity": "error",
       "module": "tool.astgate",
       "message": "astgate could not parse accepted-findings registry {path} as JSON: {cause}",
-      "remedy": "SEC-048: the checked-in accepted-findings.json is malformed. This file is the sole evidence the BUG-024 ratchet trusts (ASM-204), so LoadAcceptedFindings fails closed rather than silently treating a corrupt file as an empty registry. Fix the JSON (must be an array of {finding, reason} objects) and re-run."
+      "remedy": "SEC-048: the checked-in accepted-findings.json is malformed. This file is the sole evidence the BUG-024 ratchet trusts (ASM-204), so LoadAcceptedFindings fails closed rather than silently treating a corrupt file as an empty registry. Fix the JSON (must be an array of objects with finding and reason keys) and re-run."
     },
     "MET-F706": {
       "severity": "error",
@@ -532,25 +532,25 @@
     "MET-U304": {
       "severity": "warn",
       "module": "ui.keys",
-      "message": "command palette argument {name} in {command!q} does not match the expected {kind} form: {value!q}",
+      "message": "command palette argument {name} in {command} does not match the expected {kind} form: {value}",
       "remedy": "The palette's free-text command string is validated per positively-stated argument grammar (AC-9b) before it can influence dispatch; a value outside that grammar is rejected, never silently coerced to zero or truncated. Re-enter the command using the documented form for that argument kind (see doc.go's palette argument grammar table)."
     },
     "MET-U305": {
       "severity": "warn",
       "module": "ui.keys",
-      "message": "mark slot {id!q} is not a valid 12-slot mark identifier (a-l)",
+      "message": "mark slot {id} is not a valid 12-slot mark identifier (a-l)",
       "remedy": "Only the 12 mark slots a through l are addressable (AC-7); a 13th distinct identifier is rejected rather than silently overwriting an existing slot. Use one of the 12 documented slots, or clear/reuse an existing one explicitly."
     },
     "MET-U306": {
       "severity": "error",
       "module": "ui.keys",
-      "message": "Register/RegisterGlobal rejected: token {token!q} is reserved for a built-in binding (Esc/./u/U) and can never be reached through the leader tree or global lookup",
+      "message": "Register/RegisterGlobal rejected: token {token} is reserved for a built-in binding (Esc/./u/U) and can never be reached through the leader tree or global lookup",
       "remedy": "Esc, '.', 'u', and 'U' are unconditionally intercepted by Feed before the leader tree or the global-binding map is ever consulted (see doc.go/grammar.go), so registering an action under one of them would be permanently unreachable dead code. Choose a different mnemonic token or global key."
     },
     "MET-U307": {
       "severity": "warn",
       "module": "ui.keys",
-      "message": "command palette input names unknown command {name!q}",
+      "message": "command palette input names unknown command {name}",
       "remedy": "No RegisterCommand call has registered a palette command with this name. Check the spelling, or register the command before parsing input that references it."
     },
     "MET-U308": {
@@ -873,13 +873,13 @@
     "MET-U401": {
       "severity": "error",
       "module": "feat.devmode",
-      "message": "dev console action {action!q} attempted before the console was open",
+      "message": "dev console action {action} attempted before the console was open",
       "remedy": "Call Console.Open successfully (which itself gates on debug.State.RequireConsole) before invoking Inspect or SubmitFeedback — FEAT-065 AC-DM7 requires every devconsole surface to be unreachable without first passing through the same gate the console's own open-action uses."
     },
     "MET-U402": {
       "severity": "error",
       "module": "feat.devmode",
-      "message": "dev console capability {capability!q} has no implementation wired",
+      "message": "dev console capability {capability} has no implementation wired",
       "remedy": "The Console was constructed without the matching Option (e.g. WithInspect, WithSubmitFeedback, WithPause) for this capability. Wire every capability the caller intends to expose at construction time — an unwired optional seam is refused explicitly rather than silently doing nothing."
     },
     "MET-U500": {
@@ -4768,7 +4768,7 @@
       "severity": "error",
       "module": "ui.router",
       "message": "Router method called on a struct copy (correlation {correlationId})",
-      "remedy": "A *router.Router value was copied (dereference-and-copy, or constructed via new(Router)/Router{} instead of New) rather than used via the pointer New returned. Use the *Router New gave you; never copy it by value."
+      "remedy": "A *router.Router value was copied (dereference-and-copy, or constructed via new(Router) or a Router zero-value literal instead of New) rather than used via the pointer New returned. Use the *Router New gave you; never copy it by value."
     },
     "MET-V403": {
       "severity": "error",

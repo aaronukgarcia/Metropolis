@@ -111,30 +111,24 @@ func TestBUG323_DefaultScreenAtBoot_RendersRealTerrainNotBlank(t *testing.T) {
 }
 
 // TestBUG323_RenderedTerrain_MatchesWhatEngineWorldActuallyHolds pins
-// the CONTENT, not merely its non-blankness: the start tile engine.world
-// generates today is uniform grass, so the map must render '.' — the
-// grass glyph — and specifically must NOT be rendering the Sprint-1
-// stub fixture's handcrafted Folkestone-64 bands, which no engine module
-// has ever produced.
-//
-// This is the assertion Aaron's 2026-08-21 ruling asks for: draw what
-// engine.world generates, and let the result speak. If engine.world ever
-// starts producing varied surfaces (a real OS Terrain 50 import, or a
-// synthesiser that emits water/rock), this test's grass-dominance check
-// is expected to fail, and that failure is the SIGNAL that the terrain
-// changed — update it deliberately then, never by loosening it now.
+// the CONTENT, not merely its non-blankness. BUG-329 made the
+// synthesiser emit more than grass; the map must therefore show more
+// than one of engine.world's five surface glyphs, and specifically must
+// NOT be rendering the Sprint-1 stub fixture's motorway band ('=').
 func TestBUG323_RenderedTerrain_MatchesWhatEngineWorldActuallyHolds(t *testing.T) {
 	const width, height = 100, 24
 	text := bug323BootAndRenderMap(t, width, height)
 	counts := countGlyphs(text)
 
-	// Grass ('.') is what a synthesised start tile is made of end to end
-	// (internal/engine/world/synth_terrain.go: every synthesised
-	// elevation is >= 0, so classifySurface never picks water, and the
-	// start tile is on land).
-	grass := counts['.']
-	if grass < width*(height-1)/2 {
-		t.Fatalf("expected the rendered map to be dominated by grass ('.') — engine.world's synthesised start tile is uniform SurfaceGrass — but only %d of %d viewport cells are grass; full render:\n%s", grass, width*(height-1), text)
+	terrainRunes := []rune{'.', '%', '~', ':', '^'}
+	kinds := 0
+	for _, r := range terrainRunes {
+		if counts[r] > 0 {
+			kinds++
+		}
+	}
+	if kinds < 2 {
+		t.Fatalf("expected at least 2 of engine.world's surface glyphs %q after BUG-329, got %d kinds; full render:\n%s", string(terrainRunes), kinds, text)
 	}
 
 	// Negative half: the stub fixture's own bands must not appear. '='
@@ -176,11 +170,10 @@ func TestBUG323_ViewportSubscription_IsAcceptedAndDelivers(t *testing.T) {
 	if got.Terrain == "" {
 		t.Fatalf("mapScreen.Inspect(0,0).Terrain is empty — the published cell carries no terrain string; got %+v", got)
 	}
-	// Elevation is real metres AOD from engine.world's synthesiser
-	// (measured 35..40m for the start tile), not a zero placeholder.
-	if got.Elevation == 0 {
-		t.Fatalf("mapScreen.Inspect(0,0).Elevation = 0 — engine.world's start tile sits well above sea level, so a zero here means the view is publishing placeholder cells; got %+v", got)
-	}
+	// Elevation is published as real metres AOD. After BUG-329 some cells
+	// sit below the synthetic sea level (water); (0,0) may be either
+	// side. A missing elevation is an empty Terrain string, already
+	// rejected above — do not require a positive height here.
 
 	// The far corner of the start tile must be known too: the published
 	// window is the whole 200x200 tile, matching compose's own

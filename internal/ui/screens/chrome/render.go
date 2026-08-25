@@ -13,9 +13,28 @@ import (
 // pure function of the Figures value so the render test can assert the
 // known injected values appear without going through the buffer, and so the
 // format is one place rather than repeated per field.
+//
+// FEAT-216 (the lead's ruling on BUG-324's independent round): Speed is
+// deliberately NOT rendered here, even though Figures still carries it. The
+// binary has TWO persistent bars and they divide the frame by subject:
+//
+//   - top bar (this line) = WORLD state — when you are, what you have.
+//   - bottom bar (cmd/metropolis/statusbar.go) = MACHINE state — tick,
+//     speed, running/paused, key help.
+//
+// Speed is machine state, so the bottom bar owns it. Before this ruling BOTH
+// bars printed it, in two different formats ("speed 1" here against
+// "SPEED 1x RUNNING" there) — two numbers for one fact, disagreeing on
+// spelling, which is worse than either alone.
+//
+// The FIELD is kept, and kept correct: the publisher
+// (internal/engine/compose/chrome_publish.go) still sources a real
+// multiplier for it, so Figures() reports the truth to any caller. What
+// changed is only what this one line prints. Zeroing the field instead
+// would have made the view lie to satisfy a layout decision.
 func (f Figures) topBarString() string {
-	return fmt.Sprintf("%s | cycle %d/30 | speed %d | money %d | pop %d | rating %s",
-		f.Date, f.ClockCycle, f.Speed, f.Money, f.Population, f.Rating)
+	return fmt.Sprintf("%s | cycle %d/30 | money %d | pop %d | rating %s",
+		f.Date, f.ClockCycle, f.Money, f.Population, f.Rating)
 }
 
 // alertLine renders one alert's displayed text. The tier colour is applied
@@ -83,8 +102,20 @@ func drawAlertStack(buf *core.Buffer, rect core.Rect, alerts []Alert, palette wi
 // escaped/filtered at the single trust boundary (core's sanitizeRune,
 // SEC-011) rather than re-implemented here — display text is escaped, not
 // rejected (weakness pattern #4's display-boundary exception).
+//
+// BUG-324 independent round (edge finding): the column advance is a RUNE
+// counter, not `range`'s byte offset. Written with the byte offset it drew
+// correctly for pure-ASCII text and silently skipped columns for anything
+// else — a two-byte rune advanced the cursor by two cells, leaving a gap,
+// and every following character in the line shifted right. No caller feeds
+// non-ASCII today (the figures are digits and month abbreviations, and
+// alert Text is the only untrusted input), which is exactly why it would
+// have gone unnoticed until the first alert message carried a £ or an
+// accented place name.
 func drawText(buf *core.Buffer, x, y int, s string, style tcell.Style) {
-	for i, r := range s {
-		buf.Set(x+i, y, r, style)
+	col := 0
+	for _, r := range s {
+		buf.Set(x+col, y, r, style)
+		col++
 	}
 }

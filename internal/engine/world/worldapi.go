@@ -141,17 +141,17 @@ func (a *WorldAPI) ImportAndPlaceStartTile(src *SourceGrid, correlationID string
 func (a *WorldAPI) TileCells(c TileCoord, correlationID string) ([]Cell, error) {
 	// BUG-064 (AC-28): identity check BEFORE a.w.mu is touched at all —
 	// see World.checkNotCopied's doc comment (grid.go).
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return nil, err
 	}
 	if !c.InExtent() {
-		return nil, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return nil, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
 	// Defence-in-depth re-check under the lock.
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return nil, err
 	}
 	tl, err := a.w.ensureTile(c)
@@ -188,25 +188,25 @@ func (a *WorldAPI) TileCells(c TileCoord, correlationID string) ([]Cell, error) 
 // genuinely do not exist yet for land nobody has bought.
 func (a *WorldAPI) CellAt(t TileCoord, local CellLocal, correlationID string) (Cell, error) {
 	// BUG-064 (AC-28): identity check BEFORE a.w.mu is touched at all.
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": t}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &t); err != nil {
 		return Cell{}, err
 	}
 	if !t.InExtent() {
-		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t})
+		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t, "sizeKm": ExpansionSizeM / 1000})
 	}
 	// BUG-063: validate Col/Row INDIVIDUALLY before ever computing the
 	// composite index — a composite-only check lets an out-of-domain
 	// Col/Row combination alias back into range and silently read the
 	// wrong cell. See CellLocal.InBounds's doc comment (hydrology.go).
 	if !local.InBounds() {
-		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t, "local": local})
+		return Cell{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": t, "local": local, "sizeKm": ExpansionSizeM / 1000})
 	}
 	idx := localIndex(local.Col, local.Row)
 
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
 	// Defence-in-depth re-check under the lock.
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": t}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &t); err != nil {
 		return Cell{}, err
 	}
 	tl, err := a.w.ensureTile(t)
@@ -244,15 +244,15 @@ type TileInfo struct {
 // TileAt returns tile c's summary — terrain existence, ownership, and
 // (for an unowned tile) its purchase price (AC-10).
 func (a *WorldAPI) TileAt(c TileCoord, correlationID string) (TileInfo, error) {
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return TileInfo{}, err
 	}
 	if !c.InExtent() {
-		return TileInfo{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return TileInfo{}, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return TileInfo{}, err
 	}
 	tl, err := a.w.ensureTile(c)
@@ -290,21 +290,21 @@ func (a *WorldAPI) ApplyOwnershipCommand(cmd OwnershipCommand) protocol.CommandR
 	result := func(accepted bool, err error) protocol.CommandResult {
 		r := protocol.CommandResult{CorrelationID: protocol.CorrelationID(cmd.CorrelationID), Accepted: accepted}
 		if !accepted {
-			r.Error = toWorldErrorRef(err)
+			r.Error = toWorldErrorRef(err, cmd.Tile)
 		}
 		return r
 	}
 
-	if err := a.w.checkNotCopied(cmd.CorrelationID, map[string]any{"tile": cmd.Tile}); err != nil {
+	if err := a.w.checkNotCopied(cmd.CorrelationID, &cmd.Tile); err != nil {
 		return result(false, err)
 	}
 	if !cmd.Tile.InExtent() {
-		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile}))
+		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "sizeKm": ExpansionSizeM / 1000}))
 	}
 
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(cmd.CorrelationID, map[string]any{"tile": cmd.Tile}); err != nil {
+	if err := a.w.checkNotCopied(cmd.CorrelationID, &cmd.Tile); err != nil {
 		return result(false, err)
 	}
 	tl, err := a.w.ensureTile(cmd.Tile)
@@ -317,7 +317,7 @@ func (a *WorldAPI) ApplyOwnershipCommand(cmd OwnershipCommand) protocol.CommandR
 	// BUG-063: same individual Col/Row validation as CellAt — reject
 	// BEFORE computing the composite index, never after.
 	if !cmd.Local.InBounds() {
-		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "local": cmd.Local}))
+		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "local": cmd.Local, "sizeKm": ExpansionSizeM / 1000}))
 	}
 	idx := localIndex(cmd.Local.Col, cmd.Local.Row)
 	tl.sim.owner[idx] = cmd.NewOwner
@@ -340,12 +340,12 @@ func (a *WorldAPI) PurchaseTile(cmd PurchaseCommand) protocol.CommandResult {
 	result := func(accepted bool, err error) protocol.CommandResult {
 		r := protocol.CommandResult{CorrelationID: protocol.CorrelationID(cmd.CorrelationID), Accepted: accepted}
 		if !accepted {
-			r.Error = toWorldErrorRef(err)
+			r.Error = toWorldErrorRef(err, cmd.Tile)
 		}
 		return r
 	}
 
-	if err := a.w.checkNotCopied(cmd.CorrelationID, map[string]any{"tile": cmd.Tile}); err != nil {
+	if err := a.w.checkNotCopied(cmd.CorrelationID, &cmd.Tile); err != nil {
 		return result(false, err)
 	}
 	if !cmd.Tile.InExtent() {
@@ -354,7 +354,7 @@ func (a *WorldAPI) PurchaseTile(cmd PurchaseCommand) protocol.CommandResult {
 
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(cmd.CorrelationID, map[string]any{"tile": cmd.Tile}); err != nil {
+	if err := a.w.checkNotCopied(cmd.CorrelationID, &cmd.Tile); err != nil {
 		return result(false, err)
 	}
 	tl, err := a.w.ensureTile(cmd.Tile)
@@ -381,15 +381,15 @@ func (a *WorldAPI) PurchaseTile(cmd PurchaseCommand) protocol.CommandResult {
 // (but not an error) for an already-owned tile — callers should check
 // TileAt's Owned flag first.
 func (a *WorldAPI) TilePrice(c TileCoord, correlationID string) (float64, error) {
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return 0, err
 	}
 	if !c.InExtent() {
-		return 0, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return 0, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return 0, err
 	}
 	tl, err := a.w.ensureTile(c)
@@ -407,15 +407,15 @@ func (a *WorldAPI) TilePrice(c TileCoord, correlationID string) (float64, error)
 // pocket to subsequent PocketGeology queries. Idempotent — prospecting
 // an already-prospected tile is a harmless no-op accept.
 func (a *WorldAPI) Prospect(c TileCoord, correlationID string) error {
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return err
 	}
 	if !c.InExtent() {
-		return errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return err
 	}
 	tl, err := a.w.ensureTile(c)
@@ -435,7 +435,7 @@ func (a *WorldAPI) Prospect(c TileCoord, correlationID string) error {
 // out-of-extent coordinate; false, nil is a genuine "not yet prospected"
 // answer.
 func (a *WorldAPI) IsProspected(c TileCoord) (bool, error) {
-	if err := a.w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(errs.NewCorrelationID(), &c); err != nil {
 		return false, err
 	}
 	if !c.InExtent() {
@@ -443,7 +443,7 @@ func (a *WorldAPI) IsProspected(c TileCoord) (bool, error) {
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(errs.NewCorrelationID(), &c); err != nil {
 		return false, err
 	}
 	tl, err := a.w.ensureTile(c)
@@ -459,14 +459,14 @@ func (a *WorldAPI) IsProspected(c TileCoord) (bool, error) {
 // chalk baseline (always GeologyChalk today) is common knowledge and
 // available via Geology regardless of prospecting.
 func (a *WorldAPI) PocketGeology(c TileCoord, correlationID string) (GeologyKind, error) {
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		return GeologyUnknown, err
 	}
 	if !c.InExtent() {
-		return GeologyUnknown, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c})
+		return GeologyUnknown, errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": c, "sizeKm": ExpansionSizeM / 1000})
 	}
 	a.w.mu.Lock()
-	if err := a.w.checkNotCopied(correlationID, map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(correlationID, &c); err != nil {
 		a.w.mu.Unlock()
 		return GeologyUnknown, err
 	}
@@ -490,7 +490,7 @@ func (a *WorldAPI) PocketGeology(c TileCoord, correlationID string) (GeologyKind
 // BUG-064 (AC-28): signature grew an error return, same rationale as
 // IsProspected's doc comment above.
 func (a *WorldAPI) GeologyBaseline(c TileCoord) (GeologyKind, error) {
-	if err := a.w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(errs.NewCorrelationID(), &c); err != nil {
 		return GeologyUnknown, err
 	}
 	if !c.InExtent() {
@@ -498,7 +498,7 @@ func (a *WorldAPI) GeologyBaseline(c TileCoord) (GeologyKind, error) {
 	}
 	a.w.mu.Lock()
 	defer a.w.mu.Unlock()
-	if err := a.w.checkNotCopied(errs.NewCorrelationID(), map[string]any{"tile": c}); err != nil {
+	if err := a.w.checkNotCopied(errs.NewCorrelationID(), &c); err != nil {
 		return GeologyUnknown, err
 	}
 	tl, err := a.w.ensureTile(c)
@@ -538,11 +538,13 @@ func (a *WorldAPI) OffMapConnections() ([]OffMapConnection, error) {
 // package's own construction sites) into a protocol.ErrorRef, mirroring
 // engine.core's commands.go toErrorRef exactly (GR#1/GR#7: every
 // rejection carries a registry code, never a panic, never an untyped
-// string).
-func toWorldErrorRef(err error) *protocol.ErrorRef {
+// string). tile is the command's target tile, threaded in from the
+// caller so the defensive MET-E403 wrap below can supply the {tile} and
+// {sizeKm} template values the real call site has (BUG-357 step 4).
+func toWorldErrorRef(err error, tile TileCoord) *protocol.ErrorRef {
 	if e, ok := err.(*errs.E); ok {
 		return &protocol.ErrorRef{Code: e.Code, Display: e.Display()}
 	}
-	wrapped := errs.Wrap(ErrTileOutOfBounds, "", err, map[string]any{"cause": err.Error()})
+	wrapped := errs.Wrap(ErrTileOutOfBounds, "", err, map[string]any{"cause": err.Error(), "tile": tile, "sizeKm": ExpansionSizeM / 1000})
 	return &protocol.ErrorRef{Code: wrapped.Code, Display: wrapped.Display()}
 }

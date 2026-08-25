@@ -140,22 +140,38 @@ func printBootError(stderr io.Writer, err error) {
 // re-subscribe, no reconstruction, so this closure's own cost per tick
 // never grows with how many screens are registered).
 // composeDraw builds the ONE core.DrawFunc runInteractive hands to
-// NewRenderLoop: the active screen draws first, then BUG-322's status line is
-// overlaid on the last row.
+// NewRenderLoop: the active screen draws first, then every GLOBAL chrome
+// overlay draws on top of it, in this fixed order — BUG-324's top bar
+// (row 0) and then BUG-322's status line (last row).
 //
 // A named function rather than a closure literal inside runInteractive
 // purely so it is testable: runInteractive itself needs a live tcell.Screen
-// and blocks until a quit key, so a status bar wired only in there could be
+// and blocks until a quit key, so an overlay wired only in there could be
 // deleted without a single test going red — which is precisely the
 // "nothing on screen looks the same as nothing running" failure BUG-322 is
-// about. See TestBUG322_ComposedDrawIncludesTheStatusLine.
+// about, and the "an empty bar and a missing bar look identical" failure
+// BUG-324 is about. See TestBUG322_ComposedDrawIncludesTheStatusLine and
+// TestBUG324_TopBarOverlaysTheActiveScreen.
 //
-// Order is the contract: screen first, clock chrome on top, so the overlay
-// always wins the last row no matter what the active screen drew there.
+// Order is the contract: screen first, chrome overlays on top, so an
+// overlay always wins its own row no matter what the active screen drew
+// there. The two overlays never contend for the same row on any terminal
+// tall enough to have two rows — chrome owns row 0, the status line owns
+// h-1 — and the screens are inset between them (chromebar.go's
+// screenContentRect), so neither overlay covers a screen heading.
+//
+// ONE-ROW TERMINAL (h == 1): row 0 IS the last row, so both overlays
+// target it and composition order decides the winner — the status line
+// draws second and therefore wins. That is deliberate and is the right
+// way round: on a single row the player needs the MACHINE state (is it
+// running? what are the keys?) more than the world's vital signs, and
+// "the last writer wins" is a property of the order above, not luck.
 func composeDraw(w *skeletonWiring) core.DrawFunc {
+	chromeDraw := chromeTopBarDraw(w.chromeUI)
 	statusDraw := statusBarDraw(w.statusBar)
 	return func(back *core.Buffer, vm *core.ViewModels) {
 		w.screens.ActiveDraw()(back, vm)
+		chromeDraw(back, vm)
 		statusDraw(back, vm)
 	}
 }

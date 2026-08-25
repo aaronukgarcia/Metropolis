@@ -61,12 +61,9 @@ func wireFinanceTestEngine(t *testing.T) (*core.Engine, *protocol.InProcTranspor
 // version of TestServicesView_EndToEnd_DeltaMatchesLiveState: subscribing
 // to "f2.finance" against a REAL compose.Wire'd engine succeeds and the
 // delivered patch's balanceSheet decodes through ui.screen.finance's own
-// real ApplyDelta/BalanceSheet() round trip, matching a fresh (all-zero)
-// FinanceAPI's live state — Treasury/Reserves/Debt all start at zero
-// (NewFinanceAPI opens the well-known accounts with a zero balance, no
-// compose-level caller posts to Treasury before the first tick), so this
-// proves the SHAPE (two assets, one liability, netWorth==0) round-trips
-// correctly, not merely that some JSON happens to parse.
+// real ApplyDelta/BalanceSheet() round trip. BUG-355 seeds the opening
+// grant into FinanceAPI at Wire time, so Treasury equals initialTreasury
+// (not zero). Shape is still two assets + one liability.
 func TestFinanceView_EndToEnd_DeltaMatchesLiveState(t *testing.T) {
 	_, transport, cancel := wireFinanceTestEngine(t)
 	defer cancel()
@@ -90,17 +87,17 @@ func TestFinanceView_EndToEnd_DeltaMatchesLiveState(t *testing.T) {
 	if len(bs.Assets) != 2 {
 		t.Fatalf("len(Assets) = %d, want 2 (Treasury, Reserves)", len(bs.Assets))
 	}
-	if bs.Assets[0].Label != "Treasury" || bs.Assets[0].ValueMicropounds != 0 {
-		t.Errorf("Assets[0] = %+v, want {Treasury 0} (fresh FinanceAPI)", bs.Assets[0])
+	if bs.Assets[0].Label != "Treasury" || bs.Assets[0].ValueMicropounds != initialTreasury {
+		t.Errorf("Assets[0] = %+v, want {Treasury %d} (BUG-355 opening grant)", bs.Assets[0], initialTreasury)
 	}
 	if bs.Assets[1].Label != "Reserves" || bs.Assets[1].ValueMicropounds != 0 {
-		t.Errorf("Assets[1] = %+v, want {Reserves 0} (fresh FinanceAPI)", bs.Assets[1])
+		t.Errorf("Assets[1] = %+v, want {Reserves 0} (no reserve allocation yet)", bs.Assets[1])
 	}
 	if len(bs.Liabilities) != 1 || bs.Liabilities[0].Label != "Outstanding Debt" || bs.Liabilities[0].ValueMicropounds != 0 {
 		t.Errorf("Liabilities = %+v, want [{Outstanding Debt 0}] (no loans outstanding)", bs.Liabilities)
 	}
-	if bs.NetWorth != 0 {
-		t.Errorf("NetWorth = %d, want 0 (0+0-0)", bs.NetWorth)
+	if bs.NetWorth != initialTreasury {
+		t.Errorf("NetWorth = %d, want %d (treasury+0-0)", bs.NetWorth, initialTreasury)
 	}
 
 	// AdvanceTicks also signals the pump; driving one more tick and

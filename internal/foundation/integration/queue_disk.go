@@ -78,34 +78,34 @@ func writeSegment(root string, seq int64, cmd protocol.Command, correlationID st
 		// effectively unreachable for any payload registered in
 		// commands.go, but is still handled explicitly rather than
 		// ignored (GR#1).
-		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"seq": seq, "cause": err.Error()})
+		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"kind": cmd.Kind, "seq": seq, "cause": err.Error()})
 	}
 
 	tmp, err := os.CreateTemp(staging, "spill-*")
 	if err != nil {
-		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"seq": seq, "cause": err.Error()})
+		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"kind": cmd.Kind, "seq": seq, "cause": err.Error()})
 	}
 	tmpPath := tmp.Name()
 
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"seq": seq, "cause": err.Error()})
+		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"kind": cmd.Kind, "seq": seq, "cause": err.Error()})
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"seq": seq, "cause": err.Error()})
+		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"kind": cmd.Kind, "seq": seq, "cause": err.Error()})
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"seq": seq, "cause": err.Error()})
+		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"kind": cmd.Kind, "seq": seq, "cause": err.Error()})
 	}
 
 	finalPath := segmentPath(root, seq)
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"seq": seq, "cause": err.Error()})
+		return errs.Wrap(ErrSpillWriteFailed, correlationID, err, map[string]any{"kind": cmd.Kind, "seq": seq, "cause": err.Error()})
 	}
 	return nil
 }

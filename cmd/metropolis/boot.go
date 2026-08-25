@@ -16,6 +16,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/keys"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/router"
+	chromescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/chrome"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
 	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
 	mapscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/map"
@@ -274,9 +275,33 @@ type skeletonWiring struct {
 	// live "engine.status" figures (tick, month, speed, paused), primed
 	// and router-bound exactly like financeScreen/servicesScreen, drawn
 	// as a one-line overlay under whichever screen is active (run.go).
-	// See statusbar.go for why this is a one-line overlay rather than
-	// ui.screens/chrome.
+	// See statusbar.go for why the MACHINE-state figures live on their own
+	// one-line bottom overlay rather than inside ui.screens/chrome.
 	statusBar *statusBar
+
+	// chromeUI is BUG-324's GLOBAL chrome (internal/ui/screens/chrome):
+	// the persistent TOP bar carrying date/cycle/money/population/
+	// credit-rating. It is deliberately NOT a ScreenRegistry entry — per
+	// Aaron's F9 ruling chrome renders OVER the active screen, so it is
+	// composed on top of ActiveDraw()'s output in run.go rather than
+	// being an F-key-selected screen of its own (chromebar.go's
+	// chromeTopBarDraw).
+	//
+	// It is fed by a real, primed subscription to "chrome.topbar", which
+	// compose.Wire registers as of this fix (internal/engine/compose/
+	// chrome_publish.go). That order matters and is the whole reason
+	// this item was blocked: registering the screen against an
+	// unregistered view would have had its Subscribe rejected exactly
+	// like mapScreen's "f1.viewport" is, leaving a permanently empty
+	// bar.
+	//
+	// It splits the frame with statusBar above by SUBJECT, not by
+	// accident (FEAT-216, the lead's ruling on this fix's independent
+	// round): the top bar carries WORLD state — when you are and what
+	// you have — and the bottom bar carries MACHINE state — tick, speed,
+	// running/paused, key help. Speed is machine state, so it appears on
+	// the bottom bar only; chromeTopBarDraw drops it from the top.
+	chromeUI *chromescreen.Chrome
 
 	// debugState is feat.debugmode's (FEAT-008) single source of truth
 	// for whether debug mode is on, and devConsole is feat.devmode's
@@ -518,6 +543,33 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	servicesCorrID := errs.NewCorrelationID()
 	w.financeScreen = financescreen.New(financeCorrID)
 	w.servicesScreen = servicesscreen.New(servicesCorrID)
+
+	// BUG-324: the global chrome. Its own correlation ID for the same
+	// reason finance/services mint theirs — primeScreenSubscription
+	// matches its first Delta by exactly this value, so a shared ID
+	// across concurrent Subscribes would make that match ambiguous.
+	//
+	// Effects.Pause is wired to the SAME sendPauseCommand this binary's
+	// devmode console uses, so a crisis auto-pause and a console pause
+	// are literally the same command (chrome.PauseCommand's own
+	// "equivalent to Space, not a bespoke pause implementation"
+	// contract, satisfied through this binary's existing transport
+	// helper rather than a second one).
+	//
+	// Effects.Navigator is deliberately nil, and that is an honest
+	// recorded gap rather than an oversight: dash.Navigator's
+	// DrillTarget names a screen + entity to jump to, and nothing
+	// engine-side publishes chrome alerts at all yet, so there is no
+	// alert to select and no target to resolve. Chrome's own contract
+	// treats a nil effect as "not wired yet" and skips it rather than
+	// panicking. Wiring alerts (and with them `!`, bind.go's
+	// RegisterBang) needs an engine-side alert source first — the same
+	// shape of blocker the top bar itself had until chrome_publish.go
+	// landed.
+	chromeCorrID := errs.NewCorrelationID()
+	w.chromeUI = chromescreen.NewChrome(chromeCorrID, widgets.DefaultPalette, chromescreen.Effects{
+		Pause: func() { _ = sendPauseCommand(transport, chromeCorrID) },
+	})
 	w.debugState = dbgState
 	w.devConsole = devmode.New(
 		devmode.WithRequireConsole(w.debugState.RequireConsole),
@@ -671,6 +723,29 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "engine.core.status.Subscribe",
 			"cause":     err.Error(),
+		})
+	}
+
+	// BUG-324: prime + bind the GLOBAL chrome's "chrome.topbar"
+	// subscription through the same handshake, so the top bar carries
+	// real figures from the first frame rather than rendering an empty
+	// line until the first tick. A failure here is a loud boot failure
+	// like every other: if "chrome.topbar" is not a served view, the
+	// bar would be permanently blank, and a blank bar that boots
+	// "successfully" is exactly the silent failure this item is about
+	// (GR#17) — better to refuse to start than to ship a frame that
+	// looks broken.
+	chromeSink := chromeDeltaSink{c: w.chromeUI}
+	if err := primeScreenSubscription(transport, w.router, primed, chromeCorrID, chromescreen.ViewChrome,
+		func() error { return w.chromeUI.Subscribe(transport.SendCommand) },
+		chromeSink.Bind,
+		chromeSink.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.chrome.Subscribe",
 		})
 	}
 
@@ -1256,8 +1331,10 @@ func mapDrawFunc(ms *mapscreen.MapScreen) core.DrawFunc {
 		// "fresh" glyph permanently. router owns per-subscription
 		// staleness now and exposing it to a DrawFunc is a ui.router/
 		// ui.core surface change — out of this fix's scope.
-		w, h := back.Size()
-		ms.Render(back, core.Rect{X: 0, Y: 0, W: w, H: h})
+		// BUG-324: the chrome top bar owns the top row, so screens draw
+		// inside screenContentRect (chromebar.go), not the raw buffer.
+		r := screenContentRect(back)
+		ms.Render(back, r)
 	}
 }
 
@@ -1279,22 +1356,26 @@ func mapDrawFunc(ms *mapscreen.MapScreen) core.DrawFunc {
 func financeDrawFunc(fs *financescreen.Screen) core.DrawFunc {
 	style := tcell.StyleDefault
 	return func(back *core.Buffer, _ *core.ViewModels) {
-		w, h := back.Size()
-		col, row := w/2, h/2
+		// The 2x2 grid is laid out inside the CHROME-INSET rect, not the
+		// raw buffer (screenContentRect, chromebar.go) — every quadrant
+		// origin is relative to r.X/r.Y, which is what keeps F2's "P&L"
+		// heading on a row the global top bar does not own.
+		r := screenContentRect(back)
+		col, row := r.W/2, r.H/2
 
 		pl, havePL := fs.PL()
-		financescreen.RenderPL(back, core.Rect{X: 0, Y: 0, W: col, H: row}, pl, havePL, style)
+		financescreen.RenderPL(back, core.Rect{X: r.X, Y: r.Y, W: col, H: row}, pl, havePL, style)
 
 		bs, haveBS := fs.BalanceSheet()
-		financescreen.RenderBalanceSheet(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, bs, haveBS, style)
+		financescreen.RenderBalanceSheet(back, core.Rect{X: r.X + col, Y: r.Y, W: r.W - col, H: row}, bs, haveBS, style)
 
 		loans, haveLoans := fs.Loans()
 		rating, _ := fs.CreditRating()
 		history, _ := fs.CreditRatingHistory()
-		financescreen.RenderLoans(back, core.Rect{X: 0, Y: row, W: col, H: h - row}, loans, rating, history, fs.LoanRejectedReason(), haveLoans, style)
+		financescreen.RenderLoans(back, core.Rect{X: r.X, Y: r.Y + row, W: col, H: r.H - row}, loans, rating, history, fs.LoanRejectedReason(), haveLoans, style)
 
 		sliders, haveSliders := fs.TaxSliders()
-		financescreen.RenderSliders(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, sliders, haveSliders, style)
+		financescreen.RenderSliders(back, core.Rect{X: r.X + col, Y: r.Y + row, W: r.W - col, H: r.H - row}, sliders, haveSliders, style)
 	}
 }
 
@@ -1309,19 +1390,23 @@ func financeDrawFunc(fs *financescreen.Screen) core.DrawFunc {
 func servicesDrawFunc(ss *servicesscreen.Screen) core.DrawFunc {
 	style := tcell.StyleDefault
 	return func(back *core.Buffer, _ *core.ViewModels) {
-		w, h := back.Size()
-		col, row := w/2, h/2
+		// Chrome-inset, same as financeDrawFunc above — F4's own
+		// headings (and its "unavailable" placeholders, which on a
+		// data-less boot are the ONLY thing on the screen) must not be
+		// the row the global top bar paints over.
+		r := screenContentRect(back)
+		col, row := r.W/2, r.H/2
 
 		sliders, haveSliders := ss.Sliders()
-		servicesscreen.RenderSliders(back, core.Rect{X: 0, Y: 0, W: col, H: row}, sliders, ss.FundingRejectedReason(), haveSliders, style)
+		servicesscreen.RenderSliders(back, core.Rect{X: r.X, Y: r.Y, W: col, H: row}, sliders, ss.FundingRejectedReason(), haveSliders, style)
 
 		cd, haveCD := ss.CapacityDemand()
-		servicesscreen.RenderCapacityDemand(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, cd, haveCD, widgets.DefaultPalette, style)
+		servicesscreen.RenderCapacityDemand(back, core.Rect{X: r.X + col, Y: r.Y, W: r.W - col, H: row}, cd, haveCD, widgets.DefaultPalette, style)
 
 		rt, haveRT := ss.ResponseTimes()
-		servicesscreen.RenderResponseTimes(back, core.Rect{X: 0, Y: row, W: col, H: h - row}, rt, haveRT, style)
+		servicesscreen.RenderResponseTimes(back, core.Rect{X: r.X, Y: r.Y + row, W: col, H: r.H - row}, rt, haveRT, style)
 
 		wl, haveWL := ss.WaitingLists()
-		servicesscreen.RenderWaitingLists(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, wl, haveWL, style)
+		servicesscreen.RenderWaitingLists(back, core.Rect{X: r.X + col, Y: r.Y + row, W: r.W - col, H: r.H - row}, wl, haveWL, style)
 	}
 }
