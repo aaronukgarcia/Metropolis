@@ -28,7 +28,10 @@ const path = require('path');
 const crypto = require('crypto');
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const { runAudit, normalizeModulePath, isGoTreePath, runAstinfo } = require('./codejson-audit.js');
+const {
+  runAudit, normalizeModulePath, isGoTreePath, runAstinfo,
+  parseGoImports, resolveDirOwners, isImportRegistered, primaryOwner, isBenignSibling,
+} = require('./codejson-audit.js');
 
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
 
@@ -312,12 +315,13 @@ test('BUG-181: a third-party mutation of a scanned Go file DURING the run (not j
 
 // ── AC-9: every finding instance carries exactly one fix-route label ──────
 
-test('AC-9: every finding instance in every populated class carries exactly one of "master-plan-fix"/"code-side-defect"', async () => {
+test('AC-9: every finding instance in every populated class carries a valid fix-route label (master-plan-fix / code-side-defect / informational)', async () => {
   const report = await runAudit();
+  const VALID = ['master-plan-fix', 'code-side-defect', 'informational'];
   for (const [cls, data] of Object.entries(report.findingsByClass)) {
-    assert.ok(['master-plan-fix', 'code-side-defect'].includes(data.fixRoute), `class ${cls} must have a class-level fixRoute`);
+    assert.ok(VALID.includes(data.fixRoute), `class ${cls} must have a class-level fixRoute, got ${data.fixRoute}`);
     for (const inst of data.instances) {
-      assert.ok(['master-plan-fix', 'code-side-defect'].includes(inst.fixRoute), `every instance of ${cls} must carry a fixRoute label`);
+      assert.ok(VALID.includes(inst.fixRoute), `every instance of ${cls} must carry a fixRoute label, got ${inst.fixRoute}`);
     }
   }
 });
@@ -332,7 +336,7 @@ test('AC-10: fileFindingsToBow would file at most one BOW item per POPULATED cla
   // and is deliberately never called by this test suite or by the audit's
   // default run — see codejson-audit.js's --file flag and FEAT-062's
   // report-only scope).
-  assert.ok(populated.length <= 6, 'at most 6 classes are defined; filing must never exceed one item per class');
+  assert.ok(populated.length <= 8, 'at most 8 classes are defined; filing must never exceed one item per class');
   for (const [cls, data] of populated) {
     assert.ok(data.instanceCount >= 1);
     assert.ok(Array.isArray(data.instances) && data.instances.length === data.instanceCount);
@@ -366,4 +370,82 @@ test('isGoTreePath: only internal/ and cmd/ paths are Go-tree paths', () => {
   assert.equal(isGoTreePath('tools/plan'), false);
   assert.equal(isGoTreePath('.'), false);
   assert.equal(isGoTreePath(null), false);
+});
+
+// ── BUG-327: Direction-D reverse import-edge check (pure-unit helpers) ─────
+
+test('BUG-327 parseGoImports: parses single, aliased, dot, blank and grouped imports, ignores line/block comments, and stops at the first top-level declaration', () => {
+  const src = [
+    'package foo',
+    '',
+    '// leading line comment',
+    'import "github.com/x/internal/a"',
+    'import alias "github.com/x/internal/b"',
+    'import . "github.com/x/internal/c"',
+    'import _ "github.com/x/internal/d"',
+    'import (',
+    '\t"github.com/x/internal/e"',
+    '\tf "github.com/x/internal/f"',
+    ')',
+    '/* a block',
+    '   comment spanning lines */',
+    'var Marker = func() { _ = "import \\"not-a-real-import\\"" }',
+  ].join('\n');
+  assert.deepEqual(parseGoImports(src), [
+    'github.com/x/internal/a',
+    'github.com/x/internal/b',
+    'github.com/x/internal/c',
+    'github.com/x/internal/d',
+    'github.com/x/internal/e',
+    'github.com/x/internal/f',
+  ]);
+});
+
+test('BUG-327 parseGoImports: robust to non-canonical-but-compilable forms (same-line block, no-space, split import)', () => {
+  const sameLine = 'package x\nimport ("github.com/x/internal/a")\nvar V = 1\n';
+  assert.deepEqual(parseGoImports(sameLine), ['github.com/x/internal/a']);
+  const noSpace = 'package x\nimport"github.com/x/internal/b"\n';
+  assert.deepEqual(parseGoImports(noSpace), ['github.com/x/internal/b']);
+  const split = 'package x\nimport\n(\n\t"github.com/x/internal/c"\n)\n';
+  assert.deepEqual(parseGoImports(split), ['github.com/x/internal/c']);
+});
+
+test('BUG-327 resolveDirOwners: resolves a child dir to its nearest registered ancestor and returns ALL owners sharing that path (owner-set exposure, not single-winner)', () => {
+  const ownersByDir = new Map([
+    ['internal/engine/citizens', new Set(['engine.citizens', 'feat.deathwave'])],
+    ['internal/engine', new Set(['engine.core'])],
+  ]);
+  const registeredDirList = [...ownersByDir.keys()].sort((a, b) => (b.length - a.length) || a.localeCompare(b));
+  const child = resolveDirOwners(registeredDirList, ownersByDir, 'internal/engine/citizens/fertility');
+  assert.equal(child.path, 'internal/engine/citizens', 'deepest registered ancestor wins over a shallower one');
+  assert.deepEqual([...child.owners].sort(), ['engine.citizens', 'feat.deathwave'], 'both entries sharing the path must be exposed');
+  assert.equal(resolveDirOwners(registeredDirList, ownersByDir, 'internal/nowhere'), null, 'unregistered dir resolves to null');
+});
+
+test('BUG-327 isImportRegistered: ANY-owner — an edge held only by the FEATURE owner still counts as registered', () => {
+  const fromOwners = new Set(['engine.citizens', 'feat.deathwave']);
+  const toOwners = new Set(['foundation.num']);
+  const featureOnly = new Map([['feat.deathwave', new Set(['foundation.num'])]]);
+  assert.equal(isImportRegistered(fromOwners, toOwners, featureOnly), true, 'the feature owner holding the edge must register the import');
+  const nobody = new Map([['engine.citizens', new Set(['foundation.errors'])]]);
+  assert.equal(isImportRegistered(fromOwners, toOwners, nobody), false, 'no owner holding the edge means unregistered');
+});
+
+test('BUG-327 primaryOwner: module-type wins over feature-type for the canonical finding label (display-only, deterministic)', () => {
+  const byKey = new Map([
+    ['engine.citizens', { bowType: 'module' }],
+    ['feat.deathwave', { bowType: 'feature' }],
+  ]);
+  assert.equal(primaryOwner(new Set(['feat.deathwave', 'engine.citizens']), byKey), 'engine.citizens');
+});
+
+test('BUG-327 isBenignSibling: only "descendant imports its module root" is benign (two attacker rounds)', () => {
+  // child imports its parent module root (replay/gen -> replay) — benign.
+  assert.equal(isBenignSibling('internal/harness/replay', 'internal/harness/replay', 'internal/harness/replay'), true);
+  // two distinct unregistered siblings under one coarse ancestor — NOT benign.
+  assert.equal(isBenignSibling('internal/foo', 'internal/foo/b', 'internal/foo'), false);
+  // parent module root imports its own unregistered child — NOT benign (second
+  // attacker round: the child gets no orphan finding, so this import is the only
+  // signal a registration is missing).
+  assert.equal(isBenignSibling('internal/foo', 'internal/foo/bar', 'internal/foo'), false);
 });

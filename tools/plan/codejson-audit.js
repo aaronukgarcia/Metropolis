@@ -18,6 +18,16 @@
  *   Direction C: name/type character-for-character matching, separating
  *     "does not resolve at all" (AC-2) from "resolves to something similar
  *     but not identical" (AC-6, near-miss).
+ *   Direction D (code -> registry, BUG-327): every real module-crossing Go
+ *     import from a git-tracked .go file under internal/ or cmd/ must
+ *     correspond to a registered outbound.calls edge. Attribution is
+ *     ANY-owner: a directory
+ *     resolves to every entry registering its nearest registered ancestor,
+ *     and an import counts as registered if ANY owner of the importer has an
+ *     edge to ANY owner of the imported. The only benign case is importer and
+ *     imported resolving to the SAME registered path (a sibling package
+ *     inside one module). Not gated by BOW status — an import that exists on
+ *     disk needs no permission to be flagged.
  *
  * THE "EXPECTED TO EXIST" GATE (binding, see the acceptance doc's
  * Definitions section): a module is only faulted for a MISSING path/symbol/
@@ -193,6 +203,141 @@ function findGoBearingDirs(root) {
   return found.sort();
 }
 
+// ── Go import parsing (Direction D, BUG-327: code -> registry edge check) ──
+
+/** Strips line (`//…`) and block (`/* … *​/`) comments from Go source, returning
+ * the comment-free text. Block comments may span lines; an UNCLOSED block
+ * comment consumes the rest of the source (that file wouldn't compile, so no
+ * valid import follows it). */
+function stripComments(src) {
+  const s = String(src);
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    if (s[i] === '/' && s[i + 1] === '/') {
+      const nl = s.indexOf('\n', i);
+      if (nl === -1) break;
+      out += '\n';
+      i = nl + 1;
+    } else if (s[i] === '/' && s[i + 1] === '*') {
+      const end = s.indexOf('*/', i + 2);
+      if (end === -1) break; // unclosed block comment — rest is comment
+      i = end + 2;
+    } else {
+      out += s[i];
+      i++;
+    }
+  }
+  return out;
+}
+
+/** Parses the import paths out of a single Go source file's text. Robust to
+ * non-canonical-but-compilable forms gofmt would normalise (same-line
+ * `import ("x")` / `import("x")`, no-space `import"x"`, and a `(` split onto
+ * its own line): it extracts every quoted path literal in the import section
+ * — everything before the first top-level func/type/const/var declaration —
+ * after comments are stripped. Aliased/dot/blank imports (`alias "x"`,
+ * `. "x"`, `_ "x"`) work because only the quoted path is captured. */
+function parseGoImports(src) {
+  const clean = stripComments(src);
+  const imports = [];
+  let inSection = false;
+  for (const raw of clean.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!inSection) {
+      if (/^import\b/.test(line)) inSection = true;
+      else if (/^(func|type|const|var)\b/.test(line)) break; // declaration before any import
+      else continue;
+    } else if (/^(func|type|const|var)\b/.test(line)) {
+      break; // past the import section
+    }
+    const re = /"([^"]+)"/g;
+    let m;
+    while ((m = re.exec(line)) !== null) imports.push(m[1]);
+  }
+  return imports;
+}
+
+/** Lists git-TRACKED .go files under the given repo-relative root (posix
+ * paths, sorted) — tracked-only so another lane's scratch/backup files never
+ * pollute the audit (mirrors the AC-7/AC-8 self-check's git-status scope). */
+function listTrackedGoFiles(rootRel) {
+  const out = execFileSync('git', ['ls-files', '--', rootRel], { cwd: ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return out.split('\n').map(s => s.trim()).filter(f => f.endsWith('.go')).sort();
+}
+
+// ── Direction-D attribution (BUG-327): ANY-owner, not single-winner ────────
+
+/** Deterministic tie-break when several registered entries share one path:
+ * the module-type entry wins over interface-type, which wins over feature-
+ * type; remaining ties break alphabetically by key. Used only for the
+ * canonical from/to LABEL on a finding — the registered/benign DECISION is
+ * ANY-owner (see isImportRegistered), never this single winner. */
+const BOW_TYPE_RANK = { module: 0, interface: 1, feature: 2 };
+
+/** Resolves a Go directory to its owning entries: the nearest registered
+ * ancestor path (exact path or longest registered prefix) and the SET of
+ * module keys that register exactly that path. Returns null for an
+ * unregistered directory (Direction B's orphan-directory finding owns that
+ * case). `registeredDirList` must be sorted longest-path-first so the first
+ * prefix hit is the deepest. */
+function resolveDirOwners(registeredDirList, ownersByDir, dir) {
+  for (const rd of registeredDirList) {
+    if (dir === rd || dir.startsWith(rd + '/')) {
+      return { path: rd, owners: ownersByDir.get(rd) };
+    }
+  }
+  return null;
+}
+
+/** ANY-owner registration test (BUG-327): an import is registered iff SOME
+ * owner of the importing directory has an outbound.calls edge to SOME owner
+ * of the imported directory. This is what fixes the single-winner
+ * false-positive — several entries legitimately share one path
+ * (engine.citizens and feat.deathwave on internal/engine/citizens), and an
+ * edge the FEATURE registers must count as much as one the MODULE registers. */
+function isImportRegistered(fromOwners, toOwners, registeredOutbound) {
+  for (const f of fromOwners) {
+    const outs = registeredOutbound.get(f);
+    if (!outs) continue;
+    for (const t of toOwners) {
+      if (outs.has(t)) return true;
+    }
+  }
+  return false;
+}
+
+/** Canonical single-key label for a directory's owner set (module over
+ * interface over feature, then alphabetical) — display-only, never part of
+ * the registered/benign decision. */
+function primaryOwner(ownerSet, byKey) {
+  let best = null;
+  for (const k of ownerSet) {
+    const m = byKey.get(k);
+    const rank = (m && m.bowType in BOW_TYPE_RANK) ? BOW_TYPE_RANK[m.bowType] : 3;
+    if (best === null || rank < best.rank || (rank === best.rank && k < best.key)) {
+      best = { key: k, rank };
+    }
+  }
+  return best ? best.key : [...ownerSet].sort()[0];
+}
+
+/** BUG-327 benign-sibling rule (two attacker rounds, 2026-08-21): an import is
+ * benign ONLY when importer and imported resolve to the same registered path
+ * AND the IMPORTED side is the LITERAL registered path (`relTarget ===
+ * toPath`) — i.e. a subpackage importing its own module root (e.g.
+ * internal/harness/replay/gen -> internal/harness/replay). Two distinct
+ * unregistered siblings under one coarse ancestor are NOT benign (neither side
+ * is literal); and — second attacker round — a module root importing a brand-
+ * new unregistered child is NOT benign either: that child gets no orphan
+ * finding (Direction B classifies it as a documented child-of), so the import
+ * is the only signal that a registration is missing. Only the "descendant
+ * imports its module root" direction is exempt. */
+function isBenignSibling(fromPath, relTarget, toPath) {
+  return fromPath === toPath && relTarget === toPath;
+}
+
 // ── name-matching helpers (Direction C) ────────────────────────────────────
 
 function normalizeIdentForNearMiss(s) {
@@ -217,7 +362,18 @@ const FIX_ROUTE_BY_CLASS = {
   'contract-does-not-resolve': 'code-side-defect',
   'call-edge-not-backed-by-import': 'code-side-defect',
   'name-type-near-miss': 'code-side-defect',
+  // BUG-327 Direction-D (code -> registry edges): a PROD import that exists
+  // in Go source but has no outbound.calls edge means the PLAN is missing an
+  // edge the code already relies on — same routing logic as orphan-directory.
+  'import-edge-not-registered': 'master-plan-fix',
+  // Test-only imports are deliberately NOT registrable edges (GR#20 contracts
+  // cover production dependencies); reported for visibility only.
+  'import-edge-test-only': 'informational',
 };
+
+// Classes surfaced for visibility but never filed to the BOW by --file
+// (BUG-327: test-only import edges are informational).
+const INFORMATIONAL_CLASSES = new Set(['import-edge-test-only']);
 
 const CLASS_TITLES = {
   'missing-path': 'Direction-A: code.json module path does not exist on disk (BOW status done)',
@@ -226,6 +382,8 @@ const CLASS_TITLES = {
   'contract-does-not-resolve': 'Direction-A: inbound.name does not resolve to any exported Go symbol',
   'call-edge-not-backed-by-import': 'Direction-A: registered call edge has no matching Go import',
   'name-type-near-miss': 'Direction-C: recorded name/type is a near-miss (case/spelling drift) against the real Go identifier',
+  'import-edge-not-registered': 'Direction-D: PROD Go import crosses module boundaries but no outbound.calls edge is registered in code.json',
+  'import-edge-test-only': 'Direction-D (informational): module-crossing Go import appears ONLY in _test.go files and has no registered edge',
 };
 
 // ── main audit ──────────────────────────────────────────────────────────────
@@ -285,7 +443,7 @@ async function runAudit(opts = {}) {
     if (status === 'done') state = exists ? 'path-exists-done' : 'path-missing-done';
     else state = 'not-yet-built';
     return {
-      key: m.key, bowCode: bowCodeOf(m.key), rawPath: m.path, normPath,
+      key: m.key, bowCode: bowCodeOf(m.key), rawPath: m.path, normPath, exists,
       bowStatus: status, noBowMatch: !bowStatuses.has(m.key), state,
     };
   }).sort((a, b) => a.key.localeCompare(b.key));
@@ -307,9 +465,9 @@ async function runAudit(opts = {}) {
 
   // ── Go directories we need astinfo for: every done module's Go path
   // (for AC-2/AC-6 contract checks and AC-3 import checks). ────────────────
-  const goPathForModule = new Map(); // key -> normPath (only Go-tree paths)
+  const goPathForModule = new Map(); // key -> normPath (Go-tree paths that exist on disk, regardless of BOW status — BUG-327)
   for (const r of pathRows) {
-    if (isGoTreePath(r.normPath) && r.state === 'path-exists-done') goPathForModule.set(r.key, r.normPath);
+    if (isGoTreePath(r.normPath) && r.exists) goPathForModule.set(r.key, r.normPath);
   }
   const astinfoDirs = [...new Set(goPathForModule.values())];
   const astinfo = astinfoDirs.length ? runAstinfo(astinfoDirs) : new Map();
@@ -388,15 +546,15 @@ async function runAudit(opts = {}) {
   edgeRows.sort((a, b) => (a.from + ' ' + a.to).localeCompare(b.from + ' ' + b.to));
 
   for (const edge of edgeRows) {
-    const fromStatus = statusOf(edge.from);
-    const toStatus = statusOf(edge.to);
-    if (fromStatus !== 'done' || toStatus !== 'done') {
-      edge.result = 'skip'; edge.detail = 'not both done — out of Direction-A scope per the expected-to-exist gate'; continue;
-    }
+    // BUG-327: an edge worth registering is worth checking whether the items
+    // are BOW-done or not. The only skip is an endpoint whose Go path does not
+    // exist on disk yet (nothing to import / no source to parse) — a
+    // registered edge whose code exists on disk must be backed by a real
+    // import regardless of status.
     const fromDir = goPathForModule.get(edge.from);
     const toDir = goPathForModule.get(edge.to);
     if (!fromDir || !toDir) {
-      edge.result = 'skip'; edge.detail = 'one or both endpoints have no resolvable Go-tree path (see AC-1 missing-path)'; continue;
+      edge.result = 'skip'; edge.detail = 'one or both endpoints have no Go-tree path on disk yet (see AC-1 missing-path / not-yet-built)'; continue;
     }
     const fromInfo = astinfo.get(fromDir);
     if (!fromInfo || fromInfo.error) {
@@ -448,6 +606,105 @@ async function runAudit(opts = {}) {
       });
     }
   }
+
+  // ── Direction D (BUG-327): code -> registry import-edge check ─────────────
+  // The mirror image of AC-3: AC-3 asks "is every REGISTERED edge backed by a
+  // real import?"; this asks "is every real module-crossing import REGISTERED
+  // as an outbound.calls edge?". Existence-only and NOT gated by BOW status —
+  // an import that exists in code needs no permission to be flagged. Tracked
+  // (git ls-files) .go files under internal/ and cmd/; see the header's
+  // Direction D note for the ANY-owner attribution + single benign-sibling
+  // rule.
+  //
+  // ACCEPTED LIMITATIONS (adversarial review, documented not fixed):
+  //   - tracked-only scan (git ls-files): an untracked/.gitignore'd .go file's
+  //     imports are invisible until staged — deliberate, keeps other lanes'
+  //     scratch out; Direction B (filesystem sweep) sees the dir first.
+  //   - text scan is not build-aware: `//go:build ignore`/platform-tagged/
+  //     testdata files still contribute PROD import findings (report-only).
+  //   - ANY-owner is deliberately over-permissive on shared paths (the fix for
+  //     the single-winner false positive) — an edge held by any co-owner
+  //     registers the import, hiding a specific owner's gap.
+  //   - only internal/ and cmd/ imports are considered (current repo scope).
+  const ownersByDir = new Map(); // dir -> Set(mkey)
+  for (const m of modules) {
+    const np = normalizeModulePath(m.path);
+    if (!isGoTreePath(np)) continue;
+    if (!ownersByDir.has(np)) ownersByDir.set(np, new Set());
+    ownersByDir.get(np).add(m.key);
+  }
+  const registeredDirList = [...ownersByDir.keys()]
+    .sort((a, b) => (b.length - a.length) || a.localeCompare(b));
+
+  const registeredOutbound = new Map(); // mkey -> Set(mkey)
+  for (const m of modules) {
+    registeredOutbound.set(m.key, new Set(((m.outbound && m.outbound.calls) || []).map(c => c.key)));
+  }
+
+  // Scan every registered Go-tree root — internal/ AND cmd/ (BUG-327: the
+  // original internal/-only sweep was blind to unregistered imports originating
+  // from cmd/metropolis and cmd/metctl, e.g. tickdriver.go -> foundation.num).
+  const trackedGoFiles = [...listTrackedGoFiles('internal'), ...listTrackedGoFiles('cmd')].sort();
+  const importEdges = new Map(); // "fromPath -> toPath" -> record
+  for (const file of trackedGoFiles) {
+    const dir = path.posix.dirname(file);
+    const fromRes = resolveDirOwners(registeredDirList, ownersByDir, dir);
+    if (!fromRes) continue; // unregistered source dir — Direction B's orphan finding owns it
+    let src;
+    try {
+      src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+    } catch {
+      continue; // tracked but unreadable mid-run — the AC-7/AC-8 self-check owns that condition
+    }
+    const isTest = file.endsWith('_test.go');
+    for (const imp of parseGoImports(src)) {
+      if (!imp.startsWith(goModule + '/')) continue; // external/stdlib import, not a module edge
+      const relTarget = imp.slice(goModule.length + 1);
+      if (!isGoTreePath(relTarget)) continue;
+      const toRes = resolveDirOwners(registeredDirList, ownersByDir, relTarget);
+      if (!toRes) continue; // unregistered target dir — orphan finding owns it
+      if (isBenignSibling(fromRes.path, relTarget, toRes.path)) continue; // descendant imports its module root
+      const edgeId = `${fromRes.path} -> ${toRes.path}`;
+      if (!importEdges.has(edgeId)) {
+        importEdges.set(edgeId, {
+          fromPath: fromRes.path, toPath: toRes.path,
+          fromDir: dir, toDir: relTarget, // literal dirs, for an accurate detail when a module imports its own child
+          fromOwners: fromRes.owners, toOwners: toRes.owners,
+          prodFiles: [], testFiles: [],
+        });
+      }
+      const rec = importEdges.get(edgeId);
+      (isTest ? rec.testFiles : rec.prodFiles).push(file);
+    }
+  }
+
+  const importEdgeRows = [...importEdges.values()]
+    .sort((a, b) => (a.fromPath + ' ' + a.toPath).localeCompare(b.fromPath + ' ' + b.toPath))
+    .map(rec => {
+      const registered = isImportRegistered(rec.fromOwners, rec.toOwners, registeredOutbound);
+      const prodFiles = [...new Set(rec.prodFiles)].sort();
+      const testFiles = [...new Set(rec.testFiles)].sort();
+      const row = {
+        fromPath: rec.fromPath, toPath: rec.toPath, registered,
+        prodFileCount: prodFiles.length, testFileCount: testFiles.length,
+      };
+      if (!registered) {
+        const fromKey = primaryOwner(rec.fromOwners, byKey);
+        const toKey = primaryOwner(rec.toOwners, byKey);
+        if (prodFiles.length > 0) {
+          findingsByClass.get('import-edge-not-registered').push({
+            from: fromKey, to: toKey, fromPath: rec.fromPath, toPath: rec.toPath,
+            detail: `PROD import edge ${rec.fromDir} -> ${rec.toDir} exists in Go source (${prodFiles.length} non-test file(s), e.g. ${prodFiles[0]}) but no outbound.calls edge is registered in code.json (owners ${fromKey} -> ${toKey})`,
+          });
+        } else {
+          findingsByClass.get('import-edge-test-only').push({
+            from: fromKey, to: toKey, fromPath: rec.fromPath, toPath: rec.toPath,
+            detail: `test-only import edge ${rec.fromDir} -> ${rec.toDir} (${testFiles.length} _test.go file(s), e.g. ${testFiles[0]}) has no registered outbound.calls edge — informational, test dependencies are not registrable contracts`,
+          });
+        }
+      }
+      return row;
+    });
 
   // ── AC-9: attach the fix-route label to every finding instance ───────────
   for (const [cls, instances] of findingsByClass) {
@@ -503,6 +760,10 @@ async function runAudit(opts = {}) {
       goBearingDirCount: goBearingDirs.length,
       rows: orphanRows,
     },
+    directionD: {
+      trackedGoFileCount: trackedGoFiles.length,
+      rows: importEdgeRows,
+    },
     findingsByClass: Object.fromEntries(
       Object.keys(CLASS_TITLES).map(cls => [cls, {
         title: CLASS_TITLES[cls],
@@ -526,6 +787,7 @@ function fileFindingsToBow(report) {
   const filed = [];
   for (const [cls, data] of Object.entries(report.findingsByClass)) {
     if (data.instanceCount === 0) continue;
+    if (INFORMATIONAL_CLASSES.has(cls)) continue; // test-only edges are never filed
     const title = `codejson-audit: ${data.title} (${data.instanceCount} instance(s), commit ${report.commitHash.slice(0, 10)})`;
     const lines = data.instances.map((inst, i) => `${i + 1}. ${inst.detail}`);
     const body = [
@@ -592,7 +854,15 @@ function renderMarkdown(report) {
   lines.push(`- Go-bearing directories swept: ${report.directionB.goBearingDirCount}`);
   lines.push(`- orphans: ${orphanCount}`);
   lines.push('');
-  lines.push(`## Findings by class (AC-9/AC-10) — ${report.populatedClassCount} populated of 6 defined`);
+  lines.push(`## Direction D — import edges, code -> registry (BUG-327)`);
+  const unregisteredProd = report.directionD.rows.filter(r => !r.registered && r.prodFileCount > 0).length;
+  const unregisteredTestOnly = report.directionD.rows.filter(r => !r.registered && r.prodFileCount === 0).length;
+  lines.push(`- tracked .go files under internal/ + cmd/: ${report.directionD.trackedGoFileCount}`);
+  lines.push(`- module-crossing import edges: ${report.directionD.rows.length}`);
+  lines.push(`- PROD edges with no registered outbound.calls edge: ${unregisteredProd}`);
+  lines.push(`- test-only unregistered edges (informational): ${unregisteredTestOnly}`);
+  lines.push('');
+  lines.push(`## Findings by class (AC-9/AC-10) — ${report.populatedClassCount} populated of ${Object.keys(report.findingsByClass).length} defined`);
   for (const [cls, data] of Object.entries(report.findingsByClass)) {
     lines.push(`### ${cls} — ${data.instanceCount} instance(s) — fix route: ${data.fixRoute}`);
     lines.push(data.title);
@@ -628,7 +898,12 @@ async function cli() {
   return report;
 }
 
-module.exports = { runAudit, renderMarkdown, fileFindingsToBow, normalizeModulePath, isGoTreePath, findGoBearingDirs, runAstinfo, CLASS_TITLES, FIX_ROUTE_BY_CLASS };
+module.exports = {
+  runAudit, renderMarkdown, fileFindingsToBow,
+  normalizeModulePath, isGoTreePath, findGoBearingDirs, runAstinfo,
+  parseGoImports, listTrackedGoFiles, resolveDirOwners, isImportRegistered, primaryOwner, isBenignSibling,
+  BOW_TYPE_RANK, INFORMATIONAL_CLASSES, CLASS_TITLES, FIX_ROUTE_BY_CLASS,
+};
 
 if (require.main === module) {
   cli().catch(err => { console.error(err.stack || String(err)); process.exit(1); });
