@@ -227,6 +227,12 @@ type renderSnapshot struct {
 	cursorX, cursorY int
 	stale            bool
 	activeOverlay    Overlay
+	// zoneColours is the palette reference captured under mu (FEAT-199).
+	// The map itself is treated as immutable after SetZonePalette stores
+	// it (which REPLACES the map), so reading this reference lock-free in
+	// the draw functions below is race-free. Nil = no zoning palette
+	// injected yet; zoned cells then keep their terrain colours.
+	zoneColours map[string]tcell.Color
 }
 
 func (m *MapScreen) snapshotLocked() renderSnapshot {
@@ -251,6 +257,7 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 		cursorY:       m.cursorY,
 		stale:         m.stale,
 		activeOverlay: overlayOrder[m.overlayIdx],
+		zoneColours:   m.zoneColours,
 	}
 }
 
@@ -270,7 +277,7 @@ func drawViewport(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette
 		for col := 0; col < rect.W; col++ {
 			gx, gy := snap.offsetX+col, snap.offsetY+row
 			c := snap.cellAt(gx, gy)
-			style, r := cellStyleAndRune(c, palette)
+			style, r := cellStyleAndRune(c, palette, snap.zoneColours)
 			buf.Set(rect.X+col, rect.Y+row, r, style)
 		}
 	}
@@ -285,12 +292,20 @@ func drawViewport(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette
 }
 
 // cellStyleAndRune computes cell c's two-layer style (AC-4): background
-// colour from its terrain band, foreground rune from terrain or, if
+// colour from its terrain band — or, when the cell is zoned and the
+// screen's injected zoning palette resolves the cell's semantic key, from
+// the zone family+density colour instead (FEAT-199: a zoned cell reads as
+// its zone first; the terrain underneath stays visible through unzoned
+// cells and unknown keys) — and foreground rune from terrain or, if
 // present, the road/building overlay glyph (a building takes visual
 // priority over a road, since Folkestone-64 never places both on the
 // same cell in practice, but a building is the more specific feature
-// when it does).
-func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
+// when it does). A zoned cell with a density level and neither a building
+// nor a road draws the density DIGIT ('1'..'5') as its glyph — the same
+// "foreground carries the data layer" convention the overlay glyphs use,
+// so density is readable without colour vision (UI-SPEC §2's
+// colourblind-safety discipline: never encode data in hue alone).
+func cellStyleAndRune(c cellData, palette widgets.Palette, zoneColours map[string]tcell.Color) (tcell.Style, rune) {
 	if !c.Known {
 		return tcell.StyleDefault, blankGlyph
 	}
@@ -299,6 +314,11 @@ func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
 	if tok, ok := terrainToken(c.Terrain); ok {
 		style = style.Background(palette.Color(tok))
 	}
+	if c.ZoneColourKey != "" && zoneColours != nil {
+		if col, ok := zoneColours[c.ZoneColourKey]; ok {
+			style = style.Background(col)
+		}
+	}
 
 	r := terrainGlyph(c.Terrain)
 	switch {
@@ -306,6 +326,8 @@ func cellStyleAndRune(c cellData, palette widgets.Palette) (tcell.Style, rune) {
 		r = glyphBuilding
 	case c.Road != "":
 		r = glyphRoad
+	case c.ZoneDensity >= 1 && c.ZoneDensity <= 9:
+		r = rune('0' + c.ZoneDensity)
 	}
 	return style, r
 }
@@ -331,7 +353,7 @@ func drawMinimap(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette 
 	for col := 0; col < rect.W; col++ {
 		gx0, gx1 := minimapColumnRange(col, rect.W, snap.width)
 		terrain := dominantTerrain(snap, gx0, gx1)
-		style, r := cellStyleAndRune(cellData{Terrain: terrain, Known: terrain != ""}, palette)
+		style, r := cellStyleAndRune(cellData{Terrain: terrain, Known: terrain != ""}, palette, snap.zoneColours)
 		if col >= viewStart && col < viewEnd {
 			style = palette.SelectionStyle(style)
 		}

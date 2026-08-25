@@ -87,7 +87,7 @@ func fixtureCommands(t *testing.T) map[Kind]Command {
 			CorrelationID:   corr,
 			IssuedAtTick:    107,
 			Kind:            KindZone,
-			Payload:         ZonePayload{Cell: CellRef{X: 3, Y: 7}, ZoneType: "Dwelling"},
+			Payload:         ZonePayload{Cell: CellRef{X: 3, Y: 7}, ZoneType: "Dwelling", Density: 3},
 		},
 		KindBuild: {
 			ProtocolVersion: ProtocolVersion,

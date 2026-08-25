@@ -97,6 +97,13 @@ func (s Surface) String() string {
 // carries the field so engine.build/engine.zoning have somewhere to
 // write it via WorldAPI's ownership/zoning command path (GR#20 — this
 // package does not itself interpret zoning values beyond storing them).
+//
+// FEAT-199 (2026-08-23): ZoningOffice and ZoningMining were APPENDED at
+// the end of the iota block (never inserted mid-list) so every value
+// already persisted or in flight keeps its meaning. compose's KindZone
+// write-through maps the data/zoning.json six families onto this enum:
+// residential->Residential, commercial->Commercial, office->Office,
+// industry->Industrial, farming->Agricultural, mining->Mining.
 type Zoning uint8
 
 const (
@@ -105,7 +112,16 @@ const (
 	ZoningCommercial
 	ZoningIndustrial
 	ZoningAgricultural
+	ZoningOffice
+	ZoningMining
 )
+
+// MaxZoningDensity bounds the per-cell zoning density level a command may
+// carry (FEAT-199): 0 = unzoned, 1..5 = the data-driven ladder
+// data/zoning.json declares per zone family. The per-family min/max live
+// in that file (GR#15); this constant is only the storage-space ceiling
+// ApplyOwnershipCommand hard-rejects above.
+const MaxZoningDensity uint8 = 5
 
 // OverlayScratch is the per-cell "flow scratch" (§2.4): small
 // contents-independent working values recomputed every relevant tick by
@@ -139,4 +155,12 @@ type Cell struct {
 	StructureRef uint32 // 0 = no structure; otherwise an opaque structure ID (engine.build's)
 	LandValue    float32
 	Overlay      OverlayScratch
+
+	// ZoningDensity is the cell's density level within its Zoning family
+	// (FEAT-199): 0 = unzoned/unset, 1..5 = the data-driven ladder
+	// data/zoning.json declares per family (MaxZoningDensity is the hard
+	// ceiling ApplyOwnershipCommand enforces). Stored as one packed byte
+	// in simGrid's SoA; the per-family min/max interpretation is the
+	// consumers' (compose/UI), never this package's (GR#20).
+	ZoningDensity uint8
 }

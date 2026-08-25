@@ -51,14 +51,23 @@ type viewportExtent struct {
 }
 
 // viewportCell mirrors ui.screen.map/patch.go's wireCell field for
-// field, including its omitempty rules.
+// field, including its omitempty rules. FEAT-199 adds the three zoning
+// fields (zone/zoneDensity/zoneColourKey) — additive, omitempty, so a
+// cell with no zoning produces byte-identical v1 JSON.
 type viewportCell struct {
-	X         int    `json:"x"`
-	Y         int    `json:"y"`
-	Terrain   string `json:"terrain,omitempty"`
-	Elevation int    `json:"elevation,omitempty"`
-	Road      string `json:"road,omitempty"`
-	Building  string `json:"building,omitempty"`
+	X           int    `json:"x"`
+	Y           int    `json:"y"`
+	Terrain     string `json:"terrain,omitempty"`
+	Elevation   int    `json:"elevation,omitempty"`
+	Road        string `json:"road,omitempty"`
+	Building    string `json:"building,omitempty"`
+	Zone        string `json:"zone,omitempty"`
+	ZoneDensity int    `json:"zoneDensity,omitempty"`
+	// ZoneColourKey is data/zoning.json's semantic palette key for this
+	// cell's family+density (e.g. "res3"). The UI resolves it against its
+	// own injected palette — the wire never carries a raw colour (GR#15:
+	// colours are data; the key is the stable reference).
+	ZoneColourKey string `json:"zoneColourKey,omitempty"`
 }
 
 // viewportWirePatch mirrors ui.screen.map/patch.go's wirePatch.
@@ -142,6 +151,14 @@ func (st *simState) buildViewportPatch() (json.RawMessage, error) {
 				// exact "looks fine, means nothing" failure this item
 				// was raised against.
 				Building: structureLabel(c.StructureRef),
+				// FEAT-199 zoning fields — populated only when the cell
+				// actually carries zoned state (the KindZone write-through
+				// in compose.go), so unzoned cells stay byte-identical to
+				// the v1 schema. zoneColourKeyForCell is a pure function
+				// of (cell, catalogue); no map iteration anywhere.
+				Zone:          zoningFamilyIDOrEmpty(c.Zoning),
+				ZoneDensity:   int(c.ZoningDensity),
+				ZoneColourKey: st.zoneColourKeyForCell(c.Zoning, c.ZoningDensity),
 			})
 		}
 	}

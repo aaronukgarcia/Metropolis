@@ -40,6 +40,15 @@ type wireCell struct {
 	Elevation int    `json:"elevation,omitempty"`
 	Road      string `json:"road,omitempty"`
 	Building  string `json:"building,omitempty"`
+	// FEAT-199 zoning fields (additive, omitempty): Zone is the
+	// data/zoning.json family id ("residential", ...), ZoneDensity the
+	// 1..5 ladder level (omitted at 0 = unzoned), ZoneColourKey the
+	// family+density semantic palette key ("res3"). This package resolves
+	// the key against its own injected palette (SetZonePalette) — it
+	// never sees an engine type and never hardcodes a colour (AC-1/GR#15).
+	Zone          string `json:"zone,omitempty"`
+	ZoneDensity   int    `json:"zoneDensity,omitempty"`
+	ZoneColourKey string `json:"zoneColourKey,omitempty"`
 }
 
 type wirePatch struct {

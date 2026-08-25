@@ -963,6 +963,12 @@
       "message": "operation on World value that is not the one NewWorld constructed (a struct copy)",
       "remedy": "BUG-064: World embeds its mutex-guarded state by value, mirroring engine.core's Engine. A struct copy (`cp := *w`) gets its OWN, independently-zeroed mu but ALIASES the original's tiles map, defeating mutual exclusion. Every WorldAPI method and every mu-guarded internal helper (ensureTile, tilePrice) rejects a copy with this code, before its own mu is ever touched, exactly as engine.core.Engine's checkNotCopied/ErrEngineCopied does for the analogous SEC-014/SEC-016 hazard. Always call methods on the original *World/*WorldAPI NewWorld/NewWorldAPI returned, never on a dereferenced copy."
     },
+    "MET-E407": {
+      "severity": "error",
+      "module": "engine.world",
+      "message": "zoning density {density} rejected for tile {tile}: outside the data/zoning.json density range 0-5",
+      "remedy": "FEAT-199: a per-cell zoning density is a level in [0,5] (0 = unzoned, 1-5 = the data-driven ladder in data/zoning.json). Re-issue the OwnershipCommand with NewDensity inside that range; engine.world never clamps silently."
+    },
     "MET-E500": {
       "severity": "error",
       "module": "engine.season",

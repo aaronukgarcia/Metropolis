@@ -7,6 +7,8 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
+
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	enginecore "github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/debug"
@@ -394,6 +396,30 @@ var newBootRegistry = func() *registry.Registry { return registry.NewRegistry() 
 // file, which is what GR#15 requires.
 var bootSecondsPerMonthAt1x = enginecore.LoadDefaultSecondsPerMonthAt1x
 
+// bootZonePalette loads data/zoning.json's colours map (FEAT-199) as the
+// semantic-key -> tcell colour table the map screen resolves zone cells
+// against. A package-level var indirection mirrors bootSecondsPerMonthAt1x
+// above: tests may substitute it to drive the real boot path without
+// depending on the shipped file's placeholder values; production always
+// reads the data file, which is what GR#15 requires.
+var bootZonePalette = func(correlationID string) (map[string]tcell.Color, error) {
+	dir, err := data.ResolveDataDir(correlationID)
+	if err != nil {
+		return nil, err
+	}
+	catalogue, err := data.LoadZoningFile(dir, correlationID)
+	if err != nil {
+		return nil, err
+	}
+	colours := make(map[string]tcell.Color, len(catalogue.Colours))
+	for key, idx := range catalogue.Colours {
+		// tcell's 256-colour indices ARE its low numeric values (XTerm
+		// numbering) — PaletteColor(idx) is the direct data->Color bridge.
+		colours[key] = tcell.PaletteColor(idx)
+	}
+	return colours, nil
+}
+
 // bootCore wires int.protocol + engine.core (via the composition root) +
 // ui.core + ui.screen.map + the module registry (AC-1a/AC-2/AC-5a) and
 // starts core.Engine.RunCommandLoop and ui.core.ViewsLoop.Run as
@@ -482,6 +508,21 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// construction) would make that match ambiguous against anything else
 	// that ever used the shared ID.
 	mapCorrID := errs.NewCorrelationID()
+	// FEAT-199: load the zoning palette from data/zoning.json — the SAME
+	// file the engine side resolves semantic keys from (GR#3/GR#15: one
+	// source of truth for the colours; the wire carries only the key).
+	// A load failure is a loud boot failure, matching every other
+	// data-file consumer in this boot path: a binary whose zoning
+	// catalogue is missing or corrupt must say so, not render an
+	// unexplained map.
+	zonePalette, zonePaletteErr := bootZonePalette(correlationID)
+	if zonePaletteErr != nil {
+		cancel()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, zonePaletteErr, map[string]any{
+			"component": "data.LoadZoningFile",
+		})
+	}
 	w := &skeletonWiring{
 		correlationID: correlationID,
 		registry:      reg,
@@ -494,6 +535,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		cancel:        cancel,
 		engineDone:    make(chan struct{}),
 	}
+	w.mapScreen.SetZonePalette(zonePalette)
 	// FEAT-208 increment 2: router replaces ui.core.ViewsLoop as this
 	// binary's transport consumer — see the router/viewStore field doc
 	// comments above for the full rationale. Constructing it here does

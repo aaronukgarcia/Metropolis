@@ -44,4 +44,9 @@ const (
 	// (SEC-014/SEC-016 family) — see World.self's doc comment
 	// (grid.go).
 	ErrWorldCopied = "MET-E406"
+
+	// ErrZoningDensityOutOfRange (FEAT-199): an OwnershipCommand carried a
+	// NewDensity above MaxZoningDensity. Rejected whole — no field of the
+	// target cell mutates; engine.world never clamps silently.
+	ErrZoningDensityOutOfRange = "MET-E407"
 )

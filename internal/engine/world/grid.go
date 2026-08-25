@@ -60,28 +60,32 @@ type terrainGrid struct {
 }
 
 // simGrid is the full-simulation SoA, allocated only for owned tiles:
-// owner/zoning/structureRef/landValue/overlay scratch — 17 bytes/cell.
+// owner/zoning/zoningDensity/structureRef/landValue/overlay scratch —
+// 18 bytes/cell (FEAT-199 added the one density byte; memory_test.go's
+// perCellSimBytes lower bound tracks this field list exactly).
 type simGrid struct {
-	owner        []uint32
-	zoning       []Zoning
-	structureRef []uint32
-	landValue    []float32
-	traffic      []uint8
-	utility      []uint8
-	pollution    []uint8
-	decay        []uint8
+	owner         []uint32
+	zoning        []Zoning
+	zoningDensity []uint8
+	structureRef  []uint32
+	landValue     []float32
+	traffic       []uint8
+	utility       []uint8
+	pollution     []uint8
+	decay         []uint8
 }
 
 func newSimGrid() *simGrid {
 	return &simGrid{
-		owner:        make([]uint32, CellsPerTile),
-		zoning:       make([]Zoning, CellsPerTile),
-		structureRef: make([]uint32, CellsPerTile),
-		landValue:    make([]float32, CellsPerTile),
-		traffic:      make([]uint8, CellsPerTile),
-		utility:      make([]uint8, CellsPerTile),
-		pollution:    make([]uint8, CellsPerTile),
-		decay:        make([]uint8, CellsPerTile),
+		owner:         make([]uint32, CellsPerTile),
+		zoning:        make([]Zoning, CellsPerTile),
+		zoningDensity: make([]uint8, CellsPerTile),
+		structureRef:  make([]uint32, CellsPerTile),
+		landValue:     make([]float32, CellsPerTile),
+		traffic:       make([]uint8, CellsPerTile),
+		utility:       make([]uint8, CellsPerTile),
+		pollution:     make([]uint8, CellsPerTile),
+		decay:         make([]uint8, CellsPerTile),
 	}
 }
 

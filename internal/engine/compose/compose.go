@@ -22,6 +22,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -621,6 +622,15 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract_terms_data"})
 	}
 
+	// FEAT-199: the zoning density catalogue (data/zoning.json) — loaded
+	// once at Wire, read-only afterwards, same discipline as attractTerms
+	// above. Backs the KindZone write-through's slug->family/density
+	// validation and the f1.viewport publish's palette keys.
+	zoningCatalogue, err := loadZoningCatalogue(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "zoning_wire"})
+	}
+
 	// FEAT-167 completion (docs/planning/icd/engine.services-coverage.md,
 	// docs/planning/icd/engine.firms-labourmarket.md): construct the two
 	// remaining §11 term source modules. Resolved BEFORE the first hook
@@ -762,6 +772,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		traffic:                 trafficAPI,
 		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
+		zoning:                  zoningCatalogue,
 		leisureVenuesRegistered: make(map[uint64]bool),
 		treasury:                ledgerBalance(financeAPI, finance.AcctTreasury),
 		citizenWealth:           ledgerBalance(financeAPI, finance.AcctHouseholds),
@@ -924,6 +935,12 @@ type simState struct {
 	leisure      *leisure.LeisureAPI
 	refuse       *refuse.RefuseAPI
 	attractTerms attractTermsData
+
+	// FEAT-199 (zoning_wire.go): the data/zoning.json catalogue, loaded
+	// once at Wire and read-only afterwards. Backs the KindZone
+	// write-through's slug->family resolution + density validation and
+	// the f1.viewport publish's semantic palette keys.
+	zoning data.ZoningCatalogue
 
 	// FEAT-167 completion (docs/planning/icd/engine.services-coverage.md,
 	// docs/planning/icd/engine.firms-labourmarket.md): the two remaining
@@ -1726,7 +1743,35 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		if err != nil {
 			return err
 		}
-		return st.buildAPI.SubmitZoneCommand(build.ZoneCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Zone: build.ZoneType(p.ZoneType)})
+		// FEAT-199: validate the commanded density against the
+		// data/zoning.json catalogue BEFORE anything is submitted — a
+		// rejected command must mutate no zone state anywhere (build's
+		// acceptance-time-gate posture, extended to the density ladder).
+		newZoning, newDensity, err := st.resolveZoneCommandDensity(p.ZoneType, p.Density)
+		if err != nil {
+			return err
+		}
+		if err := st.buildAPI.SubmitZoneCommand(build.ZoneCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Zone: build.ZoneType(p.ZoneType)}); err != nil {
+			return err
+		}
+		// FEAT-199 write-through: record family + density in engine.world's
+		// per-cell ledger so Cell.Zoning/ZoningDensity are real state the
+		// viewport publish reads. build accepted the zone above; this is
+		// the registered compose->world edge doing its one job.
+		if res := st.world.ApplyOwnershipCommand(world.OwnershipCommand{
+			CorrelationID: st.cid,
+			Tile:          tile,
+			Local:         local,
+			NewOwner:      playerOwnerID,
+			NewZoning:     newZoning,
+			NewDensity:    newDensity,
+		}); !res.Accepted {
+			if res.Error == nil {
+				return errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "world", "cause": "zoning write-through rejected without an error"})
+			}
+			return errs.New(ErrGameplayRejectionPassthrough, st.cid, map[string]any{"display": res.Error.Display})
+		}
+		return nil
 	case protocol.KindBuild:
 		p, ok := cmd.Payload.(protocol.BuildPayload)
 		if !ok {

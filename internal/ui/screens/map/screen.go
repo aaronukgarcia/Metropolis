@@ -5,6 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/gdamore/tcell/v2"
+
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
@@ -18,6 +20,11 @@ type cellData struct {
 	Elevation int
 	Road      string
 	Building  string
+	// FEAT-199 zoning state, straight off the wire (see wireCell's doc):
+	// family id, 1..5 density level (0 = unzoned), semantic palette key.
+	Zone          string
+	ZoneDensity   int
+	ZoneColourKey string
 	// Known is false for a grid slot that has never been covered by an
 	// applied full or sparse patch (e.g. before the first full snapshot
 	// arrives, or a coordinate outside the last full snapshot's extent).
@@ -58,6 +65,12 @@ type InspectResult struct {
 	Road string
 	// Building is "" when the cell has no named building.
 	Building string
+	// Zone/ZoneDensity/ZoneColourKey are the cell's FEAT-199 zoning
+	// state: family id, 1..5 density level (0 = unzoned), and the
+	// semantic palette key. Zero values when the cell is unzoned.
+	Zone          string
+	ZoneDensity   int
+	ZoneColourKey string
 }
 
 // MapScreen is F1: see doc.go for the full package contract.
@@ -109,6 +122,17 @@ type MapScreen struct {
 	// nil map reads cleanly, so an ApplyDelta before any bind is an
 	// "unknown subscription" log, never a panic.
 	subs map[protocol.SubscriptionID]string
+
+	// zoneColours maps data/zoning.json semantic palette keys ("res3",
+	// "mine5", ...) to their tcell colours (FEAT-199). Injected whole via
+	// SetZonePalette by the composition caller (cmd/metropolis, fed from
+	// the same JSON file the engine side resolves keys from) — this
+	// package never hardcodes a zone colour and never reads a data file
+	// itself (AC-1/GR#15). Treated as immutable after injection: a Render
+	// snapshot captures the map REFERENCE, so SetZonePalette REPLACES the
+	// map rather than mutating it in place — an in-flight render can then
+	// never observe a half-updated palette.
+	zoneColours map[string]tcell.Color
 }
 
 // NewMapScreen constructs an empty MapScreen (no snapshot applied yet).
@@ -128,6 +152,26 @@ func NewMapScreen(correlationID string, palette widgets.Palette) *MapScreen {
 	// makes checkNotCopied work.
 	m.self.Store(m)
 	return m
+}
+
+// SetZonePalette replaces the screen's zoning palette wholesale (FEAT-199):
+// semantic palette key -> tcell colour, sourced by the caller from
+// data/zoning.json's colours map. Replacing (never mutating) the map keeps
+// an in-flight Render's captured reference immutable — see the zoneColours
+// field's doc comment. A key the wire names but this palette lacks renders
+// with the terrain colour (a missing entry degrades to "no zone tint",
+// never a panic).
+func (m *MapScreen) SetZonePalette(colours map[string]tcell.Color) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetZonePalette"}); err != nil {
+		return
+	}
+	m.mu.Lock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "SetZonePalette"}); err != nil {
+		m.mu.Unlock()
+		return
+	}
+	m.zoneColours = colours
+	m.mu.Unlock()
 }
 
 // Subscribe sends the "f1.viewport" Subscribe command via send (AC-1).
@@ -292,11 +336,14 @@ func (m *MapScreen) applyFullLocked(p wirePatch) {
 			continue
 		}
 		grid[c.Y*w+c.X] = cellData{
-			Terrain:   c.Terrain,
-			Elevation: c.Elevation,
-			Road:      c.Road,
-			Building:  c.Building,
-			Known:     true,
+			Terrain:       c.Terrain,
+			Elevation:     c.Elevation,
+			Road:          c.Road,
+			Building:      c.Building,
+			Zone:          c.Zone,
+			ZoneDensity:   c.ZoneDensity,
+			ZoneColourKey: c.ZoneColourKey,
+			Known:         true,
 		}
 	}
 	m.width, m.height = w, h
@@ -312,11 +359,14 @@ func (m *MapScreen) applySparseLocked(p wirePatch) {
 			continue
 		}
 		m.grid[c.Y*m.width+c.X] = cellData{
-			Terrain:   c.Terrain,
-			Elevation: c.Elevation,
-			Road:      c.Road,
-			Building:  c.Building,
-			Known:     true,
+			Terrain:       c.Terrain,
+			Elevation:     c.Elevation,
+			Road:          c.Road,
+			Building:      c.Building,
+			Zone:          c.Zone,
+			ZoneDensity:   c.ZoneDensity,
+			ZoneColourKey: c.ZoneColourKey,
+			Known:         true,
 		}
 	}
 }
@@ -518,12 +568,15 @@ func (m *MapScreen) Inspect(x, y int) InspectResult {
 		return InspectResult{Found: false, X: x, Y: y}
 	}
 	return InspectResult{
-		Found:     true,
-		X:         x,
-		Y:         y,
-		Terrain:   c.Terrain,
-		Elevation: c.Elevation,
-		Road:      c.Road,
-		Building:  c.Building,
+		Found:         true,
+		X:             x,
+		Y:             y,
+		Terrain:       c.Terrain,
+		Elevation:     c.Elevation,
+		Road:          c.Road,
+		Building:      c.Building,
+		Zone:          c.Zone,
+		ZoneDensity:   c.ZoneDensity,
+		ZoneColourKey: c.ZoneColourKey,
 	}
 }

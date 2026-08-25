@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "comment": "FEAT-199 zoning density catalogue: six zone types, each with a density ladder 1-5 (Blue's light-green..very-dark-green generalised; industry stays ONE type per Aaron 2026-08-18). Palette keys are semantic (res1..res5 etc) and colours are tcell 256-colour indices -- PLACEHOLDERS pending Aaron's rendered-swatch UI pass; edit here, never in Go (GR#15). aliases maps each zone family to the SS34 eight-way build-catalogue slugs that resolve into it (compose's KindZone write-through).",
+  "zones": [
+    {
+      "id": "residential",
+      "densityMin": 1,
+      "densityMax": 5,
+      "paletteKeys": ["res1", "res2", "res3", "res4", "res5"],
+      "aliases": ["dwelling"]
+    },
+    {
+      "id": "commercial",
+      "densityMin": 1,
+      "densityMax": 5,
+      "paletteKeys": ["com1", "com2", "com3", "com4", "com5"],
+      "aliases": ["shop", "entertainment"]
+    },
+    {
+      "id": "office",
+      "densityMin": 1,
+      "densityMax": 5,
+      "paletteKeys": ["off1", "off2", "off3", "off4", "off5"],
+      "aliases": ["office"]
+    },
+    {
+      "id": "industry",
+      "densityMin": 1,
+      "densityMax": 5,
+      "paletteKeys": ["ind1", "ind2", "ind3", "ind4", "ind5"],
+      "aliases": ["manufacturing", "heavy_industry"]
+    },
+    {
+      "id": "farming",
+      "densityMin": 1,
+      "densityMax": 5,
+      "paletteKeys": ["farm1", "farm2", "farm3", "farm4", "farm5"],
+      "aliases": ["farming"]
+    },
+    {
+      "id": "mining",
+      "densityMin": 1,
+      "densityMax": 5,
+      "paletteKeys": ["mine1", "mine2", "mine3", "mine4", "mine5"],
+      "aliases": ["mining"]
+    }
+  ],
+  "colours": {
+    "res1": 194,
+    "res2": 157,
+    "res3": 120,
+    "res4": 71,
+    "res5": 22,
+    "com1": 195,
+    "com2": 116,
+    "com3": 80,
+    "com4": 44,
+    "com5": 30,
+    "off1": 189,
+    "off2": 147,
+    "off3": 141,
+    "off4": 99,
+    "off5": 61,
+    "ind1": 223,
+    "ind2": 215,
+    "ind3": 179,
+    "ind4": 137,
+    "ind5": 94,
+    "farm1": 229,
+    "farm2": 191,
+    "farm3": 143,
+    "farm4": 101,
+    "farm5": 58,
+    "mine1": 224,
+    "mine2": 180,
+    "mine3": 131,
+    "mine4": 88,
+    "mine5": 52
+  }
+}

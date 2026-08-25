@@ -191,6 +191,15 @@ func (BuyPayload) commandKind() Kind { return KindBuy }
 type ZonePayload struct {
 	Cell     CellRef `json:"cell"`
 	ZoneType string  `json:"zoneType"`
+
+	// Density is the FEAT-199 zoning density level the player paints:
+	// 0 = engine default/unspecified (omitted on the wire), 1..5 = the
+	// ladder data/zoning.json declares per zone family. Like ZoneType,
+	// the per-family min/max are DATA (GR#15) — this package carries the
+	// level opaquely; the receiving engine side validates it against the
+	// catalogue. Additive field per this file's extension rule: a sender
+	// that never sets it produces byte-identical v1 JSON.
+	Density int `json:"density,omitempty"`
 }
 
 func (ZonePayload) commandKind() Kind { return KindZone }

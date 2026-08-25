@@ -28,12 +28,13 @@ func perCellTerrainBytes() uintptr {
 func perCellSimBytes() uintptr {
 	var owner uint32
 	var zoning Zoning
+	var zoningDensity uint8
 	var structRef uint32
 	var landValue float32
 	var traffic, utility, pollution, decay uint8
-	return unsafe.Sizeof(owner) + unsafe.Sizeof(zoning) + unsafe.Sizeof(structRef) +
-		unsafe.Sizeof(landValue) + unsafe.Sizeof(traffic) + unsafe.Sizeof(utility) +
-		unsafe.Sizeof(pollution) + unsafe.Sizeof(decay)
+	return unsafe.Sizeof(owner) + unsafe.Sizeof(zoning) + unsafe.Sizeof(zoningDensity) +
+		unsafe.Sizeof(structRef) + unsafe.Sizeof(landValue) + unsafe.Sizeof(traffic) +
+		unsafe.Sizeof(utility) + unsafe.Sizeof(pollution) + unsafe.Sizeof(decay)
 }
 
 const fourGB = 4 * 1024 * 1024 * 1024

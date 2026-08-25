@@ -169,6 +169,7 @@ func (a *WorldAPI) TileCells(c TileCoord, correlationID string) ([]Cell, error) 
 		if tl.sim != nil {
 			out[idx].Owner = tl.sim.owner[idx]
 			out[idx].Zoning = tl.sim.zoning[idx]
+			out[idx].ZoningDensity = tl.sim.zoningDensity[idx]
 			out[idx].StructureRef = tl.sim.structureRef[idx]
 			out[idx].LandValue = tl.sim.landValue[idx]
 			out[idx].Overlay = OverlayScratch{
@@ -222,6 +223,7 @@ func (a *WorldAPI) CellAt(t TileCoord, local CellLocal, correlationID string) (C
 	if tl.sim != nil {
 		c.Owner = tl.sim.owner[idx]
 		c.Zoning = tl.sim.zoning[idx]
+		c.ZoningDensity = tl.sim.zoningDensity[idx]
 		c.StructureRef = tl.sim.structureRef[idx]
 		c.LandValue = tl.sim.landValue[idx]
 		c.Overlay = OverlayScratch{
@@ -271,14 +273,22 @@ func (a *WorldAPI) TileAt(c TileCoord, correlationID string) (TileInfo, error) {
 }
 
 // OwnershipCommand mutates one cell's ownership-governed fields
-// (zoning/owner) on a tile the caller already owns — AC-1's "ownership
-// mutations expressed only as commands (never a direct field-set)".
+// (zoning/zoningDensity/owner) on a tile the caller already owns — AC-1's
+// "ownership mutations expressed only as commands (never a direct
+// field-set)".
 type OwnershipCommand struct {
 	CorrelationID string
 	Tile          TileCoord
 	Local         CellLocal
 	NewOwner      uint32
 	NewZoning     Zoning
+	// NewDensity is the cell's FEAT-199 density level: 0 = unzoned/unset,
+	// 1..MaxZoningDensity = the ladder data/zoning.json declares per zone
+	// family. A value above MaxZoningDensity rejects the WHOLE command
+	// with ErrZoningDensityOutOfRange (never clamped silently); the
+	// per-family min/max are the caller's data-driven concern (GR#15/GR#20),
+	// not this package's.
+	NewDensity uint8
 }
 
 // ApplyOwnershipCommand is the ONLY way a caller may change a cell's
@@ -320,8 +330,19 @@ func (a *WorldAPI) ApplyOwnershipCommand(cmd OwnershipCommand) protocol.CommandR
 		return result(false, errs.New(ErrTileOutOfBounds, cmd.CorrelationID, map[string]any{"tile": cmd.Tile, "local": cmd.Local, "sizeKm": ExpansionSizeM / 1000}))
 	}
 	idx := localIndex(cmd.Local.Col, cmd.Local.Row)
+	// FEAT-199: reject an out-of-space density BEFORE any field is
+	// written — a rejected command must mutate no zone state (same
+	// acceptance-time-gate posture SubmitZoneCommand documents).
+	if cmd.NewDensity > MaxZoningDensity {
+		return result(false, errs.New(ErrZoningDensityOutOfRange, cmd.CorrelationID, map[string]any{
+			"tile":    cmd.Tile,
+			"density": cmd.NewDensity,
+			"max":     MaxZoningDensity,
+		}))
+	}
 	tl.sim.owner[idx] = cmd.NewOwner
 	tl.sim.zoning[idx] = cmd.NewZoning
+	tl.sim.zoningDensity[idx] = cmd.NewDensity
 	return result(true, nil)
 }
 
