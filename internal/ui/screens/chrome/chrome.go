@@ -47,13 +47,20 @@ type Effects struct {
 // position, speed multiplier, money, population, and credit rating. It is
 // a plain value snapshot, immutable once published — Render reads a copy,
 // never a live reference.
+//
+// BUG-324 corrected three of the per-field comments below. They were
+// written before any engine-side publisher for "chrome.topbar" existed
+// and described units the engine does not use; the real publisher
+// (internal/engine/compose/chrome_publish.go, which carries the full
+// per-field sourcing ledger) is now the ground truth and these comments
+// follow it. Comments only — no field, tag, or rendered format changed.
 type Figures struct {
-	Date       string `json:"date"`       // calendar month/year, e.g. "Aug 2026"
+	Date       string `json:"date"`       // month name + ordinal world year, e.g. "Jan Y1" (no real-world calendar year is pinned anywhere in the engine)
 	ClockCycle int    `json:"clockCycle"` // 0..29 — which of the 30 logistics day-ticks within the month
-	Speed      int    `json:"speed"`      // 0/1/2/3 — pause / 1x / 2x / 4x (UI-SPEC §3)
-	Money      int64  `json:"money"`      // integer money, minor units
+	Speed      int    `json:"speed"`      // engine clock multiplier: 0 = paused, else 1/2/4/8 (engine.core Speed1x..Speed8xDebug)
+	Money      int64  `json:"money"`      // city treasury in WHOLE POUNDS (the engine's own unit is micropounds; the publisher converts)
 	Population int64  `json:"population"` // current citizen count
-	Rating     string `json:"rating"`     // credit rating, e.g. "AA"
+	Rating     string `json:"rating"`     // credit rating on engine.finance's own 0..1000 scale, e.g. "1000/1000" — there is no letter-grade scale in the engine
 }
 
 // Chrome is the persistent chrome: the top bar (figures) and the bottom

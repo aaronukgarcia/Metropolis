@@ -62,10 +62,15 @@ func recordingEffects() (Effects, *int, *recordingNavigator) {
 }
 
 // TestFiguresRenderAndUpdate is AC-1: the top bar renders date, clock-cycle,
-// speed, money, population, and rating from injected values, and each field
+// money, population, and rating from injected values, and each field
 // updates when a new delta arrives. A build that rendered a static top bar
 // (or dropped a field) would fail the "want" substring check or the update
 // half.
+//
+// FEAT-216: SPEED is deliberately absent from the rendered line — the
+// bottom bar (cmd/metropolis/statusbar.go) owns machine state. The field is
+// still carried and still decoded, which TestFEAT216_SpeedIsCarriedButNotRendered
+// below asserts separately; what changed is only what this line prints.
 func TestFiguresRenderAndUpdate(t *testing.T) {
 	c := NewChrome("test", widgets.DefaultPalette, Effects{})
 
@@ -75,7 +80,7 @@ func TestFiguresRenderAndUpdate(t *testing.T) {
 
 	top := rowString(buf, 0, 80)
 	for _, want := range []string{
-		"Aug 2026", "cycle 14/30", "speed 2", "money 123456", "pop 50000", "rating AA",
+		"Aug 2026", "cycle 14/30", "money 123456", "pop 50000", "rating AA",
 	} {
 		if !strings.Contains(top, want) {
 			t.Errorf("top bar %q does not contain %q", top, want)
@@ -83,16 +88,46 @@ func TestFiguresRenderAndUpdate(t *testing.T) {
 	}
 
 	// A second delta updates every field (AC-1's "updates when a new delta
-	// arrives").
+	// arrives"). A fresh buffer, not the one above: Render draws only as many
+	// cells as its string is long and never blanks the row, so reusing the
+	// buffer leaves a tail of the LONGER previous line behind and the
+	// assertions would be reading two renders spliced together. (The live
+	// binary does not have this problem — chromeTopBarDraw blanks row 0 in
+	// the bar's own style before calling Render.)
+	buf = core.NewBuffer(80, 6)
 	c.ApplyFiguresPatch(mustFiguresPatch(t, "Sep 2026", 5, 1, 999, 60000, "BB"))
 	c.Render(buf, core.Rect{X: 0, Y: 0, W: 80, H: 6})
 	top = rowString(buf, 0, 80)
 	for _, want := range []string{
-		"Sep 2026", "cycle 5/30", "speed 1", "money 999", "pop 60000", "rating BB",
+		"Sep 2026", "cycle 5/30", "money 999", "pop 60000", "rating BB",
 	} {
 		if !strings.Contains(top, want) {
 			t.Errorf("updated top bar %q does not contain %q", top, want)
 		}
+	}
+}
+
+// TestFEAT216_SpeedIsCarriedButNotRendered pins both halves of the lead's
+// ruling at once, because each half is wrong without the other:
+//
+//   - the top bar must NOT print speed (the bottom bar owns machine state,
+//     and two bars printing one fact in two formats is what the ruling
+//     removes), and
+//   - Figures must still CARRY the real value, so the view keeps telling the
+//     truth to any caller. Zeroing the field to satisfy the layout would
+//     make the data lie.
+func TestFEAT216_SpeedIsCarriedButNotRendered(t *testing.T) {
+	c := NewChrome("test", widgets.DefaultPalette, Effects{})
+	c.ApplyFiguresPatch(mustFiguresPatch(t, "Aug 2026", 14, 4, 123456, 50000, "AA"))
+
+	if got := c.Figures().Speed; got != 4 {
+		t.Errorf("Figures().Speed = %d, want 4 — the field must still carry the real multiplier", got)
+	}
+
+	buf := core.NewBuffer(80, 6)
+	c.Render(buf, core.Rect{X: 0, Y: 0, W: 80, H: 6})
+	if top := rowString(buf, 0, 80); strings.Contains(strings.ToLower(top), "speed") {
+		t.Errorf("top bar still prints speed: %q", top)
 	}
 }
 

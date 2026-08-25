@@ -48,11 +48,20 @@ import (
 //     There was no Space binding anywhere in the tree to reuse, so this fix
 //     binds Space itself — see bootCore's registerClockKeys.
 //
-// So the honest scope line: wiring chrome up for real is out of scope and
-// stays open (it needs its view registered engine-side first). What this
-// does instead is put the ALREADY-REGISTERED engine.status figures on
-// screen, on one line, on every screen, which is what "the player can see
-// that time is moving" actually requires.
+// So the honest scope line: wiring chrome up for real was out of scope for
+// BUG-322. What this does instead is put the ALREADY-REGISTERED
+// engine.status figures on screen, on one line, on every screen, which is
+// what "the player can see that time is moving" actually requires.
+//
+// UPDATE (BUG-324): the blocker named above is gone — compose.Wire now
+// registers "chrome.topbar" (internal/engine/compose/chrome_publish.go) and
+// the real chrome IS wired, as a top-bar overlay on row 0, with the screens
+// inset below it. This bar is NOT superseded by it. The two divide the
+// frame by subject (FEAT-216): chrome's top bar carries WORLD state (date,
+// cycle, money, population, rating) and this bar carries MACHINE state
+// (tick, month, speed, running/paused, key help). Speed was the one figure
+// both printed; FEAT-216 removed it from the TOP bar, and this bar — the
+// one with the controls next to it — keeps it, unchanged.
 type statusBar struct {
 	mu   sync.Mutex
 	have bool

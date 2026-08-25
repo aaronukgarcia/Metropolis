@@ -2,6 +2,7 @@ package compose
 
 import (
 	"errors"
+	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
@@ -312,6 +313,15 @@ type viewRegistration struct {
 var viewRegistrationOrder = []viewRegistration{
 	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
 	{name: financeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildFinanceBalanceSheetPatch }},
+	// BUG-324: "chrome.topbar" — the global chrome's top-bar figures
+	// (chrome_publish.go). Not one of the design's §6 F-screen
+	// fast-follows: it is the view the ALWAYS-visible chrome renders
+	// from, and internal/ui/screens/chrome could not be registered in
+	// cmd/metropolis at all until it existed, because an unregistered
+	// view's Subscribe is rejected and the top bar would have rendered
+	// permanently empty — the same failure mode "f1.viewport" shows
+	// today.
+	{name: chromeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildChromeTopBarPatch }},
 	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
 }
 
@@ -767,6 +777,14 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		citizenWealth:           ledgerBalance(financeAPI, finance.AcctHouseholds),
 		nextCitizenID:           1,
 	}
+	// treasury is seeded through setTreasury (never assigned directly)
+	// so the BUG-324 publish mirror is correct from before the engine
+	// ever ticks. BUG-355: the pot itself comes from the FinanceAPI
+	// ledger (seedOpeningBalances above), so the mirror is seeded from
+	// that same ledger value, not a literal — a bar that reads £0 for
+	// the first frame and then jumps is the same class of wrong number
+	// as one that always reads £0.
+	st.setTreasury(st.treasury)
 
 	// Establish the non-zero seed population (AC-8's precondition).
 	if err := st.spawnCitizens(0, seedCitizenCount); err != nil {
@@ -886,6 +904,22 @@ func idNamespaceRangesDisjoint(fertilityChildIDBase, migrantIDBase uint64) bool 
 // guard (and would make this type an astgate SEC-020 candidate for
 // nothing) — the fix for the concurrency gap above is "read through the
 // module's own lock," never "add a lock here."
+//
+// BUG-324 addendum: the top bar needs the player's MONEY, and the
+// correction above is precisely why it could not simply read
+// st.treasury. It also could not read engine.finance's AcctTreasury
+// ledger account instead: baseline one never funds that account (Wire
+// seeds st.treasury, and financeHook moves st.treasury — the finance
+// ledger's own accounts stay at zero, which is why "f2.finance"'s
+// balance sheet publishes zeros today too). So the money the player
+// actually has lives in an unguarded plain field, and both honest
+// alternatives — publish a zero, or drop money from the bar — were
+// worse than making the real figure safely readable. treasuryPub below
+// is that: a publish-only atomic MIRROR of st.treasury, written by
+// setTreasury alongside every st.treasury write, read lock-free by the
+// subscription pump. It is not a second source of truth (nothing in the
+// simulation ever reads it) and it cannot drift, because st.treasury is
+// never assigned outside setTreasury.
 type simState struct {
 	e    *core.Engine
 	cid  string
@@ -967,6 +1001,14 @@ type simState struct {
 	moneyDelta    int64
 	treasury      int64
 	citizenWealth int64
+
+	// treasuryPub is the BUG-324 publish-only mirror of treasury — see
+	// this type's own doc comment for why it exists and why it cannot
+	// drift. Write it ONLY via setTreasury; read it ONLY from a
+	// ViewPatchFunc (publishedTreasury). The simulation itself must keep
+	// reading treasury, so that a stale/forgotten mirror can never
+	// change a simulated outcome, only a displayed one.
+	treasuryPub atomic.Int64
 
 	// cumulative gross money flow (AC-9)
 	moneyFlows int64
@@ -1289,7 +1331,9 @@ func (st *simState) syncMoneyFromLedger() {
 	if st.finance == nil {
 		return
 	}
-	st.treasury = ledgerBalance(st.finance, finance.AcctTreasury)
+	// BUG-324: treasury is written ONLY through setTreasury so the
+	// publish-only mirror cannot drift from the simulated pot.
+	st.setTreasury(ledgerBalance(st.finance, finance.AcctTreasury))
 	st.citizenWealth = ledgerBalance(st.finance, finance.AcctHouseholds)
 }
 
@@ -1764,7 +1808,8 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		// wealth. BUG-355: post the same transfer through FinanceAPI so
 		// the ledger F2 reads moves with the sim. Fallback keeps the
 		// simState pots consistent if the post is rejected (demolish
-		// already landed in build).
+		// already landed in build); treasury writes go through
+		// setTreasury so the BUG-324 publish mirror never drifts.
 		if res.Compensation > 0 && st.finance != nil {
 			if _, err := st.finance.Post(finance.Transaction{
 				Description: "demolish compensation",
@@ -1775,11 +1820,11 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 			}); err == nil {
 				st.syncMoneyFromLedger()
 			} else {
-				st.treasury = num.SatSub(st.treasury, res.Compensation)
+				st.setTreasury(num.SatSub(st.treasury, res.Compensation))
 				st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
 			}
 		} else {
-			st.treasury = num.SatSub(st.treasury, res.Compensation)
+			st.setTreasury(num.SatSub(st.treasury, res.Compensation))
 			st.citizenWealth = num.SatAdd(st.citizenWealth, res.Compensation)
 		}
 		st.moneyFlows = num.SatAdd(st.moneyFlows, res.Compensation)
