@@ -1723,3 +1723,355 @@ test('BUG-232 end-to-end (trailing-pipe fix): a docs-only commit with a trailing
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-332: "does the accepted verdict COVER THIS WORK?" (three outcomes)
+//
+// The hole: commit c6f2088 landed code-bearing paths on public main tagged
+// [engine.core], which resolves to MOD-012 — a module CLOSED on 2026-08-13
+// carrying an `accept` from 2026-08-18 for entirely different code — while the
+// item that actually tracked the work (FEAT-215) held ZERO verdicts. The
+// pre-fix rule ("the item's LATEST verdict is accept") is a statement about
+// the item's history, not about the diff being proposed.
+//
+// Each test below was mutation-proved: with the corresponding check removed
+// from a scratch copy of the guard, it goes red.
+// ---------------------------------------------------------------------------
+
+const {
+  OUTCOME,
+  classifyCoverage,
+  latestLandedRef,
+  toTimeMs,
+  TERMINAL_ITEM_STATUSES,
+  KNOWN_ITEM_STATUSES,
+} = guard;
+
+const BUG332_T0 = new Date('2026-08-18T20:44:22Z');
+const BUG332_T1 = new Date('2026-08-20T10:00:00Z');
+const bug332OpenItem = { code: 'FEAT-215', title: 'live item', status: 'open' };
+const bug332DoneItem = { code: 'MOD-012', title: 'closed module', status: 'done' };
+const bug332Accept = (at) => ({ verdict: 'accept', created_at: at });
+
+test('BUG-332 unit: an unresolvable tag is BLOCKED (never PASSED) and the message names the tag', () => {
+  const r = classifyCoverage({ tag: 'FEAT-9999', item: null, verdict: null, landedRef: null });
+  assert.equal(r.outcome, OUTCOME.BLOCKED);
+  assert.equal(r.reason, 'unresolved');
+  const msg = guard.coverageDenyMessage([r]);
+  assert.match(msg, /\[FEAT-9999\]/);
+  assert.match(msg, /use a REAL item code/i);
+});
+
+test('BUG-332 unit: the c6f2088 shape — a DONE item with a historical accept cannot cover new code', () => {
+  const r = classifyCoverage({ tag: 'engine.core', item: bug332DoneItem, verdict: bug332Accept(BUG332_T0), landedRef: null });
+  assert.equal(r.outcome, OUTCOME.BLOCKED);
+  assert.equal(r.reason, 'terminal-item');
+  assert.match(guard.coverageDenyMessage([r]), /already CLOSED/);
+});
+
+test('BUG-332 unit: a CANCELLED item is terminal too', () => {
+  const r = classifyCoverage({ tag: 'x.y', item: { ...bug332DoneItem, status: 'cancelled' }, verdict: bug332Accept(BUG332_T0), landedRef: null });
+  assert.equal(r.outcome, OUTCOME.BLOCKED);
+  assert.equal(r.reason, 'terminal-item');
+});
+
+test('BUG-332 unit: a LIVE item with an accept and no recorded commit ref PASSES', () => {
+  for (const status of ['open', 'in_progress', 'blocked']) {
+    const r = classifyCoverage({ tag: 'FEAT-215', item: { ...bug332OpenItem, status }, verdict: bug332Accept(BUG332_T0), landedRef: null });
+    assert.equal(r.outcome, OUTCOME.PASSED, `status ${status} must pass`);
+  }
+});
+
+test('BUG-332 unit: an accept OLDER than the item last LANDED commit is stale -> BLOCKED', () => {
+  const r = classifyCoverage({ tag: 'FEAT-215', item: bug332OpenItem, verdict: bug332Accept(BUG332_T0), landedRef: { commit_hash: 'deadbeefdeadbeef', created_at: BUG332_T1 } });
+  assert.equal(r.outcome, OUTCOME.BLOCKED);
+  assert.equal(r.reason, 'stale-verdict');
+  assert.match(guard.coverageDenyMessage([r]), /do NOT cover this work/);
+});
+
+// BUG-332 SOFTENING (lead ruling 2026-08-21): staleness is measured against
+// LANDED work only, so main() passes landedRef=null when nothing the item has
+// recorded is on origin/main — a wave of local commits after one accepted
+// round is this team's normal rhythm and must not be blocked.
+test('BUG-332 softening unit: local-only refs mean landedRef=null, and the accept then still covers the work', () => {
+  const r = classifyCoverage({ tag: 'FEAT-215', item: bug332OpenItem, verdict: bug332Accept(BUG332_T0), landedRef: null, landingProblem: null });
+  assert.equal(r.outcome, OUTCOME.PASSED);
+});
+
+test('BUG-332 softening unit: an undetermined landing is COULD-NOT-EVALUATE, never PASSED', () => {
+  const r = classifyCoverage({ tag: 'FEAT-215', item: bug332OpenItem, verdict: bug332Accept(BUG332_T0), landedRef: null, landingProblem: 'origin/main could not be resolved' });
+  assert.equal(r.outcome, OUTCOME.COULD_NOT_EVALUATE);
+  assert.equal(r.reason, 'undetermined-landing');
+  assert.match(guard.couldNotEvaluateDenyMessage([r]), /origin\/main could not be resolved/);
+});
+
+test('BUG-332 unit: an accept NEWER than the item last landed commit covers the work -> PASSED', () => {
+  const r = classifyCoverage({ tag: 'FEAT-215', item: bug332OpenItem, verdict: bug332Accept(BUG332_T1), landedRef: { commit_hash: 'deadbeef', created_at: BUG332_T0 } });
+  assert.equal(r.outcome, OUTCOME.PASSED);
+});
+
+test('BUG-332 unit: no verdict / a REJECT verdict on a live item are both BLOCKED', () => {
+  const none = classifyCoverage({ tag: 'FEAT-215', item: bug332OpenItem, verdict: null, landedRef: null });
+  assert.equal(none.outcome, OUTCOME.BLOCKED);
+  assert.equal(none.reason, 'no-verdict');
+  const rej = classifyCoverage({ tag: 'FEAT-215', item: bug332OpenItem, verdict: { verdict: 'reject', created_at: BUG332_T1 }, landedRef: null });
+  assert.equal(rej.outcome, OUTCOME.BLOCKED);
+  assert.equal(rej.reason, 'rejected');
+});
+
+test('BUG-332 unit: COULD-NOT-EVALUATE is a distinct third outcome, never folded into PASSED', () => {
+  const cases = [
+    ['unreadable status', { tag: 't', item: { code: 'X-1', title: '', status: 'weird-new-status' }, verdict: bug332Accept(BUG332_T1), landedRef: null }],
+    ['unreadable verdict value', { tag: 't', item: bug332OpenItem, verdict: { verdict: 42, created_at: BUG332_T1 }, landedRef: null }],
+    ['unreadable verdict time', { tag: 't', item: bug332OpenItem, verdict: { verdict: 'accept', created_at: 'not-a-date' }, landedRef: null }],
+    ['unreadable ref time', { tag: 't', item: bug332OpenItem, verdict: bug332Accept(BUG332_T1), landedRef: { commit_hash: 'a', created_at: {} } }],
+  ];
+  for (const [label, input] of cases) {
+    const r = classifyCoverage(input);
+    assert.equal(r.outcome, OUTCOME.COULD_NOT_EVALUATE, `${label} must be COULD-NOT-EVALUATE`);
+    assert.notEqual(r.outcome, OUTCOME.PASSED);
+  }
+  assert.notEqual(OUTCOME.COULD_NOT_EVALUATE, OUTCOME.PASSED);
+  assert.equal(new Set(Object.values(OUTCOME)).size, 3);
+  const msg = guard.couldNotEvaluateDenyMessage([{ tag: 't', detail: 'because reasons' }]);
+  assert.match(msg, /COULD-NOT-EVALUATE/);
+  assert.match(msg, /treated as BLOCKED/i);
+});
+
+test('BUG-332 unit: toTimeMs reads Date/SQL-string/epoch and returns null for anything unreadable', () => {
+  assert.equal(toTimeMs(new Date('2026-08-18T20:44:22Z')), Date.parse('2026-08-18T20:44:22Z'));
+  assert.equal(toTimeMs('2026-08-18 20:44:22'), Date.parse('2026-08-18T20:44:22'));
+  assert.equal(toTimeMs(1755000000000), 1755000000000);
+  for (const bad of [null, undefined, {}, [], 'not-a-date', NaN, new Date('nope')]) {
+    assert.equal(toTimeMs(bad), null, `${String(bad)} must be unreadable`);
+  }
+  assert.ok(TERMINAL_ITEM_STATUSES.has('done') && TERMINAL_ITEM_STATUSES.has('cancelled'));
+  for (const s of TERMINAL_ITEM_STATUSES) assert.ok(KNOWN_ITEM_STATUSES.has(s));
+});
+
+/**
+ * BUG-332 softening fixture: a working repo that has a REAL origin whose
+ * `main` is a genuine remote-tracking ref, so "has this recorded commit
+ * landed?" is a question git can actually answer here. Yields
+ * { dir, originDir, landedHash, localHash } — landedHash IS origin/main,
+ * localHash is a commit that exists only in the working clone.
+ *
+ * Async by construction: these tests interleave DB writes with guard runs, and
+ * a sync `finally { rmSync }` would delete the repo out from under a pending
+ * promise (the fixture would then "pass" against a directory that no longer
+ * exists — a fake-verification shape this file exists to avoid).
+ */
+async function withTempRepoOnOrigin(fn) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'destructive-guard-origin-'));
+  const originDir = path.join(root, 'origin');
+  const dir = path.join(root, 'work');
+  try {
+    fs.mkdirSync(originDir);
+    git(originDir, ['init', '-b', 'main', '.']);
+    git(originDir, ['config', 'user.name', 'Fixture Contributor']);
+    git(originDir, ['config', 'user.email', 'fixture@example.invalid']);
+    fs.writeFileSync(path.join(originDir, 'seed.txt'), 'seed\n', 'utf8');
+    git(originDir, ['add', 'seed.txt']);
+    git(originDir, ['commit', '-m', 'seed origin main']);
+    const landedHash = git(originDir, ['rev-parse', 'HEAD']);
+
+    git(root, ['clone', '--quiet', originDir, 'work']);
+    git(dir, ['config', 'user.name', 'Fixture Contributor']);
+    git(dir, ['config', 'user.email', 'fixture@example.invalid']);
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), defaultSettingsJson(), 'utf8');
+    git(dir, ['add', '.claude/settings.json']);
+    git(dir, ['commit', '-m', 'seed settings.json (local only)']);
+    const localHash = git(dir, ['rev-parse', 'HEAD']);
+
+    return await fn({ dir, originDir, landedHash, localHash });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+test('BUG-332 softening end-to-end: a ref that is only LOCAL leaves the accept valid; the SAME shape once the ref is ON ORIGIN/MAIN is BLOCKED', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332soft');
+  const insertRef = (hash) => db.query(
+    'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 60 SECOND))',
+    [item.guid, hash, 'main', 'BUG-332 softening fixture']);
+  const clearRefs = () => db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'BUG-332 softening test' });
+
+    await withTempRepoOnOrigin(async ({ dir, landedHash, localHash }) => {
+      // (1) THE SOFTENING: the item's newest ref is a commit that exists only
+      // locally — the second commit of a wave the attacker already rounded.
+      // The accept still covers it.
+      await insertRef(localHash);
+      stageFile(dir, 'internal/engine/core/clock.go', 'package core\n');
+      let r = runGuard(dir, `git commit -m "fix: second commit of the same wave [${item.code}]"`);
+      assert.equal(r.denied, false, `a ref that is only LOCAL must not make the accept stale: ${r.reason}`);
+
+      // (2) THE HAZARD, unchanged: the same ref, once it is on origin/main,
+      // makes that accept attest shipped work — BLOCKED.
+      await clearRefs();
+      await insertRef(landedHash);
+      r = runGuard(dir, `git commit -m "fix: new work after the wave landed [${item.code}]"`);
+      assert.equal(r.denied, true, 'a verdict older than a LANDED commit ref must BLOCK');
+      assert.match(r.reason, /do NOT cover this work/);
+
+      // (3) EDGE CASE (a): a ref whose commit is not in the local object
+      // database at all (never fetched / another lane's worktree) cannot be
+      // shown to have landed, so it does not count toward staleness.
+      await clearRefs();
+      await insertRef('b'.repeat(40));
+      r = runGuard(dir, `git commit -m "fix: unknown-object ref [${item.code}]"`);
+      assert.equal(r.denied, false, `an unfetchable ref must not count as landed: ${r.reason}`);
+
+      // (4) Newest-first wins: a landed ref newer than the accept blocks even
+      // when a local-only ref was recorded after it.
+      await clearRefs();
+      await insertRef(landedHash);
+      await insertRef(localHash);
+      r = runGuard(dir, `git commit -m "fix: local ref on top of a landed one [${item.code}]"`);
+      assert.equal(r.denied, true, 'a landed ref under a local one must still block');
+      assert.match(r.reason, /do NOT cover this work/);
+    });
+  } finally {
+    await clearRefs();
+    await db.query('DELETE FROM bow_destructive_verdicts WHERE item_guid = ?', [item.guid]);
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-332 end-to-end: live item + fresh accept ALLOWS; a repo where origin/main cannot be resolved is COULD-NOT-EVALUATE -> BLOCKED; once DONE it is BLOCKED', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332');
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'BUG-332 regression test' });
+
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/core/clock.go', 'package core\n');
+      const r = runGuard(dir, `git commit -m "fix: real work [${item.code}]"`);
+      assert.equal(r.denied, false, `a covered code-bearing commit must PASS: ${r.reason}`);
+    });
+
+    // EDGE CASE (c): withTempRepo has NO origin, so with a ref on file the
+    // guard cannot tell whether that commit landed. "Cannot tell" is BLOCKED
+    // with the COULD-NOT-EVALUATE message, never folded into a pass (BUG-071).
+    await db.query(
+      'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 60 SECOND))',
+      [item.guid, 'b'.repeat(40), 'main', 'BUG-332 regression fixture']);
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/core/clock.go', 'package core\n');
+      const r = runGuard(dir, `git commit -m "fix: more work [${item.code}]"`);
+      assert.equal(r.denied, true, 'an unresolvable origin/main must BLOCK, not pass');
+      assert.match(r.reason, /COULD-NOT-EVALUATE/);
+      assert.match(r.reason, /origin\/main/);
+    });
+
+    await db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+    await db.query("UPDATE bow_items SET status = 'done' WHERE guid = ?", [item.guid]);
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/core/clock.go', 'package core\n');
+      const r = runGuard(dir, `git commit -m "fix: post-close work [${item.code}]"`);
+      assert.equal(r.denied, true, 'a DONE item verdict must not cover new code');
+      assert.match(r.reason, /already CLOSED/);
+    });
+  } finally {
+    await db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+    await db.query('DELETE FROM bow_destructive_verdicts WHERE item_guid = ?', [item.guid]);
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-332 end-to-end: the FEAT-077 proportionality exemptions and the operator escape hatch are untouched', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    assert.equal(runGuard(dir, 'git commit -m "docs: notes"').denied, false);
+  });
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/core/clock_test.go', 'package core\n');
+    assert.equal(runGuard(dir, 'git commit -m "test: cover clock"').denied, false);
+  });
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/core/clock.go', 'package core\n');
+    assert.equal(runGuard(dir, 'git commit -m "feat: no tag"', { CLAUDE_DISABLE_DESTRUCTIVE_GUARD: '1' }).denied, false);
+  });
+});
+
+test('BUG-332: claude-bow.js exports listGitRefs and the guard requires it (a missing export must deny, not degrade)', () => {
+  assert.equal(typeof bow.listGitRefs, 'function');
+  const src = fs.readFileSync(GUARD_PATH, 'utf8');
+  assert.match(src, /requiredBowFns\s*=\s*\[[^\]]*'listGitRefs'/);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 softening: the git half of the rule — "has this recorded ref
+// actually landed on origin/main?" — against real repositories, because the
+// three awkward cases (unknown object, rebased-under-a-new-hash, no
+// origin/main at all) are exactly the ones a fixture object cannot fake.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 softening: refLandingStatus answers landed / not-landed / unreadable-hash against a real repo, including the REBASED-under-a-new-hash case', async () => {
+  await withTempRepoOnOrigin(async ({ dir, originDir, landedHash, localHash }) => {
+    const originMain = guard.resolveOriginMain(dir);
+    assert.equal(originMain, landedHash, 'the clone origin/main must resolve to the seeded commit');
+
+    assert.equal(guard.refLandingStatus(dir, landedHash, originMain), 'landed');
+    assert.equal(guard.refLandingStatus(dir, landedHash.slice(0, 7), originMain), 'landed', 'abbreviated hashes (what claude-bow.js actually records) must resolve');
+    assert.equal(guard.refLandingStatus(dir, localHash, originMain), 'not-landed', 'a local-only commit has not landed');
+    assert.equal(guard.refLandingStatus(dir, 'b'.repeat(40), originMain), 'not-landed', 'a commit absent from the local object database cannot be shown to have landed');
+    assert.equal(guard.refLandingStatus(dir, 'not-a-hash', originMain), 'unreadable-hash');
+    assert.equal(guard.refLandingStatus(dir, '', originMain), 'unreadable-hash');
+
+    // EDGE CASE (b): this repo merges with `gh pr merge --rebase`, so a ref
+    // recorded on a lane branch lands under a DIFFERENT hash. Exact-hash
+    // ancestry says no; patch equivalence says yes, and yes is the truth.
+    git(dir, ['checkout', '--quiet', '-b', 'lane', 'origin/main']);
+    fs.writeFileSync(path.join(dir, 'lane.txt'), 'lane work\n', 'utf8');
+    git(dir, ['add', 'lane.txt']);
+    git(dir, ['commit', '-m', 'lane work']);
+    const laneHash = git(dir, ['rev-parse', 'HEAD']);
+    // Move origin/main on first, so the replay lands on a different parent and
+    // the hash genuinely changes — which is what a rebase merge does.
+    fs.writeFileSync(path.join(originDir, 'other.txt'), 'someone else\n', 'utf8');
+    git(originDir, ['add', 'other.txt']);
+    git(originDir, ['commit', '-m', 'another lane landed first']);
+    git(originDir, ['fetch', '--quiet', dir.replace(/\\/g, '/'), 'lane']);
+    git(originDir, ['cherry-pick', 'FETCH_HEAD']); // rewrites the hash, same patch
+    const rebasedHash = git(originDir, ['rev-parse', 'HEAD']);
+    assert.notEqual(rebasedHash, laneHash, 'the fixture must actually change the hash');
+    git(dir, ['fetch', '--quiet', 'origin']);
+    const originMain2 = guard.resolveOriginMain(dir);
+    assert.equal(originMain2, rebasedHash);
+    assert.equal(guard.refLandingStatus(dir, laneHash, originMain2), 'landed', 'a rebased ref that exists on main under another hash HAS landed');
+  });
+});
+
+test('BUG-332 softening: latestLandedRef picks the newest LANDED row, reports a problem when it cannot tell, and is bounded', async () => {
+  await withTempRepoOnOrigin(async ({ dir, originDir, landedHash, localHash }) => {
+    const t = (s) => new Date(Date.now() + s * 1000);
+    // Newest-first input (listGitRefs()'s contract).
+    const refs = [
+      { commit_hash: localHash, created_at: t(20) },
+      { commit_hash: landedHash, created_at: t(10) },
+    ];
+    assert.equal(latestLandedRef(dir, refs).ref.commit_hash, landedHash, 'the local row is skipped, the landed one is the answer');
+    assert.equal(latestLandedRef(dir, [refs[0]]).ref, null, 'nothing landed -> no staleness input');
+    assert.equal(latestLandedRef(dir, []).ref, null);
+
+    // EDGE CASE (c): no origin/main at all -> a PROBLEM, never a null ref
+    // (which would read as "nothing landed" and silently pass).
+    const noOrigin = latestLandedRef(originDir, refs);
+    assert.equal(noOrigin.ref, undefined);
+    assert.match(noOrigin.problem, /origin\/main could not be resolved/);
+
+    // An unreadable hash is a problem, not a shrug.
+    assert.match(latestLandedRef(dir, [{ commit_hash: 'nope', created_at: t(1) }]).problem, /unreadable commit_hash/);
+
+    // Bounded: more rows than the budget, none landed -> a problem, not a
+    // silent "nothing landed".
+    const many = Array.from({ length: guard.LANDING_REF_BUDGET + 1 }, () => ({ commit_hash: localHash, created_at: t(1) }));
+    assert.match(latestLandedRef(dir, many).problem, /more than this guard checks/);
+  });
+});
