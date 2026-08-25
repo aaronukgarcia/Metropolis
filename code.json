@@ -556,7 +556,7 @@
       "note": "Noise level — airport noiseLevelDBA, mining blight noiseRadius dBA."
     }
   ],
-  "moduleCount": 168,
+  "moduleCount": 169,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -1010,6 +1010,10 @@
           {
             "key": "engine.news",
             "outboundGuid": "179c218a-f221-4785-8c7d-55d67df1e7b6"
+          },
+          {
+            "key": "engine.power",
+            "outboundGuid": "f543f33e-82dd-4af8-b3d2-17dcc803be84"
           },
           {
             "key": "engine.projections",
@@ -1728,6 +1732,10 @@
           {
             "key": "engine.policies",
             "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
+          },
+          {
+            "key": "engine.power",
+            "outboundGuid": "f543f33e-82dd-4af8-b3d2-17dcc803be84"
           },
           {
             "key": "engine.rail",
@@ -4575,6 +4583,11 @@
             "key": "engine.dispatch",
             "moduleGuid": "351b5c05-1b42-4438-b495-c0aaf6855194",
             "inboundGuid": "ffb9d07e-1f14-4cfa-8573-192efaca1e3f"
+          },
+          {
+            "key": "engine.power",
+            "moduleGuid": "859fbba3-f832-404f-97af-da70e81e7bb7",
+            "inboundGuid": "13ec61a4-b6a1-4674-8352-63eca757370a"
           },
           {
             "key": "foundation.errors",
@@ -10366,6 +10379,10 @@
             "outboundGuid": "179c218a-f221-4785-8c7d-55d67df1e7b6"
           },
           {
+            "key": "engine.power",
+            "outboundGuid": "f543f33e-82dd-4af8-b3d2-17dcc803be84"
+          },
+          {
             "key": "engine.rail",
             "outboundGuid": "8cfa2a06-2d01-44af-8033-50dac845b33e"
           },
@@ -10566,6 +10583,52 @@
             "key": "feat.saveux",
             "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
             "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
+          }
+        ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "859fbba3-f832-404f-97af-da70e81e7bb7",
+      "key": "engine.power",
+      "bowType": "module",
+      "seq": 1010,
+      "sprint": 7,
+      "title": "Power network: pylon tier catalogue + line-segment placement store",
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "FEAT-1972079851; §17 (winter power peak consumer seam)",
+      "path": "internal/engine/power/",
+      "inbound": {
+        "guid": "13ec61a4-b6a1-4674-8352-63eca757370a",
+        "name": "PowerAPI",
+        "format": "Go package API",
+        "pattern": "catalogue load (all-or-nothing, registry-sourced errors) + PlaceLine/Lines over the tile-local cell domain",
+        "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "f543f33e-82dd-4af8-b3d2-17dcc803be84",
+        "calls": [
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },

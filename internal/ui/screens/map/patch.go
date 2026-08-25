@@ -42,19 +42,40 @@ type wireCell struct {
 	Building  string `json:"building,omitempty"`
 }
 
+// wirePowerLine mirrors compose/viewport_publish.go's viewportPowerLine
+// field for field (same JSON tags): one placed pylon span of the engine's
+// power network, published under the patch's powerLines key. Absent
+// entirely (not merely empty) while the engine has placed nothing — the
+// omitempty contract this package's decode relies on by simply leaving
+// PowerLines nil.
+type wirePowerLine struct {
+	ID         uint64  `json:"id"`
+	Class      string  `json:"class"`
+	FromX      int     `json:"fromX"`
+	FromY      int     `json:"fromY"`
+	ToX        int     `json:"toX"`
+	ToY        int     `json:"toY"`
+	CapacityMW float64 `json:"capacityMW"`
+}
+
 type wirePatch struct {
-	SchemaVersion int        `json:"schemaVersion"`
-	Full          bool       `json:"full"`
-	Origin        wirePoint  `json:"origin"`
-	Extent        wireExtent `json:"extent"`
-	Cells         []wireCell `json:"cells"`
+	SchemaVersion int             `json:"schemaVersion"`
+	Full          bool            `json:"full"`
+	Origin        wirePoint       `json:"origin"`
+	Extent        wireExtent      `json:"extent"`
+	Cells         []wireCell      `json:"cells"`
+	PowerLines    []wirePowerLine `json:"powerLines,omitempty"`
 }
 
 // decodeWirePatch parses raw as a wirePatch. It returns an error for
 // anything ApplyPatch should treat as malformed: an oversized wire
 // payload (SEC-039/AC-10, checked first — see below), invalid JSON, a
-// schemaVersion this package doesn't understand, or a Cells array
-// bigger than this screen could ever legitimately need (SEC-039/AC-11).
+// schemaVersion this package doesn't understand, a Cells array
+// bigger than this screen could ever legitimately need (SEC-039/AC-11),
+// or a powerLines array violating the same allocation discipline (count
+// cap, per-line coordinate bounds, no degenerate spans — see the gates
+// at the bottom of this function).
+//
 // Beyond that it performs no other validation (e.g. out-of-range cell
 // coordinates are a decode-time no-op, handled by
 // applyFullLocked/applySparseLocked instead) — keeping this function's
@@ -93,6 +114,31 @@ func decodeWirePatch(raw json.RawMessage) (wirePatch, error) {
 	}
 	if len(p.Cells) > maxGridCells {
 		return wirePatch{}, errTooManyCells(len(p.Cells), maxGridCells)
+	}
+	// SEC-039 class (FEAT-1972079851 follow-up): the same discipline the
+	// Cells checks above apply to the grid slab, applied to PowerLines —
+	// without it, raw wire endpoint ints flowed straight into the
+	// renderers' span walks, which allocate adx+ady+1 cells from those
+	// ints BEFORE any clamp runs (234-byte payload = ~119 GiB alloc PoC).
+	// Three gates, mirroring the existing fields' reject-never-clamp
+	// posture: a count cap derived from the grid budget (limits.go's
+	// maxPowerLines), per-line coordinate bounds against the same
+	// [0, maxGridSide) domain every legitimate snapshot extent is already
+	// bounded by, and rejection of degenerate (from==to) spans — which
+	// cover no drawable cells and exist only to make a walker allocate.
+	if len(p.PowerLines) > maxPowerLines {
+		return wirePatch{}, errTooManyPowerLines(len(p.PowerLines), maxPowerLines)
+	}
+	for i := range p.PowerLines {
+		l := &p.PowerLines[i]
+		for _, c := range [4]int{l.FromX, l.FromY, l.ToX, l.ToY} {
+			if c < 0 || c >= maxGridSide {
+				return wirePatch{}, errPowerLineOutOfBounds(i, l.ID, c, maxGridSide)
+			}
+		}
+		if l.FromX == l.ToX && l.FromY == l.ToY {
+			return wirePatch{}, errDegeneratePowerLine(l.ID)
+		}
 	}
 	return p, nil
 }

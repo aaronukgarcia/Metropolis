@@ -1239,30 +1239,32 @@
         "engine.refuse",
         "engine.traffic",
         "engine.extcommute",
-        "engine.services",
-        "engine.firms"
-      ],
-      "calls": [
-        "engine.core",
-        "engine.world",
-        "engine.citizens",
-        "engine.market",
-        "engine.consumption",
-        "engine.finance",
-        "engine.build",
-        "engine.attract",
-        "engine.invariant",
-        "engine.logistics",
-        "engine.season",
-        "engine.households",
-        "engine.crime",
-        "engine.leisure",
-        "engine.refuse",
-        "engine.traffic",
-        "engine.extcommute",
-        "engine.services",
-        "engine.firms",
-        "engine.dispatch",
+                 "engine.services",
+                 "engine.firms",
+                 "engine.power"
+             ],
+    "calls":  [
+                  "engine.core",
+                  "engine.world",
+                  "engine.citizens",
+                  "engine.market",
+                  "engine.consumption",
+                  "engine.finance",
+                  "engine.build",
+                  "engine.attract",
+                  "engine.invariant",
+                  "engine.logistics",
+                  "engine.season",
+                  "engine.households",
+                  "engine.crime",
+                  "engine.leisure",
+                  "engine.refuse",
+                  "engine.traffic",
+                  "engine.extcommute",
+                  "engine.services",
+                  "engine.firms",
+                  "engine.dispatch",
+                  "engine.power",
         "foundation.errors",
         "foundation.num",
         "int.protocol"
@@ -4292,6 +4294,32 @@
         "foundation.num"
       ],
       "sprint": 11
+    },
+    {
+      "key": "engine.power",
+      "type": "module",
+      "seq": 1010,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "title": "Power network: pylon tier catalogue + line-segment placement store",
+      "desc": "data/pylons.json's transmission tiers (local pole / standard lattice / super grid; HVDC France interconnector a later class seam) and placed pylon spans as world line-segment objects carrying their tier capacity; deterministic ID-ordered publish through f1.viewport's powerLines field. First slice proves catalogue -> placement -> publish end to end; network connectivity/flow solving and consumption coupling are documented later-slice seams.",
+      "specRef": "FEAT-1972079851; §17 (winter power peak consumer seam)",
+      "path": "internal/engine/power/",
+      "inbound": {
+        "name": "PowerAPI",
+        "format": "Go package API",
+        "pattern": "catalogue load (all-or-nothing, registry-sourced errors) + PlaceLine/Lines over the tile-local cell domain"
+      },
+      "deps": [
+        "foundation.data"
+      ],
+      "calls": [
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
+      ],
+      "sprint": 7
     }
   ]
 }

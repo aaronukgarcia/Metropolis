@@ -934,7 +934,8 @@
         "engine.traffic",
         "engine.extcommute",
         "engine.services",
-        "engine.firms"
+        "engine.firms",
+        "engine.power"
       ]
     },
     {
@@ -3137,6 +3138,24 @@
         "int.protocol",
         "feat.checkpoint",
         "feat.saveux"
+      ]
+    },
+    {
+      "mkey": "engine.power",
+      "type": "module",
+      "title": "Power network: pylon tier catalogue + line-segment placement store",
+      "desc": "data/pylons.json's transmission tiers (local pole / standard lattice / super grid; HVDC France interconnector a later class seam) and placed pylon spans as world line-segment objects carrying their tier capacity; deterministic ID-ordered publish through f1.viewport's powerLines field. First slice proves catalogue -> placement -> publish end to end; network connectivity/flow solving and consumption coupling are documented later-slice seams. [spec: FEAT-1972079851; §17 (winter power peak consumer seam)] [path: internal/engine/power/]",
+      "seq": 1010,
+      "sprint": 7,
+      "priority": "P1",
+      "milestone": "M1",
+      "layer": "engine",
+      "specRef": "FEAT-1972079851; §17 (winter power peak consumer seam)",
+      "guid": "859fbba3-f832-404f-97af-da70e81e7bb7",
+      "guidIn": "13ec61a4-b6a1-4674-8352-63eca757370a",
+      "guidOut": "f543f33e-82dd-4af8-b3d2-17dcc803be84",
+      "deps": [
+        "foundation.data"
       ]
     }
   ]

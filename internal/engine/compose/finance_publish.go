@@ -2,6 +2,7 @@ package compose
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -53,15 +54,22 @@ type financeBalanceSheetView struct {
 }
 
 // financeBalanceSheetWirePatch is compose's own copy of
-// ui.screen.finance/wire.go's wirePatch — only the BalanceSheet field is
-// ever populated this increment; every other field is deliberately left
-// nil (and therefore omitted, via wire.go's own `omitempty` tags on the
-// UI side) rather than sent as an empty/zero value, so a future
-// fast-follow sub-view (PL, loans, taxSliders, publicPayroll, sankey)
-// can start sending its own field without this one changing shape.
+// ui.screen.finance/wire.go's wirePatch — BalanceSheet has been populated
+// since increment 2; FEAT-233 adds the Sankey and Loans sub-views in the
+// SAME patch (both fields already exist on ui.screen.finance's schema as
+// `omitempty` documented fast-follows, so no schemaVersion bump is needed
+// — the REUSE-existing-view discipline: "f2.finance" is not extended with
+// a new view id, it simply starts sending two more of its own fields).
+// TaxSliders/PublicPayroll/PL remain deliberately nil (omitted) until a
+// registered composition-root → engine.tax edge exists to source live
+// rates from (feat.compositionroot's outbound edge list does not include
+// engine.tax today — wiring it without that registry change would be an
+// unregistered dependency, GR#20/BUG-296 class).
 type financeBalanceSheetWirePatch struct {
 	SchemaVersion int                      `json:"schemaVersion"`
 	BalanceSheet  *financeBalanceSheetView `json:"balanceSheet,omitempty"`
+	Sankey        *financeSankeyView       `json:"sankey,omitempty"`
+	Loans         *[]financeLoanWire       `json:"loans,omitempty"`
 }
 
 // buildFinanceBalanceSheetPatch reads st.finance's own synchronization
@@ -131,6 +139,43 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 			NetWorth: netWorth,
 		},
 	}
+
+	// FEAT-233: the fiscal Sankey sub-view, built from FinanceAPI's own
+	// FlowMatrix query seam (ASM-1220: budget inflow vs external outflow
+	// only — internal redistribution never becomes a band). Bands are
+	// emitted in FlowMatrix's fixed order (tax categories, then imports/
+	// debt interest — GR#21), every band anchored to the central "budget"
+	// node. Same concurrency contract as the balance-sheet reads above:
+	// FlowMatrix/Loans take FinanceAPI's internal mutex, never a plain
+	// simState field read.
+	fm := st.finance.FlowMatrix()
+	bands := make([]financeSankeyBand, 0, len(fm.Inflows)+len(fm.ExternalOutflows))
+	for _, in := range fm.Inflows {
+		bands = append(bands, financeSankeyBand{Source: string(in.Category), Target: financeSankeyBudgetNode, Amount: int64(in.Amount)})
+	}
+	for _, out := range fm.ExternalOutflows {
+		bands = append(bands, financeSankeyBand{Source: financeSankeyBudgetNode, Target: string(out.Category), Amount: int64(out.Amount)})
+	}
+	patch.Sankey = &financeSankeyView{Bands: bands}
+
+	// FEAT-233: the loans summary sub-view, from FinanceAPI's ordered
+	// Loans() snapshot (ascending loan ID, GR#21). RateBp travels as a
+	// float percent (bp/100 — the basis-point scale is 10000 per 100%),
+	// and NextPayment mirrors Loan.MonthlyPayment's placeholder
+	// obligation so the panel shows the real queryable figure.
+	loans := st.finance.Loans()
+	wireLoans := make([]financeLoanWire, 0, len(loans))
+	for _, l := range loans {
+		wireLoans = append(wireLoans, financeLoanWire{
+			ID:                     "loan-" + strconv.FormatUint(uint64(l.ID), 10),
+			PrincipalMicropounds:   int64(l.Principal),
+			RatePercent:            float64(l.RateBp) / 100,
+			TermMonths:             l.TermMonths,
+			NextPaymentMicropounds: int64(l.MonthlyPayment()),
+		})
+	}
+	patch.Loans = &wireLoans
+
 	raw, err := json.Marshal(patch)
 	if err != nil {
 		// Marshalling a plain struct of strings/int64s cannot fail;
@@ -151,3 +196,34 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 // servicesViewSubscriptionName is (a symbol a compose test can
 // reference for the registered view-name set).
 const financeViewSubscriptionName = "f2.finance"
+
+// financeSankeyBudgetNode is the central node every FlowMatrix band
+// anchors to (ASM-1220's budget inflow/outflow hub). It mirrors
+// engine.fiscal's NodeBudget category VALUE ("budget") as compose's own
+// literal — engine.fiscal is not composed here, and importing it for one
+// string would be an unregistered edge.
+const financeSankeyBudgetNode = "budget"
+
+// financeSankeyBand mirrors ui.screen.finance/wire.go's wireSankeyBand
+// field-for-field.
+type financeSankeyBand struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Amount int64  `json:"amount"`
+}
+
+// financeSankeyView mirrors ui.screen.finance/wire.go's
+// wireFiscalCircuitView field-for-field.
+type financeSankeyView struct {
+	Bands []financeSankeyBand `json:"bands"`
+}
+
+// financeLoanWire mirrors ui.screen.finance/wire.go's wireLoanState
+// field-for-field.
+type financeLoanWire struct {
+	ID                     string  `json:"id"`
+	PrincipalMicropounds   int64   `json:"principalMicropounds"`
+	RatePercent            float64 `json:"ratePercent"`
+	TermMonths             int     `json:"termMonths"`
+	NextPaymentMicropounds int64   `json:"nextPaymentMicropounds"`
+}

@@ -137,6 +137,15 @@ type routeEntry struct {
 }
 
 func (s *Server) mintCID() protocol.CorrelationID {
+	// astgate's live-tree scan (BUG-024 ratchet) names this method as an
+	// unguarded candidate-type entry point: it mutates shared state
+	// (nextCID), so a struct copy would advance the ORIGINAL's counter
+	// under its own aliased atomic. The guard closes that; on a copy we
+	// fail closed to an empty correlation ID, which routeEntry's callers
+	// treat as any other malformed key rather than a special case.
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "mintCID"}); err != nil {
+		return ""
+	}
 	return protocol.CorrelationID(fmt.Sprintf("srv-%016x", s.nextCID.Add(1)))
 }
 

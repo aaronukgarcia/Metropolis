@@ -17,6 +17,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/power"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
@@ -194,6 +195,19 @@ type Deps struct {
 	// ErrModuleFailed naming "traffic" with zero hooks left behind (AC-4's
 	// discipline, docs/planning/icd/engine.traffic-tick.md §2/§8).
 	LoadTraffic func(correlationID string) (*traffic.TrafficAPI, error)
+
+	// Power overrides construction of the FEAT-1972079851 engine.power
+	// dependency (defaults to loadDefaultPower — power.New over
+	// data/pylons.json, bounded to the start tile's cell domain). nil is
+	// the common boot case; the test seam lets a caller inject a failing
+	// loader and assert Wire returns ErrModuleFailed naming "power" with
+	// zero hooks left behind. Deliberate seam: nothing places pylons yet —
+	// later trio slices add the placement callers.
+	Power *power.PowerAPI
+
+	// LoadPower overrides construction of the engine.power dependency
+	// (mirrors LoadTraffic's shape above).
+	LoadPower func(correlationID string) (*power.PowerAPI, error)
 }
 
 // moduleRegistration is one fixed slot in the composition order.
@@ -419,6 +433,14 @@ func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
 // composed instance through — mirrors ExtCommute() above.
 func (c *Composition) Traffic() *traffic.TrafficAPI {
 	return c.state.traffic
+}
+
+// Power returns the composed engine.power placement store (FEAT-1972079851).
+// Nothing places pylons yet — the documented trio seam — so today this is
+// an empty store; it exists so a future placement caller, and tests, reach
+// the same instance buildViewportPatch reads without re-threading it.
+func (c *Composition) Power() *power.PowerAPI {
+	return c.state.power
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -681,6 +703,23 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "traffic"})
 	}
 
+	// FEAT-1972079851: construct engine.power's placement store before any
+	// view registers, same resolve-before-first-registration discipline as
+	// every module above (AC-4 — no partially-wired engine on a
+	// construction failure).
+	loadPower := deps.LoadPower
+	if loadPower == nil {
+		loadPower = loadDefaultPower
+	}
+	powerAPI := deps.Power
+	if powerAPI == nil {
+		var pErr error
+		powerAPI, pErr = loadPower(cid)
+		if pErr != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, pErr, map[string]any{"module": "power"})
+		}
+	}
+
 	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
 	// Wire-time identity-map cross-check MUST run before extcommute's
 	// citizens-seam adapter is ever exercised (§3/§11 "identity-map
@@ -761,6 +800,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		firms:                   firmsAPI,
 		traffic:                 trafficAPI,
 		extCommute:              extCommuteAPI,
+		power:                   powerAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
 		treasury:                ledgerBalance(financeAPI, finance.AcctTreasury),
@@ -941,6 +981,13 @@ type simState struct {
 	// hook this package adds, and today's tests via Composition.Traffic(),
 	// can reach the same instance without re-threading it.
 	traffic *traffic.TrafficAPI
+
+	// FEAT-1972079851: engine.power's placement store, constructed in Wire
+	// (power_wire.go) and read by buildViewportPatch to publish placed
+	// pylon spans through "f1.viewport"'s powerLines field. Nothing places
+	// pylons yet (documented trio seam); today this is nil-free but
+	// empty — Lines() returns no lines and the wire field stays omitted.
+	power *power.PowerAPI
 
 	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
 	// off-map external-commuting module, wired with its three seam

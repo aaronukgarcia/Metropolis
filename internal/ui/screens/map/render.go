@@ -195,6 +195,14 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	// in production until a real overlay lands, by construction rather
 	// than a special case.
 	paintOverlay(buf, viewportRect, snap, snap.activeOverlay, overlayLiveValue, 0, 1, widgets.DefaultHeatRamp(m.palette))
+	// FEAT-1972079851: the Power layer (OverlayPower) paints placed pylon
+	// spans as a FOREGROUND layer — unlike the ten blocked heatmaps above,
+	// this one has a real data source ("f1.viewport"'s powerLines). It is
+	// OFF by default: a fresh screen's overlayIdx selects OverlayOwnership,
+	// and drawPowerLines is only reached once the cycle lands on power.
+	if snap.activeOverlay == OverlayPower {
+		drawPowerLines(buf, viewportRect, snap, m.palette)
+	}
 	if minimapRect.H > 0 {
 		drawMinimap(buf, minimapRect, snap, m.palette)
 	}
@@ -221,6 +229,7 @@ func splitRect(rect core.Rect) (viewport, minimap core.Rect) {
 type renderSnapshot struct {
 	width, height    int
 	grid             []cellData
+	powerLines       []wirePowerLine
 	offsetX, offsetY int
 	viewportW        int
 	viewportH        int
@@ -239,10 +248,15 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 	// (4096 cells) in Sprint 1, so a full copy per Render call is cheap.
 	grid := make([]cellData, len(m.grid))
 	copy(grid, m.grid)
+	// powerLines is copied, not aliased: applyFullLocked replaces m.
+	// powerLines wholesale under mu (screen.go), same reasoning as grid.
+	lines := make([]wirePowerLine, len(m.powerLines))
+	copy(lines, m.powerLines)
 	return renderSnapshot{
 		width:         m.width,
 		height:        m.height,
 		grid:          grid,
+		powerLines:    lines,
 		offsetX:       m.offsetX,
 		offsetY:       m.offsetY,
 		viewportW:     m.viewportW,
@@ -261,6 +275,193 @@ func (s renderSnapshot) cellAt(x, y int) cellData {
 		return cellData{}
 	}
 	return s.grid[y*s.width+x]
+}
+
+// Power-layer glyphs and colours (FEAT-1972079851). Each catalogue class
+// gets a DISTINCT foreground rune + hex colour, matched by web
+// MapCanvas.tsx's POWER_COLORS so the tcell map and the browser render
+// the same tier the same colour:
+//
+//	localPole       '|'  #F1C40F  power yellow (widgets.TokenPower)
+//	standardLattice 'Y'  #E67E22  lattice orange
+//	superGrid       'W'  #C0392B  super-grid red
+const (
+	glyphPowerPole    = '|'
+	glyphPowerLattice = 'Y'
+	glyphPowerSuper   = 'W'
+)
+
+// powerClassStyle maps a wirePowerLine's class string to its glyph and
+// style. An unrecognised class (a future trio slice's class this build
+// predates) reports ok=false and is SKIPPED — drawn never, guessed never,
+// mirroring terrainGlyph's unknown-vocabulary posture.
+func powerClassStyle(class string, palette widgets.Palette) (rune, tcell.Style, bool) {
+	switch class {
+	case "localPole":
+		return glyphPowerPole, tcell.StyleDefault.Foreground(palette.Color(widgets.TokenPower)), true
+	case "standardLattice":
+		return glyphPowerLattice, tcell.StyleDefault.Foreground(tcell.NewHexColor(0xE67E22)), true
+	case "superGrid":
+		return glyphPowerSuper, tcell.StyleDefault.Foreground(tcell.NewHexColor(0xC0392B)), true
+	default:
+		return 0, tcell.StyleDefault, false
+	}
+}
+
+// powerSpanCells walks the grid cells a span covers, using the
+// integer Bresenham line between its endpoints (deterministic: same
+// endpoints, same cells, always). Endpoints are inclusive.
+//
+// Test/legacy seam only: production rendering goes through walkPowerSpan
+// (below), which streams the identical walk through a viewport window so
+// hostile endpoint magnitudes can never become a proportional allocation
+// here (SEC-039 class). This wrapper exists to keep the materialising
+// contract its test pins, delegating to the one shared walker (GR#3).
+func powerSpanCells(fromX, fromY, toX, toY int) [][2]int {
+	var cells [][2]int
+	walkPowerSpan(fromX, fromY, toX, toY, gridWindow{
+		x0: min(fromX, toX),
+		y0: min(fromY, toY),
+		x1: max(fromX, toX),
+		y1: max(fromY, toY),
+	}, func(x, y int) {
+		cells = append(cells, [2]int{x, y})
+	})
+	return cells
+}
+
+// abs is kept next to its only remaining external consumer above; the
+// walker uses it too.
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+// gridWindow is a viewport's visible region expressed in absolute grid
+// coordinates ([x0,x1]x[y0,y1], inclusive) — the clamp target for
+// walkPowerSpan.
+type gridWindow struct{ x0, y0, x1, y1 int }
+
+// maxSafeSpanCoord bounds every endpoint coordinate walkPowerSpan will
+// subtract or step toward. The decode gate already bounds wire-supplied
+// coordinates to [0, maxGridSide); this much wider ceiling exists purely
+// as defense in depth for any future caller that reaches the walker
+// without that gate: it keeps the dx/dy subtraction below overflow-safe
+// AND caps the pre-window approach walk (the monotone march from a far
+// start to the window edge) at O(maxSafeSpanCoord) iterations — a few
+// million worst case, milliseconds — instead of letting endpoint
+// magnitude translate into unbounded iteration. Inputs beyond it cannot
+// occur in decoded patches (errPowerLineOutOfBounds rejects anything
+// outside [0, maxGridSide)), so the geometric distortion this clamp
+// would cause is unreachable by construction.
+var maxSafeSpanCoord = 1 << 20
+
+// walkPowerSpan streams the integer Bresenham line between two inclusive
+// endpoints (the same deterministic walk powerSpanCells pins) into visit,
+// calling visit ONLY for cells inside win and terminating early once any
+// axis has moved permanently past the window — the walk is monotone in
+// each axis toward its endpoint and a cell must be in-range on EVERY axis,
+// so one exhausted axis means no further cell can be inside the window
+// (a "both axes" condition would never fire for axis-aligned hostile
+// spans, whose stationary coordinate stays in-window forever). Nothing is
+// allocated proportional to the span length: iteration count is bounded
+// by the walk until early exit, and visit sees only window cells, closing
+// the SEC-039-class allocation blowup at the renderer regardless of what
+// reached it.
+func walkPowerSpan(fromX, fromY, toX, toY int, win gridWindow, visit func(x, y int)) {
+	if visit == nil || win.x1 < win.x0 || win.y1 < win.y0 {
+		return
+	}
+	clampCoord := func(v int) int {
+		if v < -maxSafeSpanCoord {
+			return -maxSafeSpanCoord
+		}
+		if v > maxSafeSpanCoord {
+			return maxSafeSpanCoord
+		}
+		return v
+	}
+	fromX, fromY = clampCoord(fromX), clampCoord(fromY)
+	toX, toY = clampCoord(toX), clampCoord(toY)
+
+	dx, dy := toX-fromX, toY-fromY
+	sx, sy := -1, -1
+	if dx > 0 {
+		sx = 1
+	}
+	if dy > 0 {
+		sy = 1
+	}
+	adx, ady := abs(dx), abs(dy)
+	err := adx - ady
+	x, y := fromX, fromY
+
+	// pastAxis reports whether the given coordinate has moved beyond the
+	// window in its direction of travel (or, for an axis with no travel,
+	// sits outside the window permanently — it can never come back).
+	pastAxis := func(v, step, lo, hi int) bool {
+		switch {
+		case step > 0:
+			return v > hi
+		case step < 0:
+			return v < lo
+		default:
+			return v < lo || v > hi
+		}
+	}
+
+	for {
+		if x >= win.x0 && x <= win.x1 && y >= win.y0 && y <= win.y1 {
+			visit(x, y)
+		}
+		if x == toX && y == toY {
+			return
+		}
+		e2 := 2 * err
+		if e2 > -ady {
+			err -= ady
+			x += sx
+		}
+		if e2 < adx {
+			err += adx
+			y += sy
+		}
+		if pastAxis(x, sx, win.x0, win.x1) || pastAxis(y, sy, win.y0, win.y1) {
+			return
+		}
+	}
+}
+
+// drawPowerLines paints snap.powerLines' spans over the already-drawn
+// viewport background: every span cell inside the visible window gets its
+// class glyph in its class colour. Only the FOREGROUND changes (the
+// background colour each drawViewport call set stays), keeping AC-4's
+// two-layer contract. Unknown classes are skipped outright. Spans are
+// streamed through walkPowerSpan clamped to rect's window, so no span —
+// however hostile its endpoints — can drive an allocation or iteration
+// proportional to its length (SEC-039 class; decodeWirePatch's gates are
+// the first line, this is the renderer-side backstop).
+func drawPowerLines(buf *core.Buffer, rect core.Rect, snap renderSnapshot, palette widgets.Palette) {
+	if buf == nil || len(snap.powerLines) == 0 || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	win := gridWindow{
+		x0: snap.offsetX,
+		y0: snap.offsetY,
+		x1: snap.offsetX + rect.W - 1,
+		y1: snap.offsetY + rect.H - 1,
+	}
+	for _, line := range snap.powerLines {
+		r, style, ok := powerClassStyle(line.Class, palette)
+		if !ok {
+			continue // unknown class: skip the whole span, not just a cell
+		}
+		walkPowerSpan(line.FromX, line.FromY, line.ToX, line.ToY, win, func(x, y int) {
+			buf.Set(rect.X+x-snap.offsetX, rect.Y+y-snap.offsetY, r, style)
+		})
+	}
 }
 
 // drawViewport paints the visible grid window (snap.offsetX/Y,

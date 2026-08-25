@@ -53,3 +53,30 @@ func errPatchTooLarge(gotBytes, maxBytes int) error {
 func errTooManyCells(got, max int) error {
 	return fmt.Errorf("mapscreen: f1.viewport patch carries %d cells, exceeding the %d-cell ceiling (SEC-039) — rejected before applying", got, max)
 }
+
+// errTooManyPowerLines is decodeWirePatch's rejection cause for a patch
+// whose powerLines array exceeds maxPowerLines (limits.go) — the count
+// half of the SEC-039-class gate on the FEAT-1972079851 field. Logged
+// through the same MET-U100 malformed-patch path as every other
+// decodeWirePatch rejection: rejected outright, never truncated.
+func errTooManyPowerLines(got, max int) error {
+	return fmt.Errorf("mapscreen: f1.viewport patch carries %d powerLines, exceeding the %d-span ceiling (SEC-039) — rejected before applying", got, max)
+}
+
+// errPowerLineOutOfBounds is decodeWirePatch's rejection cause for a
+// powerLines entry whose endpoint coordinate falls outside [0,
+// maxGridSide) — the same per-dimension domain applyFullLocked's SEC-009
+// Extent check already bounds every legitimate snapshot to, so a span
+// endpoint outside it can never be drawable and its only possible use is
+// inflating the renderers' span walks.
+func errPowerLineOutOfBounds(lineIdx int, id uint64, coord, maxSide int) error {
+	return fmt.Errorf("mapscreen: f1.viewport powerLines[%d] (id %d) carries coordinate %d outside the grid domain [0,%d) (SEC-039) — rejected before applying", lineIdx, id, coord, maxSide)
+}
+
+// errDegeneratePowerLine is decodeWirePatch's rejection cause for a
+// zero-length (from==to) span: it covers no drawable cells (engine.power's
+// PlaceLine rejects the identical shape as ErrPlacementInvalid), so
+// accepting it would hand the renderers an allocation with no payload.
+func errDegeneratePowerLine(id uint64) error {
+	return fmt.Errorf("mapscreen: f1.viewport powerLine id %d is degenerate (from==to) — rejected before applying", id)
+}

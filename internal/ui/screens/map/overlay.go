@@ -28,6 +28,15 @@ const (
 	OverlayParkingOccupancy
 	OverlayVitality
 
+	// OverlayPower is FEAT-1972079851's eleventh entry: the placed-pylon
+	// layer. Unlike the ten heatmaps above it (all blocked on per-cell
+	// data sources today, overlayBlockedReason), this one has a REAL data
+	// source — "f1.viewport"'s powerLines field — and paints placed spans
+	// in class-distinct colours when active (render.go's drawPowerLines).
+	// Appended at the END of the cycle so every existing ordinal stays
+	// stable; overlay.go's own header note explicitly allows an eleventh.
+	OverlayPower
+
 	overlayCount
 )
 
@@ -46,6 +55,7 @@ var overlayOrder = [...]Overlay{
 	OverlayServiceCoverage,
 	OverlayParkingOccupancy,
 	OverlayVitality,
+	OverlayPower,
 }
 
 // String names ov for status-bar / log display. An out-of-range Overlay
@@ -75,6 +85,8 @@ func (ov Overlay) String() string {
 		return "parking occupancy"
 	case OverlayVitality:
 		return "vitality"
+	case OverlayPower:
+		return "power"
 	default:
 		return "unknown"
 	}

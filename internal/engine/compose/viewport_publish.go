@@ -61,13 +61,27 @@ type viewportCell struct {
 	Building  string `json:"building,omitempty"`
 }
 
+// viewportPowerLine mirrors ui.screen.map/patch.go's wirePowerLine (and
+// web/src/ws/messages.ts's PowerLine): one placed pylon span, published
+// in placement-ID order (GR#21).
+type viewportPowerLine struct {
+	ID         uint64  `json:"id"`
+	Class      string  `json:"class"`
+	FromX      int     `json:"fromX"`
+	FromY      int     `json:"fromY"`
+	ToX        int     `json:"toX"`
+	ToY        int     `json:"toY"`
+	CapacityMW float64 `json:"capacityMW"`
+}
+
 // viewportWirePatch mirrors ui.screen.map/patch.go's wirePatch.
 type viewportWirePatch struct {
-	SchemaVersion int            `json:"schemaVersion"`
-	Full          bool           `json:"full"`
-	Origin        viewportPoint  `json:"origin"`
-	Extent        viewportExtent `json:"extent"`
-	Cells         []viewportCell `json:"cells"`
+	SchemaVersion int                 `json:"schemaVersion"`
+	Full          bool                `json:"full"`
+	Origin        viewportPoint       `json:"origin"`
+	Extent        viewportExtent      `json:"extent"`
+	Cells         []viewportCell      `json:"cells"`
+	PowerLines    []viewportPowerLine `json:"powerLines,omitempty"`
 }
 
 // buildViewportPatch reads engine.world's start tile — the one tile the
@@ -146,12 +160,39 @@ func (st *simState) buildViewportPatch() (json.RawMessage, error) {
 		}
 	}
 
+	// FEAT-1972079851: placed pylon spans publish in placement-ID order
+	// (power.Lines sorts by ID). omitempty keeps the wire byte-identical
+	// to the pre-power schema while nothing is placed, so today's
+	// consumers (and this package's existing JSON-shape tests) see no
+	// change until an engine actually carries pylons.
+	powerLines := make([]viewportPowerLine, 0)
+	if st.power != nil {
+		lines, err := st.power.Lines(st.cid)
+		if err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, st.cid, err, map[string]any{
+				"module": "power", "accessor": "Lines",
+			})
+		}
+		for _, l := range lines {
+			powerLines = append(powerLines, viewportPowerLine{
+				ID:         l.ID,
+				Class:      l.Class.String(),
+				FromX:      l.FromX,
+				FromY:      l.FromY,
+				ToX:        l.ToX,
+				ToY:        l.ToY,
+				CapacityMW: l.CapacityMW,
+			})
+		}
+	}
+
 	patch := viewportWirePatch{
 		SchemaVersion: viewportWireSchemaVersion,
 		Full:          true,
 		Origin:        viewportPoint{X: 0, Y: 0},
 		Extent:        viewportExtent{Width: side, Height: side},
 		Cells:         cells,
+		PowerLines:    powerLines,
 	}
 	raw, err := json.Marshal(patch)
 	if err != nil {

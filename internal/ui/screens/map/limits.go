@@ -102,3 +102,20 @@ var maxGridSide = int(math.Sqrt(float64(maxGridCells)))
 // project's real terrain/road/building name content ever grows enough
 // to approach this ceiling for a legitimately large full-grid patch.
 const maxPatchWireBytes = 2 * maxGridBudgetBytes
+
+// maxPowerLines bounds a single "f1.viewport" patch's powerLines array
+// length (SEC-039 class follow-up, FEAT-1972079851: the PowerLines field
+// shipped without any decode-time gate, so raw wire ints flowed straight
+// into the renderers' span walks — a 234-byte payload declaring two huge
+// endpoints made drawPowerLines/lineCells allocate adx+ady+1 cells, ~119
+// GiB in the PoC, before any clamp ran).
+//
+// Derivation (GR#15, same population discipline as maxPatchWireBytes
+// above): every ACCEPTED span occupies at least 2 distinct grid cells —
+// degenerate (from==to) spans are rejected at decode outright — and span
+// cells live inside the same [0, maxGridSide) coordinate domain the grid
+// itself is bounded by, so a patch whose spans tiled the entire
+// maxGridCells-sized grid could never legitimately carry more than
+// maxGridCells/2 spans. Like maxGridCells this is derived from real,
+// compiler/spec-derived figures, never hand-picked.
+var maxPowerLines = maxGridCells / 2

@@ -70,15 +70,92 @@ export interface ViewportCell {
   building?: string;
 }
 
+// One placed pylon span (FEAT-1972079851). class mirrors engine.power's
+// PylonClass String() keys ("localPole" | "standardLattice" | "superGrid"
+// today; later trio slices append more).
+export interface PowerLine {
+  id: number;
+  class: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  capacityMW: number;
+}
+
 export interface ViewportPatch {
   schemaVersion: number;
   full: boolean;
   origin: { x: number; y: number };
   extent: { width: number; height: number };
   cells: ViewportCell[];
+  /** Absent entirely while the engine has placed no pylons (omitempty). */
+  powerLines?: PowerLine[];
 }
 
 export const PROTOCOL_VERSION = "1.0";
+
+/** The f2.finance view (internal/ui/screens/finance/wire.go). */
+export const FINANCE_VIEW = "f2.finance";
+
+// --- f2.finance patch (schemaVersion 1) ---------------------------------
+// Hand-mirrored copy of ui.screen.finance's wirePatch schema: balanceSheet
+// has shipped since FEAT-208 increment 2; sankey + loans are FEAT-233's
+// additions (compose publishes them from FinanceAPI's FlowMatrix/Loans
+// query seams, per ASM-1220: bands anchor to "budget" and carry the budget
+// INFLOW vs EXTERNAL OUTFLOW only). taxSliders exists on the Go schema but
+// is not published yet — feat.compositionroot has no registered outbound
+// edge to engine.tax, so live rates cannot be sourced without that
+// registry change; the field is typed here so the panel lights up the day
+// it ships.
+
+export interface BalanceItem {
+  label: string;
+  valueMicropounds: number;
+}
+
+export interface BalanceSheetView {
+  assets: BalanceItem[];
+  liabilities: BalanceItem[];
+  netWorth: number;
+}
+
+export interface LoanState {
+  id: string;
+  principalMicropounds: number;
+  ratePercent: number;
+  termMonths: number;
+  nextPaymentMicropounds: number;
+}
+
+export interface TaxSliderState {
+  id: string;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  elasticityCurvePoints?: number[];
+  incidenceDescription: string;
+}
+
+export interface SankeyBand {
+  source: string;
+  target: string;
+  amount: number;
+}
+
+export interface SankeyView {
+  bands: SankeyBand[];
+}
+
+export interface FinancePatch {
+  schemaVersion: number;
+  balanceSheet?: BalanceSheetView;
+  loans?: LoanState[];
+  taxSliders?: TaxSliderState[];
+  sankey?: SankeyView;
+}
 
 let counter = 0;
 

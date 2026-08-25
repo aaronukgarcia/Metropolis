@@ -458,15 +458,16 @@ func TestActiveOverlay_DefaultsToFirstInOrder(t *testing.T) {
 	}
 }
 
-// TestCycleOverlay_Forward_ReturnsToStartAfterTenSteps is AC-3's core
+// TestCycleOverlay_Forward_ReturnsToStartAfterNSteps is AC-3's core
 // assertion: "cycling through all overlays returns to the starting
 // overlay after N steps (N = overlay count)" — forward direction ("o").
-func TestCycleOverlay_Forward_ReturnsToStartAfterTenSteps(t *testing.T) {
+// N is FEAT-031's ten plus FEAT-1972079851's appended eleventh ("power").
+func TestCycleOverlay_Forward_ReturnsToStartAfterNSteps(t *testing.T) {
 	m := newTestScreen(t)
 	start := m.ActiveOverlay()
 
 	seen := map[mapscreen.Overlay]bool{start: true}
-	const n = 10 // AC-3's ten named overlays; asserted separately below
+	const n = 11 // ten AC-3 overlays + OverlayPower; asserted separately below
 	for i := 0; i < n; i++ {
 		got := m.CycleOverlay(true)
 		if i < n-1 {
@@ -480,14 +481,14 @@ func TestCycleOverlay_Forward_ReturnsToStartAfterTenSteps(t *testing.T) {
 	}
 }
 
-// TestCycleOverlay_Reverse_ReturnsToStartAfterTenSteps is AC-3's same
+// TestCycleOverlay_Reverse_ReturnsToStartAfterNSteps is AC-3's same
 // assertion in the reverse direction ("O").
-func TestCycleOverlay_Reverse_ReturnsToStartAfterTenSteps(t *testing.T) {
+func TestCycleOverlay_Reverse_ReturnsToStartAfterNSteps(t *testing.T) {
 	m := newTestScreen(t)
 	start := m.ActiveOverlay()
 
 	seen := map[mapscreen.Overlay]bool{start: true}
-	const n = 10
+	const n = 11
 	for i := 0; i < n; i++ {
 		got := m.CycleOverlay(false)
 		if i < n-1 {
@@ -522,9 +523,11 @@ func TestCycleOverlay_ForwardThenReverse_Cancels(t *testing.T) {
 // TestCycleOverlay_MatchesDocumentedFEAT031Order pins the cycle order to
 // FEAT-031's own list ("ownership, land value, zoning, utilities,
 // traffic, pollution, decay, per-service coverage, parking occupancy,
-// vitality") — a passing test here is what makes a future accidental
-// reordering (e.g. an alphabetised overlayOrder) visible as a failure,
-// not just a silent behaviour change.
+// vitality") followed by FEAT-1972079851's appended eleventh entry
+// ("power" — overlay.go documents why it appends at the end): a passing
+// test here is what makes a future accidental reordering (e.g. an
+// alphabetised overlayOrder) visible as a failure, not just a silent
+// behaviour change.
 func TestCycleOverlay_MatchesDocumentedFEAT031Order(t *testing.T) {
 	m := newTestScreen(t)
 	want := []mapscreen.Overlay{
@@ -538,6 +541,7 @@ func TestCycleOverlay_MatchesDocumentedFEAT031Order(t *testing.T) {
 		mapscreen.OverlayServiceCoverage,
 		mapscreen.OverlayParkingOccupancy,
 		mapscreen.OverlayVitality,
+		mapscreen.OverlayPower,
 	}
 	if got := m.ActiveOverlay(); got != want[0] {
 		t.Fatalf("ActiveOverlay() = %v, want %v (first in FEAT-031's documented order)", got, want[0])

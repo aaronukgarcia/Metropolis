@@ -271,6 +271,30 @@ func (f *FinanceAPI) OutstandingDebt() Money {
 	return f.totalDebtLocked()
 }
 
+// Loans returns a snapshot of every open loan facility in ascending
+// LoanID order (GR#21 — sorted IDs, never map-iteration order), copying
+// each value so the caller owns the slice and can never alias the
+// internal book (weakness pattern #1). FEAT-233's loans-summary view
+// consumes this; OutstandingDebt remains the maintained running TOTAL and
+// stays authoritative for aggregates (AC-14 discipline).
+func (f *FinanceAPI) Loans() []Loan {
+	if err := f.checkNotCopied("Loans"); err != nil {
+		return nil
+	}
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	ids := make([]LoanID, 0, len(f.loans))
+	for id := range f.loans {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	out := make([]Loan, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, *f.loans[id])
+	}
+	return out
+}
+
 // totalDebtLocked returns the maintained outstanding-principal running
 // total (f.mu held). It never iterates the loans map — the total is
 // updated incrementally on Borrow/RepayLoan, so no monetary sum depends

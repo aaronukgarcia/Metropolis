@@ -1,0 +1,10 @@
+{
+  "comment": "engine.power pylon catalogue (FEAT-1972079851, trio slice 1 of 3: local pole / standard lattice / super grid now; HVDC France interconnector arrives as a later class — the class enum and this file's schema are the seam). Every tunable figure a pylon placement consumes — per-tier transmission capacity, build cost and siting footprint — lives here, never as a Go literal in internal/engine/power/*.go (GR#15).",
+  "unitConvention": "capacityMW is in MEGAWATTS of transmission capacity per span (float64, finite, > 0); costMicropounds is in MICRO-POUNDS per placed span (1 GBP = 1,000,000 micropounds, M0-ENG §1.2; int64, > 0); footprintCells is in CELLS of siting footprint per endpoint pylon (int, > 0). All three are PLACEHOLDER magnitudes pending Aaron's balance pass — plausible v1 figures chosen so tiers are strictly ordered, never pinned targets.",
+  "version": 1,
+  "tiers": {
+    "localPole":       { "capacityMW": 0.5, "costMicropounds": 2000000000,     "footprintCells": 1 },
+    "standardLattice": { "capacityMW": 40,  "costMicropounds": 25000000000,    "footprintCells": 4 },
+    "superGrid":       { "capacityMW": 400, "costMicropounds": 800000000000,   "footprintCells": 9 }
+  }
+}

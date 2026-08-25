@@ -66,6 +66,26 @@ body {
   position: relative;
 }
 
+.map-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.map-toolbar button {
+  background: #1b1f27;
+  color: #d7dae0;
+  border: 1px solid #2c313a;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.map-toolbar button[aria-pressed="true"] {
+  border-color: #f1c40f;
+  color: #f1c40f;
+}
+
+
 .map-canvas canvas {
   image-rendering: pixelated;
   max-width: 100%;

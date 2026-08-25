@@ -88,6 +88,13 @@ type MapScreen struct {
 	width, height int // last full snapshot's extent
 	grid          []cellData
 
+	// powerLines is the latest full snapshot's placed-pylon spans
+	// (FEAT-1972079851), copied (never aliased) into renderSnapshot by
+	// snapshotLocked. Sparse patches carry no line data, so this is
+	// replaced wholesale on every full snapshot — mirroring how the grid
+	// itself is re-initialised by applyFullLocked.
+	powerLines []wirePowerLine
+
 	offsetX, offsetY     int // viewport pan origin, in grid coordinates
 	viewportW, viewportH int // last known visible viewport size (Render/SetViewportSize)
 
@@ -301,6 +308,12 @@ func (m *MapScreen) applyFullLocked(p wirePatch) {
 	}
 	m.width, m.height = w, h
 	m.grid = grid
+	// FEAT-1972079851: replace the pylon set wholesale with the new full
+	// snapshot's (a defensive copy — the decoded patch's slice must not
+	// alias anything the next decode reuses).
+	lines := make([]wirePowerLine, len(p.PowerLines))
+	copy(lines, p.PowerLines)
+	m.powerLines = lines
 	m.haveSnapshot = true
 	m.clampOffsetLocked()
 	m.clampCursorLocked()

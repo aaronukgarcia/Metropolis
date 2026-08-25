@@ -62,6 +62,15 @@ func overlayBlockedReason(ov Overlay) string {
 		return "no engine module or code.json node exists yet for a per-cell decay metric — no stable detection point to tripwire; revisit once a candidate module/edge lands"
 	case OverlayVitality:
 		return "no engine module or code.json node exists yet for a per-cell vitality metric — no stable detection point to tripwire; revisit once a candidate module/edge lands"
+	case OverlayPower:
+		// FEAT-1972079851: deliberately NOT a blocked heatmap. Power is
+		// the cycle's first overlay with a REAL data source —
+		// "f1.viewport"'s powerLines field — but it is a line-object
+		// layer painted by render.go's drawPowerLines, not a per-cell
+		// heatmap metric, so overlayLiveValue reporting have=false here
+		// is correct-by-design (paintOverlay never runs for this entry's
+		// data; Render branches to drawPowerLines instead).
+		return "not a per-cell heatmap: placed pylon spans paint via drawPowerLines from f1.viewport's real powerLines data (FEAT-1972079851); overlayLiveValue is unused for this entry"
 	default:
 		return "unrecognised overlay"
 	}
