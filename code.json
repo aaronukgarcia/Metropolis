@@ -2760,6 +2760,10 @@
             "outboundGuid": "d4dbc368-2df9-4eb9-8ddb-8f424d46a47a"
           },
           {
+            "key": "engine.finance",
+            "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
+          },
+          {
             "key": "engine.firms",
             "outboundGuid": "fd65035a-1204-45e0-bdb7-5b9196c77b4f"
           },
@@ -3306,6 +3310,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.citizens",
+            "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
+            "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
           }
         ]
       },
@@ -3700,6 +3709,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.staffing",
+            "moduleGuid": "13eff6db-c51c-4307-b84e-3cfd2ce671af",
+            "inboundGuid": "8de22d17-1d58-4ca8-995f-89f2c98d4fb5"
           }
         ]
       },
@@ -6757,6 +6771,10 @@
           {
             "key": "engine.airunits",
             "outboundGuid": "bba25b12-a2ef-404a-96b4-de6dc739ba49"
+          },
+          {
+            "key": "engine.build",
+            "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
           }
         ]
       },
