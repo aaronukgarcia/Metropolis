@@ -132,7 +132,7 @@ func TestTunnels_AC10_NoTBMError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for boring without TBM")
 	}
-	expectedCode := "MET-E_TUNNEL_01: cannot bore tunnel without an active TBM programme (AC-10)"
+	expectedCode := ErrNoTBMProgramme + ": cannot bore tunnel without an active TBM programme (AC-10)"
 	if err.Error() != expectedCode {
 		t.Errorf("expected error matching custom code, got: %v", err)
 	}

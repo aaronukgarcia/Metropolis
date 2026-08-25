@@ -419,6 +419,83 @@ func TestLoad_MissingCommodity(t *testing.T) {
 	}
 }
 
+// --- BUG-285: the exact-set check (MET-E606) --------------------------------
+
+// TestLoad_ExtraUnknownCommodityRejected is BUG-285's headline
+// regression test: a market.json carrying all nine required commodities
+// PLUS a tenth unknown key ("education" — a §10 service name, exactly
+// the class of key that used to slip through) must be rejected at Load
+// with ErrExtraCommodity (MET-E606), and the rendered message must name
+// the offending key. Before the exact-set check, this fixture loaded
+// successfully: "education" carries an import price so it passes
+// validateCommodityPricingXOR, and the subset loop only proves the nine
+// are PRESENT, never that they are ALONE — the registry silently
+// widened to ten and AC-2's "exactly nine" was defeated.
+func TestLoad_ExtraUnknownCommodityRejected(t *testing.T) {
+	dir := t.TempDir()
+	extra := strings.Replace(fullValidMarketJSON(),
+		`"commodities": {`,
+		`"commodities": {
+			"education": {"supplyMode": "hybrid", "unit": "seat", "importPriceMicropounds": 1000, "capacityCeiling": 500},`, 1)
+	writeFixture(t, dir, extra)
+
+	_, err := Load(dir, testCorrelationID())
+	assertCode(t, err, ErrExtraCommodity)
+	if !strings.Contains(err.Error(), "education") {
+		t.Errorf("err = %v, want the message to name the unknown key %q", err, "education")
+	}
+	if e, ok := err.(*errs.E); ok {
+		if keys, _ := e.Ctx["keys"].(string); keys != "education" {
+			t.Errorf("e.Ctx[\"keys\"] = %q, want %q", keys, "education")
+		}
+	}
+}
+
+// TestLoad_TypoedCommodityKeyRejected is BUG-285's typo scenario: the
+// real key "waste" misspelled "waiste". Load rejects it loudly — the
+// actual first tripwire is validateCommodityPricingXOR, which runs
+// before the subset/exact-set checks and treats every non-"waste" key
+// as importable, so the "waiste" record (export price, no import price)
+// fails "importPriceMicropounds required" → ErrMarketDataInvalid
+// (MET-E600) naming "waiste". Had the typo'd record instead LOOKED
+// importable, the subset loop would still have caught the missing real
+// key (MET-E601) — that path is TestLoad_ExtraKeyMaskingMissingKeyRejected
+// below. Either way: never a silent load.
+func TestLoad_TypoedCommodityKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	typoed := strings.Replace(fullValidMarketJSON(),
+		`"waste": {"supplyMode": "hybrid", "unit": "kg", "exportPriceMicropounds": 50000, "capacityCeiling": 120000}`,
+		`"waiste": {"supplyMode": "hybrid", "unit": "kg", "exportPriceMicropounds": 50000, "capacityCeiling": 120000}`, 1)
+	writeFixture(t, dir, typoed)
+
+	_, err := Load(dir, testCorrelationID())
+	assertCode(t, err, ErrMarketDataInvalid)
+	if !strings.Contains(err.Error(), "waiste") {
+		t.Errorf("err = %v, want the message to name the typo'd key %q", err, "waiste")
+	}
+}
+
+// TestLoad_ExtraKeyMaskingMissingKeyRejected closes the count-only
+// loophole the r1 attacker probed: a market.json with EXACTLY nine keys
+// but the WRONG nine ("water" replaced by an importable-looking
+// "education"). A naive len(commodities) == 9 check alone would pass
+// this fixture; Load must still reject it. The subset loop runs first
+// and catches the missing real commodity → ErrMissingCommodity
+// (MET-E601) naming "water".
+func TestLoad_ExtraKeyMaskingMissingKeyRejected(t *testing.T) {
+	dir := t.TempDir()
+	masked := strings.Replace(fullValidMarketJSON(),
+		`"water": {"supplyMode": "hybrid", "unit": "L", "importPriceMicropounds": 2000, "capacityCeiling": 5000000}`,
+		`"education": {"supplyMode": "hybrid", "unit": "seat", "importPriceMicropounds": 1000, "capacityCeiling": 500}`, 1)
+	writeFixture(t, dir, masked)
+
+	_, err := Load(dir, testCorrelationID())
+	assertCode(t, err, ErrMissingCommodity)
+	if !strings.Contains(err.Error(), "water") {
+		t.Errorf("err = %v, want the message to name the missing commodity %q", err, "water")
+	}
+}
+
 func TestLoad_NegativePriceRejected(t *testing.T) {
 	dir := t.TempDir()
 	bad := strings.Replace(fullValidMarketJSON(), `"importPriceMicropounds": 2000`, `"importPriceMicropounds": -2000`, 1)

@@ -3,6 +3,7 @@ package market
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -211,6 +212,34 @@ func Load(dir, correlationID string) (*MarketAPI, error) {
 				"dir":       dir,
 			})
 		}
+	}
+
+	// BUG-285: the loop above proves the nine are present (a subset
+	// check); this one proves the loaded set is EXACTLY the nine. A
+	// typo'd extra key - including any §10 service name, every one of
+	// which would otherwise pass validateCommodityPricingXOR as an
+	// importable - silently widened the registry and defeated AC-2's
+	// "exactly nine". Unknown keys are reported sorted (deterministic
+	// message, GR#21).
+	if len(commodities) != len(allCommodities) {
+		extra := make([]string, 0)
+		for name := range commodities {
+			known := false
+			for _, c := range allCommodities {
+				if c == name {
+					known = true
+					break
+				}
+			}
+			if !known {
+				extra = append(extra, string(name))
+			}
+		}
+		sort.Strings(extra)
+		return nil, errs.New(ErrExtraCommodity, correlationID, map[string]any{
+			"keys": strings.Join(extra, ", "),
+			"dir":  dir,
+		})
 	}
 
 	return &MarketAPI{

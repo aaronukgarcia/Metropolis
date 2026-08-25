@@ -112,7 +112,10 @@
       "V400-V499": "reserved for ui.router (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V500-V599": "reserved for ui.screen.services (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "G5200-G5299": "reserved for engine.parking (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "G5300-G5399": "reserved for engine.tunnels (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")"
+    
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1028,6 +1031,12 @@
       "module": "engine.market",
       "message": "internal error: commodity \"{commodity}\" record is missing required field \"{field}\" despite passing Load validation",
       "remedy": "This should be unreachable — Load's foundation/data.MarketFile.Validate and validateCommodityPricingXOR both enforce this field's presence before a *MarketAPI is ever returned, and the commodity map is never mutated afterward. If this fires, either that validation was weakened by a later edit, or a *MarketAPI was constructed by a path that bypasses Load (e.g. a hand-built test fixture); file a BUG item, do not treat the returned MarketAPI as trustworthy."
+    },
+    "MET-E606": {
+      "severity": "error",
+      "module": "engine.market",
+      "message": "market.json contains unknown commodity keys beyond the nine §6 commodities: {keys}",
+      "remedy": "market.json must contain EXACTLY the nine registered commodities - the completeness check is an exact-set match, not a subset check. Remove the unknown keys: a typo'd extra entry (including any §10 service name) must fail loudly at Load, never silently widen the commodity registry (BUG-285)."
     },
     "MET-E700": {
       "severity": "error",
@@ -4868,6 +4877,72 @@
       "module": "ui.screen.census",
       "message": "citizen bio {guid} unavailable: {reason}",
       "remedy": "the engine rejected the citizen bio query (MET-G2701) -- check the GUID is a known tracked citizen"
+    },
+    "MET-G5200": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "ParkingAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *ParkingAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G5201": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "unknown destination facility ID: {id}",
+      "remedy": "Reference a facility ID previously registered with the parking API (AddFacility/Load). IDs are minted by the module; there is no lookup by guess."
+    },
+    "MET-G5202": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "negative space count: {spaces}",
+      "remedy": "Pass a non-negative space count when registering or resizing a facility's capacity."
+    },
+    "MET-G5203": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "invalid allocation fraction: {fraction}",
+      "remedy": "Allocation fractions must lie in [0,1]; clamp at the caller if the value derives from balance data."
+    },
+    "MET-G5204": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "negative rate/price",
+      "remedy": "Hourly rates and prices must be non-negative; reject rather than clamp so balance-data sign errors surface at load."
+    },
+    "MET-G5205": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "unregistered district ID: {id}",
+      "remedy": "Wire the district source (engine.world) before registering facilities that reference a district ID."
+    },
+    "MET-G5206": {
+      "severity": "error",
+      "module": "engine.parking",
+      "message": "facility still busy or sustained low-occupancy period not met",
+      "remedy": "A facility can only change use once its occupancy has drained below the sustained-low threshold for the documented period, or after demolition. Wait or demolish first."
+    },
+    "MET-G5300": {
+      "severity": "error",
+      "module": "engine.tunnels",
+      "message": "TunnelsAPI method {method} called on a struct-copied value",
+      "remedy": "Call methods on the *TunnelsAPI returned by New/Load, never a struct copy of it (SEC-020 family). A copied value aliases the original's mutex while holding an independent lock, so it is rejected before the lock is touched."
+    },
+    "MET-G5301": {
+      "severity": "error",
+      "module": "engine.tunnels",
+      "message": "cannot bore tunnel without an active TBM programme",
+      "remedy": "Start a TBM programme (programme start order) before issuing bore orders; boring requires active TBM capacity."
+    },
+    "MET-G5302": {
+      "severity": "error",
+      "module": "engine.tunnels",
+      "message": "invalid boring segment length: {length}",
+      "remedy": "Boring segment lengths must be finite and positive (km); reject rather than clamp so balance-data sign errors surface."
+    },
+    "MET-G5303": {
+      "severity": "error",
+      "module": "engine.tunnels",
+      "message": "cannot construct Hyperloop before M12 unlock gate",
+      "remedy": "Hyperloop construction is gated at milestone M12 (engine.unlocks); defer the order until the gate opens."
     }
   }
 }

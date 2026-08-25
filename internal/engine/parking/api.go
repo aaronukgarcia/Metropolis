@@ -77,9 +77,12 @@ func New() *ParkingAPI {
 	return p
 }
 
+// checkNotCopied rejects a method invoked on a struct-copied ParkingAPI
+// before any lock is touched (SEC-020 family — a copy aliases the original's
+// mutex while holding an independent lock).
 func (p *ParkingAPI) checkNotCopied(method string) error {
 	if p.self.Load() != p {
-		return fmt.Errorf("MET-E_PARKING_99: copy guard error: method %s called on copied value", method)
+		return fmt.Errorf("%s: copy guard error: method %s called on copied value", ErrCopiedValue, method)
 	}
 	return nil
 }
@@ -133,7 +136,7 @@ func (p *ParkingAPI) RegisterFacility(facilityID uint64, tile world.TileCoord, l
 	defer p.mu.Unlock()
 
 	if spaces < 0 {
-		return fmt.Errorf("MET-E_PARKING_02: negative space count: %d (AC-11)", spaces)
+		return fmt.Errorf("%s: negative space count: %d (AC-11)", ErrNegativeSpaces, spaces)
 	}
 
 	p.facilities[facilityID] = &Facility{
@@ -169,7 +172,7 @@ func (p *ParkingAPI) TotalLandFootprint(facilityID uint64) (float64, error) {
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_01: unknown destination facility ID: %d (AC-10)", facilityID)
+		return 0, fmt.Errorf("%s: unknown destination facility ID: %d (AC-10)", ErrUnknownFacility, facilityID)
 	}
 
 	return float64(f.Spaces) * FootprintPerSpace(f.Type), nil
@@ -185,7 +188,7 @@ func (p *ParkingAPI) ReconcileZonedArea(facilityID uint64) (float64, error) {
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_01: unknown destination facility ID: %d (AC-10)", facilityID)
+		return 0, fmt.Errorf("%s: unknown destination facility ID: %d (AC-10)", ErrUnknownFacility, facilityID)
 	}
 
 	if p.world == nil {
@@ -217,10 +220,10 @@ func (p *ParkingAPI) AddWorkplaceAllocation(allocationID uint64, tile world.Tile
 	defer p.mu.Unlock()
 
 	if spaces < 0 {
-		return fmt.Errorf("MET-E_PARKING_02: negative space count (AC-11)")
+		return fmt.Errorf("%s: negative space count (AC-11)", ErrNegativeSpaces)
 	}
 	if fraction < 0 || fraction > 1.0 {
-		return fmt.Errorf("MET-E_PARKING_03: invalid allocation fraction: %f", fraction)
+		return fmt.Errorf("%s: invalid allocation fraction: %f", ErrInvalidFraction, fraction)
 	}
 
 	p.allocations[allocationID] = &WorkplaceAllocation{
@@ -245,7 +248,7 @@ func (p *ParkingAPI) ConfigureCharges(districtID uint16, hourlyRate float64, per
 	defer p.mu.Unlock()
 
 	if hourlyRate < 0 || permitPrice < 0 {
-		return fmt.Errorf("MET-E_PARKING_04: negative rate/price (AC-11)")
+		return fmt.Errorf("%s: negative rate/price (AC-11)", ErrNegativeRatePrice)
 	}
 
 	p.districts[districtID] = &DistrictConfig{
@@ -266,12 +269,12 @@ func (p *ParkingAPI) EffectiveCharge(facilityID uint64, hour int, isPermit bool)
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_01: unknown destination facility ID: %d (AC-10)", facilityID)
+		return 0, fmt.Errorf("%s: unknown destination facility ID: %d (AC-10)", ErrUnknownFacility, facilityID)
 	}
 
 	cfg, ok := p.districts[f.District]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_05: unregistered district ID: %d (AC-10)", f.District)
+		return 0, fmt.Errorf("%s: unregistered district ID: %d (AC-10)", ErrUnknownDistrict, f.District)
 	}
 
 	if isPermit {
@@ -333,7 +336,7 @@ func (p *ParkingAPI) Capacity(facilityID uint64) (int, error) {
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_01: unknown facility: %d", facilityID)
+		return 0, fmt.Errorf("%s: unknown facility: %d", ErrUnknownFacility, facilityID)
 	}
 
 	capValue := f.Spaces
@@ -354,7 +357,7 @@ func (p *ParkingAPI) Occupancy(facilityID uint64) (int, error) {
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_01: unknown facility: %d", facilityID)
+		return 0, fmt.Errorf("%s: unknown facility: %d", ErrUnknownFacility, facilityID)
 	}
 
 	return f.Occupied, nil
@@ -370,7 +373,7 @@ func (p *ParkingAPI) Type(facilityID uint64) (InstrumentType, error) {
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, fmt.Errorf("MET-E_PARKING_01: unknown facility: %d", facilityID)
+		return 0, fmt.Errorf("%s: unknown facility: %d", ErrUnknownFacility, facilityID)
 	}
 
 	return f.Type, nil
@@ -386,7 +389,7 @@ func (p *ParkingAPI) RecordArrivals(facilityID uint64, arrivingTrips int) (cruis
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return 0, 0, fmt.Errorf("MET-E_PARKING_01: unknown facility: %d", facilityID)
+		return 0, 0, fmt.Errorf("%s: unknown facility: %d", ErrUnknownFacility, facilityID)
 	}
 
 	capacity := f.Spaces
@@ -423,12 +426,12 @@ func (p *ParkingAPI) ConvertToRedevelopment(facilityID uint64) error {
 
 	f, ok := p.facilities[facilityID]
 	if !ok {
-		return fmt.Errorf("MET-E_PARKING_01: unknown facility: %d", facilityID)
+		return fmt.Errorf("%s: unknown facility: %d", ErrUnknownFacility, facilityID)
 	}
 
 	// Rejects conversion if sustained low period is not met (sustained below 10% capacity)
 	if f.Occupied >= int(float64(f.Spaces)*0.1) || f.SustainedLowPeriod < 5 {
-		return fmt.Errorf("MET-E_PARKING_06: facility still busy or sustained low-occupancy period not met (AC-11)")
+		return fmt.Errorf("%s: facility still busy or sustained low-occupancy period not met (AC-11)", ErrFacilityBusy)
 	}
 
 	f.IsRedeveloped = true

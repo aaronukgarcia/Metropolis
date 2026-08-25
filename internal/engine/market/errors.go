@@ -67,4 +67,13 @@ const (
 	// rather than a nil-pointer panic (BOW MOD-020 ruling 2, 2026-08-11
 	// — GR#1: a panic in engine code is not a trap).
 	ErrCommodityFieldMissing = "MET-E605"
+
+	// ErrExtraCommodity: data/market.json contains commodity keys BEYOND
+	// the nine §6 requires — the exact-set half of the completeness
+	// check (BUG-285; ErrMissingCommodity above is only the subset
+	// half). A typo'd extra key, including any §10 service name, used
+	// to silently widen the commodity registry because
+	// validateCommodityPricingXOR treats every non-waste key as
+	// importable. Load-time.
+	ErrExtraCommodity = "MET-E606"
 )

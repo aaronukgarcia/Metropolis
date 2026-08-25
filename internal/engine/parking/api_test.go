@@ -182,7 +182,7 @@ func TestParking_AC10_NoFacilityError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for unknown facility ID")
 	}
-	expectedCode := "MET-E_PARKING_01: unknown destination facility ID: 999 (AC-10)"
+	expectedCode := ErrUnknownFacility + ": unknown destination facility ID: 999 (AC-10)"
 	if err.Error() != expectedCode {
 		t.Errorf("expected error matching custom code, got: %v", err)
 	}

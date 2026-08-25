@@ -34,9 +34,12 @@ func New() *TunnelsAPI {
 	return t
 }
 
+// checkNotCopied rejects a method invoked on a struct-copied TunnelsAPI
+// before any lock is touched (SEC-020 family — a copy aliases the original's
+// mutex while holding an independent lock).
 func (t *TunnelsAPI) checkNotCopied(method string) error {
 	if t.self.Load() != t {
-		return fmt.Errorf("MET-E_TUNNEL_99: copy guard error: method %s called on copied value", method)
+		return fmt.Errorf("%s: copy guard error: method %s called on copied value", ErrCopiedValue, method)
 	}
 	return nil
 }
@@ -137,14 +140,14 @@ func (t *TunnelsAPI) BoreSegment(lengthKm float64, tunnelType string) error {
 	defer t.mu.Unlock()
 
 	if !t.hasTBM {
-		return fmt.Errorf("MET-E_TUNNEL_01: cannot bore tunnel without an active TBM programme (AC-10)")
+		return fmt.Errorf("%s: cannot bore tunnel without an active TBM programme (AC-10)", ErrNoTBMProgramme)
 	}
 	if lengthKm <= 0 {
-		return fmt.Errorf("MET-E_TUNNEL_02: invalid boring segment length: %f", lengthKm)
+		return fmt.Errorf("%s: invalid boring segment length: %f", ErrInvalidSegmentLength, lengthKm)
 	}
 
 	if tunnelType == "hyperloop" && t.hyperloopGated {
-		return fmt.Errorf("MET-E_TUNNEL_03: cannot construct Hyperloop before M12 unlock gate (AC-10)")
+		return fmt.Errorf("%s: cannot construct Hyperloop before M12 unlock gate (AC-10)", ErrHyperloopLocked)
 	}
 
 	// Accumulate km bored on TBM program
