@@ -90,4 +90,23 @@
 // (a scaled-down analogue proving the paging code path runs without
 // needing a >8GB synthetic in a unit test); binary serialization of cold
 // shards via int.serializer is out of scope for this item.
+//
+// # Mortality smoothing / death-wave (feat.deathwave, FEAT-087)
+//
+// The cold pass's Gompertz-Makeham mortality (§5.1/§5.2, AC-11) selects
+// deaths; a [DeathQueue] then defers them and releases at most the
+// data-sourced monthly death budget (data/mortality.json) per non-emergency
+// month, so a same-birthMonth cohort aging onto the steep Gompertz slope
+// becomes a smooth ~N-deaths/month tail, never a single-month population
+// cliff (§10 "deaths are continuous", AC-1). Smoothing is pure delay —
+// every selected death is eventually realised, none dropped or duplicated
+// (AC-2, §14/§19). A deterministic, seeded citywide weather draw
+// [WeatherSeverity] keyed hash(worldSeed, month, "weather") declares a
+// weather emergency (§9) that suspends the budget (multiplying it, AC-6);
+// the emergency source is engine.season per the acceptance criteria, but the
+// engine.citizens → engine.season code.json edge is not yet registered, so
+// the signal is derived locally and flagged for the SSOT pass. Realised
+// deaths are exposed as an ordered (selection month, citizen id) handoff
+// ledger ([RealisedDeath]: CitizenID, DeathMonth, Emergency) for FEAT-088's
+// death services (graveyards, cremation, hearses — §H).
 package citizens

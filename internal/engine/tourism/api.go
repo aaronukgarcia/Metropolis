@@ -1,6 +1,7 @@
 package tourism
 
 import (
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -320,7 +321,7 @@ func (t *TourismAPI) AccommodationCapacity(kind AccommodationKind) (int64, error
 	var total int64
 	for _, a := range t.accommodation {
 		if a.Kind == kind {
-			total += a.Beds
+			total = num.SatAdd(total, a.Beds)
 		}
 	}
 	return total, nil
@@ -334,7 +335,7 @@ func (t *TourismAPI) TotalAccommodationCapacity() int64 {
 	defer t.mu.RUnlock()
 	var total int64
 	for _, a := range t.accommodation {
-		total += a.Beds
+		total = num.SatAdd(total, a.Beds)
 	}
 	return total
 }
@@ -417,27 +418,7 @@ func (t *TourismAPI) PortfolioScore() (float64, error) {
 	attractions := append([]Attraction(nil), t.attractions...)
 	t.mu.RUnlock()
 
-	var sum float64
-	for term := TermKind(0); int(term) < numPortfolioTerms; term++ {
-		var v float64
-		if term == TermVenues {
-			if leisure == nil {
-				return 0, errs.New(ErrDependencyMissing, t.correlationID, map[string]any{
-					"dependency": "leisure",
-					"operation":  "PortfolioScore",
-				})
-			}
-			mix, err := leisure.VenueMix(0, t.correlationID)
-			if err != nil {
-				return 0, err
-			}
-			v = sumVenueMix(mix)
-		} else {
-			v = sumTermAttractions(attractions, term)
-		}
-		sum += weights[term] * v
-	}
-	return sum, nil
+	return portfolioScore(attractions, leisure, weights, t.correlationID)
 }
 
 // DrawScore returns the composite draw score for the current month:
@@ -609,24 +590,58 @@ func (t *TourismAPI) ReportEvent(ev news.Event) (news.Story, error) {
 
 // --- internal computation (pure, deterministic) ---
 
+// maxDrawFloat is the float64 saturation ceiling for the portfolio/draw
+// chain: float64(math.MaxInt64) (exactly 2^63), the value at which
+// num.ClampInt64FromFloat saturates to math.MaxInt64. Every portfolio term
+// and the running SUM are clamped to it, so the SUM stays finite and no
+// +Inf/NaN can ever reach the float64→int64 cast (GR#16).
+const maxDrawFloat = float64(math.MaxInt64)
+
+// satTermFloat clamps a portfolio contribution into the non-negative draw
+// domain [0, maxDrawFloat]. NaN and negative values collapse to 0; any
+// value at or past maxDrawFloat saturates to maxDrawFloat (the downstream
+// num.ClampInt64FromFloat saturation point — beyond it the visitor count is
+// already saturated, so nothing is lost).
+func satTermFloat(x float64) float64 {
+	if math.IsNaN(x) || x <= 0 {
+		return 0
+	}
+	if x >= maxDrawFloat {
+		return maxDrawFloat
+	}
+	return x
+}
+
+// satFloatAdd adds b onto a, saturating the total at maxDrawFloat. Both
+// operands are assumed already clamped to [0, maxDrawFloat], so a+b is at
+// most 2·maxDrawFloat — finite — and the guard only bounds the total.
+func satFloatAdd(a, b float64) float64 {
+	s := a + b
+	if math.IsNaN(s) || s >= maxDrawFloat {
+		return maxDrawFloat
+	}
+	return s
+}
+
 // sumVenueMix folds a citywide venue-mix array into a single venue term
 // (index order — deterministic). The home category carries no venue
 // capacity, so it contributes zero in practice.
 func sumVenueMix(mix [leisure.NumCategories]float64) float64 {
 	var sum float64
 	for i := 0; i < len(mix); i++ {
-		sum += mix[i]
+		sum = satFloatAdd(sum, satTermFloat(mix[i]))
 	}
 	return sum
 }
 
 // sumTermAttractions sums the scores of the attractions of one term in
-// insertion order (deterministic — GR#21).
+// insertion order (deterministic — GR#21). Each score and the running sum
+// are saturated so a term can never overflow to +Inf (GR#16).
 func sumTermAttractions(attractions []Attraction, term TermKind) float64 {
 	var sum float64
 	for _, a := range attractions {
 		if a.Term == term {
-			sum += a.Score
+			sum = satFloatAdd(sum, satTermFloat(a.Score))
 		}
 	}
 	return sum
@@ -731,7 +746,7 @@ func portfolioScore(attractions []Attraction, leisure LeisureAPI, weights [numPo
 		} else {
 			v = sumTermAttractions(attractions, term)
 		}
-		sum += weights[term] * v
+		sum = satFloatAdd(sum, satTermFloat(weights[term]*v))
 	}
 	return sum, nil
 }
@@ -774,15 +789,15 @@ func (t *TourismAPI) AdvanceMonth() error {
 	repMult := reputationMultiplier(lagRep, t.cfg.ReputationScale)
 	draw := portfolio * repMult * t.cfg.AccessTierReach[t.accessTier] * seasonal
 
-	desiredStaying := int64(draw * t.cfg.StayingVisitorRate)
-	desiredDayTrip := int64(draw * t.cfg.DayTripRate)
+	desiredStaying := num.ClampInt64FromFloat(draw * t.cfg.StayingVisitorRate)
+	desiredDayTrip := num.ClampInt64FromFloat(draw * t.cfg.DayTripRate)
 
 	// 1. Departures: visitors admitted stayMonths ago leave, freeing beds.
 	stay := int(t.cfg.StayingVisitorStayMonths)
 	if len(t.admissions) >= stay {
 		departing := t.admissions[len(t.admissions)-stay]
-		t.presentStaying -= departing
-		t.departedStaying += departing
+		t.presentStaying = num.SatSub(t.presentStaying, departing)
+		t.departedStaying = num.SatAdd(t.departedStaying, departing)
 	}
 
 	// 2. Admission: waitlist first, then new demand, up to free beds.
@@ -794,7 +809,7 @@ func (t *TourismAPI) AdvanceMonth() error {
 	fromQueue := int64(0)
 	if t.queue > 0 && free > 0 {
 		fromQueue = minInt64(t.queue, free)
-		t.queue -= fromQueue
+		t.queue = num.SatSub(t.queue, fromQueue)
 		free -= fromQueue
 	}
 	fromNew := int64(0)
@@ -802,30 +817,36 @@ func (t *TourismAPI) AdvanceMonth() error {
 		fromNew = minInt64(desiredStaying, free)
 	}
 	if desiredStaying > fromNew {
-		t.queue += desiredStaying - fromNew
+		t.queue = num.SatAdd(t.queue, desiredStaying-fromNew)
 	}
-	admitted := fromQueue + fromNew
-	t.presentStaying += admitted
-	t.admittedStaying += admitted
+	admitted := num.SatAdd(fromQueue, fromNew)
+	t.presentStaying = num.SatAdd(t.presentStaying, admitted)
+	t.admittedStaying = num.SatAdd(t.admittedStaying, admitted)
 	t.admissions = append(t.admissions, admitted)
 
 	// 3. Day-trippers: arrive and depart within the same month (transient).
-	t.admittedDayTrip += desiredDayTrip
-	t.departedDayTrip += desiredDayTrip
+	t.admittedDayTrip = num.SatAdd(t.admittedDayTrip, desiredDayTrip)
+	t.departedDayTrip = num.SatAdd(t.departedDayTrip, desiredDayTrip)
 
-	// 4. Refresh current-month records.
+	// 4. Refresh current-month records. Spend/nights are int64 visitor
+	// quantities, so they route through SafeMul (GR#16) — a saturated
+	// visitor count times a large spend coefficient must saturate at
+	// math.MaxInt64, never wrap negative.
 	dayTripCount := desiredDayTrip
 	stayingCount := admitted
+	dayTripSpend, _ := num.SafeMul(dayTripCount, t.cfg.Spend.DayTripMicroPounds)
+	stayNights, _ := num.SafeMul(stayingCount, int64(stay))
+	stayingSpend, _ := num.SafeMul(stayNights, t.cfg.Spend.StayingPerNightMicroPounds)
 	t.dayTrip = DayTripper{
 		Count:            dayTripCount,
 		Hours:            float64(dayTripCount) * t.cfg.Spend.DayTripHours,
-		SpendMicroPounds: dayTripCount * t.cfg.Spend.DayTripMicroPounds,
+		SpendMicroPounds: dayTripSpend,
 		TransportLoad:    float64(dayTripCount) * t.cfg.Load.DayTripperTransport,
 	}
 	t.stayingVisitor = StayingVisitor{
 		Count:            stayingCount,
-		Nights:           stayingCount * int64(stay),
-		SpendMicroPounds: stayingCount * int64(stay) * t.cfg.Spend.StayingPerNightMicroPounds,
+		Nights:           stayNights,
+		SpendMicroPounds: stayingSpend,
 		TransportLoad:    float64(stayingCount) * t.cfg.Load.StayingTransport,
 	}
 	t.load = VisitorLoad{
@@ -845,7 +866,7 @@ func (t *TourismAPI) AdvanceMonth() error {
 func (t *TourismAPI) totalCapacityLocked() int64 {
 	var total int64
 	for _, a := range t.accommodation {
-		total += a.Beds
+		total = num.SatAdd(total, a.Beds)
 	}
 	return total
 }

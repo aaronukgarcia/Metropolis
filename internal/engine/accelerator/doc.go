@@ -63,4 +63,27 @@
 //   - engine.wellbeing.md — the health spillover target.
 //   - engine.fdi.md — the FDI anchor-prospect target.
 //   - feat.facilitypermits.md / feat.decommission.md — the §7 obligations.
+//
+// # Shared expert-workforce gate: stub-forever (FEAT-084 ASM-1138 fold)
+//
+// FEAT-055 owns the shared expert-workforce gate (a numeric threshold on
+// education's research output), but feat.megafacilities has no code yet. This
+// package consumes the verdict through the local [ExpertGate] interface and
+// ships [ThresholdGate] as the stub-forever standing-in: it compares the
+// research output to data/accelerator.json's expertGateThreshold. The
+// composition root swaps in the real FEAT-055 gate when it lands; the
+// verdict-consumption contract does not change, and the accelerator never
+// reimplements education accounting (it reads the output through the
+// ResearchSource seam).
+//
+// # Stub-seam consumption of not-yet-built modules (FEAT-084 ASM-1131 fold)
+//
+// engine.fdi (MOD-059), feat.facilitypermits (FEAT-053) and feat.decommission
+// (FEAT-054) have no code yet, and engine.wellbeing's WellbeingAPI exposes no
+// research-spillover injection point. Per GR#20 contract-first stub-forever,
+// this package consumes all four through local seams — ResearchSource,
+// WellbeingSource, FdiSource, PermitSource, DecommissionSource — with a
+// WellbeingSpilloverAdapter bridging the real wellbeing API, wired by the
+// composition root and faked in tests. The registered engine.accelerator
+// outbound edges to all four already exist in code.json.
 package accelerator

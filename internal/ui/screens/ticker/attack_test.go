@@ -30,29 +30,33 @@ func countCode(code string) (int, int) {
 	return n, maxRepeat
 }
 
-// TestAttack_BindBogusViewSilentlyDrops reproduces the asymmetry: Subscribe
-// rejects a non-owned view (MET-U702), but BindSubscription accepts any
-// view string. A delta bound to a non-owned view is then dropped by
-// ApplyDelta's switch (which has no default case) with NO log entry — an
-// unbound subscription logs MET-U701, but a bound-to-bogus-view
-// subscription is silent. Assertions pin the current silent behaviour.
+// TestAttack_BindBogusViewSilentlyDrops verifies the SEC-073 fix. Pre-fix,
+// BindSubscription accepted any view string, so a delta bound to a non-owned
+// view was dropped by ApplyDelta's routing switch with NO log entry — an
+// unbound subscription logs MET-U701, but a bound-to-bogus-view subscription
+// was silent. Post-fix, BindSubscription rejects the bogus view (MET-U702)
+// and never records the binding, so a later delta for that id is dropped as
+// an UNBOUND subscription and logs MET-U701 — logged, never silent.
 func TestAttack_BindBogusViewSilentlyDrops(t *testing.T) {
-	before701, _ := countCode(ErrUnknownSubscription)
+	beforeN, beforeR := countCode(ErrUnknownSubscription)
 
 	s := New("corr-bogus-view")
-	s.BindSubscription("f9.bogus", "sub-bogus")
+	err := s.BindSubscription("f9.bogus", "sub-bogus")
+	assertErrCode(t, err, ErrUnrecognisedView)
+
 	s.ApplyDelta(protocol.Delta{SubscriptionID: "sub-bogus", Patch: mustWire(t, wireTickerPatch{
 		SchemaVersion: 1,
 		Events:        []wireStory{{EventID: "evt-1", Text: "legit"}},
 	})})
 
 	if _, have := s.Ticker(); have {
-		t.Fatalf("Ticker() have=true after a delta bound to a bogus view — expected silent drop")
+		t.Fatalf("Ticker() have=true after a delta for a rejected bogus view — expected drop")
 	}
-	// The drop is SILENT: no MET-U701 (unknown subscription) was logged.
-	after701, _ := countCode(ErrUnknownSubscription)
-	if after701 != before701 {
-		t.Errorf("MET-U701 count went %d -> %d after a bound-to-bogus-view delta: the drop was NOT silent, it logged", before701, after701)
+	// The drop is NO LONGER silent: the now-unbound SubscriptionID logs
+	// MET-U701 exactly once more (total = slot count + coalesced repeat).
+	afterN, afterR := countCode(ErrUnknownSubscription)
+	if afterN+afterR != beforeN+beforeR+1 {
+		t.Errorf("MET-U701 total went %d -> %d after a delta for a rejected bogus view, want +1 (SEC-073: the drop must be logged, never silent)", beforeN+beforeR, afterN+afterR)
 	}
 }
 

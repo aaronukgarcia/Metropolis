@@ -141,7 +141,7 @@ func renderCurveOverlays(buf *core.Buffer, rect core.Rect, c Curve, band, thresh
 		return
 	}
 	dotsW := rect.W * 2
-	dotsH := rect.H * 4
+	dotsH := thresholdLineCap(rect.H)
 	min, max := combinedRange(c.History, c.Projection)
 
 	total := len(c.History) + len(c.Projection)
@@ -173,11 +173,31 @@ func renderCurveOverlays(buf *core.Buffer, rect core.Rect, c Curve, band, thresh
 	}
 
 	// Threshold lines: a horizontal line across the chart at each
-	// threshold's value.
-	if len(c.Thresholds) > 0 {
+	// threshold's value. The chart has at most dotsH distinct dot-rows, so
+	// at most dotsH threshold lines are visually distinct — draw each dot-row
+	// at most once and stop as soon as every row is covered (SEC-091). This
+	// bounds the line-rasterization work by the drawn viewport (dotsH is
+	// thresholdLineCap, a viewport-derived bound — GR#15) rather than by the
+	// wire threshold count: a hostile "f7.projections" patch can carry ~80k
+	// thresholds and still fit the 1 MiB wire cap, and the pre-fix loop drew
+	// a full dotsW-wide line per threshold every render tick. Re-drawing an
+	// already-lit row is a no-op (SetDot ORs the dot mask), so skipping it
+	// changes nothing visual — the output is byte-identical to drawing every
+	// threshold, only the redundant passes are gone.
+	if len(c.Thresholds) > 0 && dotsH > 0 {
 		thr := widgets.NewBrailleCanvas(rect.W, rect.H)
+		seen := make([]bool, dotsH)
+		drawn := 0
 		for _, t := range c.Thresholds {
+			if drawn >= dotsH {
+				break
+			}
 			row := dotRow(t.Value, min, max, dotsH)
+			if seen[row] {
+				continue
+			}
+			seen[row] = true
+			drawn++
 			for col := 0; col < dotsW; col++ {
 				thr.SetDot(col, row)
 			}
@@ -211,6 +231,49 @@ func renderCurveOverlays(buf *core.Buffer, rect core.Rect, c Curve, band, thresh
 		}
 		overlayCanvas(buf, rect, marks, marker)
 	}
+}
+
+// RenderCurves draws the demand/supply curve list (PRJ-1) stacked top-to-
+// bottom in deterministic producer order — the order the engine sent them
+// (GR#21), never re-sorted — each curve in a curveBandRows-row band. It is
+// the per-tick entry point for this screen's curves, and it owns the
+// total-curve-count bound (SEC-091, second half): a hostile
+// "f7.projections" patch can carry ~10k curves and still fit the 1 MiB
+// wire cap, and the pre-fix per-curve loop called RenderCurve once per
+// curve, allocating 2+ Braille canvases each (measured at 12.2 ms /
+// 11.6 MB per tick at 10k curves) with no bound tying that work to the
+// drawn viewport. It returns the number of curves it actually drew, so a
+// caller can render an honest "… and N more" indicator rather than
+// silently padding the list.
+//
+// Dropping semantics: WHICH curves to draw is a UX/layout call, so this
+// picks the deterministic default — the first curveRenderCap(rect.H)
+// curves in producer order; every later curve is dropped and draws nothing
+// (no label, no chart, no canvas allocation). A caller that wants a
+// highest-salience selection can reorder the slice before calling (the
+// bound and the "first-N" rule live here, not in a magic number). The cap
+// itself is curveRenderCap(rect.H), derived from the render viewport the
+// same way thresholdLineCap derives the threshold-line cap (GR#15): one
+// curve occupies curveBandRows rows, so a rect.H-tall viewport holds at
+// most rect.H/curveBandRows curves.
+func RenderCurves(buf *core.Buffer, rect core.Rect, curves []Curve, palette widgets.Palette) int {
+	if buf == nil || rect.W <= 0 || rect.H <= 0 {
+		return 0
+	}
+	cap := curveRenderCap(rect.H)
+	if cap <= 0 {
+		return 0
+	}
+	if len(curves) > cap {
+		curves = curves[:cap]
+	}
+	y := rect.Y
+	for _, c := range curves {
+		band := core.Rect{X: rect.X, Y: y, W: rect.W, H: curveBandRows}
+		RenderCurve(buf, band, c, palette)
+		y += curveBandRows
+	}
+	return len(curves)
 }
 
 // RenderCrossing draws one contracted-vs-internal demand crossing chart
@@ -409,6 +472,53 @@ func combinedRange(a, b []float64) (min, max float64) {
 	scan(a)
 	scan(b)
 	return min, max
+}
+
+// thresholdLineCap is the maximum number of threshold lines a chart of the
+// given cell height can meaningfully draw — the data-driven bound (GR#15)
+// that caps the threshold loop in renderCurveOverlays (SEC-091).
+//
+// Derivation: a threshold is a horizontal line drawn at exactly one Braille
+// dot-row, and a BrailleCanvas packs four dot-rows per cell row, so a chart
+// h cells tall has exactly h*4 distinct dot-rows (the same rect.H*4 geometry
+// renderCurveOverlays uses for dotsH). dotRow maps every threshold value onto
+// one of those rows, so any threshold beyond the first h*4 distinct rows is
+// guaranteed to land on a row an earlier threshold already occupied — drawing
+// it again is redundant work, not additional information. Bounding the loop
+// to h*4 drawn lines therefore makes per-tick line-rasterization work
+// O(dotsW * h*4), the chart's own drawn area, rather than proportional to the
+// attacker-controlled wire threshold count (a hostile "f7.projections" patch
+// can carry ~80k thresholds and still fit the 1 MiB wire cap; the pre-fix
+// loop drew a full dotsW-wide line per threshold, measured at 23.7 ms per
+// render tick). The bound is derived from the render viewport (a runtime
+// value), never a hardcoded literal, matching the SEC-061 fix's "bound the
+// work by the drawn width" idiom.
+func thresholdLineCap(rectH int) int {
+	if rectH <= 0 {
+		return 0
+	}
+	return rectH * 4
+}
+
+// curveBandRows is the number of viewport rows one curve occupies in
+// RenderCurves' stacked layout: one label row plus one chart row (a
+// StatusAvailable curve's chart requires a second row; a non-available
+// curve draws its status line there instead). It is layout geometry — a
+// terminal cell row is one unit — not a data-derived count, exactly as
+// thresholdLineCap's "4" is Braille dot-row geometry.
+const curveBandRows = 2
+
+// curveRenderCap is the total-curve-count bound (SEC-091, second half):
+// the maximum number of curves RenderCurves will draw in one tick. Derived
+// from the render viewport the same way thresholdLineCap derives the
+// threshold-line cap (GR#15): each curve occupies curveBandRows rows, so a
+// viewport rectH rows tall holds at most rectH/curveBandRows curves.
+// Degenerate (non-positive) heights cap to zero.
+func curveRenderCap(viewportH int) int {
+	if viewportH <= 0 {
+		return 0
+	}
+	return viewportH / curveBandRows
 }
 
 // dotRow maps value v to a dot row within dotsH (0 = top), mirroring

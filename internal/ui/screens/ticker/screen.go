@@ -160,18 +160,26 @@ func (s *Screen) SubscribeAll(send SendCommandFunc) error {
 // BindSubscription records that id (the SubscriptionID the engine
 // allocated in response to a prior Subscribe(view, ...) call) belongs to
 // view. ApplyDelta uses this binding to route/validate incoming Deltas.
-// Rebinding an id to a different view simply overwrites the previous
-// binding.
-func (s *Screen) BindSubscription(view string, id protocol.SubscriptionID) {
+// view must be one of ViewTicker/ViewBulletin/ViewAnnual/ViewArchive —
+// any other value is rejected with MET-U702 (ErrUnrecognisedView) and no
+// binding is recorded, mirroring Subscribe's validation (SEC-073): a
+// bound-to-bogus view would otherwise be silently dropped by ApplyDelta's
+// routing switch with no registry error. Rebinding an id to a different
+// known view simply overwrites the previous binding.
+func (s *Screen) BindSubscription(view string, id protocol.SubscriptionID) error {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BindSubscription"}); err != nil {
-		return
+		return err
+	}
+	if !knownViews[view] {
+		return errs.New(ErrUnrecognisedView, s.correlationID, map[string]any{"view": view})
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BindSubscription"}); err != nil {
-		return
+		return err
 	}
 	s.subs[id] = view
+	return nil
 }
 
 // UnbindSubscription forgets id (e.g. after Unsubscribe) so a

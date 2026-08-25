@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "specRef": "§43; §36 (sold places)",
+  "note": "All magnitudes below are PLACEHOLDERS pending M2 balance tuning (ASM-328, P1). They are data-loaded (GR#15), so the mechanism is real; only the numbers are provisional. Units: baseRates/effects are dimensionless rates in [0,1]; costs are whole pounds (int64).",
+  "categories": ["open", "standard", "highSecurity"],
+  "baseRates": {
+    "youth": { "minor": 0.22, "serious": 0.42, "violent": 0.62 },
+    "adult": { "minor": 0.25, "serious": 0.45, "violent": 0.65 }
+  },
+  "categoryMismatchPenalty": 0.10,
+  "regime": {
+    "education": { "maxEffect": 0.08, "costForMax": 1000000 },
+    "work": { "maxEffect": 0.06, "costForMax": 800000 },
+    "addictionTreatment": { "maxEffect": 0.07, "costForMax": 1200000 }
+  },
+  "reentry": {
+    "probationCapacity": { "maxEffect": 0.06 },
+    "employmentUptake": { "maxEffect": 0.05 },
+    "housingOnRelease": { "maxEffect": 0.04 }
+  },
+  "overcrowding": {
+    "degradeMax": 1.0
+  },
+  "youth": {
+    "costMultiplier": 0.5
+  },
+  "adultCostPerOffender": {
+    "minor": 500000,
+    "serious": 800000,
+    "violent": 1200000
+  },
+  "fuseYears": { "min": 5, "max": 15 }
+}

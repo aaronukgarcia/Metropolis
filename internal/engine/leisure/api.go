@@ -44,10 +44,10 @@ type TripDemand struct {
 // WellbeingAPI is the local contract shape for engine.wellbeing's LeisureFit
 // driver — code.json's registered engine.leisure → engine.wellbeing outbound
 // edge (the engine/wellbeing import path, i.e.
-// github.com/aaronukgarcia/Metropolis/internal/engine/wellbeing). The
-// engine/wellbeing package is not yet built, so this package consumes the
-// contract shape directly (GR#20 contract-first, stub-forever) and the
-// composition root wires the real implementation later — the per-citizen
+// github.com/aaronukgarcia/Metropolis/internal/engine/wellbeing). The real
+// engine.wellbeing package is bridged by [WellbeingLeisureFitAdapter] (see
+// seams.go); this package consumes the contract shape (GR#20 contract-first,
+// stub-forever) and the composition root wires the adapter — the per-citizen
 // push below is the live call AC-10 requires.
 type WellbeingAPI interface {
 	// SetLeisureFit pushes one citizen's per-citizen leisure-fit driver
@@ -77,8 +77,10 @@ type LeisureAPI struct {
 	cfg           Config
 
 	// Dependencies, wired via SetCitizens/SetTraffic/SetWellbeing and read
-	// under mu. traffic/wellbeing are interfaces (both unbuilt); citizens is
-	// the concrete *citizens.CitizensAPI, mirroring engine.education.
+	// under mu. traffic/wellbeing are interfaces; citizens is the concrete
+	// *citizens.CitizensAPI, mirroring engine.education. The real
+	// engine.wellbeing is bridged by [WellbeingLeisureFitAdapter] (seams.go);
+	// engine.traffic is still unbuilt and consumed contract-first.
 	citizens  *citizens.CitizensAPI
 	traffic   TrafficAPI
 	wellbeing WellbeingAPI

@@ -128,4 +128,16 @@
 // that data file, never as a Go literal here (GR#15). Every failure is a
 // registry-sourced *errs.E (MET-G28xx, this module's claimed sub-range — see
 // errors.go).
+//
+// # Locking and blight-registration decisions (FEAT-084 ASM folds)
+//
+// SEC-119 (ASM-1191): [Airport] serializes Build with a dedicated buildMu
+// sync.Mutex so a.mu is never held across a seam callback; a seam that
+// re-enters Build itself (rather than Tick/reads) would deadlock on buildMu and
+// is out of scope. SEC-116 (ASM-1188): the BlightRegistrar seam is extended
+// with DeregisterBlightingObject and de-registers the PRIOR tier's contour
+// BEFORE registering the new one, keeping per-tier object keys rather than a
+// stable key. ASM-1265: blightObjectKey is a hardcoded Go constant "airport" —
+// an identity key, not a balance figure, so GR#15 does not require it in
+// data/airport.json.
 package airport

@@ -80,3 +80,19 @@ func clamp01(v float64) float64 {
 	}
 	return v
 }
+
+// realizedQuality computes one service instance's current realised quality
+// from its stored state — the single place that assembles a [QualityInput]
+// from an instance's funding/capacity/demand/coverage/staffing fields, used
+// by both [ServicesAPI.Quality] and the coverage aggregate (GR#3: one source
+// of truth for "quality of this instance right now").
+func realizedQuality(inst *serviceInstance) float64 {
+	return ComputeQuality(QualityInput{
+		Funding:        inst.funding,
+		Capacity:       inst.capacityCeiling(),
+		Demand:         inst.demand,
+		CoverageRadius: inst.spec.CoverageRadius,
+		DemandDistance: inst.demandDist,
+		StaffingRatio:  inst.staffingRatio(),
+	})
+}

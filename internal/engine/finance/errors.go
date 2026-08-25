@@ -60,4 +60,12 @@ const (
 	// ErrInvalidFirm: a SimpleFirm carried a negative revenue or cost
 	// input (AC-9).
 	ErrInvalidFirm = "MET-G210"
+
+	// ErrInvalidBorrowingInstrument: a FEAT-057 borrowing-instrument entry
+	// or request was malformed — a missing source, a claimed-secured
+	// instrument with no collateral reference, a revenue-share percentage
+	// outside [0, 1], or a PFI facility with a non-positive
+	// MinimumTermMonths. Rejected at load/construction time, never
+	// silently defaulted (unsecured/0 percent/zero-length term).
+	ErrInvalidBorrowingInstrument = "MET-G211"
 )

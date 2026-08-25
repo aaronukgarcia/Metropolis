@@ -71,6 +71,15 @@ type FinanceAPI struct {
 	insolvencyMonths int
 	gameOver         bool
 
+	// FEAT-057 borrowing-instrument registries (see borrowing.go): issued
+	// borrowing instruments (loan/revenue-share) and PFI facilities. Their
+	// obligations feed MonthlyObligations (AC-6) and their exposure feeds
+	// the credit-rating debt denominator via totalExposureLocked (AC-7).
+	instruments      map[InstrumentID]*BorrowingInstrument
+	nextInstrumentID InstrumentID
+	pfiFacilities    map[PFIID]*PFIFacility
+	nextPFIID        PFIID
+
 	// v1 registries.
 	firms        map[FirmID]*SimpleFirm
 	nextFirmID   FirmID
@@ -100,16 +109,20 @@ func NewFinanceAPI(correlationID string) *FinanceAPI {
 		correlationID = errs.NewCorrelationID()
 	}
 	f := &FinanceAPI{
-		correlationID: correlationID,
-		accounts:      make(map[AccountID]*accountState),
-		role:          make(map[AccountID]AccountRole),
-		nextTxID:      1,
-		creditLines:   make(map[AccountID]Money),
-		loans:         make(map[LoanID]*Loan),
-		nextLoanID:    1,
-		firms:         make(map[FirmID]*SimpleFirm),
-		nextFirmID:    1,
-		nextInvestID:  1,
+		correlationID:    correlationID,
+		accounts:         make(map[AccountID]*accountState),
+		role:             make(map[AccountID]AccountRole),
+		nextTxID:         1,
+		creditLines:      make(map[AccountID]Money),
+		loans:            make(map[LoanID]*Loan),
+		nextLoanID:       1,
+		firms:            make(map[FirmID]*SimpleFirm),
+		nextFirmID:       1,
+		nextInvestID:     1,
+		instruments:      make(map[InstrumentID]*BorrowingInstrument),
+		nextInstrumentID: 1,
+		pfiFacilities:    make(map[PFIID]*PFIFacility),
+		nextPFIID:        1,
 	}
 	// Open the well-known accounts directly (not via OpenAccount): the
 	// copy-guard's self pointer is stored below, after construction, so

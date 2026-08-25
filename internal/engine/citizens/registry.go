@@ -66,6 +66,24 @@ type CitizensAPI struct {
 	// once at the start of each month and applied across its 30 day-ticks.
 	monthParams ColdPassParams
 
+	// deathQueue is the FEAT-087 smoothing queue (feat.deathwave):
+	// hazard-selected deaths are deferred here and realised at the month
+	// boundary up to the weather-modulated monthly budget (AC-1/AC-2). It is
+	// city-wide and mutated only under c.mu, and Realise re-sorts by
+	// (selection month, citizen id), so its realisation sequence is a pure
+	// function of (seed, command log), never shard-completion order (AC-4/AC-15).
+	deathQueue *DeathQueue
+
+	// mortalityCfg is the loaded data/mortality.json balance config
+	// (FEAT-087), read once at construction (GR#15: every magnitude lives in
+	// data, never a Go literal).
+	mortalityCfg MortalityConfig
+
+	// realisedDeaths is the ordered handoff ledger (FEAT-088's intake
+	// surface): every death the queue has realised, in FIFO order, each
+	// carrying (CitizenID, DeathMonth, Emergency).
+	realisedDeaths []RealisedDeath
+
 	mu sync.RWMutex
 
 	// self is the SEC-020 copyguard (atomic.Pointer, mirroring
@@ -83,6 +101,10 @@ func NewCitizensAPI(seed uint64, correlationID string) (*CitizensAPI, error) {
 	if err != nil {
 		return nil, err
 	}
+	mortalityCfg, err := LoadDefaultMortalityConfig(correlationID)
+	if err != nil {
+		return nil, err
+	}
 	c := &CitizensAPI{
 		seed:            seed,
 		workers:         1,
@@ -90,6 +112,8 @@ func NewCitizensAPI(seed uint64, correlationID string) (*CitizensAPI, error) {
 		households:      make(map[uint64]*Household),
 		nextHouseholdID: 1, // 0 is the "no household" sentinel
 		fertilityCfg:    fertilityCfg,
+		deathQueue:      NewDeathQueue(),
+		mortalityCfg:    mortalityCfg,
 		monthParams:     ColdPassParams{MortalityMultiplier: 1.0},
 	}
 	for i := range c.cold {
@@ -357,27 +381,7 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		c.setColdHouseholdLocked(cmd.CitizenID, safeUint32(h.ID), safeUint32(cmd.PartnerID))
 		c.setColdHouseholdLocked(cmd.PartnerID, safeUint32(h.ID), safeUint32(cmd.CitizenID))
 	case LifeEventDeath:
-		// A departure (mortality or emigration) unwires the citizen's
-		// household membership (the inverse of LifeEventPartner's wiring):
-		// the household's Members list is pruned and, if the departed
-		// citizen was one half of an adult pairing, the SURVIVING partner's
-		// Partner reference is cleared (the pairing dissolves; the
-		// household itself persists as long as any member remains -- see
-		// household.go's dissolution-invariant doc, F1 fix). Both the
-		// household id AND the departed citizen's own Partner id must be
-		// resolved BEFORE the citizen is removed from hot+cold (no record
-		// remains to read them back from afterwards).
-		var householdID, partnerID uint64
-		if cit, ok := c.hot[cmd.CitizenID]; ok {
-			householdID = cit.Household
-			partnerID = cit.Partner
-		} else if r, ok := c.coldRecord(cmd.CitizenID); ok {
-			householdID = uint64(r.Household)
-			partnerID = uint64(r.Partner)
-		}
-		delete(c.hot, cmd.CitizenID)
-		c.removeColdLocked(cmd.CitizenID)
-		c.removeHouseholdMemberLocked(cmd.CitizenID, householdID, partnerID)
+		c.departCitizenLocked(cmd.CitizenID)
 	case LifeEventEducation:
 		// Education drifts the personality (good schooling widens ambition/
 		// novelty-seeking). The cold store is the single source of truth, so
@@ -460,6 +464,8 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 	results := runShardsParallel(c.workers, shards, func(shard int) passTotals {
 		return c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
 			return hotSet[id]
+		}, func(id uint64) bool {
+			return c.deathQueue.Queued(id)
 		})
 	})
 
@@ -469,7 +475,13 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 	for _, t := range results {
 		tot = tot.add(t)
 	}
-	c.curMonthDeaths += tot.deaths
+
+	// FEAT-087 smoothing (feat.deathwave): the month's hazard-selected deaths
+	// are DEFERRED into the death queue, not removed inline (AC-1). The month
+	// boundary below realises at most the weather-modulated monthly budget.
+	for _, id := range tot.selectedDeaths {
+		c.deathQueue.Enqueue(id, month)
+	}
 
 	// Fertility (FEAT-160): a deterministic SEQUENTIAL pass over the same
 	// scheduled shards, run only after the parallel mortality/education/job
@@ -484,6 +496,15 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) error {
 
 	c.dayTick++
 	if c.dayTick == DaysPerMonth {
+		// Calendar month complete: realise the death queue up to this month's
+		// (weather-modulated) budget — the moment smoothing actually removes
+		// citizens from the living population (AC-1). Realised deaths are
+		// counted as this month's deaths for VitalEvents' conservation
+		// accounting and appended to the FEAT-088 handoff ledger.
+		emergency := IsWeatherEmergency(seed, month, c.mortalityCfg)
+		budget := MonthlyDeathBudget(seed, month, c.mortalityCfg)
+		c.curMonthDeaths += len(c.realiseDeathsLocked(budget, month, emergency, correlationID))
+
 		c.dayTick = 0
 		c.month++
 		// Keep every elevated citizen's derived age in step with the sim
@@ -519,6 +540,30 @@ func (c *CitizensAPI) VitalEvents(correlationID string) (births, deaths int) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.lastMonthBirths, c.lastMonthDeaths
+}
+
+// RealisedDeaths returns the FEAT-088 handoff ledger — every death the
+// smoothing queue has realised so far, in FIFO (selection month, then citizen
+// id) order, each carrying (CitizenID, DeathMonth, Emergency) (AC-9/AC-10).
+// The returned slice is a copy; the API's ledger is never aliased.
+func (c *CitizensAPI) RealisedDeaths(correlationID string) []RealisedDeath {
+	if err := c.checkNotCopied(correlationID, "RealisedDeaths"); err != nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return append([]RealisedDeath(nil), c.realisedDeaths...)
+}
+
+// PendingDeaths returns the number of hazard-selected deaths still waiting in
+// the smoothing queue (selected, not yet realised).
+func (c *CitizensAPI) PendingDeaths(correlationID string) int {
+	if err := c.checkNotCopied(correlationID, "PendingDeaths"); err != nil {
+		return 0
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.deathQueue.Len()
 }
 
 // AdvanceMonth advances a full calendar month (30 day-ticks). Convenience
@@ -650,6 +695,56 @@ func (c *CitizensAPI) removeColdLocked(id uint64) {
 	if row := s.rowOf(id); row >= 0 {
 		s.removeAt(row)
 	}
+}
+
+// departCitizenLocked removes a citizen from the living population, in full:
+// it unwires their household membership (the inverse of LifeEventPartner's
+// wiring — the household's Members list is pruned and, if the departed
+// citizen was one half of an adult pairing, the SURVIVING partner's Partner
+// reference is cleared; the household itself persists as long as any member
+// remains, per household.go's dissolution-invariant doc, F1 fix), then drops
+// them from both the hot elevation cache and the cold store (the single
+// source of truth). It is the shared realisation path for LifeEventDeath and
+// the FEAT-087 death queue (feat.deathwave): both the household id AND the
+// departed citizen's own Partner id are resolved BEFORE the citizen is
+// removed from hot+cold (no record remains to read them back from
+// afterwards). Called with c.mu held.
+func (c *CitizensAPI) departCitizenLocked(citizenID uint64) {
+	// A departing citizen leaves the living population; whether the departure
+	// is a REAL death (the month boundary's realiseDeathsLocked) or an
+	// ALIVE departure such as emigration (attract's LifeEventDeath command),
+	// any pending death-queue entry must be cancelled. For a realised death
+	// the entry was already popped by Realise, so Remove is a no-op; for an
+	// emigrant it cancels the pending selection so realiseDeathsLocked never
+	// drains a citizen who did NOT die (AC-13 phantom death).
+	c.deathQueue.Remove(citizenID)
+
+	var householdID, partnerID uint64
+	if cit, ok := c.hot[citizenID]; ok {
+		householdID = cit.Household
+		partnerID = cit.Partner
+	} else if r, ok := c.coldRecord(citizenID); ok {
+		householdID = uint64(r.Household)
+		partnerID = uint64(r.Partner)
+	}
+	delete(c.hot, citizenID)
+	c.removeColdLocked(citizenID)
+	c.removeHouseholdMemberLocked(citizenID, householdID, partnerID)
+}
+
+// realiseDeathsLocked releases up to budget queued deaths at the month
+// boundary (FEAT-087 smoothing, feat.deathwave) and removes each from the
+// living population via departCitizenLocked, appending them to the FEAT-088
+// handoff ledger. It returns the realised records (for VitalEvents'
+// conservation accounting). Called with c.mu held, at the completed month's
+// boundary only.
+func (c *CitizensAPI) realiseDeathsLocked(budget int, month int64, emergency bool, correlationID string) []RealisedDeath {
+	realised := c.deathQueue.Realise(budget, month, emergency)
+	for _, d := range realised {
+		c.departCitizenLocked(d.CitizenID)
+	}
+	c.realisedDeaths = append(c.realisedDeaths, realised...)
+	return realised
 }
 
 func (c *CitizensAPI) setHouseholdLocked(citizenID, householdID, partnerID uint64) {

@@ -1606,5 +1606,17 @@
   {
     "finding": "internal/foundation/integration/queue.go|*QueuedTransport|receiver method|commitTier|q|*QueuedTransport",
     "reason": "FEAT-188 increment 2 (internal/foundation/integration/queue.go): unexported helper reached only through an already-guarded entry point -- commitTier is called exclusively from Drain (same file, line ~664), which calls q.checkNotCopied(...) before ever touching q.drainMu or committing any tier's dequeue. astgate's syntactic, no-call-graph analysis cannot see that the only caller is already guarded (doc.go's known blind spots; mirrors the *tierQueue *Locked-helper precedent already accepted above -- depthLocked/compactMemoryLocked/enqueueLocked/peekLocked/commitLocked -- just one layer up, at the QueuedTransport level instead of tierQueue). commitTier delegates each tier's actual dequeue-commit to that tier's own already-guarded commit()/Commit() methods."
+  },
+  {
+    "finding": "internal/engine/finance/borrowing.go|*FinanceAPI|receiver method|totalExposureLocked|f|*FinanceAPI",
+    "reason": "FEAT-057 r1 REJECT close (2026-08-20): totalExposureLocked is an unexported *FinanceAPI lock-held helper called only from already-guarded entry points (TotalExposure and creditScoreLocked) while f.mu is held -- astgate's syntactic, no-call-graph analysis cannot distinguish this established *Locked-helper pattern from a genuine unguarded entry point (doc.go's known blind spots; internal/foundation/errs/copyguard_test.go's rotateLocked precedent). Same safe shape as the pre-existing BUG-024 ratchet entries."
+  },
+  {
+    "finding": "internal/engine/finance/borrowing.go|*FinanceAPI|receiver method|sortedInstrumentIDs|f|*FinanceAPI",
+    "reason": "FEAT-057 r1 REJECT close (2026-08-20): sortedInstrumentIDs is an unexported *FinanceAPI deterministic-order helper called only from already-guarded entry points (MonthlyObligations, totalExposureLocked, BorrowInstrument, RegisterPFIFacility) while f.mu is held -- astgate's syntactic, no-call-graph analysis cannot distinguish this lock-held helper pattern from a genuine unguarded entry point (doc.go's known blind spots; internal/foundation/errs/copyguard_test.go's rotateLocked precedent). Same safe shape as the pre-existing BUG-024 ratchet entries."
+  },
+  {
+    "finding": "internal/engine/finance/borrowing.go|*FinanceAPI|receiver method|sortedPFIIDs|f|*FinanceAPI",
+    "reason": "FEAT-057 r1 REJECT close (2026-08-20): sortedPFIIDs is an unexported *FinanceAPI deterministic-order helper called only from already-guarded entry points (MonthlyObligations, totalExposureLocked, BorrowInstrument, RegisterPFIFacility) while f.mu is held -- astgate's syntactic, no-call-graph analysis cannot distinguish this lock-held helper pattern from a genuine unguarded entry point (doc.go's known blind spots; internal/foundation/errs/copyguard_test.go's rotateLocked precedent). Same safe shape as the pre-existing BUG-024 ratchet entries."
   }
 ]

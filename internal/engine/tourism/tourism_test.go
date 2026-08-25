@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -668,5 +669,178 @@ func TestReportEventSuppliesEvent(t *testing.T) {
 	defer sink.mu.Unlock()
 	if len(sink.events) != 1 || sink.events[0].ID != "tourism-august-stress" {
 		t.Fatalf("news sink did not receive the supplied event: %+v", sink.events)
+	}
+}
+
+// --- MOD-057 destructive-round regression: the draw→visitor cast and the
+// portfolio SUM must fail closed (bounded, never a wrapped MinInt64) ---
+
+// TestHugeAttractionScoreDoesNotOverflowVisitors is the first original
+// destructive repro: a 1e300 attraction score (finite, so the input guard
+// admits it) used to reach the bare int64(draw * rate) cast and wrap to
+// math.MinInt64 with a nil error. The cast must saturate to a bounded,
+// non-negative visitor count instead.
+func TestHugeAttractionScoreDoesNotOverflowVisitors(t *testing.T) {
+	api, _ := newTestAPI(t)
+	if err := api.AddAttraction(tourism.Attraction{ID: 1, Term: tourism.TermBeach, Score: 1e300}); err != nil {
+		t.Fatalf("AddAttraction: %v", err)
+	}
+	if err := api.AdvanceMonth(); err != nil {
+		t.Fatalf("AdvanceMonth: %v", err)
+	}
+	if got := api.DayTrippers().Count; got < 0 || got == math.MinInt64 {
+		t.Fatalf("1e300 score produced an overflowed/negative day-tripper count: %d", got)
+	} else if got != math.MaxInt64 {
+		t.Errorf("1e300 score should saturate at MaxInt64, got %d", got)
+	}
+	if ds, err := api.DrawScore(); err != nil {
+		t.Fatalf("DrawScore: %v", err)
+	} else if math.IsNaN(ds) || math.IsInf(ds, 0) || ds < 0 {
+		t.Errorf("draw score must stay finite and non-negative, got %v", ds)
+	}
+}
+
+// TestMaxFloatTermsDoNotSumToInf is the second original destructive repro:
+// two math.MaxFloat64 portfolio terms used to sum to +Inf in the unguarded
+// portfolioScore fold, which then flowed through the draw chain and the
+// bare cast to a wrapped math.MinInt64 (or NaN via a zero multiplier). The
+// SUM must be saturated so the result stays bounded and finite.
+func TestMaxFloatTermsDoNotSumToInf(t *testing.T) {
+	api, _ := newTestAPI(t)
+	if err := api.AddAttraction(tourism.Attraction{ID: 1, Term: tourism.TermBeach, Score: math.MaxFloat64}); err != nil {
+		t.Fatalf("AddAttraction beach: %v", err)
+	}
+	if err := api.AddAttraction(tourism.Attraction{ID: 2, Term: tourism.TermEvents, Score: math.MaxFloat64}); err != nil {
+		t.Fatalf("AddAttraction events: %v", err)
+	}
+	if ps, err := api.PortfolioScore(); err != nil {
+		t.Fatalf("PortfolioScore: %v", err)
+	} else if math.IsNaN(ps) || math.IsInf(ps, 0) {
+		t.Fatalf("two MaxFloat64 terms summed to a non-finite portfolio score: %v", ps)
+	}
+	if err := api.AdvanceMonth(); err != nil {
+		t.Fatalf("AdvanceMonth: %v", err)
+	}
+	if got := api.DayTrippers().Count; got < 0 || got == math.MinInt64 {
+		t.Fatalf("MaxFloat64 terms produced an overflowed/negative day-tripper count: %d", got)
+	} else if got != math.MaxInt64 {
+		t.Errorf("MaxFloat64 terms should saturate at MaxInt64, got %d", got)
+	}
+}
+
+// TestSaturatedQueueDoesNotWrap is the regression for the AC-13c waitlist
+// accumulator: the float-path overflow fix bounded desiredStaying at
+// math.MaxInt64, but `t.queue += desiredStaying - fromNew` (and the drain
+// `t.queue -= fromQueue`) still used a raw int64 add/sub. Sustained saturated
+// demand against zero capacity used to push the waitlist past MaxInt64 and
+// wrap negative after ~2 months; a negative queue then failed `t.queue > 0`
+// and silently destroyed pending-demand conservation. The accumulator must
+// saturate: the queue stays non-negative and bounded at math.MaxInt64.
+func TestSaturatedQueueDoesNotWrap(t *testing.T) {
+	cfg := testConfig()
+	cfg.StayingVisitorRate = 2 // draw*2 saturates the staying stream at MaxInt64
+	cfg.Accommodation = [4]int64{}
+	api, err := tourism.New(cfg, 42, testCorrelationID)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := api.SetAttract(&fakeAttract{rep: 0}); err != nil {
+		t.Fatalf("SetAttract: %v", err)
+	}
+	if err := api.SetLeisure(&fakeLeisure{}); err != nil {
+		t.Fatalf("SetLeisure: %v", err)
+	}
+	if err := api.SetSeason(&fakeSeason{beach: 0.8}); err != nil {
+		t.Fatalf("SetSeason: %v", err)
+	}
+	if err := api.AddAttraction(tourism.Attraction{ID: 1, Term: tourism.TermBeach, Score: 1e300}); err != nil {
+		t.Fatalf("AddAttraction: %v", err)
+	}
+
+	for m := 0; m < 8; m++ {
+		if err := api.AdvanceMonth(); err != nil {
+			t.Fatalf("AdvanceMonth %d: %v", m, err)
+		}
+		if got := api.QueueLength(); got < 0 {
+			t.Fatalf("month %d: queue wrapped negative: %d (pending demand was destroyed)", m, got)
+		} else if got != math.MaxInt64 {
+			t.Fatalf("month %d: queue = %d, want saturated at MaxInt64 (%d)", m, got, int64(math.MaxInt64))
+		}
+	}
+}
+
+// --- MOD-057 REJECT r3: package-wide int64 overflow sweep ---
+
+// TestSaturatedVisitorLedgerDoesNotWrap is the r3 destructive repro for the
+// remaining raw int64 accumulators on visitor/money quantities: with a draw
+// large enough to saturate BOTH visitor streams (score 1e300, staying and
+// day-trip rates doubled) and unbounded accommodation (MaxInt64 beds), the
+// cumulative Admitted/Departed counters and the per-month SpendMicroPounds/
+// Nights figures must stay bounded across repeated months — saturating at
+// math.MaxInt64, never wrapping negative and silently inventing or
+// destroying visitors.
+func TestSaturatedVisitorLedgerDoesNotWrap(t *testing.T) {
+	cfg := testConfig()
+	cfg.StayingVisitorRate = 2 // draw*2 saturates the staying stream at MaxInt64
+	cfg.DayTripRate = 2        // and the day-tripper stream likewise
+	cfg.StayingVisitorStayMonths = 1
+	cfg.Accommodation = [4]int64{math.MaxInt64} // unbounded beds: the staying stream saturates too
+
+	api, err := tourism.New(cfg, 42, testCorrelationID)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := api.SetAttract(&fakeAttract{rep: 0}); err != nil {
+		t.Fatalf("SetAttract: %v", err)
+	}
+	if err := api.SetLeisure(&fakeLeisure{}); err != nil {
+		t.Fatalf("SetLeisure: %v", err)
+	}
+	if err := api.SetSeason(&fakeSeason{beach: 0.8}); err != nil {
+		t.Fatalf("SetSeason: %v", err)
+	}
+	if err := api.AddAttraction(tourism.Attraction{ID: 1, Term: tourism.TermBeach, Score: 1e300}); err != nil {
+		t.Fatalf("AddAttraction: %v", err)
+	}
+
+	checks := func() []struct {
+		name string
+		got  int64
+	} {
+		return []struct {
+			name string
+			got  int64
+		}{
+			{"StayingAdmitted", api.StayingAdmitted()},
+			{"StayingDeparted", api.StayingDeparted()},
+			{"StayingPresent", api.StayingPresent()},
+			{"DayTripperAdmitted", api.DayTripperAdmitted()},
+			{"DayTripperDeparted", api.DayTripperDeparted()},
+			{"dayTrip spend", api.DayTrippers().SpendMicroPounds},
+			{"staying nights", api.StayingVisitors().Nights},
+			{"staying spend", api.StayingVisitors().SpendMicroPounds},
+		}
+	}
+
+	for m := 0; m < 3; m++ {
+		if err := api.AdvanceMonth(); err != nil {
+			t.Fatalf("AdvanceMonth %d: %v", m, err)
+		}
+		// The invariant that must never break: no visitor/money quantity
+		// wraps negative under sustained saturation (a raw += would wrap
+		// MaxInt64+MaxInt64 to -2 by month 1 and destroy the ledger).
+		for _, c := range checks() {
+			if c.got < 0 {
+				t.Fatalf("month %d: %s wrapped negative: %d", m, c.name, c.got)
+			}
+		}
+	}
+
+	// After three saturated months every cumulative counter and per-month
+	// figure must sit pinned at math.MaxInt64 (saturated, not wrapped).
+	for _, c := range checks() {
+		if c.got != math.MaxInt64 {
+			t.Errorf("%s = %d, want saturated at math.MaxInt64", c.name, c.got)
+		}
 	}
 }

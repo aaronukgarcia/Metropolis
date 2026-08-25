@@ -44,6 +44,27 @@ func (f *FinanceAPI) RecordMonthResult(obligationsMet, creditAvailable bool) Mon
 	return MonthResult{ConsecutiveFailedMonths: f.insolvencyMonths, GameOver: f.gameOver}
 }
 
+// RecordMonthResultFromObligations is the production month-recording path
+// (AC-6): it derives obligationsMet from the real obligation set via
+// CanMeetObligations — never from a caller-supplied bool — then records the
+// month through RecordMonthResult. funds is the liquid money the city had
+// available to meet its MonthlyObligations this month. A city that cannot
+// fund its obligations and has no credit available walks the same
+// 3-consecutive-months game-over counter MOD-022 AC-7 defines. Because
+// obligationsMet is computed from MonthlyObligations, every borrowing
+// instrument feeds the insolvency check — none can be silently omitted.
+//
+// Note: the obligations snapshot and the counter update are two separate
+// locked operations; in the monthly-phase cadence this is called once per
+// month, so the gap is immaterial, but callers should not invoke it
+// concurrently with other mutations.
+func (f *FinanceAPI) RecordMonthResultFromObligations(funds Money, revenueBases map[InstrumentID]Money, creditAvailable bool) MonthResult {
+	if err := f.checkNotCopied("RecordMonthResultFromObligations"); err != nil {
+		return MonthResult{}
+	}
+	return f.RecordMonthResult(f.CanMeetObligations(funds, revenueBases), creditAvailable)
+}
+
 // IsInsolvent reports whether the game-over signal has fired (AC-7).
 func (f *FinanceAPI) IsInsolvent() bool {
 	if err := f.checkNotCopied("IsInsolvent"); err != nil {

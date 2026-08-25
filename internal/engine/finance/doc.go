@@ -48,4 +48,39 @@
 // injected via [FinanceAPI.BeginMonth]. No monetary sum ranges over a
 // map in map-iteration order — account-key iteration in
 // [FinanceAPI.RecomputeMoneyStock] sorts keys first (GR#21, AC-14).
+//
+// # Borrowing instruments (FEAT-057)
+//
+// FEAT-057 adds a data-driven borrowing-instrument taxonomy on top of the
+// milestone-gated loan facilities: a source split ([LoanSourceIMF]
+// lender-of-last-resort vs [LoanSourceGovernment]), a secured/unsecured
+// axis ([Security] + [Collateral]) where secured borrowing earns a
+// strictly lower rate floor, live-computed revenue-share repayments
+// ([RevenueShareTerms]), and PFI-style facility funding ([PFIFacility]:
+// deferred capex + recurring [PFIFacility.UnitaryCharge] over
+// [PFIFacility.MinimumTermMonths] with an explicit lock-in choice). No new
+// instrument bypasses the existing MOD-022 machinery: every instrument's
+// obligation is included in [FinanceAPI.MonthlyObligations] (the set
+// MOD-022 AC-7 / [FinanceAPI.IsInsolvent]'s "obligations met" signal is
+// computed against), and every instrument's outstanding/committed exposure
+// is included in the debt/revenue denominator [FinanceAPI.CreditRatingNow]
+// feeds to [CreditRating] (MOD-022 AC-5). Every rate range, spread,
+// revenue-share percentage bound, and PFI unitary-charge multiplier is a
+// placeholder pending Aaron's balance pass, sourced from
+// data/borrowing_instruments.json (GR#15) — never a Go literal.
+//
+// # Known limitation — no settlement path yet (FEAT-057 r1 REJECT disclosure)
+//
+// Borrowing instruments have NO settlement/repayment path in this increment:
+// a [BorrowingInstrument]'s Outstanding is fixed at origination and never
+// amortised, [FinanceAPI.MonthlyPayment] charges straight-line principal
+// without reducing that balance, and a [PFIFacility]'s committed exposure
+// runs down only as [PFIFacility.AdvanceMonth] advances ElapsedMonths
+// toward MinimumTermMonths. Outstanding therefore only grows (with each new
+// issuance) and the AC-7 credit-rating debt denominator keeps counting the
+// full principal for the instrument's whole life. Building the settlement
+// path — actually reducing Outstanding as monthly payments are made, and
+// retiring PFI commitments as the unitary-charge stream is paid — is
+// separate BOW-tracked work; until it lands, this surface is deliberately
+// disclosed rather than silently half-built.
 package finance

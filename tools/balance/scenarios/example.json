@@ -1,0 +1,18 @@
+{
+  "name": "pacing-sweep-example",
+  "parameters": {
+    "secondsPerMonthAt1x": [240, 480, 960],
+    "months": [600],
+    "citizenCount": [1000],
+    "sprawl": [0.5],
+    "networkShape": ["grid"]
+  },
+  "seeds": [1, 2],
+  "target": {
+    "metric": "realHoursToMilestone",
+    "band": [80, 150]
+  },
+  "milestone": 100000000,
+  "retries": 1,
+  "timeoutMillis": 60000
+}

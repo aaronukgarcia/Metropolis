@@ -55,6 +55,30 @@ func TestSubscribe_RejectsUnrecognisedView(t *testing.T) {
 	}
 }
 
+func TestBindSubscription_RejectsUnrecognisedView(t *testing.T) {
+	s := New("corr-bind")
+
+	// A known view binds successfully.
+	if err := s.BindSubscription(ViewTicker, "sub-tick"); err != nil {
+		t.Fatalf("BindSubscription(ViewTicker): %v", err)
+	}
+
+	// An unknown view is rejected with MET-U702 (ErrUnrecognisedView) and
+	// records no binding (SEC-073) — mirroring Subscribe's validation.
+	err := s.BindSubscription("f9.bogus", "sub-bogus")
+	assertErrCode(t, err, ErrUnrecognisedView)
+
+	// The rejected id was never bound: a delta for it is dropped as an
+	// unknown subscription (MET-U701), never routed silently (SEC-073).
+	s.ApplyDelta(protocol.Delta{SubscriptionID: "sub-bogus", Patch: mustWire(t, wireTickerPatch{
+		SchemaVersion: 1,
+		Events:        []wireStory{{EventID: "evt-1", Text: "legit"}},
+	})})
+	if _, have := s.Ticker(); have {
+		t.Fatalf("Ticker() have=true after a delta for a rejected bogus view — want dropped as unknown")
+	}
+}
+
 func TestSubscribeAll_SendsFourViewsInOrder(t *testing.T) {
 	s := New("corr-suball")
 	var order []string

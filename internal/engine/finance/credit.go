@@ -321,11 +321,15 @@ func (f *FinanceAPI) reduceLoanBookLocked(principal Money) {
 }
 
 // creditScoreLocked derives the credit score from live state (f.mu held).
+// The debt/revenue denominator is total exposure across every instrument
+// type (AC-7): legacy loan principal plus borrowing-instrument
+// outstanding plus PFI committed unitary-charge streams — no borrowing
+// product sits outside the credit-rating ratio.
 func (f *FinanceAPI) creditScoreLocked() CreditScore {
 	if err := f.checkNotCopied("creditScoreLocked"); err != nil {
 		return creditScoreMin
 	}
-	debt := f.totalDebtLocked()
+	debt := f.totalExposureLocked()
 	revenue := f.taxRevenueLocked()
 	reserves := f.accountBalanceLocked(AcctReserves)
 

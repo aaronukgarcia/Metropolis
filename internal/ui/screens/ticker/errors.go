@@ -24,9 +24,9 @@ const (
 	// logged ... never applied or causing a panic").
 	ErrUnknownSubscription = "MET-U701"
 
-	// ErrUnrecognisedView: Subscribe was called with a view name other
-	// than the four this screen owns. A programming error at the call
-	// site, not a runtime data condition.
+	// ErrUnrecognisedView: Subscribe or BindSubscription was called with a
+	// view name other than the four this screen owns. A programming error
+	// at the call site, not a runtime data condition.
 	ErrUnrecognisedView = "MET-U702"
 
 	// ErrMissingEventID: a story in an otherwise well-formed f9.* patch

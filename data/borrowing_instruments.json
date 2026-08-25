@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "meta": {
+    "note": "FEAT-057 borrowing-instrument taxonomy (engine.finance). Every rate range, spread, revenue-share bound and PFI unitary-charge multiplier below is a PLACEHOLDER pending Aaron's balance pass (balance-number regime): tests assert direction/structure only, never a pinned figure."
+  },
+  "sources": {
+    "government": {
+      "name": "Government loan",
+      "disclosure": "placeholder government-lending terms pending Aaron's balance pass; government is the ordinary, always-available borrowing source",
+      "availability": {
+        "mode": "always",
+        "maxCreditScore": 0,
+        "disclosure": "government loans are available regardless of credit rating (mode 'always'; maxCreditScore unused)"
+      },
+      "secured": {
+        "minBp": 300,
+        "maxBp": 500,
+        "disclosure": "placeholder secured government rate range pending Aaron's balance pass"
+      },
+      "unsecured": {
+        "minBp": 450,
+        "maxBp": 700,
+        "disclosure": "placeholder unsecured government rate range pending Aaron's balance pass"
+      }
+    },
+    "imf": {
+      "name": "IMF lender-of-last-resort facility",
+      "disclosure": "placeholder IMF lending terms pending Aaron's balance pass; IMF is the desperate, reputationally-costly lender of last resort",
+      "availability": {
+        "mode": "belowCreditScore",
+        "maxCreditScore": 400,
+        "disclosure": "IMF is lender of last resort: available only when the credit score falls below maxCreditScore (a data-defined threshold, never hardcoded)"
+      },
+      "secured": {
+        "minBp": 500,
+        "maxBp": 800,
+        "disclosure": "placeholder secured IMF rate range pending Aaron's balance pass"
+      },
+      "unsecured": {
+        "minBp": 700,
+        "maxBp": 1200,
+        "disclosure": "placeholder unsecured IMF rate range pending Aaron's balance pass"
+      }
+    }
+  },
+  "revenueShare": {
+    "maxSharePermille": 1000,
+    "disclosure": "revenue-share percentages are fixed-point per-mille (1000 = 100 percent); maxSharePermille bounds the per-instrument share to [0,1] and is a placeholder pending Aaron's balance pass"
+  },
+  "pfi": {
+    "upfrontCapexFractionPermille": 100,
+    "unitaryChargeMonthlyBp": 50,
+    "minimumTermMonths": 120,
+    "lockInMode": "earlyTerminationPenaltyMonths",
+    "earlyTerminationPenaltyMonths": 12,
+    "disclosure": "placeholder PFI terms pending Aaron's balance pass; upfrontCapexFractionPermille (100 = 10 percent of capex debited at construction) and unitaryChargeMonthlyBp (50 bp of capex per month) are directional placeholders, never final figures"
+  }
+}

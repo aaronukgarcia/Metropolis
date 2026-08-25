@@ -49,9 +49,10 @@ func TestScreen_CopyDetectedAndRejected(t *testing.T) {
 		t.Fatal("s2.SubscribeAll on a copy returned nil, want MET-U704")
 	}
 
-	// Void-returning methods are a silent no-op that never mutates state
-	// visible through s1 (s2's subs/stale maps are the SAME aliased maps
-	// as s1's, pre-guard).
+	// BindSubscription (whose returned error a caller may discard) and the
+	// void methods below are a silent no-op on a copy that never mutates
+	// state visible through s1 (s2's subs/stale maps are the SAME aliased
+	// maps as s1's, pre-guard).
 	s2.BindSubscription(ViewTicker, "sub-2")
 	if _, ok := s1.subs["sub-2"]; ok {
 		t.Error("s2.BindSubscription on a copy leaked into s1.subs")

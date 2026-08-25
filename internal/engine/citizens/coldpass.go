@@ -68,13 +68,23 @@ type ColdPassParams struct {
 // passTotals aggregates one monthly cold pass's effects. The zero value is
 // the identity (MergeInOrder-style combine: field-wise addition).
 type passTotals struct {
-	deaths  int
-	updated int
+	// selectedDeaths are the citizen ids hazard-selected for death this month
+	// but NOT yet realised (FEAT-087 smoothing, feat.deathwave): the city-wide
+	// death queue realises at most the monthly budget at the month boundary.
+	// A selected citizen stays in the shard — still alive, still aging —
+	// until realised.
+	selectedDeaths []uint64
+	updated        int
 }
 
-// add folds one shard's totals into the accumulator (in shard order).
+// add folds one shard's totals into the accumulator (in shard order). The
+// selected-death id lists concatenate (shard order), never merge via a map —
+// the queue itself re-sorts by (selection month, citizen id) at realise time.
 func (t passTotals) add(o passTotals) passTotals {
-	return passTotals{deaths: t.deaths + o.deaths, updated: t.updated + o.updated}
+	return passTotals{
+		selectedDeaths: append(t.selectedDeaths, o.selectedDeaths...),
+		updated:        t.updated + o.updated,
+	}
 }
 
 // runShardsParallel runs fn over every shard in shards, spread across
@@ -124,7 +134,11 @@ func runShardsParallel(workers int, shards []int, fn func(shard int) passTotals)
 // (AC-15/AC-17). isHot, when non-nil, identifies citizens currently
 // elevated to HOT/WARM: those are advanced by the daily path, not the
 // monthly cold pass, so they are skipped here (never double-advanced).
-func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool) passTotals {
+// isQueued, when non-nil, identifies citizens already in the death queue
+// (selected in a prior month, not yet realised): they still age and update,
+// but skip the mortality draw — the queue entry is their single, terminal
+// selection event (FEAT-087/AC-3).
+func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot, isQueued func(uint64) bool) passTotals {
 	var tot passTotals
 	i := 0
 	for i < s.count() {
@@ -138,17 +152,25 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 
 		// Mortality: per-person draw from hash(worldSeed, id, month,
 		// "mortality") against the Gompertz-Makeham hazard scaled by the
-		// sample-measured multiplier. A death is a removal, never a cull —
-		// it is the per-individual probabilistic event §5.1 specifies.
-		stream := det.NewStream(seed, id, month, "mortality")
-		hazard := MortalityHazard(age, HealthBand(s.healthBands[i]), s.access[i]) * params.MortalityMultiplier
-		if hazard > 1 {
-			hazard = 1
-		}
-		if stream.Float64() < hazard {
-			s.removeAt(i)
-			tot.deaths++
-			continue
+		// sample-measured multiplier. FEAT-087 smoothing (feat.deathwave): a
+		// selected death is DEFERRED into the city-wide death queue, not
+		// removed inline — the month boundary realises at most the monthly
+		// budget, so a same-birthMonth cohort aging onto the steep Gompertz
+		// slope becomes a smooth N-deaths/month tail, never a single-month
+		// population cliff (AC-1). A citizen already in the queue (isQueued)
+		// does not draw mortality again — the queue entry is the single,
+		// terminal selection event (AC-3).
+		if isQueued == nil || !isQueued(id) {
+			stream := det.NewStream(seed, id, month, "mortality")
+			hazard := MortalityHazard(age, HealthBand(s.healthBands[i]), s.access[i]) * params.MortalityMultiplier
+			if hazard > 1 {
+				hazard = 1
+			}
+			if stream.Float64() < hazard {
+				tot.selectedDeaths = append(tot.selectedDeaths, id)
+				// Do NOT remove: the citizen stays alive (and continues to
+				// age/update below) until the month boundary realises them.
+			}
 		}
 
 		// Education stage transition (params-derived rate). The September

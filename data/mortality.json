@@ -1,0 +1,27 @@
+{
+  "$comment": "engine.citizens mortality-smoothing / death-wave balance configuration (FEAT-087, feat.deathwave). Every numeric value below is a PLACEHOLDER pending Aaron's row-by-row balance pass (the balance-number regime, same convention as data/fertility.json and data/census.json) — tests check direction and structure only, never a pinned magnitude. The monthly death budget bounds how many hazard-selected deaths are REALISED per non-emergency month, so a same-birthMonth cohort aging onto the steep Gompertz slope produces a smooth ~N-deaths/month tail, never a single-month population cliff (AC-1). The weather emergency is sourced from a deterministic, seeded citywide weather draw keyed (worldSeed, month, 'weather') — engine.season is the eventual source per the feat.deathwave acceptance criteria (AC-7), but the engine.citizens → engine.season code.json outbound edge is NOT yet registered, so this feature derives the signal locally (deterministic, seeded, no wall clock — GR#21) and flags that edge for the master-plan SSOT pass. FEAT-088 death services (graveyards, cremation, hearses) is the downstream handoff target of the realised-death queue.",
+  "version": 1,
+  "meta": {
+    "module": "engine.citizens",
+    "featureKey": "feat.deathwave",
+    "specRefs": ["§5.1", "§5.2", "§9", "§10", "§H"],
+    "balanceRegime": "Every numeric entry below is a disclosed placeholder pending Aaron's row-by-row balance pass. Units are stated per entry."
+  },
+  "params": {
+    "monthlyDeathBudget": {
+      "value": 50,
+      "unit": "deaths/month",
+      "disclosure": "placeholder — maximum hazard-selected deaths realised in a single non-emergency month (the smoothing throughput cap), pending Aaron's balance pass. Directional-only: tests assert the cap binds, never this exact figure."
+    },
+    "weatherEmergencyThreshold": {
+      "value": 0.9,
+      "unit": "probability",
+      "disclosure": "placeholder — deterministic monthly weather severity at or above which a month is a declared weather emergency (adverse weather), pending Aaron's balance pass. Severity is drawn from hash(worldSeed, month, 'weather') in [0,1); at 0.9 roughly one month in ten is an emergency."
+    },
+    "emergencyBudgetMultiplier": {
+      "value": 10,
+      "unit": "unitless multiple",
+      "disclosure": "placeholder — during a weather emergency the monthly death budget is multiplied by this to produce the documented emergency throughput (a major, non-smoothed death event), pending Aaron's balance pass. Bounded (never unbounded), so even an emergency month realises at most budget×multiplier deaths."
+    }
+  }
+}
