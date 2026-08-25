@@ -177,10 +177,11 @@ func TestAdvanceMonthNoOpexWhenCheckpointProjectionsUnwired(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Input-validation error codes (secondary) — every defensive input rejection
-// carries a code from the module's registered range (G4000-G4012), matched by
+// carries a code from the module's registered range (G4000-G4013), matched by
 // meaning: G4003 (unknown/malformed scope) for malformed or empty-resolving
 // inputs, G4004 (unknown district) for invalid district identity, G4005
-// (unknown road) for invalid road identity.
+// (unknown road) for invalid road identity, G4013 (temporal-order violation)
+// for month/range regression (BUG-300).
 // ---------------------------------------------------------------------------
 
 func roadEdges() []EdgeRef {
@@ -205,14 +206,14 @@ func TestInputValidationErrorCodes(t *testing.T) {
 		a := testAPI(t)
 		a.currentMonth = 5
 		_, err := a.AdvanceMonth(3)
-		assertCode(t, err, ErrUnknownScope)
+		assertCode(t, err, ErrInvalidTemporalOrder)
 	})
 
 	t.Run("checkpoint precedes current month", func(t *testing.T) {
 		a := testAPI(t)
 		a.currentMonth = 5
 		_, err := a.Checkpoint(3)
-		assertCode(t, err, ErrUnknownScope)
+		assertCode(t, err, ErrInvalidTemporalOrder)
 	})
 
 	t.Run("inverted preview range", func(t *testing.T) {
@@ -221,7 +222,7 @@ func TestInputValidationErrorCodes(t *testing.T) {
 		a.currentMonth = 10
 		addPolicy(t, a, simplePolicy("cycling", ScopeCitywide, "movement.cycling.share", 0.15))
 		_, err := a.PreviewImpactRange("cycling", Scope{Kind: ScopeCitywide}, 5)
-		assertCode(t, err, ErrUnknownScope)
+		assertCode(t, err, ErrInvalidTemporalOrder)
 	})
 
 	t.Run("empty district name", func(t *testing.T) {
@@ -266,4 +267,63 @@ func TestInputValidationErrorCodes(t *testing.T) {
 		err = a.RenameDistrict(id, "")
 		assertCode(t, err, ErrUnknownDistrict)
 	})
+}
+
+// ---------------------------------------------------------------------------
+// BUG-300 — a temporal-order failure carries its own registry code
+// (ErrInvalidTemporalOrder), never ErrUnknownScope, and never mutates state.
+// ---------------------------------------------------------------------------
+
+// TestAdvanceMonthRegression (regression, BUG-300): AdvanceMonth with a month
+// before the current month returns ErrInvalidTemporalOrder — not the
+// scope-lookup code ErrUnknownScope — and leaves the clock unmoved (GR#7 code
+// AND no partial state, the BUG-100 assertion convention).
+func TestAdvanceMonthRegression(t *testing.T) {
+	a := testAPI(t)
+	a.currentMonth = 5
+	_, err := a.AdvanceMonth(3)
+	assertCode(t, err, ErrInvalidTemporalOrder)
+	if errors.Is(err, &errs.E{Code: ErrUnknownScope}) {
+		t.Fatalf("temporal-order failure must never fall back to ErrUnknownScope, got %v", err)
+	}
+	if got := a.currentMonth; got != 5 {
+		t.Fatalf("rejected AdvanceMonth must not move the clock, currentMonth=%d", got)
+	}
+}
+
+// TestCheckpointPrecedesCurrent (regression, BUG-300): Checkpoint with a
+// checkpoint month before the current month returns ErrInvalidTemporalOrder
+// and leaves the clock unmoved.
+func TestCheckpointPrecedesCurrent(t *testing.T) {
+	a := testAPI(t)
+	a.currentMonth = 5
+	_, err := a.Checkpoint(3)
+	assertCode(t, err, ErrInvalidTemporalOrder)
+	if errors.Is(err, &errs.E{Code: ErrUnknownScope}) {
+		t.Fatalf("temporal-order failure must never fall back to ErrUnknownScope, got %v", err)
+	}
+	if got := a.currentMonth; got != 5 {
+		t.Fatalf("rejected Checkpoint must not move the clock, currentMonth=%d", got)
+	}
+}
+
+// TestPreviewImpactRangeInverted (regression, BUG-300): PreviewImpactRange
+// with toMonth < fromMonth returns ErrInvalidTemporalOrder AND never calls
+// SetCurrentMonth on the projections seam (GR#12 — the range is validated
+// before any side effect).
+func TestPreviewImpactRangeInverted(t *testing.T) {
+	a := testAPI(t)
+	rec := &recordingProjections{horizon: 72}
+	a.projections = rec
+	a.currentMonth = 10
+	addPolicy(t, a, simplePolicy("cycling", ScopeCitywide, "movement.cycling.share", 0.15))
+
+	_, err := a.PreviewImpactRange("cycling", Scope{Kind: ScopeCitywide}, 5)
+	assertCode(t, err, ErrInvalidTemporalOrder)
+	if errors.Is(err, &errs.E{Code: ErrUnknownScope}) {
+		t.Fatalf("temporal-order failure must never fall back to ErrUnknownScope, got %v", err)
+	}
+	if got := len(rec.setCurrentMonth); got != 0 {
+		t.Fatalf("rejected preview must not move the projections seam's current month, got %d SetCurrentMonth calls", got)
+	}
 }

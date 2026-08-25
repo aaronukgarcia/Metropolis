@@ -2,7 +2,10 @@ package policies
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"sync"
 	"testing"
@@ -11,6 +14,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/projections"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/tax"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -26,6 +30,10 @@ type recordingProjections struct {
 	decisions []projections.Decision
 	horizon   int64
 	base      float64
+
+	// setCurrentMonth records every SetCurrentMonth call so a test can prove
+	// a rejected preview never moves the seam's current month (GR#12).
+	setCurrentMonth []int64
 }
 
 func (r *recordingProjections) EnqueueDecision(d projections.Decision) error {
@@ -46,7 +54,13 @@ func (r *recordingProjections) Curve(key string, from, to int64) ([]projections.
 }
 
 func (r *recordingProjections) HorizonMonths() (int64, error) { return r.horizon, nil }
-func (r *recordingProjections) SetCurrentMonth(int64) error   { return nil }
+
+func (r *recordingProjections) SetCurrentMonth(m int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.setCurrentMonth = append(r.setCurrentMonth, m)
+	return nil
+}
 
 // deltasWithPrefix returns the (Key, Delta) payload of every recorded
 // decision whose ID starts with prefix, in record order.
@@ -568,6 +582,107 @@ func TestCompoundEffect(t *testing.T) {
 	want := 0.32
 	if !floatApprox(combined, want) {
 		t.Fatalf("combined = %v, want %v", combined, want)
+	}
+}
+
+// writeClampFixture writes a minimal valid data/policies.json with the given
+// data-declared maxCombinedAbsDelta bound and a single citywide policy whose
+// delta produces a raw multiplicative product of (1+delta)−1 = delta, so a
+// delta magnitude above the bound exercises the clamp, returning the temp dir.
+func writeClampFixture(t *testing.T, bound, delta float64) string {
+	t.Helper()
+	dir := t.TempDir()
+	body := fmt.Sprintf(`{
+  "version": 1,
+  "meta": {
+    "categories": ["economy"],
+    "combination": "multiplicative",
+    "maxCombinedAbsDelta": %v,
+    "previewDrift": {"tolerance": 0.1, "checkpointMonths": 3}
+  },
+  "entries": [
+    {"key": "boostA", "name": "Boost A", "category": "economy", "scope": "citywide",
+     "mechanism": {"coefficients": [{"key": "economy.wage.level", "delta": %v}]},
+     "cost": {"enactmentMicroPounds": 0, "opexMonthlyMicroPounds": 0},
+     "conflictsWith": [], "disclosure": "clamp test fixture"}
+  ]
+}`, bound, delta)
+	if err := os.WriteFile(filepath.Join(dir, data.FilePolicies), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	return dir
+}
+
+// loadClampFixture loads the fixture written by [writeClampFixture] and wires
+// the projections seam so Enact/CombinedEffect run.
+func loadClampFixture(t *testing.T, dir string) *PoliciesAPI {
+	t.Helper()
+	a, err := Load(dir, "clamp-test")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	a.projections = &recordingProjections{horizon: 72}
+	return a
+}
+
+// TestCombinedEffectClamped (regression, routed finding): a raw multiplicative
+// product that exceeds the data-declared meta.maxCombinedAbsDelta bound is
+// CLAMPED to exactly ±bound — never the unbounded raw product, never a Go
+// literal (GR#15).
+func TestCombinedEffectClamped(t *testing.T) {
+	// Positive side: single +3.0 delta, raw product +3.0, bound 2.0 → +2.0.
+	a := loadClampFixture(t, writeClampFixture(t, 2.0, 3.0))
+	mustEnact(t, a, "boostA", Scope{Kind: ScopeCitywide})
+	combined, err := a.CombinedEffect("economy.wage.level", Scope{Kind: ScopeCitywide})
+	if err != nil {
+		t.Fatalf("CombinedEffect: %v", err)
+	}
+	if combined != 2.0 {
+		t.Fatalf("combined must clamp to exactly +bound 2.0, got %v", combined)
+	}
+	if floatApprox(combined, 3.0) {
+		t.Fatalf("clamp must not return the raw unbounded product 3.0")
+	}
+
+	// Negative side: single −3.0 delta, raw product −3.0, bound 2.0 → −2.0.
+	b := loadClampFixture(t, writeClampFixture(t, 2.0, -3.0))
+	mustEnact(t, b, "boostA", Scope{Kind: ScopeCitywide})
+	combinedNeg, err := b.CombinedEffect("economy.wage.level", Scope{Kind: ScopeCitywide})
+	if err != nil {
+		t.Fatalf("CombinedEffect (negative): %v", err)
+	}
+	if combinedNeg != -2.0 {
+		t.Fatalf("combined must clamp to exactly −bound −2.0, got %v", combinedNeg)
+	}
+	if floatApprox(combinedNeg, -3.0) {
+		t.Fatalf("clamp must not return the raw unbounded product −3.0")
+	}
+}
+
+// TestCombinedEffectClampMovesWithData (data-driven proof, GR#15): the clamp
+// bound is read from the loaded meta, so changing the data-declared
+// maxCombinedAbsDelta moves the clamp — the engine never hardcodes the bound.
+func TestCombinedEffectClampMovesWithData(t *testing.T) {
+	// Same delta (+3.0) under two different data-declared bounds: the clamp
+	// must follow the data, not a literal.
+	a := loadClampFixture(t, writeClampFixture(t, 0.5, 3.0))
+	mustEnact(t, a, "boostA", Scope{Kind: ScopeCitywide})
+	combined, err := a.CombinedEffect("economy.wage.level", Scope{Kind: ScopeCitywide})
+	if err != nil {
+		t.Fatalf("CombinedEffect: %v", err)
+	}
+	if combined != 0.5 {
+		t.Fatalf("clamp must follow the loaded bound 0.5, got %v", combined)
+	}
+
+	b := loadClampFixture(t, writeClampFixture(t, 1.5, 3.0))
+	mustEnact(t, b, "boostA", Scope{Kind: ScopeCitywide})
+	combined2, err := b.CombinedEffect("economy.wage.level", Scope{Kind: ScopeCitywide})
+	if err != nil {
+		t.Fatalf("CombinedEffect (bound 1.5): %v", err)
+	}
+	if combined2 != 1.5 {
+		t.Fatalf("clamp must move with the data to bound 1.5, got %v", combined2)
 	}
 }
 
