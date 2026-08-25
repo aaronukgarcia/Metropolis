@@ -28,7 +28,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const CHECK_INTERVAL_MS = 2 * 60 * 1000;  // Check every 2 minutes
 const SYNC_SCRIPT = path.join(__dirname, 'claude-sync.js');
@@ -79,8 +79,24 @@ readStdin((input) => {
   // Update timestamp FIRST to avoid retry spam on network errors
   fs.writeFileSync(pingFile, String(nowMs), 'utf8');
 
+  // BUG-354 r4/r5: pass the permit's server-issued session secret explicitly so
+  // renew authenticates by secret, never by the ambient env var (which any
+  // process can set to another window's value — Warden round 3). The secret
+  // lives in the per-window key file acquire() writes at checkin; a fresh
+  // window with no key file yet omits it (renew is then a clean no-op). r5 F3:
+  // the file lives in the per-user os.homedir()/.claude/session-keys dir (not
+  // the shared checkout), read via claude-sync's exported reader (with one-time
+  // legacy migration).
+  let sessionSecret = '';
+  if (windowId) {
+    try {
+      sessionSecret = require('./claude-sync.js').readSessionKey(windowId);
+    } catch { /* fresh window — no secret yet */ }
+  }
+  const renewArgs = ['renew', '--auto'];
+  if (sessionSecret) renewArgs.push('--session', sessionSecret);
   try {
-    const output = execSync(`node "${SYNC_SCRIPT}" renew --auto`, {
+    const output = execFileSync('node', [SYNC_SCRIPT, ...renewArgs], {
       encoding: 'utf8',
       timeout: 15000,
       cwd: __dirname,

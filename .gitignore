@@ -5,6 +5,7 @@ node_modules/
 .claude/settings.local.json
 .claude/.identity*
 .claude/.last-ping*
+.claude/.session-key*
 .claude/worktrees/
 .claude-heartbeat-*
 .claude-session-key
