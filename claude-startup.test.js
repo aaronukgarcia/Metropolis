@@ -185,9 +185,15 @@ test('FEAT-038: printSessionSummary() surfaces the GIT IDENTITY warning in the "
 // value — rejected, not accepted as a real identity.
 // ---------------------------------------------------------------------------
 
-test('VALID_NAMES is exactly the current three slots — Bob removed, Bev added', () => {
-  assert.deepEqual(startup.VALID_NAMES, ['bill', 'ben', 'bev']);
+test('VALID_NAMES is exactly the current four slots — Bob removed, Bro added, Ben still seeded', () => {
+  assert.deepEqual(startup.VALID_NAMES, ['bill', 'ben', 'bev', 'bro']);
   assert.ok(!startup.VALID_NAMES.includes('bob'), 'Bob must not be accepted as a resolved identity any more');
+});
+
+test('LIVE_NAMES excludes retired Bob and parked Ben (BUG-344 roster drift)', () => {
+  assert.deepEqual(startup.LIVE_NAMES, ['bill', 'bev', 'bro']);
+  assert.ok(!startup.LIVE_NAMES.includes('ben'), 'parked Ben must not be a live slot');
+  assert.ok(!startup.LIVE_NAMES.includes('bob'), 'retired Bob must not be a live slot');
 });
 
 test('parseName() rejects "YOU ARE: Bob" (retired name is not a valid resolved identity)', () => {
