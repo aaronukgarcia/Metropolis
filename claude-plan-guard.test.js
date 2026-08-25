@@ -495,5 +495,10 @@ test('BUG-123 round 10: ReDoS safety -- a 1MB adversarial non-matching string (m
   const result = looksLikeCommitFallback(adversarial);
   const elapsedMs = Number(process.hrtime.bigint() - t0) / 1e6;
   assert.equal(result, false, 'no "commit" anywhere in the fixture -- must resolve to false, not hang');
-  assert.equal(elapsedMs < 100, true, `must resolve well under 100ms on a 1MB adversarial input (took ${elapsedMs.toFixed(2)}ms) -- a slow fallback would itself be a DoS vector`);
+  // BUG-292: the ceiling is a backtracking DETECTOR, not a latency SLO. Real
+  // catastrophic backtracking on this input takes seconds-to-minutes; linear
+  // scans take milliseconds. The old 100ms ceiling was BUG-031-shaped (a
+  // 'generous' bound that blew at 707ms once on a loaded shared runner). A
+  // 5s ceiling keeps every genuine DoS detection while never flaking CI.
+  assert.equal(elapsedMs < 5000, true, `must resolve under 5000ms on a 1MB adversarial input (took ${elapsedMs.toFixed(2)}ms) -- catastrophic backtracking takes seconds-to-minutes, so anything over this IS a DoS vector`);
 });
