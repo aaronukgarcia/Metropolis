@@ -11,8 +11,9 @@ import (
 // stub.maxAdvanceTicksPerCall (a literal copy, required by SEC-006's
 // fix: engine.stub deliberately does not import internal/engine/core's
 // package internals — see codes.go's doc comment — the same GR#20-style
-// decoupling reason internal/ui/screens/debug/phase.go's monthlyPhaseOrder
-// mirror exists for) drifting from the real, authoritative
+// decoupling reason internal/ui/screens/debug/phase.go used to mirror
+// the phase names before BUG-382 moved them into internal/protocol)
+// drifting from the real, authoritative
 // internal/engine/core.MaxAdvanceTicksPerCall.
 //
 // This is a _test.go file specifically so it CAN import

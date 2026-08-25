@@ -8,7 +8,28 @@ import (
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
+
+// TestMonthlyPhaseOrderMatchesProtocol is BUG-382's belt-and-braces
+// order check: the phase NAMES are compile-time shared via protocol
+// (a rename breaks every consumer's build), but the SEQUENCE in this
+// package's pipeline array is owned here and only mirrored — by value,
+// at runtime — inside protocol.MonthlyPhaseOrderNames. This test fails
+// if the two sequences ever diverge, so a reorder of either side cannot
+// land silently.
+func TestMonthlyPhaseOrderMatchesProtocol(t *testing.T) {
+	want := MonthlyPhaseOrder()
+	got := protocol.MonthlyPhaseOrderNames()
+	if len(want) != len(got) {
+		t.Fatalf("len(engine monthlyPhaseOrder) = %d, len(protocol.MonthlyPhaseOrderNames()) = %d", len(want), len(got))
+	}
+	for i := range want {
+		if string(want[i]) != got[i] {
+			t.Fatalf("order divergence at [%d]: engine %q vs protocol %q", i, string(want[i]), got[i])
+		}
+	}
+}
 
 func TestNumShards_Is256(t *testing.T) {
 	if got := NumShards(); got != 256 {

@@ -41,17 +41,21 @@
 //   - BoW tab: an injected BoWSource (WithBoWSource) — a read-only query
 //     against the metro BOW in production, a mock in tests (AC-9).
 //
-// # GR#20 note: phase order is a local mirror, not an import
+// # GR#20 note: phase names come from the protocol seam, not engine
 //
 // AC-8 names internal/engine/core.MonthlyPhaseOrder as the canonical
 // phase sequence, but internal/ui packages may not import
 // internal/engine in non-test code (GR#20, mechanically enforced by
 // golangci-lint's depguard — see .golangci.yml's
-// "ui-must-not-import-engine" rule). phase.go therefore carries its own
-// monthlyPhaseOrder constant, a literal copy of the six PhaseKind string
-// values from internal/engine/core/phase.go; determinism_test.go imports
+// "ui-must-not-import-engine" rule). Since BUG-382, phase.go derives
+// its monthlyPhaseOrder from internal/protocol (the neutral Engine<->UI
+// seam package both domains already depend on) at COMPILE TIME — the
+// hand-copied literal this section used to describe is gone. A phase
+// rename or reorder in protocol now breaks this package's build instead
+// of surfacing as a red CI drift test; determinism_test.go still imports
 // internal/engine/core (test-only exemption, deliberate and verified per
-// CLAUDE.md) solely to assert the two orders never drift apart.
+// CLAUDE.md) to assert the snapshot wiring stays aligned with the
+// engine's real order.
 //
 // # Layout note
 //

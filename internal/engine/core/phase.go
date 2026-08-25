@@ -7,12 +7,22 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
 // PhaseKind names one stop in the fixed, documented phase pipeline (§3,
 // AC-3, AC-16). It is a closed set — see DailyPhaseOrder and
 // MonthlyPhaseOrder below, which are the only valid values
 // RegisterPhaseHook accepts.
+//
+// Each constant ALIASES its protocol-package counterpart (BUG-382): the
+// name vocabulary's single source lives in internal/protocol (neutral
+// ground both the engine and UI domains already depend on), so renaming
+// a phase there breaks this package's build at compile time instead of
+// surfacing later as a red CI drift test. The pipeline ORDER itself is
+// still owned HERE — monthlyPhaseOrder below is the contract; protocol
+// only mirrors the sequence for the UI, and phase_test.go asserts the
+// two never diverge.
 type PhaseKind string
 
 // The fixed phase set. Monthly phases run in this exact order, every
@@ -28,13 +38,13 @@ type PhaseKind string
 // citizens/finance/etc. modules register PhaseHooks against these
 // names as they go real, one at a time (M0-ENG §2).
 const (
-	PhaseDailyTick            PhaseKind = "daily-tick"
-	PhaseProduction           PhaseKind = "production"
-	PhaseLogisticsSettlement  PhaseKind = "logistics-settlement"
-	PhaseConsumptionShortfall PhaseKind = "consumption-shortfall"
-	PhasePopulation           PhaseKind = "population"
-	PhaseLandValueDecay       PhaseKind = "land-value-decay"
-	PhaseFinance              PhaseKind = "finance"
+	PhaseDailyTick            PhaseKind = protocol.PhaseDailyTick
+	PhaseProduction           PhaseKind = protocol.PhaseProduction
+	PhaseLogisticsSettlement  PhaseKind = protocol.PhaseLogisticsSettlement
+	PhaseConsumptionShortfall PhaseKind = protocol.PhaseConsumptionShortfall
+	PhasePopulation           PhaseKind = protocol.PhasePopulation
+	PhaseLandValueDecay       PhaseKind = protocol.PhaseLandValueDecay
+	PhaseFinance              PhaseKind = protocol.PhaseFinance
 )
 
 // dailyPhaseOrder is the fixed phase set executed on every daily
@@ -65,24 +75,18 @@ var dailyPhaseOrder = [...]PhaseKind{
 // runtime. See dailyPhaseOrder's doc comment above for why this is an
 // unexported array rather than an exported slice (SEC-005).
 //
-// MIRRORED ELSEWHERE — read before changing this list. The F12 info
-// panel keeps a literal copy of these six names in
-// internal/ui/screens/debug/phase.go, because GR#20 forbids
-// internal/ui from importing internal/engine, so it cannot reference
-// this slice directly. Reordering, renaming, adding or removing a
-// phase here therefore requires the same edit there. A drift test in
-// internal/ui/screens/debug/determinism_test.go imports MonthlyPhaseOrder()
-// (the sanctioned test-file exemption) and fails if the two diverge —
-// so a mistake is caught, but by CI rather than by reading. That note
-// exists so you find out now instead of then; see that file's doc
-// comment for the full rationale.
+// BUG-382: the F12 debug panel no longer keeps a hand-copied literal of
+// these names — internal/protocol is the shared name vocabulary (see
+// PhaseKind above) and the UI derives from it directly. A rename now
+// fails to compile in every consumer; a REORDER here is caught by
+// TestMonthlyPhaseOrderMatchesProtocol in phase_test.go.
 var monthlyPhaseOrder = [...]PhaseKind{
-	PhaseProduction,
-	PhaseLogisticsSettlement,
-	PhaseConsumptionShortfall,
-	PhasePopulation,
-	PhaseLandValueDecay,
-	PhaseFinance,
+	protocol.PhaseProduction,
+	protocol.PhaseLogisticsSettlement,
+	protocol.PhaseConsumptionShortfall,
+	protocol.PhasePopulation,
+	protocol.PhaseLandValueDecay,
+	protocol.PhaseFinance,
 }
 
 // DailyPhaseOrder returns a fresh copy of the fixed daily phase order

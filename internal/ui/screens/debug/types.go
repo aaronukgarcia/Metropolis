@@ -125,8 +125,9 @@ type DebugFlagFunc func() bool
 // PhaseSeries is one phase's row in the AC-8 sparkline pane: up to the
 // last 60 RecordTickCost samples for that phase (oldest-first), sourced
 // from Registry.TickCostHistory(key) where key is the phase's name — see
-// phase.go's monthlyPhaseOrder for the fixed key list and the GR#20 note
-// on why it's a local mirror rather than an internal/engine import.
+// phase.go for the fixed key list and its BUG-382 note on why the names
+// come from internal/protocol (compile-time shared vocabulary) rather
+// than an internal/engine import.
 type PhaseSeries struct {
 	Phase     string
 	Micros    []uint64

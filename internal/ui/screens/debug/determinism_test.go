@@ -8,21 +8,25 @@ import (
 	debug "github.com/aaronukgarcia/Metropolis/internal/ui/screens/debug"
 )
 
-// TestPhaseOrder_MatchesEngineCore guards against phase.go's local
-// monthlyPhaseOrder (a literal copy, required by GR#20 — internal/ui
-// non-test code may not import internal/engine) drifting from the real
-// internal/engine/core.MonthlyPhaseOrder(). This test file is exempt
-// from the ui-must-not-import-engine depguard rule (test files only,
-// see .golangci.yml) — the sanctioned way to check the mirror stays in
-// sync.
+// TestPhaseOrder_MatchesEngineCore asserts the debug snapshot's phase
+// series stays aligned with the real
+// internal/engine/core.MonthlyPhaseOrder(). Since BUG-382 the phase
+// NAMES are compile-time shared via internal/protocol (phase.go derives
+// from protocol.MonthlyPhaseOrderNames — no literal copy any more), so
+// a rename now fails the build outright; what this test still uniquely
+// guards is the WIRING: that Collect keys each series by exactly the
+// engine's order and that every phase is Available against a registry
+// keyed by the real names.
+//
+// This test file is exempt from the ui-must-not-import-engine depguard
+// rule (test files only, see .golangci.yml) — the sanctioned way to
+// check against the engine itself.
 //
 // Reads via MonthlyPhaseOrder() (a function call) rather than a bare
 // var, per SEC-005's fix (2026-08-09): the real slice is no longer an
 // exported, directly-mutable package variable — see
 // internal/engine/core/phase.go's dailyPhaseOrder/monthlyPhaseOrder doc
-// comments. This test only ever reads the returned copy, so the change
-// is call-syntax only (added parens); it still validates the exact same
-// invariant against the exact same authoritative order.
+// comments. This test only ever reads the returned copy.
 func TestPhaseOrder_MatchesEngineCore(t *testing.T) {
 	wantOrder := engcore.MonthlyPhaseOrder()
 
