@@ -608,7 +608,9 @@
       ],
       "calls": [
         "int.protocol",
-        "int.serializer"
+        "int.serializer",
+        "foundation.errors",
+        "harness.stub"
       ],
       "sprint": 2
     },
@@ -657,7 +659,8 @@
         "int.serializer",
         "int.protocol",
         "feat.debugmode",
-        "foundation.errors"
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 1
     },
@@ -685,7 +688,8 @@
         "foundation.det",
         "int.solver",
         "foundation.errors",
-        "int.serializer"
+        "int.serializer",
+        "foundation.num"
       ],
       "sprint": 2
     },
@@ -755,7 +759,8 @@
         "int.serializer",
         "engine.invariant",
         "foundation.det",
-        "foundation.errors"
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 3,
       "collaborations": {
@@ -941,7 +946,9 @@
         "engine.roads",
         "engine.invariant",
         "engine.education",
-        "engine.leisure"
+        "engine.leisure",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 5,
       "collaborations": {
@@ -1193,7 +1200,8 @@
         "engine.dispatch",
         "foundation.errors",
         "foundation.num",
-        "int.protocol"
+        "int.protocol",
+        "foundation.data"
       ],
       "sprint": 6
     },
@@ -1437,7 +1445,10 @@
         "engine.citizens",
         "engine.traffic",
         "engine.finance",
-        "foundation.data"
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 7
     },
@@ -1627,7 +1638,10 @@
         "engine.fiscal",
         "int.protocol",
         "ui.dash",
-        "ui.diagrams"
+        "ui.diagrams",
+        "foundation.errors",
+        "ui.core",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -1675,7 +1689,10 @@
         "engine.dispatch",
         "int.protocol",
         "ui.dash",
-        "ui.keys"
+        "ui.keys",
+        "foundation.errors",
+        "ui.core",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -1822,7 +1839,9 @@
         "engine.policies",
         "engine.tax",
         "int.protocol",
-        "ui.dash"
+        "ui.dash",
+        "foundation.errors",
+        "ui.core"
       ],
       "sprint": 9
     },
@@ -2356,7 +2375,8 @@
         "engine.maintenance",
         "engine.finance",
         "foundation.data",
-        "engine.services"
+        "engine.services",
+        "foundation.errors"
       ],
       "sprint": 11
     },
@@ -2389,7 +2409,10 @@
         "engine.staffing",
         "engine.maintenance",
         "engine.finance",
-        "foundation.data"
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -2516,7 +2539,8 @@
         "engine.traffic",
         "engine.market",
         "engine.wellbeing",
-        "engine.citizens"
+        "engine.citizens",
+        "foundation.errors"
       ],
       "sprint": 10
     },
@@ -2633,7 +2657,8 @@
       "calls": [
         "engine.wellbeing",
         "engine.build",
-        "engine.season"
+        "engine.season",
+        "foundation.errors"
       ],
       "sprint": 11
     },
@@ -2690,7 +2715,11 @@
       "calls": [
         "engine.crime",
         "engine.services",
-        "engine.capexport"
+        "engine.capexport",
+        "foundation.data",
+        "foundation.det",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11,
       "collaborations": {
@@ -2723,7 +2752,10 @@
         "engine.attract",
         "engine.leisure",
         "engine.season",
-        "engine.news"
+        "engine.news",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 11
     },
@@ -2885,7 +2917,11 @@
       "calls": [
         "engine.tourism",
         "engine.mining",
-        "engine.parking"
+        "engine.parking",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num",
+        "engine.world"
       ],
       "sprint": 11
     },
@@ -2915,7 +2951,10 @@
         "engine.consumption",
         "engine.tax",
         "engine.logistics",
-        "engine.finance"
+        "engine.finance",
+        "foundation.data",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 10
     },
@@ -2977,7 +3016,9 @@
         "engine.tax",
         "foundation.data",
         "engine.finance",
-        "engine.world"
+        "engine.world",
+        "foundation.errors",
+        "foundation.num"
       ],
       "sprint": 9,
       "collaborations": {

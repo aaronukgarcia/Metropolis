@@ -383,12 +383,20 @@
             "outboundGuid": "ab6fe1dc-5766-443e-af57-4c80b345a657"
           },
           {
+            "key": "engine.airunits",
+            "outboundGuid": "bba25b12-a2ef-404a-96b4-de6dc739ba49"
+          },
+          {
             "key": "engine.attract",
             "outboundGuid": "7c3d420c-3d6e-48de-9c21-f46ff1b38ead"
           },
           {
             "key": "engine.build",
             "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
+          },
+          {
+            "key": "engine.cafe",
+            "outboundGuid": "e9809660-e6e5-4ccb-a62d-b782ec32b41a"
           },
           {
             "key": "engine.capexport",
@@ -435,8 +443,16 @@
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
           {
+            "key": "engine.destination",
+            "outboundGuid": "af2de6ff-09ef-453c-b2a8-880326060b67"
+          },
+          {
             "key": "engine.education",
             "outboundGuid": "a180c700-5b49-4c98-976d-cedf6ab2524c"
+          },
+          {
+            "key": "engine.extcommute",
+            "outboundGuid": "d4dbc368-2df9-4eb9-8ddb-8f424d46a47a"
           },
           {
             "key": "engine.farming",
@@ -461,6 +477,10 @@
           {
             "key": "engine.freight",
             "outboundGuid": "75dfc952-590a-4602-b621-dc369322b72f"
+          },
+          {
+            "key": "engine.fuel",
+            "outboundGuid": "028e7813-da5a-4d3b-a21e-04700849ae3c"
           },
           {
             "key": "engine.households",
@@ -495,6 +515,14 @@
             "outboundGuid": "179c218a-f221-4785-8c7d-55d67df1e7b6"
           },
           {
+            "key": "engine.policies",
+            "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
+          },
+          {
+            "key": "engine.prison",
+            "outboundGuid": "e14d1948-9f54-4da0-9463-4509c5bf4f27"
+          },
+          {
             "key": "engine.projections",
             "outboundGuid": "77adc839-ba58-4bfd-abb4-213cc1bb97e9"
           },
@@ -519,6 +547,10 @@
             "outboundGuid": "47f5426b-85c0-4bce-a70e-621762f9f8f3"
           },
           {
+            "key": "engine.shopping",
+            "outboundGuid": "80c175d5-f412-46af-8f61-05009ea4ffea"
+          },
+          {
             "key": "engine.social",
             "outboundGuid": "a5ae75cf-b566-4ae4-a521-112d48426ef3"
           },
@@ -531,8 +563,20 @@
             "outboundGuid": "bed174ed-42bc-4b19-9381-939b51985b3b"
           },
           {
+            "key": "engine.staffing",
+            "outboundGuid": "d30a438c-0d64-49ff-9af2-1aac60456b45"
+          },
+          {
             "key": "engine.tax",
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
+          },
+          {
+            "key": "engine.tourism",
+            "outboundGuid": "698b7f3d-b93b-47e5-b9bd-c06ddc6eec87"
+          },
+          {
+            "key": "engine.traffic",
+            "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
           {
             "key": "engine.transit",
@@ -623,6 +667,10 @@
             "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
           },
           {
+            "key": "harness.replay",
+            "outboundGuid": "f0bdf83e-4e69-451e-a33c-6a96a8cdd31a"
+          },
+          {
             "key": "harness.stub",
             "outboundGuid": "21192f19-d7f4-4d40-8c7a-327e3d205138"
           },
@@ -687,6 +735,14 @@
             "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
           },
           {
+            "key": "ui.screen.districts",
+            "outboundGuid": "30ce8c12-6843-4876-8405-756280e23988"
+          },
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          },
+          {
             "key": "ui.screen.map",
             "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           },
@@ -697,6 +753,10 @@
           {
             "key": "ui.screen.proj",
             "outboundGuid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -937,6 +997,10 @@
         "pattern": "hash-stream draws + shard scheduler; no shared RNG object anywhere",
         "consumers": [
           {
+            "key": "engine.airunits",
+            "outboundGuid": "bba25b12-a2ef-404a-96b4-de6dc739ba49"
+          },
+          {
             "key": "engine.attract",
             "outboundGuid": "7c3d420c-3d6e-48de-9c21-f46ff1b38ead"
           },
@@ -969,6 +1033,10 @@
             "outboundGuid": "a180c700-5b49-4c98-976d-cedf6ab2524c"
           },
           {
+            "key": "engine.extcommute",
+            "outboundGuid": "d4dbc368-2df9-4eb9-8ddb-8f424d46a47a"
+          },
+          {
             "key": "engine.fdi",
             "outboundGuid": "4ee652c8-8ace-48e9-9bc8-0f8fbeba6540"
           },
@@ -979,6 +1047,10 @@
           {
             "key": "engine.leisure",
             "outboundGuid": "305f19a1-9743-49b9-af98-03b362eaea4b"
+          },
+          {
+            "key": "engine.prison",
+            "outboundGuid": "e14d1948-9f54-4da0-9463-4509c5bf4f27"
           },
           {
             "key": "engine.roads",
@@ -1169,6 +1241,10 @@
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
           {
+            "key": "engine.destination",
+            "outboundGuid": "af2de6ff-09ef-453c-b2a8-880326060b67"
+          },
+          {
             "key": "engine.education",
             "outboundGuid": "a180c700-5b49-4c98-976d-cedf6ab2524c"
           },
@@ -1187,6 +1263,10 @@
           {
             "key": "engine.freight",
             "outboundGuid": "75dfc952-590a-4602-b621-dc369322b72f"
+          },
+          {
+            "key": "engine.fuel",
+            "outboundGuid": "028e7813-da5a-4d3b-a21e-04700849ae3c"
           },
           {
             "key": "engine.households",
@@ -1211,6 +1291,10 @@
           {
             "key": "engine.policies",
             "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
+          },
+          {
+            "key": "engine.prison",
+            "outboundGuid": "e14d1948-9f54-4da0-9463-4509c5bf4f27"
           },
           {
             "key": "engine.rail",
@@ -1249,6 +1333,10 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.tourism",
+            "outboundGuid": "698b7f3d-b93b-47e5-b9bd-c06ddc6eec87"
+          },
+          {
             "key": "engine.transit",
             "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
           },
@@ -1263,6 +1351,10 @@
           {
             "key": "engine.worklife",
             "outboundGuid": "79ca5926-0f11-4757-ad1c-726420df08e2"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "feat.deathwave",
@@ -1461,7 +1553,12 @@
         "name": "StubEngine",
         "format": "Transport server",
         "pattern": "canned world + scripted deltas + chaos injection",
-        "consumers": []
+        "consumers": [
+          {
+            "key": "harness.replay",
+            "outboundGuid": "f0bdf83e-4e69-451e-a33c-6a96a8cdd31a"
+          }
+        ]
       },
       "outbound": {
         "guid": "21192f19-d7f4-4d40-8c7a-327e3d205138",
@@ -1547,6 +1644,14 @@
             "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
           },
           {
+            "key": "ui.screen.districts",
+            "outboundGuid": "30ce8c12-6843-4876-8405-756280e23988"
+          },
+          {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          },
+          {
             "key": "ui.screen.map",
             "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           },
@@ -1557,6 +1662,10 @@
           {
             "key": "ui.screen.proj",
             "outboundGuid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.ticker",
@@ -1744,12 +1853,20 @@
             "outboundGuid": "e7892f35-f353-4c4e-bdc2-8e71ef06b2e0"
           },
           {
+            "key": "ui.screen.finance",
+            "outboundGuid": "0ec38e13-f88c-460b-a9c2-71392f36d580"
+          },
+          {
             "key": "ui.screen.map",
             "outboundGuid": "57f61e62-3dc2-41c3-88b1-8e3415bf04c0"
           },
           {
             "key": "ui.screen.proj",
             "outboundGuid": "1283ce8d-c3c3-4228-9b11-04181e1b36a5"
+          },
+          {
+            "key": "ui.screen.services",
+            "outboundGuid": "96581f8a-77b4-449e-a592-3a7a3ea149e5"
           },
           {
             "key": "ui.screen.trade",
@@ -2350,6 +2467,16 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "harness.stub",
+            "moduleGuid": "c254728b-4a1c-490f-a1a7-42e08f8605ff",
+            "inboundGuid": "64530ba0-19ee-4a01-9f73-41e266863b99"
           }
         ]
       },
@@ -2470,6 +2597,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -2545,6 +2677,11 @@
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -2612,6 +2749,10 @@
           {
             "key": "engine.defence",
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
+          },
+          {
+            "key": "engine.destination",
+            "outboundGuid": "af2de6ff-09ef-453c-b2a8-880326060b67"
           },
           {
             "key": "engine.dispatch",
@@ -2844,6 +2985,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -3424,6 +3570,16 @@
             "key": "engine.leisure",
             "moduleGuid": "47447aee-f985-470a-9e8f-b25dbb571743",
             "inboundGuid": "d7d01c42-212d-48f4-b9b9-984bf33bd1ce"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -4059,6 +4215,11 @@
             "key": "int.protocol",
             "moduleGuid": "19bed5ea-bcfd-4dd5-9be7-71def6c50fc4",
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
           }
         ]
       },
@@ -4671,6 +4832,21 @@
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -5083,6 +5259,21 @@
             "key": "ui.diagrams",
             "moduleGuid": "f1dc63b8-98e3-4a0b-b629-a924dd27597b",
             "inboundGuid": "ead88a71-8c91-4925-ae49-e847e77a810f"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.widgets",
+            "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
+            "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
           }
         ]
       },
@@ -5209,6 +5400,21 @@
             "key": "ui.keys",
             "moduleGuid": "9b4f3509-f2cb-461f-b6ea-f5531b3b55d9",
             "inboundGuid": "f4b96331-dcee-48bf-920e-a6c6aa0ab513"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
+          },
+          {
+            "key": "ui.widgets",
+            "moduleGuid": "03496f9c-4e7e-4888-ab13-4f6c46fa87ad",
+            "inboundGuid": "9d2efa3c-eb0c-4195-a3c1-943f6a0b9cd8"
           }
         ]
       },
@@ -5575,6 +5781,16 @@
             "key": "ui.dash",
             "moduleGuid": "c2af8b88-2e3f-420a-b44a-f70cd5f8e104",
             "inboundGuid": "c9779cf4-4098-4392-a356-40f6af348a45"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "ui.core",
+            "moduleGuid": "0a68ef61-6148-458f-8fa4-722119ba3d44",
+            "inboundGuid": "fb5bbde6-9be1-4875-b460-d203a6249606"
           }
         ]
       },
@@ -6787,6 +7003,11 @@
             "key": "engine.services",
             "moduleGuid": "ab443390-0a8a-459a-ae5a-4b8a35308751",
             "inboundGuid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
           }
         ]
       },
@@ -6843,6 +7064,21 @@
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -6960,6 +7196,11 @@
             "key": "engine.citizens",
             "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
             "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
           }
         ]
       },
@@ -7180,6 +7421,11 @@
             "key": "engine.season",
             "moduleGuid": "5a348a85-15ba-46d9-aa61-0605f12785f1",
             "inboundGuid": "a85f49a1-4a31-44a1-9a7d-08defdad3011"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
           }
         ]
       },
@@ -7304,6 +7550,26 @@
             "key": "engine.capexport",
             "moduleGuid": "35618942-25cf-4398-8809-c96635362d49",
             "inboundGuid": "8ed7d8b5-7618-4dec-a75e-986bf896f377"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.det",
+            "moduleGuid": "4e1a1a9c-0757-4964-9d4b-74d37584e739",
+            "inboundGuid": "c3a4321c-8f1f-4ae0-a3ca-ca8b60176a81"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -7359,6 +7625,21 @@
             "key": "engine.news",
             "moduleGuid": "129592d7-2873-4857-b733-e21f175b2ec2",
             "inboundGuid": "cc3758bb-d419-4103-a4da-0058d1dfefd9"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -7767,6 +8048,26 @@
             "key": "engine.parking",
             "moduleGuid": "2b9777a1-a691-4ddd-a32a-49d7648dfa73",
             "inboundGuid": "b08f5ffe-441c-475f-9191-3b0de4589713"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "engine.world",
+            "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
+            "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
           }
         ]
       },
@@ -7823,6 +8124,21 @@
             "key": "engine.finance",
             "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
             "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
+          },
+          {
+            "key": "foundation.data",
+            "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
+            "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -7962,6 +8278,16 @@
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
             "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "foundation.errors",
+            "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
+            "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "foundation.num",
+            "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
+            "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
           }
         ]
       },
@@ -9743,6 +10069,10 @@
             "outboundGuid": "ab6fe1dc-5766-443e-af57-4c80b345a657"
           },
           {
+            "key": "engine.airunits",
+            "outboundGuid": "bba25b12-a2ef-404a-96b4-de6dc739ba49"
+          },
+          {
             "key": "engine.attract",
             "outboundGuid": "7c3d420c-3d6e-48de-9c21-f46ff1b38ead"
           },
@@ -9761,6 +10091,10 @@
           {
             "key": "engine.chemicals",
             "outboundGuid": "66c57025-8e56-45f2-a371-7b6aba74c97f"
+          },
+          {
+            "key": "engine.citizens",
+            "outboundGuid": "c128a4e1-80d2-46f8-ae99-aa902f806983"
           },
           {
             "key": "engine.coastal",
@@ -9783,8 +10117,16 @@
             "outboundGuid": "7c1dbf84-076e-4f44-a521-1ede4c58cc6d"
           },
           {
+            "key": "engine.destination",
+            "outboundGuid": "af2de6ff-09ef-453c-b2a8-880326060b67"
+          },
+          {
             "key": "engine.education",
             "outboundGuid": "a180c700-5b49-4c98-976d-cedf6ab2524c"
+          },
+          {
+            "key": "engine.extcommute",
+            "outboundGuid": "d4dbc368-2df9-4eb9-8ddb-8f424d46a47a"
           },
           {
             "key": "engine.fdi",
@@ -9805,6 +10147,10 @@
           {
             "key": "engine.freight",
             "outboundGuid": "75dfc952-590a-4602-b621-dc369322b72f"
+          },
+          {
+            "key": "engine.fuel",
+            "outboundGuid": "028e7813-da5a-4d3b-a21e-04700849ae3c"
           },
           {
             "key": "engine.households",
@@ -9829,6 +10175,14 @@
           {
             "key": "engine.news",
             "outboundGuid": "179c218a-f221-4785-8c7d-55d67df1e7b6"
+          },
+          {
+            "key": "engine.policies",
+            "outboundGuid": "651073d5-281f-45c8-aa76-2ccc1c7ba6da"
+          },
+          {
+            "key": "engine.prison",
+            "outboundGuid": "e14d1948-9f54-4da0-9463-4509c5bf4f27"
           },
           {
             "key": "engine.rail",
@@ -9863,6 +10217,14 @@
             "outboundGuid": "1722d14f-7e42-4d46-bf06-534f02479515"
           },
           {
+            "key": "engine.tourism",
+            "outboundGuid": "698b7f3d-b93b-47e5-b9bd-c06ddc6eec87"
+          },
+          {
+            "key": "engine.traffic",
+            "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
+          },
+          {
             "key": "engine.transit",
             "outboundGuid": "a4b98f30-4ebb-4727-9be9-c52089a3d1fd"
           },
@@ -9889,6 +10251,14 @@
           {
             "key": "feat.faith",
             "outboundGuid": "4fa8b149-bf76-49df-8ef4-8bca3aab76c2"
+          },
+          {
+            "key": "harness.headless",
+            "outboundGuid": "776ca38b-aaa6-4665-a1be-18a54c05bbd3"
+          },
+          {
+            "key": "harness.synth",
+            "outboundGuid": "c711ba2e-0e5b-4a5e-9685-183ca7643ed4"
           }
         ]
       },
