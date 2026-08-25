@@ -746,6 +746,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.chrome.Subscribe",
+			"cause":     err.Error(),
 		})
 	}
 
