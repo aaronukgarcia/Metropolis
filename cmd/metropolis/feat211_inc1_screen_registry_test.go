@@ -57,7 +57,7 @@ func TestBootCore_ScreenRegistry_MapIsInitiallyActive(t *testing.T) {
 		t.Fatalf("ActiveID() immediately after bootCore = %q, want %q (map must stay the pre-FEAT-211 baseline default)", got, screenIDMap)
 	}
 	got := w.screens.RegisteredIDs()
-	want := []core.ScreenID{screenIDMap, screenIDFinance, screenIDServices}
+	want := []core.ScreenID{screenIDMap, screenIDFinance, screenIDServices, screenIDCensus, screenIDProjections, screenIDDistricts, screenIDTrade}
 	if len(got) != len(want) {
 		t.Fatalf("RegisteredIDs() = %v, want %v", got, want)
 	}
@@ -132,9 +132,9 @@ func TestScreenSwitch_UnregisteredKey_DoesNotSwitch(t *testing.T) {
 		t.Fatalf("ActiveID() after an unregistered key = %q, want unchanged %q", got, screenIDMap)
 	}
 
-	// F3/F5..F12 are real tcell specials but none are registered chrome
-	// globals in this increment (only F1/F2/F4 exist) — same must hold.
-	for _, k := range []tcell.Key{tcell.KeyF3, tcell.KeyF5, tcell.KeyF9, tcell.KeyF10} {
+	// F3/F9..F12 are real tcell specials but none are registered chrome
+	// globals (F1/F2/F4/F5/F6/F7/F8 are) — same must hold for the rest.
+	for _, k := range []tcell.Key{tcell.KeyF3, tcell.KeyF9, tcell.KeyF10, tcell.KeyF11} {
 		routeKeyInput(w, keyMsg(k, 0))
 		if got := w.screens.ActiveID(); got != screenIDMap {
 			t.Fatalf("ActiveID() after unregistered %v = %q, want unchanged %q", k, got, screenIDMap)

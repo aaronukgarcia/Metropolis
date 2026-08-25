@@ -804,7 +804,7 @@ func TestPreviewImpactInvertedRangeDoesNotMoveCurrentMonth(t *testing.T) {
 	addPolicy(t, a, simplePolicy("cycling", ScopeCitywide, "movement.cycling.share", 0.15))
 
 	_, err := a.PreviewImpactRange("cycling", Scope{Kind: ScopeCitywide}, 5)
-	assertCode(t, err, ErrUnknownScope)
+	assertCode(t, err, ErrInvertedPreviewRange)
 	if got := len(rec.setCurrentMonth); got != 0 {
 		t.Fatalf("SetCurrentMonth called %d times on a rejected inverted-range preview, want 0", got)
 	}

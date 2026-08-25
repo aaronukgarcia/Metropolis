@@ -2,9 +2,9 @@ package policies
 
 // Registry error codes for engine.policies (MOD-064). The module owns the
 // G4000-G4099 block reserved for it in data/errors.json's ranges.reserved
-// table; it raises exactly the codes below, G4000-G4014 (fifteen codes),
+// table; it raises exactly the codes below, G4000-G4015 (sixteen codes),
 // which are the ones registered in the canonical data/errors.json. The
-// remaining reserved slots (G4015-G4099) are intentionally unclaimed.
+// remaining reserved slots (G4016-G4099) are intentionally unclaimed.
 //
 // The E layer (E000-E999) was fully claimed by eleven earlier engine
 // modules and G000-G3999 was claimed by engine.citizens … engine.roads
@@ -22,10 +22,11 @@ package policies
 // code by meaning: G4003 (unknown/malformed scope) for malformed or
 // empty-resolving inputs, G4004 (unknown district) for invalid district
 // identity, G4005 (unknown road) for invalid road identity. G4013
-// (month regression) and G4014 (checkpoint-precedes) have since been
-// registered in data/errors.json (BUG-300) and are raised again by their
-// dedicated constants below — a month/checkpoint ordering failure is a
-// temporal error, not a scope-lookup error, and now carries its own code.
+// (month regression), G4014 (checkpoint-precedes) and G4015 (inverted
+// preview range) have since been registered in data/errors.json (BUG-300)
+// and are raised again by their dedicated constants below — a temporal-order
+// failure is a temporal error, not a scope-lookup error, and now carries its
+// own code.
 const (
 	// ErrPoliciesDataInvalid: data/policies.json could not be loaded or
 	// failed schema validation (missing file, malformed JSON, schema
@@ -101,4 +102,10 @@ const (
 	// current simulation month. Checkpoint is monotonic — a preceding
 	// checkpoint is rejected, never silently rewound (BUG-300).
 	ErrCheckpointPrecedes = "MET-G4014"
+
+	// ErrInvertedPreviewRange: PreviewImpactRange was called with an end month
+	// before its start month (toMonth < fromMonth). A preview range is
+	// ordered — an inverted range is rejected, never silently clamped or
+	// treated as a scope-lookup failure (BUG-300).
+	ErrInvertedPreviewRange = "MET-G4015"
 )

@@ -224,6 +224,33 @@ func (c *CitizensAPI) TotalPopulation(correlationID string) int {
 	return n
 }
 
+// AllCitizens returns a snapshot of every citizen's current record, sorted
+// by id (GR#21). It is the whole-population enumeration surface the census
+// observer (and any other all-citizens reader) needs: TotalPopulation gives
+// only a count, never the ids. Elevated (hot) citizens return their rich
+// record; everyone else is widened from the cold store (the single source
+// of truth), exactly like CitizenAt does per id. Safe for concurrent use —
+// it reads the cold store and hot map under c.mu and returns deep copies,
+// never a reference into either store.
+func (c *CitizensAPI) AllCitizens(correlationID string) ([]Citizen, error) {
+	if err := c.checkNotCopied(correlationID, "AllCitizens"); err != nil {
+		return nil, err
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	records := c.allColdRecordsLocked()
+	out := make([]Citizen, 0, len(records))
+	for _, r := range records {
+		if cit, ok := c.hot[r.ID]; ok {
+			out = append(out, cloneCitizen(*cit))
+		} else {
+			out = append(out, coldRecordToHot(r, c.month))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 // BuildSample builds the A7 stratified rotating sample from the full cold
 // population (the single source of truth), independent of the viewport —
 // this is what makes cold-pass parameter estimates camera-invariant.

@@ -221,7 +221,7 @@ func TestInputValidationErrorCodes(t *testing.T) {
 		a.currentMonth = 10
 		addPolicy(t, a, simplePolicy("cycling", ScopeCitywide, "movement.cycling.share", 0.15))
 		_, err := a.PreviewImpactRange("cycling", Scope{Kind: ScopeCitywide}, 5)
-		assertCode(t, err, ErrUnknownScope)
+		assertCode(t, err, ErrInvertedPreviewRange)
 	})
 
 	t.Run("empty district name", func(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/census"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -12,14 +13,18 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/extcommute"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/firms"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/freight"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/households"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/leisure"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/logistics"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/policies"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/projections"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/tax"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -305,14 +310,36 @@ type viewRegistration struct {
 // design's §6 fast-follow list's next entry, pulled forward to P0
 // because F1 is the DEFAULT screen at boot and, with no view registered
 // here, engine.core rejected its Subscribe and it rendered entirely
-// blank. Later increments (f8.districts, f5.trade, f7.projections) are
-// documented, deliberate fast-follows — see the design's §6 — each
-// adding one more entry here, in the SAME slice, never a new
+// blank. FEAT-209 adds "f6.census", serving the Demographics/Census
+// screen's three population splines, workforce split, KPI tiles and
+// education→crime linkage (buildCensusPatch, census_publish.go) — the
+// same design's §6 "f6" fast-follow, pulled forward here because the
+// screen is built but unreachable/blank without a registered view behind
+// its Subscribe. FEAT-019 adds "f7.projections", serving the Projections
+// screen's forecast-horizon header (buildProjectionsPatch,
+// projections_publish.go) — the same design's §6 "f7" fast-follow, pulled
+// forward here because the screen is built but unreachable/blank without
+// a registered view behind its Subscribe. FEAT-022 adds "f8.districts",
+// serving the Districts & Policies screen's district roster and per-district
+// tax-settings table (buildDistrictsPatch, districts_publish.go) — the same
+// design's §6 "f8" fast-follow, pulled forward here because the screen is
+// built but unreachable/blank without a registered view behind its
+// Subscribe. FEAT-017 adds "f5.trade", serving the Trade & Logistics
+// screen's balance-of-trade, port and warehouse sub-surfaces
+// (buildTradePatch, trade_publish.go) — the same design's §6 "f5"
+// fast-follow, pulled forward here because the screen is built but
+// unreachable/blank without a registered view behind its Subscribe. Later
+// increments are documented, deliberate fast-follows — see the design's §6
+// — each adding one more entry here, in the SAME slice, never a new
 // registration mechanism.
 var viewRegistrationOrder = []viewRegistration{
 	{name: servicesViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildServicesCapacityDemandPatch }},
 	{name: financeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildFinanceBalanceSheetPatch }},
 	{name: viewportViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildViewportPatch }},
+	{name: censusViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildCensusPatch }},
+	{name: projectionsViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildProjectionsPatch }},
+	{name: districtsViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildDistrictsPatch }},
+	{name: tradeViewSubscriptionName, fn: func(st *simState) core.ViewPatchFunc { return st.buildTradePatch }},
 }
 
 // RegisteredViewNames returns a defensive copy of the fixed view
@@ -419,6 +446,37 @@ func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
 // composed instance through — mirrors ExtCommute() above.
 func (c *Composition) Traffic() *traffic.TrafficAPI {
 	return c.state.traffic
+}
+
+// Policies returns the wired FEAT-022 engine.policies handle
+// (docs/planning/acceptance/ui.screen.districts.md) — the named-district
+// scope system and district roster behind the "f8.districts" view's
+// Districts sub-surface. Baseline one seeds no districts, so this accessor
+// is the seam a future gameplay handler (district drawing/naming, AC-2) and
+// today's tests reach the composed instance through — mirrors ExtCommute()/
+// Traffic() above.
+func (c *Composition) Policies() *policies.PoliciesAPI {
+	return c.state.policies
+}
+
+// Tax returns the wired FEAT-022 engine.tax handle — the six data-loaded
+// tax instruments and their per-district rate multipliers behind the
+// "f8.districts" view's TaxSettings sub-surface (effectiveRate =
+// Rate × Multiplier). Mirrors Policies()/ExtCommute()/Traffic().
+func (c *Composition) Tax() *tax.TaxAPI {
+	return c.state.tax
+}
+
+// Freight returns the wired FEAT-017 engine.freight handle — the freight
+// harbour (port/customs, balance-of-trade ledgers, storage sites) behind
+// the "f5.trade" view's balance/port/warehouse sub-surfaces. Mirrors
+// Tax()/Policies()/ExtCommute()/Traffic(). It is composed as a query
+// surface only (no phase hook ticks it), so this accessor is the seam a
+// future gameplay path — and today's tests driving a real Import/Export to
+// prove the balance surface turns on — reaches the composed instance
+// through.
+func (c *Composition) Freight() *freight.FreightAPI {
+	return c.state.freight
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -725,6 +783,98 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
 	}
 
+	// FEAT-209 (docs/planning/acceptance/ui.screen.census.md): construct the
+	// engine.census observer and wire its seven source seams. Resolved
+	// BEFORE the first hook registers, like every other required module
+	// above (AC-4 — no partially-wired engine on a construction failure).
+	// The data file is loaded once, at construction, via the census's own
+	// module-owned loader (data/census.json — the same LoadDefault pattern
+	// market/season use).
+	censusCfg, err := census.LoadDefaultConfig(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "census"})
+	}
+	censusAPI, err := census.New(censusCfg, cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "census"})
+	}
+	if err := wireCensus(censusAPI, c, cid); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "census"})
+	}
+
+	// FEAT-019 (docs/planning/acceptance/ui.screen.proj.md): construct the
+	// engine.projections observer. Resolved BEFORE the first hook registers,
+	// like every other required module above (AC-4 — no partially-wired
+	// engine on a construction failure). NewProjectionsAPI constructs an
+	// empty provider registry; the base forecast horizon loads lazily from
+	// this package's embedded horizon.json on the first HorizonMonths call
+	// (config.go). No producer module is composed yet, so no curve providers
+	// are registered here (see the simState.projections field doc comment).
+	projectionsAPI := projections.NewProjectionsAPI(projections.WithCorrelationID(cid))
+
+	// FEAT-022 (docs/planning/acceptance/ui.screen.districts.md): construct
+	// the two engine modules behind the "f8.districts" view — engine.tax
+	// (the six data-loaded instruments and their per-district rate
+	// multipliers) and engine.policies (the named-district scope system /
+	// district roster). Resolved BEFORE the first hook registers, like every
+	// other required module above (AC-4 — no partially-wired engine on a
+	// construction failure).
+	//
+	// engine.tax loads data/tax_instruments.json through its own LoadDefault
+	// (GR#15). engine.policies is constructed EMPTY via NewPoliciesAPI:
+	// baseline one seeds no districts (a district exists only once a gameplay
+	// path calls CreateDistrict — AC-2, PENDING BUILD under FEAT-210 per
+	// ui.screen.districts/doc.go), so its roster is empty until then and the
+	// tax join below produces zero rows. The three DI seams (SetTax/
+	// SetFinance/SetProjections) are wired so a future enactment that routes
+	// a tax coefficient move or posts a cost/opex debit does not fail with
+	// ErrTaxNotWired/ErrFinanceNotWired/ErrProjectionsNotWired — the
+	// registered engine.policies -> engine.tax / engine.finance /
+	// engine.projections edges (GR#20).
+	taxAPI, err := tax.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "tax"})
+	}
+	if err := taxAPI.SetFinance(financeAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "tax"})
+	}
+	policiesAPI := policies.NewPoliciesAPI(cid)
+	if err := policiesAPI.SetTax(taxAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "policies"})
+	}
+	if err := policiesAPI.SetFinance(financeAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "policies"})
+	}
+	if err := policiesAPI.SetProjections(projectionsAPI); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "policies"})
+	}
+
+	// FEAT-017 (docs/planning/acceptance/ui.screen.trade.md): construct the
+	// engine.freight module behind the "f5.trade" view — the freight harbour
+	// (port/customs, balance-of-trade ledgers, storage sites). Resolved
+	// BEFORE the first hook registers, like every other required module above
+	// (AC-4 — no partially-wired engine on a construction failure).
+	//
+	// freight.LoadDefault constructs its OWN engine.market/engine.logistics
+	// dependencies internally (a second stateless load of data/market.json
+	// and data/logistics.json is harmless — see freight.Load's own doc
+	// comment), so NO DI seams need wiring here: the FirmRegistrar seam
+	// (RegisterFirms) is OPTIONAL and left nil (engine.firms does not
+	// implement freight's FirmRegistrar, and no engine.freight ->
+	// engine.firms edge is registered in code.json — the documented blocked
+	// state, freight/doc.go), and the factory-type catalogue
+	// (LoadFactoryTypeCatalogue) is an explicit, separately-invoked surface
+	// this view does not need. freight is composed here as a QUERY surface
+	// only: no phase hook ticks it (AdvanceTick is not registered), so its
+	// per-tick import/export ledgers stay empty until a gameplay path issues
+	// Import/Export — which this dispatch does not wire (out of scope; the
+	// screen's TRD-1 create/cancel contract commands ride the Debug seam,
+	// per ui.screen.trade/doc.go).
+	freightAPI, err := freight.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "freight"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -757,6 +907,11 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		services:                servicesAPI,
 		firms:                   firmsAPI,
 		traffic:                 trafficAPI,
+		census:                  censusAPI,
+		projections:             projectionsAPI,
+		policies:                policiesAPI,
+		tax:                     taxAPI,
+		freight:                 freightAPI,
 		extCommute:              extCommuteAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
@@ -938,6 +1093,72 @@ type simState struct {
 	// hook this package adds, and today's tests via Composition.Traffic(),
 	// can reach the same instance without re-threading it.
 	traffic *traffic.TrafficAPI
+
+	// FEAT-209 (docs/planning/acceptance/ui.screen.census.md): the composed
+	// engine.census observer, wired in Wire via wireCensus (census_wire.go)
+	// and read on demand by buildCensusPatch (census_publish.go). It is a
+	// pure query surface — buildCensusPatch derives its figures straight
+	// from CensusAPI.Snapshot/Stats/BlueWhiteCollar/… on the subscription
+	// pump goroutine, so no phase hook mutates it; CensusAPI's own
+	// synchronization makes that concurrent read safe.
+	census *census.CensusAPI
+
+	// FEAT-019 (docs/planning/acceptance/ui.screen.proj.md): the composed
+	// engine.projections observer, constructed in Wire and read on demand by
+	// buildProjectionsPatch (projections_publish.go). It is a pure query
+	// surface — buildProjectionsPatch reads only HorizonMonths on the
+	// subscription pump goroutine — and ProjectionsAPI's own synchronization
+	// makes that concurrent read safe.
+	//
+	// Honest scope: no producer module that registers a curve provider
+	// (engine.capexport / engine.education / engine.social / engine.spiral /
+	// engine.policies) is composed into simState yet, and ProjectionsAPI
+	// exposes no key-enumeration surface, so the "f7.projections" patch
+	// today carries only the data-sourced horizon (72 months) and no
+	// curves/crossings/rateOutlook — see projections_publish.go's own doc
+	// comment for what turns those fields on.
+	projections *projections.ProjectionsAPI
+
+	// FEAT-022 (docs/planning/acceptance/ui.screen.districts.md): the two
+	// composed modules behind the "f8.districts" view, constructed in Wire
+	// and read on demand by buildDistrictsPatch (districts_publish.go). Both
+	// are pure query surfaces for this view — buildDistrictsPatch reads
+	// PoliciesAPI.Districts() (the named-district roster) and TaxAPI's
+	// Instruments()/GetDistrictMultiplier (the per-district tax join) on the
+	// subscription pump goroutine — and both APIs guard every accessor with
+	// their own sync.RWMutex, which makes that concurrent read safe (the same
+	// read-through-the-module's-own-lock discipline the census/projections
+	// fields above document).
+	//
+	// Honest scope: policies is constructed EMPTY via NewPoliciesAPI — no
+	// district is seeded at Wire time, so Districts() returns an empty roster
+	// and the tax join produces zero rows until a gameplay path creates a
+	// district (AC-2, out of this view's scope; PENDING BUILD under FEAT-210).
+	// The six tax instruments ARE present (data/tax_instruments.json), so
+	// TaxSettings populates one row per (district, instrument) the moment any
+	// district exists.
+	policies *policies.PoliciesAPI
+	tax      *tax.TaxAPI
+
+	// FEAT-017 (docs/planning/acceptance/ui.screen.trade.md): the composed
+	// engine.freight module behind the "f5.trade" view, constructed in Wire
+	// and read on demand by buildTradePatch (trade_publish.go). It is a pure
+	// query surface for this view — buildTradePatch reads only
+	// BalanceOfTrade()/PortCapacity()/CustomsCapacity()/SmugglingRisk()/
+	// StorageSites() on the subscription pump goroutine — and FreightAPI's
+	// own sync.RWMutex (each accessor takes f.mu.RLock internally) makes
+	// that concurrent read safe (the same read-through-the-module's-own-lock
+	// discipline the census/projections/policies/tax fields above document).
+	//
+	// Honest scope: freight is composed as a QUERY surface only — no phase
+	// hook calls AdvanceTick, so no production ever runs and its per-tick
+	// import/export ledgers stay empty until a gameplay path issues
+	// Import/Export (not wired in this dispatch). The port figures are the
+	// one real, non-empty surface at a fresh boot (data/freight.json seeds 2
+	// berths); balance/warehouse are present-but-empty. See
+	// trade_publish.go's own doc comment for which wire sub-surfaces this
+	// covers and which (contracts/junctions/safety) freight cannot back.
+	freight *freight.FreightAPI
 
 	// FEAT-207 (docs/planning/icd/engine.extcommute-compose.md): the
 	// off-map external-commuting module, wired with its three seam

@@ -97,7 +97,7 @@ func computePreview(def *policyDef, scope Scope, proj projectionSeam, fromMonth,
 	// rejected before it, not after a rejected preview has already moved the
 	// projections' current month.
 	if toMonth < fromMonth {
-		return Preview{}, errs.New(ErrUnknownScope, correlationID, map[string]any{
+		return Preview{}, errs.New(ErrInvertedPreviewRange, correlationID, map[string]any{
 			"scope":     "inverted preview range",
 			"fromMonth": fromMonth,
 			"toMonth":   toMonth,

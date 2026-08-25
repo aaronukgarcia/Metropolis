@@ -16,10 +16,14 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/keys"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/router"
+	censusscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/census"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/screens/devmode"
+	districtsscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/districts"
 	financescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/finance"
 	mapscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/map"
+	projscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/proj"
 	servicesscreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/services"
+	tradescreen "github.com/aaronukgarcia/Metropolis/internal/ui/screens/trade"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
@@ -110,9 +114,13 @@ var feat208PilotFundingKeyPath = []string{"s", "f"}
 // districts/menu/debug) will add more ScreenIDs than there are still-free
 // low F-keys worth memorising by number.
 const (
-	screenIDMap      core.ScreenID = "map"
-	screenIDFinance  core.ScreenID = "finance"
-	screenIDServices core.ScreenID = "services"
+	screenIDMap         core.ScreenID = "map"
+	screenIDFinance     core.ScreenID = "finance"
+	screenIDServices    core.ScreenID = "services"
+	screenIDCensus      core.ScreenID = "census"
+	screenIDProjections core.ScreenID = "projections"
+	screenIDDistricts   core.ScreenID = "districts"
+	screenIDTrade       core.ScreenID = "trade"
 )
 
 // skeletonModuleVersion is the placeholder semver every registerSkeletonModules
@@ -190,6 +198,15 @@ type skeletonWiring struct {
 	transport     *protocol.InProcTransport
 	engine        *enginecore.Engine
 
+	// composition is the *compose.Composition returned by compose.Wire — the
+	// read-only handle onto the wired modules (world/citizens/…/policies/tax).
+	// Kept so tests can reach a composed module (e.g. engine.policies'
+	// CreateDistrict / engine.tax's SetDistrictMultiplier) that the screen
+	// layer only ever observes through its view's Deltas — the same "reach
+	// the composed instance" seam compose.Composition.ExtCommute/Traffic
+	// already provide, now surfaced here for the boot-level test path.
+	composition *compose.Composition
+
 	// viewStore is ui.core's ViewStore — kept ONLY because
 	// core.NewRenderLoop's constructor (run.go) still requires one as a
 	// parameter for mapDrawFunc's vm.Patches/vm.Stale reads. FEAT-208
@@ -237,8 +254,12 @@ type skeletonWiring struct {
 	// stream is genuinely live end to end, provable via HaveData()/
 	// BalanceSheet()/CapacityDemand() from a test that reaches into
 	// skeletonWiring, exactly as mapScreen already is for "f1.viewport".
-	financeScreen  *financescreen.Screen
-	servicesScreen *servicesscreen.Screen
+	financeScreen     *financescreen.Screen
+	servicesScreen    *servicesscreen.Screen
+	censusScreen      *censusscreen.Screen
+	projectionsScreen *projscreen.Screen
+	districtsScreen   *districtsscreen.Screen
+	tradeScreen       *tradescreen.Screen
 
 	// keyGrammar is ui.keys' leader-key state machine (MOD-011), FEAT-208
 	// increment 3's own real input call site for F4's funding sliders
@@ -465,7 +486,8 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		enginecore.WithSpeed8xGate(dbgState.AllowSpeed8x),
 		enginecore.WithSecondsPerMonthAt1x(secondsPerMonthAt1x),
 	)
-	if _, err := compose.Wire(engine, nil); err != nil {
+	comp, err := compose.Wire(engine, nil)
+	if err != nil {
 		cancel()
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
@@ -487,6 +509,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		registry:      reg,
 		transport:     transport,
 		engine:        engine,
+		composition:   comp,
 		viewStore:     core.NewViewStore(),
 		mapScreen:     mapscreen.NewMapScreen(mapCorrID, widgets.DefaultPalette),
 		statusBar:     newStatusBar(),
@@ -513,8 +536,16 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// match ambiguous.
 	financeCorrID := errs.NewCorrelationID()
 	servicesCorrID := errs.NewCorrelationID()
+	censusCorrID := errs.NewCorrelationID()
+	projectionsCorrID := errs.NewCorrelationID()
+	districtsCorrID := errs.NewCorrelationID()
+	tradeCorrID := errs.NewCorrelationID()
 	w.financeScreen = financescreen.New(financeCorrID)
 	w.servicesScreen = servicesscreen.New(servicesCorrID)
+	w.censusScreen = censusscreen.New(censusCorrID)
+	w.projectionsScreen = projscreen.New(projectionsCorrID)
+	w.districtsScreen = districtsscreen.New(districtsCorrID)
+	w.tradeScreen = tradescreen.New(tradeCorrID)
 	w.debugState = dbgState
 	w.devConsole = devmode.New(
 		devmode.WithRequireConsole(w.debugState.RequireConsole),
@@ -625,6 +656,80 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
 			"component": "ui.screen.map.Subscribe",
+		})
+	}
+	// FEAT-209: F6 ("f6.census") is primed and bound the SAME way, now that
+	// compose.Wire registers a real view behind it (viewRegistrationOrder /
+	// internal/engine/compose/census_publish.go). Like F1 before it, priming
+	// here means the first census snapshot is applied before bootCore
+	// returns, so the very first F6 frame shows the population splines
+	// rather than "unavailable" panes.
+	if err := primeScreenSubscription(transport, w.router, primed, censusCorrID, censusscreen.ViewSubscriptionName,
+		func() error { return w.censusScreen.Subscribe(transport.SendCommand) },
+		w.censusScreen.BindSubscription,
+		w.censusScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.census.Subscribe",
+		})
+	}
+	// FEAT-019: F7 ("f7.projections") is primed and bound the SAME way, now
+	// that compose.Wire registers a real view behind it (viewRegistrationOrder /
+	// internal/engine/compose/projections_publish.go). Like F6 before it,
+	// priming here means the first projections patch (the data-sourced
+	// forecast horizon) is applied before bootCore returns, so the very first
+	// F7 frame shows "horizon: N months" rather than "no data".
+	if err := primeScreenSubscription(transport, w.router, primed, projectionsCorrID, projscreen.ViewSubscriptionName,
+		func() error { return w.projectionsScreen.Subscribe(transport.SendCommand) },
+		w.projectionsScreen.BindSubscription,
+		w.projectionsScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.proj.Subscribe",
+		})
+	}
+	// FEAT-022: F8 ("f8.districts") is primed and bound the SAME way, now that
+	// compose.Wire registers a real view behind it (viewRegistrationOrder /
+	// internal/engine/compose/districts_publish.go). Like F6/F7 before it,
+	// priming here means the first districts patch (the district roster and
+	// the per-district tax-settings table — empty at a fresh boot, since no
+	// district is seeded) is applied before bootCore returns, so F8 shows its
+	// real headers rather than "unavailable"/blank.
+	if err := primeScreenSubscription(transport, w.router, primed, districtsCorrID, districtsscreen.ViewSubscriptionName,
+		func() error { return w.districtsScreen.Subscribe(transport.SendCommand) },
+		w.districtsScreen.BindSubscription,
+		w.districtsScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.districts.Subscribe",
+		})
+	}
+	// FEAT-017: F5 ("f5.trade") is primed and bound the SAME way, now that
+	// compose.Wire registers a real view behind it (viewRegistrationOrder /
+	// internal/engine/compose/trade_publish.go). Like F6/F7/F8 before it,
+	// priming here means the first trade patch (the port figures, plus the
+	// empty-at-seed balance/warehouse surfaces) is applied before bootCore
+	// returns, so the very first F5 frame shows the real port panel rather
+	// than "no data".
+	if err := primeScreenSubscription(transport, w.router, primed, tradeCorrID, tradescreen.ViewSubscriptionName,
+		func() error { return w.tradeScreen.Subscribe(transport.SendCommand) },
+		w.tradeScreen.BindSubscription,
+		w.tradeScreen.ApplyDelta,
+	); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{
+			"component": "ui.screen.trade.Subscribe",
 		})
 	}
 
@@ -745,6 +850,46 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDServices)})
 	}
+	// FEAT-209: F6 registers its own Draw (censusDrawFunc, below) with no
+	// per-screen Grammar — like map/finance, it has no leader-key actions of
+	// its own yet, so input routing for it is chrome-globals-only.
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDCensus, Draw: censusDrawFunc(w.censusScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDCensus)})
+	}
+	// FEAT-019: F7 registers its own Draw (projectionsDrawFunc, below) with
+	// no per-screen Grammar — like map/finance/census, it has no leader-key
+	// actions of its own yet, so input routing for it is chrome-globals-only.
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDProjections, Draw: projectionsDrawFunc(w.projectionsScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDProjections)})
+	}
+	// FEAT-022: F8 registers its own Draw (districtsDrawFunc, below) with no
+	// per-screen Grammar — like map/finance/census/projections, it has no
+	// leader-key actions of its own yet (district selection is local UI
+	// state with no keybinding in this increment), so input routing for it is
+	// chrome-globals-only.
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDDistricts, Draw: districtsDrawFunc(w.districtsScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDDistricts)})
+	}
+	// FEAT-017: F5 registers its own Draw (tradeDrawFunc, below) with no
+	// per-screen Grammar — like map/finance/census/projections/districts, it
+	// has no leader-key actions of its own yet (contract create/cancel and
+	// buffer-set ride the Debug seam, not a registered grammar), so input
+	// routing for it is chrome-globals-only.
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDTrade, Draw: tradeDrawFunc(w.tradeScreen)}); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.core.ScreenRegistry.Register", "id": string(screenIDTrade)})
+	}
 
 	// chromeGrammar is the ALWAYS-fed global grammar (design §7(b)):
 	// F1/F2/F4 fire regardless of which screen is currently active or
@@ -780,6 +925,30 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		w.wg.Wait()
 		_ = transport.Close()
 		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F4"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F6"}, fKeyGlobal(screenIDCensus, "Switch to Census (F6)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F6"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F7"}, fKeyGlobal(screenIDProjections, "Switch to Projections (F7)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F7"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F8"}, fKeyGlobal(screenIDDistricts, "Switch to Districts (F8)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F8"})
+	}
+	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F5"}, fKeyGlobal(screenIDTrade, "Switch to Trade (F5)")); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, errs.Wrap(codeBootFailure, correlationID, err, map[string]any{"component": "ui.keys.RegisterGlobal", "key": "F5"})
 	}
 
 	// BUG-322: the player's clock controls. Registered on the SAME chrome
@@ -1289,5 +1458,188 @@ func servicesDrawFunc(ss *servicesscreen.Screen) core.DrawFunc {
 
 		wl, haveWL := ss.WaitingLists()
 		servicesscreen.RenderWaitingLists(back, core.Rect{X: col, Y: row, W: w - col, H: h - row}, wl, haveWL, style)
+	}
+}
+
+// censusDrawFunc adapts censusscreen.Screen into a core.DrawFunc
+// (FEAT-209, design §7(c)) — same shape and same rationale as
+// financeDrawFunc/servicesDrawFunc immediately above (censusScreen's own
+// state is kept live by ApplyDelta via router.BindSubscription, never vm).
+// Lays out a 2-column x 3-row grid of censusscreen's existing Render*
+// package functions: the age-band population pyramid and sex spline on the
+// top row, the education-tier spline and blue/white-collar split in the
+// middle, and the KPI tile row and education→crime linkage report on the
+// bottom. Each pane is the screen's own tested renderer; no new render
+// logic is invented here, mirroring the closure-adapter pattern the other
+// three DrawFuncs already establish.
+func censusDrawFunc(cs *censusscreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		col := w / 2
+		row := h / 3
+
+		bands, haveBands := cs.AgeBandSeries()
+		censusscreen.RenderAgeBandPyramid(back, core.Rect{X: 0, Y: 0, W: col, H: row}, bands, haveBands, widgets.DefaultPalette, style)
+
+		sex, haveSex := cs.SexSeries()
+		censusscreen.RenderSexSeries(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, sex, haveSex, widgets.DefaultPalette, style)
+
+		tiers, haveTiers := cs.EducationTierSeries()
+		censusscreen.RenderEducationTierSeries(back, core.Rect{X: 0, Y: row, W: col, H: row}, tiers, haveTiers, style)
+
+		bwc, haveBWC := cs.BlueWhiteCollarSplit()
+		censusscreen.RenderBlueWhiteCollar(back, core.Rect{X: col, Y: row, W: w - col, H: row}, bwc, haveBWC, widgets.DefaultPalette, style)
+
+		kpis, haveKPIs := cs.KPITiles()
+		censusscreen.RenderKPITiles(back, core.Rect{X: 0, Y: 2 * row, W: col, H: h - 2*row}, kpis, haveKPIs, style)
+
+		link, haveLink := cs.EducationCrimeLinkageView()
+		censusscreen.RenderEducationCrimeLinkage(back, core.Rect{X: col, Y: 2 * row, W: w - col, H: h - 2*row}, link, haveLink, style)
+	}
+}
+
+// projectionsDrawFunc adapts projscreen.Screen into a core.DrawFunc
+// (FEAT-019, design §7(c)) — same shape and same rationale as
+// censusDrawFunc immediately above (projectionsScreen's own state is kept
+// live by ApplyDelta via router.BindSubscription, never vm). Lays out the
+// F7 title line (RenderHeader, carrying the forecast horizon N read from
+// the view) and then a vertical stack of projscreen's existing Render*
+// package functions: one RenderCurve pane per curve, one RenderCrossing
+// pane per crossing, and the RenderRateOutlook pane when the view supplies
+// one. Each pane is the screen's own tested renderer; no new render logic
+// is invented here, mirroring the closure-adapter pattern the other four
+// DrawFuncs already establish.
+func projectionsDrawFunc(ps *projscreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		if w <= 0 || h <= 0 {
+			return
+		}
+
+		horizon, haveData := ps.HorizonMonths()
+		projscreen.RenderHeader(back, core.Rect{X: 0, Y: 0, W: w, H: 1}, horizon, haveData, style)
+
+		// The header takes row 0; every pane below it stacks vertically.
+		// A fixed pane height keeps the layout deterministic (GR#21) — a
+		// curve/crossing/rate pane is a Braille chart and a label, so five
+		// rows is enough to show both without clipping the label line.
+		const paneHeight = 5
+		y := 1
+		nextPane := func() (core.Rect, bool) {
+			if y >= h {
+				return core.Rect{}, false
+			}
+			ph := paneHeight
+			if y+ph > h {
+				ph = h - y
+			}
+			r := core.Rect{X: 0, Y: y, W: w, H: ph}
+			y += ph
+			return r, true
+		}
+
+		curves, _ := ps.Curves()
+		for _, c := range curves {
+			if r, ok := nextPane(); ok {
+				projscreen.RenderCurve(back, r, c, widgets.DefaultPalette)
+			}
+		}
+
+		crossings, _ := ps.Crossings()
+		for _, x := range crossings {
+			if r, ok := nextPane(); ok {
+				projscreen.RenderCrossing(back, r, x, widgets.DefaultPalette)
+			}
+		}
+
+		if rate, ok, _ := ps.RateOutlook(); ok {
+			if r, ok2 := nextPane(); ok2 {
+				projscreen.RenderRateOutlook(back, r, rate, widgets.DefaultPalette)
+			}
+		}
+	}
+}
+
+// districtsDrawFunc adapts districtsscreen.Screen into a core.DrawFunc
+// (FEAT-022, design §7(c)) — same shape and same rationale as
+// projectionsDrawFunc/censusDrawFunc immediately above (districtsScreen's
+// own state is kept live by ApplyDelta via router.BindSubscription, never
+// vm). Lays out a 2-column x 3-row grid of districtsscreen's existing
+// Render* package functions: the four blocked policy/district panes
+// (RenderBlockedFeature — AC-2 district drawing/naming, AC-3 policy
+// library, AC-4 impact preview, AC-5 conflict warnings) in the top two
+// rows, and the one live pane — RenderTaxSettings (AC-6) — full-width on the
+// bottom row. Each pane is the screen's own tested renderer; no new render
+// logic is invented here, mirroring the closure-adapter pattern the other
+// five DrawFuncs already establish.
+func districtsDrawFunc(ds *districtsscreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		if w <= 0 || h <= 0 {
+			return
+		}
+		col := w / 2
+		row := h / 3
+
+		districtsscreen.RenderBlockedFeature(back, core.Rect{X: 0, Y: 0, W: col, H: row}, "DISTRICTS", style)
+		districtsscreen.RenderBlockedFeature(back, core.Rect{X: col, Y: 0, W: w - col, H: row}, "POLICY LIBRARY", style)
+		districtsscreen.RenderBlockedFeature(back, core.Rect{X: 0, Y: row, W: col, H: row}, "IMPACT PREVIEW", style)
+		districtsscreen.RenderBlockedFeature(back, core.Rect{X: col, Y: row, W: w - col, H: row}, "CONFLICT WARNINGS", style)
+
+		settings, have := ds.TaxSettings()
+		districtsscreen.RenderTaxSettings(back, core.Rect{X: 0, Y: 2 * row, W: w, H: h - 2*row}, settings, ds.SelectedDistrict(), ds.TaxRejectedReason(), have, style)
+	}
+}
+
+// tradeDrawFunc adapts tradescreen.Screen into a core.DrawFunc
+// (FEAT-017, design §7(c)) — same shape and same rationale as
+// districtsDrawFunc/censusDrawFunc immediately above (tradeScreen's own
+// state is kept live by ApplyDelta via router.BindSubscription, never vm).
+// Lays out a full-width header row (RenderHeader, which carries the data-vs-
+// "no data" signal plus the staleness marker) and then a 2-column x 3-row
+// grid of tradescreen's existing Render* package functions: contracts and
+// junction queue on the top row, warehouse and port in the middle, and the
+// balance-of-trade and pipeline-vs-truck safety views on the bottom. Each
+// pane is the screen's own tested renderer; no new render logic is invented
+// here, mirroring the closure-adapter pattern the other six DrawFuncs
+// already establish.
+func tradeDrawFunc(ts *tradescreen.Screen) core.DrawFunc {
+	style := tcell.StyleDefault
+	return func(back *core.Buffer, _ *core.ViewModels) {
+		w, h := back.Size()
+		if w <= 0 || h <= 0 {
+			return
+		}
+
+		tradescreen.RenderHeader(back, core.Rect{X: 0, Y: 0, W: w, H: 1}, ts.HaveData(), ts.Stale(), style)
+		if h <= 1 {
+			return
+		}
+
+		col := w / 2
+		body := h - 1
+		row := body / 3
+		y := 1
+
+		contracts, haveContracts := ts.Contracts()
+		tradescreen.RenderContracts(back, core.Rect{X: 0, Y: y, W: col, H: row}, contracts, haveContracts, style)
+
+		junctions, haveJunctions := ts.Junctions()
+		tradescreen.RenderJunctions(back, core.Rect{X: col, Y: y, W: w - col, H: row}, junctions, haveJunctions, style)
+
+		warehouse, haveWarehouse := ts.Warehouse()
+		tradescreen.RenderWarehouse(back, core.Rect{X: 0, Y: y + row, W: col, H: row}, warehouse, haveWarehouse, style)
+
+		port, havePort := ts.Port()
+		tradescreen.RenderPort(back, core.Rect{X: col, Y: y + row, W: w - col, H: row}, port, havePort, style)
+
+		balance, haveBalance := ts.Balance()
+		tradescreen.RenderBalance(back, core.Rect{X: 0, Y: y + 2*row, W: col, H: body - 2*row}, balance, haveBalance, style)
+
+		safety, haveSafety := ts.Safety()
+		tradescreen.RenderSafety(back, core.Rect{X: col, Y: y + 2*row, W: w - col, H: body - 2*row}, safety, haveSafety, style)
 	}
 }
