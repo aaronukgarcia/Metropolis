@@ -6,8 +6,9 @@
  *
  * Port of the Prix Six claude-sync v2.2 DHCP-style permit system onto the
  * project's own `metro` MariaDB database (localhost:3306). Same protocol:
- * three named slots (Bill, Ben, Bev), 5-minute TTL permits, auto-renewal by
- * the PostToolUse hook, wake recovery, reserved slots, human-only force-evict.
+ * four named slots (Bill, Ben, Bev, Bro — Bro added 2026-08-20, Ben PARKED
+ * 2026-08-19), 5-minute TTL permits, auto-renewal by the PostToolUse hook,
+ * wake recovery, reserved slots, human-only force-evict.
  *
  * The CLI surface and output strings are contract-compatible with the hook
  * scripts (claude-startup.js parses "YOU ARE: <Name>", "SLOT IS OCCUPIED",
@@ -126,6 +127,12 @@ const NAMES = ['Bill', 'Ben', 'Bev', 'Bro'];
 // `--name Bob` produced the 2026-08-18 overnight incident (see isRetired /
 // retiredMessage below).
 const RETIRED = ['Bob'];
+// Ben is PARKED (Aaron, 2026-08-19: weeks). Unlike RETIRED, the slot STAYS
+// SEEDED and LISTED — Ben is expected to return — but it must never be
+// occupied or addressed while parked (BUG-354 D2). Kept as its own list (not
+// merged into RETIRED) so error text can distinguish "parked" from "retired"
+// and a future unpark is a one-line removal, exactly like the retirement flip.
+const PARKED = ['Ben'];
 const TTL_MS = 5 * 60 * 1000;             // permit lifetime
 const RENEW_THRESHOLD_MS = 3.5 * 60 * 1000; // --auto renews only below this remaining
 const RESERVE_MS = 30 * 60 * 1000;        // expired slot stays reserved for its window
@@ -322,6 +329,17 @@ async function lockedPermits(db) {
   return byName;
 }
 
+/** Path to this window's per-window session-key file (BUG-354 r4): it holds the
+ *  server-issued session secret so the ping/startup hooks and the operator can
+ *  present it as an explicit `--session` without trusting the ambient env.
+ *  Suffixed with the DB name when METRO_DB_NAME is set, so a test run's key
+ *  files can never collide with a live window's. */
+function sessionKeyPath(windowId) {
+  if (!windowId) return null;
+  const dbTag = process.env.METRO_DB_NAME ? `-${process.env.METRO_DB_NAME}` : '';
+  return path.join(__dirname, '.claude', `.session-key-${windowId}${dbTag}`);
+}
+
 async function acquire(db, name, prevRow) {
   const now = Date.now();
   const sessionId = crypto.randomUUID();
@@ -334,19 +352,81 @@ async function acquire(db, name, prevRow) {
       [WINDOW_ID, name, now]);
   }
   writeIdentityFiles(name);
+  // BUG-354 r4 (Warden round 3): the per-window session-key file is written
+  // ONLY when the caller can prove it IS the window that file belongs to —
+  // either no key file exists yet (genuinely fresh window) or the caller
+  // presents the existing secret. A caller whose env merely CLAIMS this window
+  // id (spoofing) must never be able to overwrite the real owner's key file:
+  // that would redirect the owner's next hook renew onto the attacker's row.
+  try {
+    const key = sessionKeyPath(WINDOW_ID);
+    if (key) {
+      let existing = '';
+      try { existing = fs.readFileSync(key, 'utf8').trim(); } catch { /* none yet */ }
+      if (!existing || flags.session === existing) {
+        fs.writeFileSync(key, sessionId, 'utf8');
+      }
+      // else: key file exists and this caller cannot present it — leave the
+      // owner's secret intact. The DB row still claims the slot, but under a
+      // secret only this caller knows; it expires and is GC'd harmlessly.
+    }
+  } catch { /* key file is an automation convenience — never fail a checkin */ }
   return sessionId;
 }
 
-/** Keep the statusline truthful: it reads .claude/.identity-<window> first,
- *  falling back to the shared .identity. Writing both here (on every acquire,
- *  including wake recovery and IDENTITY CHANGED) means the statusline follows
- *  identity changes without depending on the startup hook re-running. */
+/** BUG-354 r4: ensure this window's per-window session-key file holds `secret`.
+ *  The renew-of-self paths keep the row's existing server-issued secret (they
+ *  do not re-mint), so they must also ensure the key file reflects it — a
+ *  window whose key file is missing (e.g. a row acquired under pre-r4 code)
+ *  can bootstrap itself on its own next renew. Only writes when the file is
+ *  absent or already matches; never overwrites a different secret. */
+function ensureSessionKey(secret) {
+  try {
+    const key = sessionKeyPath(WINDOW_ID);
+    if (!key || !secret) return;
+    let existing = '';
+    try { existing = fs.readFileSync(key, 'utf8').trim(); } catch { /* none */ }
+    if (!existing || existing === secret) fs.writeFileSync(key, secret, 'utf8');
+  } catch { /* convenience — never fail a command over it */ }
+}
+
+/** BUG-354 F2: release any OTHER non-free permit row still belonging to THIS
+ *  window before acquiring a new slot. Root cause: after an idle expiry a
+ *  window's old slot lingers as RESERVED (released=0) for up to RESERVE_MS,
+ *  and the fresh-acquire path (`checkin --name <free>` / `--any`) took the new
+ *  slot WITHOUT releasing it — leaving one window holding two live rows and
+ *  blocking that slot for everyone else. Plain-terminal acquires (no WINDOW_ID)
+ *  have no window key of their own and never leave such rows, so this is
+ *  window-keyed only.
+ *
+ * BUG-354 r4 (Warden round 3): the rows released are keyed by the window id of
+ *  a SECRET-PROVEN row (`provenRow`) — never by the ambient WINDOW_ID env, which
+ *  any process can set to another window's value. A caller that cannot present a
+ *  row's server-issued session secret must not release any row, including the
+ *  "other" rows of the window id it merely claims. */
+async function releaseOtherRowsForWindow(db, exceptName, provenRow) {
+  if (!provenRow || !provenRow.window_id) return;
+  await db.query(
+    'UPDATE sync_permits SET released=1 WHERE window_id=? AND released=0 AND name<>?',
+    [provenRow.window_id, exceptName]);
+}
+
+/** Keep the statusline and prefix hook truthful: they read
+ *  .claude/.identity-<window> first, falling back to the shared .identity.
+ *  BUG-354 D3: identity is keyed PER-WINDOW, not per-checkout. The shared
+ *  .identity is cross-window, last-checkin-wins state — writing it from every
+ *  acquire let one window's standing-loop checkin rewrite another window's
+ *  prefix hook / statusline identity (the live incident: a Bev-holding window
+ *  was told to answer as "bill>" then "ben>" because Bill's loop clobbered the
+ *  shared file). Only the per-window marker is written when this window has an
+ *  id; a plain-terminal acquire (no id) falls back to the shared file because
+ *  it has no per-window key of its own. */
 function writeIdentityFiles(name) {
   try {
     const dotClaude = path.join(__dirname, '.claude');
     fs.mkdirSync(dotClaude, { recursive: true });
     if (WINDOW_ID) fs.writeFileSync(path.join(dotClaude, `.identity-${WINDOW_ID}`), name.toLowerCase(), 'utf8');
-    fs.writeFileSync(path.join(dotClaude, '.identity'), name.toLowerCase(), 'utf8');
+    else fs.writeFileSync(path.join(dotClaude, '.identity'), name.toLowerCase(), 'utf8');
   } catch { /* statusline nicety — never fail a checkin over it */ }
 }
 
@@ -587,13 +667,14 @@ function findMine(byName, now, { allowStale = false } = {}) {
  * printed, the same way it would handle any other credential a command
  * prints once and expects reused.
  */
-function findMineBySessionSecret(byName, now) {
+function findMineBySessionSecret(byName, now, { allowStale = false } = {}) {
   if (!flags.session) return null;
   for (const n of NAMES) {
     const row = byName[n];
-    if (row.session_id && row.session_id === flags.session && slotState(row, now) === 'ACTIVE') {
-      return { row, state: 'ACTIVE' };
-    }
+    if (!row.session_id || row.session_id !== flags.session) continue;
+    const state = slotState(row, now);
+    if (state === 'ACTIVE') return { row, state };
+    if (allowStale && state === 'RESERVED') return { row, state };
   }
   return null;
 }
@@ -610,35 +691,172 @@ function retiredMessage(candidate) {
   return `${candidate} is retired (Aaron, 2026-08-18) - roles: Bev=lead, Bill=RM/BA/allocator+oversight, Ben=coder.`;
 }
 
+/** True if `candidate` (case-insensitive) names a PARKED slot (Ben). */
+function isParked(candidate) {
+  return PARKED.some(n => n.toLowerCase() === String(candidate).toLowerCase());
+}
+
+/** True if the slot must never be occupied or addressed — retired OR parked
+ *  (BUG-354 D2 / BUG-344: parked is a third slot state needing the same
+ *  isRetired-like treatment on every assignment path). */
+function isUnusable(candidate) {
+  return isRetired(candidate) || isParked(candidate);
+}
+
+/** Clear rejection text for a parked-slot name, mirroring retiredMessage. */
+function parkedMessage(candidate) {
+  return `${candidate} is parked (Aaron, 2026-08-19: weeks) - slot stays seeded but must not be occupied or addressed. Use a live slot: ${liveNames().join(', ')}.`;
+}
+
+/** Rejection text for any unusable slot name, naming the actual state. */
+function unusableMessage(candidate) {
+  return isParked(candidate) ? parkedMessage(candidate) : retiredMessage(candidate);
+}
+
+/** Live slot names in NAMES order — retired and parked slots excluded. */
+function liveNames() {
+  return NAMES.filter(n => !isUnusable(n));
+}
+
 // ── Commands ──────────────────────────────────────────────────────────────────
 
 async function cmdCheckin(db) {
+  // BUG-354 r4 (Warden round 3): checkin ACCEPTS --session — the server-issued
+  // session secret IS the identity authority for every destructive operation.
+  // r2's F1 rejection was built around findMine's WINDOW_ID match; with that
+  // removed, presenting the secret is the only way to prove a held row is
+  // "mine" (the W-1 swap and W-4 renew attacks were exactly the WINDOW_ID
+  // comparison being vacuous under env spoofing). A caller with NO --session is
+  // a fresh acquire: it may claim a FREE slot, but can never release, swap,
+  // or evict any held/reserved row.
   const now = Date.now();
   await db.beginTransaction();
   const byName = await lockedPermits(db);
 
-  // Already holding an active permit in this window? Renew, done.
-  const mine = findMine(byName, now);
+  // BUG-354 D1: resolve the operator's instruction BEFORE the held-permit fast
+  // path. `--name` is AUTHORITATIVE — it must win or fail loudly, never be
+  // silently ignored because the window already holds a permit (the old shape:
+  // "YOU ARE: <old>" + exit 0, observed live while holding Ben). The ambient
+  // CLAUDE_IDENTITY env (metro.bat's preference) is NOT authoritative — it
+  // only guides a FRESH acquisition, never forces an identity swap.
+  const requested = flags.name || null;
+  const envPref = (!flags.any && process.env.CLAUDE_IDENTITY) || null;
+  const preferred = requested || envPref || null;
+
+  // Validate an explicit --name up front so a bad instruction fails loudly
+  // (non-zero, clear message) even when the window already holds a permit.
+  let requestedName = null;
+  if (requested) {
+    if (isUnusable(requested)) {
+      await db.rollback();
+      console.error(unusableMessage(requested));
+      process.exit(1);
+    }
+    requestedName = NAMES.find(n => n.toLowerCase() === String(requested).toLowerCase());
+    if (!requestedName) {
+      await db.rollback();
+      console.error(`Unknown slot name "${requested}". Valid: ${NAMES.join(', ')}`);
+      process.exit(1);
+    }
+  }
+
+  // Already holding an active permit? Resolved ONLY by the server-issued
+  // session secret this invocation presents — never by ambient WINDOW_ID
+  // (BUG-354 r4 W-1/W-4: an env-spoofed attacker must not resolve the victim's
+  // row as "mine"). `proven` additionally matches a RESERVED stale own-row so a
+  // window whose permit expired while idle can still prove its identity for
+  // releasing that stale row before taking a fresh slot.
+  const mine = findMineBySessionSecret(byName, now);
+  const proven = findMineBySessionSecret(byName, now, { allowStale: true });
   if (mine) {
+    if (requestedName) {
+      if (requestedName === mine.row.name) {
+        // Same slot — plain renew (re-asserts the instruction harmlessly).
+        await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
+          [now + TTL_MS, now, mine.row.name]);
+        ensureSessionKey(mine.row.session_id);
+        await db.commit();
+        await printSuccess(mine.row.name, mine.row.session_id, db);
+        return;
+      }
+      // Different slot: --name is authoritative. Swap when the target is
+      // available to this window; FAIL LOUDLY otherwise — never silently keep
+      // the old identity and exit 0.
+      const targetRow = byName[requestedName];
+      const targetState = slotState(targetRow, now);
+
+      if (targetState === 'ACTIVE') {
+        // Auto-reclaim from a provably dead holder is handled by slotState
+        // (boot mismatch -> FREE). A live holder requires the human-only path.
+        if (flags.force && flags['human-ok']) {
+          await releaseOtherRowsForWindow(db, requestedName, mine.row);
+          const sessionId = await acquire(db, requestedName);
+          await log(db, requestedName, `${requestedName} FORCE-EVICTED previous holder (human-authorised) and checked in`);
+          await db.commit();
+          console.log(`Evicted previous ${requestedName} holder (human-authorised).`);
+          await printSuccess(requestedName, sessionId, db);
+          return;
+        }
+        if (flags.force) {
+          await db.rollback();
+          console.error(`FORCE-EVICT BLOCKED: evicting a live holder requires the human-only --human-ok flag.`);
+          console.error(`A human must authorise: node claude-sync.js checkin --name ${requestedName} --force --human-ok`);
+          process.exit(1);
+        }
+        await db.rollback();
+        console.error(`SLOT IS OCCUPIED: ${requestedName} is held by a live session (name-occupied), expires in ${fmtMs(Number(targetRow.expires_ms) - now)}.`);
+        console.error(`Identity change to ${requestedName} refused (held elsewhere). Human-only eviction: node claude-sync.js checkin --name ${requestedName} --force --human-ok`);
+        process.exit(1);
+      }
+
+      if (targetState === 'RESERVED' && targetRow.session_id !== flags.session) {
+        if (flags.force && flags['human-ok']) {
+          await releaseOtherRowsForWindow(db, requestedName, mine.row);
+          const sessionId = await acquire(db, requestedName);
+          await log(db, requestedName, `${requestedName} reservation overridden (human-authorised)`);
+          await db.commit();
+          await printSuccess(requestedName, sessionId, db);
+          return;
+        }
+        await db.rollback();
+        console.error(`SLOT IS RESERVED: ${requestedName} expired recently and is held for its idle window (name-reserved).`);
+        console.error(`Identity change to ${requestedName} refused. Take a different slot: node claude-sync.js checkin --any`);
+        process.exit(1);
+      }
+
+      // Target FREE, or RESERVED for this very window (its secret is ours) —
+      // swap in one transaction: release the old slot, acquire the requested
+      // one. `mine` is by construction the row whose server-issued secret this
+      // invocation presented, so releasing it releases OUR OWN permit — no
+      // further window-id guard is needed (BUG-354 r4).
+      await db.query('UPDATE sync_permits SET released=1 WHERE name=?', [mine.row.name]);
+      await releaseOtherRowsForWindow(db, requestedName, mine.row);
+      const sessionId = await acquire(db, requestedName);
+      await log(db, requestedName, `${requestedName} checked in (identity changed from ${mine.row.name} by operator --name)`);
+      await db.commit();
+      await printSuccess(requestedName, sessionId, db);
+      return;
+    }
+    // No explicit --name — renew, done. Ambient CLAUDE_IDENTITY never forces a
+    // swap; the window already holds a slot.
     await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
       [now + TTL_MS, now, mine.row.name]);
+    ensureSessionKey(mine.row.session_id);
     await db.commit();
     await printSuccess(mine.row.name, mine.row.session_id, db);
     return;
   }
 
-  const requested = flags.name || (!flags.any && process.env.CLAUDE_IDENTITY) || null;
-
-  if (requested) {
-    if (isRetired(requested)) {
+  if (preferred) {
+    if (isUnusable(preferred)) {
       await db.rollback();
-      console.error(retiredMessage(requested));
+      console.error(unusableMessage(preferred));
       process.exit(1);
     }
-    const name = NAMES.find(n => n.toLowerCase() === String(requested).toLowerCase());
+    const name = NAMES.find(n => n.toLowerCase() === String(preferred).toLowerCase());
     if (!name) {
       await db.rollback();
-      console.error(`Unknown slot name "${requested}". Valid: ${NAMES.join(', ')}`);
+      console.error(`Unknown slot name "${preferred}". Valid: ${NAMES.join(', ')}`);
       process.exit(1);
     }
     const row = byName[name];
@@ -648,6 +866,7 @@ async function cmdCheckin(db) {
       // Auto-reclaim from a provably dead holder is handled by slotState (boot
       // mismatch -> FREE). A live holder requires the human-only force path.
       if (flags.force && flags['human-ok']) {
+        await releaseOtherRowsForWindow(db, name, proven && proven.row);
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} FORCE-EVICTED previous holder (human-authorised) and checked in`);
         await db.commit();
@@ -667,8 +886,9 @@ async function cmdCheckin(db) {
       process.exit(1);
     }
 
-    if (state === 'RESERVED' && row.window_id !== WINDOW_ID) {
+    if (state === 'RESERVED' && row.session_id !== flags.session) {
       if (flags.force && flags['human-ok']) {
+        await releaseOtherRowsForWindow(db, name, proven && proven.row);
         const sessionId = await acquire(db, name);
         await log(db, name, `${name} reservation overridden (human-authorised)`);
         await db.commit();
@@ -682,6 +902,7 @@ async function cmdCheckin(db) {
     }
 
     // FREE, or RESERVED for this very window — take it.
+    await releaseOtherRowsForWindow(db, name, proven && proven.row);
     const sessionId = await acquire(db, name);
     await log(db, name, `${name} checked in`);
     await db.commit();
@@ -691,36 +912,50 @@ async function cmdCheckin(db) {
 
   // No specific name — prefer THIS window's own last-held identity (per
   // sync_window_map) when that slot is actually available to it; otherwise
-  // first free slot in NAMES order (Bill -> Ben -> Bev). FIX (Aaron,
-  // 2026-08-18 incident): falling straight to first-free-in-NAMES-order let
-  // a woken window with a lapsed/mismatched reservation land on a DIFFERENT
-  // identity than the one its previous session held — that's how a lead
-  // session's window kept resurrecting the Bill slot via a stale map row,
-  // and (the sibling incident) how a woken session with no name preference
-  // landed on whatever slot happened to be first-free instead of its own.
-  // Checking the map first keeps a window in its own identity whenever that
-  // slot is FREE or still RESERVED for this same window; it never grants a
-  // slot held live by someone else, and never resurrects a retired name.
+  // first free slot in NAMES order. FIX (Aaron, 2026-08-18 incident): falling
+  // straight to first-free-in-NAMES-order let a woken window with a
+  // lapsed/mismatched reservation land on a DIFFERENT identity than the one
+  // its previous session held — that's how a lead session's window kept
+  // resurrecting the Bill slot via a stale map row. Checking the map first
+  // keeps a window in its own identity whenever that slot is FREE or still
+  // RESERVED for this same window; it never grants a slot held live by someone
+  // else, and never resurrects a retired or PARKED name (BUG-354 D2).
   let free = null;
-  if (WINDOW_ID) {
-    const [mapRows] = await db.query('SELECT name FROM sync_window_map WHERE window_id=?', [WINDOW_ID]);
+  // The persistent window-map preference (which FREE slot this window prefers
+  // as its own identity) is keyed by a PROVEN window id, never by the ambient
+  // env alone — any process can set that to another window's value. Proof is
+  // either a live secret-matched row, or key-file possession: the caller
+  // presents a --session matching this window's OWN per-window key file
+  // (written at its last acquire), which an env-spoofing attacker does not
+  // hold. A caller with neither proof has no last-held identity and goes
+  // straight to first-free.
+  let mapWindowId = (proven && proven.row && proven.row.window_id) || null;
+  if (!mapWindowId && WINDOW_ID && flags.session) {
+    try {
+      const k = sessionKeyPath(WINDOW_ID);
+      if (k && fs.readFileSync(k, 'utf8').trim() === flags.session) mapWindowId = WINDOW_ID;
+    } catch { /* no key file — no proof */ }
+  }
+  if (mapWindowId) {
+    const [mapRows] = await db.query('SELECT name FROM sync_window_map WHERE window_id=?', [mapWindowId]);
     if (mapRows.length) {
       const mapped = mapRows[0].name;
-      if (NAMES.includes(mapped) && !isRetired(mapped)) {
+      if (NAMES.includes(mapped) && !isUnusable(mapped)) {
         const mappedState = slotState(byName[mapped], now);
-        if (mappedState === 'FREE' || (mappedState === 'RESERVED' && byName[mapped].window_id === WINDOW_ID)) {
+        if (mappedState === 'FREE' || (mappedState === 'RESERVED' && byName[mapped].session_id === flags.session)) {
           free = mapped;
         }
       }
     }
   }
   if (!free) {
-    free = NAMES.find(n => slotState(byName[n], now) === 'FREE'
-      || (slotState(byName[n], now) === 'RESERVED' && byName[n].window_id === WINDOW_ID));
+    free = NAMES.find(n => !isUnusable(n)
+      && (slotState(byName[n], now) === 'FREE'
+        || (slotState(byName[n], now) === 'RESERVED' && byName[n].session_id === flags.session)));
   }
   if (!free) {
     await db.rollback();
-    console.error('ALL SLOTS FULL (all-full): Bill, Ben and Bev are all occupied or reserved.');
+    console.error(`ALL SLOTS FULL (all-full): ${liveNames().join(', ')} are all occupied or reserved.`);
     for (const n of NAMES) {
       const row = byName[n];
       const state = slotState(row, now);
@@ -729,6 +964,7 @@ async function cmdCheckin(db) {
     }
     process.exit(1);
   }
+  await releaseOtherRowsForWindow(db, free, proven && proven.row);
   const sessionId = await acquire(db, free);
   await log(db, free, `${free} checked in`);
   await db.commit();
@@ -740,7 +976,7 @@ async function cmdRenew(db) {
   await db.beginTransaction();
   const byName = await lockedPermits(db);
 
-  const mine = findMine(byName, now);
+  const mine = findMineBySessionSecret(byName, now);
   if (mine) {
     const remaining = Number(mine.row.expires_ms) - now;
     if (flags.auto && remaining > RENEW_THRESHOLD_MS) {
@@ -750,14 +986,26 @@ async function cmdRenew(db) {
     }
     await db.query('UPDATE sync_permits SET expires_ms=?, heartbeat_ms=? WHERE name=?',
       [now + TTL_MS, now, mine.row.name]);
+    ensureSessionKey(mine.row.session_id);
     await db.commit();
     if (!flags.auto) console.log(`${mine.row.name} renewed — expires in ${fmtMs(TTL_MS)}.`);
     return;
   }
 
-  // Wake recovery: permit expired while idle.
-  const stale = findMine(byName, now, { allowStale: true });
+  // Wake recovery: permit expired while idle. Secret-resolved only — an
+  // env-spoofing attacker must not be able to re-acquire the victim's RESERVED
+  // row and mint a fresh secret under its own control (BUG-354 r4 W-3).
+  const stale = findMineBySessionSecret(byName, now, { allowStale: true });
   if (stale) {
+    // BUG-354 D2: a PARKED slot must never be (re)assigned — even if this
+    // window's own previous permit was Ben (a pre-park assignment), recovery
+    // must not land the window back in it.
+    if (isUnusable(stale.row.name)) {
+      await db.commit();
+      console.error(`[claude-sync] Your previous slot "${stale.row.name}" is ${isParked(stale.row.name) ? 'PARKED' : 'retired'} and cannot be re-acquired.`);
+      console.error(`[claude-sync] Check in explicitly with a live name: node claude-sync.js checkin --name <${liveNames().join('|')}>`);
+      process.exit(1);
+    }
     const sessionId = await acquire(db, stale.row.name);
     await log(db, stale.row.name, `${stale.row.name} wake recovery — re-acquired after idle expiry`);
     await db.commit();
@@ -784,20 +1032,29 @@ async function cmdRenew(db) {
   // if the previous slot is itself FREE, reclaim that SAME name; if it is
   // genuinely unavailable (held live by another window, or reserved for
   // another window), fail loudly and exit nonzero instead of cross-assigning.
-  let hadName = WINDOW_ID && NAMES.find(n => byName[n].window_id === WINDOW_ID);
+  // BUG-354 F3: a released row must never count as "last held". After a D1
+  // swap the old slot is released but retains this window's window_id, so an
+  // unreleased-inclusive scan resurrects the PRE-swap identity (map says Bev,
+  // but the released Bill row shadows it) and wake recovery reclaims the wrong
+  // slot. Exclude released rows; the persistent sync_window_map below is the
+  // authoritative last-held record.
+  let hadName = WINDOW_ID && NAMES.find(n => {
+    const r = byName[n];
+    return r && !r.released && r.window_id === WINDOW_ID;
+  });
   if (!hadName && WINDOW_ID) {
     const [map] = await db.query('SELECT name FROM sync_window_map WHERE window_id=?', [WINDOW_ID]);
     if (map.length) hadName = map[0].name;
   }
   if (hadName) {
-    if (!NAMES.includes(hadName) || isRetired(hadName)) {
-      // The previous name no longer exists as a valid slot at all (e.g. a
-      // stale window_map row pointing at retired Bob) — there is no "same
-      // name" left to reclaim. Loud + explicit, never a silent swap to some
-      // other name.
+    if (!NAMES.includes(hadName) || isUnusable(hadName)) {
+      // The previous name is retired, PARKED, or no longer a valid slot at all
+      // (e.g. a stale window_map row pointing at retired Bob, or parked Ben) —
+      // there is no "same name" left to reclaim. Loud + explicit, never a
+      // silent swap to some other name (BUG-354 D2).
       await db.commit();
-      console.error(`[claude-sync] Your previous slot "${hadName}" no longer exists (retired or removed).`);
-      console.error(`[claude-sync] Check in explicitly with a current name: node claude-sync.js checkin --name <${NAMES.join('|')}>`);
+      console.error(`[claude-sync] Your previous slot "${hadName}" no longer exists or is unusable (retired or parked).`);
+      console.error(`[claude-sync] Check in explicitly with a current name: node claude-sync.js checkin --name <${liveNames().join('|')}>`);
       process.exit(1);
     }
     const state = slotState(byName[hadName], now);
@@ -835,9 +1092,9 @@ async function cmdCheckout(db) {
   let target = null;
   if (flags.force) {
     const forcedName = positional[0] || (typeof flags.force === 'string' ? flags.force : null);
-    if (forcedName && isRetired(forcedName)) {
+    if (forcedName && isUnusable(forcedName)) {
       await db.rollback();
-      console.error(retiredMessage(forcedName));
+      console.error(unusableMessage(forcedName));
       process.exit(1);
     }
     const name = NAMES.find(n => forcedName && n.toLowerCase() === String(forcedName).toLowerCase());
@@ -848,7 +1105,13 @@ async function cmdCheckout(db) {
     }
     target = byName[name];
   } else {
-    const mine = findMine(byName, now, { allowStale: true });
+    // BUG-354 r4: checkout resolves the permit to release ONLY by the
+    // server-issued session secret this invocation presents (allowStale so a
+    // window can check out its own RESERVED row too). Ambient WINDOW_ID is
+    // never consulted — an env-spoofing attacker with no secret must not be
+    // able to release the victim's permit (Warden repro #2). The secret comes
+    // from the operator: `node claude-sync.js checkout --session <secret>`.
+    const mine = findMineBySessionSecret(byName, now, { allowStale: true });
     target = mine ? mine.row : null;
   }
 
@@ -986,8 +1249,8 @@ async function cmdMessage(db) {
   // from checkin's own validation (claude-sync.js's Unknown slot name error).
   let toName = null;
   if (flags.to !== undefined) {
-    if (isRetired(flags.to)) {
-      console.error(retiredMessage(flags.to));
+    if (isUnusable(flags.to)) {
+      console.error(unusableMessage(flags.to));
       process.exit(1);
     }
     const name = NAMES.find(n => n.toLowerCase() === String(flags.to).toLowerCase());
@@ -1310,8 +1573,10 @@ async function runCli() {
 }
 
 module.exports = {
-  NAMES, RETIRED, isRetired, retiredMessage,
+  NAMES, RETIRED, PARKED, isRetired, isParked, isUnusable, retiredMessage, parkedMessage,
+  unusableMessage, liveNames,
   connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
+  sessionKeyPath,
   countUnread, printUnreadCount,
   cmdCheckin, cmdRenew, cmdMessage, cmdCheckout, cmdStatus, cmdWrite, cmdClaim,
   cmdRelease, cmdGc,
