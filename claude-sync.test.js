@@ -344,22 +344,22 @@ test('AC-7 false-pass guard: body absent from checkin output AND a subsequent re
 // ── AC-8: offline identity, delivered to a different window later ──────────
 
 test('AC-8: message to an offline identity persists — checkin (from a different window) shows the count, read delivers the body', async () => {
-  // No active Ben permit exists (beforeEach reset everyone to FREE).
+  // No active Bro permit exists (beforeEach reset everyone to FREE).
   const sid1 = 'ac8-sender-session';
   assert.equal(checkin('Bill', sid1).status, 0);
-  assert.equal(run(['message', 'hi Ben, are you there?', '--to', 'Ben'], sid1).status, 0);
+  assert.equal(run(['message', 'hi Bro, are you there?', '--to', 'Bro'], sid1).status, 0);
 
   // Checkin via a DIFFERENT, never-before-seen window/session id — shows the
   // count only.
   const sid2 = 'ac8-different-window-session';
-  const res = checkin('Ben', sid2);
+  const res = checkin('Bro', sid2);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
   assert.match(res.stdout, /UNREAD: 1 message\(s\)/);
-  assert.doesNotMatch(res.stdout, /hi Ben, are you there\?/, 'checkin must not deliver the body even for an offline-at-send-time identity');
+  assert.doesNotMatch(res.stdout, /hi Bro, are you there\?/, 'checkin must not deliver the body even for an offline-at-send-time identity');
 
   // read (same window) delivers the body.
   const readRes = readCmd(sid2);
-  assert.match(readRes.stdout, /hi Ben, are you there\?/);
+  assert.match(readRes.stdout, /hi Bro, are you there\?/);
 });
 
 // ── AC-9: sender suppression ─────────────────────────────────────────────────
@@ -398,13 +398,13 @@ test('AC-10: broadcast is delivered independently to each identity (separate cur
   const bevRead = readCmd(bevSid);
   assert.match(bevRead.stdout, /broadcast to everyone/);
 
-  // Ben must STILL receive it — one identity's cursor advancing must not
+  // Bro must STILL receive it — one identity's cursor advancing must not
   // mark it read for another (the single-shared-scalar bug class).
-  const benSid = 'ac10-ben-session';
-  const benCi = checkin('Ben', benSid);
-  assert.match(benCi.stdout, /UNREAD: 1 message\(s\)/, "Ben's independent cursor must still show the broadcast as unread");
-  const benRead = readCmd(benSid);
-  assert.match(benRead.stdout, /broadcast to everyone/, "Ben's independent cursor must still deliver the broadcast");
+  const broSid = 'ac10-bro-session';
+  const broCi = checkin('Bro', broSid);
+  assert.match(broCi.stdout, /UNREAD: 1 message\(s\)/, "Bro's independent cursor must still show the broadcast as unread");
+  const broRead = readCmd(broSid);
+  assert.match(broRead.stdout, /broadcast to everyone/, "Bro's independent cursor must still deliver the broadcast");
 });
 
 // ── AC-11: chronological ordering ────────────────────────────────────────────
@@ -582,7 +582,7 @@ test('Finding #1 false-pass guard: a window presenting its OWN real session secr
 
 test('Finding A: an attacker who merely knows the victim\'s WINDOW_ID (CLAUDE_CODE_SESSION_ID), with ZERO flags, cannot read the victim\'s loop', async () => {
   const victimSid = 'fA-victim-window-id';
-  const victimCi = checkin('Ben', victimSid);
+  const victimCi = checkin('Bro', victimSid);
   assert.equal(victimCi.status, 0);
   const realSecret = captureSessionSecret(victimCi);
   assert.equal(loopSet(realSecret, '15m /victim-loop').status, 0);
@@ -597,7 +597,7 @@ test('Finding A: an attacker who merely knows the victim\'s WINDOW_ID (CLAUDE_CO
 
 test('Finding A: the same WINDOW_ID-spoofing attacker cannot overwrite or delete the victim\'s loop', async () => {
   const victimSid = 'fA-victim-window-id-2';
-  const victimCi = checkin('Ben', victimSid);
+  const victimCi = checkin('Bro', victimSid);
   assert.equal(victimCi.status, 0);
   const realSecret = captureSessionSecret(victimCi);
   assert.equal(loopSet(realSecret, '15m /victim-loop').status, 0);
@@ -608,7 +608,7 @@ test('Finding A: the same WINDOW_ID-spoofing attacker cannot overwrite or delete
   const attackClear = run(['loop-clear'], victimSid);
   assert.notEqual(attackClear.status, 0, 'loop-clear via WINDOW_ID spoofing must be rejected');
 
-  const [rows] = await db.query('SELECT spec FROM sync_loop_config WHERE name="Ben"');
+  const [rows] = await db.query('SELECT spec FROM sync_loop_config WHERE name="Bro"');
   assert.equal(rows.length, 1, 'the victim\'s row must survive the WINDOW_ID-spoofing attack completely untouched');
   assert.equal(rows[0].spec, '15m /victim-loop');
 });
@@ -995,7 +995,7 @@ test('window-mapped preference is skipped when the mapped slot is unavailable �
     [sid, 'Bill', Date.now()]);
   const res = run(['checkin'], sid);
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /YOU ARE: Ben/, 'Bill (mapped but live-held elsewhere) must be skipped in favour of the next free slot');
+  assert.match(res.stdout, /YOU ARE: Bev/, 'Bill (mapped but live-held elsewhere) must be skipped, and parked Ben excluded, in favour of the next live free slot (Bev)');
 });
 
 test('window-mapped preference never resurrects a retired name (defensive — map should never hold Bob, but code must not trust it blindly)', async () => {
@@ -1045,14 +1045,14 @@ test('ensureSchema never deletes a pre-existing stale Bob row (operator handles 
 test('wake recovery on a genuinely-unavailable previous slot fails loudly and never adopts a different name', async () => {
   const sidA = 'wakefail-A';
   const sidB = 'wakefail-B';
-  // Window A originally held Ben (also seeds sync_window_map: sidA -> Ben).
-  assert.equal(checkin('Ben', sidA).status, 0);
-  // Simulate A's reservation having lapsed past RESERVE_MS: its Ben row goes
-  // back to FREE, but sync_window_map's sidA -> Ben mapping is untouched
+  // Window A originally held Bev (also seeds sync_window_map: sidA -> Bev).
+  assert.equal(checkin('Bev', sidA).status, 0);
+  // Simulate A's reservation having lapsed past RESERVE_MS: its Bev row goes
+  // back to FREE, but sync_window_map's sidA -> Bev mapping is untouched
   // (that table is explicitly designed to survive slot reassignment).
-  await db.query("UPDATE sync_permits SET released=1 WHERE name='Ben'");
-  // Window B then legitimately takes the now-free Ben slot for itself.
-  assert.equal(checkin('Ben', sidB).status, 0);
+  await db.query("UPDATE sync_permits SET released=1 WHERE name='Bev'");
+  // Window B then legitimately takes the now-free Bev slot for itself.
+  assert.equal(checkin('Bev', sidB).status, 0);
 
   // Window A wakes and calls renew — it holds no active permit of its own
   // any more (Ben's row now belongs to window B).
@@ -1060,8 +1060,8 @@ test('wake recovery on a genuinely-unavailable previous slot fails loudly and ne
   assert.notEqual(res.status, 0, 'must fail loudly, never silently succeed under a different name');
   assert.doesNotMatch(res.stdout, /YOU ARE:/, 'no identity may be printed as granted');
   assert.doesNotMatch(res.stdout, /IDENTITY CHANGED/, 'the old silent cross-assign message must be gone');
-  assert.match(res.stderr, /Your previous slot "Ben" is held/);
-  assert.match(res.stderr, /checkin --name Ben/);
+  assert.match(res.stderr, /Your previous slot "Bev" is held/);
+  assert.match(res.stderr, /checkin --name Bev/);
 
   // False-pass guard: window A must not have been silently granted ANY slot
   // (Bill or Bev), which is exactly what the pre-fix cross-assign did.
@@ -1090,4 +1090,87 @@ test('wake recovery on a stale window_map entry pointing at retired Bob fails lo
   assert.doesNotMatch(res.stdout, /YOU ARE:/);
   const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
   assert.equal(rows.length, 0, 'no slot may be silently granted when the mapped previous name is retired');
+});
+
+// ── BUG-354: identity is operator-enforceable ─────────────────────────────────
+// (Aaron, 2026-08-22: "when I tell you that you're Bev you will be Bev?" —
+// the honest answer today is NO.) Three defects, all silent, all exit 0.
+//   D1  checkin --name <X> is silently ignored when the window holds a permit.
+//   D2  wake recovery / first-free / --any can assign a PARKED slot (Ben).
+//   D3  windowed checkin rewrites the shared .identity (last-checkin-wins
+//       across windows), so another window's prefix hook reads a file this
+//       session does not own.
+// These tests must FAIL against today's code (pre-fix) — Bev's acceptance:
+// "you must SHOW BOTH TESTS FAILING against today's code before the fix."
+
+test('BUG-354 D1a: --name is authoritative — holding a permit, an explicit different --name SWAPS the slot (operator instruction wins)', async () => {
+  const sid = 'bug354-d1a-session';
+  assert.equal(checkin('Bill', sid).status, 0);
+  const res = checkin('Bev', sid); // operator: "you are Bev" while this window holds Bill
+  assert.equal(res.status, 0, `--name Bev must succeed when the target is free: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bev/, '--name must win over the held Bill permit');
+  const [rows] = await db.query('SELECT name, released FROM sync_permits WHERE window_id=?', [sid]);
+  assert.deepEqual(rows.map(r => [r.name, r.released]).sort(),
+    [['Bev', 0], ['Bill', 1]].sort(),
+    'window must hold exactly Bev, with the old Bill slot released');
+});
+
+test('BUG-354 D1b: --name fails LOUDLY when the target slot is held live by another window (never silently keeps the old identity)', async () => {
+  assert.equal(checkin('Bev', 'bug354-d1b-holder').status, 0); // Bev live-held elsewhere
+  const sid = 'bug354-d1b-session';
+  assert.equal(checkin('Bill', sid).status, 0); // this window holds Bill
+  const res = checkin('Bev', sid);              // operator: "you are Bev" — Bev is taken
+  assert.notEqual(res.status, 0, 'must fail loudly, never silently renew Bill and exit 0');
+  assert.match(res.stderr, /SLOT IS OCCUPIED/, 'clear non-zero rejection naming the unavailable target');
+  const [rows] = await db.query('SELECT name, released FROM sync_permits WHERE window_id=?', [sid]);
+  assert.deepEqual(rows.map(r => [r.name, r.released]).sort(),
+    [['Bill', 0]].sort(),
+    'the window must still hold Bill, unchanged, with no identity swap');
+});
+
+test('BUG-354 D2a: wake recovery must never re-acquire a PARKED slot (Ben) via sync_window_map — fails loudly', async () => {
+  const sid = 'bug354-d2-wake-session';
+  // Window's persistent map says it last held Ben (the exact cross-assign
+  // mechanism from the live incident — "landed this window in Ben twice");
+  // Ben's permit is FREE (beforeEach reset everyone to released).
+  await db.query('INSERT INTO sync_window_map (window_id, name, updated_ms) VALUES (?, ?, ?)',
+    [sid, 'Ben', Date.now()]);
+  const res = run(['renew'], sid);
+  assert.notEqual(res.status, 0, 'must fail loudly — a parked slot must never be (re)assigned');
+  assert.doesNotMatch(res.stdout, /re-acquired Ben/);
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
+  assert.equal(rows.length, 0, 'no slot may be silently granted by wake recovery onto a parked slot');
+});
+
+test('BUG-354 D2b: first-free / --any checkin must skip a PARKED slot (Ben) and take the next live free slot', async () => {
+  const sid = 'bug354-d2b-session';
+  // Occupy Bill and Bev; Ben is FREE but PARKED; Bro is free. First-free in
+  // NAMES order would pick Ben unless parked is excluded.
+  assert.equal(checkin('Bill', 'bug354-d2b-w1').status, 0);
+  assert.equal(checkin('Bev', 'bug354-d2b-w2').status, 0);
+  const res = run(['checkin'], sid); // no --name, no CLAUDE_IDENTITY -> first-free
+  assert.equal(res.status, 0, `checkin should succeed via a remaining live slot: ${res.stderr}`);
+  assert.match(res.stdout, /YOU ARE: Bro/, 'must skip parked Ben and take the next live free slot');
+});
+
+test('BUG-354 D2c: explicit checkin --name Ben is rejected as PARKED with a clear message (isRetired-like treatment)', async () => {
+  const sid = 'bug354-d2c-session';
+  const res = checkin('Ben', sid);
+  assert.notEqual(res.status, 0, 'a parked slot must not be occupiable even by explicit --name');
+  assert.match(res.stderr, /parked/i, 'rejection must name the parked state');
+  const [rows] = await db.query('SELECT name FROM sync_permits WHERE window_id=?', [sid]);
+  assert.equal(rows.length, 0, 'no permit may be granted for a parked slot');
+});
+
+test('BUG-354 D3: windowed checkin writes the per-window identity marker and must NOT clobber the shared .identity', async () => {
+  const sid = 'bug354-d3-session';
+  const perWindow = path.join(ROOT, '.claude', `.identity-${sid}`);
+  const before = identitySnapshotExisted ? identitySnapshot : null;
+  assert.equal(checkin('Bev', sid).status, 0);
+  assert.equal(fs.readFileSync(perWindow, 'utf8').trim(), 'bev',
+    'per-window identity marker (.identity-<window>) must be written on acquire');
+  if (before !== null) {
+    assert.equal(fs.readFileSync(IDENTITY_FILE, 'utf8'), before,
+      'shared .identity must be untouched by a windowed acquire (it is cross-window state)');
+  }
 });

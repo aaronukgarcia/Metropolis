@@ -24,10 +24,21 @@ const committhook = require('./claude-committhook-install.js');
 // one derivation, already consumed by the commit-msg hook and the demoted
 // PreToolUse guard) rather than a third, independent identity check.
 const identity = require('./claude-author-identity.js');
+// BUG-344 / BUG-354 D2: the slot roster is DERIVED from claude-sync.js's own
+// NAMES constant (single source of truth) — this file once hand-listed
+// ['bill','ben','bev'], which silently missed Bro (added 2026-08-20) and
+// would have treated a Bro-assigned startup checkin as a failure. claude-sync
+// only loads mysql2/claude-db at require time (no DB connection until a
+// command runs), so this is cheap and stops the two files from drifting.
+const { NAMES, isUnusable } = require('./claude-sync.js');
+const VALID_NAMES = NAMES.map(n => n.toLowerCase());
+// Live (occupiable) slot names, capitalised — parked/retired excluded — for
+// the all-full and fallback messaging, so Ben (PARKED) and Bob (RETIRED) never
+// appear as occupiable slots.
+const LIVE_NAMES = NAMES.filter(n => !isUnusable(n));
 
 const projectRoot = __dirname;
 const identityPath = path.join(projectRoot, '.claude', '.identity');
-const VALID_NAMES = ['bill', 'ben', 'bev'];
 
 /** Claude window UUID — resolved from hook stdin JSON before main logic runs. */
 let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
@@ -245,7 +256,21 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
  *  see that function for FEAT-045 AC-14's test-only committhookRepoRoot
  *  override. */
 function emitSuccess(name, checkinOutput, committhookRepoRoot) {
-  fs.writeFileSync(identityPath, name, 'utf-8');
+  // BUG-354 D3: identity is keyed PER-WINDOW. Write the per-window marker
+  // (.identity-<session_id> — the same key claude-sync's acquire writes and
+  // the statusline / prefix hooks read first) instead of clobbering the shared
+  // .identity, which is cross-window last-checkin-wins state (Bill's 15m loop
+  // rewriting it told a Bev-holding window to answer as "bill>" — the live
+  // incident). This also covers the pure-renew startup path, where checkin
+  // renews an existing permit without calling acquire, so the per-window
+  // marker is still ensured to exist. A plain-terminal startup (no window id)
+  // has no per-window key and falls back to the shared file, same as
+  // claude-sync's writeIdentityFiles.
+  if (windowId) {
+    fs.writeFileSync(path.join(projectRoot, '.claude', `.identity-${windowId}`), name.toLowerCase(), 'utf-8');
+  } else {
+    fs.writeFileSync(identityPath, name, 'utf-8');
+  }
   printSessionSummary(name, checkinOutput, committhookRepoRoot);
 }
 
@@ -274,7 +299,7 @@ function emitDeferredCheckin(maxTTLMs, stderrSnippet) {
 
 /** Emit the hard-blocked message when all slots are full with long TTLs */
 function emitAllFull() {
-  console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (Bill, Ben, Bev all occupied, TTLs > 3 min).`);
+  console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (${LIVE_NAMES.join(', ')} all occupied, TTLs > 3 min).`);
   console.log(`YOU HAVE NO IDENTITY. DO NOT PREFIX RESPONSES WITH ANY NAME.`);
   console.log(`TELL THE USER IMMEDIATELY: "All three Claude slots are occupied. I cannot check in."`);
   console.log(`Ask the user to run: node claude-sync.js read  — to see who is active.`);
@@ -325,12 +350,12 @@ if (requestedIdentity) {
     // Requested slot is taken (live holder) or reserved (idle holder may return)
     // — fall back to the next genuinely free slot
     console.log(`WARNING: ${requestedIdentity} slot is OCCUPIED or RESERVED by another session.`);
-    // Derived from VALID_NAMES (not hand-listed) so this line is correct
+    // Derived from LIVE_NAMES (not hand-listed) so this line is correct
     // regardless of which identity was requested, and never drifts when the
     // slot roster changes (this hardcoded-Bob/Ben text is exactly what went
-    // stale when Bob was retired — 2026-08-19).
-    const otherNames = VALID_NAMES.filter(n => n !== requestedIdentity.toLowerCase())
-      .map(n => n.charAt(0).toUpperCase() + n.slice(1));
+    // stale when Bob was retired — 2026-08-19; parked Ben is excluded too,
+    // BUG-354 D2).
+    const otherNames = LIVE_NAMES.filter(n => n.toLowerCase() !== requestedIdentity.toLowerCase());
     console.log(`Falling back to next available slot (${otherNames.join(' or ')})...`);
 
     const second = tryCheckin(['claude-sync.js', 'checkin', '--any']);
