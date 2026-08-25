@@ -107,6 +107,30 @@ func construct(code, correlationID string, cause error, ctx map[string]any) *E {
 		ctx = map[string]any{}
 	}
 
+	// BUG-357 root fix: Wrap must supply the cause it looks like it supplies.
+	// When wrapping a non-nil cause and the caller did not provide an explicit
+	// "cause" ctx key, inject the cause text so templates carrying {cause}
+	// render it instead of the literal placeholder — the 376-site measurement
+	// (BUG-357) was dominated by exactly this asymmetry. An explicit ctx
+	// "cause" always wins; a nil cause leaves {cause} literal, which is a
+	// genuine ctx gap the mechanical gate is built to catch, not a value to
+	// invent here.
+	if cause != nil {
+		if _, ok := ctx["cause"]; !ok {
+			// Copy-on-inject (BUG-357 LOW finding, pr6 round): never mutate the
+			// caller's ctx map. A map shared across calls would otherwise carry
+			// the first Wrap's cause into every later error built from the same
+			// map — a New with a nil cause would then render the stale cause
+			// text, violating the "nil cause leaves {cause} literal" contract.
+			injected := make(map[string]any, len(ctx)+1)
+			for k, v := range ctx {
+				injected[k] = v
+			}
+			injected["cause"] = cause.Error()
+			ctx = injected
+		}
+	}
+
 	if correlationID == "" {
 		logEntry(Entry{
 			Ts:            t.UTC().Format(time.RFC3339Nano),
