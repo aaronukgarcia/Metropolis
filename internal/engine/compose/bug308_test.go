@@ -72,6 +72,11 @@ func TestBUG308_NetWorth_SaturatesInsteadOfWrapping(t *testing.T) {
 	}
 
 	st := &simState{cid: cid, finance: fin}
+	// Initialize the published treasury mirror from the ledger, as Wire does.
+	// The buildFinanceBalanceSheetPatch now reads from st.publishedTreasury(),
+	// which requires treasuryPub to be seeded (BUG-333 fix).
+	st.treasury = int64(treasury)
+	st.setTreasury(st.treasury)
 	raw, err := st.buildFinanceBalanceSheetPatch()
 	if err != nil {
 		t.Fatalf("buildFinanceBalanceSheetPatch: %v", err)

@@ -64,33 +64,43 @@ type financeBalanceSheetWirePatch struct {
 	BalanceSheet  *financeBalanceSheetView `json:"balanceSheet,omitempty"`
 }
 
-// buildFinanceBalanceSheetPatch reads st.finance's own synchronization
-// (FinanceAPI.mu, an internal sync.RWMutex — see AccountBalance/
-// OutstandingDebt's own doc comments) and returns the "f2.finance"
-// balanceSheet-only patch (the design's §6 fast-follow, mirroring
-// buildServicesCapacityDemandPatch's shape exactly).
+// buildFinanceBalanceSheetPatch returns the "f2.finance" balanceSheet-only
+// patch (the design's §6 fast-follow, mirroring buildServicesCapacityDemandPatch's
+// shape exactly).
 //
 // The city balance sheet this slice publishes is deliberately narrow:
-// Assets = {Treasury, Reserves} (finance.AcctTreasury/AcctReserves, the
-// city's own RoleMoney accounts), Liabilities = {Outstanding Debt}
-// (FinanceAPI.OutstandingDebt, the maintained loan-principal running
-// total), NetWorth = Assets - Liabilities. Households/Firms cash
-// accounts (AcctHouseholds/AcctFirms) are deliberately EXCLUDED — they
-// are the city's citizens'/firms' own money, not the city's assets; a
-// city balance sheet that included them would overstate net worth by
-// counting money the city does not own. Per the r1 addendum's corrected
-// contract (subscribe.go's ViewPatchFunc doc comment): this function
-// runs on the subscription pump goroutine, concurrently with
-// tick-phase writes to simState — safe here only because every read
-// goes through FinanceAPI's own accessor methods, each of which takes
-// f.mu internally, never a plain simState field read.
+// Assets = {Treasury, Reserves} (the city's own RoleMoney accounts),
+// Liabilities = {Outstanding Debt} (FinanceAPI.OutstandingDebt, the
+// maintained loan-principal running total), NetWorth = Assets - Liabilities.
+// Households/Firms cash accounts (AcctHouseholds/AcctFirms) are deliberately
+// EXCLUDED — they are the city's citizens'/firms' own money, not the city's
+// assets; a city balance sheet that included them would overstate net worth
+// by counting money the city does not own.
+//
+// Treasury is sourced from simState's publish-only mirror (treasuryPub, see
+// setTreasury / BUG-324), not from engine.finance's AcctTreasury ledger
+// account. BUG-333 r2 honest claim: this is consistency-with-chrome hygiene,
+// NOT a race fix — the previous ledger read was already lock-safe
+// (AccountBalance takes f.mu internally), and BUG-333's filed zeros symptom
+// was actually fixed by BUG-355, which keeps the mirror synced to the ledger
+// at every phase boundary (syncMoneyFromLedger). What this read buys is that
+// F2's balance sheet renders the SAME single published source as
+// chrome.topbar, so the two can never disagree about the player's money —
+// even if a future change lets mirror and ledger diverge between phase
+// boundaries.
+//
+// Reserves are sourced from finance.AcctReserves; baseline one does not use
+// reserves, so this is currently always zero. Per the r1 addendum's corrected
+// contract (subscribe.go's ViewPatchFunc doc comment): this function runs on
+// the subscription pump goroutine, concurrently with tick-phase writes to
+// simState — safe because Treasury reads the lock-free atomic mirror and
+// Reserves/OutstandingDebt go through FinanceAPI's own accessor methods
+// (each takes f.mu internally).
 func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
-	treasury, ok := st.finance.AccountBalance(finance.AcctTreasury)
-	if !ok {
-		return nil, errs.New(ErrModuleFailed, st.cid, map[string]any{
-			"module": "finance", "accessor": "AccountBalance", "account": string(finance.AcctTreasury),
-		})
-	}
+	// Treasury comes from the published mirror — BUG-324's single published
+	// source, the same read chrome.topbar performs (BUG-333: consistency
+	// hygiene, not a race fix; the old ledger read was equally lock-safe).
+	treasury := st.publishedTreasury()
 	reserves, ok := st.finance.AccountBalance(finance.AcctReserves)
 	if !ok {
 		return nil, errs.New(ErrModuleFailed, st.cid, map[string]any{
