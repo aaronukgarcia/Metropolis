@@ -92,7 +92,11 @@ func Load(dir, correlationID string) (*SocialAPI, error) {
 	path := filepath.Join(dir, fileName)
 	d, err := data.Load[SocialData, *SocialData](path, correlationID)
 	if err != nil {
+		// Route load errors through the helper to supply full {field,dir,cause} ctx.
+		// field is empty for load-time errors (the error came from data.Load, not a
+		// specific field validation). dir is the directory we tried to load from.
 		return nil, errs.Wrap(ErrSocialDataInvalid, correlationID, err, map[string]any{
+			"field": "",
 			"dir":   dir,
 			"cause": err.Error(),
 		})

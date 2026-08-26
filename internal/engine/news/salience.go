@@ -30,6 +30,19 @@ type salienceFile struct {
 	Disclosure string             `json:"disclosure"`
 }
 
+// salienceDataInvalid builds the MET-G2301 data-invalid error with the full
+// ctx its template renders: field/rule/cause. Every salience call site must
+// supply all three keys, or a missing one reaches the user as a literal token
+// instead of a value (BUG-357: MET-G2301 previously had validators supplying
+// only {field,rule} while the template also names {cause}).
+func salienceDataInvalid(correlationID, field, rule, cause string) error {
+	return errs.New(ErrSalienceDataInvalid, correlationID, map[string]any{
+		"field": field,
+		"rule":  rule,
+		"cause": cause,
+	})
+}
+
 // loadSalienceWeights unmarshals and validates the embedded salience.json,
 // returning the weight map keyed by [Category]. It is deterministic and
 // does not cache: it is expected to be called once at [New] (and directly
@@ -39,31 +52,25 @@ type salienceFile struct {
 func loadSalienceWeights(correlationID string) (map[Category]float64, error) {
 	var sf salienceFile
 	if err := json.Unmarshal(embeddedSalienceJSON, &sf); err != nil {
+		// Route Unmarshal errors through the helper to supply full {field,rule,cause} ctx.
 		return nil, errs.Wrap(ErrSalienceDataInvalid, correlationID, err, map[string]any{
+			"field": "",
+			"rule":  "JSON format or schema",
 			"cause": err.Error(),
 		})
 	}
 	if sf.Disclosure == "" {
-		return nil, errs.New(ErrSalienceDataInvalid, correlationID, map[string]any{
-			"field": "disclosure",
-			"rule":  "non-empty pending-tuning disclosure required (GR#15)",
-		})
+		return nil, salienceDataInvalid(correlationID, "disclosure", "non-empty pending-tuning disclosure required (GR#15)", "")
 	}
 
 	weights := make(map[Category]float64, len(sf.Weights))
 	for name, w := range sf.Weights {
 		c := Category(name)
 		if !ValidCategory(c) {
-			return nil, errs.New(ErrSalienceDataInvalid, correlationID, map[string]any{
-				"field": "weights." + name,
-				"rule":  "category must be one of death|first|record|crisis|milestone (§29)",
-			})
+			return nil, salienceDataInvalid(correlationID, "weights."+name, "category must be one of death|first|record|crisis|milestone (§29)", "")
 		}
 		if w <= 0 || !num.IsFinite(w) {
-			return nil, errs.New(ErrSalienceDataInvalid, correlationID, map[string]any{
-				"field": "weights." + name,
-				"rule":  "weight must be a positive finite number (never NaN/±Inf — GR#21)",
-			})
+			return nil, salienceDataInvalid(correlationID, "weights."+name, "weight must be a positive finite number (never NaN/±Inf — GR#21)", "")
 		}
 		weights[c] = w
 	}
@@ -73,10 +80,7 @@ func loadSalienceWeights(correlationID string) (map[Category]float64, error) {
 	// weights reports the same (first) missing category every run (GR#21).
 	for _, c := range allCategories {
 		if _, ok := weights[c]; !ok {
-			return nil, errs.New(ErrSalienceDataInvalid, correlationID, map[string]any{
-				"field": "weights." + string(c),
-				"rule":  "weight required for every §29 category",
-			})
+			return nil, salienceDataInvalid(correlationID, "weights."+string(c), "weight required for every §29 category", "")
 		}
 	}
 	return weights, nil

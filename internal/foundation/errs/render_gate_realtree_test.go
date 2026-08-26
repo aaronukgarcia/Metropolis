@@ -28,6 +28,9 @@ import (
 // survivors. Grow this list as BUG-357 module sweeps land.
 var renderGateFixedPackages = []string{
 	filepath.Join("internal", "engine", "coastal"),
+	filepath.Join("internal", "engine", "accelerator"),
+	filepath.Join("internal", "engine", "social"),
+	filepath.Join("internal", "engine", "news"),
 }
 
 func TestRenderGate_FixedPackagesHaveNoLiteralTokens(t *testing.T) {

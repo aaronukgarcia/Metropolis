@@ -57,6 +57,19 @@ func loadFactWordsOnce(correlationID string) {
 	})
 }
 
+// factListInvalid builds the MET-G2305 list-invalid error with the full ctx
+// its template renders: field/rule/cause. Every fact-list call site must
+// supply all three keys, or a missing one reaches the user as a literal token
+// instead of a value (BUG-357: MET-G2305 previously had validators supplying
+// only {field,rule} while the template also names {cause}).
+func factListInvalid(correlationID, field, rule, cause string) error {
+	return errs.New(ErrFactListInvalid, correlationID, map[string]any{
+		"field": field,
+		"rule":  rule,
+		"cause": cause,
+	})
+}
+
 // loadFactWords unmarshals and validates the embedded news-facts.json,
 // returning the lowercased token set. It is deterministic and does not cache
 // (the sync.Once in loadFactWordsOnce is the single cache). Every failure is
@@ -64,43 +77,31 @@ func loadFactWordsOnce(correlationID string) {
 func loadFactWords(correlationID string) (map[string]struct{}, error) {
 	var ff factsFile
 	if err := json.Unmarshal(embeddedFactsJSON, &ff); err != nil {
+		// Route Unmarshal errors through the helper to supply full {field,rule,cause} ctx.
 		return nil, errs.Wrap(ErrFactListInvalid, correlationID, err, map[string]any{
+			"field": "",
+			"rule":  "JSON format or schema",
 			"cause": err.Error(),
 		})
 	}
 	if ff.Disclosure == "" {
-		return nil, errs.New(ErrFactListInvalid, correlationID, map[string]any{
-			"field": "disclosure",
-			"rule":  "non-empty pending-tuning disclosure required (GR#15)",
-		})
+		return nil, factListInvalid(correlationID, "disclosure", "non-empty pending-tuning disclosure required (GR#15)", "")
 	}
 	if len(ff.Tokens) == 0 {
-		return nil, errs.New(ErrFactListInvalid, correlationID, map[string]any{
-			"field": "tokens",
-			"rule":  "non-empty fact-bearing token list required",
-		})
+		return nil, factListInvalid(correlationID, "tokens", "non-empty fact-bearing token list required", "")
 	}
 
 	set := make(map[string]struct{}, len(ff.Tokens))
 	for _, tok := range ff.Tokens {
 		t := strings.ToLower(strings.TrimSpace(tok))
 		if t == "" {
-			return nil, errs.New(ErrFactListInvalid, correlationID, map[string]any{
-				"field": "tokens",
-				"rule":  "no empty/whitespace-only token",
-			})
+			return nil, factListInvalid(correlationID, "tokens", "no empty/whitespace-only token", "")
 		}
 		if !isLetterWord(t) {
-			return nil, errs.New(ErrFactListInvalid, correlationID, map[string]any{
-				"field": "tokens." + tok,
-				"rule":  "token must be a single whole word of letters (no digits, spaces, or punctuation) so whole-word matching is well-defined",
-			})
+			return nil, factListInvalid(correlationID, "tokens."+tok, "token must be a single whole word of letters (no digits, spaces, or punctuation) so whole-word matching is well-defined", "")
 		}
 		if _, dup := set[t]; dup {
-			return nil, errs.New(ErrFactListInvalid, correlationID, map[string]any{
-				"field": "tokens." + tok,
-				"rule":  "duplicate token after lowercasing",
-			})
+			return nil, factListInvalid(correlationID, "tokens."+tok, "duplicate token after lowercasing", "")
 		}
 		set[t] = struct{}{}
 	}

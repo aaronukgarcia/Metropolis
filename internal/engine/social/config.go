@@ -58,6 +58,20 @@ type CaseloadConfig struct {
 	UnemploymentCapMonths            float64 // unemployment-duration saturation cap
 }
 
+// socialDataInvalid builds the MET-G3600 data-invalid error with the full ctx
+// its template renders: field/dir/cause. Every social call site must supply
+// all three keys, or a missing one reaches the user as a literal token instead
+// of a value (BUG-357: MET-G3600 previously had validators supplying only
+// {field} while the template names {dir} and {cause}). dir and cause are blank
+// for runtime Config validators with no file behind them.
+func socialDataInvalid(correlationID, field, dir, cause string) error {
+	return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
+		"field": field,
+		"dir":   dir,
+		"cause": cause,
+	})
+}
+
 // validate rejects an out-of-contract Config with a registry-sourced error
 // (GR#7/GR#16) — never a silently-defaulted placeholder. Every caseload rate
 // must be finite and non-negative, the unemployment cap strictly positive,
@@ -65,29 +79,19 @@ type CaseloadConfig struct {
 // harm threshold in [0,1].
 func (c Config) validate(correlationID string) error {
 	if c.RoughSleepingLocation == "" {
-		return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-			"field": "roughSleepingLocation", "rule": "required",
-		})
+		return socialDataInvalid(correlationID, "roughSleepingLocation", "", "")
 	}
 	if c.HostelCapacity < 0 {
-		return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-			"field": "hostelCapacity", "value": c.HostelCapacity,
-		})
+		return socialDataInvalid(correlationID, "hostelCapacity", "", "")
 	}
 	if c.FosterCapacity < 0 {
-		return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-			"field": "fosterCapacity", "value": c.FosterCapacity,
-		})
+		return socialDataInvalid(correlationID, "fosterCapacity", "", "")
 	}
 	if !numFinite(c.CarersReleasedPerFundingUnit) || c.CarersReleasedPerFundingUnit < 0 {
-		return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-			"field": "carersReleasedPerFundingUnit", "value": c.CarersReleasedPerFundingUnit,
-		})
+		return socialDataInvalid(correlationID, "carersReleasedPerFundingUnit", "", "")
 	}
 	if !numFinite(c.InterventionHarmThreshold) || c.InterventionHarmThreshold < 0 || c.InterventionHarmThreshold > 1 {
-		return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-			"field": "interventionHarmThreshold", "value": c.InterventionHarmThreshold,
-		})
+		return socialDataInvalid(correlationID, "interventionHarmThreshold", "", "")
 	}
 	cc := c.Caseload
 	rates := []struct {
@@ -109,15 +113,11 @@ func (c Config) validate(correlationID string) error {
 	}
 	for _, r := range rates {
 		if !numFinite(r.v) || r.v < 0 {
-			return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-				"field": r.name, "value": r.v,
-			})
+			return socialDataInvalid(correlationID, r.name, "", "")
 		}
 	}
 	if cc.UnemploymentCapMonths <= 0 {
-		return errs.New(ErrSocialDataInvalid, correlationID, map[string]any{
-			"field": "caseload.unemploymentCapMonths", "rule": "must be strictly positive",
-		})
+		return socialDataInvalid(correlationID, "caseload.unemploymentCapMonths", "", "")
 	}
 	return nil
 }

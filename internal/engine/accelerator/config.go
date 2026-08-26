@@ -130,6 +130,20 @@ func (d *AcceleratorData) validate() error {
 // *AcceleratorData (the generic data.Load's PT constraint).
 func (d *AcceleratorData) Validate() error { return d.validate() }
 
+// acceleratorDataInvalid builds the MET-G2400 data-invalid error with the full
+// ctx its template renders: field/dir/cause. Every accelerator call site must
+// supply all three keys, or a missing one reaches the user as the literal token
+// {field}/{dir}/{cause} instead of a value (BUG-357: MET-G2400 previously had
+// call sites supplying only {field} while the template names {dir} and {cause}).
+// dir and cause are blank for runtime Config validators with no file behind them.
+func acceleratorDataInvalid(correlationID, field, dir, cause string) error {
+	return errs.New(ErrDataInvalid, correlationID, map[string]any{
+		"field": field,
+		"dir":   dir,
+		"cause": cause,
+	})
+}
+
 // validate rejects an out-of-contract Config with a registry-sourced error
 // (GR#7/GR#16) — never a silently-defaulted placeholder. It is the runtime
 // counterpart of [AcceleratorData.validate] (which names the JSON fields for
@@ -137,31 +151,31 @@ func (d *AcceleratorData) Validate() error { return d.validate() }
 // hand-constructed Config and a loaded one are equally guarded.
 func (c Config) validate(correlationID string) error {
 	if c.ConsumptionRef == "" {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "consumptionRef"})
+		return acceleratorDataInvalid(correlationID, "consumptionRef", "", "")
 	}
 	if !num.IsFinite(c.FacilityThroughput) || c.FacilityThroughput < 0 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "facilityThroughput"})
+		return acceleratorDataInvalid(correlationID, "facilityThroughput", "", "")
 	}
 	if !num.IsFinite(c.ElectricityPeakMultiplier) || c.ElectricityPeakMultiplier <= 1 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "electricityPeakMultiplier"})
+		return acceleratorDataInvalid(correlationID, "electricityPeakMultiplier", "", "")
 	}
 	if !num.IsFinite(c.ResearchRateMultiplier) || c.ResearchRateMultiplier <= 1 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "researchRateMultiplier"})
+		return acceleratorDataInvalid(correlationID, "researchRateMultiplier", "", "")
 	}
 	if !num.IsFinite(c.HealthSpillover) || c.HealthSpillover < 0 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "healthSpillover"})
+		return acceleratorDataInvalid(correlationID, "healthSpillover", "", "")
 	}
 	if c.FdiAnchorDraw < 0 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "fdiAnchorDraw"})
+		return acceleratorDataInvalid(correlationID, "fdiAnchorDraw", "", "")
 	}
 	if c.PrestigeBase < 0 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "prestigeBase"})
+		return acceleratorDataInvalid(correlationID, "prestigeBase", "", "")
 	}
 	if c.PrestigePerTick < 0 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "prestigePerTick"})
+		return acceleratorDataInvalid(correlationID, "prestigePerTick", "", "")
 	}
 	if c.ExpertGateThreshold < 0 {
-		return errs.New(ErrDataInvalid, correlationID, map[string]any{"field": "expertGateThreshold"})
+		return acceleratorDataInvalid(correlationID, "expertGateThreshold", "", "")
 	}
 	return nil
 }
@@ -191,7 +205,11 @@ func Load(dir, correlationID string) (*AcceleratorAPI, error) {
 	path := filepath.Join(dir, fileName)
 	d, err := data.Load[AcceleratorData, *AcceleratorData](path, correlationID)
 	if err != nil {
+		// Route load errors through the helper to supply full {field,dir,cause} ctx.
+		// field is empty for load-time errors (the error came from data.Load, not a
+		// specific field validation). dir is the directory we tried to load from.
 		return nil, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{
+			"field": "",
 			"dir":   dir,
 			"cause": err.Error(),
 		})
