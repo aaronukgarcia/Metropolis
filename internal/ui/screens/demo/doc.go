@@ -103,16 +103,14 @@
 //
 // # SF-5/DEMO-8: drill-through, consumed not reimplemented
 //
-// DrillTargets (render.go) produces the screen's (widget, source) pairs
+// DrillTargets (render.go) produces the screen's drill-through targets
 // -- the pyramid total, one entry per non-retired housing typology, and
-// the two distinct commuting-leak figures -- for a caller with the real
-// ui.dash (MOD-038) registration API to register. This package
-// implements no navigation, dead-end detection, or graph storage itself
-// (MOD-038's job); MOD-038 was open at dispatch time per the acceptance
-// file's own Escalations note, so DrillTargets' pair list is the
-// integration seam a later item wires against MOD-038's landed API.
-// DEMO-3's workforce totals are explicitly absent from this list (DEMO-3
-// itself is blocked, see above).
+// the two distinct commuting-leak figures -- using the canonical
+// dash.DrillTarget (ViewName, EntityID) type. This package implements
+// no navigation, dead-end detection, or graph storage itself (MOD-038's
+// job); this screen only produces the list of (ViewName, EntityID) pairs
+// for MOD-038 to consume. DEMO-3's workforce totals are explicitly absent
+// from this list (DEMO-3 itself is blocked, see above).
 //
 // # SF-6: alert-jump landing anchor
 //

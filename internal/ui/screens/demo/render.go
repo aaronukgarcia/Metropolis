@@ -7,6 +7,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 )
 
 // drawText writes s left-to-right starting at (x, y), clipped to
@@ -173,25 +174,25 @@ func renderHistogram(buf *core.Buffer, rect core.Rect, style tcell.Style, n int,
 	}
 }
 
-// DrillTargets returns the (widget, source) registration pairs this
-// screen supplies to ui.dash's (MOD-038) drill-through graph, per
-// SF-5/DEMO-8: the pyramid total, one entry per non-retired typology,
-// and the two distinct commuting-leak figures. Registration itself
-// (Enter opening the target, dead-end detection) is MOD-038's job — see
-// doc.go's SF-5 note; this screen only produces the pair list.
-func DrillTargets(typologies []TypologyRow, commute CommuteFigures) []DrillTarget {
-	out := []DrillTarget{
-		{WidgetID: "demo.pyramid.total", Target: "citizen.population"},
+// DrillTargets returns the drill-through targets for every drillable
+// figure on the demo screen (per SF-5/DEMO-8): the pyramid total, one
+// entry per non-retired typology, and the two distinct commuting-leak
+// figures. The canonical drill.DrillTarget (ViewName, EntityID) carries
+// the navigation target only — screen-specific widget metadata is not
+// part of the drill contract (MOD-038's responsibility).
+func DrillTargets(typologies []TypologyRow, commute CommuteFigures) []dash.DrillTarget {
+	out := []dash.DrillTarget{
+		{ViewName: "citizen.population"},
 	}
 	for _, t := range typologies {
 		if t.Retired {
 			continue
 		}
-		out = append(out, DrillTarget{WidgetID: "demo.typology." + t.Typology, Target: "household.typology." + t.Typology})
+		out = append(out, dash.DrillTarget{ViewName: "household.typology." + t.Typology})
 	}
 	out = append(out,
-		DrillTarget{WidgetID: "demo.commute.out", Target: "extcommute.out"},
-		DrillTarget{WidgetID: "demo.commute.in", Target: "extcommute.in"},
+		dash.DrillTarget{ViewName: "extcommute.out"},
+		dash.DrillTarget{ViewName: "extcommute.in"},
 	)
 	return out
 }

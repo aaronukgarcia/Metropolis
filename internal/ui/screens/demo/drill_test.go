@@ -1,12 +1,18 @@
 package demo
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
+)
 
 // TestDrillTargets_RegistersDocumentedFigures is DEMO-8's check: every
 // SF-2-documented whole-view aggregate this screen displays (excluding
 // DEMO-3's blocked workforce totals) is registered into the drill-through
-// pair list -- the pyramid total, one entry per non-retired typology, and
-// both distinct commuting-leak directions.
+// list as a canonical dash.DrillTarget (ViewName, EntityID) pair -- the
+// pyramid total, one entry per non-retired typology, and both distinct
+// commuting-leak directions. The bespoke screen-local widget metadata is
+// not part of the canonical drill contract (GR#3 / BUG-239).
 func TestDrillTargets_RegistersDocumentedFigures(t *testing.T) {
 	typologies := []TypologyRow{
 		{Typology: "Terrace", Demand: 100, Stock: 90},
@@ -16,28 +22,31 @@ func TestDrillTargets_RegistersDocumentedFigures(t *testing.T) {
 
 	targets := DrillTargets(typologies, commute)
 
-	byID := map[string]DrillTarget{}
+	// Index targets by ViewName for verification. The canonical type
+	// carries ViewName (where to drill) and optional EntityID, not
+	// screen-specific widget metadata.
+	byView := map[string]dash.DrillTarget{}
 	for _, tgt := range targets {
-		byID[tgt.WidgetID] = tgt
+		byView[tgt.ViewName] = tgt
 	}
 
-	if _, ok := byID["demo.pyramid.total"]; !ok {
-		t.Errorf("missing drill target for the pyramid total")
+	if _, ok := byView["citizen.population"]; !ok {
+		t.Errorf("missing drill target for the pyramid total (citizen.population)")
 	}
-	if _, ok := byID["demo.typology.Terrace"]; !ok {
+	if _, ok := byView["household.typology.Terrace"]; !ok {
 		t.Errorf("missing drill target for typology Terrace")
 	}
-	if _, ok := byID["demo.typology.Bungalow"]; ok {
+	if _, ok := byView["household.typology.Bungalow"]; ok {
 		t.Errorf("retired typology Bungalow should not get a drill target (nothing live to drill into)")
 	}
-	if _, ok := byID["demo.commute.out"]; !ok {
+	if _, ok := byView["extcommute.out"]; !ok {
 		t.Errorf("missing drill target for out-commuting")
 	}
-	if _, ok := byID["demo.commute.in"]; !ok {
+	if _, ok := byView["extcommute.in"]; !ok {
 		t.Errorf("missing drill target for in-commuting")
 	}
-	if byID["demo.commute.out"].Target == byID["demo.commute.in"].Target {
-		t.Errorf("out/in commuting drill targets must be distinct: both = %q", byID["demo.commute.out"].Target)
+	if byView["extcommute.out"] == byView["extcommute.in"] {
+		t.Errorf("out/in commuting drill targets must be distinct")
 	}
 }
 
