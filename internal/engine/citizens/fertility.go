@@ -347,9 +347,15 @@ func (c *CitizensAPI) applyFertilityLocked(seed uint64, month int64, shards []in
 			if partner < id {
 				continue // not the acting (lower-id) partner: skip, avoid double-processing
 			}
-			if _, ok := c.hot[id]; ok {
-				continue // elevated citizens are out of the cold pass's scope, mirrors mortality's isHot skip
-			}
+			// BUG-270: an elevated (HOT/WARM) couple still lives in the cold
+			// store (the single source of truth for partner/household/birthMonth
+			// -- LifeEventPartner and clearPartnerOnlyLocked keep the cold
+			// columns current), so the once-per-month shard schedule covers both
+			// tiers. The former hot-actor skip left an elevated couple unable to
+			// bear children. birthChildLocked already writes the birth through to
+			// BOTH stores (cold childCount + hot Children), so a hot parent stays
+			// consistent. The draw keys on (seed, householdID, month), identical
+			// regardless of tier, and is taken exactly once per couple per month.
 			partnerRec, ok := c.coldRecord(partner)
 			if !ok {
 				continue // partner not resolvable (e.g. deceased, not yet unwired): no-op, not a crash

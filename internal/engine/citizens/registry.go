@@ -523,6 +523,14 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	// so the merge is deterministic (AC-17).
 	for _, shard := range shards {
 		for _, d := range deathsByShard[shard] {
+			// BUG-270: an ELEVATED citizen's death (the cold pass now draws
+			// mortality for hot/warm citizens too) must also drop them from the
+			// hot elevation cache, exactly as LifeEventDeath's delete(c.hot,...)
+			// does -- otherwise a dead id lingers in c.hot pointing at a removed
+			// cold record. A no-op for a citizen who was cold. Done before the
+			// household unwiring, mirroring LifeEventDeath's order (the survivor,
+			// not the departed id, is the one removeHouseholdMemberLocked reads).
+			delete(c.hot, d.citizenID)
 			c.removeHouseholdMemberLocked(d.citizenID, d.householdID, d.partnerID)
 		}
 	}

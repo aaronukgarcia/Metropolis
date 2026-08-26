@@ -132,8 +132,29 @@ type coldDeath struct {
 // hardcoded). It is a pure function of (seed, the shard's own columns,
 // month, params): no shared RNG, no wall clock, no cross-shard reads
 // (AC-15/AC-17). isHot, when non-nil, identifies citizens currently
-// elevated to HOT/WARM: those are advanced by the daily path, not the
-// monthly cold pass, so they are skipped here (never double-advanced).
+// elevated to HOT/WARM.
+//
+// BUG-270: an elevated citizen still lives in the cold store (the single
+// source of truth) and is advanced by THIS pass on their shard's one
+// scheduled day-tick per month -- there is no separate "daily path", and the
+// former blanket isHot skip meant an elevated citizen was never drawn for
+// mortality and so could never die. The MORTALITY draw is now taken for
+// every citizen regardless of tier: it is keyed (seed, id, month,
+// "mortality"), so the outcome is identical whether the citizen is hot or
+// cold, and it is taken exactly ONCE per citizen per month (their shard is
+// scheduled on exactly one day-tick), never double-counted. The elevated
+// death is finished on the sequential post-pass in AdvanceDayTick, which
+// deletes the dead id from the hot cache and dissolves the household through
+// the same removeHouseholdMemberLocked path a cold death uses (BUG-369).
+//
+// The other monthly effects (education, job matching, health/satisfaction
+// drift) are still COLD-ONLY: writing them to an elevated citizen's cold
+// record while leaving the hot mirror untouched would desync the two
+// (currently both stay put while elevated, staying observationally
+// consistent). Extending those drifts to the hot path with full write-through
+// is a larger change outside BUG-270's births/deaths scope, so an elevated
+// survivor skips them here -- exactly the prior behaviour for everything
+// except the now-universal mortality draw.
 //
 // Returns the pass totals PLUS this shard's deaths as dissolution records
 // (BUG-369): removing a deceased citizen's row is only half of a death —
@@ -150,10 +171,7 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 	i := 0
 	for i < s.count() {
 		id := s.ids[i]
-		if isHot != nil && isHot(id) {
-			i++
-			continue
-		}
+		hot := isHot != nil && isHot(id)
 		birthMonth := s.epochMonth + int64(s.birthDelta[i])
 		age := month - birthMonth
 
@@ -178,6 +196,15 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 			})
 			s.removeAt(i)
 			tot.deaths++
+			continue
+		}
+
+		// An elevated survivor takes the mortality draw above (BUG-270) but
+		// NOT the drift updates below: those write only the cold record, which
+		// would desync the hot mirror while the citizen is elevated. Left for
+		// a later, larger write-through change (see applyMonthly's doc).
+		if hot {
+			i++
 			continue
 		}
 
