@@ -1,4 +1,11 @@
-const QUEUE_KEY = 'metropolis.debugQueue';
+// backend.ts — the browser-facing debug backend shim (FEAT-1972079885/86).
+// Error capture (window listeners in main.tsx feed recordError) plus the
+// snapshot commit path. The commit QUEUE itself is the pure module
+// commitqueue.ts (see its ASM-453 contract note: no backend exists yet, so
+// every commit queues client-side in localStorage until one arrives); this
+// file only binds it to the real window.localStorage and the real network.
+
+import { enqueueCommit, pendingCount, type StorageLike } from './commitqueue.ts';
 
 const errorLog: { at: number; msg: string }[] = [];
 
@@ -11,6 +18,28 @@ export function recentErrors(): { at: number; msg: string }[] {
   return [...errorLog];
 }
 
+/** One row of the DebugTab "Errors captured" list. */
+export interface ErrorRow {
+  /** Local wall-clock time the error was captured. */
+  time: string;
+  msg: string;
+}
+
+/**
+ * Pure presentation model for the "Errors captured" display: `empty` selects
+ * the "No errors captured this session." hint; otherwise `rows` render
+ * newest-first (recordError unshifts) as "time  message".
+ */
+export function errorListModel(errors: readonly { at: number; msg: string }[]): {
+  empty: boolean;
+  rows: ErrorRow[];
+} {
+  return {
+    empty: errors.length === 0,
+    rows: errors.map((e) => ({ time: new Date(e.at).toLocaleTimeString(), msg: e.msg })),
+  };
+}
+
 export interface CommitResult {
   ok: boolean;
   queued: boolean;
@@ -18,33 +47,26 @@ export interface CommitResult {
   message: string;
 }
 
-interface QueuedCommit {
-  id: string;
-  at: string;
-  payload: unknown;
+// Fail-safe storage binding: in any context without localStorage (or where
+// touching it throws) fall back to a volatile in-memory store — the Debug
+// tab must keep working, just without cross-reload persistence.
+const memoryStore = new Map<string, string>();
+const memoryStorage: StorageLike = {
+  getItem: (k) => memoryStore.get(k) ?? null,
+  setItem: (k, v) => void memoryStore.set(k, v),
+};
+
+function queueStorage(): StorageLike {
+  try {
+    if (typeof localStorage !== 'undefined') return localStorage;
+  } catch {
+    /* fall through to memory */
+  }
+  return memoryStorage;
 }
 
 export function pendingCommits(): number {
-  try {
-    const q = JSON.parse(localStorage.getItem(QUEUE_KEY) ?? '[]');
-    return Array.isArray(q) ? q.length : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function enqueue(id: string, payload: unknown): number {
-  let q: QueuedCommit[] = [];
-  try {
-    const raw = JSON.parse(localStorage.getItem(QUEUE_KEY) ?? '[]');
-    if (Array.isArray(raw)) q = raw;
-  } catch {
-    q = [];
-  }
-  q.push({ id, at: new Date().toISOString(), payload });
-  const trimmed = q.slice(-50);
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(trimmed));
-  return trimmed.length;
+  return pendingCount(queueStorage());
 }
 
 export async function commitDebug(payload: unknown): Promise<CommitResult> {
@@ -58,7 +80,8 @@ export async function commitDebug(payload: unknown): Promise<CommitResult> {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { ok: true, queued: false, id, message: `Committed to backend as ${id}` };
   } catch {
-    const n = enqueue(id, payload);
+    // ASM-453: no backend exists — queue locally and report honestly.
+    const n = enqueueCommit(queueStorage(), id, payload, new Date().toISOString());
     return {
       ok: true,
       queued: true,

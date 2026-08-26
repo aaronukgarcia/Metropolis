@@ -16,7 +16,8 @@ import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
 import { fmtMoney, fmtNum, fmtPct } from '../../sim/utils';
 import { useBusy } from '../Busy';
-import { commitDebug, pendingCommits, recentErrors } from '../../sim/backend';
+import { commitDebug, errorListModel, pendingCommits, recentErrors } from '../../sim/backend';
+import { debugActions } from '../../sim/debugactions';
 import { buildDebugJson, debugJsonText } from '../../sim/debugjson';
 import { currentMapUi } from '../../sim/uistate';
 import { versionRaw } from '../../sim/version';
@@ -562,14 +563,28 @@ function DebugTab() {
     a.remove();
     URL.revokeObjectURL(url);
   }
+  // FEAT-1972079885: the state-mutating cheats are DEV-gated exactly like the
+  // TopBar +£10m button — debugActions() returns [] in production builds, so
+  // the row (and every cheat) vanishes from `vite build` output entirely.
+  const devButtons = debugActions(import.meta.env.DEV);
+  const errList = errorListModel(recentErrors());
+
   return (
     <>
-      <div className="row-actions wrap">
-        <button className="btn" onClick={() => dispatch({ type: 'debugFunds', amount: 10000 })}>+{fmtMoney(10000)}</button>
-        <button className="btn" onClick={() => dispatch({ type: 'debugXp', amount: 500 })}>+500 XP</button>
-        <button className="btn" onClick={() => dispatch({ type: 'speed', speed: 3 })}>Force fast</button>
-        <button className="btn danger" onClick={() => dispatch({ type: 'reset' })}>Reset city</button>
-      </div>
+      {devButtons.length > 0 && (
+        <div className="row-actions wrap">
+          {devButtons.map((a) => (
+            <button
+              key={a.id}
+              className={`btn${a.danger ? ' danger' : ''}`}
+              title={a.title}
+              onClick={() => dispatch(a.action)}
+            >
+              {a.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="row-actions wrap">
         <button className="btn accent" title="Save the on-screen debug.json to the backend for processing (queues locally if offline)" onClick={commit}>
           Commit snapshot
@@ -589,13 +604,13 @@ function DebugTab() {
         </span>
       </div>
       <h4>Errors captured</h4>
-      {recentErrors().length === 0 ? (
+      {errList.empty ? (
         <p className="hint">No errors captured this session.</p>
       ) : (
         <ul className="error-list mono">
-          {recentErrors().map((e, i) => (
+          {errList.rows.map((e, i) => (
             <li key={i}>
-              <span className="muted">{new Date(e.at).toLocaleTimeString()}</span> {e.msg}
+              <span className="muted">{e.time}</span> {e.msg}
             </li>
           ))}
         </ul>
