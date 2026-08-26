@@ -3717,6 +3717,88 @@ function printVestigeCheck() {
   }
 }
 
+/**
+ * BUG-348: HEAD's drift BEHIND trunk (origin/main) — the axis that
+ * printGitCheck's origin/<branch> comparison structurally CANNOT see.
+ *
+ * The pre-BUG-348 summary reported dirty-tree count and ahead/behind of
+ * origin/<currentBranch>, so a lane branch could read "SYNCED" while sitting
+ * 128 commits behind trunk (the GR#26 128-behind disaster: a stale branch
+ * reads as a healthy session and every reader takes the line as complete).
+ * This is the project's "a gate that measures one of two axes is worse than
+ * no gate" family — a signal trusted as complete but blind to divergence
+ * produces confident wrong action.
+ *
+ * Pure and testable: takes the SAME `git(args)` runner printGitCheck already
+ * uses (throws on non-zero exit), so it is exercised against a throwaway repo
+ * with no DB and no network (see claude-bow-trunkdiv.test.js). It NEVER
+ * fetches — it reads the already-present remote-tracking ref, so the number
+ * is always labelled "vs last-fetched origin/main" and a stale ref is never
+ * mistaken for a live one. Works on a detached HEAD (HEAD resolves to a
+ * commit, so `${trunkRef}...HEAD` still counts).
+ *
+ * @param {(args: string[], timeout?: number) => string} git  runner that
+ *        throws on non-zero exit (printGitCheck's inner `git`).
+ * @param {string} trunkRef  the trunk remote-tracking ref; origin/main by
+ *        deliberate choice — GR#26/CLAUDE.md define trunk as origin/main, and
+ *        that is the base every lane rebases onto. A fresh clone or an
+ *        offline/never-fetched checkout that lacks the ref returns
+ *        {available:false} rather than a silent zero.
+ * @returns {{available:false}|{available:true,behind:number,ahead:number,ref:string}}
+ */
+function trunkDivergence(git, trunkRef = 'origin/main') {
+  // Does the trunk ref resolve locally? Missing => fresh clone / offline /
+  // never-fetched. --verify --quiet exits non-zero (git() throws) on a
+  // missing ref, so the catch is the "unknown, not zero" path.
+  try {
+    git(['rev-parse', '--verify', '--quiet', trunkRef]);
+  } catch {
+    return { available: false };
+  }
+  let behind, ahead;
+  try {
+    const lr = git(['rev-list', '--left-right', '--count', `${trunkRef}...HEAD`]).split(/\s+/);
+    behind = Number(lr[0]);
+    ahead = Number(lr[1]);
+  } catch {
+    return { available: false };
+  }
+  if (!Number.isFinite(behind) || !Number.isFinite(ahead)) {
+    return { available: false };
+  }
+  return { available: true, behind, ahead, ref: trunkRef };
+}
+
+/**
+ * BUG-348: render the trunk-divergence line for the startup summary.
+ * Pure string builder (no git, no I/O) so the GR#26 threshold behaviour is
+ * unit-testable without a repo. Thresholds are GR#26's: >20 behind is a P1 to
+ * clear before new work, >50 behind is stop-the-line.
+ *
+ * @param {ReturnType<typeof trunkDivergence>} div
+ * @returns {string}
+ */
+function formatTrunkDivergence(div) {
+  if (!div || !div.available) {
+    return 'Trunk (origin/main): not available — divergence unknown '
+      + '(origin/main not fetched; run: git fetch origin)';
+  }
+  const label = 'vs last-fetched origin/main';
+  const { behind, ahead } = div;
+  if (behind > 50) {
+    return `Trunk (origin/main): ${behind} BEHIND / ${ahead} ahead — `
+      + `STOP THE LINE: reconcile with trunk before ANY work (GR#26) (${label})`;
+  }
+  if (behind > 20) {
+    return `Trunk (origin/main): ${behind} BEHIND / ${ahead} ahead — `
+      + `P1: rebase/merge trunk before new work (GR#26) (${label})`;
+  }
+  if (behind > 0) {
+    return `Trunk (origin/main): ${behind} BEHIND / ${ahead} ahead (${label})`;
+  }
+  return `Trunk (origin/main): level (0 behind / ${ahead} ahead) (${label})`;
+}
+
 /** Git sync state: branch, dirty files, ahead/behind origin (with a quick fetch).
  *
  * @FIX (SEC-004): git-derived values (notably the current branch name) MUST
@@ -3765,6 +3847,16 @@ function printGitCheck() {
       if (ahead === null) bits.push('no upstream tracking branch');
       console.log(`Git: ${branch} — NOT SYNCED: ${bits.join('; ')}${fetched ? '' : ' (fetch failed — offline?)'}`);
     }
+    // BUG-348: the two lines above measure drift FROM HEAD (dirty tree) and
+    // drift of HEAD vs origin/<branch>; neither shows how far HEAD is BEHIND
+    // TRUNK. Print that as its own line so a stale lane can never read as
+    // healthy. Reuses the already-fetched origin/main (no extra network) and
+    // degrades to "divergence unknown" if the trunk ref isn't present.
+    try {
+      console.log(formatTrunkDivergence(trunkDivergence(git)));
+    } catch (err) {
+      console.log(`Trunk (origin/main): check failed (${err.message.split('\n')[0]})`);
+    }
   } catch (err) {
     console.log(`Git: check failed (${err.message.split('\n')[0]})`);
   }
@@ -3790,6 +3882,11 @@ const findItemByRef = findItem;
 
 module.exports = {
   printStartupSummary, printBowSummary, SUMMARY_MARKER, findItemByRef,
+  // BUG-348: pure trunk-divergence helpers, exported for unit testing against
+  // a throwaway repo (behind/ahead computation) and synthetic div objects
+  // (GR#26 threshold rendering) — no DB, no network. See
+  // claude-bow-trunkdiv.test.js.
+  trunkDivergence, formatTrunkDivergence,
   recordDestructiveVerdict, latestDestructiveVerdict,
   // BUG-075: batch existence check exported for direct unit testing in
   // addition to the required real-subprocess CLI tests.
