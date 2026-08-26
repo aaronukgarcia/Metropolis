@@ -14,7 +14,7 @@ import {
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
-import { fmtMoney, fmtPct } from '../../sim/utils';
+import { fmtMoney, fmtNum, fmtPct } from '../../sim/utils';
 import { useBusy } from '../Busy';
 import { commitDebug, pendingCommits, recentErrors } from '../../sim/backend';
 
@@ -81,11 +81,11 @@ function StatusTab() {
           <div className="l">Wellbeing</div>
         </div>
         <div className="tile acc">
-          <div className="n">{state.population.toLocaleString()}</div>
+          <div className="n">{fmtNum(state.population)}</div>
           <div className="l">Citizens</div>
         </div>
         <div className="tile">
-          <div className="n">{capacity.toLocaleString()}</div>
+          <div className="n">{fmtNum(capacity)}</div>
           <div className="l">Housing cap</div>
         </div>
       </div>
@@ -141,7 +141,7 @@ function StatusTab() {
       </table>
       <p className="hint">
         Fiscal state {income - expense >= 0 ? 'solvent' : 'in deficit'} · net{' '}
-        {(income - expense).toLocaleString()}/tick
+        {fmtMoney(income - expense)}/tick
       </p>
     </>
   );
@@ -156,9 +156,9 @@ function RatesTab() {
     industrial: Math.round(c.industrial * state.taxRates.industrial * 0.55),
   };
   const bases: Record<keyof TaxRates, string> = {
-    residential: `${state.population} citizens × ¤2 × rate`,
-    commercial: `${c.commercial} zones × ¤40 × rate`,
-    industrial: `${c.industrial} plants × ¤55 × rate`,
+    residential: `${fmtNum(state.population)} citizens × ${fmtMoney(2)} × rate`,
+    commercial: `${fmtNum(c.commercial)} zones × ${fmtMoney(40)} × rate`,
+    industrial: `${fmtNum(c.industrial)} plants × ${fmtMoney(55)} × rate`,
   };
   return (
     <>
@@ -236,11 +236,11 @@ function WaterTab() {
     <>
       <div className="tiles">
         <div className="tile pos">
-          <div className="n">{bal.clean.toLocaleString()}</div>
+          <div className="n">{fmtNum(bal.clean)}</div>
           <div className="l">Clean capacity</div>
         </div>
         <div className={`tile ${bal.leak ? 'neg' : 'pos'}`}>
-          <div className="n">{bal.waste.toLocaleString()}</div>
+          <div className="n">{fmtNum(bal.waste)}</div>
           <div className="l">Discharge capacity</div>
         </div>
       </div>
@@ -274,7 +274,7 @@ function WaterTab() {
                 <td className={sp.tag === 'clean' ? 'in' : 'out'}>{sp.name}</td>
                 <td className="mono">{b.x},{b.y}</td>
                 <td>{PIPE_TIERS[tier].label}</td>
-                <td>{eff.toLocaleString()}</td>
+                <td>{fmtNum(eff)}</td>
                 <td>
                   {next && (
                     <button
@@ -350,7 +350,7 @@ function EarningsTab() {
         {rows.map((r) => (
           <tr key={r.type}>
             <td>{r.type}</td>
-            <td className="muted">{r.count > 0 ? `${r.count.toLocaleString()} ${r.unit}` : '—'}</td>
+            <td className="muted">{r.count > 0 ? `${fmtNum(r.count)} ${r.unit}` : '—'}</td>
             <td className="in">{fmtMoney(r.gross)}</td>
             <td>{r.count > 0 ? fmtMoney(r.gross / r.count) : '—'}</td>
           </tr>
@@ -414,7 +414,7 @@ function XpTab() {
         <div>
           <b>City level {level}</b>
           <p className="muted">
-            {state.xp.toLocaleString()} XP · {Math.max(0, next - state.xp).toLocaleString()} to level {level + 1}
+            {fmtNum(state.xp)} XP · {fmtNum(Math.max(0, next - state.xp))} to level {level + 1}
           </p>
         </div>
       </div>
@@ -516,7 +516,7 @@ function DebugTab() {
   return (
     <>
       <div className="row-actions wrap">
-        <button className="btn" onClick={() => dispatch({ type: 'debugFunds', amount: 10000 })}>+¤10,000</button>
+        <button className="btn" onClick={() => dispatch({ type: 'debugFunds', amount: 10000 })}>+{fmtMoney(10000)}</button>
         <button className="btn" onClick={() => dispatch({ type: 'debugXp', amount: 500 })}>+500 XP</button>
         <button className="btn" onClick={() => dispatch({ type: 'speed', speed: 3 })}>Force fast</button>
         <button className="btn danger" onClick={() => dispatch({ type: 'reset' })}>Reset city</button>

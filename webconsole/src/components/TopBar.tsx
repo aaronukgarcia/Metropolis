@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSim, levelOf, xpForLevel, wellbeingOf } from '../sim/store';
-import { fmtMoney } from '../sim/utils';
+import { fmtMoney, fmtNum } from '../sim/utils';
 import { versionBadgeLabel, versionRaw } from '../sim/version';
 import { TrendArrows } from './Trend';
 import { useBusy } from './Busy';
@@ -22,7 +22,6 @@ function gameDate(tick: number): string {
 
 export function TopBar() {
   const { state, dispatch } = useSim();
-  const { run } = useBusy();
   const [aboutOpen, setAboutOpen] = useState(false);
   const level = levelOf(state.xp);
   const cur = xpForLevel(level);
@@ -44,22 +43,13 @@ export function TopBar() {
           {versionBadgeLabel()}
         </button>
       </div>
-      <div className="top-center">
-        <button
-          className="btn danger"
-          title="God mode: wipe everything and restart from the M20 junction seed"
-          onClick={() => run(() => dispatch({ type: 'reset' }))}
-        >
-          Start Over
-        </button>
-      </div>
       <div className="top-stats">
         <span className="stat acc">
           {fmtMoney(state.funds)}
           <TrendArrows series={state.history.map((h) => h.funds)} gentle={15} fast={150} label="Treasury" />
         </span>
         <span className="stat">
-          {state.population.toLocaleString()} citizens
+          {fmtNum(state.population)} citizens
           <TrendArrows series={state.history.map((h) => h.population)} gentle={0.05} fast={1} label="Population" />
         </span>
         <span className="stat" title={`Wellbeing ${wb.overall}/100`}>
@@ -91,5 +81,24 @@ export function TopBar() {
       </div>
       {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
     </header>
+  );
+}
+
+// StartOverButton — relocated out of the TopBar to the LEFT dock (FEAT-1972079874).
+// Kept as its own component so it can live inside the build column while still
+// reaching the sim dispatch + busy overlay.
+export function StartOverButton() {
+  const { dispatch } = useSim();
+  const { run } = useBusy();
+  return (
+    <div className="start-over-row">
+      <button
+        className="btn danger start-over"
+        title="God mode: wipe everything and restart from the M20 junction seed"
+        onClick={() => run(() => dispatch({ type: 'reset' }))}
+      >
+        Start Over
+      </button>
+    </div>
   );
 }

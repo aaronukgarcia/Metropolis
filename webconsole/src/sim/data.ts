@@ -565,7 +565,7 @@ export interface PolicyDef {
 
 export const POLICIES: PolicyDef[] = [
   { id: 'recycling', label: 'Recycling Mandate', description: '-7% utility & service upkeep, -2 approval' },
-  { id: 'transitSubsidy', label: 'Free Transit', description: '+25% growth rate and +8 approval; costs ¤1.5 per resident per tick' },
+  { id: 'transitSubsidy', label: 'Free Transit', description: '+25% growth rate and +8 approval; costs £1.5 per resident per tick' },
   { id: 'tourismDrive', label: 'Tourism Drive', description: 'Adds Tourism income scaling with population' },
   { id: 'austerity', label: 'Austerity Budget', description: '-10% all outflows, -12 approval' },
 ];
@@ -586,7 +586,7 @@ export const SPECIALISTS: SpecialistDef[] = [
 ];
 
 export const UNIT_REGISTRY = [
-  { unit: 'credit (¤)', dimension: 'currency', note: 'All fiscal flows; integers only in the engine' },
+  { unit: 'pound (£)', dimension: 'currency', note: 'All fiscal flows; integers only in the engine' },
   { unit: 'person', dimension: 'population', note: 'Persistent individual citizens' },
   { unit: 'MW', dimension: 'power', note: 'Plant capacity vs grid draw' },
   { unit: 'kL/day', dimension: 'water', note: 'Works throughput' },

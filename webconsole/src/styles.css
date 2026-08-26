@@ -44,14 +44,44 @@ body {
 
 .topbar { grid-area: top; position: relative; display: flex; align-items: center; gap: 18px; padding: 0 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
 .top-center { position: absolute; left: 50%; transform: translateX(-50%); }
-.left-col { grid-area: left; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.left-col > .panel:first-child { flex: 1 1 55%; min-height: 0; }
-.left-col > .panel:last-child { flex: 0 0 auto; max-height: 45%; }
-.col-wrap { display: flex; flex-direction: column; min-height: 0; }
+.col-wrap { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+
+/* LEFT column (FEAT-1972079874): build palette grows, Start Over pinned below it. */
+.left-col { grid-area: left; }
+.left-col > .panel { flex: 1 1 auto; min-height: 0; }
+.start-over-row { flex: 0 0 auto; }
+.start-over-row .start-over { width: 100%; }
+
+/* RIGHT column (FEAT-1972079874): demand (natural height) above fiscal (grows). */
 .right-col { grid-area: right; }
+.right-col > .panel:first-child { flex: 0 0 auto; max-height: 45%; }
+.right-col > .panel:last-child { flex: 1 1 auto; min-height: 0; }
+
+/* BOTTOM row (FEAT-1972079874): the information panel. */
 .bottom-col { grid-area: bottom; }
+.bottom-col > .panel { flex: 1 1 auto; min-height: 0; }
+
 .panel { width: 100%; }
 .map-wrap { grid-area: map; }
+
+/* Responsive: collapse the three columns into a single scrolling stack on
+   narrow viewports so nothing is clipped off-screen. */
+@media (max-width: 960px) {
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 48px auto minmax(280px, 60vh) auto auto;
+    grid-template-areas:
+      "top"
+      "left"
+      "map"
+      "right"
+      "bottom";
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+  body { overflow: auto; }
+}
 
 /* ---------- top bar ---------- */
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
@@ -103,6 +133,19 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .btn.tiny { padding: 3px 8px; font-size: 11px; }
 .btn.danger:hover { border-color: var(--danger); color: var(--danger); }
 .btn.toggle.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+
+/* Depressed/engaged playback button (FEAT-1972079875): the speed the sim is
+   actually running at renders pushed-in, driven by state.speed (single source
+   of truth), and stays that way under hover — hence the :hover pairing so it
+   wins the specificity tie with the generic .btn:hover rule above. */
+.btn.active,
+.btn.active:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b1220;
+  box-shadow: inset 0 2px 5px rgba(0, 0, 0, 0.45);
+  transform: translateY(1px);
+}
 
 .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2.5px; margin-right: 6px; vertical-align: baseline; }
 .swatch.big { width: 13px; height: 13px; border-radius: 3.5px; vertical-align: middle; }

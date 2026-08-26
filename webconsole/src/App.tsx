@@ -1,28 +1,33 @@
 import { SimProvider } from './sim/store';
 import { BusyProvider, BusyIndicator } from './components/Busy';
-import { TopBar } from './components/TopBar';
+import { TopBar, StartOverButton } from './components/TopBar';
 import { LeftDock } from './components/left/LeftDock';
 import { DemandDock } from './components/left/DemandDock';
 import { RightDock } from './components/right/RightDock';
 import { BottomBar } from './components/bottom/BottomBar';
 import { MapView } from './components/MapView';
 
+// Layout (FEAT-1972079874): map stays centre; the docks are re-homed —
+//   LEFT   : build palette (BottomBar) + Start Over button
+//   BOTTOM : information panel (RightDock)
+//   RIGHT  : demand (DemandDock) + fiscal (LeftDock)
 export default function App() {
   return (
     <BusyProvider>
       <SimProvider>
         <div className="app">
           <TopBar />
-          <div className="left-col">
-            <LeftDock />
-            <DemandDock />
+          <div className="col-wrap left-col">
+            <BottomBar />
+            <StartOverButton />
           </div>
           <MapView />
           <div className="col-wrap right-col">
-            <RightDock />
+            <DemandDock />
+            <LeftDock />
           </div>
           <div className="col-wrap bottom-col">
-            <BottomBar />
+            <RightDock />
           </div>
         </div>
         <BusyIndicator />

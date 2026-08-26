@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { PALETTE, SPECS } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
 import { useSim, levelOf } from '../../sim/store';
@@ -25,6 +25,16 @@ function BuildTab() {
   const [fam, setFam] = useState(PALETTE[0].title);
   const famDef = PALETTE.find((p) => p.title === fam) ?? PALETTE[0];
 
+  // FEAT-1972079876 scroll-reset: the type list for each family shares one
+  // scroll container. Without this, scrolling down inside (say) Education then
+  // switching to Landmarks left the shorter list scrolled off-screen, looking
+  // empty. Resetting scrollTop to 0 on every family change guarantees the new
+  // family's first entries are visible immediately.
+  const detailRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (detailRef.current) detailRef.current.scrollTop = 0;
+  }, [fam]);
+
   return (
     <>
       <div className="tree-wrap">
@@ -47,7 +57,7 @@ function BuildTab() {
             );
           })}
         </div>
-        <div className="tree-detail">
+        <div className="tree-detail" ref={detailRef}>
           {famDef.items.map((id) => {
             const sp = SPECS[id];
             if (!sp) {
@@ -96,7 +106,7 @@ function MoveTab() {
   const { state, dispatch } = useSim();
   const modes: { mode: ToolMode; label: string; hint: string }[] = [
     { mode: 'select', label: 'Select', hint: 'Click any structure to inspect it.' },
-    { mode: 'move', label: 'Move', hint: 'Click a structure, then an empty spot (¤25 per relocation).' },
+    { mode: 'move', label: 'Move', hint: `Click a structure, then an empty spot (${fmtMoney(25)} per relocation).` },
     { mode: 'bulldoze', label: 'Bulldoze', hint: 'Click a structure to demolish it for a 25% refund. Drag to clear a row.' },
   ];
   const activeMode = state.movingId != null ? 'move' : state.tool.mode;

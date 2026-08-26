@@ -22,7 +22,7 @@ import {
 import { useSim, levelOf, demandOf } from '../sim/store';
 import { useBusy } from './Busy';
 import type { Building, ZoneKind } from '../sim/types';
-import { fmtMoney } from '../sim/utils';
+import { fmtMoney, fmtNum } from '../sim/utils';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -665,7 +665,7 @@ function BuildingCard({
           </p>
           <p className="mono">
             Pipe {PIPE_TIERS[state.pipeTier[building.id] ?? 0].label} · serves{' '}
-            {plantEffServed(state, building).toLocaleString()}
+            {fmtNum(plantEffServed(state, building))}
           </p>
         </>
       )}
