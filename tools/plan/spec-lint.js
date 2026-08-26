@@ -88,6 +88,63 @@
  *   can no longer contribute "esponse.Payload"). Everything else — stdlib
  *   idioms like time.Now/json.Marshal, plain prose — never enters the
  *   pipeline.
+ *
+ * BUG-256 fix (Destructive-BevWave-r1 findings, 2026-08-25):
+ *
+ *   HYPHEN-COMPOUND SWALLOW (finding 2): the mkey char class [a-z0-9.-]+
+ *   greedily captured hyphenated prose suffixes ("the engine.other-owned
+ *   ledger" -> token "engine.other-owned"), which resolved to NO key and fired
+ *   only SPEC-LINT-004 — the REAL citation of engine.other silently escaped
+ *   the SPEC-LINT-001 edge check. resolveCitedKey now trims at BOTH separator
+ *   kinds during ancestor resolution ('.' segments AND '-' compound tails), so
+ *   "engine.other-owned" resolves to registered "engine.other" and is
+ *   edge-checked at full strength; a compound whose head resolves to nothing
+ *   still fires SPEC-LINT-004 citing the full original token.
+ *
+ *   SPEC-LINT-005 CASE/UNICODE EVASION (findings 3+4): the strict lowercase
+ *   mkey regex meant "Engine.other", "ENGINE.FINANCE", "engine.other" spelt
+ *   with U+2024 ONE DOT LEADER, and homoglyph spellings (Cyrillic е for e)
+ *   produced NO signal at all. A second per-file pass now scans every token
+ *   containing uppercase or non-ASCII characters, folds it (NFKC + confusable
+ *   map + lowercase, trailing dots stripped), and if the folded form is
+ *   mkey-shaped (registered prefix + '.' + tail):
+ *     - non-ASCII lookalike  -> SPEC-LINT-005 ERROR (never legitimate prose;
+ *       module-key citations must be plain lowercase ASCII — fail closed);
+ *     - ASCII case variant   -> SPEC-LINT-005 WARNING (probable mkey typo;
+ *       sentence-initial capitalisation is legitimate prose, so non-fatal);
+ *     - in BOTH cases, when the folded token resolves to a registered key the
+ *       citation is ALSO routed through the SPEC-LINT-001 edge check, so a
+ *       disguised dependency on an unregistered relationship still FAILS the
+ *       lint (GR#25 fail-closed) — a per-file dedupe set guarantees one 001
+ *       per cited key across both passes.
+ *   Go-symbol-form tokens (lowercase pkg + CamelCase symbol: "strconv.Atoi",
+ *   "int.Parse") belong to the CHECK-2 pipeline and are excluded from the
+ *   case-variant class UNLESS their folded form resolves to a registered
+ *   module key (so "engine.Other" citing engine.other still flags, while
+ *   stdlib/prose symbol idioms never storm). Case variants folding to an
+ *   UNREGISTERED key are additionally skipped inside backtick code spans —
+ *   the real corpus's "`Engine.Snapshot`"/"`Engine.self`" Go-identifier
+ *   references (10 hits, all triaged as Go member accesses, none mkey typos)
+ *   are code, not prose citations; a registered-key case variant or any
+ *   unicode lookalike still flags inside code spans too.
+ *
+ * BUG-256 r3 (Destructive r2 REJECT, 2026-08-26) — list-chasing loses:
+ *   the r2 invisible-char strip was a hand list, and U+2028/U+2029 (Zl/Zp)
+ *   plus U+202A-202E (directional overrides) survived it and silently
+ *   passed. Two structural changes, both in this file:
+ *   1. WIDENED STRIP: foldMkeyToken strips the ENTIRE Unicode Format (Cf)
+ *      category plus the two Zl/Zp separators via a property escape — no
+ *      per-character list remains to go stale (U+FFF9, never on any list,
+ *      is covered for free).
+ *   2. FAIL-CLOSED RESIDUE RULE: an mkey-shaped candidate whose FOLDED form
+ *      still carries any char outside [a-z0-9.-] now flags SPEC-LINT-005
+ *      MKEY RESIDUE instead of silently failing the shape regex — the
+ *      failure direction is inverted permanently: unknown exotic chars
+ *      yield a finding, never a silent pass (class-closure proven with
+ *      U+FE00, a char no list or map ever named). Sole carve-out:
+ *      arrow-joined citation PAIRS (residue only BETWEEN well-formed
+ *      citations) are notation — unflagged but every fragment is still
+ *      edge-checked.
  */
 
 'use strict';
@@ -121,6 +178,43 @@ const GO_STDLIB_PKG_NAMES = new Set((
 // File-extension tails that mark a dotted token as a FILE reference, not a
 // module-key citation (e.g. "see engine.finance.md", "engine.go").
 const FILE_EXT_RE = /\.(?:md|go|json|js|ts|ya?ml|txt|csv|html|sql|bat|ps1|sh)$/;
+
+// BUG-256 finding 4: dot and letter lookalikes that can disguise an mkey
+// citation. NFKC normalization already folds most compatibility forms
+// (U+2024 ONE DOT LEADER -> '.', fullwidth letters -> ASCII); this table
+// catches the common confusables NFKC deliberately leaves alone (distinct
+// letters that merely LOOK identical). Keys are the post-lowercase forms.
+const CONFUSABLE_CHARS = new Map(Object.entries({
+  // dot lookalikes NFKC does not fold
+  '·': '.', '·': '.', '۔': '.', '‧': '.', '・': '.',
+  // Cyrillic homoglyphs of Latin letters
+  'а': 'a', 'е': 'e', 'о': 'o', 'р': 'p', 'с': 'c',
+  'у': 'y', 'х': 'x', 'і': 'i', 'ѕ': 's', 'ј': 'j',
+  'һ': 'h', 'ԁ': 'd', 'ԛ': 'q', 'ԝ': 'w', 'є': 'e',
+  // Greek homoglyphs
+  'α': 'a', 'ι': 'i', 'κ': 'k', 'ν': 'v', 'ο': 'o',
+  'ρ': 'p', 'υ': 'u',
+}));
+
+/** BUG-256 r3: fold a raw prose token towards canonical mkey form — strip
+ * invisible/format characters BEFORE NFKC normalization. Unicode property
+ * escape \p{Cf} (Format category) covers most format chars (00AD, 200B-200F,
+ * 2060-2064, FEFF, etc.); U+2028/U+2029 (line/paragraph separators, classified
+ * as Zl/Zp not Cf) are added explicitly because they survive NFKC and break
+ * regex shape-matching, e.g. "engine.oth<U+2028>er" passes the capture but
+ * fails foldedMkeyShapeRe. After stripping and normalizing, THEN normalize
+ * via NFKC (folds U+2024/fullwidth/ligature compatibility forms), lowercase,
+ * map residual visual confusables to ASCII, strip trailing dots. */
+function foldMkeyToken(rawToken) {
+  // Strip all Unicode Format (Cf) category chars PLUS U+2028/U+2029 (line/para separators).
+  // This comprehensively blocks all invisible/directional chars: soft hyphens, zero-width
+  // spaces/joiners/marks, word joiners, BOMs, directional overrides (U+202A-202E), etc.
+  const stripped = String(rawToken).replace(/[\p{Cf}\u2028\u2029]/gu, '');
+  const s = stripped.normalize('NFKC').toLowerCase();
+  let out = '';
+  for (const ch of s) out += CONFUSABLE_CHARS.get(ch) || ch;
+  return out.replace(/\.+$/, '');
+}
 
 /** Normalize a code.json module `path` into a posix dir string (primary
  * component of composites, no trailing slash), or null. Mirrors
@@ -228,13 +322,20 @@ function edgeRegisteredEitherDirection(edges, a, b) {
  *                                     bare prefix, empty)
  */
 function resolveCitedKey(rawToken, modulesByKey) {
-  const token = String(rawToken).replace(/\.+$/, '');
+  const token = String(rawToken).replace(/[.-]+$/, '');
   if (!token || !token.includes('.')) return { kind: 'skip' };
   if (FILE_EXT_RE.test(token)) return { kind: 'skip' };
   let k = token;
   while (k.includes('.')) {
     if (modulesByKey[k]) return { kind: 'key', key: k };
-    k = k.slice(0, k.lastIndexOf('.'));
+    // BUG-256 finding 2: trim at the LAST separator of EITHER kind — a '.'
+    // ancestor segment or a '-' prose-compound tail. The old '.'-only trim
+    // let "engine.other-owned" swallow the real engine.other citation
+    // (resolved to nothing -> SPEC-LINT-004 only; the SPEC-LINT-001 edge
+    // check never ran).
+    const cut = Math.max(k.lastIndexOf('.'), k.lastIndexOf('-'));
+    if (cut <= 0) break;
+    k = k.slice(0, cut).replace(/[.-]+$/, '');
   }
   return { kind: 'unregistered', token };
 }
@@ -333,6 +434,16 @@ function runLint(opts = {}) {
   const mkeyRegex = new RegExp(`\\b(?:${keyPrefixes.join('|')})\\.[a-z0-9.-]+`, 'g');
   const realSpecFileRe = new RegExp(`^(?:${keyPrefixes.join('|')})\\.`);
 
+  // BUG-256 evasion-pass regexes (built once from the runtime prefix set):
+  // a prose token (letters/digits/dots/hyphens, non-ASCII included so
+  // lookalike characters stay inside the token), a non-global strict-citation
+  // tester, the anchored folded-mkey shape, and the Go-symbol citation form
+  // owned by CHECK 2.
+  const evasionTokenRe = new RegExp('[A-Za-z0-9\\u0080-\\uffff][A-Za-z0-9.\\u0080-\\uffff-]*', 'g');
+  const strictMkeyOnceRe = new RegExp(`\\b(?:${keyPrefixes.join('|')})\\.[a-z0-9.-]+`);
+  const foldedMkeyShapeRe = new RegExp(`^(?:${keyPrefixes.join('|')})\\.[a-z0-9.-]+$`);
+  const goSymbolFormRe = /^[a-z0-9]+\.[A-Z][A-Za-z0-9_]+$/;
+
   log(`=== RUNNING SPEC-LINT ON ${files.length} ACCEPTANCE FILES ===`);
   log(`(key namespace derived from code.json: ${keyPrefixes.join(', ')})`);
   if (deadExemptions.length > 0) {
@@ -381,6 +492,18 @@ function runLint(opts = {}) {
     // SPEC-LINT-004 (reject finding 1, warning).
     const mkeyMatches = new Set(content.match(mkeyRegex) || []);
 
+    // One SPEC-LINT-001 finding per cited key per file, across BOTH the main
+    // citation pass and the BUG-256 evasion pass below.
+    const edgeCheckedKeys = new Set();
+    const checkCitedEdge = (citedKey) => {
+      if (citedKey === currentMkey || exemptKeys.has(citedKey)) return;
+      if (edgeCheckedKeys.has(citedKey)) return;
+      edgeCheckedKeys.add(citedKey);
+      if (!edgeRegisteredEitherDirection(edges, currentMkey, citedKey)) {
+        fileErrors.push(`[SPEC-LINT-001] GRAPH VIOLATION: Spec cites dependency on "${citedKey}", but no edge between "${currentMkey}" and "${citedKey}" is registered in code.json in either direction!`);
+      }
+    };
+
     for (const rawCitedKey of mkeyMatches) {
       const resolved = resolveCitedKey(rawCitedKey, modulesByKey);
       if (resolved.kind === 'skip') continue;
@@ -391,11 +514,108 @@ function runLint(opts = {}) {
         fileWarnings.push(`[SPEC-LINT-004] UNREGISTERED KEY: Spec cites "${resolved.token}", which matches no registered module key in code.json (no ancestor segment registered either) — GR#25 prose must only reference registered modules.`);
         continue;
       }
-      const citedKey = resolved.key;
-      if (citedKey === currentMkey || exemptKeys.has(citedKey)) continue;
-      if (!edgeRegisteredEitherDirection(edges, currentMkey, citedKey)) {
-        fileErrors.push(`[SPEC-LINT-001] GRAPH VIOLATION: Spec cites dependency on "${citedKey}", but no edge between "${currentMkey}" and "${citedKey}" is registered in code.json in either direction!`);
+      checkCitedEdge(resolved.key);
+    }
+
+    // --- CHECK 1b: case/unicode mkey evasion (SPEC-LINT-005, BUG-256) ---
+    // Any token containing uppercase or non-ASCII characters whose FOLDED
+    // form (NFKC + confusable map + lowercase) is mkey-shaped is a citation
+    // the strict lowercase regex above could never see. Non-ASCII lookalikes
+    // are ERRORS (never legitimate); ASCII case variants are WARNINGS
+    // (probable typo); both route their folded key through the edge check.
+    //
+    // Corpus-triage exclusion (real-prose false positives, 2026-08-26): Go
+    // member accesses on Uppercase receivers ("Engine.Snapshot()",
+    // "Engine.self" — the engine.headless/feat.debugmode/harness.replay
+    // class) live inside markdown code spans. A case variant whose folded
+    // form is UNREGISTERED is therefore skipped when the token appears in a
+    // backtick code span (code is code; Go identifiers are case-sensitive).
+    // A case variant folding to a REGISTERED key flags everywhere, and
+    // unicode lookalikes flag everywhere — code span or not.
+    const codeSpanTokens = new Set();
+    for (const span of content.match(/```[\s\S]*?```|`[^`\n]+`/g) || []) {
+      for (const t of span.match(evasionTokenRe) || []) {
+        codeSpanTokens.add(t.replace(/[.-]+$/, ''));
       }
+    }
+    const seenEvasionTokens = new Set();
+    evasionTokenRe.lastIndex = 0;
+    let evMatch;
+    while ((evMatch = evasionTokenRe.exec(content)) !== null) {
+      const rawTok = evMatch[0].replace(/[.-]+$/, '');
+      if (!rawTok || seenEvasionTokens.has(rawTok)) continue;
+      seenEvasionTokens.add(rawTok);
+      const hasNonAscii = /[^\x00-\x7F]/.test(rawTok);
+      const hasUpper = /[A-Z]/.test(rawTok);
+      if (!hasNonAscii && !hasUpper) continue; // pure-lowercase ASCII is the main pass's domain
+      // A token that already CONTAINS a well-formed citation is owned by the
+      // main pass (e.g. "engine.other-Owned" — the head was matched above).
+      if (!hasNonAscii && strictMkeyOnceRe.test(rawTok)) continue;
+      const folded = foldMkeyToken(rawTok);
+      if (!foldedMkeyShapeRe.test(folded)) {
+        // --- BUG-256 r3 FAIL-CLOSED RESIDUE RULE (the class-closer) ---
+        // This token matched the evasion tokenizer (an mkey-shaped
+        // candidate), yet after the Cf/Zl/Zp strip, NFKC fold, lowercasing,
+        // and confusable mapping its folded form STILL carries characters
+        // outside the canonical mkey alphabet [a-z0-9.-]. r1 and r2 handled
+        // that by silently failing this shape regex — exactly the
+        // list-chasing false-negative class the r2 REJECT proved (U+2028,
+        // U+2029, and U+202A-202E all slipped a hand-maintained strip list).
+        // So: when removing the residue characters leaves a well-formed
+        // citation of a registered key prefix, we FLAG instead of skipping.
+        // This inverts the failure direction permanently — any future exotic
+        // character in an mkey-shaped token yields a SPEC-LINT-005 finding,
+        // never a silent pass, with no per-character list to maintain.
+        //
+        // One structural carve-out (real-corpus triage, 2026-08-26): specs
+        // legitimately join TWO citations with arrow punctuation
+        // ("engine.build" U+2194 "engine.season"); the evasion tokenizer
+        // over-merges them into one token. Splitting on the residue decides:
+        // if EVERY fragment is itself a well-formed folded citation, the
+        // exotic chars sit BETWEEN citations, not inside one — that is
+        // notation, not evasion, and each fragment is still routed through
+        // the SPEC-LINT-001 edge check (deduped), so the graph rule loses
+        // nothing. ANY malformed fragment means residue INSIDE an
+        // mkey-shaped token — fail closed.
+        const residueStripped = folded.replace(/[^a-z0-9.-]/gu, '');
+        if (residueStripped === folded) continue; // no residue — just not mkey-shaped
+        const fragments = folded.split(/[^a-z0-9.-]+/gu).filter(Boolean);
+        if (fragments.length > 0 && fragments.every((f) => foldedMkeyShapeRe.test(f))) {
+          for (const f of fragments) {
+            const rf = resolveCitedKey(f, modulesByKey);
+            if (rf.kind === 'key') checkCitedEdge(rf.key);
+          }
+          continue;
+        }
+        if (foldedMkeyShapeRe.test(residueStripped)) {
+          const residueList = [...new Set([...folded].filter((c) => !/[a-z0-9.-]/.test(c)))]
+            .map((c) => 'U+' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0'))
+            .join(' ');
+          fileErrors.push(`[SPEC-LINT-005] MKEY RESIDUE (fail-closed): Spec contains "${rawTok}", an mkey-shaped token whose folded form still carries unmapped exotic characters (${residueList}; residue-stripped it reads "${residueStripped}") — module-key citations must be plain lowercase ASCII, and unrecognised characters in one are treated as evasion, never silently passed (GR#25, BUG-256 r3).`);
+          const resolvedResidue = resolveCitedKey(residueStripped, modulesByKey);
+          if (resolvedResidue.kind === 'key') checkCitedEdge(resolvedResidue.key);
+        }
+        continue;
+      }
+      const resolved = resolveCitedKey(folded, modulesByKey);
+      if (resolved.kind === 'skip') continue; // file references etc.
+      if (resolved.kind === 'unregistered' && resolved.token === fileKey) continue;
+      // Go-symbol-form tokens (lowercase pkg + CamelCase symbol) belong to
+      // CHECK 2 — only treat as mkey evasion when the folded form resolves
+      // to a REGISTERED key ("engine.Other" flags; "int.Parse" does not).
+      if (!hasNonAscii && goSymbolFormRe.test(rawTok) && resolved.kind !== 'key') continue;
+      // Code-span exclusion (see triage note above): a case variant folding
+      // to nothing registered, sitting in a backtick span, is a Go identifier.
+      if (!hasNonAscii && resolved.kind !== 'key' && codeSpanTokens.has(rawTok)) continue;
+      const detail = resolved.kind === 'key'
+        ? `resolves to registered module "${resolved.key}"`
+        : 'matches no registered module key either';
+      if (hasNonAscii) {
+        fileErrors.push(`[SPEC-LINT-005] UNICODE MKEY LOOKALIKE: Spec contains "${rawTok}", an mkey-shaped token written with non-ASCII lookalike characters (folds to "${folded}"; ${detail}) — module-key citations must be plain lowercase ASCII (GR#25, fail-closed).`);
+      } else {
+        fileWarnings.push(`[SPEC-LINT-005] CASE-VARIANT MKEY: Spec contains "${rawTok}", which is not a valid module-key citation but lowercases to "${folded}" (${detail}) — mkeys are lowercase by convention; probable mkey typo.`);
+      }
+      if (resolved.kind === 'key') checkCitedEdge(resolved.key);
     }
 
     // --- CHECK 2: Go Method-Interface Invariant (SPEC-LINT-002 / -003) ---
@@ -516,7 +736,7 @@ function runLint(opts = {}) {
 module.exports = {
   runLint, loadRegistry, goContentExportsSymbol, EXEMPT_MODULES,
   effectiveExemptions, resolveCitedKey, resolveSpecFileModule,
-  edgeRegisteredEitherDirection, GO_STDLIB_PKG_NAMES,
+  edgeRegisteredEitherDirection, GO_STDLIB_PKG_NAMES, foldMkeyToken,
 };
 
 if (require.main === module) {

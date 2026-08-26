@@ -37,6 +37,7 @@ const path = require('path');
 const {
   runLint, loadRegistry, goContentExportsSymbol,
   effectiveExemptions, resolveCitedKey, edgeRegisteredEitherDirection,
+  foldMkeyToken,
 } = require('./spec-lint.js');
 
 // ── unit: the identifier-aware symbol matcher ─────────────────────────────
@@ -468,6 +469,432 @@ test('SPEC-LINT-003 fires for a registered key segment with no registered Go dir
   } finally {
     cleanup();
   }
+});
+
+// ── BUG-256: silent false-negative closures ───────────────────────────────
+// Each class is proven able to FAIL (verification standard: a check that
+// cannot fail is not a check). Fixture: engine.testpkg + engine.other, no
+// edges registered — so any resolved citation of engine.other MUST produce a
+// SPEC-LINT-001 error.
+
+test('BUG-256(a) lock: an unknown mkey with a registered prefix flags SPEC-LINT-004, never silence', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: hands lift control to engine.hovercraft.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const warns = r.warningsByFile['engine.testpkg.md'] || [];
+    assert.equal(warns.length, 1, `expected exactly one warning, got: ${JSON.stringify(warns)}`);
+    assert.ok(warns[0].includes('[SPEC-LINT-004]') && warns[0].includes('"engine.hovercraft"'),
+      `unknown mkey must flag, got: ${warns[0]}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256(b): a hyphen compound no longer swallows the citation — "engine.other-owned" is edge-checked as engine.other', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: the engine.other-owned ledger is read nightly.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.equal(r.totalErrors, 1, `the swallowed citation must fire SPEC-LINT-001, got: ${JSON.stringify({ e: errs, w: r.warningsByFile })}`);
+    assert.ok(errs[0].includes('[SPEC-LINT-001]') && errs[0].includes('"engine.other"'),
+      `expected the compound to resolve to engine.other, got: ${errs[0]}`);
+    assert.equal(r.totalWarnings, 0, 'a compound resolving to a registered head must not ALSO warn SPEC-LINT-004');
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256(b): a hyphen compound whose head resolves to nothing still fires SPEC-LINT-004 citing the full token', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: the engine.ghost-backed cache is refreshed.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    assert.equal(r.totalErrors, 0);
+    const warns = r.warningsByFile['engine.testpkg.md'] || [];
+    assert.equal(warns.length, 1, `expected one SPEC-LINT-004, got: ${JSON.stringify(warns)}`);
+    assert.ok(warns[0].includes('[SPEC-LINT-004]') && warns[0].includes('"engine.ghost-backed"'));
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256(b) unit: resolveCitedKey trims hyphen tails and trailing separators', () => {
+  const modulesByKey = { 'engine.other': {} };
+  assert.deepEqual(resolveCitedKey('engine.other-owned', modulesByKey), { kind: 'key', key: 'engine.other' });
+  assert.deepEqual(resolveCitedKey('engine.other-multi-part-tail', modulesByKey), { kind: 'key', key: 'engine.other' });
+  assert.deepEqual(resolveCitedKey('engine.other-', modulesByKey), { kind: 'key', key: 'engine.other' });
+  assert.deepEqual(resolveCitedKey('engine.ghost-backed', modulesByKey), { kind: 'unregistered', token: 'engine.ghost-backed' });
+  // file references keep skipping even with a hyphen in the name
+  assert.deepEqual(resolveCitedKey('engine.other-spec.md', modulesByKey), { kind: 'skip' });
+});
+
+test('BUG-256(c): a case-variant citation ("Engine.other") flags SPEC-LINT-005 AND still fails the edge check', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: Engine.other must be polled every tick.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    const warns = r.warningsByFile['engine.testpkg.md'] || [];
+    assert.equal(r.totalErrors, 1, `the disguised citation must still fire SPEC-LINT-001, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs[0].includes('[SPEC-LINT-001]') && errs[0].includes('"engine.other"'));
+    assert.equal(warns.length, 1, `expected the SPEC-LINT-005 typo warning, got: ${JSON.stringify(warns)}`);
+    assert.ok(warns[0].includes('[SPEC-LINT-005]') && warns[0].includes('"Engine.other"'),
+      `expected a case-variant warning naming the raw token, got: ${warns[0]}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256(c): a case variant of an UNKNOWN key ("Engine.hovercraft") still flags — the double evasion is closed', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: Engine.hovercraft supplies lift.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const warns = r.warningsByFile['engine.testpkg.md'] || [];
+    assert.equal(warns.length, 1, `expected one SPEC-LINT-005, got: ${JSON.stringify(warns)}`);
+    assert.ok(warns[0].includes('[SPEC-LINT-005]') && warns[0].includes('"Engine.hovercraft"')
+      && warns[0].includes('matches no registered module key'),
+      `expected a case-variant warning for the unknown key, got: ${warns[0]}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256(c): with the edge registered, a case variant is warning-only (no false SPEC-LINT-001)', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: Engine.other must be polled every tick.\n',
+    { modules: edgeFixtureModules({ outboundOnCiting: true }) });
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    assert.equal(r.totalErrors, 0, `a registered edge must satisfy the disguised citation: ${JSON.stringify(r.findingsByFile)}`);
+    assert.equal(r.totalWarnings, 1, 'the typo warning still fires');
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256(c): unicode dot-lookalike (U+2024) and Cyrillic homoglyph citations are ERRORS and edge-checked', () => {
+  for (const [name, body] of [
+    ['one-dot-leader', '# engine.testpkg\n\nAC-1: cites engine․other daily.\n'],
+    ['Cyrillic e homoglyph', '# engine.testpkg\n\nAC-1: cites еngine.other daily.\n'],
+  ]) {
+    const { repoDir, cleanup } = makeFixtureRepo(body);
+    try {
+      const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+      const errs = r.findingsByFile['engine.testpkg.md'] || [];
+      assert.equal(r.totalErrors, 2, `${name}: expected SPEC-LINT-005 error + SPEC-LINT-001, got: ${JSON.stringify(errs)}`);
+      assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('engine.other')),
+        `${name}: expected a SPEC-LINT-005 lookalike error, got: ${JSON.stringify(errs)}`);
+      assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('"engine.other"')),
+        `${name}: the disguised citation must still be edge-checked, got: ${JSON.stringify(errs)}`);
+    } finally {
+      cleanup();
+    }
+  }
+});
+
+test('BUG-256 dedupe: plain + case-variant citations of the same key yield exactly ONE SPEC-LINT-001', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: depends on engine.other. AC-2: Engine.other is polled.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = (r.findingsByFile['engine.testpkg.md'] || []).filter(e => e.includes('[SPEC-LINT-001]'));
+    assert.equal(errs.length, 1, `one 001 per cited key per file, got: ${JSON.stringify(errs)}`);
+    assert.equal(r.totalWarnings, 1, 'the 005 typo warning still fires alongside');
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 false-positive controls: Go-symbol idioms, acronyms, codes, and file refs never fire SPEC-LINT-005', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    // engine.Frobnicate: Go-symbol form whose folded key is UNREGISTERED —
+    // owned by CHECK 2, must not fire 005. Response.Payload / time.Now /
+    // MET-E403 / FEAT-999 / Engine (bare) / Engine.other.md (file ref):
+    // none are mkey citations.
+    '# engine.testpkg\n\nAC-1: engine.Frobnicate wraps Response.Payload at time.Now; see MET-E403, FEAT-999, the Engine, and Engine.other.md.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    assert.equal(r.totalErrors + r.totalWarnings, 0,
+      `no SPEC-LINT-005 storm on legitimate prose: ${JSON.stringify({ e: r.findingsByFile, w: r.warningsByFile })}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256: a Go-symbol-form token whose folded key IS registered ("engine.Other") still flags as a probable typo', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: engine.Other coordinates the handoff.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const warns = r.warningsByFile['engine.testpkg.md'] || [];
+    assert.ok(warns.some(w => w.includes('[SPEC-LINT-005]') && w.includes('"engine.Other"')),
+      `expected a SPEC-LINT-005 warning, got: ${JSON.stringify(warns)}`);
+    assert.equal(r.totalErrors, 1, 'and the folded citation is edge-checked (no edge in fixture)');
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 code-span rule: an unregistered-folding case variant in backticks is a Go identifier, not a typo (the Engine.self corpus class)', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: mirrors `Engine.self` and calls `Engine.Snapshot()` before save.\n\n```go\nEngine.RunCommandLoop(ctx)\n```\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    assert.equal(r.totalErrors + r.totalWarnings, 0,
+      `code-span Go identifiers must not fire SPEC-LINT-005: ${JSON.stringify({ e: r.findingsByFile, w: r.warningsByFile })}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 code-span rule: a REGISTERED-folding case variant flags even inside backticks, and unicode lookalikes flag everywhere', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: reads `Engine.other` state; AC-2: cites `engine․other` too.\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const warns = r.warningsByFile['engine.testpkg.md'] || [];
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(warns.some(w => w.includes('[SPEC-LINT-005]') && w.includes('"Engine.other"')),
+      `registered-key case variant must flag in a code span, got: ${JSON.stringify(warns)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE')),
+      `unicode lookalike must error even in a code span, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('"engine.other"')),
+      `the disguised citations must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+// BUG-256 r2: invisible/format character evasion regression tests.
+// These prove the strip-before-fold fix catches zero-width characters that
+// survive NFKC and would otherwise break the foldedMkeyShapeRe pattern.
+// Invisible non-ASCII chars are classified as UNICODE LOOKALIKES (ERRORS),
+// not warnings.
+
+test('BUG-256 r2: ZWJ-embedded citation (U+200D zero-width joiner) flags SPEC-LINT-005 and edges', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: engine.oth‍er must be polled (ZWJ embedded in token).\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE') && e.includes('engine.oth')),
+      `ZWJ-embedded token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `invisible chars stripped, citation must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r2: ZWSP-embedded citation (U+200B zero-width space) flags SPEC-LINT-005 and edges', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: engine.ot​her state (ZWSP embedded).\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE') && e.includes('engine.ot')),
+      `ZWSP-embedded token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `invisible chars stripped, citation must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r2: soft-hyphen-embedded citation (U+00AD) flags SPEC-LINT-005 and edges', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: en­gine.other must work (soft hyphen in first segment).\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE')),
+      `soft-hyphen-embedded token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `invisible chars stripped, citation must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r2: BOM-prefixed citation (U+FEFF) flags SPEC-LINT-005 and edges', () => {
+  const { repoDir, cleanup } = makeFixtureRepo(
+    '# engine.testpkg\n\nAC-1: ﻿engine.other coordinates (BOM at start).\n');
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE')),
+      `BOM-prefixed token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `invisible chars stripped, citation must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+// BUG-256 r3: the r2 hand list (00AD/200B-200F/2060/FEFF) missed U+2028/U+2029
+// (Zl/Zp line/paragraph separators) and U+202A-202E (directional overrides) —
+// the r2 REJECT. r3 replaces the list with the full Cf category plus the two
+// Zl/Zp separators, and adds the FAIL-CLOSED RESIDUE RULE so that any exotic
+// character NO list ever named still produces a finding, never a silent pass.
+// Payloads are built with String.fromCodePoint: the evasion chars must never
+// appear as literals in this source file (U+2028/U+2029 are not even legal in
+// JS regex literals — that is what killed the first r3 attempt mid-write).
+
+test('BUG-256 r3 killshot: U+2028 LINE SEPARATOR embedded citation flags SPEC-LINT-005 and edges', () => {
+  const body = '# engine.testpkg\n\nAC-1: engine.oth' + String.fromCodePoint(0x2028) + 'er must be polled (Zl separator embedded).\n';
+  const { repoDir, cleanup } = makeFixtureRepo(body);
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE')),
+      `U+2028-embedded token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `folded key engine.other must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r3 killshot: U+2029 PARAGRAPH SEPARATOR embedded citation flags SPEC-LINT-005 and edges', () => {
+  const body = '# engine.testpkg\n\nAC-1: engine.oth' + String.fromCodePoint(0x2029) + 'er state (Zp separator embedded).\n';
+  const { repoDir, cleanup } = makeFixtureRepo(body);
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE')),
+      `U+2029-embedded token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `folded key engine.other must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r3 killshot: U+202E RTL OVERRIDE embedded citation flags SPEC-LINT-005 and edges', () => {
+  const body = '# engine.testpkg\n\nAC-1: engine.oth' + String.fromCodePoint(0x202E) + 'er must work (directional override embedded).\n';
+  const { repoDir, cleanup } = makeFixtureRepo(body);
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('UNICODE')),
+      `U+202E-embedded token must flag SPEC-LINT-005 UNICODE LOOKALIKE error, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `folded key engine.other must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r3 class closure: U+FFF9 INTERLINEAR ANNOTATION ANCHOR (never in any hand list; Cf) still flags', () => {
+  // U+FFF9 was never on the r1/r2 strip lists. It is General_Category=Cf, so
+  // the category-wide strip covers it with no list edit — proving the strip
+  // is list-free for the whole Format category.
+  const body = '# engine.testpkg\n\nAC-1: engine.oth' + String.fromCodePoint(0xFFF9) + 'er coordinates (exotic Cf char embedded).\n';
+  const { repoDir, cleanup } = makeFixtureRepo(body);
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]')),
+      `U+FFF9-embedded token must flag SPEC-LINT-005, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `folded key engine.other must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r3 class closure: U+FE00 VARIATION SELECTOR (not Cf, not Zl/Zp, NFKC-inert, unmapped) flags via the FAIL-CLOSED RESIDUE RULE', () => {
+  // U+FE00 is category Mn: it survives the Cf/Zl/Zp strip, NFKC leaves it
+  // unchanged, and the confusable map does not know it. Under r1/r2 semantics
+  // it silently failed the folded-shape regex — a guaranteed silent pass for
+  // a character no list ever named. The residue rule closes the CLASS: an
+  // mkey-shaped candidate whose folded form still carries any char outside
+  // [a-z0-9.-] is flagged fail-closed, and its residue-stripped key is
+  // edge-checked. RED-proven: with the residue rule scratch-removed this
+  // test fails (the token produces zero findings).
+  const body = '# engine.testpkg\n\nAC-1: engine.oth' + String.fromCodePoint(0xFE00) + 'er must be polled (unmapped exotic char embedded).\n';
+  const { repoDir, cleanup } = makeFixtureRepo(body);
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-005]') && e.includes('MKEY RESIDUE') && e.includes('U+FE00')),
+      `U+FE00-embedded token must flag the SPEC-LINT-005 MKEY RESIDUE fail-closed error naming the residue char, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('engine.other')),
+      `residue-stripped key engine.other must be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r3 residue carve-out: arrow-joined citation pairs (U+2194) are notation, not evasion — no 005, but every fragment is still edge-checked', () => {
+  // Real-corpus shape ("engine.build" U+2194 "engine.season"): the evasion
+  // tokenizer over-merges the pair into one token. The residue rule must NOT
+  // flag it (every fragment is a well-formed citation — the exotic char sits
+  // BETWEEN citations), but each fragment still routes through SPEC-LINT-001.
+  const body = '# engine.testpkg\n\nAC-1: the engine.testpkg' + String.fromCodePoint(0x2194) + 'engine.other flow is bidirectional.\n';
+  const { repoDir, cleanup } = makeFixtureRepo(body);
+  try {
+    const r = runLint({ repoDir, log: sink, warn: sink, error: sink });
+    const errs = r.findingsByFile['engine.testpkg.md'] || [];
+    assert.ok(!errs.some(e => e.includes('MKEY RESIDUE')),
+      `arrow-joined citation pair must not flag MKEY RESIDUE, got: ${JSON.stringify(errs)}`);
+    assert.ok(errs.some(e => e.includes('[SPEC-LINT-001]') && e.includes('"engine.other"')),
+      `the arrow-joined fragment engine.other must still be edge-checked, got: ${JSON.stringify(errs)}`);
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-256 r3 foldMkeyToken unit: Zl/Zp separators and exotic Cf chars strip to canonical form; unmapped non-Cf residue survives for the residue rule', () => {
+  assert.equal(foldMkeyToken('engine.oth' + String.fromCodePoint(0x2028) + 'er'), 'engine.other', 'U+2028 (Zl) stripped');
+  assert.equal(foldMkeyToken('engine.oth' + String.fromCodePoint(0x2029) + 'er'), 'engine.other', 'U+2029 (Zp) stripped');
+  assert.equal(foldMkeyToken('engine.oth' + String.fromCodePoint(0x202A) + 'er'), 'engine.other', 'U+202A (Cf, LRE) stripped');
+  assert.equal(foldMkeyToken('engine.oth' + String.fromCodePoint(0x202E) + 'er'), 'engine.other', 'U+202E (Cf, RLO) stripped');
+  assert.equal(foldMkeyToken('engine.oth' + String.fromCodePoint(0xFFF9) + 'er'), 'engine.other', 'U+FFF9 (Cf, never hand-listed) stripped');
+  // Deliberate: FE00 must NOT be silently dropped by the fold — it is the
+  // residue rule's job to turn it into a finding, keeping the fold honest.
+  assert.equal(foldMkeyToken('engine.oth' + String.fromCodePoint(0xFE00) + 'er'),
+    'engine.oth' + String.fromCodePoint(0xFE00) + 'er', 'U+FE00 (Mn) is residue, not silently stripped');
+});
+
+test('foldMkeyToken unit: NFKC compatibility forms, case, and confusables all fold to canonical mkey form', () => {
+  assert.equal(foldMkeyToken('Engine.Other'), 'engine.other');
+  assert.equal(foldMkeyToken('ENGINE.FINANCE'), 'engine.finance');
+  assert.equal(foldMkeyToken('engine․other'), 'engine.other', 'U+2024 ONE DOT LEADER folds via NFKC');
+  assert.equal(foldMkeyToken('engine．other'), 'engine.other', 'U+FF0E FULLWIDTH FULL STOP folds via NFKC');
+  assert.equal(foldMkeyToken('еngine.other'), 'engine.other', 'Cyrillic е folds via the confusable map');
+  assert.equal(foldMkeyToken('engine.оther'), 'engine.other', 'Cyrillic о folds via the confusable map');
+  assert.equal(foldMkeyToken('engine.other...'), 'engine.other', 'trailing dots stripped');
+});
+
+// BUG-256 r2 regression tests: invisible/format characters must be stripped
+// BEFORE shape-matching, else they survive NFKC and break regex patterns
+test('foldMkeyToken unit: ZWJ-embedded mkey folds to canonical form', () => {
+  // U+200D zero-width joiner: engine.oth[ZWJ]er should strip the ZWJ
+  // and fold to engine.other, not remain as engine.oth[ZWJ]er
+  assert.equal(foldMkeyToken('engine.oth‍er'), 'engine.other',
+    'U+200D zero-width joiner stripped before shape-matching');
+});
+
+test('foldMkeyToken unit: ZWSP-embedded mkey folds to canonical form', () => {
+  // U+200B zero-width space in the second segment
+  assert.equal(foldMkeyToken('engine.ot​her'), 'engine.other',
+    'U+200B zero-width space stripped before shape-matching');
+});
+
+test('foldMkeyToken unit: soft-hyphen-embedded mkey folds to canonical form', () => {
+  // U+00AD soft hyphen (appears in the first segment)
+  assert.equal(foldMkeyToken('en­gine.other'), 'engine.other',
+    'U+00AD soft hyphen stripped before shape-matching');
+});
+
+test('foldMkeyToken unit: BOM-prefixed mkey folds to canonical form', () => {
+  // U+FEFF zero-width no-break space / BOM at the start
+  assert.equal(foldMkeyToken('﻿engine.other'), 'engine.other',
+    'U+FEFF BOM/zero-width no-break space stripped before shape-matching');
 });
 
 test('gating precedence: a registered module path basename BEATS a stdlib name collision (e.g. "build"), and SPEC-LINT-002 still fires there', () => {
