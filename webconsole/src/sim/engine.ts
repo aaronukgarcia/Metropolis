@@ -1,0 +1,581 @@
+// engine.ts — pure (non-React) simulation core.
+//
+// Extracted from store.tsx so the reducer and its helpers can be unit-tested
+// directly: `node --test` type-strips .ts, but NOT the JSX in store.tsx. Every
+// piece of game logic lives here; store.tsx keeps only the React wiring and
+// re-exports these symbols so existing `'../sim/store'` imports keep working.
+
+import {
+  PIPE_TIERS,
+  SPECS,
+  countByKind,
+  fits,
+  isOnline,
+  occupiedSet,
+  placementCost,
+  plantEffServed,
+  stationLinks,
+  totalJobs,
+  powerStats,
+  waterBalanceOf,
+  unlockedAtLevel,
+  MAP_H,
+  MAP_W,
+} from './data.ts';
+import type {
+  FlowItem,
+  LedgerEntry,
+  LevelUpNotice,
+  PolicyId,
+  SimState,
+  TaxRates,
+  Tool,
+  ZoneKind,
+} from './types.ts';
+
+export const LOAN_PRINCIPAL = 25000;
+export const LOAN_TOTAL = 27500;
+const MOVE_COST = 25;
+
+/**
+ * Milestone cash-injection rate (FEAT-1972079884): a level-up grants this
+ * fraction of current funds. PLACEHOLDER under the balance-number regime —
+ * directional only, pending Aaron's row-by-row balance pass.
+ */
+export const LEVEL_REWARD_RATE = 0.1;
+
+const XP_LEVELS: number[] = (() => {
+  const a = [0];
+  let step = 50;
+  for (let l = 2; l <= 20; l++) {
+    a.push(a[a.length - 1] + step);
+    step = Math.round(step * 1.5);
+  }
+  return a;
+})();
+
+export const levelOf = (xp: number) => {
+  let lv = 1;
+  for (let i = 1; i < XP_LEVELS.length; i++) if (xp >= XP_LEVELS[i]) lv = i + 1;
+  return lv;
+};
+
+export const xpForLevel = (level: number) =>
+  XP_LEVELS[Math.max(0, Math.min(level - 1, XP_LEVELS.length - 1))];
+
+export interface ZoneDemand {
+  residential: number;
+  commercial: number;
+  industrial: number;
+}
+
+const clampN = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+export function demandOf(s: SimState): ZoneDemand {
+  const c = countByKind(s.buildings);
+  const t = s.taxRates;
+  const avgTax = (t.residential + t.commercial + t.industrial) / 3;
+  const jobs = totalJobs(s);
+  const workers = s.population * 0.55;
+  const base = Math.max(Math.max(jobs, workers), 40);
+  const res = ((jobs - workers) / base) * 140 - (avgTax - 10) * 4;
+  const popFactor = Math.min(1, s.population / 40);
+  const shopBase = Math.max(s.population * 0.22, 12);
+  const com = popFactor * (((shopBase - c.commercial * 10) / shopBase) * 130 - (t.commercial - 11) * 3);
+  const indBase = Math.max(s.population * 0.18, 9);
+  const ind = popFactor * (((indBase - c.industrial * 7) / indBase) * 130 - (t.industrial - 13) * 3);
+  return {
+    residential: Math.round(clampN(res, -100, 100)),
+    commercial: Math.round(clampN(com, -100, 100)),
+    industrial: Math.round(clampN(ind, -100, 100)),
+  };
+}
+
+function starterCity(): SimState['buildings'] {
+  const out: SimState['buildings'] = [];
+  let id = 1;
+  const put = (spec: string, x: number, y: number) => out.push({ id: id++, spec, x, y });
+
+  for (let x = 0; x < MAP_W; x++) {
+    put('m20', x, 56);
+    put('m20', x, 58);
+  }
+  for (let y = 57; y <= 63; y++) put('road', 150, y);
+
+  const jx = 150;
+  const jy = 67;
+  const r = 4;
+  const seen = new Set<string>();
+  for (let a = 0; a < 360; a += 4) {
+    const rad = (a * Math.PI) / 180;
+    const x = Math.round(jx + r * Math.cos(rad));
+    const y = Math.round(jy + r * Math.sin(rad));
+    const k = `${x},${y}`;
+    if (!seen.has(k)) {
+      seen.add(k);
+      put('road', x, y);
+    }
+  }
+
+  for (let y = jy + r + 1; y <= 96; y++) put('road', 150, y);
+  for (let x = 149; x >= 122; x--) put('road', x, 96);
+
+  put('pylon', 164, 72);
+  put('pylon', 171, 70);
+
+  for (let x = 0; x < MAP_W; x++) put('rail', x, 84);
+  for (let x = 0; x < MAP_W; x++) put('hs1', x, 205);
+  put('station_sanderling', 136, 83);
+  return out;
+}
+
+function rawState(): SimState {
+  return {
+    tick: 0,
+    speed: 1,
+    funds: 10000000,
+    loanBalance: 0,
+    population: 0,
+    xp: 30,
+    taxRates: { residential: 9, commercial: 11, industrial: 13 },
+    policies: { recycling: false, transitSubsidy: false, tourismDrive: false, austerity: false },
+    buildings: starterCity(),
+    nextId: 100,
+    movingId: null,
+    tool: { mode: 'select' },
+    clipboard: null,
+    pipeTier: {},
+    history: [],
+    ledger: [],
+    nextLedgerId: 1,
+    lastFlows: { inflows: [], outflows: [] },
+    // Start already "at" the seed level so the opening state grants no reward.
+    lastRewardedLevel: levelOf(30),
+    notice: null,
+  };
+}
+
+const UPKEEP_BUCKET: Partial<Record<ZoneKind, string>> = {
+  road: 'Roads',
+  power: 'Power Grid',
+  water: 'Water & Waste',
+  health: 'Healthcare',
+  school: 'Education',
+  police: 'Policing',
+  park: 'Parks',
+  commercial: 'Commerce & Industry',
+  office: 'Commerce & Industry',
+  industrial: 'Commerce & Industry',
+  mine: 'Commerce & Industry',
+};
+
+export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: FlowItem[] } {
+  const c = countByKind(s.buildings);
+  const t = s.taxRates;
+  const inflows: FlowItem[] = [
+    { label: 'Council Tax', value: Math.round((s.population * t.residential * 2) / 100) },
+    { label: 'Business Tax', value: Math.round(c.commercial * t.commercial * 0.4) },
+    { label: 'Freight Tax', value: Math.round(c.industrial * t.industrial * 0.55) },
+  ];
+  if (s.policies.tourismDrive)
+    inflows.push({ label: 'Tourism', value: Math.round(s.population * 0.12) });
+
+  const links = stationLinks(s);
+  let commuterWeight = 0;
+  for (const b of s.buildings) {
+    if (!links.connectedIds.has(b.id)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind !== 'station') continue;
+    commuterWeight += sp.id === 'station_ashford' ? 3 : 1;
+  }
+  if (commuterWeight > 0) {
+    inflows.push({
+      label: 'Commuter Revenue',
+      value: Math.round(s.population * 0.08 * Math.min(commuterWeight, 6)),
+    });
+  }
+
+  const c2 = countByKind(s.buildings);
+  const officeJobs = totalJobs(s) - c2.commercial * 12 - c2.industrial * 18;
+  const officeTax = Math.max(0, officeJobs) * t.commercial * 0.05;
+  if (officeTax > 0) inflows.push({ label: 'Office Tax', value: Math.round(officeTax) });
+
+  let tourism = s.policies.tourismDrive ? Math.round(s.population * 0.12) : 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.tourism) tourism += sp.tourism * Math.min(1, s.population / 300);
+  }
+  if (tourism > 0) inflows.push({ label: 'Tourism', value: Math.round(tourism) });
+
+  const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour') ? 1.4 : 1;
+
+  const buckets: Record<string, number> = {};
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (!sp || !sp.upkeep) continue;
+    const k = UPKEEP_BUCKET[sp.kind];
+    if (k) buckets[k] = (buckets[k] ?? 0) + sp.upkeep;
+  }
+  let outflows: FlowItem[] = Object.entries(buckets)
+    .filter(([, v]) => v > 0)
+    .map(([label, value]) => ({ label, value }));
+  outflows.push({ label: 'Wages', value: Math.round(s.population * 0.5) });
+
+  const c3 = countByKind(s.buildings);
+  const freightIdx = inflows.findIndex((f) => f.label === 'Freight Tax');
+  if (freightIdx >= 0) {
+    inflows[freightIdx] = {
+      label: 'Freight Tax',
+      value: Math.round(
+        (c3.industrial * t.industrial * 0.55 + c3.mine * t.industrial * 0.9) * harbourBoost
+      ),
+    };
+  }
+  if (s.policies.transitSubsidy)
+    outflows.push({ label: 'Transit Subsidy', value: Math.round(s.population * 1.5) });
+  if (s.loanBalance > 0)
+    outflows.push({ label: 'Loan Interest', value: Math.round(s.loanBalance * 0.005) });
+
+  if (s.policies.recycling) {
+    const discounted = new Set(['Roads', 'Power Grid', 'Water & Waste', 'Healthcare', 'Education', 'Parks', 'Policing']);
+    outflows = outflows.map((o) =>
+      discounted.has(o.label) ? { ...o, value: Math.round(o.value * 0.93) } : o
+    );
+  }
+  if (s.policies.austerity)
+    outflows = outflows.map((o) => ({ ...o, value: Math.round(o.value * 0.9) }));
+  return { inflows, outflows };
+}
+
+/**
+ * Milestone rewards (FEAT-1972079884). If experience has crossed one or more new
+ * levels since the last reward, grant the cash injection + build the level-up
+ * notice EXACTLY ONCE per level. Idempotent: a no-op unless levelOf(xp) has
+ * advanced past lastRewardedLevel, so it is safe to call after any xp change.
+ */
+export function grantLevelRewards(s: SimState): SimState {
+  const lv = levelOf(s.xp);
+  if (lv <= s.lastRewardedLevel) return s;
+  let funds = s.funds;
+  let notice: LevelUpNotice | null = s.notice;
+  // A single jump may cross several levels (e.g. debugXp); reward each crossed
+  // level once, compounding, and surface the most recent as the live notice.
+  for (let L = s.lastRewardedLevel + 1; L <= lv; L++) {
+    const cash = Math.round(funds * LEVEL_REWARD_RATE);
+    funds += cash;
+    notice = { level: L, cash, unlocked: unlockedAtLevel(L) };
+  }
+  return { ...s, funds, lastRewardedLevel: lv, notice };
+}
+
+function advance(s: SimState): SimState {
+  const { inflows, outflows } = computeFlows(s);
+  const income = inflows.reduce((a, b) => a + b.value, 0);
+  const expense = outflows.reduce((a, b) => a + b.value, 0);
+  let funds = s.funds + income - expense;
+  let ledger: LedgerEntry[] = s.ledger;
+  let nextLedger = s.nextLedgerId;
+  const tick = s.tick + 1;
+
+  if (tick % 30 === 0) {
+    funds += 800;
+    ledger = [{ id: nextLedger++, tick, label: 'Regional Grant', amount: 800 }, ...ledger].slice(0, 200);
+  }
+
+  const capacity = (() => {
+    let cap = 0;
+    for (const b of s.buildings) {
+      if (!isOnline(s, b)) continue;
+      const sp = SPECS[b.spec];
+      if (sp?.kind === 'residential') cap += sp.residents ?? 8;
+    }
+    return cap;
+  })();
+  const t = s.taxRates;
+  const avgTax = (t.residential + t.commercial + t.industrial) / 3;
+  const demand = demandOf(s);
+  const links = stationLinks(s);
+  let stationWeight = 0;
+  for (const b of s.buildings) {
+    if (!links.connectedIds.has(b.id)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'station') stationWeight += sp.id === 'station_ashford' ? 3 : 1;
+  }
+  let population = s.population;
+  if (capacity > population) {
+    const growthFactor =
+      (1.4 - avgTax / 15) * (s.policies.transitSubsidy ? 1.25 : 1) *
+      Math.max(0.3, 0.55 + demand.residential / 200) *
+      (1 + 0.15 * Math.min(stationWeight, 6));
+    population += Math.max(0, Math.ceil((capacity - population) * 0.05 * growthFactor));
+  } else if (population > capacity) {
+    population = Math.max(capacity, population - Math.ceil((population - capacity) * 0.1));
+  }
+
+  return grantLevelRewards({
+    ...s,
+    tick,
+    funds,
+    population,
+    xp: s.xp + 1,
+    history: [...s.history, { tick, funds, income, expense, population }].slice(-240),
+    ledger,
+    nextLedgerId: nextLedger,
+    lastFlows: { inflows, outflows },
+  });
+}
+
+function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'ledger' | 'nextLedgerId'> {
+  return {
+    ledger: [{ id: s.nextLedgerId, tick: s.tick, label, amount }, ...s.ledger].slice(0, 200),
+    nextLedgerId: s.nextLedgerId + 1,
+  };
+}
+
+export type Action =
+  | { type: 'tick' }
+  | { type: 'speed'; speed: SimState['speed'] }
+  | { type: 'tool'; tool: Tool }
+  | { type: 'place'; spec: string; x: number; y: number }
+  | { type: 'bulldoze'; x: number; y: number }
+  | { type: 'pickup'; id: number }
+  | { type: 'relocate'; x: number; y: number }
+  | { type: 'cancelMove' }
+  | { type: 'pipeUpgrade'; id: number }
+  | { type: 'tax'; which: keyof TaxRates; rate: number }
+  | { type: 'policy'; id: PolicyId }
+  | { type: 'loan' }
+  | { type: 'repay' }
+  | { type: 'debugFunds'; amount: number }
+  | { type: 'debugXp'; amount: number }
+  | { type: 'dismissNotice' }
+  | { type: 'reset' };
+
+export function reducer(state: SimState, action: Action): SimState {
+  switch (action.type) {
+    case 'tick':
+      return advance(state);
+
+    case 'speed':
+      return { ...state, speed: action.speed };
+
+    case 'tool':
+      return { ...state, tool: action.tool, movingId: null };
+
+    case 'place': {
+      const sp = SPECS[action.spec];
+      if (!sp) return state;
+      if (sp.unlock > levelOf(state.xp)) return state;
+      // Zoning is free (FEAT-1972079882): a zone charges £0, so the funds check
+      // and deduction use placementCost, not the catalogue cost.
+      const cost = placementCost(sp);
+      if (state.funds < cost) return state;
+      if (
+        action.x < 0 ||
+        action.y < 0 ||
+        action.x + sp.w > MAP_W ||
+        action.y + sp.h > MAP_H
+      )
+        return state;
+      if (!fits(occupiedSet(state), sp.w, sp.h, action.x, action.y)) return state;
+      return grantLevelRewards({
+        ...state,
+        funds: state.funds - cost,
+        xp: state.xp + 4,
+        nextId: state.nextId + 1,
+        buildings: [
+          ...state.buildings,
+          { id: state.nextId, spec: action.spec, x: action.x, y: action.y, builtTick: state.tick },
+        ],
+        ...logEvent(state, `Started ${sp.name}`, -cost),
+      });
+    }
+
+    case 'bulldoze': {
+      const target = state.buildings.find((b) => {
+        const sp = SPECS[b.spec];
+        if (!sp) return false;
+        return (
+          action.x >= b.x &&
+          action.x < b.x + sp.w &&
+          action.y >= b.y &&
+          action.y < b.y + sp.h
+        );
+      });
+      if (!target) return state;
+      const def = SPECS[target.spec];
+      // Refund 25% of what was actually PAID — a free zone refunds nothing, so
+      // place-then-bulldoze cannot mint money.
+      const refund = Math.round(placementCost(def) * 0.25);
+      return {
+        ...state,
+        funds: state.funds + refund,
+        buildings: state.buildings.filter((w) => w.id !== target.id),
+        ...(state.movingId === target.id ? { movingId: null } : {}),
+        ...logEvent(state, `Demolished ${def.name}`, refund),
+      };
+    }
+
+    case 'pickup':
+      return { ...state, movingId: action.id };
+
+    case 'relocate': {
+      if (state.movingId == null || state.funds < MOVE_COST) return state;
+      const moving = state.buildings.find((b) => b.id === state.movingId);
+      if (!moving) return { ...state, movingId: null };
+      const sp = SPECS[moving.spec];
+      if (
+        action.x < 0 ||
+        action.y < 0 ||
+        action.x + sp.w > MAP_W ||
+        action.y + sp.h > MAP_H ||
+        !fits(occupiedSet(state, moving.id), sp.w, sp.h, action.x, action.y)
+      )
+        return state;
+      return {
+        ...state,
+        funds: state.funds - MOVE_COST,
+        movingId: null,
+        buildings: state.buildings.map((b) =>
+          b.id === moving.id ? { ...b, x: action.x, y: action.y } : b
+        ),
+      };
+    }
+
+    case 'cancelMove':
+      return { ...state, movingId: null };
+
+    case 'pipeUpgrade': {
+      const b = state.buildings.find((w) => w.id === action.id);
+      if (!b) return state;
+      const sp = SPECS[b.spec];
+      if (sp?.kind !== 'water') return state;
+      const tier = state.pipeTier[action.id] ?? 0;
+      if (tier >= PIPE_TIERS.length - 1) return state;
+      const cost = PIPE_TIERS[tier + 1].upgradeCost;
+      if (state.funds < cost) return state;
+      return {
+        ...state,
+        funds: state.funds - cost,
+        pipeTier: { ...state.pipeTier, [action.id]: tier + 1 },
+        ...logEvent(state, `${sp.name} pipe upgraded to ${PIPE_TIERS[tier + 1].label}`, -cost),
+      };
+    }
+
+    case 'tax':
+      return { ...state, taxRates: { ...state.taxRates, [action.which]: action.rate } };
+
+    case 'policy':
+      return { ...state, policies: { ...state.policies, [action.id]: !state.policies[action.id] } };
+
+    case 'loan': {
+      if (state.loanBalance > 0) return state;
+      return {
+        ...state,
+        funds: state.funds + LOAN_PRINCIPAL,
+        loanBalance: LOAN_TOTAL,
+        ...logEvent(state, `Municipal loan taken (+${LOAN_PRINCIPAL})`, LOAN_PRINCIPAL),
+      };
+    }
+
+    case 'repay': {
+      if (state.loanBalance === 0 || state.funds < state.loanBalance) return state;
+      const bal = state.loanBalance;
+      return {
+        ...state,
+        funds: state.funds - bal,
+        loanBalance: 0,
+        ...logEvent(state, 'Loan repaid in full', -bal),
+      };
+    }
+
+    case 'debugFunds':
+      return { ...state, funds: state.funds + action.amount };
+
+    case 'debugXp':
+      return grantLevelRewards({ ...state, xp: state.xp + action.amount });
+
+    case 'dismissNotice':
+      return state.notice == null ? state : { ...state, notice: null };
+
+    case 'reset': {
+      const s = rawState();
+      s.speed = state.speed;
+      return advance(s);
+    }
+  }
+}
+
+export function approvalOf(s: SimState): number {
+  const t = s.taxRates;
+  const avgTax = (t.residential + t.commercial + t.industrial) / 3;
+  let a = 62 - avgTax * 1.5;
+  a += Math.min(6, 3 * stationLinks(s).connectedIds.size);
+  if (waterBalanceOf(s).leak) a -= 5;
+  if (s.policies.transitSubsidy) a += 8;
+  if (s.policies.austerity) a -= 12;
+  if (s.policies.recycling) a -= 2;
+  return Math.max(0, Math.min(100, Math.round(a)));
+}
+
+export function wellbeingOf(s: SimState): {
+  overall: number;
+  parts: { label: string; value: number }[];
+} {
+  const c = countByKind(s.buildings);
+  const pop = s.population;
+  const f = Math.min(1, pop / 50);
+  const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
+
+  let nursery = 0;
+  let primary = 0;
+  let tertiary = 0;
+  let gp = 0;
+  let hosp = 0;
+  let police = 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    if (sp.stage === 'nursery') nursery += sp.children ?? 0;
+    else if (sp.stage === 'primary' || sp.stage === 'city') primary += sp.children ?? 0;
+    else if (sp.stage === 'tertiary') tertiary += sp.children ?? 0;
+    else if (sp.id === 'hea_clinic') gp += sp.served ?? 0;
+    else if (sp.id === 'hea_hospital') hosp += sp.served ?? 0;
+    else if (sp.id === 'pol_station') police += sp.served ?? 0;
+  }
+
+  const cov = (need: number, cap: number) =>
+    blend(Math.round(clampN((cap / Math.max(need, 1)) * 100, 0, 120)));
+
+  const parks = blend(Math.round(clampN(((c.park * 40) / Math.max(pop, 20)) * 70, 0, 100)));
+  const pw = powerStats(s);
+  const cleanWaste = { clean: 0, waste: 0 };
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'water') {
+      if (sp.tag === 'clean') cleanWaste.clean += plantEffServed(s, b);
+      if (sp.tag === 'waste') cleanWaste.waste += plantEffServed(s, b);
+    }
+  }
+  const utilities = blend(
+    Math.round(clampN(Math.min((pw.cap / Math.max(pw.need, 1)) * 100, (cleanWaste.clean / Math.max(pop, 1)) * 100), 0, 120))
+  );
+
+  const parts = [
+    { label: 'Approval', value: approvalOf(s) },
+    { label: 'Parks & leisure', value: parks },
+    { label: 'Healthcare', value: cov(pop / 800, gp) },
+    { label: 'Hospital care', value: cov(pop / 40000, hosp) },
+    { label: 'Education', value: cov(pop * 0.18, nursery + primary + tertiary) },
+    { label: 'Safety', value: cov(pop / 10000, police) },
+    { label: 'Utilities', value: utilities },
+    { label: 'Sewage', value: cov(pop, cleanWaste.waste) },
+  ];
+  const overall = Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
+  return { overall, parts };
+}
+
+export function initialState(): SimState {
+  return advance(rawState());
+}

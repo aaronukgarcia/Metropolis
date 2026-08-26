@@ -99,6 +99,27 @@ export function StartOverButton() {
       >
         Start Over
       </button>
+      <DevFundsButton />
     </div>
+  );
+}
+
+/** Amount granted by the dev funds button (FEAT-1972079883). */
+export const DEV_FUNDS_GRANT = 10_000_000;
+
+// DevFundsButton — DEV-ONLY debug helper (FEAT-1972079883) sitting next to
+// Start Over. Renders only when import.meta.env.DEV is true, so a production
+// `vite build` (DEV=false) omits it entirely. Grants +£10m via debugFunds.
+export function DevFundsButton() {
+  const { dispatch } = useSim();
+  if (!import.meta.env.DEV) return null;
+  return (
+    <button
+      className="btn accent dev-funds"
+      title={`Dev only: grant ${fmtMoney(DEV_FUNDS_GRANT)}`}
+      onClick={() => dispatch({ type: 'debugFunds', amount: DEV_FUNDS_GRANT })}
+    >
+      +£10m
+    </button>
   );
 }

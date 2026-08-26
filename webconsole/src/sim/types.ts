@@ -62,6 +62,15 @@ export interface LedgerEntry {
 
 export type PolicyId = 'recycling' | 'transitSubsidy' | 'tourismDrive' | 'austerity';
 
+/** Level-up notification (FEAT-1972079884): what a crossing unlocked + the cash granted. */
+export interface LevelUpNotice {
+  level: number;
+  /** Cash injection granted for reaching this level (already added to funds). */
+  cash: number;
+  /** Human-readable names of specs that unlock AT this level. */
+  unlocked: string[];
+}
+
 export interface TaxRates {
   residential: number;
   commercial: number;
@@ -94,4 +103,12 @@ export interface SimState {
   ledger: LedgerEntry[];
   nextLedgerId: number;
   lastFlows: { inflows: FlowItem[]; outflows: FlowItem[] };
+  /**
+   * Highest experience level already rewarded (FEAT-1972079884). Guarantees the
+   * milestone cash injection + notification fire EXACTLY ONCE per level crossing:
+   * a reward only triggers while levelOf(xp) > lastRewardedLevel.
+   */
+  lastRewardedLevel: number;
+  /** Active level-up notification banner, or null when dismissed / none pending. */
+  notice: LevelUpNotice | null;
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PALETTE, SPECS } from '../../sim/data';
+import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
 import { useSim, levelOf } from '../../sim/store';
 import { fmtMoney } from '../../sim/utils';
@@ -72,11 +72,13 @@ function BuildTab() {
               <button
                 key={id}
                 className={`pal-item${active ? ' active' : ''}${locked ? ' locked' : ''}`}
-                disabled={locked || state.funds < sp.cost}
+                disabled={locked || state.funds < placementCost(sp)}
                 title={
                   locked
                     ? `${sp.name} — unlocks at city level ${sp.unlock}`
-                    : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick`
+                    : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick${
+                        isFreeZone(sp) ? ` · free to zone · ${constructionTicks(sp)} ticks to build` : ''
+                      }`
                 }
                 onClick={() => dispatch({ type: 'tool', tool: { mode: 'build', spec: id } })}
               >
@@ -86,7 +88,11 @@ function BuildTab() {
                   <span className="pal-cap">{sp.blurb}</span>
                 </span>
                 <span className="pal-cost">
-                  {locked ? `Lv ${sp.unlock}` : `${fmtMoney(sp.cost)} · ${sp.w}×${sp.h}`}
+                  {locked
+                    ? `Lv ${sp.unlock}`
+                    : isFreeZone(sp)
+                      ? `Free · ${constructionTicks(sp)}t · ${sp.w}×${sp.h}`
+                      : `${fmtMoney(sp.cost)} · ${sp.w}×${sp.h}`}
                 </span>
               </button>
             );

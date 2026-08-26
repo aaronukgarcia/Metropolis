@@ -1,4 +1,4 @@
-import type { Dims, SimState, ZoneKind } from './types';
+import type { Dims, SimState, ZoneKind } from './types.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -96,6 +96,91 @@ export function pipeTierOf(s: SimState, id: number): number {
 
 export function constructionTicks(sp: Spec): number {
   return Math.max(3, Math.round(sp.cost / 1500));
+}
+
+/**
+ * Money actually charged to PLACE a spec (FEAT-1972079882).
+ * Zoning is free: any 'zones'-category structure (residential / commercial /
+ * farm / industrial / park / office / mining zones) costs £0 to place. Network
+ * and service structures keep their catalogue cost.
+ *
+ * NOTE: this deliberately does NOT touch `sp.cost`, so build TIME
+ * (constructionTicks, derived from sp.cost) is unchanged and still shown, and
+ * demand/refund maths keep a sensible nominal value to work from.
+ */
+export function placementCost(sp: Spec): number {
+  return sp.category === 'zones' ? 0 : sp.cost;
+}
+
+/** True when placing this spec is free (a zone). */
+export function isFreeZone(sp: Spec): boolean {
+  return sp.category === 'zones';
+}
+
+/**
+ * Density / level tier of a block (FEAT-1972079882), 1..3, drawn as the block's
+ * border colour. Deterministic from the spec's footprint + capacity — there is
+ * no per-building level in sim state yet, so tier is a stable property of the
+ * structure type (a bigger, higher-capacity building = a denser tier).
+ *   tier 1 = low density (grey), 2 = medium (blue), 3 = high (gold)
+ */
+export function densityTier(sp: Spec): 1 | 2 | 3 {
+  const area = sp.w * sp.h;
+  const cap = sp.residents ?? sp.jobs ?? sp.children ?? 0;
+  const score = area + cap / 20;
+  if (score >= 12) return 3;
+  if (score >= 4) return 2;
+  return 1;
+}
+
+/** Border colours for the three density tiers (documented in the map legend). */
+export const TIER_COLORS: Record<1 | 2 | 3, string> = {
+  1: '#9099a6', // grey  — low density
+  2: '#4c9aff', // blue  — medium density
+  3: '#e3b341', // gold  — high density
+};
+
+/**
+ * Per-block occupancy fraction 0..1 for fill shading (FEAT-1972079882), or null
+ * when the block should render fully filled (services / network / parks).
+ *
+ * PLACEHOLDER: true per-building occupancy is not tracked in sim state, so this
+ * derives a stable city-wide estimate and applies it to every block of the kind:
+ *   residential            -> population / residential capacity
+ *   commercial/office/     -> workers (population*0.55) / total jobs
+ *     industrial/mine
+ * Both are clamped to 0..1. Same-kind blocks therefore share one occupancy —
+ * a reasonable directional placeholder until per-building tenancy exists.
+ */
+export function blockOccupancy(s: SimState, b: SimState['buildings'][number]): number | null {
+  const sp = SPECS[b.spec];
+  if (!sp) return null;
+  const frac = (have: number, cap: number) =>
+    cap > 0 ? Math.max(0, Math.min(1, have / cap)) : 0;
+  switch (sp.kind) {
+    case 'residential':
+      return frac(s.population, residentsCapacity(s));
+    case 'commercial':
+    case 'office':
+    case 'industrial':
+    case 'mine':
+      return frac(s.population * 0.55, totalJobs(s));
+    default:
+      return null;
+  }
+}
+
+/**
+ * Names of specs whose unlock level is EXACTLY `level` (FEAT-1972079884), used to
+ * tell the player what a level-up just made available. The 99 sentinel (always
+ * placeable seed infrastructure) is excluded.
+ */
+export function unlockedAtLevel(level: number): string[] {
+  const names: string[] = [];
+  for (const sp of Object.values(SPECS)) {
+    if (sp.unlock === level && sp.unlock !== 99) names.push(sp.name);
+  }
+  return names;
 }
 
 export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean {

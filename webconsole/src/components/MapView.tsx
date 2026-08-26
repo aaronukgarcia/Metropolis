@@ -17,6 +17,10 @@ import {
   isOnline,
   constructionTicks,
   plantEffServed,
+  placementCost,
+  densityTier,
+  TIER_COLORS,
+  blockOccupancy,
   PIPE_TIERS,
 } from '../sim/data';
 import { useSim, levelOf, demandOf } from '../sim/store';
@@ -164,9 +168,26 @@ export function MapView() {
       const py = geom.oy + b.y * geom.s;
       const pw = sp.w * geom.s;
       const ph = sp.h * geom.s;
-      ctx.globalAlpha = b.id === state.movingId ? 0.6 : online ? 1 : 0.45;
+      const baseAlpha = b.id === state.movingId ? 0.6 : online ? 1 : 0.45;
+      ctx.globalAlpha = baseAlpha;
+      const rx = px + 0.5;
+      const ry = py + 0.5;
+      const rw = Math.max(pw - 1, 1.5);
+      const rh = Math.max(ph - 1, 1.5);
+      // FEAT-1972079882 occupancy fill: null => full colour; else draw a dim
+      // empty underlay and fill only the bottom `occ` fraction at full colour
+      // (a half-occupied block shows a half-height fill, growing bottom-up).
+      const occ = online ? blockOccupancy(state, b) : null;
       ctx.fillStyle = sp.color;
-      ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
+      if (occ == null) {
+        ctx.fillRect(rx, ry, rw, rh);
+      } else {
+        ctx.globalAlpha = baseAlpha * 0.28;
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.globalAlpha = baseAlpha;
+        const fh = rh * occ;
+        if (fh > 0) ctx.fillRect(rx, ry + rh - fh, rw, fh);
+      }
       if (!online && geom.s > 3) {
         ctx.strokeStyle = 'rgba(255,255,255,0.7)';
         ctx.lineWidth = 1;
@@ -181,6 +202,15 @@ export function MapView() {
         ctx.strokeStyle = 'rgba(15, 18, 22, 0.55)';
         ctx.lineWidth = 1;
         ctx.strokeRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
+      }
+      // FEAT-1972079882 density/level tier border: colour the block outline by
+      // its tier (grey→blue→gold). Only zone blocks carry a tier; drawn when the
+      // block is big enough on screen to read the border.
+      if (sp.category === 'zones' && geom.s > 3) {
+        ctx.globalAlpha = baseAlpha;
+        ctx.strokeStyle = TIER_COLORS[densityTier(sp)];
+        ctx.lineWidth = geom.s > 8 ? 2 : 1.25;
+        ctx.strokeRect(rx, ry, rw, rh);
       }
       if (selected && b.id === selected.id) {
         ctx.globalAlpha = 1;
@@ -290,7 +320,7 @@ export function MapView() {
         const ay = Math.min(hover.y, MAP_H - sp.h);
         const blocked =
           !fits(occupiedSet(state), sp.w, sp.h, ax, ay) ||
-          state.funds < sp.cost ||
+          state.funds < placementCost(sp) ||
           sp.unlock > levelOf(state.xp);
         const px = geom.ox + ax * geom.s;
         const py = geom.oy + ay * geom.s;
@@ -527,6 +557,17 @@ export function MapView() {
       <Compass />
       <span className="map-hint">wheel zoom · right-drag pan · left-drag paint · 1-9 pick · Esc cancel · train strips = % full (green/amber/red)</span>
       <div
+        className="tier-legend"
+        title="Zone block border = density/level tier. Block fill height = percent occupied (residents vs capacity; workers vs jobs)."
+      >
+        <b>Density</b>
+        <span><i className="tier-dot" style={{ background: TIER_COLORS[1] }} />1 low</span>
+        <span><i className="tier-dot" style={{ background: TIER_COLORS[2] }} />2 med</span>
+        <span><i className="tier-dot" style={{ background: TIER_COLORS[3] }} />3 high</span>
+        <span className="tier-fill-note">fill = % occupied</span>
+      </div>
+      <LevelUpBanner />
+      <div
         className={`advisor${advisorContent.go ? ' clickable' : ''}`}
         onClick={advisorContent.go}
         title={advisorContent.go ? 'Click to place it now at the best site' : undefined}
@@ -585,7 +626,7 @@ export function MapView() {
             reason = `Needs a clear ${sp.w}×${sp.h} area`;
           else if (sp.unlock > levelOf(state.xp))
             reason = `Locked — reach city level ${sp.unlock}`;
-          else if (state.funds < sp.cost) reason = 'Insufficient funds';
+          else if (state.funds < placementCost(sp)) reason = 'Insufficient funds';
           return reason ? (
             <span className="map-block">
               {reason}
@@ -610,6 +651,34 @@ export function MapView() {
     }
     return cap;
   }
+}
+
+// FEAT-1972079884 — dismissible level-up banner. Reads the reward notice the
+// reducer stamped on state when experience crossed a new level, showing the
+// cash injection (through fmtMoney) and what the level unlocked. Dismiss clears
+// it; it fires exactly once because the reward is guarded by lastRewardedLevel.
+function LevelUpBanner() {
+  const { state, dispatch } = useSim();
+  const n = state.notice;
+  if (!n) return null;
+  return (
+    <div className="levelup-banner" role="status">
+      <div className="levelup-head">
+        <b>Level {n.level} reached</b>
+        <button className="btn tiny" onClick={() => dispatch({ type: 'dismissNotice' })}>
+          Dismiss
+        </button>
+      </div>
+      <p className="levelup-cash">
+        Cash injection <b>{fmtMoney(n.cash)}</b> granted.
+      </p>
+      <p className="levelup-unlocks">
+        {n.unlocked.length > 0
+          ? `Unlocked: ${n.unlocked.join(', ')}`
+          : 'No new structures at this level — keep building.'}
+      </p>
+    </div>
+  );
 }
 
 function Compass() {
