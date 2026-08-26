@@ -65,4 +65,14 @@ const (
 	// mistake, so Load walks the raw token stream ahead of Unmarshal to
 	// catch it explicitly.
 	CodeDuplicateKey = "MET-F609"
+
+	// CodeUnknownField: a config file contains a JSON field that is not
+	// a recognized member of the target schema (e.g. a typo'd field name
+	// like "recylingRate" instead of "recyclingRate"). Bare json.Unmarshal
+	// silently discards unknown fields and decodes to the Go zero value with
+	// no error signal (BUG-281), which is a GR#17 silent-failure hazard for
+	// a package whose purpose is "no coefficient silently wrong". Load now
+	// enables json.Decoder.DisallowUnknownFields() to catch typos before they
+	// propagate as silent configuration errors.
+	CodeUnknownField = "MET-F610"
 )

@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 )
@@ -29,6 +30,18 @@ type ZoneMeta struct {
 	// catalogue is present; the engine rejects a non-positive value rather
 	// than silently substituting a default.
 	LabourPerTick int64 `json:"labourPerTick"`
+
+	// Documentation-only fields (section / unit legends / note / specRefs /
+	// zoneTypes — AC-16). Never consumed by the engine, but DECLARED
+	// because the BUG-281 r2 strict loader rejects undeclared fields and
+	// only strips $-prefixed keys at a file's top level, never nested ones.
+	Section           string          `json:"section,omitempty"`
+	MaterialsBillUnit string          `json:"materialsBillUnit,omitempty"`
+	LabourUnit        string          `json:"labourUnit,omitempty"`
+	LeadTimeUnit      string          `json:"leadTimeUnit,omitempty"`
+	Note              string          `json:"note,omitempty"`
+	SpecRefs          json.RawMessage `json:"specRefs,omitempty"`
+	ZoneTypes         json.RawMessage `json:"zoneTypes,omitempty"`
 }
 
 // ZoneEntry is one §34 zone type's construction economics: its identity,

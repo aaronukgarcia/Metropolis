@@ -1,6 +1,7 @@
 package accelerator
 
 import (
+	"encoding/json"
 	"path/filepath"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
@@ -63,9 +64,11 @@ type Config struct {
 }
 
 // AcceleratorData is the JSON shape of data/accelerator.json (the module's
-// Store). The documentation-only keys ($comment, meta, units, disclosures)
-// are deliberately not modelled here — they are for Aaron's balance read and
-// the AC-18 unit/disclosure requirements, never runtime inputs.
+// Store). The documentation-only keys (meta, units, disclosures) are for
+// Aaron's balance read and the AC-18 unit/disclosure requirements, never
+// runtime inputs — but they are DECLARED (as opaque raw JSON) because the
+// BUG-281 r2 strict loader rejects undeclared fields; only $-prefixed
+// top-level keys (like $comment) are stripped before decoding.
 type AcceleratorData struct {
 	Version                   int     `json:"version"`
 	ConsumptionRef            string  `json:"consumptionRef"`
@@ -77,6 +80,11 @@ type AcceleratorData struct {
 	PrestigeBase              int64   `json:"prestigeBase"`
 	PrestigePerTick           int64   `json:"prestigePerTick"`
 	ExpertGateThreshold       int64   `json:"expertGateThreshold"`
+
+	// Documentation-only blocks (never consumed at runtime).
+	Meta        json.RawMessage `json:"meta,omitempty"`
+	Units       json.RawMessage `json:"units,omitempty"`
+	Disclosures json.RawMessage `json:"disclosures,omitempty"`
 }
 
 // validate satisfies the foundation/data.Validator contract (via pointer

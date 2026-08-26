@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/json"
 	"sort"
 	"strconv"
 )
@@ -133,6 +134,11 @@ func (c *Consumption) Validate() error {
 type Seasonal struct {
 	Version int                     `json:"version"`
 	Curves  map[string]MonthlyCurve `json:"curves"`
+	// Meta is data/seasonal.json's documentation block (month-index
+	// convention, curve inventory prose). Declared explicitly — never
+	// consumed — because the BUG-281 r2 strict loader rejects undeclared
+	// fields and only strips $-prefixed keys at the top level.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 // MonthlyCurve is exactly 12 multipliers, index 0 = January.
@@ -258,6 +264,12 @@ func (m *Modes) Validate() error {
 type Policies struct {
 	Version int           `json:"version"`
 	Entries []PolicyEntry `json:"entries"`
+	// Meta is data/policies.json's documentation block (spec refs,
+	// category inventory, disclosures). engine.policies decodes it with
+	// its own richer schema; this skeleton declares it opaquely so the
+	// BUG-281 r2 strict loader (which only strips top-level $-prefixed
+	// keys) accepts the real file.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 // PolicyEntry is a placeholder row; Key is the only field currently

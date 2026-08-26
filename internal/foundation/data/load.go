@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -64,20 +65,56 @@ func Load[T any, PT interface {
 	// syntax still unmarshals successfully here (encoding/json's
 	// last-write-wins map behaviour), so the walk below still catches it
 	// -- round 1's whole point is preserved.
+	//
+	// BUG-281 r2: strip-then-strict. The r1 design retried WITHOUT
+	// DisallowUnknownFields whenever the FIRST unknown field looked like
+	// allowlisted metadata, which turned protection off for the entire
+	// document (a "$comment" anywhere before a typo let the typo ride in
+	// silently), was order-dependent, and keyed off a name-only,
+	// depth-blind allowlist parsed out of an error MESSAGE. The r2 shape
+	// never decodes without DisallowUnknownFields:
+	//
+	//   1. json.Unmarshal the raw bytes into a shadow
+	//      map[string]json.RawMessage. Unmarshal (unlike Decoder.Decode)
+	//      rejects trailing data after the top-level value, so this step
+	//      also restores the CodeMalformedJSON trailing-garbage rejection
+	//      the r1 Decoder switch had silently lost.
+	//   2. Strip the allowlisted metadata keys from the shadow map:
+	//      "$"-prefixed keys at the TOP LEVEL only ("$comment",
+	//      "$schema_note" are what the real data/ files use) — and only
+	//      those T does NOT itself declare, so a schema that captures its
+	//      file's $comment (ExternalWorld, NamingCorpus, UnlockTrees do)
+	//      still receives it. Nested metadata is NOT stripped — real
+	//      files' nested comment/note/description keys are declared
+	//      struct fields, so a nested unknown is always a genuine typo
+	//      and always rejects.
+	//   3. Re-marshal the stripped map (json.Marshal sorts map keys, so
+	//      the result is deterministic) and strict-decode THAT with
+	//      DisallowUnknownFields. Every non-metadata unknown field now
+	//      errors deterministically regardless of where it sits relative
+	//      to any metadata key.
+	//
+	// extractUnknownFieldName is now used ONLY to name the offending
+	// field in the returned error context — never as a security decision.
 	var v T
-	if err := json.Unmarshal(b, &v); err != nil {
+	var shadow map[string]json.RawMessage
+	if err := json.Unmarshal(b, &shadow); err != nil {
 		var ute *json.UnmarshalTypeError
 		if errors.As(err, &ute) {
-			field := ute.Field
-			if field == "" {
-				field = "(root)"
-			}
+			// The document is valid JSON but its top-level value is not an
+			// object (every schema T here is a struct, so this can never
+			// validate). Report it as the schema mismatch it is.
 			return zero, errs.Wrap(CodeSchemaInvalid, correlationID, err, map[string]any{
 				"path":  path,
-				"field": field,
-				"rule":  "type mismatch, want " + ute.Type.String(),
+				"field": "(root)",
+				"rule":  "type mismatch, want object",
 			})
 		}
+		// Syntax error anywhere in the document — including trailing data
+		// after the top-level value ("invalid character ... after
+		// top-level value"), which json.Unmarshal rejects and a bare
+		// json.Decoder.Decode would not.
+		//
 		// MET-F602's registered template has a "{cause}" placeholder
 		// (BUG-099, shared with MET-E600) — populate it from the JSON
 		// decode error's own text so the rendered message actually names
@@ -86,6 +123,47 @@ func Load[T any, PT interface {
 		return zero, errs.Wrap(CodeMalformedJSON, correlationID, err, map[string]any{
 			"path":  path,
 			"cause": err.Error(),
+		})
+	}
+	declared := declaredTopLevelJSONNames(reflect.TypeOf(v))
+	for key := range shadow {
+		if strings.HasPrefix(key, "$") && !declared[key] {
+			delete(shadow, key)
+		}
+	}
+	stripped, err := json.Marshal(shadow)
+	if err != nil {
+		// Can only happen if the shadow map holds invalid RawMessage,
+		// which Unmarshal above has already excluded; fail closed anyway.
+		return zero, errs.Wrap(CodeMalformedJSON, correlationID, err, map[string]any{
+			"path":  path,
+			"cause": err.Error(),
+		})
+	}
+	dec := json.NewDecoder(bytes.NewReader(stripped))
+	dec.DisallowUnknownFields()
+	if decodeErr := dec.Decode(&v); decodeErr != nil {
+		if strings.Contains(decodeErr.Error(), "unknown field") {
+			return zero, errs.Wrap(CodeUnknownField, correlationID, decodeErr, map[string]any{
+				"path":  path,
+				"field": extractUnknownFieldName(decodeErr.Error()),
+			})
+		}
+		var ute *json.UnmarshalTypeError
+		if errors.As(decodeErr, &ute) {
+			field := ute.Field
+			if field == "" {
+				field = "(root)"
+			}
+			return zero, errs.Wrap(CodeSchemaInvalid, correlationID, decodeErr, map[string]any{
+				"path":  path,
+				"field": field,
+				"rule":  "type mismatch, want " + ute.Type.String(),
+			})
+		}
+		return zero, errs.Wrap(CodeMalformedJSON, correlationID, decodeErr, map[string]any{
+			"path":  path,
+			"cause": decodeErr.Error(),
 		})
 	}
 
@@ -413,4 +491,71 @@ func walkForDuplicateKey(dec *json.Decoder, path string) (string, bool, error) {
 		// defensively as "nothing to walk".
 		return "", false, nil
 	}
+}
+
+// declaredTopLevelJSONNames returns the set of top-level JSON field names
+// type t (a struct type, possibly behind pointers) declares via its json
+// tags (or field names where untagged), following anonymous embedded
+// structs the way encoding/json does. The BUG-281 r2 strict loader uses it
+// so the pre-decode metadata strip removes ONLY $-prefixed top-level keys
+// the schema does not itself capture — a schema that declares "$comment"
+// (ExternalWorld, NamingCorpus, UnlockTrees) keeps receiving it, while an
+// undeclared "$comment"/"$schema_note" is stripped instead of tripping
+// DisallowUnknownFields. A non-struct t yields an empty set (nothing is
+// preserved, everything $-prefixed is stripped).
+func declaredTopLevelJSONNames(t reflect.Type) map[string]bool {
+	names := map[string]bool{}
+	collectJSONNames(t, names)
+	return names
+}
+
+// collectJSONNames walks t's fields into names — split out of
+// declaredTopLevelJSONNames so anonymous embedded structs can recurse.
+func collectJSONNames(t reflect.Type, names map[string]bool) {
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if f.Anonymous && name == "" {
+			// Embedded struct without an explicit json name: its fields are
+			// promoted, encoding/json-style.
+			collectJSONNames(f.Type, names)
+			continue
+		}
+		if !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		names[name] = true
+	}
+}
+
+// extractUnknownFieldName attempts to extract the field name from a
+// json.Decoder unknown field error message. The error message is typically
+// formatted as "json: unknown field \"fieldName\"" at line X column Y.
+// This function extracts "fieldName" if possible, or returns a generic
+// fallback if extraction fails.
+func extractUnknownFieldName(errMsg string) string {
+	// Try to find the pattern: unknown field "..."
+	idx := strings.Index(errMsg, "unknown field \"")
+	if idx >= 0 {
+		start := idx + len("unknown field \"")
+		end := strings.Index(errMsg[start:], "\"")
+		if end >= 0 {
+			return errMsg[start : start+end]
+		}
+	}
+	// Fallback: return generic name if we can't parse it
+	return "(unknown)"
 }

@@ -257,6 +257,192 @@ func TestLoad_MET_F602_CauseSubstituted(t *testing.T) {
 	}
 }
 
+// TestLoad_UnknownField is BUG-281's regression test for the shared
+// foundation/data.Load path: a config file with an unknown JSON field
+// (e.g. a typo'd field name like "recylingRate" instead of
+// "recyclingRate") must report CodeUnknownField with the field name, not
+// silently decode to the Go zero value (the GR#17 silent-failure hazard
+// this package is designed to prevent). The fix enables
+// json.Decoder.DisallowUnknownFields() to catch typos before they
+// propagate as configuration errors.
+func TestLoad_UnknownField(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		"residential": {"waterLitresPerPersonPerDay": 145, "electricityKWhPerPersonPerDay": 3.5,
+			"gasKWhPerPersonPerDay": 13, "foodStaplesKgPerPersonPerDay": 1.4,
+			"foodFreshKgPerPersonPerDay": 0.7, "householdWasteKgPerPersonPerDay": 1.1,
+			"wastewaterFractionOfWater": 0.95},
+		"classes": {"school": {"unit": "pupil", "waterL": 18, "elecKWh": 1.5, "gasKWh": 3.0, "wasteKg": 0.2}},
+		"typoedField": 123
+	}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeUnknownField, "typoedField")
+}
+
+// TestLoad_UnknownField_DeepNesting is another BUG-281 test variant: an
+// unknown field nested inside an object (rather than at the top level)
+// must also report CodeUnknownField with the full path preserved by the
+// decoder's error message.
+func TestLoad_UnknownField_DeepNesting(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		"residential": {"waterLitresPerPersonPerDay": 145, "electricityKWhPerPersonPerDay": 3.5,
+			"gasKWhPerPersonPerDay": 13, "foodStaplesKgPerPersonPerDay": 1.4,
+			"foodFreshKgPerPersonPerDay": 0.7, "householdWasteKgPerPersonPerDay": 1.1,
+			"wastewaterFractionOfWater": 0.95, "unknownNestedField": "should error"},
+		"classes": {"school": {"unit": "pupil", "waterL": 18, "elecKWh": 1.5, "gasKWh": 3.0, "wasteKg": 0.2}}
+	}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeUnknownField, "unknownNestedField")
+}
+
+// --- BUG-281 r2: strip-then-strict regression suite -----------------------
+//
+// The r1 fix retried the decode WITHOUT DisallowUnknownFields whenever the
+// FIRST unknown field matched a name-only metadata allowlist, which turned
+// unknown-field protection off for the whole document. The independent
+// destructive round (r1 REJECT) proved four holes; each has a regression
+// test here. The r2 design never decodes without DisallowUnknownFields:
+// undeclared $-prefixed TOP-LEVEL keys are stripped from a shadow
+// map[string]json.RawMessage before a single strict decode, and
+// json.Unmarshal into the shadow map restores trailing-garbage rejection.
+
+// bug281ValidConsumptionBody is a schema-valid consumption.json body
+// fragment shared by the r2 regression tests below.
+const bug281ValidConsumptionBody = `"residential": {"waterLitresPerPersonPerDay": 145, "electricityKWhPerPersonPerDay": 3.5,
+		"gasKWhPerPersonPerDay": 13, "foodStaplesKgPerPersonPerDay": 1.4,
+		"foodFreshKgPerPersonPerDay": 0.7, "householdWasteKgPerPersonPerDay": 1.1,
+		"wastewaterFractionOfWater": 0.95},
+	"classes": {"school": {"unit": "pupil", "waterL": 18, "elecKWh": 1.5, "gasKWh": 3.0, "wasteKg": 0.2}}`
+
+// r1 finding 1 (THE HOLE): when an allowlisted metadata key ($comment) was
+// the FIRST unknown, the r1 retry decoded the whole document with no
+// unknown-field protection, so a typo AFTER the metadata rode in silently.
+// r2 must reject it, naming the typo (not the metadata key).
+func TestLoad_BUG281r2_MetadataThenTypoRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		"$comment": "harmless metadata",
+		`+bug281ValidConsumptionBody+`,
+		"recylingRate": 0.9
+	}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeUnknownField, "recylingRate")
+}
+
+// r1 finding 2 (order dependence): typo BEFORE the metadata was rejected
+// while typo AFTER was accepted. r2 must reject both orders identically.
+func TestLoad_BUG281r2_TypoThenMetadataRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		"recylingRate": 0.9,
+		`+bug281ValidConsumptionBody+`,
+		"$comment": "harmless metadata"
+	}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeUnknownField, "recylingRate")
+}
+
+// r1 finding 3 (name-only, depth-blind allowlist): a NESTED unknown field
+// merely NAMED like metadata ("description" inside residential) opened the
+// unguarded retry and let a nested sibling typo through. r2 strips only
+// $-prefixed keys at the TOP level, so BOTH nested unknowns must reject.
+func TestLoad_BUG281r2_NestedMetadataNameDoesNotOpenTheDoor(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		"residential": {"description": "nested metadata-ish", "waterLitresPerPersonPerDay": 145, "electricityKWhPerPersonPerDay": 3.5,
+			"gasKWhPerPersonPerDay": 13, "foodStaplesKgPerPersonPerDay": 1.4,
+			"foodFreshKgPerPersonPerDay": 0.7, "householdWasteKgPerPersonPerDay": 1.1,
+			"wastewaterFractionOfWater": 0.95, "watterLitresTypo": 999},
+		"classes": {"school": {"unit": "pupil", "waterL": 18, "elecKWh": 1.5, "gasKWh": 3.0, "wasteKg": 0.2}}
+	}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	// The decoder reports the first nested unknown in document order
+	// ("description" precedes the typo inside the same object, whose raw
+	// bytes are preserved verbatim in the shadow map).
+	assertPlaceholderCode(t, err, CodeUnknownField, "description")
+}
+
+// r1 finding 4 (trailing-garbage regression): the r1 switch from
+// json.Unmarshal to json.Decoder.Decode silently started ACCEPTING a
+// second top-level value after the document. r2's shadow json.Unmarshal
+// restores the rejection as CodeMalformedJSON.
+func TestLoad_BUG281r2_TrailingGarbageRejected(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		`+bug281ValidConsumptionBody+`
+	} {"second": "document"}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeMalformedJSON, "")
+}
+
+// Positive guard for the strip itself: an UNDECLARED top-level $-prefixed
+// metadata key (Consumption declares no $comment field) must still load
+// clean — the strip, not an unguarded retry, is what admits it.
+func TestLoad_BUG281r2_UndeclaredTopLevelDollarKeyStillLoads(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		"$comment": "top-level metadata only",
+		`+bug281ValidConsumptionBody+`
+	}`)
+
+	c, err := LoadConsumption(dir, testCorrelationID())
+	if err != nil {
+		t.Fatalf("expected clean load with only $-prefixed metadata, got %v", err)
+	}
+	if c.Residential.WaterLitresPerPersonPerDay != 145 {
+		t.Errorf("residential water = %v, want 145 (decode must still populate)", c.Residential.WaterLitresPerPersonPerDay)
+	}
+}
+
+// A DECLARED $-prefixed field must NOT be stripped: ExternalWorld captures
+// its file's top-level $comment into a struct field, and the type-aware
+// strip must leave it for the decoder. (The real-file tests in
+// external_world_test.go / naming_corpus_test.go / unlock_trees_test.go
+// assert the same against data/; this pins it at the unit level.)
+func TestLoad_BUG281r2_DeclaredDollarCommentStillCaptured(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileExternalWorld,
+		`{"version":1,"$comment":"declared and captured","profiles":`+validProfilesFixture+`}`)
+
+	e, err := LoadExternalWorld(dir, testCorrelationID())
+	if err != nil {
+		t.Fatalf("LoadExternalWorld: %v", err)
+	}
+	if e.Comment != "declared and captured" {
+		t.Errorf("e.Comment = %q, want the file's $comment — the declared $-field must not be stripped", e.Comment)
+	}
+}
+
+// Fail-closed direction: an unknown field whose name embeds an escaped
+// quote (so extractUnknownFieldName cannot parse it back cleanly) must
+// still be REJECTED — name extraction is display-only in r2, never a
+// gating decision.
+func TestLoad_BUG281r2_UnparseableFieldNameFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, FileConsumption, `{
+		"version": 1,
+		`+bug281ValidConsumptionBody+`,
+		"we\"ird": 1
+	}`)
+
+	_, err := LoadConsumption(dir, testCorrelationID())
+	assertPlaceholderCode(t, err, CodeUnknownField, "")
+}
+
 // --- missing file (AC-8) --------------------------------------------------
 
 func TestLoad_MissingFile(t *testing.T) {

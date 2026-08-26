@@ -1,6 +1,7 @@
 package policies
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"sort"
@@ -31,6 +32,11 @@ type policiesMeta struct {
 	Categories   []string     `json:"categories"`
 	Combination  string       `json:"combination"`
 	PreviewDrift previewDrift `json:"previewDrift"`
+	// Disclosures is the ASM-284/ASM-288 placeholder-provenance prose.
+	// Declared explicitly — never consumed — because the BUG-281 r2 strict
+	// loader rejects undeclared fields at any depth (only $-prefixed
+	// TOP-LEVEL keys are stripped, and this block is nested).
+	Disclosures json.RawMessage `json:"disclosures,omitempty"`
 }
 
 // previewDrift is ASM-286's two stored numbers: the relative divergence

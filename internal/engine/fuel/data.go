@@ -1,6 +1,7 @@
 package fuel
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strconv"
 
@@ -24,6 +25,7 @@ type fuelData struct {
 	Eras []fuelEra `json:"eras"`
 
 	FuelDemand struct {
+		Comment                     string  `json:"comment,omitempty"`
 		CarLitresPerTick            float64 `json:"carLitresPerTick"`
 		VanLitresPerTick            float64 `json:"vanLitresPerTick"`
 		TruckLitresPerTick          float64 `json:"truckLitresPerTick"`
@@ -31,26 +33,38 @@ type fuelData struct {
 	} `json:"fuelDemand"`
 
 	ChargingProfile struct {
+		Comment        string      `json:"comment,omitempty"`
 		BaseKWhPerTick float64     `json:"baseKWhPerTick"`
 		HourlyWeight   [24]float64 `json:"hourlyWeight"`
 	} `json:"chargingProfile"`
 
 	StrategicReserve struct {
+		Comment     string  `json:"comment,omitempty"`
 		DaysOfCover float64 `json:"daysOfCover"`
 	} `json:"strategicReserve"`
 
 	Duty struct {
+		Comment           string  `json:"comment,omitempty"`
 		RatePencePerLitre float64 `json:"ratePencePerLitre"`
 		TaxInstrument     string  `json:"taxInstrument"`
 	} `json:"duty"`
 
 	Forecourt struct {
+		Comment                               string  `json:"comment,omitempty"`
 		TargetForecourtsPerThousandPopulation float64 `json:"targetForecourtsPerThousandPopulation"`
 	} `json:"forecourt"`
 
 	Tanker struct {
+		Comment                     string  `json:"comment,omitempty"`
 		PortThroughputLitresPerTick float64 `json:"portThroughputLitresPerTick"`
 	} `json:"tanker"`
+
+	// Meta is the file's documentation block. It and the per-section
+	// Comment fields above are provenance prose (ASM-307 placeholder
+	// disclosures) — never consumed at runtime, but DECLARED because the
+	// BUG-281 r2 strict loader rejects undeclared fields and only strips
+	// $-prefixed keys at a file's top level, never nested ones.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 // fuelEra is one milestone era's fleet-composition EV-share row. EV-share
@@ -59,6 +73,7 @@ type fuelData struct {
 // 0.0 early-era figure (AC-8: a missing EV-share must never silently default
 // to zero and read as "no EV adoption yet").
 type fuelEra struct {
+	Comment      string   `json:"comment,omitempty"`
 	Era          string   `json:"era"`
 	CarEVShare   *float64 `json:"carEVShare"`
 	VanEVShare   *float64 `json:"vanEVShare"`

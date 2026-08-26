@@ -1,6 +1,7 @@
 package spaceport
 
 import (
+	"encoding/json"
 	"path/filepath"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
@@ -41,6 +42,11 @@ type SpaceportData struct {
 	ExclusionRadius Quant  `json:"exclusionRadiusCells"`
 	ExclusionFactor Quant  `json:"exclusionLandFactorPerMille"`
 	ExpertThreshold Quant  `json:"expertThreshold"`
+
+	// Meta is the file's documentation block. Declared explicitly — never
+	// consumed — because the BUG-281 r2 strict loader rejects undeclared
+	// fields and only strips $-prefixed keys (like $comment) at top level.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 // Validate satisfies the foundation/data.Validator contract so the generic

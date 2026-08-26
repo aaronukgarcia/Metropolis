@@ -1,6 +1,7 @@
 package fiscal
 
 import (
+	"encoding/json"
 	"path/filepath"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
@@ -21,6 +22,11 @@ type Config struct {
 	Version      int                `json:"version"`
 	Municipality MunicipalityConfig `json:"municipality"`
 	Childcare    ChildcareConfig    `json:"childcare"`
+	// Meta is data/fiscal.json's documentation block (module/spec prose).
+	// Declared explicitly — never consumed — because the BUG-281 r2 strict
+	// loader rejects undeclared fields and only strips $-prefixed keys at
+	// the top level.
+	Meta json.RawMessage `json:"meta,omitempty"`
 }
 
 // MunicipalityConfig is the §54 "municipality as a modelled department"

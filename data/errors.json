@@ -330,6 +330,12 @@
       "message": "config file at {path} contains a duplicate JSON key {field}",
       "remedy": "Remove or rename the duplicate key at {path}. Standard JSON decoding silently keeps only the last occurrence and discards the rest, which can mask a real data-authoring mistake (BUG-060) -- check which body was intended and delete the other."
     },
+    "MET-F610": {
+      "severity": "error",
+      "module": "foundation.data",
+      "message": "config file at {path} contains an unknown JSON field {field}",
+      "remedy": "Remove or rename the unrecognized field at {path}. Standard JSON decoding silently discards unknown fields and decodes them to the Go zero value with no error signal (BUG-281), which can mask a typo'd field name (e.g. 'recylingRate' instead of 'recyclingRate'). Check the field name against the schema in the file's comment (or against the JSON schema spec in docs/planning/acceptance/) and fix any typos or remove if not intended."
+    },
     "MET-F700": {
       "severity": "error",
       "module": "tool.astgate",

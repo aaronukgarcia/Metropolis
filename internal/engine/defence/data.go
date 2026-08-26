@@ -30,6 +30,11 @@ type Config struct {
 	Mandates       []MandateConfig           `json:"mandates"`
 	Facilities     map[string]FacilityConfig `json:"facilities"`
 	Reputation     ReputationConfig          `json:"reputation"`
+	// MoneyConvention is the file's units-documentation prose (micropound
+	// convention). Declared explicitly — never consumed — because the
+	// BUG-281 r2 strict loader rejects undeclared fields and only strips
+	// $-prefixed top-level keys.
+	MoneyConvention string `json:"moneyConvention,omitempty"`
 }
 
 // GrantPotConfig is one competitive grant pot (AC-2): the win-probability

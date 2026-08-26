@@ -1,6 +1,7 @@
 package worklife
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 
@@ -20,13 +21,15 @@ const fileWorklife = "worklife.json"
 
 // WorklifeFile is data/worklife.json's top-level schema: the three time
 // patterns and the placeholder working-week policy values. The top-level
-// $comment / meta blocks are documentation for human readers and are
-// deliberately not part of this struct (GR#15: the runtime reads the
-// schedule figures, not the prose).
+// $comment block is stripped by the loader; the meta block is declared
+// opaquely below (never consumed — GR#15: the runtime reads the schedule
+// figures, not the prose) because the BUG-281 r2 strict loader rejects
+// undeclared fields and only strips $-prefixed keys at top level.
 type WorklifeFile struct {
 	Version             int                    `json:"version"`
 	Patterns            []PatternDef           `json:"patterns"`
 	WorkingWeekPolicies []WorkingWeekPolicyDef `json:"workingWeekPolicies"`
+	Meta                json.RawMessage        `json:"meta,omitempty"`
 }
 
 // PatternDef is one data/worklife.json pattern entry (AC-2: every hour and
@@ -43,6 +46,12 @@ type PatternDef struct {
 	Placeholder       bool          `json:"placeholder"`
 	Disclosure        string        `json:"disclosure"`
 	SpecRef           string        `json:"specRef"`
+
+	// Unit-legend documentation fields (never consumed at runtime; declared
+	// because the BUG-281 r2 strict loader rejects undeclared fields and
+	// only strips $-prefixed top-level keys).
+	HoursPerDayUnit string `json:"hoursPerDayUnit,omitempty"`
+	DaysPerWeekUnit string `json:"daysPerWeekUnit,omitempty"`
 }
 
 // RotationDef is one shift rotation window within a pattern.

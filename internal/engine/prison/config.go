@@ -77,6 +77,10 @@ const (
 type config struct {
 	Version int    `json:"version"`
 	SpecRef string `json:"specRef"`
+	// Note is the file's placeholder/units documentation prose. Declared
+	// explicitly — never consumed — because the BUG-281 r2 strict loader
+	// rejects undeclared fields and only strips $-prefixed top-level keys.
+	Note string `json:"note,omitempty"`
 
 	Categories              []string                      `json:"categories"`
 	BaseRates               map[string]map[string]float64 `json:"baseRates"`
