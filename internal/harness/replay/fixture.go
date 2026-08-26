@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -140,7 +141,7 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"dir": dir, "cause": "creating fixtures directory"})
+		return errs.Wrap(codeFixtureLoadFailed, errs.NewCorrelationID(), err, map[string]any{"path": dir, "cause": "creating fixtures directory"})
 	}
 
 	f, err := os.Create(shardPath)
@@ -198,6 +199,7 @@ func Save(dir, name string, rec *Recorder, meta FixtureMeta) (err error) {
 // every record it carries, in the order Save/the original Recorder wrote
 // them (AC-1's ordering guarantee, preserved through the round trip).
 type Fixture struct {
+	Name    string // fixture name (for error reporting)
 	Header  fixtureHeader
 	Records []serialize.Record
 }
@@ -240,10 +242,8 @@ func Load(dir, name string) (Fixture, error) {
 		})
 	}
 	if len(fh.Header.ShardIndex) != 1 {
-		return Fixture{}, errs.New(codeFixtureCorrupt, errs.NewCorrelationID(), map[string]any{
-			"name": name, "shardCount": len(fh.Header.ShardIndex),
-			"cause": "fixture header does not describe exactly one shard",
-		})
+		cause := fmt.Sprintf("fixture header does not describe exactly one shard (got %d)", len(fh.Header.ShardIndex))
+		return Fixture{}, fixtureCorruptError(errs.NewCorrelationID(), headerPath, cause)
 	}
 	meta := fh.Header.ShardIndex[0]
 
@@ -296,7 +296,7 @@ func Load(dir, name string) (Fixture, error) {
 		})
 	}
 
-	return Fixture{Header: fh, Records: records}, nil
+	return Fixture{Name: shardPath, Header: fh, Records: records}, nil
 }
 
 // countingReader counts bytes read through it, so Load can verify the
@@ -323,7 +323,8 @@ func (f Fixture) Commands() ([]protocol.Command, error) {
 		}
 		cmd, err := protocol.DecodeCommand(rec.Data)
 		if err != nil {
-			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded Command"})
+			cause := fmt.Sprintf("decoding recorded Command at record %d: %v", i, err)
+			return nil, fixtureCorruptError(errs.NewCorrelationID(), f.Name, cause)
 		}
 		out = append(out, cmd)
 	}
@@ -339,7 +340,8 @@ func (f Fixture) Results() ([]protocol.CommandResult, error) {
 		}
 		var r protocol.CommandResult
 		if err := json.Unmarshal(rec.Data, &r); err != nil {
-			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded CommandResult"})
+			cause := fmt.Sprintf("decoding recorded CommandResult at record %d: %v", i, err)
+			return nil, fixtureCorruptError(errs.NewCorrelationID(), f.Name, cause)
 		}
 		out = append(out, r)
 	}
@@ -355,7 +357,8 @@ func (f Fixture) Events() ([]protocol.Event, error) {
 		}
 		var e protocol.Event
 		if err := json.Unmarshal(rec.Data, &e); err != nil {
-			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded Event"})
+			cause := fmt.Sprintf("decoding recorded Event at record %d: %v", i, err)
+			return nil, fixtureCorruptError(errs.NewCorrelationID(), f.Name, cause)
 		}
 		out = append(out, e)
 	}
@@ -371,7 +374,8 @@ func (f Fixture) Deltas() ([]protocol.Delta, error) {
 		}
 		var d protocol.Delta
 		if err := json.Unmarshal(rec.Data, &d); err != nil {
-			return nil, errs.Wrap(codeFixtureCorrupt, errs.NewCorrelationID(), err, map[string]any{"recordIndex": i, "cause": "decoding recorded Delta"})
+			cause := fmt.Sprintf("decoding recorded Delta at record %d: %v", i, err)
+			return nil, fixtureCorruptError(errs.NewCorrelationID(), f.Name, cause)
 		}
 		out = append(out, d)
 	}

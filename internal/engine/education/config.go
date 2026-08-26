@@ -1,9 +1,8 @@
 package education
 
 import (
+	"fmt"
 	"math"
-
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // Config is engine.education's runtime configuration — the balance numbers
@@ -49,53 +48,34 @@ type Config struct {
 // (GR#7/GR#16) — never a silently-defaulted placeholder. The entry-age
 // gates must be non-negative and non-decreasing along the pipeline order,
 // the quality/scale/rate figures finite and in-domain, and the
-// research-points/halls figures non-negative.
-func (c Config) validate(correlationID string) error {
+// research-points/halls figures non-negative. The dir parameter is supplied
+// to all ErrEducationDataInvalid errors so the template's {dir} and {cause}
+// tokens render real values, not literals (BUG-357).
+func (c Config) validate(correlationID, dir string) error {
 	// The automatic pipeline must be age-monotone: nursery ≤ primary ≤
 	// secondary ≤ fork ≤ university ≤ adult ≤ u3a.
 	var prev int64 = 0
 	for _, s := range stageOrder {
 		v := c.EntryAgeMonths[s]
 		if v < prev {
-			return errs.New(ErrEducationDataInvalid, correlationID, map[string]any{
-				"field": "entryAgeMonths",
-				"stage": s.String(),
-				"value": v,
-				"prev":  prev,
-				"rule":  "entry ages must be non-decreasing along the pipeline",
-			})
+			return educationDataInvalid(correlationID, dir, fmt.Sprintf("entryAgeMonths[%s]", s.String()), "entry ages must be non-decreasing along the pipeline", v)
 		}
 		prev = v
 	}
 	if !numFinite(c.BaselineQuality) || c.BaselineQuality < 0 || c.BaselineQuality > 1 {
-		return errs.New(ErrEducationDataInvalid, correlationID, map[string]any{
-			"field": "baselineQuality",
-			"value": c.BaselineQuality,
-		})
+		return educationDataInvalid(correlationID, dir, "baselineQuality", "must be finite and in [0,1]", c.BaselineQuality)
 	}
 	if !numFinite(c.AttainmentScale) || c.AttainmentScale < 0 {
-		return errs.New(ErrEducationDataInvalid, correlationID, map[string]any{
-			"field": "attainmentScale",
-			"value": c.AttainmentScale,
-		})
+		return educationDataInvalid(correlationID, dir, "attainmentScale", "must be finite and non-negative", c.AttainmentScale)
 	}
 	if !numFinite(c.ResearchPointsPerGraduate) || c.ResearchPointsPerGraduate < 0 {
-		return errs.New(ErrEducationDataInvalid, correlationID, map[string]any{
-			"field": "researchPointsPerGraduate",
-			"value": c.ResearchPointsPerGraduate,
-		})
+		return educationDataInvalid(correlationID, dir, "researchPointsPerGraduate", "must be finite and non-negative", c.ResearchPointsPerGraduate)
 	}
 	if !numFinite(c.HallsCapacity) || c.HallsCapacity < 0 {
-		return errs.New(ErrEducationDataInvalid, correlationID, map[string]any{
-			"field": "hallsCapacity",
-			"value": c.HallsCapacity,
-		})
+		return educationDataInvalid(correlationID, dir, "hallsCapacity", "must be finite and non-negative", c.HallsCapacity)
 	}
 	if !numFinite(c.DropoutRate) || c.DropoutRate < 0 || c.DropoutRate > 1 {
-		return errs.New(ErrEducationDataInvalid, correlationID, map[string]any{
-			"field": "dropoutRate",
-			"value": c.DropoutRate,
-		})
+		return educationDataInvalid(correlationID, dir, "dropoutRate", "must be finite and in [0,1]", c.DropoutRate)
 	}
 	return nil
 }

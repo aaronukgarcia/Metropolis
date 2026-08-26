@@ -2,6 +2,7 @@ package replay
 
 import (
 	"encoding/json"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -99,7 +100,8 @@ func (r *Recorder) observe(kind RecordKind, correlationID string, data []byte) e
 func (r *Recorder) ObserveCommand(cmd protocol.Command) error {
 	data, err := protocol.EncodeCommand(cmd)
 	if err != nil {
-		return errs.Wrap(codeFixtureCorrupt, string(cmd.CorrelationID), err, map[string]any{"cause": "encoding captured Command"})
+		cause := fmt.Sprintf("encoding captured Command: %v", err)
+		return fixtureCorruptError(string(cmd.CorrelationID), "<recording>", cause)
 	}
 	return r.observe(KindCommand, string(cmd.CorrelationID), data)
 }
@@ -108,7 +110,8 @@ func (r *Recorder) ObserveCommand(cmd protocol.Command) error {
 func (r *Recorder) ObserveResult(res protocol.CommandResult) error {
 	data, err := json.Marshal(res)
 	if err != nil {
-		return errs.Wrap(codeFixtureCorrupt, string(res.CorrelationID), err, map[string]any{"cause": "encoding captured CommandResult"})
+		cause := fmt.Sprintf("encoding captured CommandResult: %v", err)
+		return fixtureCorruptError(string(res.CorrelationID), "<recording>", cause)
 	}
 	return r.observe(KindResult, string(res.CorrelationID), data)
 }
@@ -117,7 +120,8 @@ func (r *Recorder) ObserveResult(res protocol.CommandResult) error {
 func (r *Recorder) ObserveEvent(ev protocol.Event) error {
 	data, err := json.Marshal(ev)
 	if err != nil {
-		return errs.Wrap(codeFixtureCorrupt, string(ev.CorrelationID), err, map[string]any{"cause": "encoding captured Event"})
+		cause := fmt.Sprintf("encoding captured Event: %v", err)
+		return fixtureCorruptError(string(ev.CorrelationID), "<recording>", cause)
 	}
 	return r.observe(KindEvent, string(ev.CorrelationID), data)
 }
@@ -126,7 +130,8 @@ func (r *Recorder) ObserveEvent(ev protocol.Event) error {
 func (r *Recorder) ObserveDelta(d protocol.Delta) error {
 	data, err := json.Marshal(d)
 	if err != nil {
-		return errs.Wrap(codeFixtureCorrupt, string(d.CorrelationID), err, map[string]any{"cause": "encoding captured Delta"})
+		cause := fmt.Sprintf("encoding captured Delta: %v", err)
+		return fixtureCorruptError(string(d.CorrelationID), "<recording>", cause)
 	}
 	return r.observe(KindDelta, string(d.CorrelationID), data)
 }

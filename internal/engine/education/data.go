@@ -80,7 +80,7 @@ func Load(dir, correlationID string) (*EducationAPI, error) {
 		})
 	}
 	cfg := d.config()
-	if err := cfg.validate(correlationID); err != nil {
+	if err := cfg.validate(correlationID, dir); err != nil {
 		return nil, err
 	}
 	return New(cfg, 0, correlationID)

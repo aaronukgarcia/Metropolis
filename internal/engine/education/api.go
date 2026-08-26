@@ -112,7 +112,7 @@ func New(cfg Config, seed uint64, correlationID string) (*EducationAPI, error) {
 	if correlationID == "" {
 		correlationID = errs.NewCorrelationID()
 	}
-	if err := cfg.validate(correlationID); err != nil {
+	if err := cfg.validate(correlationID, "constructor"); err != nil {
 		return nil, err
 	}
 	a := &EducationAPI{
