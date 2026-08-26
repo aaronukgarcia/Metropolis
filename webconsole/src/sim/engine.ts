@@ -166,16 +166,20 @@ function rawState(): SimState {
 
 const UPKEEP_BUCKET: Partial<Record<ZoneKind, string>> = {
   road: 'Roads',
+  pylon: 'Power Grid',
   power: 'Power Grid',
   water: 'Water & Waste',
   health: 'Healthcare',
   school: 'Education',
   police: 'Policing',
   park: 'Parks',
+  residential: 'Housing',
   commercial: 'Commerce & Industry',
   office: 'Commerce & Industry',
   industrial: 'Commerce & Industry',
   mine: 'Commerce & Industry',
+  station: 'Transport',
+  landmark: 'Civic & Landmarks',
   // FEAT-1972079877: placeholder catalogue kinds — without these buckets the
   // new structures' upkeep would silently vanish from the outflows.
   transport: 'Transport',

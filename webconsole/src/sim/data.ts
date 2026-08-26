@@ -178,7 +178,11 @@ export function blockOccupancy(s: SimState, b: SimState['buildings'][number]): n
 export function unlockedAtLevel(level: number): string[] {
   const names: string[] = [];
   for (const sp of Object.values(SPECS)) {
-    if (sp.unlock === level && sp.unlock !== 99) names.push(sp.name);
+    // BUG-390: exclude 'network' category items to match XpTab (which hides them
+    // from the unlock ladder). Keeps station_ashford etc. out of level-up notices.
+    if (sp.unlock === level && sp.unlock !== 99 && sp.category !== 'network') {
+      names.push(sp.name);
+    }
   }
   return names;
 }
