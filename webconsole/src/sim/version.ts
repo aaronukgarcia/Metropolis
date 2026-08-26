@@ -1,0 +1,42 @@
+// version.ts — presentation helpers over the build-time git-derived version.
+//
+// FEAT-1972079872. This module holds NO version number of its own: it reads
+// everything from ../generated/version (which is produced from `git describe`
+// + `git log` at build time — GR#2). It only decides how to DISPLAY that
+// git-derived string. A hardcoded semver here would be a rule violation and is
+// caught by test/version.test.mjs.
+
+import { versionInfo } from '../generated/version';
+
+/**
+ * Human badge form of the git-describe string.
+ *
+ * `git describe --tags` yields forms like:
+ *   - "v1.2.0"                    (exactly on a milestone tag)
+ *   - "v1.2.0-7-gabc1234"         (7 commits past v1.2.0)
+ *   - "abc1234"                   (no tag reachable, --always short hash)
+ *   - "...-dirty"                 (uncommitted changes at build)
+ *
+ * We surface a compact label. When the describe output already starts with a
+ * "v", we keep it; when it is a bare hash (no milestone tag yet in this repo),
+ * we prefix a short marker so it still reads as a build identifier rather than
+ * a stray token. The full raw string is always available for the About page.
+ */
+export function versionBadgeLabel(): string {
+  const v = versionInfo.version;
+  if (!v || v === 'dev' || v === 'unknown') return 'dev';
+  if (/^v\d/.test(v)) return v; // already a v-tag form
+  // No milestone (vX.Y.Z) tag reachable — show the describe output as a build id.
+  return v;
+}
+
+/** The full, unabbreviated git-describe string (for tooltips / About). */
+export const versionRaw = versionInfo.version;
+
+/**
+ * Footer note for the About changelog making the build-time cap explicit
+ * (no-silent-caps rule): the list is the last N commits, not the whole history.
+ */
+export const CHANGELOG_CAP_NOTE =
+  `Changelog shows the most recent ${versionInfo.changelogCap} check-ins, ` +
+  `baked into the build from git log. Older history lives in git.`;

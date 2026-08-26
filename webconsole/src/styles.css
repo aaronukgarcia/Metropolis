@@ -199,6 +199,57 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border-strong); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- version badge + About (FEAT-1972079872) ---------- */
+.version-badge {
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  padding: 2px 7px;
+  margin-left: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.version-badge:hover { border-color: var(--accent); color: var(--accent); }
+
+.about-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 11, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 24px;
+}
+.about-panel {
+  width: min(640px, 92vw);
+  max-height: 82vh;
+}
+.about-body { display: flex; flex-direction: column; gap: 8px; }
+.about-version { font-size: 15px; font-weight: 700; }
+.about-version-num { color: var(--accent); }
+.about-meta { font-size: 11px; }
+.about-log { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+.about-entry { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.about-entry-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.about-hash { color: var(--warn); font-size: 11px; }
+.about-tag {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--done);
+  border: 1px solid var(--done);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.about-date { font-size: 10.5px; margin-left: auto; }
+.about-subject { font-size: 12px; line-height: 1.4; margin-top: 2px; }
+.about-foot { font-size: 10.5px; padding-top: 8px; }
+
 .wb-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 .wb-list { display: flex; flex-direction: column; gap: 5px; }
 .wb-row { display: flex; align-items: center; gap: 8px; }

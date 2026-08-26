@@ -1,0 +1,7 @@
+# Build-time git-derived version module (FEAT-1972079872).
+# Regenerated on every build/dev by scripts/gen-version.mjs from `git describe`
+# + `git log`. NEVER commit it — git is the single source of truth (GR#2).
+/src/generated/
+
+# Vite build output
+/dist/

@@ -4,9 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "gen-version": "node scripts/gen-version.mjs",
+    "predev": "node scripts/gen-version.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/gen-version.mjs",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test \"test/*.test.mjs\""
   },
   "dependencies": {
     "react": "^18.3.1",

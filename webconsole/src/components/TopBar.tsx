@@ -1,7 +1,10 @@
+import { useState } from 'react';
 import { useSim, levelOf, xpForLevel, wellbeingOf } from '../sim/store';
 import { fmtMoney } from '../sim/utils';
+import { versionBadgeLabel, versionRaw } from '../sim/version';
 import { TrendArrows } from './Trend';
 import { useBusy } from './Busy';
+import { AboutModal } from './About';
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 0, label: 'Pause' },
@@ -20,6 +23,7 @@ function gameDate(tick: number): string {
 export function TopBar() {
   const { state, dispatch } = useSim();
   const { run } = useBusy();
+  const [aboutOpen, setAboutOpen] = useState(false);
   const level = levelOf(state.xp);
   const cur = xpForLevel(level);
   const next = xpForLevel(level + 1);
@@ -32,6 +36,13 @@ export function TopBar() {
         <span className="brand-mark" />
         Metropolis
         <span className="muted">Command Console</span>
+        <button
+          className="version-badge mono"
+          title={`Version ${versionRaw} — click for About & changelog`}
+          onClick={() => setAboutOpen(true)}
+        >
+          {versionBadgeLabel()}
+        </button>
       </div>
       <div className="top-center">
         <button
@@ -78,6 +89,7 @@ export function TopBar() {
           </button>
         ))}
       </div>
+      {aboutOpen && <AboutModal onClose={() => setAboutOpen(false)} />}
     </header>
   );
 }
