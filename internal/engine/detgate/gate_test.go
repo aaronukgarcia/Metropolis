@@ -20,9 +20,10 @@ const gateMonths = 120
 // TestDeterminismGate is the CI-facing check (AC-4: wired into
 // .github/workflows/ci.yml's determinism-gate job): same seed, 120
 // months, run twice at POOL-SIM=1 (AC-1), then again at POOL-SIM=14
-// (AC-2), all against the stub-everything engine.core.Engine (AC-3 — see
-// package doc.go, engine.core has zero registered PhaseHooks today, the
-// walking-skeleton property). A hash mismatch fails this test with a
+// (AC-2), all against the COMPOSED engine — compose.Wire registers the
+// full baseline-one hook set production runs (BUG-375: the gate
+// previously hashed a bare-core, zero-hook engine, proving nothing about
+// the hooks that actually execute). A hash mismatch fails this test with a
 // message naming exactly which two runs disagreed (AC-7) and states the
 // GR#21 auto-P0 severity (AC-8) so a human triaging red CI does not have
 // to know the rule from memory.
@@ -53,6 +54,42 @@ func TestDeterminismGate(t *testing.T) {
 		if r.Hash == "" {
 			t.Fatalf("run %q (POOL-SIM=%d) produced an empty hash", r.Label, r.WorkerCount)
 		}
+	}
+}
+
+// TestDeterminismGate_GateCoversComposedHooks is BUG-375's mechanical
+// regression guard: the gate's hash MUST differ from a bare-core,
+// zero-hook engine run at the same seed and month count. If the two ever
+// agree, RunGate is again hashing a stub engine while production runs
+// compose's hook set — exactly the silent coverage hole BUG-375 closed —
+// and this test fails before that can ship green.
+//
+// grep -rn "time.Now" this file returns no matches (AC-9).
+func TestDeterminismGate_GateCoversComposedHooks(t *testing.T) {
+	e := core.NewEngine(core.WithWorldSeed(gateSeed), core.WithPoolSize(1))
+	if err := e.AdvanceTicks("bare-core-reference", int64(gateMonths)*core.DailyTicksPerMonth); err != nil {
+		t.Fatalf("bare-core AdvanceTicks: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := e.Snapshot(&buf, "bare-core-reference-snapshot"); err != nil {
+		t.Fatalf("bare-core Snapshot: %v", err)
+	}
+	bareSum := sha256.Sum256(buf.Bytes())
+	bareHash := hex.EncodeToString(bareSum[:])
+
+	report, err := RunGate("test-gate-covers-hooks", gateSeed, gateMonths, []RunSpec{
+		{Label: "composed-pool1", WorkerCount: 1},
+		{Label: "composed-pool1-b", WorkerCount: 1},
+	})
+	if err != nil {
+		t.Fatalf("RunGate(seed=%d, months=%d): %v", gateSeed, gateMonths, err)
+	}
+	if !report.Verdict {
+		t.Fatalf("composed runs disagreed with each other: %v", report.Mismatches)
+	}
+	if report.Runs[0].Hash == bareHash {
+		t.Fatal("GATE BUG: RunGate's hash equals a bare-core zero-hook engine's hash — " +
+			"the determinism gate is not covering the composed hook set (BUG-375 regression)")
 	}
 }
 

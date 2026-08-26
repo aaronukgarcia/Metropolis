@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -67,9 +68,10 @@ type GateReport struct {
 
 // RunGate is the determinism-gate reference runner (package doc.go).
 // It performs one full run per spec — booting a fresh engine.core.Engine
-// at (seed, spec.WorkerCount), driving it months*30 daily ticks through
-// the real protocol.Command path, then hashing its Snapshot — and reports
-// whether every run's hash agrees.
+// at (seed, spec.WorkerCount), wiring the full composed hook set through
+// compose.Wire (the single real registration path — BUG-375), driving it
+// months*30 daily ticks through the real protocol.Command path, then
+// hashing its Snapshot — and reports whether every run's hash agrees.
 //
 // correlationID is the root correlation ID this gate run is filed under
 // (GR#1); RunGate derives a distinct sub-ID per command and per run from
@@ -132,9 +134,30 @@ func evaluate(seed uint64, months int, runs []RunResult) (verdict bool, mismatch
 // runOnce boots one fresh Engine at (seed, spec.WorkerCount), advances it
 // months*30 daily ticks entirely through the real protocol.Command path
 // (never Engine.AdvanceTicks directly — see doc.go), then hashes its
-// Snapshot.
+// Snapshot plus the BROAD composed-state digest (BUG-375 r3:
+// Composition.StateDigest observes EVERY composed module observable a hook
+// can mutate — finance ledger per-account balances, crime, refuse, and
+// compose's conservation ledgers — not the citizen population alone). The
+// gate MUST include this digest to detect when a hook is skipped/disabled
+// AND when any hook contains nondeterminism: Snapshot alone only captures
+// Tick/Month/Seed (deterministic regardless of whether hooks ran), and the
+// earlier r2 PopulationHash-only probe observed population-class state
+// only, letting a finance/crime/refuse ordering bug ship green.
 func runOnce(rootCorrelationID string, seed uint64, months int, spec RunSpec) (string, error) {
 	e := core.NewEngine(core.WithWorldSeed(seed), core.WithPoolSize(spec.WorkerCount))
+
+	// BUG-375: the gate hashes the COMPOSED engine — compose.Wire is the
+	// single wiring path (feat.compositionroot AC-1/AC-13) every runnable
+	// top reaches real hooks through, so a bare-core boot here would hash
+	// zero hooks while production runs compose's full registration order
+	// and one nondeterministic ordering bug in any hook would ship green.
+	// Wiring failure aborts the run with compose's registry-sourced error,
+	// never a silent stub gate.
+	comp, err := compose.Wire(e, nil)
+	if err != nil {
+		return "", err
+	}
+
 	transport := protocol.NewInProcTransport(
 		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
 		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
@@ -209,5 +232,22 @@ func runOnce(rootCorrelationID string, seed uint64, months int, spec RunSpec) (s
 	h := sha256.New()
 	h.Write(headerBytes)
 	h.Write(buf.Bytes())
+	// BUG-375 r3: hash the BROAD composed-state digest, not PopulationHash
+	// alone. Snapshot alone captures only Tick/Month/Seed (deterministic
+	// regardless of whether any hook ran); PopulationHash (r2) added the
+	// citizen-store fingerprint but observes ONLY population-class state —
+	// an independent round proved conserving map-order nondeterminism in
+	// financeHook diverged treasury ~54,000 micropounds between two
+	// same-seed runs while PopulationHash stayed byte-identical and the gate
+	// PASSED. Composition.StateDigest observes EVERY composed module
+	// observable a hook can mutate — the finance ledger's per-account
+	// balances, crime threat/safety/per-type figures, refuse per-stream
+	// tonnage, and compose's own conservation ledgers — so a
+	// nondeterministic ordering bug in ANY hook (not only a population hook)
+	// changes this hash and reddens the gate. See
+	// compose.Composition.StateDigest for exactly what it covers and its
+	// known limits.
+	digest := comp.StateDigest()
+	h.Write(digest[:])
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
