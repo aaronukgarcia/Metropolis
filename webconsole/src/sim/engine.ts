@@ -198,8 +198,9 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     { label: 'Business Tax', value: Math.round(c.commercial * t.commercial * 0.4) },
     { label: 'Freight Tax', value: Math.round(c.industrial * t.industrial * 0.55) },
   ];
-  if (s.policies.tourismDrive)
-    inflows.push({ label: 'Tourism', value: Math.round(s.population * 0.12) });
+  // BUG-404 FIX: removed the duplicate tourismDrive Tourism entry here.
+  // All tourism income (both policy and building-sourced) is calculated and added
+  // once below at the unified tourism calculation site (lines ~227-230).
 
   const links = stationLinks(s);
   let commuterWeight = 0;
@@ -221,6 +222,11 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   const officeTax = Math.max(0, officeJobs) * t.commercial * 0.05;
   if (officeTax > 0) inflows.push({ label: 'Office Tax', value: Math.round(officeTax) });
 
+  // BUG-404 FIX: unified tourism calculation (SSOT style per GR#3).
+  // tourismDrive policy and building tourism both feed into ONE stream.
+  // Before: tourismDrive added a separate entry at line 202, then buildings
+  // added another "Tourism" entry at line 229, creating duplicates.
+  // Now: single source of truth for tourism income.
   let tourism = s.policies.tourismDrive ? Math.round(s.population * 0.12) : 0;
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
@@ -266,10 +272,28 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     }
   }
 
+  // BUG-403 FIX: Transit Subsidy scaled/capped to avoid unbounded costs.
+  // PLACEHOLDER (balance-number regime): scale by tax income instead of population only.
+  // Base tax income = sum of tax flows (council, business, freight).
+  const baseTaxIncome = inflows
+    .filter((f) => ['Council Tax', 'Business Tax', 'Freight Tax'].includes(f.label))
+    .reduce((a, f) => a + f.value, 0);
+  // PLACEHOLDER: cap transit subsidy at a fraction (50%) of base tax income.
+  const maxTransitSubsidy = Math.round(baseTaxIncome * 0.5);
+  const transitSubsidyCost = Math.round(s.population * 1.5);
   if (s.policies.transitSubsidy)
-    outflows.push({ label: 'Transit Subsidy', value: Math.round(s.population * 1.5) });
+    outflows.push({ label: 'Transit Subsidy', value: Math.min(transitSubsidyCost, maxTransitSubsidy) });
+
   if (s.loanBalance > 0)
     outflows.push({ label: 'Loan Interest', value: Math.round(s.loanBalance * 0.005) });
+
+  // BUG-402 FIX: overdraft interest when funds go negative.
+  // PLACEHOLDER (balance-number regime): overdraft rate on negative balance.
+  // At 50% annual rate = 0.4% per tick (50% / 125 ticks ≈ 0.4% per tick).
+  if (s.funds < 0) {
+    const overdraftInterest = Math.round(Math.abs(s.funds) * 0.004);
+    outflows.push({ label: 'Overdraft Interest', value: overdraftInterest });
+  }
 
   if (s.policies.recycling) {
     const discounted = new Set(['Roads', 'Power Grid', 'Water & Waste', 'Healthcare', 'Education', 'Parks', 'Policing']);
