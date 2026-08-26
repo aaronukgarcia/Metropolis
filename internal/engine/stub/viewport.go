@@ -73,8 +73,8 @@ type Extent struct {
 type ViewportCell struct {
 	X         int    `json:"x"`
 	Y         int    `json:"y"`
-	Terrain   string `json:"terrain,omitempty"`
-	Elevation int    `json:"elevation,omitempty"`
+	Terrain   string `json:"terrain"`
+	Elevation int    `json:"elevation"`
 	Road      string `json:"road,omitempty"`
 	Building  string `json:"building,omitempty"`
 }
