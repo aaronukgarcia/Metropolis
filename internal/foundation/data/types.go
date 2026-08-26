@@ -1,6 +1,9 @@
 package data
 
-import "strconv"
+import (
+	"sort"
+	"strconv"
+)
 
 // This file defines the typed struct for each of the §24 config files.
 // Consumption and Seasonal carry the fields spec-stated in §17.1/§17.2
@@ -86,7 +89,20 @@ func (c *Consumption) Validate() error {
 	if r.WastewaterFractionOfWater < 0 || r.WastewaterFractionOfWater > 1 {
 		return fieldErr("residential.wastewaterFractionOfWater", "must be in [0,1]")
 	}
-	for key, cls := range c.Classes {
+	// Iterate class keys in a deterministic (sorted) order rather than
+	// ranging over the map directly (Go map iteration order is randomised
+	// per-run) so that, given the SAME malformed consumption.json with
+	// multiple violating classes, the FIRST violation returned - and
+	// therefore which class the MET-F604 error blames - is stable across
+	// runs and across POOL-SIM worker counts. BUG-098 class; same fix
+	// market.go/logistics.go/refuse.go/tax_instruments.go already carry.
+	keys := make([]string, 0, len(c.Classes))
+	for key := range c.Classes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		cls := c.Classes[key]
 		if err := requireNonEmptyString("classes["+key+"].unit", cls.Unit); err != nil {
 			return err
 		}
@@ -130,7 +146,18 @@ func (s *Seasonal) Validate() error {
 	if err := requireVersion(s.Version); err != nil {
 		return err
 	}
-	for name, curve := range s.Curves {
+	// Iterate curve names in a deterministic (sorted) order rather than
+	// ranging over the map directly (Go map iteration order is randomised
+	// per-run) so the first violation reported for a multi-curve malformed
+	// file is stable across runs - BUG-098 class, same fix as Consumption
+	// above and market.go's precedent.
+	names := make([]string, 0, len(s.Curves))
+	for name := range s.Curves {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		curve := s.Curves[name]
 		if err := requireLen("curves["+name+"].multipliers", curve.Multipliers, 12); err != nil {
 			return err
 		}
