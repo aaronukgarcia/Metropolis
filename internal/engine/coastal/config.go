@@ -276,6 +276,8 @@ func LoadConfig(path, correlationID string) (Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return zero, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{
+			"field": "(file)",
+			"rule":  "data/coastal.json could not be read",
 			"path":  path,
 			"cause": err.Error(),
 		})
@@ -283,6 +285,8 @@ func LoadConfig(path, correlationID string) (Config, error) {
 	var raw rawCoastalData
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return zero, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{
+			"field": "(file)",
+			"rule":  "data/coastal.json is not well-formed JSON",
 			"path":  path,
 			"cause": err.Error(),
 		})
@@ -290,13 +294,25 @@ func LoadConfig(path, correlationID string) (Config, error) {
 	return buildConfig(raw, path, correlationID)
 }
 
+// coastalDataInvalid builds the MET-G3700 data-invalid error with the full ctx
+// its template renders: field/rule/path/cause. Every coastal call site must
+// supply all four keys, or a missing one reaches the user as the literal token
+// {rule}/{path}/{cause} instead of a value (BUG-357: MET-G3700 previously
+// carried "reason" while the template names {rule}, and pure validators omitted
+// path/cause entirely). path and cause are blank for an in-memory Config with
+// no file behind it.
+func coastalDataInvalid(correlationID, path, field, rule string) error {
+	return errs.New(ErrDataInvalid, correlationID, map[string]any{
+		"field": field,
+		"rule":  rule,
+		"path":  path,
+		"cause": "",
+	})
+}
+
 func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error) {
 	fail := func(field, rule string) (Config, error) {
-		return Config{}, errs.New(ErrDataInvalid, correlationID, map[string]any{
-			"path":   path,
-			"field":  field,
-			"reason": rule,
-		})
+		return Config{}, coastalDataInvalid(correlationID, path, field, rule)
 	}
 	var c Config
 
@@ -442,47 +458,47 @@ func buildConfig(raw rawCoastalData, path, correlationID string) (Config, error)
 // config whose fields are out-of-domain (GR#15/GR#16).
 func (c Config) Validate() error {
 	if !num.IsFinite(c.BaseArrivalRate) || c.BaseArrivalRate < 0 || c.BaseArrivalRate > float64(maxFrequencyCap) {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "baseArrivalRate", "reason": "must be finite and in [0, maxFrequencyCap] (SEC-220)"})
+		return coastalDataInvalid("", "", "baseArrivalRate", "must be finite and in [0, maxFrequencyCap] (SEC-220)")
 	}
 	if c.MaxBoatSize <= 0 || c.MaxBoatSize > maxFrequencyCap || c.MaxArrivalsPerMonth <= 0 || c.MaxArrivalsPerMonth > maxFrequencyCap {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "frequency", "reason": "maxBoatSize and maxArrivalsPerMonth must be in (0, maxFrequencyCap]"})
+		return coastalDataInvalid("", "", "frequency", "maxBoatSize and maxArrivalsPerMonth must be in (0, maxFrequencyCap]")
 	}
 	if c.MaxBoatSize*c.MaxArrivalsPerMonth > maxCasesPerMonth {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "frequency", "reason": "maxBoatSize × maxArrivalsPerMonth must be <= maxCasesPerMonth (SEC-220)"})
+		return coastalDataInvalid("", "", "frequency", "maxBoatSize × maxArrivalsPerMonth must be <= maxCasesPerMonth (SEC-220)")
 	}
-	for i, m := range c.EraMultipliers {
+	for _, m := range c.EraMultipliers {
 		if !num.IsFinite(m) || m < 0 || m > maxFrequencyMultiplier {
-			return errs.New(ErrDataInvalid, "", map[string]any{"field": "eraMultipliers", "reason": "each multiplier must be finite and in [0, maxFrequencyMultiplier] (SEC-228)", "index": i})
+			return coastalDataInvalid("", "", "eraMultipliers", "each multiplier must be finite and in [0, maxFrequencyMultiplier] (SEC-228)")
 		}
 	}
-	for i, m := range c.SeasonMultipliers {
+	for _, m := range c.SeasonMultipliers {
 		if !num.IsFinite(m) || m < 0 || m > maxFrequencyMultiplier {
-			return errs.New(ErrDataInvalid, "", map[string]any{"field": "seasonMultipliers", "reason": "each multiplier must be finite and in [0, maxFrequencyMultiplier] (SEC-228)", "index": i})
+			return coastalDataInvalid("", "", "seasonMultipliers", "each multiplier must be finite and in [0, maxFrequencyMultiplier] (SEC-228)")
 		}
 	}
 	if !num.IsFinite(c.WorldConditionsScale) || c.WorldConditionsScale < 0 || c.WorldConditionsScale > maxFrequencyMultiplier {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "worldConditionsScale", "reason": "must be finite and in [0, maxFrequencyMultiplier] (SEC-228)"})
+		return coastalDataInvalid("", "", "worldConditionsScale", "must be finite and in [0, maxFrequencyMultiplier] (SEC-228)")
 	}
 	if c.Rescue.CoastguardServiceID == "" || c.Rescue.LifeboatServiceID == "" {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "rescue", "reason": "service IDs must be non-empty"})
+		return coastalDataInvalid("", "", "rescue", "service IDs must be non-empty")
 	}
 	if !num.IsFinite(c.Reception.CaseworkerThroughputPerMonth) || c.Reception.CaseworkerThroughputPerMonth <= 0 || c.Reception.CaseworkerThroughputPerMonth > maxCaseworkerThroughputPerMonth {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.caseworkerThroughputPerMonth", "reason": "must be finite and in (0, maxCaseworkerThroughputPerMonth] (SEC-233)"})
+		return coastalDataInvalid("", "", "reception.caseworkerThroughputPerMonth", "must be finite and in (0, maxCaseworkerThroughputPerMonth] (SEC-233)")
 	}
 	if c.Reception.HotelCostPerCase < 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.hotelCostPerCase", "reason": "must be >= 0"})
+		return coastalDataInvalid("", "", "reception.hotelCostPerCase", "must be >= 0")
 	}
 	if !num.IsFinite(c.Reception.SatisfactionFrictionPerCase) || c.Reception.SatisfactionFrictionPerCase < 0 || c.Reception.SatisfactionFrictionPerCase > maxSatisfactionFrictionPerCase {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "reception.satisfactionFrictionPerCase", "reason": "must be finite and in [0, maxSatisfactionFrictionPerCase] (SEC-221)"})
+		return coastalDataInvalid("", "", "reception.satisfactionFrictionPerCase", "must be finite and in [0, maxSatisfactionFrictionPerCase] (SEC-221)")
 	}
 	if c.Pipeline.MinMonths <= 0 || c.Pipeline.MinMonths > maxPipelineMonths || c.Pipeline.MaxMonths < c.Pipeline.MinMonths || c.Pipeline.MaxMonths > maxPipelineMonths {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "pipeline", "reason": "minMonths must be in (0, maxPipelineMonths] and maxMonths in [minMonths, maxPipelineMonths] (SEC-229)"})
+		return coastalDataInvalid("", "", "pipeline", "minMonths must be in (0, maxPipelineMonths] and maxMonths in [minMonths, maxPipelineMonths] (SEC-229)")
 	}
 	if !num.IsFinite(c.Pipeline.GrantRate) || c.Pipeline.GrantRate < 0 || c.Pipeline.GrantRate > 1 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "pipeline.grantRate", "reason": "must be in [0,1]"})
+		return coastalDataInvalid("", "", "pipeline.grantRate", "must be in [0,1]")
 	}
 	if c.Pipeline.DepartureCostPerCase < 0 || c.Pipeline.MaxReductionMonths < 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "pipeline", "reason": "departureCostPerCase and maxReductionMonths must be >= 0"})
+		return coastalDataInvalid("", "", "pipeline", "departureCostPerCase and maxReductionMonths must be >= 0")
 	}
 	for name, v := range map[string]float64{
 		"processingFundingDefault":     c.Policy.ProcessingFundingDefault,
@@ -490,29 +506,29 @@ func (c Config) Validate() error {
 		"integrationInvestmentDefault": c.Policy.IntegrationInvestmentDefault,
 	} {
 		if !inUnit(v) {
-			return errs.New(ErrDataInvalid, "", map[string]any{"field": name, "reason": "must be in [0,1]"})
+			return coastalDataInvalid("", "", name, "must be in [0,1]")
 		}
 	}
 	if c.Policy.HousingApproachCostPerUnitPerMonth > 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy.housingApproachCostPerUnitPerMonth", "reason": "must be <= 0 (centres are cheaper)"})
+		return coastalDataInvalid("", "", "policy.housingApproachCostPerUnitPerMonth", "must be <= 0 (centres are cheaper)")
 	}
 	if !num.IsFinite(c.Policy.ProcessingFundingThroughputGainPerUnit) || c.Policy.ProcessingFundingThroughputGainPerUnit < 0 ||
 		c.Policy.ProcessingFundingThroughputGainPerUnit > maxPolicyCoefficientPerUnit {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy.processingFundingThroughputGainPerUnit", "reason": "must be finite and in [0, maxPolicyCoefficientPerUnit] (SEC-233)"})
+		return coastalDataInvalid("", "", "policy.processingFundingThroughputGainPerUnit", "must be finite and in [0, maxPolicyCoefficientPerUnit] (SEC-233)")
 	}
 	if !num.IsFinite(c.Policy.HousingApproachFrictionIncreasePerUnit) || c.Policy.HousingApproachFrictionIncreasePerUnit < 0 ||
 		c.Policy.HousingApproachFrictionIncreasePerUnit > maxPolicyCoefficientPerUnit {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy.housingApproachFrictionIncreasePerUnit", "reason": "must be finite and in [0, maxPolicyCoefficientPerUnit] (SEC-234)"})
+		return coastalDataInvalid("", "", "policy.housingApproachFrictionIncreasePerUnit", "must be finite and in [0, maxPolicyCoefficientPerUnit] (SEC-234)")
 	}
 	if c.Policy.ProcessingFundingOpexPerUnitPerMonth < 0 ||
 		!num.IsFinite(c.Policy.HousingApproachIntegrationPenaltyPerUnit) || c.Policy.HousingApproachIntegrationPenaltyPerUnit < 0 ||
 		!num.IsFinite(c.Policy.IntegrationInvestmentGainPerUnit) || c.Policy.IntegrationInvestmentGainPerUnit < 0 ||
 		c.Policy.IntegrationInvestmentOpexPerUnitPerMonth < 0 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "policy", "reason": "gain/cost figures must be finite and non-negative"})
+		return coastalDataInvalid("", "", "policy", "gain/cost figures must be finite and non-negative")
 	}
 	if c.WorldProfile.AttainmentMean < 0 || c.WorldProfile.AttainmentMean > 32767 ||
 		c.WorldProfile.AttainmentSpread < 0 || c.WorldProfile.AttainmentSpread > 32767 {
-		return errs.New(ErrDataInvalid, "", map[string]any{"field": "worldProfile.skills", "reason": "attainment mean/spread must be in 0..32767"})
+		return coastalDataInvalid("", "", "worldProfile.skills", "attainment mean/spread must be in 0..32767")
 	}
 	return nil
 }

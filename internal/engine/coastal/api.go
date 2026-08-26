@@ -82,7 +82,14 @@ func New(seed uint64, cfg Config, correlationID string) (*CoastalAPI, error) {
 		correlationID = errs.NewCorrelationID()
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{"cause": err.Error()})
+		// MET-G3700 names {field},{rule},{path},{cause}; supply all four so the
+		// wrapped Validate() failure renders instead of leaking literal tokens
+		// (BUG-357). cause is auto-injected from err by errs.Wrap.
+		return nil, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{
+			"field": "(config)",
+			"rule":  "the supplied Config failed Validate()",
+			"path":  "",
+		})
 	}
 	c := &CoastalAPI{
 		correlationID:         correlationID,
