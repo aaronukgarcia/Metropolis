@@ -112,10 +112,7 @@ func NewDepositMap(worldSeed uint64, w *world.WorldAPI, p DepositParams) (*Depos
 		return nil, errs.New(ErrDepositDataInvalid, errs.NewCorrelationID(), map[string]any{"cause": "nil world"})
 	}
 	if err := p.validate(func(field, rule string) error {
-		return errs.New(ErrDepositDataInvalid, errs.NewCorrelationID(), map[string]any{
-			"field": field,
-			"rule":  rule,
-		})
+		return miningDepositInvalid(errs.NewCorrelationID(), "", field, rule)
 	}); err != nil {
 		return nil, err
 	}
@@ -180,7 +177,7 @@ func (m *DepositMap) ShuffleTile(t world.TileCoord, correlationID string) error 
 		return err
 	}
 	if !t.InExtent() {
-		return errs.New(ErrDepositQueryOutOfBounds, correlationID, map[string]any{"tile": t})
+		return miningDepositQueryInvalid(correlationID, "tile coordinate out of extent")
 	}
 
 	pocket, err := m.world.PocketGeology(t, correlationID)
@@ -241,9 +238,7 @@ func (m *DepositMap) DepositAt(t world.TileCoord, local world.CellLocal) (Deposi
 		return Deposit{}, false, err
 	}
 	if !t.InExtent() || !local.InBounds() {
-		return Deposit{}, false, errs.New(ErrDepositQueryOutOfBounds, errs.NewCorrelationID(), map[string]any{
-			"tile": t, "local": local,
-		})
+		return Deposit{}, false, miningDepositQueryInvalid(errs.NewCorrelationID(), "query coordinate out of extent")
 	}
 	m.mu.RLock()
 	d, ok := m.placed[depositKey{t.X, t.Y, local.Row, local.Col}]

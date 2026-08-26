@@ -194,7 +194,7 @@ func (b *BlightAPI) RegisterBlightingObject(objectKey string, class BlightClass,
 		return errs.New(ErrBlightProfileInvalid, b.correlationID, map[string]any{"field": "objectKey", "rule": "must be non-empty"})
 	}
 	if !validClass(class) {
-		return errs.New(ErrBlightProfileInvalid, b.correlationID, map[string]any{"field": "class", "value": class})
+		return miningBlightProfileInvalid(b.correlationID, "class", "must be a valid blight class")
 	}
 	if contourRadiusM <= 0 {
 		return errs.New(ErrBlightProfileInvalid, b.correlationID, map[string]any{
@@ -203,7 +203,7 @@ func (b *BlightAPI) RegisterBlightingObject(objectKey string, class BlightClass,
 	}
 	prof, ok := b.cfg.classProfile(class)
 	if !ok {
-		return errs.New(ErrBlightDataInvalid, b.correlationID, map[string]any{"class": class})
+		return miningBlightDataInvalid(b.correlationID, "classProfile", "class not found in blight-model config")
 	}
 	obj := &blightingObject{
 		key:             objectKey,
@@ -245,7 +245,7 @@ func (b *BlightAPI) PlaceBlightingObject(spec BlightingObjectSpec) error {
 		return errs.New(ErrBlightProfileInvalid, b.correlationID, map[string]any{"field": "key", "rule": "must be non-empty"})
 	}
 	if !validClass(spec.Class) {
-		return errs.New(ErrBlightProfileInvalid, b.correlationID, map[string]any{"field": "class", "value": spec.Class})
+		return miningBlightProfileInvalid(b.correlationID, "class", "must be a valid blight class")
 	}
 	if !spec.Tile.InExtent() || !spec.Local.InBounds() {
 		return errs.New(ErrBlightProfileInvalid, b.correlationID, map[string]any{

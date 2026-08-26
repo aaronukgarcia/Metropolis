@@ -128,7 +128,7 @@ func (b *BlightAPI) SiteExtraction(cmd SiteCommand) error {
 	// Build the site's blight profile from its class (data-sourced).
 	prof, ok := b.cfg.classProfile(params.BlightClass)
 	if !ok {
-		return errs.New(ErrBlightDataInvalid, corr, map[string]any{"class": params.BlightClass})
+		return miningBlightDataInvalid(corr, "classProfile", "class not found in blight-model config")
 	}
 
 	b.mu.Lock()
@@ -253,7 +253,13 @@ func (b *BlightAPI) Extract(siteKey string, tonnes float64, correlationID string
 		return 0, errs.New(ErrUnknownBlightKey, correlationID, map[string]any{"key": siteKey})
 	}
 	if s.exhaustedAndReclaimed() || s.closed {
-		return 0, errs.New(ErrSiteExhausted, correlationID, map[string]any{"key": siteKey})
+		var rule string
+		if s.exhaustedAndReclaimed() {
+			rule = "exhausted or reclaimed"
+		} else {
+			rule = "closed"
+		}
+		return 0, miningSiteExhaustedInvalid(correlationID, siteKey, rule)
 	}
 	remaining := s.capacity - s.extracted
 	take := tonnes

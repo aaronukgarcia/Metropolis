@@ -258,11 +258,7 @@ func LoadMineTypes(path, correlationID string) (Catalogue, error) {
 // map), so Keys/All are deterministic (GR#21).
 func buildCatalogue(raw rawMineTypeData, path, correlationID string) (Catalogue, error) {
 	fail := func(field, rule string) (Catalogue, error) {
-		return Catalogue{}, errs.New(ErrMineTypeDataInvalid, correlationID, map[string]any{
-			"path":  path,
-			"field": field,
-			"rule":  rule,
-		})
+		return Catalogue{}, miningMineTypeInvalid(correlationID, field, rule)
 	}
 
 	if raw.Version <= 0 {

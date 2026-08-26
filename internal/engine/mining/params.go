@@ -188,11 +188,7 @@ func buildParams(raw rawDepositData, path, correlationID string) (DepositParams,
 	}
 
 	failErr := func(field, rule string) error {
-		return errs.New(ErrDepositDataInvalid, correlationID, map[string]any{
-			"path":  path,
-			"field": field,
-			"rule":  rule,
-		})
+		return miningDepositInvalid(correlationID, path, field, rule)
 	}
 	fail := func(field, rule string) (DepositParams, error) {
 		return DepositParams{}, failErr(field, rule)

@@ -100,7 +100,7 @@ func (c BlightConfig) classProfile(class BlightClass) (ClassProfileEntry, bool) 
 // rejected at the boundary (GR#16).
 func validateBlightConfig(c BlightConfig, correlationID string) error {
 	fail := func(field, rule string) error {
-		return errs.New(ErrBlightDataInvalid, correlationID, map[string]any{"field": field, "rule": rule})
+		return miningBlightDataInvalid(correlationID, field, rule)
 	}
 	if !finitePositive(c.Noise.MinDistanceM) {
 		return fail("noise.minDistanceM", "must be a finite, positive metres value")
@@ -248,11 +248,7 @@ func inUnitInterval(f float64) bool {
 // its key (never a string key), so lookups are typed and canonical.
 func buildBlightConfig(raw rawBlightData, path, correlationID string) (BlightConfig, error) {
 	fail := func(field, rule string) (BlightConfig, error) {
-		return BlightConfig{}, errs.New(ErrBlightDataInvalid, correlationID, map[string]any{
-			"path":  path,
-			"field": field,
-			"rule":  rule,
-		})
+		return BlightConfig{}, miningBlightDataInvalid(correlationID, field, rule)
 	}
 
 	if raw.Version <= 0 {
