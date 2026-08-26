@@ -13,10 +13,12 @@ import {
   isOnline,
   occupiedSet,
   placementCost,
-  plantEffServed,
+  serviceCoverageOf,
+  earlyGameFactor,
+  brownoutOf,
+  BROWNOUT_WELLBEING_K,
   stationLinks,
   totalJobs,
-  powerStats,
   waterBalanceOf,
   unlockedAtLevel,
   MAP_H,
@@ -251,6 +253,19 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
       ),
     };
   }
+  // BROWNOUT consequence (BUG-393): while power need exceeds capacity,
+  // powered businesses under-produce — commercial/industrial/office income
+  // scales down by brownout.incomeFactor. Applied AFTER the harbour-boosted
+  // Freight Tax overwrite above so the penalty cannot be clobbered.
+  // Deterministic; weight BROWNOUT_INCOME_K is PLACEHOLDER (balance regime).
+  const brownout = brownoutOf(s);
+  if (brownout.active) {
+    const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);
+    for (const fl of inflows) {
+      if (poweredIncome.has(fl.label)) fl.value = Math.round(fl.value * brownout.incomeFactor);
+    }
+  }
+
   if (s.policies.transitSubsidy)
     outflows.push({ label: 'Transit Subsidy', value: Math.round(s.population * 1.5) });
   if (s.loanBalance > 0)
@@ -544,55 +559,75 @@ export function wellbeingOf(s: SimState): {
 } {
   const c = countByKind(s.buildings);
   const pop = s.population;
-  const f = Math.min(1, pop / 50);
+  // Early-game blend toward a 55 baseline while pop < 50 — same ramp as the
+  // demand meters' earlyGameFactor so the two systems damp identically.
+  // ⚠ BALANCE-NUMBER PLACEHOLDER (55 baseline, pop/50 ramp) — Aaron's pass.
+  const f = earlyGameFactor(pop);
   const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
 
-  let nursery = 0;
-  let primary = 0;
-  let tertiary = 0;
-  let gp = 0;
-  let hosp = 0;
-  let police = 0;
-  for (const b of s.buildings) {
-    const sp = SPECS[b.spec];
-    if (!sp) continue;
-    if (sp.stage === 'nursery') nursery += sp.children ?? 0;
-    else if (sp.stage === 'primary' || sp.stage === 'city') primary += sp.children ?? 0;
-    else if (sp.stage === 'tertiary') tertiary += sp.children ?? 0;
-    else if (sp.id === 'hea_clinic') gp += sp.served ?? 0;
-    else if (sp.id === 'hea_hospital') hosp += sp.served ?? 0;
-    else if (sp.id === 'pol_station') police += sp.served ?? 0;
-  }
+  // BUG-392: every service part consumes the SAME per-service coverage ratios
+  // as the demand meters (data.ts serviceCoverageOf — single source of truth,
+  // GR#3). Before this fix wellbeingOf re-derived coverage with its own
+  // formula and its own (mismatched) units, so demand could peg at +100 while
+  // wellbeing read 91. Now a service part is high iff its demand index is low:
+  // at full damping, part ≈ 100 - demand for any under-covered service.
+  const covById = new Map(serviceCoverageOf(s).map((r) => [r.id, r.coverage]));
+  const ratio = (id: string): number => Math.min(1, covById.get(id) ?? 1);
+  // ⚠ BALANCE-NUMBER PLACEHOLDER: linear coverage→score map, 0–100 clamp
+  // (the old +20% over-provision bonus is dropped), pending Aaron's pass.
+  const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
 
-  const cov = (need: number, cap: number) =>
-    blend(Math.round(clampN((cap / Math.max(need, 1)) * 100, 0, 120)));
-
+  // ⚠ BALANCE-NUMBER PLACEHOLDERS: parks formula and the equal (1/3) education
+  // stage weights below, pending Aaron's pass.
   const parks = blend(Math.round(clampN(((c.park * 40) / Math.max(pop, 20)) * 70, 0, 100)));
-  const pw = powerStats(s);
-  const cleanWaste = { clean: 0, waste: 0 };
-  for (const b of s.buildings) {
-    const sp = SPECS[b.spec];
-    if (sp?.kind === 'water') {
-      if (sp.tag === 'clean') cleanWaste.clean += plantEffServed(s, b);
-      if (sp.tag === 'waste') cleanWaste.waste += plantEffServed(s, b);
-    }
-  }
-  const utilities = blend(
-    Math.round(clampN(Math.min((pw.cap / Math.max(pw.need, 1)) * 100, (cleanWaste.clean / Math.max(pop, 1)) * 100), 0, 120))
-  );
+  const education = (ratio('nursery') + ratio('primary') + ratio('college')) / 3;
+  // BUG-392 base: utilities coverage = min(power, clean water) — the weakest
+  // grid utility bounds the part.
+  const utilities = Math.min(ratio('power'), ratio('cleanwater'));
+  // BUG-393 seam, ON TOP of the coverage base: while a power DEFICIT is
+  // active, rolling outages hurt everything the grid touches beyond the mere
+  // MW shortfall the coverage ratio already expresses — so the blended part
+  // is additionally multiplied by (1 - deficitRatio·BROWNOUT_WELLBEING_K).
+  // brownoutOf's deficitRatio equals 1 - the power row's coverage (same
+  // powerStats source, GR#3), so the two penalties can never disagree about
+  // whether a deficit exists. No deficit → factor 1 → pure BUG-392 value.
+  // The multiplier applies AFTER blend, so a brownout can drag the part below
+  // the early-game 55 baseline — a brownout bites however small the town.
+  // Deterministic; BROWNOUT_WELLBEING_K is PLACEHOLDER (balance regime).
+  const brownout = brownoutOf(s);
+  const utilitiesValue = brownout.active
+    ? Math.max(0, Math.round(part(utilities) * (1 - brownout.deficitRatio * BROWNOUT_WELLBEING_K)))
+    : part(utilities);
 
   const parts = [
     { label: 'Approval', value: approvalOf(s) },
     { label: 'Parks & leisure', value: parks },
-    { label: 'Healthcare', value: cov(pop / 800, gp) },
-    { label: 'Hospital care', value: cov(pop / 40000, hosp) },
-    { label: 'Education', value: cov(pop * 0.18, nursery + primary + tertiary) },
-    { label: 'Safety', value: cov(pop / 10000, police) },
-    { label: 'Utilities', value: utilities },
-    { label: 'Sewage', value: cov(pop, cleanWaste.waste) },
+    { label: 'Healthcare', value: part(ratio('gp')) },
+    { label: 'Hospital care', value: part(ratio('hosp')) },
+    { label: 'Education', value: part(education) },
+    { label: 'Safety', value: part(ratio('police')) },
+    { label: 'Utilities', value: utilitiesValue },
+    { label: 'Sewage', value: part(ratio('waste')) },
   ];
+  // ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
   const overall = Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);
   return { overall, parts };
+}
+
+/**
+ * Helper for BUG-393 testing: calculate the Utilities wellbeing part value
+ * WITHOUT the brownout penalty (i.e., what it would be if there was no deficit).
+ * Used to verify that the brownout multiplier actually reduces the part.
+ */
+export function utilitiesWellbeingUnpenalized(s: SimState): number {
+  const pop = s.population;
+  const f = earlyGameFactor(pop);
+  const blend = (computed: number) => Math.round(computed * f + 55 * (1 - f));
+  const covById = new Map(serviceCoverageOf(s).map((r) => [r.id, r.coverage]));
+  const ratio = (id: string): number => Math.min(1, covById.get(id) ?? 1);
+  const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
+  const utilities = Math.min(ratio('power'), ratio('cleanwater'));
+  return part(utilities);
 }
 
 export function initialState(): SimState {

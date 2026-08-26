@@ -1,4 +1,4 @@
-import { SPECS, serviceDemandOf, findSpot, pickAutoSpec } from '../../sim/data';
+import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, brownoutOf } from '../../sim/data';
 import { useSim, demandOf, levelOf } from '../../sim/store';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
@@ -9,6 +9,10 @@ export function DemandDock() {
   const demand = demandOf(state);
   const services = serviceDemandOf(state);
   const auto = pickAutoSpec(state);
+  // BUG-393: visible brownout signal — banner + power-row highlight while
+  // power need exceeds capacity. Derived from the same brownoutOf SSOT as
+  // the income/wellbeing penalties, so the warning can never disagree.
+  const brownout = brownoutOf(state);
 
   function runAuto() {
     if (!auto) return;
@@ -22,11 +26,16 @@ export function DemandDock() {
   return (
     <Panel title="Demand">
       <div className="demand-strip vertical">
+        {brownout.active && (
+          <div className="brownout-banner" role="alert">
+            BROWNOUT: demand exceeds supply
+          </div>
+        )}
         <DemandMeter label="Housing" value={demand.residential} color={SPECS.res_hut.color} />
         <DemandMeter label="Shops" value={demand.commercial} color={SPECS.com_shop.color} />
         <DemandMeter label="Industry" value={demand.industrial} color={SPECS.ind_factory.color} />
         {services.map((m) => (
-          <DemandMeter key={m.id} label={m.label} value={m.value} color={SPECS[m.spec].color} />
+          <DemandMeter key={m.id} label={m.label} value={m.value} color={SPECS[m.spec].color} alert={m.alert} />
         ))}
         {auto && SPECS[auto.spec].unlock <= levelOf(state.xp) && (
           <button
@@ -49,11 +58,24 @@ export function DemandDock() {
   );
 }
 
-function DemandMeter({ label, value, color }: { label: string; value: number; color: string }) {
+function DemandMeter({
+  label,
+  value,
+  color,
+  alert,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  alert?: boolean;
+}) {
   const w = Math.min(Math.abs(value), 100) / 2;
   const pos = value >= 0;
   return (
-    <div className="demand" title={`${label}: ${value > 0 ? '+' : ''}${value}`}>
+    <div
+      className={`demand${alert ? ' alert' : ''}`}
+      title={`${label}: ${value > 0 ? '+' : ''}${value}${alert ? ' — BROWNOUT' : ''}`}
+    >
       <span className="swatch" style={{ background: color }} />
       <span className="d-label">{label}</span>
       <div className="d-bar">

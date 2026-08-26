@@ -579,6 +579,55 @@ export function powerStats(s: SimState): { need: number; cap: number } {
   };
 }
 
+// ---------- brownout (BUG-393) ----------
+//
+// A power DEFICIT (need > cap) is qualitatively worse than unmet demand
+// growth: the city is literally browning out. Before BUG-393 a 4% deficit
+// (10,592 MW need vs 10,185 cap) read as a ±4 wiggle on the linear demand
+// index and had ZERO consequence anywhere in the sim.
+//
+// ALL constants below are PLACEHOLDER weights under the balance-number
+// regime — directional only, flagged for Aaron's row-by-row balance pass.
+
+/** PLACEHOLDER: any deficit floors the power demand index here. */
+export const BROWNOUT_INDEX_FLOOR = 50;
+/** PLACEHOLDER: index points per unit deficitRatio above the floor
+ * (a 4% deficit reads +60; a 20% deficit pegs the index at +100). */
+export const BROWNOUT_INDEX_SLOPE = 250;
+/** PLACEHOLDER: fraction of powered-business income lost at a total (100%)
+ * deficit — a 4% deficit costs ~2.4% of commercial/industrial/office income. */
+export const BROWNOUT_INCOME_K = 0.6;
+/** PLACEHOLDER: utilities-wellbeing collapse rate vs deficitRatio — a 50%
+ * deficit multiplies the utilities part by (1 - 0.5*1.5) = 0.25. */
+export const BROWNOUT_WELLBEING_K = 1.5;
+
+export interface Brownout {
+  /** true while power need exceeds capacity. */
+  active: boolean;
+  /** 1 - cap/need while active, else 0. Pure function of state — deterministic.
+   *  Identical to 1 - coverage for the 'power' row of serviceCoverageOf,
+   *  because that row's coverage is cap/need (BUG-392 shared source). */
+  deficitRatio: number;
+  /** Multiplier applied to commercial/industrial/office income (<= 1). */
+  incomeFactor: number;
+}
+
+/** Single source of truth for the brownout state (GR#3): the demand index,
+ * the income penalty, the wellbeing penalty, and the UI warning all derive
+ * from this one deterministic computation. */
+export function brownoutOf(s: SimState): Brownout {
+  const pw = powerStats(s);
+  if (pw.need <= 0 || pw.cap >= pw.need) {
+    return { active: false, deficitRatio: 0, incomeFactor: 1 };
+  }
+  const deficitRatio = 1 - pw.cap / pw.need;
+  return {
+    active: true,
+    deficitRatio,
+    incomeFactor: Math.max(0, 1 - deficitRatio * BROWNOUT_INCOME_K),
+  };
+}
+
 export function totalJobs(s: SimState): number {
   let jobs = 0;
   for (const b of s.buildings) {
@@ -591,11 +640,40 @@ export function totalJobs(s: SimState): number {
   return jobs;
 }
 
-export function serviceDemandOf(
-  s: SimState
-): { id: string; label: string; value: number; spec: string }[] {
+// ---------- per-service coverage: SINGLE SOURCE OF TRUTH (BUG-392, GR#3) ----
+//
+// Before BUG-392 the demand meters (here) and the wellbeing breakdown
+// (engine.ts wellbeingOf) each computed their own coverage with DIFFERENT
+// formulas AND mismatched units — demand compared facility COUNTS against
+// population SERVED (e.g. need = pop/800 clinics vs cap = 5,000 people per
+// clinic), so one clinic pegged every meter at ±100 while wellbeing's clamp
+// read the same mismatch as "great". Both systems now consume the ratios
+// produced by serviceCoverageOf() and can never contradict each other again.
+
+export interface ServiceCoverage {
+  id: string;
+  label: string;
+  /** Requirement, in the SAME unit as `cap`: people for served-based services
+   *  (GP/hospital/police/water/sewage), school places for education, MW for
+   *  power. Never mix a facility count with a population. */
+  need: number;
+  /** Installed capacity in the same unit as `need`. */
+  cap: number;
+  /** cap / need, unclamped (may exceed 1 on oversupply); defined as 1 when
+   *  need is 0 — nothing required means fully covered. */
+  coverage: number;
+  /** Palette spec the auto-builder should place to raise this coverage. */
+  spec: string;
+}
+
+/**
+ * ⚠ BALANCE-NUMBER REGIME (Aaron's blanket rule): every `need` rate below
+ * (0.06 / 0.12 / 0.05 of population for school places; whole-population reach
+ * for GP/hospital/police/water) is a PLACEHOLDER — directional only, pending
+ * Aaron's row-by-row balance pass.
+ */
+export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   const pop = s.population;
-  const f = Math.min(1, pop / 50);
   const nursery = sumBy(s, (sp) => sp.stage === 'nursery', (sp) => sp.children ?? 0);
   const primary = sumBy(s, (sp) => sp.stage === 'primary' || sp.stage === 'city', (sp) => sp.children ?? 0);
   const tertiary = sumBy(s, (sp) => sp.stage === 'tertiary', (sp) => sp.children ?? 0);
@@ -613,20 +691,66 @@ export function serviceDemandOf(
   }
   const pw = powerStats(s);
 
-  const mk = (need: number, cap: number) =>
-    Math.round(Math.max(-100, Math.min(100, ((cap - need) / Math.max(need, 10)) * 100)) * f);
+  const row = (id: string, label: string, need: number, cap: number, spec: string): ServiceCoverage =>
+    ({ id, label, need, cap, coverage: need <= 0 ? 1 : cap / need, spec });
 
   return [
-    { id: 'nursery', label: 'Nursery (0–4)', value: mk(pop * 0.06, nursery), spec: 'edu_nursery' },
-    { id: 'primary', label: 'School (5–15)', value: mk(pop * 0.12, primary), spec: pop * 0.12 > 1200 ? 'edu_city' : 'edu_primary' },
-    { id: 'college', label: 'College (16–19)', value: mk(pop * 0.05, tertiary), spec: pop * 0.05 > 3000 ? 'uni' : 'col_sixth' },
-    { id: 'gp', label: 'GP clinics', value: mk(pop / 800, gp), spec: 'hea_clinic' },
-    { id: 'hosp', label: 'Hospital', value: mk(pop / 40000, hosp), spec: 'hea_hospital' },
-    { id: 'police', label: 'Police', value: mk(pop / 10000, police), spec: 'pol_station' },
-    { id: 'cleanwater', label: 'Clean water', value: mk(pop, clean), spec: 'wat_clean' },
-    { id: 'waste', label: 'Sewage', value: mk(pop, waste), spec: 'wat_waste' },
-    { id: 'power', label: `Power (${pw.cap}/${pw.need} MW)`, value: mk(pw.need, pw.cap), spec: pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind' },
+    row('nursery', 'Nursery (0–4)', pop * 0.06, nursery, 'edu_nursery'),
+    row('primary', 'School (5–15)', pop * 0.12, primary, pop * 0.12 > 1200 ? 'edu_city' : 'edu_primary'),
+    row('college', 'College (16–19)', pop * 0.05, tertiary, pop * 0.05 > 3000 ? 'uni' : 'col_sixth'),
+    // Served-based services: need = whole population, cap = Σ spec.served.
+    // (The pre-BUG-392 need was a facility count — pop/800 etc. — compared
+    // against population served: a ~5,000× unit mismatch that pegged meters.)
+    row('gp', 'GP clinics', pop, gp, 'hea_clinic'),
+    row('hosp', 'Hospital', pop, hosp, 'hea_hospital'),
+    row('police', 'Police', pop, police, 'pol_station'),
+    row('cleanwater', 'Clean water', pop, clean, 'wat_clean'),
+    row('waste', 'Sewage', pop, waste, 'wat_waste'),
+    row('power', `Power (${pw.cap}/${pw.need} MW)`, pw.need, pw.cap, pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind'),
   ];
+}
+
+/**
+ * Demand index from a coverage ratio: a monotone, bounded map of
+ * (1 - coverage). Positive = shortfall (demand), negative = surplus.
+ *   coverage 1.0 → 0, 0.8 → +20, 0.5 → +50, 0 → +100, ≥2 → -100.
+ * It only approaches +100 as coverage approaches 0 — 80% coverage reads +20,
+ * never a pegged +100 (the BUG-392 saturation).
+ * ⚠ BALANCE-NUMBER PLACEHOLDER: the linear 100·(1-coverage) curve and the
+ * ±100 clamp are directional only, pending Aaron's balance pass.
+ */
+export const demandIndexOf = (coverage: number): number =>
+  Math.round(Math.max(-100, Math.min(100, 100 * (1 - coverage))));
+
+/** Early-game damping so a near-empty map doesn't scream demand.
+ *  ⚠ BALANCE-NUMBER PLACEHOLDER (pop/50 ramp), pending Aaron's balance pass. */
+export const earlyGameFactor = (pop: number): number => Math.min(1, pop / 50);
+
+export function serviceDemandOf(
+  s: SimState
+): { id: string; label: string; value: number; spec: string; alert?: boolean }[] {
+  const f = earlyGameFactor(s.population);
+  return serviceCoverageOf(s).map((c) => {
+    if (c.id !== 'power') {
+      return { id: c.id, label: c.label, value: Math.round(demandIndexOf(c.coverage) * f), spec: c.spec };
+    }
+    // BUG-392 × BUG-393 seam. While power has NO deficit (coverage ≥ 1, or
+    // nothing needs power) it rides the shared demandIndexOf curve like every
+    // other service. A power DEFICIT (need > cap ⇔ coverage < 1) is
+    // qualitatively WORSE than an ordinary coverage shortfall — the city is
+    // browning out — so the index escalates instead: floored at
+    // BROWNOUT_INDEX_FLOOR, climbing by BROWNOUT_INDEX_SLOPE per unit
+    // deficitRatio (= 1 - coverage, since the power row's coverage is
+    // cap/need — same quantity brownoutOf derives), clamped at 100. The
+    // deficit branch deliberately skips the population ramp `f`: a brownout
+    // is a brownout however small the town. `alert` drives the DemandDock
+    // banner + row highlight. Curve constants are PLACEHOLDER (balance regime).
+    const deficit = c.need > 0 && c.coverage < 1;
+    const value = deficit
+      ? Math.round(Math.min(100, BROWNOUT_INDEX_FLOOR + (1 - c.coverage) * BROWNOUT_INDEX_SLOPE))
+      : Math.round(demandIndexOf(c.coverage) * f);
+    return { id: c.id, label: c.label, value, spec: c.spec, alert: deficit };
+  });
 }
 
 // ---------- placement planner ----------
@@ -744,6 +868,11 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
 export function pickAutoSpec(
   s: SimState
 ): { spec: string; label: string } | null {
+  // Positive value = shortfall (BUG-392 semantics), so the descending sort
+  // surfaces the WORST-covered service. (Under the pre-BUG-392 surplus-positive
+  // index this same code auto-built the most OVERsupplied service.)
+  // ⚠ BALANCE-NUMBER PLACEHOLDER: the >25 trigger threshold is directional
+  // only, pending Aaron's balance pass.
   const meters = serviceDemandOf(s).sort((a, b) => b.value - a.value);
   if (meters.length && meters[0].value > 25) {
     return { spec: meters[0].spec, label: meters[0].label };

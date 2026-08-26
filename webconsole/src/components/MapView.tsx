@@ -495,8 +495,10 @@ export function MapView() {
     if (d.commercial > 40) return { text: 'Citizens want shops — paint Commercial zones.', go: undefined };
     if (d.industrial > 40) return { text: 'Industry is demanded — freight jobs are waiting.', go: undefined };
 
-    const worst = serviceDemandOf(s).sort((a, b) => a.value - b.value)[0];
-    if (worst && worst.value < -30 && SPECS[worst.spec] && SPECS[worst.spec].unlock > lv)
+    // BUG-392: positive demand = shortfall, so the WORST-covered service is
+    // the highest value (the old surplus-positive index put it at the lowest).
+    const worst = serviceDemandOf(s).sort((a, b) => b.value - a.value)[0];
+    if (worst && worst.value > 30 && SPECS[worst.spec] && SPECS[worst.spec].unlock > lv)
       return {
         text: `${worst.label} is under-provided — the right structure unlocks at city level ${SPECS[worst.spec].unlock}.`,
         go: undefined,

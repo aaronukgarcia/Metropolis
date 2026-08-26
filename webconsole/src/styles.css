@@ -340,6 +340,12 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .d-zero { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--border-strong); }
 .d-val { font-size: 10.5px; min-width: 26px; }
 
+/* BUG-393: brownout warning — banner + highlighted power row while need > capacity. */
+.brownout-banner { padding: 4px 8px; border: 1px solid var(--danger); border-left: 3px solid var(--danger); border-radius: 6px; background: rgba(255, 123, 114, 0.12); color: var(--danger); font-weight: 700; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; }
+.demand.alert { outline: 1px solid var(--danger); border-radius: 6px; padding: 1px 3px; background: rgba(255, 123, 114, 0.08); }
+.demand.alert .d-label { color: var(--danger); }
+.demand.alert .d-val { color: var(--danger); }
+
 .advisor { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); max-width: 62%; background: rgba(15, 18, 22, 0.88); border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: 8px; padding: 5px 12px; font-size: 11.5px; color: var(--ink); pointer-events: none; box-shadow: var(--shadow); }
 .advisor.clickable { pointer-events: auto; cursor: pointer; border-left-color: var(--done); }
 .advisor.clickable:hover { background: rgba(24, 28, 34, 0.95); }
