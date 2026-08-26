@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -173,5 +174,51 @@ func TestIntegration_CommandsExerciseRealEngineEndToEnd(t *testing.T) {
 	}
 	if got, want := w.engine.TicksCompleted(), beforeTick+5; got != want {
 		t.Fatalf("TicksCompleted() after AdvanceTicks(5) = %d, want %d", got, want)
+	}
+}
+
+// TestBootFailureRendersCauseNotLiteral triggers the cheapest real boot
+// failure (a colliding module registration, the AC-7 path) and asserts the
+// rendered Display() carries the underlying registry error verbatim with no
+// literal "{cause}" or "{component}" surviving — rendered, not read. This is
+// the honest, behaviour-proving gate for MET-E900: errs.Wrap auto-injects the
+// cause (errs.construct), so the user sees the real reason. (BUG-388: the
+// structural all-wrap-sites gate was deliberately NOT landed — it would
+// false-RED any correct site relying on that auto-injection and skips the
+// errs.New nil-cause sites where a literal {cause} could actually appear.)
+func TestBootFailureRendersCauseNotLiteral(t *testing.T) {
+	reg := registry.NewRegistry()
+	if err := reg.Register("harness.stub", nil, wiredModule{name: "harness.stub"}); err != nil {
+		t.Fatalf("seeding collision: %v", err)
+	}
+
+	w, err := bootCore("boot-render-cause", reg)
+	if err == nil {
+		t.Fatal("bootCore: expected an error on duplicate module registration, got nil")
+	}
+	if w != nil {
+		t.Fatal("bootCore: expected nil wiring on failure")
+	}
+
+	var e *errs.E
+	if !errors.As(err, &e) {
+		t.Fatalf("bootCore error %v is not a registry-sourced *errs.E", err)
+	}
+	if e.Code != codeBootFailure {
+		t.Errorf("error code = %q, want %q", e.Code, codeBootFailure)
+	}
+
+	display := e.Display()
+	if strings.Contains(display, "{cause}") {
+		t.Fatalf("Display() = %q renders {cause} literally; want the real reason", display)
+	}
+	if strings.Contains(display, "{component}") {
+		t.Fatalf("Display() = %q renders {component} literally; want the component name", display)
+	}
+	if e.Wrapped == nil {
+		t.Fatal("boot failure must wrap the underlying registry error")
+	}
+	if !strings.Contains(display, e.Wrapped.Error()) {
+		t.Fatalf("Display() = %q does not contain the wrapped cause %q", display, e.Wrapped.Error())
 	}
 }
