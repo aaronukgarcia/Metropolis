@@ -1,5 +1,13 @@
 # HEAVY CHECKPOINT — session bounce point
 
+## REFRESH #16b — 2026-08-26 evening addendum (marathon continued: 45 items, 43 commits)
+
+**Since #16:** BUG-249 (claim-range lock, 2 rounds - r1 caught a deleted 428-line suite), BUG-256 (spec-lint, 3 rounds - fail-closed residue rule, invisible-char class CLOSED, proven with U+FE00), BUG-264 (tz skew, 2 rounds - r1 caught an INVERTED regression test), BUG-280 (Bro's orphan sorted-iteration fix swept), BUG-281 (strict loader, 2 rounds - r1 caught the metadata-retry hole; surfaced+declared 10 real files' undeclared metadata), BUG-237/239/263/270/278/279/282/283/284, BUG-246 audit closed (610 drift = BA-ahead-of-registry, 1 real contradiction already fixed), webcat (59-entry catalogue + 15s debug frame), FEAT-1972079886 debug.json FULL-STATE capture (compile+runtime completeness guarantee), FEAT-1972079885 reconciliation (fork = strict subset; SWITCHOVER.md written; dev-gating gap closed; commit queue with ASM-453 contract).
+
+**AARON ACTIONS PENDING:** (1) follow webconsole/SWITCHOVER.md then delete E:/git/metropolis-ui (his 4 queued snapshots survive - same localStorage key+port); (2) balance pass: LEVEL_REWARD_RATE 10%, zone-xp farm, office-tax monoculture BUG-391, demand-wellbeing contradiction BUG-392, power-deficit toothless BUG-393, upkeep-vanish BUG-390; (3) BUG-362 blockers 3/4 money-circulation ruling; (4) guard-blocked trees (bevcore289, agent-a991, pr-round20/65/71/73/74/77, pr52) still need a bypass session or fresh rounds; (5) 31 unmapped specs need Architect key-assignment (BUG-246 audit).
+
+**Main checkout residual orphan estate:** guard files (claude-bow.js w/ latestGitRefForItem, author/destructive-guard + tests, quote-mask, startup + tests), code.json + master-plan (regenerated), cafe/staffing doc comments, finance-screen wire/errors remnants. All other session-start orphans have been swept via verdicted commits.
+
 ## REFRESH #16 — 2026-08-26 (Bev marathon: P0/P1/P2 sweep + webconsole UX wave)
 
 **Standing order (Aaron):** "keep pulling P1 bugs never stop, P0/P1/P2 all need to be done"; "use lower models for grunt work" (haiku lanes for mechanical fixes/rounds); consolidation done earlier (23 worktrees removed, ~27 rescue branches on origin).
