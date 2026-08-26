@@ -114,6 +114,16 @@ func runShardsParallel(workers int, shards []int, fn func(shard int) passTotals)
 	return results
 }
 
+// coldDeath is one cold-pass mortality, snapshotted at removal time so the
+// caller can route the death through the same household-dissolution path
+// LifeEventDeath uses (BUG-369): the citizen's household and partner ids
+// must be read BEFORE removeAt overwrites the row via swap-with-last.
+type coldDeath struct {
+	citizenID   uint64
+	householdID uint64
+	partnerID   uint64
+}
+
 // applyMonthly advances every cold citizen in the shard exactly once for
 // the given month (AC-7): aging (implicit — age is derived from
 // birthMonth), per-person Gompertz-Makeham mortality (AC-11),
@@ -124,8 +134,19 @@ func runShardsParallel(workers int, shards []int, fn func(shard int) passTotals)
 // (AC-15/AC-17). isHot, when non-nil, identifies citizens currently
 // elevated to HOT/WARM: those are advanced by the daily path, not the
 // monthly cold pass, so they are skipped here (never double-advanced).
-func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool) passTotals {
+//
+// Returns the pass totals PLUS this shard's deaths as dissolution records
+// (BUG-369): removing a deceased citizen's row is only half of a death —
+// the caller must apply removeHouseholdMemberLocked for each returned
+// record (prune Members, clear the surviving partner's Partner reference,
+// delete the household once empty). The caller applies them sequentially
+// after the parallel pass completes, in ascending shard order, because
+// dissolution touches the shared households map and potentially
+// cross-shard survivors — the same sequential-after-parallel discipline
+// applyFertilityLocked documents.
+func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool) (passTotals, []coldDeath) {
 	var tot passTotals
+	var deaths []coldDeath
 	i := 0
 	for i < s.count() {
 		id := s.ids[i]
@@ -146,6 +167,15 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 			hazard = 1
 		}
 		if stream.Float64() < hazard {
+			// Snapshot the household/partner wiring BEFORE removeAt's
+			// swap-with-last overwrites this row (BUG-369): the caller
+			// needs the departed citizen's own pre-removal Partner id to
+			// dissolve the pairing on the survivor's side.
+			deaths = append(deaths, coldDeath{
+				citizenID:   id,
+				householdID: uint64(s.households[i]),
+				partnerID:   uint64(s.partners[i]),
+			})
 			s.removeAt(i)
 			tot.deaths++
 			continue
@@ -193,7 +223,7 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 		tot.updated++
 		i++
 	}
-	return tot
+	return tot, deaths
 }
 
 // advanceStage advances a citizen's education stage deterministically (the

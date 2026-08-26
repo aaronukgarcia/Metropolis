@@ -490,10 +490,15 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	month := c.month
 	seed := c.seed
 
+	// Each goroutine writes only its own shard's slot (same discipline as
+	// results itself), so the per-shard death slices never alias.
+	deathsByShard := make([][]coldDeath, numColdShards)
 	results := runShardsParallel(c.workers, shards, func(shard int) passTotals {
-		return c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
+		tot, deaths := c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
 			return hotSet[id]
 		})
+		deathsByShard[shard] = deaths
+		return tot
 	})
 
 	// Sum in ascending shard order (deterministic merge), ignoring slots for
@@ -503,6 +508,24 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 		tot = tot.add(t)
 	}
 	c.curMonthDeaths += tot.deaths
+
+	// BUG-369: route this pass's cold deaths through the SAME household-
+	// dissolution path LifeEventDeath uses — a bare removeAt left the
+	// surviving partner's Partner reference dangling on the dead id, leaked
+	// the dead member into the household forever, and let
+	// householdChildCountLocked count the unresolvable dead member as a
+	// child against MaxChildrenPerHousehold. Applied SEQUENTIALLY after the
+	// parallel pass has fully completed (never inside runShardsParallel's
+	// goroutines): removeHouseholdMemberLocked touches the shared
+	// households map and potentially cross-shard survivors — the same
+	// sequential-after-parallel discipline applyFertilityLocked documents.
+	// Ascending schedule order and within-shard death order are both fixed,
+	// so the merge is deterministic (AC-17).
+	for _, shard := range shards {
+		for _, d := range deathsByShard[shard] {
+			c.removeHouseholdMemberLocked(d.citizenID, d.householdID, d.partnerID)
+		}
+	}
 
 	// Fertility (FEAT-160): a deterministic SEQUENTIAL pass over the same
 	// scheduled shards, run only after the parallel mortality/education/job
