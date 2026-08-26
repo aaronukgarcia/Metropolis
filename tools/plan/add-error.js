@@ -182,6 +182,92 @@ function allocateRange(data, letter, size) {
   return null;
 }
 
+/**
+ * Acquire an exclusive lock on the errors registry to prevent concurrent
+ * claim-range collisions. Uses fs.openSync('wx') for exclusive creation.
+ * Returns a release function that MUST be called in a finally block.
+ *
+ * Stale lock detection: if a lock file is >5min old, assume the holder
+ * crashed and break the lock via rename-then-verify (closes the TOCTOU
+ * window where two breakers could both delete a fresh lock).
+ */
+function acquireRegistryLock(errorsPath, maxWaitMs = 10000) {
+  const lockPath = `${errorsPath}.lock`;
+  const lockDeadlineMs = Date.now() + maxWaitMs;
+  let backoffMs = 10;
+
+  while (Date.now() < lockDeadlineMs) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(fd, `${process.pid}\n${Date.now()}\n`);
+      fs.closeSync(fd);
+      // Lock acquired successfully
+      return () => {
+        try {
+          const stat = fs.statSync(lockPath);
+          const stale = Date.now() - stat.mtimeMs > 5 * 60 * 1000;
+          if (stale) {
+            fs.unlinkSync(lockPath);
+          } else {
+            const content = fs.readFileSync(lockPath, 'utf8');
+            const lines = content.trim().split('\n');
+            if (lines[0] === String(process.pid)) {
+              fs.unlinkSync(lockPath);
+            }
+          }
+        } catch (e) {
+          // Lock already gone or unreadable; ignore.
+        }
+      };
+    } catch (err) {
+      // Retry on both EEXIST (lock held) and EPERM (Windows pending-delete).
+      if (err.code !== 'EEXIST' && err.code !== 'EPERM') throw err;
+
+      // Lock exists or is pending-delete; check if it is stale.
+      try {
+        const stat = fs.statSync(lockPath);
+        if (Date.now() - stat.mtimeMs > 5 * 60 * 1000) {
+          // Stale lock detected. Break it via rename-then-verify to close the
+          // TOCTOU window: rename to a temp name, then verify we can stat it
+          // (proving we won the race against other stale-breakers), then unlink.
+          const brokenPath = `${lockPath}.broken-${process.pid}-${Date.now()}`;
+          try {
+            fs.renameSync(lockPath, brokenPath);
+            // Verify the rename succeeded (proves we won any race).
+            fs.statSync(brokenPath);
+            fs.unlinkSync(brokenPath);
+          } catch (e) {
+            // Another breaker won the race; just continue.
+          }
+          continue;
+        }
+      } catch (e) {
+        // Lock file disappeared or stat failed; retry.
+      }
+
+      // Backoff with exponential growth + jitter to avoid thundering herd.
+      const jitter = Math.random() * backoffMs * 0.1;
+      const waitMs = Math.min(backoffMs + jitter, 200);
+      const deadline = Date.now() + waitMs;
+      if (deadline >= lockDeadlineMs) {
+        throw new Error(
+          `could not acquire lock on ${lockPath} within ${maxWaitMs}ms ` +
+            '(another process may be claiming a range; retry after a moment)'
+        );
+      }
+      // Sleep until deadline via busy-wait loop (simple, no dependencies).
+      while (Date.now() < deadline) {
+        // Spin.
+      }
+      backoffMs = Math.min(backoffMs * 2, 200);
+    }
+  }
+  throw new Error(
+    `could not acquire lock on ${lockPath} within ${maxWaitMs}ms ` +
+      '(another process may be claiming a range; retry after a moment)'
+  );
+}
+
 function claimRange({ errorsPath, mkey, size, layerOverride, dryRun, actor }) {
   if (!mkey || typeof mkey !== 'string' || !mkey.trim()) {
     throw new Error('claim-range requires a non-empty <mkey>');
@@ -200,37 +286,70 @@ function claimRange({ errorsPath, mkey, size, layerOverride, dryRun, actor }) {
     throw new Error(`--layer must be a single uppercase letter, got "${letter}"`);
   }
 
-  const { raw, data } = loadRegistry(errorsPath);
-  const block = allocateRange(data, letter, size);
-  if (!block) {
-    throw new Error(`no free ${size}-wide block remains on layer "${letter}" (0-9999 exhausted)`);
-  }
-
-  const startCode = formatCode(letter, block.start);
-  const endCode = formatCode(letter, block.end);
-  const rangeKey = `${startCode}-${endCode}`;
-  const description =
-    `reserved for ${mkey} (auto-claimed via tools/plan/add-error.js claim-range on ` +
-    `${new Date().toISOString().slice(0, 10)} by ${actor || 'unknown'} -- BUG-273: lowest free ` +
-    `${size}-wide block found after scanning existing codes and reservations on layer "${letter}")`;
-
   if (dryRun) {
+    // Dry-run: no lock needed
+    const { raw, data } = loadRegistry(errorsPath);
+    const block = allocateRange(data, letter, size);
+    if (!block) {
+      throw new Error(`no free ${size}-wide block remains on layer "${letter}" (0-9999 exhausted)`);
+    }
+    const startCode = formatCode(letter, block.start);
+    const endCode = formatCode(letter, block.end);
+    const rangeKey = `${startCode}-${endCode}`;
+    const description =
+      `reserved for ${mkey} (auto-claimed via tools/plan/add-error.js claim-range on ` +
+      `${new Date().toISOString().slice(0, 10)} by ${actor || 'unknown'} -- BUG-273: lowest free ` +
+      `${size}-wide block found after scanning existing codes and reservations on layer "${letter}")`;
     return { rangeKey, description, letter, block, wrote: false };
   }
 
-  if (Object.prototype.hasOwnProperty.call(data.ranges.reserved, rangeKey)) {
-    throw new Error(`internal error: computed range ${rangeKey} is already reserved`);
-  }
+  // Real claim: acquire exclusive lock, read, allocate, verify uniqueness, write.
+  const releaseLock = acquireRegistryLock(errorsPath);
+  try {
+    const { raw, data } = loadRegistry(errorsPath);
+    const block = allocateRange(data, letter, size);
+    if (!block) {
+      throw new Error(`no free ${size}-wide block remains on layer "${letter}" (0-9999 exhausted)`);
+    }
 
-  const newRaw = insertReservation(raw, rangeKey, description);
-  // Round-trip-validate before committing to disk.
-  const reparsed = JSON.parse(newRaw);
-  if (!reparsed.ranges.reserved[rangeKey]) {
-    throw new Error('internal error: reservation insertion did not round-trip');
-  }
-  atomicWrite(errorsPath, newRaw);
+    const startCode = formatCode(letter, block.start);
+    const endCode = formatCode(letter, block.end);
+    const rangeKey = `${startCode}-${endCode}`;
+    const description =
+      `reserved for ${mkey} (auto-claimed via tools/plan/add-error.js claim-range on ` +
+      `${new Date().toISOString().slice(0, 10)} by ${actor || 'unknown'} -- BUG-273: lowest free ` +
+      `${size}-wide block found after scanning existing codes and reservations on layer "${letter}")`;
 
-  return { rangeKey, description, letter, block, wrote: true };
+    if (Object.prototype.hasOwnProperty.call(data.ranges.reserved, rangeKey)) {
+      throw new Error(`internal error: computed range ${rangeKey} is already reserved`);
+    }
+
+    const newRaw = insertReservation(raw, rangeKey, description);
+    // Round-trip-validate before committing to disk.
+    const reparsed = JSON.parse(newRaw);
+    if (!reparsed.ranges.reserved[rangeKey]) {
+      throw new Error('internal error: reservation insertion did not round-trip');
+    }
+
+    // Write to disk atomically.
+    atomicWrite(errorsPath, newRaw);
+
+    // CAS-style post-write verification: re-read and confirm our range is unique.
+    const { data: verifyData } = loadRegistry(errorsPath);
+    const verifyReservations = parseReservations(verifyData.ranges.reserved).filter(
+      (r) => !r.malformed && r.letter === letter && r.start === block.start && r.end === block.end
+    );
+    if (verifyReservations.length !== 1) {
+      throw new Error(
+        `post-write verification failed: expected exactly 1 reservation for ${rangeKey}, ` +
+          `found ${verifyReservations.length}`
+      );
+    }
+
+    return { rangeKey, description, letter, block, wrote: true };
+  } finally {
+    releaseLock();
+  }
 }
 
 // Insert a new "KEY": "description" entry into the ranges.reserved object,

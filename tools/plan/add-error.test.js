@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 const addError = require('./add-error.js');
 
@@ -479,5 +479,184 @@ test('claimRange rejects non-positive size at the library surface (not only the 
   const { errorsPath } = makeFixtureDir();
   for (const bad of [0, -5, 1.5, NaN]) {
     assert.throws(() => addError.claimRange({ errorsPath, mkey: 'engine.newmod', size: bad, dryRun: true }));
+  }
+});
+
+// -----------------------------------------------------------------------
+// BUG-249 r2 LOCK TESTS: verify the new lock mechanism
+// -----------------------------------------------------------------------
+
+test('BUG-249: single lock-based claim works', () => {
+  const { errorsPath } = makeFixtureDir();
+  const result = addError.claimRange({
+    errorsPath,
+    mkey: 'engine.test',
+    size: 100,
+    layerOverride: 'G',
+    dryRun: false,
+    actor: 'test',
+  });
+
+  assert.equal(result.wrote, true, 'Should have written');
+  assert.equal(result.rangeKey, 'G100-G199', 'First free range on G');
+  assert.equal(result.block.start, 100);
+  assert.equal(result.block.end, 199);
+
+  const data = JSON.parse(fs.readFileSync(errorsPath, 'utf8'));
+  assert.ok(data.ranges.reserved['G100-G199'], 'Reservation should be in file');
+});
+
+test('BUG-249: overlapping reservations detected by check', () => {
+  const { errorsPath, dir } = makeFixtureDir();
+  const data = JSON.parse(fs.readFileSync(errorsPath, 'utf8'));
+  data.ranges.reserved['G050-G150'] = 'reserved for test.overlap';
+  fs.writeFileSync(errorsPath, JSON.stringify(data, null, 2), 'utf8');
+
+  const result = addError.check({ errorsPath, repoDir: dir });
+  assert.ok(result.problems.length > 0, 'Should detect overlap');
+  const overlapProblem = result.problems.find((p) =>
+    p.includes('overlap')
+  );
+  assert.ok(overlapProblem, 'Should specifically report overlapping ranges');
+});
+
+test('BUG-249: dry-run does not acquire lock', () => {
+  const { errorsPath } = makeFixtureDir();
+  const result = addError.claimRange({
+    errorsPath,
+    mkey: 'engine.test',
+    size: 100,
+    layerOverride: 'G',
+    dryRun: true,
+    actor: 'test',
+  });
+
+  assert.equal(result.wrote, false, 'Dry-run should not write');
+  assert.equal(result.rangeKey, 'G100-G199');
+
+  const data = JSON.parse(fs.readFileSync(errorsPath, 'utf8'));
+  assert.ok(!data.ranges.reserved['G100-G199'], 'Dry-run should not modify file');
+});
+
+// -----------------------------------------------------------------------
+// BUG-249 r2 CONCURRENT REGRESSION TEST: spawn-based
+// -----------------------------------------------------------------------
+
+test('BUG-249: concurrent claims via spawn produce pairwise-disjoint ranges', async () => {
+  const { tmpDir, errorsPath } = (() => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'add-error-concurrent-'));
+    const errorsPath = path.join(tmpDir, 'errors.json');
+    const baseRegistry = {
+      version: 1,
+      ranges: {
+        format: 'MET-<layer><NNN>',
+        layers: { F: 'foundation', G: 'engine overflow' },
+        reserved: { 'G000-G099': 'reserved for test.module1' },
+      },
+      codes: { 'MET-G000': {
+        severity: 'error',
+        module: 'test.module1',
+        message: 'test error 0',
+        remedy: 'test',
+      }},
+    };
+    fs.writeFileSync(errorsPath, JSON.stringify(baseRegistry, null, 2), 'utf8');
+    return { tmpDir, errorsPath };
+  })();
+
+  // Helper script file to avoid escaping issues
+  const helperScript = path.join(tmpDir, 'concurrent-claim-helper.js');
+  const addErrorPath = path.resolve(__dirname, 'add-error.js');
+  fs.writeFileSync(helperScript, `
+const addError = require(${JSON.stringify(addErrorPath)});
+const idx = process.env.TEST_IDX;
+const errorsPath = process.env.TEST_ERRORS_PATH;
+try {
+  const result = addError.claimRange({
+    errorsPath,
+    mkey: 'engine.concurrent' + idx,
+    size: 100,
+    layerOverride: 'G',
+    dryRun: false,
+    actor: 'test-' + idx,
+  });
+  console.log(JSON.stringify({ ok: true, rangeKey: result.rangeKey, start: result.block.start, end: result.block.end, idx }));
+} catch (err) {
+  console.log(JSON.stringify({ ok: false, error: err.message, idx }));
+  process.exitCode = 1;
+}
+`, 'utf8');
+
+  try {
+    const N = 4; // minimum concurrency
+    const results = await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        new Promise((resolve, reject) => {
+          const child = spawn(process.execPath, [helperScript], {
+            env: Object.assign({}, process.env, {
+              TEST_IDX: String(i),
+              TEST_ERRORS_PATH: errorsPath,
+            }),
+            stdio: ['ignore', 'pipe', 'pipe'],
+            cwd: __dirname,
+          });
+
+          let output = '';
+          let errout = '';
+          child.stdout.on('data', (d) => { output += d; });
+          child.stderr.on('data', (d) => { errout += d; });
+          child.on('close', (code) => {
+            try {
+              const lines = output.trim().split('\n').filter((l) => l.trim());
+              const lastLine = lines[lines.length - 1];
+              const parsed = JSON.parse(lastLine);
+              if (parsed.ok) {
+                resolve(parsed);
+              } else {
+                reject(new Error(`Child ${i} failed: ${parsed.error}`));
+              }
+            } catch (e) {
+              reject(new Error(`Could not parse child output: ${output}, stderr: ${errout}`));
+            }
+          });
+        })
+      )
+    );
+
+    // Verify all claims succeeded
+    assert.equal(results.length, N, `Expected ${N} successful claims`);
+    for (const r of results) {
+      assert.ok(r.ok, `Claim should succeed: ${r.rangeKey}`);
+    }
+
+    // Verify pairwise disjointness
+    for (let i = 0; i < results.length; i++) {
+      for (let j = i + 1; j < results.length; j++) {
+        const a = results[i];
+        const b = results[j];
+        const overlap = a.start <= b.end && b.start <= a.end;
+        assert.ok(!overlap, `Ranges must not overlap: ${a.rangeKey} (${a.start}-${a.end}) vs ${b.rangeKey} (${b.start}-${b.end})`);
+      }
+    }
+
+    // Verify registry is clean
+    const final = addError.check({ errorsPath, repoDir: tmpDir });
+    assert.deepEqual(final.problems, [], `Registry should have no violations: ${final.problems.join(', ')}`);
+  } finally {
+    // Cleanup
+    try {
+      const files = fs.readdirSync(tmpDir);
+      for (const file of files) {
+        const fullPath = path.join(tmpDir, file);
+        try {
+          fs.unlinkSync(fullPath);
+        } catch (e) {
+          // Ignore
+        }
+      }
+      fs.rmdirSync(tmpDir);
+    } catch (e) {
+      // Ignore cleanup errors
+    }
   }
 });
