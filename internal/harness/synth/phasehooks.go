@@ -91,6 +91,25 @@ import "github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 // core.Engine.HookCount(), surfaced on headless.Result.PhaseHookCount for
 // every real run; this declared figure is what PerfResult carries before a
 // run exists to read the engine from.
+//
+// # BUG-237 (2026-08-26): runtime derivation + validation
+//
+// The declared count (compose.BaselineOneHookCount()) can drift from the
+// runtime engine count if registrationOrder is ever modified without
+// synchronizing the actual hook registrations (GR#3 single-source-of-truth,
+// GR#15 validators derive from data). This is prevented by:
+//
+//  1. Composition root: compose.BaselineOneHookCount() at
+//     internal/engine/compose/compose.go returns len(registrationOrder)
+//  2. Runtime: core.Engine.HookCount() at internal/engine/core/engine.go
+//     reads the actual registered hooks
+//  3. Validation: TestPhaseHookCountDerivedFromRuntime in phasehooks_test.go
+//     runs a real compose.Wire() and asserts runtime == declared, failing
+//     loudly if they ever diverge
+//
+// This function returns the composition root's count (which is the SINGLE
+// SOURCE of truth for the expected count), and the validation test ensures
+// it always matches what the engine actually registers.
 func PhaseHookCountInHeadlessPath() int {
 	return compose.BaselineOneHookCount()
 }

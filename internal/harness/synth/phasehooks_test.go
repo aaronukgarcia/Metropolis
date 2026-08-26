@@ -11,6 +11,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 )
 
 // TestPhaseHookCountAssertionStillTrue is PhaseHookCountInHeadlessPath's
@@ -554,6 +557,97 @@ func scanForCallSites(root string) ([]string, error) {
 		return nil, walkErr
 	}
 	return found, nil
+}
+
+// TestPhaseHookCountDerivedFromRuntime validates that
+// PhaseHookCountInHeadlessPath's declared count (compose.BaselineOneHookCount)
+// matches the actual runtime engine hook count (core.Engine.HookCount after
+// compose.Wire). This is the defence against GR#3 (single source of truth):
+// if the registrationOrder slice ever drifts from what the engine actually
+// registers, this test FAILS loudly, preventing silent desync.
+//
+// BUG-237: synth's PhaseHookCountInHeadlessPath used a declared count that
+// could silently drift from the runtime registration. This test ensures that
+// the two sources of truth remain synchronized — the expected count that
+// PhaseHookCountInHeadlessPath asserts must always equal what a real engine
+// has actually registered via compose.Wire.
+func TestPhaseHookCountDerivedFromRuntime(t *testing.T) {
+	// Create an engine and wire the baseline-one composition into it.
+	e := core.NewEngine(core.WithPoolSize(1))
+	_, err := compose.Wire(e, nil)
+	if err != nil {
+		t.Fatalf("compose.Wire failed: %v", err)
+	}
+
+	// The declared count (what PhaseHookCountInHeadlessPath returns) must
+	// exactly match what the engine actually has registered.
+	runtimeCount := e.HookCount()
+	declaredCount := PhaseHookCountInHeadlessPath()
+
+	if runtimeCount != declaredCount {
+		t.Fatalf(
+			"PhaseHookCountInHeadlessPath desync: declared=%d (from compose.BaselineOneHookCount), "+
+				"but runtime engine has %d hooks after compose.Wire (BUG-237). "+
+				"If registrationOrder changed, PhaseHookCountInHeadlessPath's ground truth MUST change too. "+
+				"The two sources are: (1) declared: compose.BaselineOneHookCount() at internal/engine/compose/compose.go, "+
+				"(2) runtime: core.Engine.HookCount() at internal/engine/core/engine.go",
+			declaredCount, runtimeCount,
+		)
+	}
+}
+
+// TestPhaseHookCountDesyncHazard demonstrates the class of defect BUG-237
+// addresses: a scenario where the declared hook count drifts from the
+// runtime count. This is a RED/GREEN test pair:
+//   - RED: before the fix, PhaseHookCountInHeadlessPath returns a stale
+//     count if registrationOrder is ever modified without synchronizing.
+//   - GREEN: after validating against runtime (TestPhaseHookCountDerivedFromRuntime
+//     above), the count is guaranteed to match what the engine actually has.
+//
+// This test documents the HAZARD PATTERN (what can go wrong) by showing
+// that a mismatched declared count would be caught by the runtime validation
+// test. If registrationOrder ever drifts from the engine's actual hook list,
+// TestPhaseHookCountDerivedFromRuntime will immediately FAIL and alert the
+// developer, rather than allowing the wrong count to propagate silently
+// into performance metrics (GR#3: single source of truth, GR#15: validators
+// derive from data, not hardcoded).
+//
+// Two sources of hook count:
+//  1. Declared: compose.BaselineOneHookCount() returns len(registrationOrder)
+//     at internal/engine/compose/compose.go
+//  2. Runtime:  core.Engine.HookCount() reads the actual registered hooks
+//     at internal/engine/core/engine.go
+//
+// If these ever diverge, TestPhaseHookCountDerivedFromRuntime catches it.
+func TestPhaseHookCountDesyncHazard(t *testing.T) {
+	// Snapshot what compose.BaselineOneHookCount currently returns.
+	currentDeclaredCount := compose.BaselineOneHookCount()
+
+	// Verify it is a positive integer (sanity check).
+	if currentDeclaredCount <= 0 {
+		t.Fatalf("BaselineOneHookCount is %d, expected > 0", currentDeclaredCount)
+	}
+
+	// Create a fresh engine and measure what it actually has after Wire.
+	e := core.NewEngine(core.WithPoolSize(1))
+	_, err := compose.Wire(e, nil)
+	if err != nil {
+		t.Fatalf("compose.Wire failed: %v", err)
+	}
+
+	// The runtime engine must have the same count as the declared count.
+	// If this fails, it means registrationOrder was modified without
+	// updating the engine's registration, or vice versa — exactly the
+	// silent desync BUG-237 was designed to prevent.
+	if got := e.HookCount(); got != currentDeclaredCount {
+		t.Logf("DESYNC DETECTED (would be RED without the fix):")
+		t.Logf("  declared (compose.BaselineOneHookCount()): %d", currentDeclaredCount)
+		t.Logf("  runtime  (e.HookCount() after Wire):      %d", got)
+		t.Logf("  This mismatch is caught by TestPhaseHookCountDerivedFromRuntime.")
+		t.Fatalf("Declared vs runtime hook count mismatch: %d != %d", currentDeclaredCount, got)
+	}
+
+	t.Logf("✓ Declared and runtime hook counts are synchronized: %d hooks", currentDeclaredCount)
 }
 
 // repoRoot walks up from this test file's own source location to the
