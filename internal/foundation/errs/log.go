@@ -344,7 +344,14 @@ func (l *Logger) Log(e Entry) error {
 // never a genuine one.
 func (l *Logger) rejectCopiedLog(e Entry) error {
 	if e.Ts == "" {
-		e.Ts = time.Now().UTC().Format(time.RFC3339Nano)
+		// BUG-278: timestamp via the package-level injectable clock
+		// (errs.go now()/SetClock), NOT time.Now() directly. This path is
+		// reachable from every errs.New via the package sink, so a raw wall-
+		// clock read here breaks sim-clock determinism (GR#21/M0-ENG §1.1)
+		// and made this a fourth time.Now site beyond the three injectable-
+		// clock defaults. now() reads only the package clock var — it never
+		// touches l, so it stays safe to call from a struct-copied receiver.
+		e.Ts = now().UTC().Format(time.RFC3339Nano)
 	}
 	copyRejectRing.push(e)
 	return ErrLoggerCopied

@@ -69,6 +69,45 @@ var (
 	regLoadErr error
 )
 
+// registryFailureKind classifies WHY the registry could not yield a usable
+// code map, so construct() (errs.go) can map each mode to its distinct fatal
+// registry code (BUG-279). Before this classification every registry failure
+// collapsed to the single "unregistered code" fallback (MET-F003, severity
+// "error"), leaving MET-F001/MET-F002 defined-but-unreachable and silently
+// downgrading a whole-registry outage to a single-typo-level error.
+type registryFailureKind int
+
+const (
+	// registryLoadFailed → MET-F001: the registry could not be loaded at all
+	// (path unresolved, file unreadable, or bytes unparseable as JSON) — there
+	// is no registry to speak of.
+	registryLoadFailed registryFailureKind = iota
+	// registryValidationFailed → MET-F002: the registry loaded and parsed, but
+	// an entry violates the schema (duplicate code, bad code format, missing
+	// required field, or a malformed template token) — the file is present but
+	// not trustworthy.
+	registryValidationFailed
+)
+
+// registryError wraps a doLoadRegistry failure with its classification and the
+// resolved registry path (empty when resolution itself failed). construct()
+// uses the kind to choose MET-F001 vs MET-F002 and the path/cause to fill their
+// {path}/{cause} message templates. It Unwraps to the underlying cause so
+// errors.Is/As against the wrapped error keep working.
+type registryError struct {
+	kind registryFailureKind
+	path string
+	err  error
+}
+
+func (e *registryError) Error() string {
+	if e.err == nil {
+		return "registry failure (no underlying cause)"
+	}
+	return e.err.Error()
+}
+func (e *registryError) Unwrap() error { return e.err }
+
 // registryPathEnv is the override environment variable documented in the
 // package doc and in data/errors.json's resolution order.
 const registryPathEnv = "METROPOLIS_ERRORS_PATH"
@@ -110,30 +149,35 @@ func resetRegistryForTest() {
 }
 
 func doLoadRegistry() (map[string]registryEntry, error) {
+	// BUG-279: each failure is tagged registryLoadFailed (→ MET-F001) or
+	// registryValidationFailed (→ MET-F002). The dividing line is "could we
+	// turn the bytes into a code map at all?" — path/read/parse are LOAD
+	// failures (no usable registry); schema checks over a parsed map are
+	// VALIDATION failures (a present-but-untrustworthy registry).
 	path, err := resolveRegistryPath()
 	if err != nil {
-		return nil, fmt.Errorf("resolve registry path: %w", err)
+		return nil, &registryError{kind: registryLoadFailed, path: "", err: fmt.Errorf("resolve registry path: %w", err)}
 	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
+		return nil, &registryError{kind: registryLoadFailed, path: path, err: fmt.Errorf("read %s: %w", path, err)}
 	}
 
 	codes, dupes, err := decodeCodes(data)
 	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, &registryError{kind: registryLoadFailed, path: path, err: fmt.Errorf("parse %s: %w", path, err)}
 	}
 	if len(dupes) > 0 {
-		return nil, fmt.Errorf("duplicate error codes in %s: %s", path, strings.Join(dupes, ", "))
+		return nil, &registryError{kind: registryValidationFailed, path: path, err: fmt.Errorf("duplicate error codes in %s: %s", path, strings.Join(dupes, ", "))}
 	}
 
 	for code, entry := range codes {
 		if !codeFormat.MatchString(code) {
-			return nil, fmt.Errorf("invalid code format %q in %s (want MET-<layer><NNN>, three or four digits)", code, path)
+			return nil, &registryError{kind: registryValidationFailed, path: path, err: fmt.Errorf("invalid code format %q in %s (want MET-<layer><NNN>, three or four digits)", code, path)}
 		}
 		if entry.Severity == "" || entry.Module == "" || entry.Message == "" || entry.Remedy == "" {
-			return nil, fmt.Errorf("code %q in %s is missing a required field (severity/module/message/remedy)", code, path)
+			return nil, &registryError{kind: registryValidationFailed, path: path, err: fmt.Errorf("code %q in %s is missing a required field (severity/module/message/remedy)", code, path)}
 		}
 		// BUG-357 step 2: reject template tokens that renderTemplate can never
 		// substitute. A malformed token ({x!q}, prose-in-braces, {}) is a
@@ -146,7 +190,7 @@ func doLoadRegistry() (map[string]registryEntry, error) {
 			{"remedy", entry.Remedy},
 		} {
 			if bad := malformedTemplateToken(field.text); bad != "" {
-				return nil, fmt.Errorf("code %q in %s has a malformed template token %q in %s — tokens must be plain identifiers (no format verbs, no brace-wrapped prose, no empty {})", code, path, bad, field.name)
+				return nil, &registryError{kind: registryValidationFailed, path: path, err: fmt.Errorf("code %q in %s has a malformed template token %q in %s — tokens must be plain identifiers (no format verbs, no brace-wrapped prose, no empty {})", code, path, bad, field.name)}
 			}
 		}
 	}

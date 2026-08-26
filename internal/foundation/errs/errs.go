@@ -1,6 +1,7 @@
 package errs
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -79,10 +80,11 @@ func (e *E) Is(target error) bool {
 }
 
 // New constructs a registry-sourced error. code must be a code present in
-// data/errors.json; if it is not (or the registry itself failed to
-// load), New never panics — it returns a well-formed MET-F003
-// "unregistered code" error instead (GR#7 enforced at runtime, failing
-// loudly rather than silently or fatally).
+// data/errors.json; if it is not or the registry itself failed to load or
+// validate, New never panics — it returns a well-formed error instead (MET-F001
+// if the registry could not be loaded, MET-F002 if it failed validation,
+// or MET-F003 if a valid registry simply lacks the code) (GR#7 enforced at
+// runtime, failing loudly rather than silently or fatally).
 //
 // correlationID should be non-empty (mint one with NewCorrelationID at
 // the boundary); an empty value is tolerated but logs a MET-F004 warning
@@ -144,10 +146,20 @@ func construct(code, correlationID string, cause error, ctx map[string]any) *E {
 	}
 
 	entries, regErr := loadRegistry()
-	entry, found := entries[code]
 
-	if regErr != nil || !found {
-		return constructUnregistered(code, correlationID, cause, entries, regErr, t)
+	// BUG-279: a registry that failed to load/validate is a DIFFERENT fault
+	// from a valid registry missing one code. The former is fatal and reported
+	// as MET-F001 (could not load) or MET-F002 (failed validation); only the
+	// latter — a valid registry with no such code — is the MET-F003
+	// "unregistered code" fallback. Collapsing all three to MET-F003 (the old
+	// behaviour) left F001/F002 unreachable and downgraded fatal to error.
+	if regErr != nil {
+		return constructRegistryFailure(code, correlationID, cause, regErr, t)
+	}
+
+	entry, found := entries[code]
+	if !found {
+		return constructUnregistered(code, correlationID, cause, entries, t)
 	}
 
 	msg := renderTemplate(entry.Message, code, correlationID, ctx)
@@ -164,14 +176,17 @@ func construct(code, correlationID string, cause error, ctx map[string]any) *E {
 	return e
 }
 
-// constructUnregistered builds the MET-F003 fallback used whenever the
-// requested code isn't usable — either because the registry itself
-// failed to load (regErr != nil, entries is nil) or because the code
-// simply isn't in an otherwise-valid registry (found == false). When the
-// registry did load, MET-F003's own template (from data/errors.json) is
-// used for consistency; when it didn't, a hardcoded template takes over
-// so this path can never itself depend on the broken registry.
-func constructUnregistered(code, correlationID string, cause error, entries map[string]registryEntry, regErr error, t time.Time) *E {
+// constructUnregistered builds the MET-F003 "unregistered code" fallback used
+// when a VALID registry simply has no entry for the requested code (found ==
+// false). BUG-279: this is now the ONLY caller path for MET-F003 — a registry
+// that failed to load or validate is routed to constructRegistryFailure
+// (MET-F001/F002) BEFORE this function is reached, so entries here is always
+// the successfully-loaded map and regErr is always nil. MET-F003's own
+// template (from data/errors.json) is used for consistency; a hardcoded
+// template remains as a defence-in-depth fallback for the pathological case of
+// a valid registry that somehow lacks its own MET-F003 entry, so this path can
+// never panic.
+func constructUnregistered(code, correlationID string, cause error, entries map[string]registryEntry, t time.Time) *E {
 	constructor := "New"
 	if cause != nil {
 		constructor = "Wrap"
@@ -181,17 +196,12 @@ func constructUnregistered(code, correlationID string, cause error, entries map[
 	module := "foundation.errors"
 
 	var msg string
-	if fbEntry, ok := entries["MET-F003"]; ok && regErr == nil {
+	if fbEntry, ok := entries["MET-F003"]; ok {
 		msg = renderTemplate(fbEntry.Message, "MET-F003", correlationID, fallbackCtx)
 		module = fbEntry.Module
 	} else {
-		cause2 := "registry unavailable"
-		if regErr != nil {
-			cause2 = regErr.Error()
-		}
-		fallbackCtx["cause"] = cause2
 		msg = renderTemplate(
-			"unregistered error code {code} requested via {constructor} (correlation {correlationId}); {cause}",
+			"unregistered error code {code} requested via {constructor} (correlation {correlationId})",
 			"MET-F003", correlationID, fallbackCtx,
 		)
 	}
@@ -206,6 +216,64 @@ func constructUnregistered(code, correlationID string, cause error, entries map[
 		Wrapped:       cause,
 	}
 	logEntry(e.toEntry("error"))
+	return e
+}
+
+// constructRegistryFailure builds the fatal error returned when the registry
+// itself could not be used, so the requested code is irrelevant — NO code can
+// be resolved (BUG-279). It distinguishes the two fatal modes data/errors.json
+// defines: MET-F001 when the registry could not be loaded at all (path
+// unresolved, file unreadable, bytes unparseable) and MET-F002 when it loaded
+// but failed schema validation (duplicate/misformatted code, missing field,
+// malformed token). Both are severity "fatal"; the pre-fix code collapsed every
+// registry failure to MET-F003 ("unregistered code", severity "error"),
+// leaving F001/F002 unreachable and downgrading a whole-registry outage.
+//
+// Like constructUnregistered's hardcoded branch, this path can never depend on
+// the (broken) registry to render its own message — regErr != nil means the
+// entries map is unusable — so F001/F002's templates are hardcoded here, kept
+// in sync with data/errors.json. The {path}/{cause} tokens are filled from the
+// classified registryError.
+func constructRegistryFailure(code, correlationID string, cause error, regErr error, t time.Time) *E {
+	kind := registryLoadFailed
+	path := ""
+	var re *registryError
+	if errors.As(regErr, &re) {
+		kind = re.kind
+		path = re.path
+	}
+
+	failCode := "MET-F001"
+	tmpl := "error registry failed to load from {path}: {cause}"
+	if kind == registryValidationFailed {
+		failCode = "MET-F002"
+		tmpl = "error registry at {path} failed validation: {cause}"
+	}
+	if path == "" {
+		// Resolution itself failed, so no concrete path is known; name the
+		// configured default so the message is still actionable.
+		path = relRegistryPath
+	}
+
+	fallbackCtx := map[string]any{
+		"path":  path,
+		"cause": regErr.Error(),
+		"code":  code, // the originally-requested code, preserved for the audit ctx
+	}
+	msg := renderTemplate(tmpl, failCode, correlationID, fallbackCtx)
+
+	e := &E{
+		Code:          failCode,
+		CorrelationID: correlationID,
+		Module:        "foundation.errors",
+		Msg:           msg,
+		Ctx:           fallbackCtx,
+		Time:          t,
+		Wrapped:       cause,
+	}
+	// Log at the registry entry's declared fatal severity — a whole-registry
+	// outage must not be recorded as a mere "error" (the pre-fix downgrade).
+	logEntry(e.toEntry("fatal"))
 	return e
 }
 

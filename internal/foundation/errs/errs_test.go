@@ -132,9 +132,13 @@ func TestNew_RegistryUnavailable_FallsBackWithoutPanic(t *testing.T) {
 		resetSinkForTest()
 	})
 
+	// BUG-279: a registry that could not be loaded at all is MET-F001 (fatal
+	// "failed to load"), NOT the MET-F003 "unregistered code" fallback that a
+	// valid-registry typo produces. Before the fix this asserted MET-F003 —
+	// the exact collapse BUG-279 reports.
 	e := New("MET-F900", "corr-7", nil)
-	if e.Code != "MET-F003" {
-		t.Errorf("expected MET-F003 fallback when registry unavailable, got %q", e.Code)
+	if e.Code != "MET-F001" {
+		t.Errorf("expected MET-F001 when registry could not be loaded, got %q", e.Code)
 	}
 	if !strings.Contains(e.Msg, "errors.json") {
 		t.Errorf("expected fallback message to explain the registry failure, got %q", e.Msg)
