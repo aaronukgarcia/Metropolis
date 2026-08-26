@@ -15,7 +15,12 @@ export type ZoneKind =
   | 'health'
   | 'police'
   | 'school'
-  | 'landmark';
+  | 'landmark'
+  // FEAT-1972079877 placeholder catalogue families:
+  | 'transport' // buses / trams / metro / ferries / parking
+  | 'fire' // fire & rescue cover
+  | 'civic' // governance + justice (town hall, courts, prison, library)
+  | 'leisure'; // cinema / theatre / arena / attractions
 
 export interface Building {
   id: number;

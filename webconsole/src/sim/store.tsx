@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useReducer } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import type { SimState } from './types';
-import { reducer, initialState } from './engine';
+import { reducer, initialState, SPEED_MS } from './engine';
 import type { Action } from './engine';
 
 // Pure engine logic lives in engine.ts so it is unit-testable without JSX.
@@ -20,10 +20,11 @@ export {
   LOAN_PRINCIPAL,
   LOAN_TOTAL,
   LEVEL_REWARD_RATE,
+  SPEED_MS,
+  HISTORY_CAP,
+  LEDGER_CAP,
 } from './engine';
 export type { Action, ZoneDemand } from './engine';
-
-const SPEED_MS: Record<SimState['speed'], number> = { 0: 0, 1: 900, 2: 420, 3: 160 };
 
 interface SimContextValue {
   state: SimState;

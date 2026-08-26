@@ -37,6 +37,15 @@ export const LOAN_PRINCIPAL = 25000;
 export const LOAN_TOTAL = 27500;
 const MOVE_COST = 25;
 
+/** Milliseconds per tick at each speed (0 = paused). SSOT for the game clock —
+ * the store's interval and the debug snapshot's tick-rate both derive from it. */
+export const SPEED_MS: Record<SimState['speed'], number> = { 0: 0, 1: 900, 2: 420, 3: 160 };
+
+/** Rolling caps (changelog-cap style): history / ledger keep at most this many
+ * entries. Referenced by the debug snapshot so the displayed cap can't drift. */
+export const HISTORY_CAP = 240;
+export const LEDGER_CAP = 200;
+
 /**
  * Milestone cash-injection rate (FEAT-1972079884): a level-up grants this
  * fraction of current funds. PLACEHOLDER under the balance-number regime —
@@ -167,6 +176,12 @@ const UPKEEP_BUCKET: Partial<Record<ZoneKind, string>> = {
   office: 'Commerce & Industry',
   industrial: 'Commerce & Industry',
   mine: 'Commerce & Industry',
+  // FEAT-1972079877: placeholder catalogue kinds — without these buckets the
+  // new structures' upkeep would silently vanish from the outflows.
+  transport: 'Transport',
+  fire: 'Fire & Rescue',
+  civic: 'Civic & Justice',
+  leisure: 'Leisure',
 };
 
 export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: FlowItem[] } {
@@ -280,7 +295,7 @@ function advance(s: SimState): SimState {
 
   if (tick % 30 === 0) {
     funds += 800;
-    ledger = [{ id: nextLedger++, tick, label: 'Regional Grant', amount: 800 }, ...ledger].slice(0, 200);
+    ledger = [{ id: nextLedger++, tick, label: 'Regional Grant', amount: 800 }, ...ledger].slice(0, LEDGER_CAP);
   }
 
   const capacity = (() => {
@@ -319,7 +334,7 @@ function advance(s: SimState): SimState {
     funds,
     population,
     xp: s.xp + 1,
-    history: [...s.history, { tick, funds, income, expense, population }].slice(-240),
+    history: [...s.history, { tick, funds, income, expense, population }].slice(-HISTORY_CAP),
     ledger,
     nextLedgerId: nextLedger,
     lastFlows: { inflows, outflows },
@@ -328,7 +343,7 @@ function advance(s: SimState): SimState {
 
 function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'ledger' | 'nextLedgerId'> {
   return {
-    ledger: [{ id: s.nextLedgerId, tick: s.tick, label, amount }, ...s.ledger].slice(0, 200),
+    ledger: [{ id: s.nextLedgerId, tick: s.tick, label, amount }, ...s.ledger].slice(0, LEDGER_CAP),
     nextLedgerId: s.nextLedgerId + 1,
   };
 }

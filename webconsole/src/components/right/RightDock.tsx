@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSim, levelOf, xpForLevel, wellbeingOf, approvalOf } from '../../sim/store';
 import {
   MILESTONES,
@@ -17,6 +17,8 @@ import { Panel } from '../Tabs';
 import { fmtMoney, fmtNum, fmtPct } from '../../sim/utils';
 import { useBusy } from '../Busy';
 import { commitDebug, pendingCommits, recentErrors } from '../../sim/backend';
+import { buildDebugSnapshot } from '../../sim/snapshot';
+import { nextRefreshDue } from '../../sim/throttle';
 
 const TABS = [
   { id: 'status', label: 'Status' },
@@ -400,9 +402,11 @@ function XpTab() {
   const cur = xpForLevel(level);
   const next = xpForLevel(level + 1);
   const frac = next > cur ? (state.xp - cur) / (next - cur) : 0;
+  // FEAT-1972079877: ladder runs the full 1–20 spread now that the placeholder
+  // catalogue populates every level (99 = always-available seed infrastructure).
   const byUnlock = new Map<number, string[]>();
   for (const sp of Object.values(SPECS)) {
-    if (sp.unlock > 7 || sp.category === 'network') continue;
+    if (sp.unlock > 20 || sp.category === 'network') continue;
     const list = byUnlock.get(sp.unlock) ?? [];
     list.push(sp.name);
     byUnlock.set(sp.unlock, list);
@@ -427,7 +431,7 @@ function XpTab() {
           <tr><th>Lv</th><th>Unlocks</th></tr>
         </thead>
         <tbody>
-          {[1, 2, 3, 4, 5, 6, 7].map((lv) => (
+          {Array.from({ length: 20 }, (_, i) => i + 1).map((lv) => (
             <tr key={lv} className={level >= lv ? '' : 'muted'}>
               <td>{lv}</td>
               <td>{(byUnlock.get(lv) ?? []).join(', ') || '—'}</td>
@@ -487,28 +491,46 @@ function PolicyTab() {
   );
 }
 
+// FEAT-1972079880: the snapshot JSON used to be rebuilt from live state on
+// EVERY render — the sim context updates each tick (as fast as 160 ms), so the
+// <pre> text mutated constantly and text selection was destroyed before a
+// human could copy it. The panel now freezes a "frame" (formatted text + the
+// data it came from) and only retakes it when nextRefreshDue says a full
+// SNAPSHOT_REFRESH_MS (15 s) has passed. Between refreshes the <pre> renders
+// the SAME string, so React never touches the DOM text node and selection
+// survives; the element itself is never re-mounted (stable tree position, no
+// key changes). A 1 s wall-clock interval drives the countdown label — that
+// updates a SIBLING element, which does not disturb selection inside the pre.
 function DebugTab() {
   const { state, dispatch } = useSim();
   const { run } = useBusy();
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState(pendingCommits());
-  const snapshot = {
-    tick: state.tick,
-    speed: state.speed,
-    funds: state.funds,
-    loanBalance: state.loanBalance,
-    population: state.population,
-    xp: state.xp,
-    taxRates: state.taxRates,
-    policies: state.policies,
-    buildingCount: state.buildings.length,
-    movingId: state.movingId,
-    lastFlows: state.lastFlows,
+
+  const takeFrame = (s: typeof state) => {
+    const snap = buildDebugSnapshot(s);
+    return { at: Date.now(), snap, text: JSON.stringify(snap, null, 2) };
   };
+  const [frame, setFrame] = useState(() => takeFrame(state));
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  // Retake the frame only when the 15 s window has elapsed. The effect closure
+  // is recreated every render, so when `now` ticks it sees the LATEST state.
+  useEffect(() => {
+    if (nextRefreshDue(frame.at, now).due) setFrame(takeFrame(state));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [now]);
+
+  const remainingS = Math.ceil(nextRefreshDue(frame.at, now).remainingMs / 1000);
+
   function commit() {
     run(async () => {
       setStatus('Committing snapshot…');
-      const r = await commitDebug(snapshot);
+      // Commit exactly the frame on screen (WYSIWYG), not fresher live state.
+      const r = await commitDebug(frame.snap);
       setStatus(r.message);
       setPending(pendingCommits());
     });
@@ -522,8 +544,15 @@ function DebugTab() {
         <button className="btn danger" onClick={() => dispatch({ type: 'reset' })}>Reset city</button>
       </div>
       <div className="row-actions wrap">
-        <button className="btn accent" title="Save this debug snapshot to the backend for processing (queues locally if offline)" onClick={commit}>
+        <button className="btn accent" title="Save the on-screen debug snapshot to the backend for processing (queues locally if offline)" onClick={commit}>
           Commit snapshot
+        </button>
+        <button
+          className="btn"
+          title="Retake the snapshot now instead of waiting for the 15 s refresh"
+          onClick={() => setFrame(takeFrame(state))}
+        >
+          Refresh now
         </button>
         <span className="hint">
           {pending} queued · {status ?? 'no commit this session'}
@@ -541,7 +570,11 @@ function DebugTab() {
           ))}
         </ul>
       )}
-      <pre className="debug-json mono">{JSON.stringify(snapshot, null, 2)}</pre>
+      <p className="hint">
+        Snapshot taken {new Date(frame.at).toLocaleTimeString()} · next update in {fmtNum(remainingS)}s
+        — frame is frozen so it can be selected and copied.
+      </p>
+      <pre className="debug-json mono">{frame.text}</pre>
     </>
   );
 }

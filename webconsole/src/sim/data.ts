@@ -320,6 +320,110 @@ export const SPECS: Record<string, Spec> = {
   land_stadium: P('land_stadium', 'landmark', 'Regional Stadium', 'Tourism magnet + approval', 3, 2, 24000, 260, '#d0a83c', 'services', 5, { tourism: 60 }),
   land_airport: P('land_airport', 'landmark', 'International Airport', 'Heathrow-scale · 1,227 ha · twin 3.9 km runways', 70, 70, 450000, 3000, '#5eb3d6', 'services', 6, { tourism: 140 }),
   land_harbour: P('land_harbour', 'landmark', 'Deep-Water Harbour', 'Freight income x1.4', 3, 3, 38000, 300, '#5e8bb0', 'services', 7, {}),
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FEAT-1972079877 — PLACEHOLDER OBJECT CATALOGUE.
+  // Curated from the Go engine's data/buildings.json (356 entries) + the
+  // master plan's module families so the palette looks populated NOW; real
+  // mechanics wire in later. Entries below only participate in the generic
+  // sim paths (cost/upkeep/jobs/served/mw/residents/tourism).
+  //
+  // ⚠ BALANCE-NUMBER REGIME (Aaron's blanket rule): every cost / upkeep /
+  // capacity figure in this block is a PLACEHOLDER — directional only,
+  // pending Aaron's row-by-row balance pass. Do not tune gameplay against
+  // these numbers.
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ---- Transport (buses / trams / metro / ferries / parking) ----
+  bus_stop: P('bus_stop', 'transport', 'Bus Stop', 'Local hopper services', 1, 1, 300, 4, '#5ea0c8', 'services', 2),
+  bus_depot: P('bus_depot', 'transport', 'Bus Depot', 'Runs 20 local routes', 2, 2, 4500, 40, '#5ea0c8', 'services', 4, { jobs: 20 }),
+  car_park: P('car_park', 'transport', 'Multi-storey Car Park', 'Park & ride commuters', 2, 2, 6000, 30, '#7f93a8', 'services', 5),
+  bus_station: P('bus_station', 'transport', 'Bus Station', 'Regional coach interchange', 2, 2, 9000, 70, '#5ea0c8', 'services', 6, { served: 12000 }),
+  tram_depot: P('tram_depot', 'transport', 'Tram Depot', 'Street tram network hub', 2, 2, 14000, 110, '#4d8fb8', 'services', 8, { jobs: 35 }),
+  ferry_pier: P('ferry_pier', 'transport', 'Ferry Pier', 'Cross-channel foot ferry', 1, 2, 11000, 90, '#4a9dae', 'services', 9, { tourism: 15 }),
+  metro_station: P('metro_station', 'transport', 'Metro Station', 'Underground rapid transit', 2, 2, 26000, 180, '#3d7ea6', 'services', 12, { served: 30000 }),
+  grand_terminus: P('grand_terminus', 'transport', 'Grand Terminus', 'Victorian rail cathedral', 3, 2, 60000, 320, '#d0a83c', 'services', 14, { served: 80000, jobs: 60 }),
+
+  // ---- Housing tiers ----
+  res_terrace: P('res_terrace', 'residential', 'Terrace Row', '30 residents · Victorian brick', 2, 1, 900, 3, '#4c9aff', 'zones', 3, { residents: 30 }),
+  res_lowrise: P('res_lowrise', 'residential', 'Low-rise Flats', '120 residents', 2, 2, 3200, 10, '#4c9aff', 'zones', 4, { residents: 120 }),
+  res_midrise: P('res_midrise', 'residential', 'Mid-rise Flats', '280 residents', 2, 2, 7800, 22, '#3d84e6', 'zones', 6, { residents: 280 }),
+  res_highrise: P('res_highrise', 'residential', 'High-rise Tower', '600 residents', 2, 2, 21000, 60, '#3d84e6', 'zones', 9, { residents: 600 }),
+  res_penthouse: P('res_penthouse', 'residential', 'Penthouse Tower', '350 wealthy residents', 2, 2, 45000, 90, '#6ab0ff', 'zones', 13, { residents: 350 }),
+
+  // ---- Retail tiers ----
+  com_market: P('com_market', 'commercial', 'Market Hall', 'Covered traders market', 2, 2, 2200, 10, '#e3b341', 'zones', 3, { jobs: 25 }),
+  com_super: P('com_super', 'commercial', 'Supermarket', 'Weekly shop anchor', 2, 2, 5200, 24, '#e3b341', 'zones', 4, { jobs: 40 }),
+  com_mall: P('com_mall', 'commercial', 'Shopping Mall', 'Regional retail destination', 3, 3, 30000, 160, '#d9a52e', 'zones', 8, { jobs: 220 }),
+
+  // ---- Industry tiers ----
+  ind_light: P('ind_light', 'industrial', 'Light Industrial Units', 'Workshops + trades', 2, 2, 1800, 10, '#a371f7', 'zones', 3, { jobs: 24 }),
+  ind_warehouse: P('ind_warehouse', 'industrial', 'Warehouse', 'Storage + distribution', 2, 2, 3600, 16, '#9a6ee0', 'zones', 5, { jobs: 18 }),
+  ind_heavy: P('ind_heavy', 'industrial', 'Heavy Industry Estate', 'Big plant · heavy freight', 3, 3, 16000, 90, '#8957d9', 'zones', 7, { tag: 'pollution', jobs: 110 }),
+  ind_cement: P('ind_cement', 'industrial', 'Cement Works', 'Construction materials', 2, 2, 12000, 70, '#8957d9', 'zones', 9, { tag: 'pollution', jobs: 45 }),
+  ind_logistics: P('ind_logistics', 'industrial', 'Automated Logistics Hub', 'Robotic freight sorting', 3, 3, 48000, 210, '#b58fd8', 'zones', 15, { jobs: 60 }),
+
+  // ---- Offices ----
+  off_data: P('off_data', 'office', 'Data Centre', '90 tech jobs · heavy power draw', 2, 2, 34000, 240, '#2f8f74', 'zones', 12, { jobs: 90 }),
+
+  // ---- Parks tiers ----
+  park_playground: P('park_playground', 'park', 'Playground', 'Swings + climbing frame', 1, 1, 400, 6, '#3fb950', 'zones', 2),
+  park_town: P('park_town', 'park', 'Town Park', 'Bandstand + boating lake', 2, 2, 2400, 30, '#3fb950', 'zones', 4),
+  park_botanical: P('park_botanical', 'park', 'Botanical Garden', 'Glasshouses + collections', 2, 2, 9000, 80, '#2f9e44', 'zones', 8, { tourism: 20 }),
+  park_nature: P('park_nature', 'park', 'Nature Reserve', 'Wetland + wildlife', 3, 3, 6000, 40, '#2f9e44', 'zones', 12),
+
+  // ---- Leisure ----
+  lei_leisure: P('lei_leisure', 'leisure', 'Leisure Centre', 'Pool + courts for 8,000', 2, 2, 7000, 85, '#e07be0', 'services', 4, { served: 8000 }),
+  lei_cinema: P('lei_cinema', 'leisure', 'Cinema', 'Eight-screen multiplex', 2, 1, 5500, 45, '#e07be0', 'services', 5, { tourism: 10 }),
+  lei_theatre: P('lei_theatre', 'leisure', 'Theatre', 'Rep company + touring shows', 2, 2, 12000, 95, '#c95fc9', 'services', 7, { tourism: 18 }),
+  lei_museum: P('lei_museum', 'leisure', 'Museum', 'County collection', 2, 2, 15000, 110, '#c95fc9', 'services', 9, { tourism: 25 }),
+  lei_arena: P('lei_arena', 'leisure', 'Arena', '12,000-seat events bowl', 3, 3, 55000, 380, '#b34fb3', 'services', 11, { tourism: 70 }),
+  lei_themepark: P('lei_themepark', 'leisure', 'Theme Park', 'Coasters + day-trippers', 4, 4, 120000, 700, '#b34fb3', 'services', 16, { tourism: 160 }),
+
+  // ---- Power additions ----
+  pow_substation: P('pow_substation', 'power', 'Substation', 'Grid step-down node', 1, 1, 1200, 12, '#9aa4ae', 'services', 3),
+  pow_solar: P('pow_solar', 'power', 'Solar Farm', '25 MW · clean', 3, 3, 9000, 30, '#f6c744', 'services', 6, { mw: 25 }),
+  pow_windfarm: P('pow_windfarm', 'power', 'Onshore Wind Farm', '60 MW · clean', 3, 3, 18000, 60, '#7fb2e5', 'services', 7, { mw: 60 }),
+  pow_ccgt: P('pow_ccgt', 'power', 'CCGT Gas Plant', '420 MW · fast response', 3, 3, 42000, 260, '#f0883e', 'services', 8, { mw: 420, tag: 'pollution' }),
+  pow_offshore: P('pow_offshore', 'power', 'Offshore Wind Array', '300 MW · clean', 3, 3, 90000, 240, '#5b8fc9', 'services', 12, { mw: 300 }),
+  pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 400000, 900, '#ff9f43', 'services', 19, { mw: 800 }),
+
+  // ---- Water & waste additions ----
+  wat_tower: P('wat_tower', 'water', 'Water Tower', 'Pressure head for 4,000', 1, 1, 1500, 14, '#39c5cf', 'services', 2, { tag: 'clean', served: 4000 }),
+  wat_reservoir: P('wat_reservoir', 'water', 'Reservoir', 'Valley dam · serves 60,000', 4, 4, 45000, 150, '#2ba7b1', 'services', 9, { tag: 'clean', served: 60000 }),
+  wat_sewage_regional: P('wat_sewage_regional', 'water', 'Regional Sewage Works', 'Treats waste for 60,000', 3, 3, 38000, 170, '#6b8f71', 'services', 11, { tag: 'waste', served: 60000 }),
+
+  // ---- Education additions ----
+  edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 24000, 210, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary' }),
+
+  // ---- Health additions ----
+  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 3800, 55, '#ff7b72', 'services', 5, { served: 15000 }),
+  hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 8500, 95, '#d95f57', 'services', 7, { served: 90 }),
+  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 85000, 650, '#c24f47', 'services', 10, { served: 120000 }),
+
+  // ---- Police & justice ----
+  pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 15000, 160, '#6e7bd9', 'services', 9, { served: 60000 }),
+  civ_courthouse: P('civ_courthouse', 'civic', 'Courthouse', 'Magistrates + crown courts', 2, 2, 12000, 130, '#8a94a8', 'services', 8),
+  civ_prison: P('civ_prison', 'civic', 'Prison', 'Category B · 800 places', 3, 2, 26000, 240, '#707a8c', 'services', 10),
+  // FEAT-1972079870 — the ADX supermax.
+  civ_adx: P('civ_adx', 'civic', 'ADX Supermax', 'Maximum-security prison · escape-proof', 3, 3, 90000, 520, '#565e6e', 'services', 17),
+
+  // ---- Fire & rescue ----
+  fire_post: P('fire_post', 'fire', 'Volunteer Fire Post', 'Retained crew · covers 4,000', 1, 1, 1000, 16, '#f65b56', 'services', 2, { served: 4000 }),
+  fire_station: P('fire_station', 'fire', 'Fire Station', 'Two pumps · covers 20,000', 2, 1, 4800, 70, '#f65b56', 'services', 4, { served: 20000 }),
+  fire_hq: P('fire_hq', 'fire', 'Regional Fire HQ', 'Command + specialist appliances', 2, 2, 18000, 180, '#d94a45', 'services', 11, { served: 80000 }),
+
+  // ---- Civic ----
+  civ_library: P('civ_library', 'civic', 'Library', 'Lending + study space', 1, 1, 3000, 40, '#8a94a8', 'services', 5),
+  civ_townhall: P('civ_townhall', 'civic', 'Town Hall', 'Local governance seat', 2, 2, 9000, 90, '#8a94a8', 'services', 6),
+  civ_cityhall: P('civ_cityhall', 'civic', 'City Hall', 'Metropolitan administration', 2, 2, 30000, 220, '#707a8c', 'services', 12),
+
+  // ---- Landmark additions ----
+  land_cathedral: P('land_cathedral', 'landmark', 'Cathedral', 'Gothic spire · pilgrimage draw', 2, 2, 40000, 150, '#d0a83c', 'services', 11, { tourism: 45 }),
+  land_eye: P('land_eye', 'landmark', 'The Folkestone Eye', 'Coastal observation wheel', 1, 1, 28000, 130, '#5eb3d6', 'services', 13, { tourism: 55 }),
+  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 250000, 1200, '#c2477e', 'services', 18, { tourism: 80 }),
+  land_space: P('land_space', 'landmark', 'Space Launch Complex', 'Kent spaceport · mega-project', 5, 5, 600000, 2500, '#ff9f43', 'services', 20, { tourism: 200 }),
+  // ═══════════════════ end FEAT-1972079877 placeholder block ═══════════════
 };
 
 for (const [id, d] of Object.entries(DIMS)) {
@@ -327,16 +431,29 @@ for (const [id, d] of Object.entries(DIMS)) {
   if (sp) sp.dims = d;
 }
 
+// FEAT-1972079877: the old 9-family palette is regrouped so each family shows a
+// realistic, populated count. Ordering within a family is by unlock level, so
+// the tree doubles as a preview of the level ladder. Every id here MUST exist
+// in SPECS and appear in exactly ONE family (BUG-385 class — enforced by
+// test/catalogue.test.mjs).
 export const PALETTE: { title: string; items: string[] }[] = [
   { title: 'Network', items: ['road'] },
-  { title: 'Zones', items: ['res_hut', 'res_block', 'com_shop', 'com_retail', 'farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'park'] },
-  { title: 'Offices', items: ['off_suite', 'off_tower'] },
+  { title: 'Transport', items: ['bus_stop', 'bus_depot', 'car_park', 'station_ashford', 'bus_station', 'tram_depot', 'ferry_pier', 'metro_station', 'grand_terminus'] },
+  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse'] },
+  { title: 'Retail', items: ['com_shop', 'com_retail', 'com_market', 'com_super', 'com_mall'] },
+  { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics'] },
+  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data'] },
   { title: 'Mining', items: ['mine_quarry', 'mine_deep'] },
-  { title: 'Power', items: ['pow_wind', 'pow_coal', 'pow_nuke'] },
-  { title: 'Water', items: ['wat_clean', 'wat_waste'] },
-  { title: 'Health & Police', items: ['hea_clinic', 'hea_hospital', 'pol_station'] },
-  { title: 'Education', items: ['edu_nursery', 'edu_primary', 'edu_city', 'col_sixth', 'uni'] },
-  { title: 'Landmarks', items: ['land_stadium', 'land_airport', 'land_harbour'] },
+  { title: 'Parks', items: ['park', 'park_playground', 'park_town', 'park_botanical', 'park_nature'] },
+  { title: 'Leisure', items: ['lei_leisure', 'lei_cinema', 'lei_theatre', 'lei_museum', 'lei_arena', 'lei_themepark'] },
+  { title: 'Power', items: ['pow_wind', 'pow_coal', 'pow_substation', 'pow_nuke', 'pow_solar', 'pow_windfarm', 'pow_ccgt', 'pow_offshore', 'pow_fusion'] },
+  { title: 'Water & Waste', items: ['wat_tower', 'wat_clean', 'wat_waste', 'wat_reservoir', 'wat_sewage_regional'] },
+  { title: 'Health', items: ['hea_clinic', 'hea_hospital', 'hea_ambulance', 'hea_eldercare', 'hea_teaching'] },
+  { title: 'Police & Justice', items: ['pol_station', 'civ_courthouse', 'pol_hq', 'civ_prison', 'civ_adx'] },
+  { title: 'Fire & Rescue', items: ['fire_post', 'fire_station', 'fire_hq'] },
+  { title: 'Education', items: ['edu_nursery', 'edu_primary', 'edu_city', 'col_sixth', 'uni', 'edu_tech'] },
+  { title: 'Civic', items: ['civ_library', 'civ_townhall', 'civ_cityhall'] },
+  { title: 'Landmarks', items: ['land_stadium', 'land_airport', 'land_harbour', 'land_cathedral', 'land_eye', 'land_tunnel', 'land_space'] },
 ];
 
 export const PALETTE_FLAT: string[] = PALETTE.flatMap((g) => g.items);
@@ -355,6 +472,11 @@ export const FAMILIES: { kind: ZoneKind; label: string; color: string }[] = [
   { kind: 'police', label: 'Police', color: '#6e7bd9' },
   { kind: 'school', label: 'Education', color: '#ffd166' },
   { kind: 'landmark', label: 'Landmarks', color: '#d0a83c' },
+  // FEAT-1972079877 placeholder catalogue families:
+  { kind: 'transport', label: 'Transport', color: '#5ea0c8' },
+  { kind: 'fire', label: 'Fire & Rescue', color: '#f65b56' },
+  { kind: 'civic', label: 'Civic & Justice', color: '#8a94a8' },
+  { kind: 'leisure', label: 'Leisure', color: '#e07be0' },
 ];
 
 const ZERO_COUNTS: Record<ZoneKind, number> = {
@@ -375,6 +497,10 @@ const ZERO_COUNTS: Record<ZoneKind, number> = {
   police: 0,
   school: 0,
   landmark: 0,
+  transport: 0,
+  fire: 0,
+  civic: 0,
+  leisure: 0,
 };
 
 export function countByKind(buildings: SimState['buildings']): Record<ZoneKind, number> {
