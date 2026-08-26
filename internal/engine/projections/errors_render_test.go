@@ -210,3 +210,39 @@ func TestEveryErrorRendersWithRealCallSiteKeys(t *testing.T) {
 		assertRenders(t, err, ErrCopiedValue)
 	})
 }
+
+// TestASM1233ProviderShapeCodeDistinctFromSpiralGhostCity pins the ASM-1233
+// rename (Aaron ruling 2026-08-20): the non-spiral provider-shape error was
+// renamed ErrGhostCityProviderShape -> ErrCurveProviderMissingPeak so it no
+// longer pattern-collides with engine.spiral's genuine ghost-city death path
+// (DeathGhostCity / ErrGhostCityNoWarning, MET-G1102). This regression guards
+// against the collision silently reappearing: the provider-registration
+// failure mode in engine.projections must raise its OWN distinct registered
+// code (MET-G108), never the spiral death-path code (MET-G1102). engine.spiral
+// keeps the canonical "GhostCity" death name; this module must not reuse it.
+func TestASM1233ProviderShapeCodeDistinctFromSpiralGhostCity(t *testing.T) {
+	// The spiral ghost-city no-warning death code (data/errors.json,
+	// module engine.spiral). Compared as a literal so this package does
+	// not import engine.spiral (module-boundary hygiene) — the registry
+	// check (add-error.js check) is the global no-duplicate-code guarantee;
+	// this test guards the specific pair the ASM-1233 collision was about.
+	const spiralGhostCityNoWarning = "MET-G1102"
+
+	if ErrCurveProviderMissingPeak != "MET-G108" {
+		t.Fatalf("ErrCurveProviderMissingPeak = %q, want MET-G108 (the projections provider-shape code)", ErrCurveProviderMissingPeak)
+	}
+	if ErrCurveProviderMissingPeak == spiralGhostCityNoWarning {
+		t.Fatalf("ASM-1233 collision reintroduced: projections provider-shape error shares the spiral ghost-city death code %q", spiralGhostCityNoWarning)
+	}
+
+	// The provider-shape site must actually raise its own code at runtime.
+	api := NewProjectionsAPI()
+	if err := api.RegisterCurveProvider(CurveKeyGhostCityPopulation, fakeProvider{def: 1}); err != nil {
+		t.Fatalf("RegisterCurveProvider: %v", err)
+	}
+	_, err := api.MarginToGhostCity(0)
+	assertRenders(t, err, ErrCurveProviderMissingPeak)
+	if e, ok := err.(*errs.E); ok && e.Code == spiralGhostCityNoWarning {
+		t.Fatalf("ASM-1233: MarginToGhostCity raised the spiral ghost-city death code %q, not its own provider-shape code", spiralGhostCityNoWarning)
+	}
+}
