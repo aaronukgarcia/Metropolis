@@ -312,12 +312,19 @@ func TestSEC077_OptionsArityGuardsKeyCompleteness(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ATTACK 4 -- cache lifecycle. The map has no bound and no eviction. Adding
-// height to the key multiplies the key space by the number of distinct
-// terminal heights, so a resize drag now mints an entry per (w,h) pair, each
-// holding a full glyph snapshot.
-// ---------------------------------------------------------------------------
-func TestSEC077_ResizeStormGrowsCacheUnbounded(t *testing.T) {
+// ATTACK 4 -- cache lifecycle (BUG-321, FIXED). These two tests formerly PINNED
+// the unbounded growth (asserting the map grew without limit); they are
+// rewritten in place, per BUG-321's instruction, to assert the BOUND now that
+// the hoisted engine (BUG-316) lives across frames. Adding height to the key
+// (BUG-342) multiplies the key space by the number of distinct terminal
+// heights, so a resize drag mints an entry per (w,h) pair -- exactly the churn
+// the bound must survive.
+//
+// A resize drag over 200 distinct geometries on ONE unchanged topology must
+// leave the cache bounded at maxCacheEntries, and eviction must be observable
+// (a silent eviction that later misses is indistinguishable from a cache that
+// never worked -- the BUG-316 failure mode).
+func TestBUG321_ResizeStormStaysBounded(t *testing.T) {
 	topo := tallSankey(10)
 	e := NewEngine()
 	const drags = 200
@@ -327,19 +334,28 @@ func TestSEC077_ResizeStormGrowsCacheUnbounded(t *testing.T) {
 			t.Fatalf("render %d: %v", i, err)
 		}
 	}
-	e.mu.Lock()
-	n := len(e.cache)
-	e.mu.Unlock()
-	t.Logf("after %d resize steps on ONE unchanged topology, cache holds %d entries (no eviction, no cap)", drags, n)
-	if n <= 1 {
-		t.Fatalf("expected the resize storm to mint many entries, got %d", n)
+	st, err := e.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	t.Logf("after %d resize steps on ONE unchanged topology: %d entries, %d evictions (cap %d)",
+		drags, st.Entries, st.Evictions, maxCacheEntries)
+	if st.Entries > maxCacheEntries {
+		t.Fatalf("BUG-321: cache grew to %d entries, cap is %d -- the bound did not engage",
+			st.Entries, maxCacheEntries)
+	}
+	if st.Evictions == 0 {
+		t.Fatalf("BUG-321: %d distinct geometries but 0 evictions -- the cap never fired, "+
+			"so a bound that happens to look right could be a cache that stopped caching", drags)
 	}
 }
 
 // ATTACK 4b -- the pre-existing leak the height term makes worse: the topology
 // hash folds float64 amounts, so a Sankey whose money figures move every tick
-// mints a fresh entry every tick, forever, at the UI's 10 Hz.
-func TestSEC077_TickingTopologyGrowsCacheUnbounded(t *testing.T) {
+// mints a fresh entry every tick, forever, at the UI's 10 Hz. Formerly this
+// asserted one-entry-per-tick growth; rewritten to assert the bound holds
+// under 300 ticks (30 s of a 10 Hz UI) of a moving budget.
+func TestBUG321_TickingTopologyStaysBounded(t *testing.T) {
 	e := NewEngine()
 	buf := core.NewBuffer(80, 24)
 	const ticks = 300 // 30 seconds of a 10 Hz UI
@@ -352,12 +368,21 @@ func TestSEC077_TickingTopologyGrowsCacheUnbounded(t *testing.T) {
 			t.Fatalf("tick %d: %v", i, err)
 		}
 	}
-	e.mu.Lock()
-	n := len(e.cache)
-	e.mu.Unlock()
-	t.Logf("after %d ticks of a live budget, cache holds %d entries (one per tick, never evicted)", ticks, n)
-	if n < ticks {
-		t.Fatalf("expected %d entries, got %d", ticks, n)
+	st, err := e.Stats()
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	t.Logf("after %d ticks of a live budget: %d entries, %d evictions (cap %d)",
+		ticks, st.Entries, st.Evictions, maxCacheEntries)
+	if st.Entries > maxCacheEntries {
+		t.Fatalf("BUG-321: %d ticks of a moving budget left %d entries, cap is %d -- "+
+			"the ~1.2 GB/hour retention leak is NOT closed", ticks, st.Entries, maxCacheEntries)
+	}
+	// Every tick mints a distinct key (the amount moves), so once past the cap
+	// every subsequent tick must evict exactly one entry.
+	if wantMinEvict := ticks - maxCacheEntries; st.Evictions < uint64(wantMinEvict) {
+		t.Fatalf("BUG-321: expected at least %d evictions over %d distinct-key ticks, got %d",
+			wantMinEvict, ticks, st.Evictions)
 	}
 }
 

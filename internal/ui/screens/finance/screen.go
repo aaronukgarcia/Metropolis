@@ -8,6 +8,7 @@ import (
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
+	"github.com/aaronukgarcia/Metropolis/internal/ui/diagrams"
 )
 
 type SendCommandFunc func(protocol.Command) error
@@ -54,12 +55,23 @@ type Screen struct {
 	havePayroll         bool
 	sankey              *FiscalCircuitView
 	haveSankey          bool
+
+	// engine is the diagrams layout cache, hoisted onto the Screen so it
+	// LIVES ACROSS FRAMES (BUG-316). The former per-frame diagrams.NewEngine()
+	// inside RenderSankey built a fresh empty cache every frame, so the cache
+	// never served a hit — pure per-frame allocation. Constructed once in New
+	// and reused by (*Screen).RenderSankey for the Screen's whole lifetime, so
+	// an unchanged fiscal-circuit topology re-rendered at 10 Hz is served from
+	// cache (AC-6). The cache is bounded (BUG-321, maxCacheEntries) so a live
+	// budget whose figures move every tick cannot leak.
+	engine *diagrams.Engine
 }
 
 func New(correlationID string) *Screen {
 	s := &Screen{
 		correlationID: correlationID,
 		subs:          make(map[protocol.SubscriptionID]string),
+		engine:        diagrams.NewEngine(),
 	}
 	s.self.Store(s)
 	return s

@@ -29,9 +29,49 @@ import (
 // sync.Mutex VALUE while cache is an aliased map, so a copy would be a
 // second, independent lock over the same map (see copyguard.go for the full
 // rationale and the SEC-016 pre-lock-ordering requirement).
+// maxCacheEntries bounds the live layout cache (BUG-321). Once the Engine is
+// hoisted so it lives across frames (BUG-316), a plain unbounded map turns
+// per-frame churn into unbounded retention: SankeyTopology.Hash folds the
+// float64 money amounts, so a live budget whose figures move every tick mints
+// a fresh key every tick forever, and adding buffer height to layoutKey
+// (BUG-342) multiplies that by the number of distinct terminal heights a
+// resize drag passes through. Measured on the hoisted-but-unbounded engine:
+// ~1.2 GB/hour retained at the 10 Hz UI tick, never released.
+//
+// Why 64 rather than a round number: the only live consumer is the finance
+// screen, which draws at most ONE Sankey diagram per frame. 64 therefore
+// retains the most-recently-rendered 64 distinct (topology, width, height,
+// palette) tuples — comfortably a whole resize drag's worth of recent
+// geometries plus several seconds of a ticking budget — while capping
+// worst-case retention at 64 entries. An entry is a full glyph snapshot; an
+// 80x50 region is roughly 64 KB of core.Cell, so 64 entries bound the cache
+// at about 4 MB worst case, two orders of magnitude below the unbounded leak.
+// A resize storm thrashes the cache, which is correct: resizing is transient,
+// and thrashing costs re-layout, not memory.
+const maxCacheEntries = 64
+
 type Engine struct {
 	mu    sync.Mutex
 	cache map[uint64]cacheEntry
+
+	// accessSeq is a monotonic counter bumped once per Render call under
+	// e.mu. Each cache entry records the accessSeq of its most recent
+	// touch (insert or hit) in cacheEntry.lastAccess, and eviction removes
+	// the entry with the smallest lastAccess — a least-recently-used policy.
+	// Because accessSeq is unique per access, no two live entries ever share
+	// a lastAccess, so the LRU victim is uniquely determined regardless of
+	// Go's randomised map-iteration order (GR#21: deterministic eviction,
+	// no ties to break nondeterministically).
+	accessSeq uint64
+
+	// hits/misses/evictions back CacheStats (BUG-321). Evictions are
+	// surfaced deliberately: a silently-evicted entry that then misses looks
+	// identical to a cache that never worked — which is exactly the class of
+	// defect BUG-316 was — so the eviction count makes the difference
+	// observable. All three are written only under e.mu.
+	hits      uint64
+	misses    uint64
+	evictions uint64
 
 	// self holds the address NewEngine gave this Engine at construction
 	// (self.Store(e), set once, at the end of NewEngine, never stored to
@@ -52,6 +92,24 @@ type cacheEntry struct {
 	res    Result
 	glyphs []core.Cell
 	err    error
+
+	// lastAccess is the Engine.accessSeq value of this entry's most recent
+	// touch (its insert, or its most recent cache hit). It is the LRU
+	// recency key; see Engine.accessSeq for why uniqueness makes eviction
+	// deterministic (GR#21).
+	lastAccess uint64
+}
+
+// CacheStats is an observable snapshot of the layout cache (BUG-321).
+// Entries is the current live entry count (bounded by maxCacheEntries);
+// Hits/Misses/Evictions are monotonic totals since construction. Evictions
+// is exposed so a "served from cache unless evicted" miss is distinguishable
+// from a cache that never worked at all.
+type CacheStats struct {
+	Entries   int
+	Hits      uint64
+	Misses    uint64
+	Evictions uint64
 }
 
 // NewEngine returns an empty layout cache.
@@ -134,13 +192,71 @@ func (e *Engine) Render(buf *core.Buffer, hash uint64, render func(buf *core.Buf
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.accessSeq++
+	seq := e.accessSeq
 	if ent, ok := e.cache[hash]; ok {
+		// Touch the entry so a hit refreshes its LRU recency (write the
+		// value back — cacheEntry is stored by value).
+		ent.lastAccess = seq
+		e.cache[hash] = ent
+		e.hits++
 		blit(buf, ent.res.Region, ent.glyphs)
 		return cloneResult(ent.res), ent.err
 	}
+	e.misses++
 	res, err := render(buf)
-	e.cache[hash] = cacheEntry{res: res, err: err, glyphs: snapshot(buf, res.Region)}
+	// Bound the cache (BUG-321): evict the least-recently-used entry before
+	// inserting at the cap, so the map never exceeds maxCacheEntries. The
+	// hoisted engine (BUG-316) lives for the whole session, so without this
+	// the map would grow without limit.
+	if len(e.cache) >= maxCacheEntries {
+		if evictLRU(e.cache) {
+			e.evictions++
+		}
+	}
+	e.cache[hash] = cacheEntry{res: res, err: err, glyphs: snapshot(buf, res.Region), lastAccess: seq}
 	return cloneResult(res), err
+}
+
+// evictLRU removes the single entry with the smallest lastAccess from cache
+// and reports whether one was removed. It is a free function over the map (not
+// an *Engine method) so it holds no lock of its own — the caller (Render) owns
+// e.mu for the whole critical section and has already passed the SEC-020 copy
+// guard, so there is no aliased Engine state for evictLRU to re-validate.
+// Because lastAccess values are unique (Engine.accessSeq is monotonic and
+// assigned once per access), the minimum is unique and the victim is fully
+// determined regardless of Go's randomised map-iteration order (GR#21). O(n)
+// at n = maxCacheEntries (64) is negligible.
+func evictLRU(cache map[uint64]cacheEntry) bool {
+	var victim uint64
+	var victimSeq uint64
+	first := true
+	for k, ent := range cache {
+		if first || ent.lastAccess < victimSeq {
+			victim, victimSeq, first = k, ent.lastAccess, false
+		}
+	}
+	if first {
+		return false
+	}
+	delete(cache, victim)
+	return true
+}
+
+// Stats returns an observable snapshot of the cache (BUG-321). A struct-copied
+// Engine is rejected (SEC-020) before e.mu is touched, exactly as Render is.
+func (e *Engine) Stats() (CacheStats, error) {
+	if err := e.checkNotCopied(); err != nil {
+		return CacheStats{}, err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return CacheStats{
+		Entries:   len(e.cache),
+		Hits:      e.hits,
+		Misses:    e.misses,
+		Evictions: e.evictions,
+	}, nil
 }
 
 // cloneResult returns a Result whose Hits slice is a fresh copy, never the

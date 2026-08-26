@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/core"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/dash"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/diagrams"
@@ -182,7 +183,18 @@ func RenderPublicPayroll(buf *core.Buffer, rect core.Rect, p PublicPayrollView, 
 	drawText(buf, rect, rect.X, rect.Y+3, fmt.Sprintf("Income Tax Clawback: %s", formatPounds(p.TaxClawbackMicropounds)), style)
 }
 
-func RenderSankey(buf *core.Buffer, rect core.Rect, sankey FiscalCircuitView, have bool, style tcell.Style) {
+// RenderSankey is a method on *Screen (not a free function like the other
+// Render* helpers) precisely because it must use the Screen's HOISTED layout
+// engine (BUG-316): s.engine lives for the Screen's whole lifetime, so an
+// unchanged fiscal-circuit topology re-rendered on successive frames is served
+// from the persistent, bounded cache instead of rebuilding a throwaway engine
+// (and a fresh empty cache) every frame.
+func (s *Screen) RenderSankey(buf *core.Buffer, rect core.Rect, sankey FiscalCircuitView, have bool, style tcell.Style) {
+	// Copy guard (SEC-020): reject a struct-copied Screen before touching
+	// its (aliased) engine pointer, mirroring every other *Screen method.
+	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "RenderSankey"}); err != nil {
+		return
+	}
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
@@ -208,11 +220,12 @@ func RenderSankey(buf *core.Buffer, rect core.Rect, sankey FiscalCircuitView, ha
 		}
 	}
 
-	engine := diagrams.NewEngine()
-	// Render through diagrams' Sankey engine
+	// Render through the Screen's hoisted, bounded Sankey engine (BUG-316):
+	// the cache persists across frames, so an unchanged topology at an
+	// unchanged geometry is served from cache rather than re-laid-out.
 	diagramRect := core.Rect{X: rect.X, Y: rect.Y + 2, W: rect.W, H: rect.H - 2}
 	subBuf := core.NewBuffer(diagramRect.W, diagramRect.H)
-	_, _ = engine.Sankey(subBuf, topo, diagrams.Options{Palette: widgets.DefaultPalette})
+	_, _ = s.engine.Sankey(subBuf, topo, diagrams.Options{Palette: widgets.DefaultPalette})
 
 	// Copy from sub-buffer to main buffer
 	for dy := 0; dy < diagramRect.H; dy++ {
