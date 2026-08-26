@@ -1,5 +1,26 @@
 # HEAVY CHECKPOINT — session bounce point
 
+## REFRESH #16 — 2026-08-26 (Bev marathon: P0/P1/P2 sweep + webconsole UX wave)
+
+**Standing order (Aaron):** "keep pulling P1 bugs never stop, P0/P1/P2 all need to be done"; "use lower models for grunt work" (haiku lanes for mechanical fixes/rounds); consolidation done earlier (23 worktrees removed, ~27 rescue branches on origin).
+
+### Landed this session (~34 items closed, 31+ commits pushed, every range noreply both fields)
+
+- **P0:** ASM-1233 (ErrGhostCity), BUG-385 (webconsole zone-hover crash; webconsole imported to repo webconsole/ per Aaron).
+- **Engine P1/P2:** BUG-375 (determinism gate broad StateDigest — 3 rounds; the gate was blind to ALL non-population hooks), BUG-333 (fixed-by-355 ruling), BUG-362 blocker-2 (buildings render via world.SetStructure), BUG-369 (cold-pass household dissolution), BUG-270 (hot/warm citizens now get keyed mortality/fertility draws), BUG-283/284 (stub per-subscription FIFO delta pump), BUG-282 (omitempty dropped elevation 0 on shore), BUG-263 (maintenance caps vs silent saturation), BUG-278/279 (errs injectable clock + F001/F002 fatal registry-failure codes), BUG-316/321/342 (diagrams cache lives/bounded-LRU64/height-key), BUG-357 coastal increment (66->0 + real-AST render gate; 205 survivors across ~40 pkgs REMAIN - module sweep campaign), BUG-317/335/388 (render-gate coverage; premises already fixed), BUG-343 (wake-recovery banner), BUG-348 (startup trunk-divergence line with GR#26 thresholds), BUG-236/012 (already fixed on trunk - closed with measurement), BUG-239 (canonical DrillTarget).
+- **Webconsole wave (Aaron's UX batch, epic FEAT-1972079873):** relayout (build+StartOver left, info bottom, demand+fiscal right), depressed playback buttons, palette scroll-reset, GBP+comma formatting (874/875/876/879 fedf858); zoning free + tier borders + occupancy fill, dev-only +10m, level-milestone 10% rewards (882/883/884 dfa93b5); version badge + About changelog, git-derived, v0.3.0 milestone tag created (FEAT-1972079872, item open for TUI parity AC-5).
+- **In flight at refresh:** BUG-280 round (orphan Bro sorted-iteration fix in MAIN checkout - types.go/types_test.go), BUG-281 fix (DisallowUnknownFields), BUG-237 fix (hook-count SSOT).
+
+### For Aaron (balance pass + rulings)
+- LEVEL_REWARD_RATE=0.10 placeholder; free zones + place-xp = bounded xp farm (~6.1x seed funds); multi-level banner shows last level's cash only.
+- BUG-362 blockers 1/3/4/5 still deferred (keyboard path; money circulation NEEDS RULING - SettleConstruction breaks budget closure; per-citizen wealth; households inert).
+- Guard-blocked trees still held: bevcore289, agent-a991, pr-round20/65/71/73/74/77 (+pr52 diverged, bro dirty) - CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1 session or fresh rounds to finish single-folder consolidation.
+- Open queue remains ~432 ready items; BUG-357's 205-survivor render sweep and the BOW stale-status debt (6 already-fixed-on-trunk items found this session) are the two biggest known campaigns.
+
+### Session gotchas (carry forward)
+- MAIN CHECKOUT ORPHAN ESTATE: uncommitted guard files (claude-bow.js guard estate w/ latestGitRefForItem, author/destructive-guard, startup, quote-mask) + types.go(=BUG-280) + cafe/staffing doc comments + finance wire/errors remnants. NEVER cp a worktree file over a main-checkout file without `git status --porcelain <file>` first (two clobber incidents this session; recovery via pr-round20 on-disk copy + git apply --cached scoped patches). Land verdicted work via scoped patches when files overlap the estate.
+- claude-bow.js closed_note column max 512 chars; destructive-guard denies piped/chained commit commands (run plain, separate calls); the BUG-322/320 tick-driver timing flake is pre-existing and passes in isolation.
+
 ## REFRESH #15 — 2026-08-25 (Bev consolidation session — EXCLUSIVE CONTROL)
 
 **Why:** Aaron ruled this the ONLY terminal running (exclusive code control) and ordered E:\git consolidated to a single Metropolis folder — all work committed and synced, worktrees salvaged then removed.
