@@ -530,7 +530,7 @@ func (s *StubEngine) handleSubscribe(cmd protocol.Command) protocol.CommandResul
 		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"viewName": p.ViewName}))
 	}
 	id := s.allocID.Allocate()
-	sub := &subState{id: id, viewName: p.ViewName}
+	sub := &subState{id: id, viewName: p.ViewName, done: make(chan struct{})}
 	s.subs[id] = sub
 	tick := s.tick
 
@@ -562,12 +562,21 @@ func (s *StubEngine) handleUnsubscribe(cmd protocol.Command) protocol.CommandRes
 		s.mu.Unlock()
 		return errRefResult(cmd, errs.New(codeStubEngineCopied, string(cmd.CorrelationID), map[string]any{"subscriptionId": string(p.SubscriptionID)}))
 	}
-	_, exists := s.subs[p.SubscriptionID]
+	sub, exists := s.subs[p.SubscriptionID]
 	if !exists {
 		s.mu.Unlock()
 		return s.reject(cmd, codeInvalidPayload, map[string]any{"subscriptionId": string(p.SubscriptionID), "cause": "unknown subscription"})
 	}
 	delete(s.subs, p.SubscriptionID)
+	// BUG-283: closing done aborts any in-flight delayed-delta wait and
+	// tells the delivery pump to drop everything still queued for this
+	// subscription — the engine must stop pushing the instant Unsubscribe is
+	// processed (deltas.go/AC-5). done is closed exactly once: this branch
+	// only runs when the subscription existed and was just deleted, so a
+	// second Unsubscribe for the same ID takes the !exists path above. Both
+	// the close here and the pump's own liveness re-check run under s.mu, so
+	// no delta can slip out for an already-processed Unsubscribe.
+	close(sub.done)
 	tick := s.tick
 	s.mu.Unlock()
 
@@ -674,14 +683,108 @@ func (s *StubEngine) emitDeltaLocked(sub *subState, tick protocol.Tick, patch an
 			CorrelationID:  corr,
 		}
 		if s.chaos.DelayedDeltas.Enabled {
+			// s.rng is guarded by s.mu (which every caller of this method
+			// holds), so the delay draw stays deterministic in Seq order.
 			delay := s.rng.nextDelay(s.chaos.DelayedDeltas.MinDelay, s.chaos.DelayedDeltas.MaxDelay)
-			go func(d protocol.Delta, delay time.Duration) {
-				time.Sleep(delay)
-				s.transport.SendDelta(d)
-			}(d, delay)
+			// BUG-284: enqueue for in-order, per-subscription delivery
+			// instead of spawning an independent goroutine per delta.
+			// Independent per-delta sleeps let a later-Seq delta with a
+			// shorter delay overtake an earlier one; a single pump draining
+			// this FIFO queue sequentially guarantees delivery order ==
+			// enqueue order == Seq/Tick order (GR#21). No map-range or other
+			// nondeterministic ordering sits in the delivery path.
+			// BUG-283: the pump re-checks subscription liveness before every
+			// send, so a delta queued before an Unsubscribe is dropped.
+			sub.pending = append(sub.pending, delayedDelta{delta: d, delay: delay})
+			if !sub.pumpRunning {
+				sub.pumpRunning = true
+				go s.runDelayPump(sub)
+			}
 			continue
 		}
 		s.transport.SendDelta(d)
+	}
+}
+
+// runDelayPump drains sub.pending one delta at a time, in strict FIFO
+// (== Seq) order, waiting each delta's artificial delay before sending it.
+// Exactly one pump runs per subscription while its queue is non-empty;
+// emitDeltaLocked (re)starts it under s.mu when it enqueues into an idle
+// queue, and it exits when the queue drains or the subscription ends. It
+// is the joint fix for BUG-283 and BUG-284:
+//
+//   - BUG-284 (out-of-order delivery): serialising every delayed send for a
+//     subscription through this single goroutine makes delivery order equal
+//     enqueue order, which emitDeltaLocked produces in ascending Seq. The
+//     old one-goroutine-per-delta design let independent sleeps reorder
+//     deltas, tripping SeqTracker.Observe's ok=false "treat as a bug" path.
+//
+//   - BUG-283 (use-after-unsubscribe): sub.done (closed by handleUnsubscribe)
+//     aborts an in-flight delay immediately, and before every send the pump
+//     re-checks — under the SAME s.mu handleUnsubscribe uses to delete the
+//     subscription — that the subscription is still live. A delta queued
+//     before an Unsubscribe is therefore dropped, never delivered.
+//
+// transport.SendDelta is non-blocking (it evicts the oldest queued delta
+// rather than blocking — transport.go), so holding s.mu across the send is
+// safe and is what makes the liveness check and the send atomic against
+// Unsubscribe.
+func (s *StubEngine) runDelayPump(sub *subState) {
+	// SEC-020 copyguard: this goroutine takes s.mu below, so — like every
+	// other s.mu-taking path in this file — it refuses to run on a struct
+	// copy BEFORE ever touching the lock (checkNotCopied is a lock-free
+	// atomic load; the pre-lock ordering is load-bearing, see its doc
+	// comment). It is only ever spawned by emitDeltaLocked, itself reached
+	// only through a command handler that already passed checkNotCopied on
+	// the real engine, so this never fires in practice — it is defence in
+	// depth. A rejected copy simply abandons the pump (it holds no aliased
+	// resource to release: pending/done belong to the copy's own subState).
+	if err := s.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return
+	}
+	for {
+		// Pop the next queued delta in FIFO order (BUG-284).
+		s.mu.Lock()
+		if len(sub.pending) == 0 {
+			sub.pumpRunning = false
+			s.mu.Unlock()
+			return
+		}
+		dd := sub.pending[0]
+		sub.pending = sub.pending[1:]
+		s.mu.Unlock()
+
+		// Wait this delta's artificial delay, aborting the instant the
+		// subscription is unsubscribed so nothing queued behind it lingers
+		// (BUG-283). A zero delay needs no wait; the liveness check below
+		// still guards it.
+		if dd.delay > 0 {
+			timer := time.NewTimer(dd.delay)
+			select {
+			case <-sub.done:
+				timer.Stop()
+				s.mu.Lock()
+				sub.pending = nil
+				sub.pumpRunning = false
+				s.mu.Unlock()
+				return
+			case <-timer.C:
+			}
+		}
+
+		// Liveness-checked send under s.mu (BUG-283): if the subscription was
+		// unsubscribed while this delta waited, drop it and everything behind
+		// it. handleUnsubscribe deletes from s.subs under this same lock, so
+		// a delta can never be delivered for an already-processed Unsubscribe.
+		s.mu.Lock()
+		if _, alive := s.subs[sub.id]; !alive {
+			sub.pending = nil
+			sub.pumpRunning = false
+			s.mu.Unlock()
+			return
+		}
+		s.transport.SendDelta(dd.delta)
+		s.mu.Unlock()
 	}
 }
 
