@@ -24,6 +24,7 @@ import {
   PIPE_TIERS,
 } from '../sim/data';
 import { useSim, levelOf, demandOf } from '../sim/store';
+import { publishMapUi } from '../sim/uistate';
 import { useBusy } from './Busy';
 import type { Building, ZoneKind } from '../sim/types';
 import { fmtMoney, fmtNum } from '../sim/utils';
@@ -78,6 +79,17 @@ export function MapView() {
     const h = setInterval(() => setFrame((f) => f + 1), 50);
     return () => clearInterval(h);
   }, []);
+
+  // FEAT-1972079886: publish camera / selection / layer state to the debug
+  // mailbox on every change, so the debug.json capture can report what the
+  // player is looking at. Write-only — nothing here re-renders off it.
+  useEffect(() => {
+    publishMapUi({
+      view: { zoom: view.zoom, cx: view.cx, cy: view.cy },
+      selectedBuildingId: selected?.id ?? null,
+      showWater,
+    });
+  }, [view, selected, showWater]);
 
   const geom = useMemo(() => {
     if (size.w <= 0 || size.h <= 0) return { s: 0, ox: 0, oy: 0 };

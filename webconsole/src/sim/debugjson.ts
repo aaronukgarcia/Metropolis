@@ -1,0 +1,602 @@
+// debugjson.ts — FEAT-1972079886: the FULL-STATE debug.json capture.
+//
+// Aaron's requirement: the debug screen captures EVERYTHING about the running
+// game — every UI tab's status — written into debug.json. This module is the
+// single serializer for that file. It is PURE (no React, no Date.now, no
+// localStorage): everything comes in through its two arguments, so node --test
+// exercises the exact shipped logic and the same inputs always yield the same
+// JSON (determinism is asserted by test/debugjson.test.mjs).
+//
+// RAW NUMBERS ONLY. Unlike snapshot.ts (the human-facing display frame), no
+// value in this file goes through fmtMoney/fmtNum — debug.json is a machine
+// artefact; the DISPLAY stays formatted elsewhere. The tests assert no
+// £-prefixed figure ever appears in the serialized output.
+//
+// COVERAGE GUARANTEE. SIMSTATE_COVERAGE below maps EVERY top-level SimState
+// key to the JSON path where it is represented. It is typed
+// Record<keyof SimState, string>, so adding a SimState field without deciding
+// where it lands in debug.json is a compile error — and the completeness test
+// walks the runtime keys of a real state object against this map and resolves
+// each path in the built JSON, so a forgotten serialization goes RED even if
+// the type is widened. A future tab that adds sim state cannot silently skip
+// debug.json.
+
+import type {
+  Building,
+  Clipboard,
+  FlowItem,
+  LedgerEntry,
+  LevelUpNotice,
+  SimState,
+  TaxRates,
+  TickRecord,
+  Tool,
+  ZoneKind,
+} from './types.ts';
+import {
+  FAMILIES,
+  MAP_H,
+  MAP_W,
+  MILESTONES,
+  PHYSICAL_ENTITIES,
+  PIPE_TIERS,
+  POLICIES,
+  SPECS,
+  UNIT_REGISTRY,
+  blockOccupancy,
+  countByKind,
+  densityTier,
+  isOnline,
+  plantEffServed,
+  powerStats,
+  residentsCapacity,
+  serviceDemandOf,
+  totalJobs,
+  waterBalanceOf,
+} from './data.ts';
+import {
+  HISTORY_CAP,
+  LEDGER_CAP,
+  SPEED_MS,
+  approvalOf,
+  demandOf,
+  levelOf,
+  wellbeingOf,
+  xpForLevel,
+} from './engine.ts';
+import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
+import type { MapUiState } from './uistate.ts';
+
+/** Bumped when the serialized shape changes incompatibly. */
+export const DEBUG_JSON_FORMAT = 'metropolis-debug/1';
+
+/**
+ * One captured error. Shape contract for the FEAT-1972079885 reconciliation:
+ * the metropolis-ui error-capture port lands entries of exactly this shape
+ * (epoch-ms timestamp + message); today they come from backend.recentErrors().
+ */
+export interface CapturedError {
+  at: number;
+  msg: string;
+}
+
+/** Everything the pure builder needs that is NOT sim state. */
+export interface DebugUiInput {
+  /** Git-derived app version (versionRaw from sim/version — passed in, not
+   * imported, so this module stays node-resolvable without the generated
+   * version file). */
+  appVersion: string;
+  /** Epoch-ms of the frozen 15 s frame this JSON belongs to. */
+  frameAtMs: number;
+  /** Last-published map camera / selection (uistate.ts). */
+  map: MapUiState;
+  /** Captured errors (empty array until FEAT-1972079885 feeds it). */
+  errors: CapturedError[];
+}
+
+export interface DebugJsonBuilding {
+  id: number;
+  spec: string;
+  x: number;
+  y: number;
+  builtTick: number | null;
+  online: boolean;
+  /** Density/level tier 1..3 for zone blocks, null for network/services. */
+  tier: 1 | 2 | 3 | null;
+  /** Occupancy estimate 0..1 (3 dp), null where not applicable. */
+  occ: number | null;
+}
+
+export interface DebugJson {
+  meta: {
+    format: string;
+    appVersion: string;
+    generatedAt: string;
+    generatedAtMs: number;
+    tick: number;
+    speed: SimState['speed'];
+    tickMs: number;
+  };
+  sim: {
+    tick: number;
+    speed: SimState['speed'];
+    funds: number;
+    loanBalance: number;
+    population: number;
+    xp: number;
+    level: number;
+    xpToNext: number;
+    taxRates: TaxRates;
+    policies: SimState['policies'];
+    approval: number;
+    wellbeing: { overall: number; parts: { label: string; value: number }[] };
+    nextId: number;
+    nextLedgerId: number;
+    lastRewardedLevel: number;
+    notice: LevelUpNotice | null;
+  };
+  flows: {
+    inflows: FlowItem[];
+    outflows: FlowItem[];
+    incomePerTick: number;
+    expensePerTick: number;
+    netPerTick: number;
+  };
+  demand: {
+    zones: { residential: number; commercial: number; industrial: number };
+    services: { id: string; label: string; value: number; spec: string }[];
+    power: { needMw: number; capMw: number };
+  };
+  fiscal: {
+    overview: {
+      treasury: number;
+      netPerTick: number;
+      incomePerTick: number;
+      expensePerTick: number;
+      loanBalance: number;
+      /** net/income fraction, null when income is 0. */
+      margin: number | null;
+      structures: number;
+    };
+    flowShares: {
+      inflows: { label: string; value: number; share: number | null }[];
+      outflows: { label: string; value: number; share: number | null }[];
+    };
+    ledger: { count: number; cap: number; entries: LedgerEntry[] };
+    trend: {
+      count: number;
+      cap: number;
+      history: TickRecord[];
+      /** LeftDock TrendSummary over the last 72 ticks; null with <2 samples. */
+      summary: {
+        window: number;
+        avgNetPerTick: number;
+        fundsGrowth: number;
+        popGrowth: number;
+      } | null;
+    };
+  };
+  info: {
+    status: {
+      approval: number;
+      wellbeingOverall: number;
+      wellbeingParts: { label: string; value: number }[];
+      population: number;
+      housingCapacity: number;
+      jobs: number;
+      solvent: boolean;
+      netPerTick: number;
+      structuresByFamily: { kind: ZoneKind; label: string; count: number; upkeep: number }[];
+    };
+    rates: {
+      taxRates: TaxRates;
+      avgRate: number;
+      yieldsPerTick: TaxRates;
+      basis: { citizens: number; commercialZones: number; industrialPlants: number };
+    };
+    units: {
+      registry: typeof UNIT_REGISTRY;
+      physicalEntities: typeof PHYSICAL_ENTITIES;
+    };
+    water: {
+      cleanCapacity: number;
+      wasteCapacity: number;
+      ratio: number;
+      leak: boolean;
+      /** Raw per-plant pipe tier index record (SimState.pipeTier). */
+      pipeTiers: Record<number, number>;
+      plants: {
+        id: number;
+        spec: string;
+        name: string;
+        x: number;
+        y: number;
+        pipeTier: number;
+        pipeLabel: string;
+        effServed: number;
+      }[];
+    };
+    earnings: {
+      rows: {
+        type: string;
+        basisCount: number;
+        basisUnit: string;
+        grossPerTick: number;
+        eachPerTick: number | null;
+      }[];
+      totalInPerTick: number;
+      totalOutPerTick: number;
+      margin: number | null;
+    };
+    milestones: {
+      achieved: string[];
+      all: { id: string; label: string; detail: string; met: boolean }[];
+    };
+    experience: {
+      level: number;
+      xp: number;
+      xpToNext: number;
+      ladder: { level: number; unlocks: string[] }[];
+    };
+    specialists: {
+      id: string;
+      name: string;
+      unlockLevel: number;
+      locked: boolean;
+      count: number;
+    }[];
+    policy: { id: string; label: string; on: boolean }[];
+  };
+  map: {
+    tool: Tool;
+    movingId: number | null;
+    selectedBuildingId: number | null;
+    view: { zoom: number; cx: number; cy: number } | null;
+    showWater: boolean;
+    clipboard: Clipboard | null;
+    grid: { w: number; h: number; tileMetres: number };
+  };
+  buildings: {
+    count: number;
+    byKind: Partial<Record<ZoneKind, number>>;
+    list: DebugJsonBuilding[];
+  };
+  errors: CapturedError[];
+  snapshotFrame: {
+    takenAtMs: number;
+    takenAt: string;
+    refreshPeriodMs: number;
+  };
+}
+
+/**
+ * Where every top-level SimState key surfaces in the built DebugJson, as a
+ * dot-path. Typed exhaustively over keyof SimState — see the coverage
+ * guarantee in the file header. Paths are resolved at test time against a
+ * real built object, so a stale path here also fails.
+ */
+export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
+  tick: 'meta.tick',
+  speed: 'meta.speed',
+  funds: 'sim.funds',
+  loanBalance: 'sim.loanBalance',
+  population: 'sim.population',
+  xp: 'sim.xp',
+  taxRates: 'sim.taxRates',
+  policies: 'sim.policies',
+  buildings: 'buildings.list',
+  nextId: 'sim.nextId',
+  movingId: 'map.movingId',
+  tool: 'map.tool',
+  clipboard: 'map.clipboard',
+  pipeTier: 'info.water.pipeTiers',
+  history: 'fiscal.trend.history',
+  ledger: 'fiscal.ledger.entries',
+  nextLedgerId: 'sim.nextLedgerId',
+  lastFlows: 'flows',
+  lastRewardedLevel: 'sim.lastRewardedLevel',
+  notice: 'sim.notice',
+};
+
+const round3 = (n: number) => Math.round(n * 1000) / 1000;
+
+function share(value: number, total: number): number | null {
+  return total > 0 ? round3(value / total) : null;
+}
+
+/** Build the complete raw-number debug.json object from sim + UI state. */
+export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
+  const income = s.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
+  const expense = s.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
+  const net = income - expense;
+  const level = levelOf(s.xp);
+  const xpToNext = Math.max(0, xpForLevel(level + 1) - s.xp);
+  const wb = wellbeingOf(s);
+  const approval = approvalOf(s);
+  const pw = powerStats(s);
+  const zoneDemand = demandOf(s);
+  const c = countByKind(s.buildings);
+  const bal = waterBalanceOf(s);
+  const generatedAt = new Date(ui.frameAtMs).toISOString();
+
+  // buildings — full per-building list + present-kind counts
+  const byKind: Partial<Record<ZoneKind, number>> = {};
+  for (const [kind, n] of Object.entries(c) as [ZoneKind, number][]) {
+    if (n > 0) byKind[kind] = n;
+  }
+  const list: DebugJsonBuilding[] = s.buildings.map((b: Building) => {
+    const sp = SPECS[b.spec];
+    const occ = blockOccupancy(s, b);
+    return {
+      id: b.id,
+      spec: b.spec,
+      x: b.x,
+      y: b.y,
+      builtTick: b.builtTick ?? null,
+      online: sp ? isOnline(s, b) : false,
+      tier: sp && sp.category === 'zones' ? densityTier(sp) : null,
+      occ: occ == null ? null : round3(occ),
+    };
+  });
+
+  // fiscal trend summary — mirrors LeftDock's TrendSummary, raw
+  const h72 = s.history.slice(-72);
+  const trendSummary =
+    h72.length < 2
+      ? null
+      : (() => {
+          const avgNet = h72.reduce((a, b) => a + b.income - b.expense, 0) / h72.length;
+          const first = h72[0];
+          const last = h72[h72.length - 1];
+          return {
+            window: h72.length,
+            avgNetPerTick: round3(avgNet),
+            fundsGrowth:
+              first.funds !== 0 ? round3((last.funds - first.funds) / Math.abs(first.funds)) : 0,
+            popGrowth:
+              first.population > 0
+                ? round3((last.population - first.population) / first.population)
+                : 0,
+          };
+        })();
+
+  // Status tab structures table (nonzero families, matching the tab)
+  const structuresByFamily = FAMILIES.flatMap((fam) => {
+    let count = 0;
+    let upkeep = 0;
+    for (const b of s.buildings) {
+      const sp = SPECS[b.spec];
+      if (sp?.kind === fam.kind) {
+        count++;
+        upkeep += sp.upkeep;
+      }
+    }
+    return count > 0 ? [{ kind: fam.kind, label: fam.label, count, upkeep }] : [];
+  });
+
+  // Rates tab yields (same formulas as the tab / computeFlows bases)
+  const t = s.taxRates;
+  const yieldsPerTick: TaxRates = {
+    residential: Math.round((s.population * t.residential * 2) / 100),
+    commercial: Math.round(c.commercial * t.commercial * 0.4),
+    industrial: Math.round(c.industrial * t.industrial * 0.55),
+  };
+
+  // Water tab plants
+  const plants = s.buildings
+    .filter((b) => SPECS[b.spec]?.kind === 'water')
+    .map((b) => {
+      const sp = SPECS[b.spec];
+      const tier = s.pipeTier[b.id] ?? 0;
+      return {
+        id: b.id,
+        spec: b.spec,
+        name: sp.name,
+        x: b.x,
+        y: b.y,
+        pipeTier: tier,
+        pipeLabel: PIPE_TIERS[tier].label,
+        effServed: plantEffServed(s, b),
+      };
+    });
+
+  // Earnings tab rows (raw mirror of EarningsTab)
+  const inflowValue = (label: string) =>
+    s.lastFlows.inflows.find((f) => f.label === label)?.value ?? 0;
+  const officeCount = s.buildings.filter((b) => SPECS[b.spec]?.kind === 'office').length;
+  const earningsRows = [
+    { type: 'Residential', basisCount: Math.max(s.population, 1), basisUnit: 'per citizen', grossPerTick: inflowValue('Council Tax') },
+    { type: 'Commercial', basisCount: Math.max(c.commercial, 1), basisUnit: 'per zone', grossPerTick: inflowValue('Business Tax') },
+    { type: 'Offices', basisCount: Math.max(officeCount, 1), basisUnit: 'per block', grossPerTick: inflowValue('Office Tax') },
+    { type: 'Industrial', basisCount: Math.max(c.industrial, 1), basisUnit: 'per plant', grossPerTick: inflowValue('Freight Tax') },
+    { type: 'Tourism', basisCount: s.policies.tourismDrive ? Math.max(s.population, 1) : 0, basisUnit: 'policy-driven', grossPerTick: inflowValue('Tourism') },
+  ].map((r) => ({
+    ...r,
+    eachPerTick: r.basisCount > 0 ? round3(r.grossPerTick / r.basisCount) : null,
+  }));
+  const earningsIn = earningsRows.reduce((a, r) => a + r.grossPerTick, 0);
+
+  // Milestones tab
+  const milestonesAll = MILESTONES.map((m) => ({
+    id: m.id,
+    label: m.label,
+    detail: m.detail,
+    met: m.test(s),
+  }));
+
+  // Experience tab unlock ladder (same filter as XpTab)
+  const byUnlock = new Map<number, string[]>();
+  for (const sp of Object.values(SPECS)) {
+    if (sp.unlock > 20 || sp.category === 'network') continue;
+    const arr = byUnlock.get(sp.unlock) ?? [];
+    arr.push(sp.name);
+    byUnlock.set(sp.unlock, arr);
+  }
+  const ladder = Array.from({ length: 20 }, (_, i) => ({
+    level: i + 1,
+    unlocks: byUnlock.get(i + 1) ?? [],
+  }));
+
+  // Specialists tab (same filter as SpecialistsTab)
+  const specialists = Object.values(SPECS)
+    .filter((sp) => sp.kind === 'landmark' || sp.id === 'uni')
+    .map((sp) => ({
+      id: sp.id,
+      name: sp.name,
+      unlockLevel: sp.unlock,
+      locked: level < sp.unlock,
+      count: s.buildings.filter((b) => b.spec === sp.id).length,
+    }));
+
+  return {
+    meta: {
+      format: DEBUG_JSON_FORMAT,
+      appVersion: ui.appVersion,
+      generatedAt,
+      generatedAtMs: ui.frameAtMs,
+      tick: s.tick,
+      speed: s.speed,
+      tickMs: SPEED_MS[s.speed],
+    },
+    sim: {
+      tick: s.tick,
+      speed: s.speed,
+      funds: s.funds,
+      loanBalance: s.loanBalance,
+      population: s.population,
+      xp: s.xp,
+      level,
+      xpToNext,
+      taxRates: s.taxRates,
+      policies: s.policies,
+      approval,
+      wellbeing: wb,
+      nextId: s.nextId,
+      nextLedgerId: s.nextLedgerId,
+      lastRewardedLevel: s.lastRewardedLevel,
+      notice: s.notice,
+    },
+    flows: {
+      inflows: s.lastFlows.inflows,
+      outflows: s.lastFlows.outflows,
+      incomePerTick: income,
+      expensePerTick: expense,
+      netPerTick: net,
+    },
+    demand: {
+      zones: zoneDemand,
+      services: serviceDemandOf(s),
+      power: { needMw: pw.need, capMw: pw.cap },
+    },
+    fiscal: {
+      overview: {
+        treasury: s.funds,
+        netPerTick: net,
+        incomePerTick: income,
+        expensePerTick: expense,
+        loanBalance: s.loanBalance,
+        margin: share(net, income),
+        structures: s.buildings.length,
+      },
+      flowShares: {
+        inflows: s.lastFlows.inflows.map((f) => ({ ...f, share: share(f.value, income) })),
+        outflows: s.lastFlows.outflows.map((f) => ({ ...f, share: share(f.value, expense) })),
+      },
+      ledger: { count: s.ledger.length, cap: LEDGER_CAP, entries: s.ledger },
+      trend: { count: s.history.length, cap: HISTORY_CAP, history: s.history, summary: trendSummary },
+    },
+    info: {
+      status: {
+        approval,
+        wellbeingOverall: wb.overall,
+        wellbeingParts: wb.parts,
+        population: s.population,
+        housingCapacity: residentsCapacity(s),
+        jobs: totalJobs(s),
+        solvent: net >= 0,
+        netPerTick: net,
+        structuresByFamily,
+      },
+      rates: {
+        taxRates: s.taxRates,
+        avgRate: round3((t.residential + t.commercial + t.industrial) / 3),
+        yieldsPerTick,
+        basis: {
+          citizens: s.population,
+          commercialZones: c.commercial,
+          industrialPlants: c.industrial,
+        },
+      },
+      units: { registry: UNIT_REGISTRY, physicalEntities: PHYSICAL_ENTITIES },
+      water: {
+        cleanCapacity: bal.clean,
+        wasteCapacity: bal.waste,
+        ratio: round3(bal.ratio),
+        leak: bal.leak,
+        pipeTiers: s.pipeTier,
+        plants,
+      },
+      earnings: {
+        rows: earningsRows,
+        totalInPerTick: earningsIn,
+        totalOutPerTick: expense,
+        margin: share(earningsIn - expense, earningsIn),
+      },
+      milestones: {
+        achieved: milestonesAll.filter((m) => m.met).map((m) => m.label),
+        all: milestonesAll,
+      },
+      experience: { level, xp: s.xp, xpToNext, ladder },
+      specialists,
+      policy: POLICIES.map((p) => ({ id: p.id, label: p.label, on: s.policies[p.id] })),
+    },
+    map: {
+      tool: s.tool,
+      movingId: s.movingId,
+      selectedBuildingId: ui.map.selectedBuildingId,
+      view: ui.map.view,
+      showWater: ui.map.showWater,
+      clipboard: s.clipboard,
+      grid: { w: MAP_W, h: MAP_H, tileMetres: 50 },
+    },
+    buildings: { count: s.buildings.length, byKind, list },
+    errors: ui.errors,
+    snapshotFrame: {
+      takenAtMs: ui.frameAtMs,
+      takenAt: generatedAt,
+      refreshPeriodMs: SNAPSHOT_REFRESH_MS,
+    },
+  };
+}
+
+// Placeholder token for the buildings list during pretty-printing. Never
+// appears in any sim/spec/ledger string, so the single replacement below is
+// unambiguous.
+const BUILDINGS_MARK = '@@BUILDINGS_LIST@@';
+
+/**
+ * Serialize a DebugJson to its canonical pretty text — indent 2 everywhere
+ * EXCEPT buildings.list, whose entries are rendered one compact line each.
+ * That keeps a 7,000-building city's file readable AND bounded: fully
+ * indenting each building object would multiply the file several times over
+ * for zero information. The JSON itself stays complete — nothing is elided.
+ */
+export function debugJsonText(dj: DebugJson): string {
+  const withMark = {
+    ...dj,
+    buildings: {
+      ...dj.buildings,
+      list: BUILDINGS_MARK as unknown as DebugJsonBuilding[],
+    },
+  };
+  const pretty = JSON.stringify(withMark, null, 2);
+  const rows = dj.buildings.list.map((b) => '      ' + JSON.stringify(b));
+  const inline = rows.length === 0 ? '[]' : '[\n' + rows.join(',\n') + '\n    ]';
+  const token = JSON.stringify(BUILDINGS_MARK); // the quoted marker in `pretty`
+  const i = pretty.indexOf(token);
+  // The marker was placed by us two lines up; if it is somehow absent, return
+  // the marked text rather than throwing — a debug artefact must never crash
+  // the debug screen.
+  if (i < 0) return pretty;
+  return pretty.slice(0, i) + inline + pretty.slice(i + token.length);
+}

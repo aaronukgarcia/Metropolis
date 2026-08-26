@@ -17,7 +17,9 @@ import { Panel } from '../Tabs';
 import { fmtMoney, fmtNum, fmtPct } from '../../sim/utils';
 import { useBusy } from '../Busy';
 import { commitDebug, pendingCommits, recentErrors } from '../../sim/backend';
-import { buildDebugSnapshot } from '../../sim/snapshot';
+import { buildDebugJson, debugJsonText } from '../../sim/debugjson';
+import { currentMapUi } from '../../sim/uistate';
+import { versionRaw } from '../../sim/version';
 import { nextRefreshDue } from '../../sim/throttle';
 
 const TABS = [
@@ -507,9 +509,20 @@ function DebugTab() {
   const [status, setStatus] = useState<string | null>(null);
   const [pending, setPending] = useState(pendingCommits());
 
+  // FEAT-1972079886: the frame is now the FULL-STATE debug.json — every UI
+  // tab's status, raw numbers — built by the pure serializer in debugjson.ts.
+  // Non-sim inputs (version, wall clock, map camera, captured errors) are
+  // gathered HERE, at frame time, so the builder stays pure and the frozen
+  // frame is a complete, self-consistent capture of that instant.
   const takeFrame = (s: typeof state) => {
-    const snap = buildDebugSnapshot(s);
-    return { at: Date.now(), snap, text: JSON.stringify(snap, null, 2) };
+    const at = Date.now();
+    const dj = buildDebugJson(s, {
+      appVersion: versionRaw,
+      frameAtMs: at,
+      map: currentMapUi(),
+      errors: recentErrors(),
+    });
+    return { at, dj, text: debugJsonText(dj) };
   };
   const [frame, setFrame] = useState(() => takeFrame(state));
   const [now, setNow] = useState(() => Date.now());
@@ -528,12 +541,26 @@ function DebugTab() {
 
   function commit() {
     run(async () => {
-      setStatus('Committing snapshot…');
+      setStatus('Committing debug.json…');
       // Commit exactly the frame on screen (WYSIWYG), not fresher live state.
-      const r = await commitDebug(frame.snap);
+      const r = await commitDebug(frame.dj);
       setStatus(r.message);
       setPending(pendingCommits());
     });
+  }
+
+  // Download the EXACT on-screen frozen text as debug.json (WYSIWYG — the file
+  // is byte-identical to the <pre> contents, not a fresher re-serialization).
+  function download() {
+    const blob = new Blob([frame.text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'debug.json';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
   return (
     <>
@@ -544,8 +571,11 @@ function DebugTab() {
         <button className="btn danger" onClick={() => dispatch({ type: 'reset' })}>Reset city</button>
       </div>
       <div className="row-actions wrap">
-        <button className="btn accent" title="Save the on-screen debug snapshot to the backend for processing (queues locally if offline)" onClick={commit}>
+        <button className="btn accent" title="Save the on-screen debug.json to the backend for processing (queues locally if offline)" onClick={commit}>
           Commit snapshot
+        </button>
+        <button className="btn" title="Save the on-screen frozen frame to a local debug.json file" onClick={download}>
+          Download debug.json
         </button>
         <button
           className="btn"
