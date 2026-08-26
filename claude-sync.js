@@ -1501,7 +1501,10 @@ async function cmdStatus(db, { full = false } = {}) {
     if (acts.length) {
       console.log('\nRecent activity:');
       for (const a of acts.reverse()) {
-        console.log(`  [${a.ts.toISOString().replace('T', ' ').slice(0, 19)}] ${a.name ? a.name + ': ' : ''}${a.message}`);
+        // BUG-264 fix: with dateStrings:true, a.ts is a string like "2026-08-18 23:01:53"
+        // (local time, no timezone info). Use it directly without toISOString() tz conversion.
+        const tsStr = typeof a.ts === 'string' ? a.ts : a.ts.toISOString().replace('T', ' ');
+        console.log(`  [${tsStr.slice(0, 19)}] ${a.name ? a.name + ': ' : ''}${a.message}`);
       }
     }
 

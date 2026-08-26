@@ -34,6 +34,7 @@ function connectionOptions(overrides = {}) {
     user: process.env.METRO_DB_USER || 'root',
     password: process.env.METRO_DB_PASSWORD || '',
     database: process.env.METRO_DB_NAME || 'metro',
+    dateStrings: true,  // BUG-264: return TIMESTAMP/DATETIME fields as strings to avoid tz skew
     ...overrides,
   };
 }

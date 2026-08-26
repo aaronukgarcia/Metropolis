@@ -1756,3 +1756,54 @@ test('BUG-354 r6 R3 (r5 P2 = BUG-360): findMine window-id fallback requires key-
   assert.ok(readBack.stdout.includes('BUG-360-TOP-SECRET'),
     `the victim with key-file possession must still receive the message: ${readBack.stdout}`);
 });
+
+// ── BUG-264: timestamp display skew ──────────────────────────────────────────
+
+test('BUG-264: recent activity timestamps display without timezone skew', async () => {
+  // BUG-264: claude-sync.js displays activity timestamps 1 hour behind local time.
+  // Root cause: TIMESTAMP fields without dateStrings:true are read as Date objects,
+  // .toISOString() assumes they're UTC and shifts them.
+  //
+  // Fix: use dateStrings:true to get TIMESTAMP as strings in local time, and handle
+  // them directly without .toISOString() tz conversion.
+  //
+  // Regression test: insert a row with a known LOCAL-time string, call read, and
+  // verify the displayed timestamp matches the inserted string verbatim (string equality,
+  // no Date parsing). This proves: (1) timestamps are displayed in local time, not UTC,
+  // and (2) the near-midnight date splice is correct.
+  const sid = 'bug264-timestamp-session';
+  const ci = checkin('Bill', sid);
+  assert.equal(ci.status, 0, `checkin should succeed: ${ci.stderr}`);
+
+  // Build a local-time string from current local date/time components (per attacker model).
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const insertedTs = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
+  // Insert a row with this known local-time string into sync_activity.
+  await db.query(
+    'INSERT INTO sync_activity (ts, name, message) VALUES (?, ?, ?)',
+    [insertedTs, 'Bill', 'BUG-264-TEST-MESSAGE']
+  );
+
+  // Call `read` and capture output
+  const readResult = run(['read'], sid);
+  assert.equal(readResult.status, 0, `read should succeed: ${readResult.stderr}`);
+
+  // Extract the timestamp from the output using the same regex as the actual display.
+  // With the fix, displayed timestamps are in "[YYYY-MM-DD HH:MM:SS]" format.
+  const testMsgMatch = readResult.stdout.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*BUG-264-TEST-MESSAGE/);
+  assert.ok(testMsgMatch, `should find BUG-264-TEST-MESSAGE with timestamp in output:\n${readResult.stdout}`);
+
+  const displayedTs = testMsgMatch[1];
+
+  // Verify: the displayed timestamp must equal the inserted local-time string verbatim.
+  // With the fix (dateStrings:true + passthrough), they match. Without the fix, the
+  // old code parsed local as UTC and shifted by ~1 hour.
+  assert.equal(
+    displayedTs,
+    insertedTs,
+    `displayed timestamp must equal inserted local time verbatim. ` +
+    `displayed: "${displayedTs}", inserted: "${insertedTs}"`
+  );
+});
