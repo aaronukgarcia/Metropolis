@@ -81,7 +81,7 @@ func ParseWeaknessText(text string) (WeaknessReport, error) {
 		rep.OpenFindings += open
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
-		return WeaknessReport{}, errs.Wrap(codeWeaknessSourceUnavailable, errs.NewCorrelationID(), scanErr, nil)
+		return WeaknessReport{}, weaknessDataFailed(errs.NewCorrelationID(), "scanner error: "+scanErr.Error())
 	}
 	if len(rep.Classes) == 0 {
 		// Neither the "no findings" sentinel nor any parseable row —
@@ -101,7 +101,7 @@ func RunWeakness(ctx context.Context, repoRoot string) (WeaknessReport, error) {
 	correlationID := errs.NewCorrelationID()
 	out, err := runBowCommand(ctx, repoRoot, "weakness")
 	if err != nil {
-		return WeaknessReport{}, errs.Wrap(codeWeaknessSourceUnavailable, correlationID, err, map[string]any{"command": "weakness"})
+		return WeaknessReport{}, weaknessDataFailed(correlationID, err.Error())
 	}
 	return ParseWeaknessText(out)
 }

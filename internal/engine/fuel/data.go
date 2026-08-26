@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
@@ -171,10 +170,7 @@ func (f *fuelData) Validate() error {
 func loadFuelData(dir, correlationID string) (fuelData, error) {
 	f, err := data.Load[fuelData, *fuelData](filepath.Join(dir, fileFuel), correlationID)
 	if err != nil {
-		return fuelData{}, errs.Wrap(ErrFuelDataInvalid, correlationID, err, map[string]any{
-			"dir":   dir,
-			"cause": err.Error(),
-		})
+		return fuelData{}, fuelDataInvalid(correlationID, err)
 	}
 	return f, nil
 }

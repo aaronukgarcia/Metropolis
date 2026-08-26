@@ -94,7 +94,7 @@ func RunLint(ctx context.Context, repoRoot string) (LintReport, error) {
 	correlationID := errs.NewCorrelationID()
 	out, err := runBowCommand(ctx, repoRoot, "lint")
 	if err != nil {
-		return LintReport{}, errs.Wrap(codeLintSourceUnavailable, correlationID, err, map[string]any{"command": "lint"})
+		return LintReport{}, lintReportFailed(correlationID, err.Error())
 	}
 	return ParseLintText(out)
 }

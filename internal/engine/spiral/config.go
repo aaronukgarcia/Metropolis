@@ -4,8 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"sync"
-
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
 // This file loads engine.spiral's GR#15 data-sourced tuning: the decay/
@@ -99,10 +97,7 @@ var (
 func loadConfig(correlationID string) (config, error) {
 	configOnce.Do(func() {
 		if err := json.Unmarshal(embeddedSpiralJSON, &loadedCfg); err != nil {
-			configErr = errs.Wrap(ErrSpiralConfigInvalid, correlationID, err, map[string]any{
-				"file":  "spiral.json",
-				"cause": err.Error(),
-			})
+			configErr = spiralConfigInvalidWrapped(correlationID, "spiral.json", err)
 			return
 		}
 		if err := validateConfig(loadedCfg, correlationID); err != nil {
@@ -127,33 +122,23 @@ func validateConfig(c config, correlationID string) error {
 		c.Decay.DemolitionCostPerMonthMicropounds <= 0 ||
 		c.Decay.SeverityGrowthPerMonth <= 0 ||
 		c.Decay.AbandonSeverityStart <= 0 {
-		return errs.New(ErrSpiralConfigInvalid, correlationID, map[string]any{
-			"file": "spiral.json", "field": "decay",
-		})
+		return spiralConfigInvalid(correlationID, "spiral.json", "decay")
 	}
 	if c.Blight.SpreadSeverityThreshold <= 0 || c.Blight.MaxSeverity < c.Blight.SpreadSeverityThreshold {
-		return errs.New(ErrSpiralConfigInvalid, correlationID, map[string]any{
-			"file": "spiral.json", "field": "blight",
-		})
+		return spiralConfigInvalid(correlationID, "spiral.json", "blight")
 	}
 	if c.Recovery.InvestmentCostMicropounds <= 0 ||
 		c.Recovery.InvestmentSeverityReduction <= 0 ||
 		c.Recovery.TaxReliefCostPerCellMicropounds <= 0 ||
 		c.Recovery.TaxReliefSeverityReduction <= 0 {
-		return errs.New(ErrSpiralConfigInvalid, correlationID, map[string]any{
-			"file": "spiral.json", "field": "recovery",
-		})
+		return spiralConfigInvalid(correlationID, "spiral.json", "recovery")
 	}
 	if c.GhostCity.WarningThresholdMonths <= 0 || c.GhostCity.MinWarningLeadMonths <= 0 ||
 		c.GhostCity.Disclosure == "" {
-		return errs.New(ErrSpiralConfigInvalid, correlationID, map[string]any{
-			"file": "spiral.json", "field": "ghostCity",
-		})
+		return spiralConfigInvalid(correlationID, "spiral.json", "ghostCity")
 	}
 	if c.Stage.EmigrationAttractivenessThreshold < 0 {
-		return errs.New(ErrSpiralConfigInvalid, correlationID, map[string]any{
-			"file": "spiral.json", "field": "stage",
-		})
+		return spiralConfigInvalid(correlationID, "spiral.json", "stage")
 	}
 	return nil
 }

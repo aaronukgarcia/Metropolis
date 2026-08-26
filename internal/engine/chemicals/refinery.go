@@ -2,6 +2,7 @@ package chemicals
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -520,7 +521,7 @@ func (r *Refinery) Operate(tick int64, crudeTonnes int64) (OperateResult, error)
 	// downstream accounting consumer would record (SEC-165). Zero is a valid
 	// "no crude this tick" request, mirroring ImportRefined's tonnes < 0 rule.
 	if crudeTonnes < 0 {
-		return OperateResult{}, errs.New(ErrRefineryDataInvalid, r.correlationID, map[string]any{"crudeTonnes": crudeTonnes})
+		return OperateResult{}, refineryDataInvalid(r.correlationID, fmt.Sprintf("negative crude tonnes %d", crudeTonnes))
 	}
 
 	landed, err := freight.CrudeLanding(crudeTonnes)
@@ -531,9 +532,7 @@ func (r *Refinery) Operate(tick int64, crudeTonnes int64) (OperateResult, error)
 	// seam is a trust boundary: a negative landing is rejected rather than
 	// recorded, so CrudeLanded always lies within 0..throughput (SEC-166).
 	if landed < 0 {
-		return OperateResult{}, errs.New(ErrRefineryDataInvalid, r.correlationID, map[string]any{
-			"landed": landed, "facility": facilityRefinery,
-		})
+		return OperateResult{}, refineryDataInvalid(r.correlationID, fmt.Sprintf("negative crude landed %d", landed))
 	}
 	// Throughput is the facility's processing capacity cap, not merely a
 	// scaling denominator: whatever the freight seam lands, a single refinery
@@ -632,7 +631,7 @@ func (r *Refinery) DomesticUnitCost(throughput int64) (int64, error) {
 		return 0, errs.New(ErrUnknownRefineryFacility, r.correlationID, map[string]any{"facility": facilityRefinery})
 	}
 	if throughput <= 0 {
-		return 0, errs.New(ErrRefineryDataInvalid, r.correlationID, map[string]any{"throughput": throughput})
+		return 0, refineryDataInvalid(r.correlationID, fmt.Sprintf("non-positive throughput %d", throughput))
 	}
 	capexPerDay := p.CapexMicropounds / p.CapexAmortisationDays
 	totalPerDay := num.SatAdd(capexPerDay, p.OpexMicropoundsPerDay)
@@ -652,7 +651,7 @@ func (r *Refinery) ImportUnitCost() (int64, error) {
 		return 0, err
 	}
 	if !ok {
-		return 0, errs.New(ErrRefineryDataInvalid, r.correlationID, map[string]any{"commodity": commodityRefinedProduct})
+		return 0, refineryDataInvalid(r.correlationID, fmt.Sprintf("unknown commodity %q", commodityRefinedProduct))
 	}
 	return margin, nil
 }

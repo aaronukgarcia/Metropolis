@@ -80,7 +80,7 @@ func RunGateStatus(ctx context.Context, repoRoot, sprint string) (GateStatusRepo
 	correlationID := errs.NewCorrelationID()
 	out, err := runBowCommand(ctx, repoRoot, "gate-status", sprint)
 	if err != nil {
-		return GateStatusReport{}, errs.Wrap(codeGateStatusSourceUnavailable, correlationID, err, map[string]any{"command": "gate-status", "sprint": sprint})
+		return GateStatusReport{}, gateStatusFailed(correlationID, sprint, err.Error())
 	}
 	return ParseGateStatusText(sprint, out)
 }

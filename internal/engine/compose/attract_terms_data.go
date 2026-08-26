@@ -103,37 +103,19 @@ func loadAttractTermsData(correlationID string) (attractTermsData, error) {
 	}
 	var d attractTermsData
 	if err := json.Unmarshal(b, &d); err != nil {
-		return attractTermsData{}, errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{
-			"module": "attract_terms_data", "path": path, "cause": "malformed JSON",
-		})
+		return attractTermsData{}, moduleFailedWrapped(correlationID, "attract_terms_data", err)
 	}
 	if !num.IsFinite(d.Environment.PollutionHalfSaturationKg) || d.Environment.PollutionHalfSaturationKg <= 0 {
-		return attractTermsData{}, errs.New(ErrModuleFailed, correlationID, map[string]any{
-			"module": "attract_terms_data",
-			"field":  "environment.pollutionHalfSaturationKg",
-			"value":  d.Environment.PollutionHalfSaturationKg,
-		})
+		return attractTermsData{}, moduleDataInvalid(correlationID, "attract_terms_data", "environment.pollutionHalfSaturationKg", d.Environment.PollutionHalfSaturationKg)
 	}
 	if d.Leisure.BridgeVenueCapacityUnits <= 0 {
-		return attractTermsData{}, errs.New(ErrModuleFailed, correlationID, map[string]any{
-			"module": "attract_terms_data",
-			"field":  "leisure.bridgeVenueCapacityUnits",
-			"value":  d.Leisure.BridgeVenueCapacityUnits,
-		})
+		return attractTermsData{}, moduleDataInvalid(correlationID, "attract_terms_data", "leisure.bridgeVenueCapacityUnits", d.Leisure.BridgeVenueCapacityUnits)
 	}
 	if !num.IsFinite(d.JobAvailability.VacancyRateHalfSaturationPerMille) || d.JobAvailability.VacancyRateHalfSaturationPerMille <= 0 {
-		return attractTermsData{}, errs.New(ErrModuleFailed, correlationID, map[string]any{
-			"module": "attract_terms_data",
-			"field":  "jobAvailability.vacancyRateHalfSaturationPerMille",
-			"value":  d.JobAvailability.VacancyRateHalfSaturationPerMille,
-		})
+		return attractTermsData{}, moduleDataInvalid(correlationID, "attract_terms_data", "jobAvailability.vacancyRateHalfSaturationPerMille", d.JobAvailability.VacancyRateHalfSaturationPerMille)
 	}
 	if !num.IsFinite(d.ServiceCoverage.CoverageRatioScalePercent) || d.ServiceCoverage.CoverageRatioScalePercent <= 0 {
-		return attractTermsData{}, errs.New(ErrModuleFailed, correlationID, map[string]any{
-			"module": "attract_terms_data",
-			"field":  "serviceCoverage.coverageRatioScalePercent",
-			"value":  d.ServiceCoverage.CoverageRatioScalePercent,
-		})
+		return attractTermsData{}, moduleDataInvalid(correlationID, "attract_terms_data", "serviceCoverage.coverageRatioScalePercent", d.ServiceCoverage.CoverageRatioScalePercent)
 	}
 	return d, nil
 }

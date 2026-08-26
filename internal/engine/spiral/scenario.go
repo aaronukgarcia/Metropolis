@@ -92,9 +92,7 @@ func (s Scenario) validate(correlationID string) error {
 		}
 	}
 	if s.MonthCap < 0 || s.ShockMonth < 0 || s.StartingPopulation < 0 || s.EmigrationPerMonth < 0 {
-		return errs.New(ErrInvalidScenario, correlationID, map[string]any{
-			"field": "scenario", "cause": "negative month/population/emigration",
-		})
+		return invalidScenario(correlationID, "scenario", "negative month/population/emigration")
 	}
 	return nil
 }

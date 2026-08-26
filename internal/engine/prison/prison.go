@@ -1,6 +1,7 @@
 package prison
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -336,10 +337,7 @@ func (p *PrisonAPI) Admit(a Admission) error {
 	// intake-vs-crime cross-check. A citizen whose prior cohort is already
 	// released may be re-admitted normally.
 	if existing, ok := p.cohorts[a.CitizenID]; ok && !existing.Released {
-		return errs.New(ErrInvalidAdmission, p.correlationID, map[string]any{
-			"citizen": a.CitizenID,
-			"reason":  "already admitted",
-		})
+		return invalidAdmission(p.correlationID, "citizenID")
 	}
 
 	rec := CohortRecord{
@@ -429,10 +427,10 @@ func (p *PrisonAPI) SetRegimeFunding(line RegimeLine, amount int64) error {
 	switch line {
 	case RegimeEducation, RegimeWork, RegimeAddictionTreatment:
 	default:
-		return errs.New(ErrInvalidRegimeFunding, p.correlationID, map[string]any{"line": string(line)})
+		return invalidRegimeFunding(p.correlationID, line, 0)
 	}
 	if amount < 0 {
-		return errs.New(ErrInvalidRegimeFunding, p.correlationID, map[string]any{"line": string(line), "amount": amount})
+		return invalidRegimeFunding(p.correlationID, line, amount)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -448,7 +446,7 @@ func (p *PrisonAPI) RegimeFunding(line RegimeLine) (int64, error) {
 	switch line {
 	case RegimeEducation, RegimeWork, RegimeAddictionTreatment:
 	default:
-		return 0, errs.New(ErrInvalidRegimeFunding, p.correlationID, map[string]any{"line": string(line)})
+		return 0, invalidRegimeFunding(p.correlationID, line, 0)
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -465,10 +463,10 @@ func (p *PrisonAPI) SetReentrySupport(kind ReentryKind, value float64) error {
 	switch kind {
 	case ReentryProbation, ReentryEmployment, ReentryHousing:
 	default:
-		return errs.New(ErrInvalidReentrySupport, p.correlationID, map[string]any{"kind": string(kind)})
+		return invalidReentrySupport(p.correlationID, kind, 0)
 	}
 	if !num.IsFinite(value) || value < 0 || value > 1 {
-		return errs.New(ErrInvalidReentrySupport, p.correlationID, map[string]any{"kind": string(kind), "value": value})
+		return invalidReentrySupport(p.correlationID, kind, value)
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -688,20 +686,16 @@ func (p *PrisonAPI) RehabSpend(req RehabSpendRequest) error {
 	switch req.Line {
 	case RegimeEducation, RegimeWork, RegimeAddictionTreatment:
 	default:
-		return errs.New(ErrInvalidRegimeFunding, p.correlationID, map[string]any{"line": string(req.Line)})
+		return invalidRegimeFunding(p.correlationID, req.Line, 0)
 	}
 	if req.Increase <= 0 {
-		return errs.New(ErrInvalidRegimeFunding, p.correlationID, map[string]any{"line": string(req.Line), "amount": req.Increase})
+		return invalidRegimeFunding(p.correlationID, req.Line, req.Increase)
 	}
 	if req.FuseYears < p.cfg.FuseYears.Min || req.FuseYears > p.cfg.FuseYears.Max {
-		return errs.New(ErrSlowFuseRejected, p.correlationID, map[string]any{
-			"line": string(req.Line), "fuseYears": req.FuseYears,
-		})
+		return slowFuseRejected(p.correlationID, fmt.Sprintf("fuseYears %d outside [%d,%d]", req.FuseYears, p.cfg.FuseYears.Min, p.cfg.FuseYears.Max))
 	}
 	if req.ProjectedConsequence == nil || !num.IsFinite(*req.ProjectedConsequence) {
-		return errs.New(ErrSlowFuseRejected, p.correlationID, map[string]any{
-			"line": string(req.Line), "reason": "missing local projected-consequence value",
-		})
+		return slowFuseRejected(p.correlationID, "missing local projected-consequence value")
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()

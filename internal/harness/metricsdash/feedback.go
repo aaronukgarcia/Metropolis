@@ -99,10 +99,10 @@ func LogNote(inbox string, kind NoteKind, body, context string, now func() time.
 
 	b, merr := json.MarshalIndent(rec, "", "  ")
 	if merr != nil {
-		return errs.Wrap(codeFeedbackWriteFailed, correlationID, merr, nil)
+		return feedbackWriteFailed(correlationID, "json marshal", merr)
 	}
 	if err := os.MkdirAll(inbox, 0o755); err != nil {
-		return errs.Wrap(codeFeedbackWriteFailed, correlationID, err, map[string]any{"inbox": inbox})
+		return feedbackWriteFailed(correlationID, inbox, err)
 	}
 
 	name := "metricsdash-" + correlationID + ".json"

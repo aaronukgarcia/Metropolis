@@ -2,6 +2,7 @@ package compose
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -103,9 +104,7 @@ func (st *simState) buildFinanceBalanceSheetPatch() (json.RawMessage, error) {
 	treasury := st.publishedTreasury()
 	reserves, ok := st.finance.AccountBalance(finance.AcctReserves)
 	if !ok {
-		return nil, errs.New(ErrModuleFailed, st.cid, map[string]any{
-			"module": "finance", "accessor": "AccountBalance", "account": string(finance.AcctReserves),
-		})
+		return nil, moduleFailed(st.cid, "finance", fmt.Sprintf("AccountBalance(%s) not found", finance.AcctReserves))
 	}
 	debt := st.finance.OutstandingDebt()
 

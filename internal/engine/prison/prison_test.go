@@ -383,8 +383,8 @@ func TestReAdmitUnreleasedRejected(t *testing.T) {
 	if !errors.As(err, &e) || e.Code != ErrInvalidAdmission {
 		t.Fatalf("re-admit must be ErrInvalidAdmission (MET-G4306), got %v", err)
 	}
-	if e.Ctx["reason"] != "already admitted" {
-		t.Fatalf("re-admit error must carry reason=already admitted, got %v", e.Ctx)
+	if e.Ctx["field"] != "citizenID" {
+		t.Fatalf("re-admit error must carry field=citizenID, got %v", e.Ctx)
 	}
 
 	if got := p.DomesticPopulation(); got != 1 {

@@ -1,6 +1,7 @@
 package chemicals
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -253,14 +254,14 @@ func (c *ChemAPI) ImportRefined(commodity string, tonnes int64) (int64, error) {
 		return 0, err
 	}
 	if tonnes < 0 {
-		return 0, errs.New(ErrRefineryDataInvalid, c.correlationID, map[string]any{"commodity": commodity, "tonnes": tonnes})
+		return 0, refineryDataInvalidForCommodity(c.correlationID, commodity, fmt.Sprintf("negative tonnes %d", tonnes))
 	}
 	margin, ok, err := c.ImportMargin(commodity)
 	if err != nil {
 		return 0, err
 	}
 	if !ok {
-		return 0, errs.New(ErrRefineryDataInvalid, c.correlationID, map[string]any{"commodity": commodity})
+		return 0, refineryDataInvalidForCommodity(c.correlationID, commodity, "unknown commodity")
 	}
 	if margin <= 0 {
 		return 0, errs.New(ErrRefineryDataInvalid, c.correlationID, map[string]any{"commodity": commodity, "margin": margin, "cause": "non-positive import margin"})

@@ -1,6 +1,7 @@
 package fuel
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -407,16 +408,21 @@ func (f *FuelAPI) ForecourtCoverageAdequacy(forecourts int, population float64) 
 	if err := f.checkNotCopied("ForecourtCoverageAdequacy"); err != nil {
 		return 0, err
 	}
-	if forecourts < 0 || !num.IsFinite(population) || population < 0 {
-		return 0, errs.New(ErrInvalidInput, f.correlationID, map[string]any{
-			"forecourts": forecourts, "population": population,
-		})
+	if forecourts < 0 {
+		return 0, fuelDomainInvalid(f.correlationID, "forecourts", forecourts)
+	}
+	if !num.IsFinite(population) || population < 0 {
+		return 0, fuelDomainInvalid(f.correlationID, "population", population)
 	}
 	f.mu.RLock()
 	target := f.forecourtTarget
 	f.mu.RUnlock()
 	if target <= 0 {
-		return 0, errs.New(ErrFuelDataInvalid, f.correlationID, map[string]any{"field": "forecourt.targetForecourtsPerThousandPopulation"})
+		return 0, errs.New(ErrFuelDataInvalid, f.correlationID, map[string]any{
+			"field":  "forecourt.targetForecourtsPerThousandPopulation",
+			"reason": "must be positive",
+			"cause":  fmt.Sprintf("got %v", target),
+		})
 	}
 	required := (population / 1000) * target
 	if required <= 0 {

@@ -34,6 +34,12 @@ var renderGateFixedPackages = []string{
 	filepath.Join("internal", "engine", "mining"),
 	filepath.Join("internal", "engine", "education"),
 	filepath.Join("internal", "harness", "replay"),
+	filepath.Join("internal", "engine", "spiral"),
+	filepath.Join("internal", "engine", "chemicals"),
+	filepath.Join("internal", "engine", "fuel"),
+	filepath.Join("internal", "engine", "prison"),
+	filepath.Join("internal", "harness", "metricsdash"),
+	filepath.Join("internal", "engine", "compose"),
 }
 
 func TestRenderGate_FixedPackagesHaveNoLiteralTokens(t *testing.T) {
