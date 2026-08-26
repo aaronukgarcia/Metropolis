@@ -624,6 +624,10 @@ func (b *BuildAPI) Tick(month int64) error {
 			key := cellKey{tile: order.tile, local: order.local}
 			b.zoneState[key] = order.zone
 			b.structures[key] = order.id
+			// Sync the structure reference to world.structureRef so the viewport publishes it
+			if err := b.world.SetStructure(order.tile, order.local, uint32(order.id), b.correlationID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

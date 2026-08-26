@@ -325,6 +325,37 @@ func (a *WorldAPI) ApplyOwnershipCommand(cmd OwnershipCommand) protocol.CommandR
 	return result(true, nil)
 }
 
+// SetStructure writes a structure reference to one cell on an owned tile.
+// Used by engine.build to sync completed build orders to the world grid.
+// The cell must be on an owned tile (returns ErrTileNotOwned otherwise).
+func (a *WorldAPI) SetStructure(tile TileCoord, local CellLocal, structureRef uint32, correlationID string) error {
+	if err := a.w.checkNotCopied(correlationID, &tile); err != nil {
+		return err
+	}
+	if !tile.InExtent() {
+		return errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": tile, "sizeKm": ExpansionSizeM / 1000})
+	}
+
+	a.w.mu.Lock()
+	defer a.w.mu.Unlock()
+	if err := a.w.checkNotCopied(correlationID, &tile); err != nil {
+		return err
+	}
+	tl, err := a.w.ensureTile(tile)
+	if err != nil {
+		return err
+	}
+	if !tl.owned || tl.sim == nil {
+		return errs.New(ErrTileNotOwned, correlationID, map[string]any{"tile": tile})
+	}
+	if !local.InBounds() {
+		return errs.New(ErrTileOutOfBounds, correlationID, map[string]any{"tile": tile, "local": local, "sizeKm": ExpansionSizeM / 1000})
+	}
+	idx := localIndex(local.Col, local.Row)
+	tl.sim.structureRef[idx] = structureRef
+	return nil
+}
+
 // PurchaseCommand buys an unowned tile in full (§2.3).
 type PurchaseCommand struct {
 	CorrelationID string
