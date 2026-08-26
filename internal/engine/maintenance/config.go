@@ -1,8 +1,47 @@
 package maintenance
 
 import (
+	"math"
+	"sort"
+
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
+)
+
+// Upper bounds on the data-authored magnitudes (BUG-263 / SEC-117 shape). Every
+// numeric field below is data-sourced and was previously positive-UNBOUNDED, so
+// a near-MaxInt64 authoring value loaded silently and then SATURATED in the
+// downstream integer arithmetic (num.SafeMul/SatAdd clamp at int64's edge)
+// instead of being rejected — masking a data-authoring bug. validate() now
+// rejects anything above these caps loudly at load. Each cap is DERIVED from the
+// representable range of the specific downstream product, never a hardcoded
+// balance figure (GR#15) — rebalancing within the caps stays a pure data edit.
+const (
+	// maxEngineerDaysPerYear caps a class's base rate. repairDemandPerYear
+	// doubles the base at max age (base + base×age/lifetime → 2×base at
+	// age==lifetime), so the rate must leave ×2 headroom to stay
+	// representable. (The separate rate×sizePerMille size-scaling product is
+	// guarded at the Register boundary, SEC-163.)
+	maxEngineerDaysPerYear = int64(math.MaxInt64) / 2
+
+	// maxLifetimeYears caps a class's lifetime. api.go converts years→months
+	// via num.SafeMul(LifetimeYears, monthsPerYear); the cap keeps that
+	// conversion product below int64 saturation.
+	maxLifetimeYears = int64(math.MaxInt64) / monthsPerYear
+
+	// maxCostPerEngineerDay caps a per-engineer-day cost figure. The field is
+	// ALREADY in micro-pounds (engine.finance's Money scale) and is never
+	// multiplied by MicropoundsPerPound in this module; the real downstream
+	// product is `applied × cost` in AdvanceMonth's crew/contract spend
+	// (num.SafeMul, runtime-bounded). This cap is therefore a finite
+	// sanity ceiling, not the exact saturation bound of that runtime product:
+	// dividing MaxInt64 by MicropoundsPerPound keeps any authored cost at or
+	// below one-million-pounds-per-engineer-day magnitude, leaving ~10^6
+	// headroom in the int64 product so a plausibly-applied engineer-day count
+	// can never saturate the SafeMul. The divisor picks a defensible order of
+	// magnitude tied to the money scale, not a hardcoded balance figure (GR#15).
+	maxCostPerEngineerDay = int64(math.MaxInt64) / int64(det.MicropoundsPerPound)
 )
 
 // ClassConfig is one class's data-driven maintenance parameters
@@ -43,18 +82,39 @@ type Config struct {
 // validate rejects an out-of-contract Config with a registry-sourced error
 // (GR#7/GR#16) — never a silently-defaulted placeholder. Requires at least
 // two classes (so "scaled by class" is a real ordering, AC-2), a positive
-// rate and lifetime per class, and non-negative cost figures.
+// rate and lifetime per class within their upper bounds, and positive cost
+// figures within the money-scale ceiling. The upper bounds (BUG-263) close the
+// SEC-117 load-time-saturation shape: a near-MaxInt64 authoring value used to
+// load silently and then saturate downstream; it is now rejected at load.
+//
+// The per-class checks iterate the Classes map in SORTED key order (GR#21): the
+// map's own iteration order is randomised, so ranging it directly would make the
+// reported first-error field depend on Go's map seed. Sorting the keys makes the
+// first offending class deterministic.
 func (c Config) validate(correlationID string) error {
 	if len(c.Classes) < 2 {
 		return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
 			"reason": "at least two classes with distinct rates are required",
 		})
 	}
-	for class, cc := range c.Classes {
+	classes := make([]Class, 0, len(c.Classes))
+	for class := range c.Classes {
+		classes = append(classes, class)
+	}
+	sort.Slice(classes, func(i, j int) bool { return classes[i] < classes[j] })
+	for _, class := range classes {
+		cc := c.Classes[class]
 		if cc.EngineerDaysPerYear <= 0 {
 			return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
 				"field": "classes." + string(class) + ".engineerDaysPerYear",
 				"value": cc.EngineerDaysPerYear,
+			})
+		}
+		if cc.EngineerDaysPerYear > maxEngineerDaysPerYear {
+			return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
+				"field": "classes." + string(class) + ".engineerDaysPerYear",
+				"value": cc.EngineerDaysPerYear, "max": maxEngineerDaysPerYear,
+				"reason": "exceeds the ×2-headroom cap — would saturate the age-scaled repair demand (SEC-117 shape)",
 			})
 		}
 		if cc.LifetimeYears <= 0 {
@@ -63,15 +123,34 @@ func (c Config) validate(correlationID string) error {
 				"value": cc.LifetimeYears,
 			})
 		}
+		if cc.LifetimeYears > maxLifetimeYears {
+			return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
+				"field": "classes." + string(class) + ".lifetimeYears",
+				"value": cc.LifetimeYears, "max": maxLifetimeYears,
+				"reason": "exceeds the years→months cap — would saturate the lifetime-in-months conversion (SEC-117 shape)",
+			})
+		}
 	}
 	if c.CrewCostPerEngineerDay <= 0 {
 		return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
 			"field": "crewCostPerEngineerDay", "value": c.CrewCostPerEngineerDay,
 		})
 	}
+	if c.CrewCostPerEngineerDay > maxCostPerEngineerDay {
+		return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
+			"field": "crewCostPerEngineerDay", "value": c.CrewCostPerEngineerDay,
+			"max": maxCostPerEngineerDay, "reason": "exceeds the money-scale cap (SEC-117 shape)",
+		})
+	}
 	if c.ContractorCostPerEngineerDay <= 0 {
 		return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
 			"field": "contractorCostPerEngineerDay", "value": c.ContractorCostPerEngineerDay,
+		})
+	}
+	if c.ContractorCostPerEngineerDay > maxCostPerEngineerDay {
+		return errs.New(ErrMaintenanceDataInvalid, correlationID, map[string]any{
+			"field": "contractorCostPerEngineerDay", "value": c.ContractorCostPerEngineerDay,
+			"max": maxCostPerEngineerDay, "reason": "exceeds the money-scale cap (SEC-117 shape)",
 		})
 	}
 	return nil
