@@ -24,6 +24,19 @@
  * (that starvation is how Bill's permit silently expired on 2026-07-13).
  *
  * Fast path (< 2 min since last check): single file read. No Firestore hit.
+ *
+ * BUG-343 (silent-failure, GR#1 aggressive error trapping + GR#17 silent-failure
+ * detection): wake recovery in claude-sync `renew --auto` fails LOUD — it writes
+ * a `console.error` explanation and `process.exit(1)` — when the window's previous
+ * slot is retired/parked or has been taken by another window (the live path after
+ * every laptop sleep/resume). `execSync` throws on that nonzero exit. This hook
+ * USED TO swallow that throw in an empty `catch {}`, so the session silently lost
+ * its permit with no notice of any kind. It now SURFACES the failure: the failed
+ * command's own explanation plus a "WAKE RECOVERY FAILED — permit LOST" banner is
+ * written to process.stdout (the channel this hook relays to the session — see the
+ * success path below, which surfaces wake-recovery notices the same way) and to
+ * stderr. The hook still stays fail-open for the tool call (exit 0) so a coord
+ * outage never blocks the user's work.
  */
 
 const fs = require('fs');
@@ -31,13 +44,11 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 const CHECK_INTERVAL_MS = 2 * 60 * 1000;  // Check every 2 minutes
-const SYNC_SCRIPT = path.join(__dirname, 'claude-sync.js');
-
-// Ensure .claude directory exists
-const dotClaudeDir = path.join(__dirname, '.claude');
-if (!fs.existsSync(dotClaudeDir)) {
-  fs.mkdirSync(dotClaudeDir, { recursive: true });
-}
+// The claude-sync script and the .claude throttle dir are overridable via env so
+// the regression test (claude-ping-check.test.js) can drive the failure path
+// end-to-end against a stub that exits nonzero, without a live metro DB.
+const SYNC_SCRIPT = process.env.CLAUDE_PING_SYNC_SCRIPT || path.join(__dirname, 'claude-sync.js');
+const DOT_CLAUDE_DIR = process.env.CLAUDE_PING_DIR || path.join(__dirname, '.claude');
 
 /** Read the hook's stdin JSON (Claude Code always provides it and closes the pipe). */
 function readStdin(cb) {
@@ -50,48 +61,107 @@ function readStdin(cb) {
   setTimeout(() => cb(input), 2000).unref();
 }
 
-let done = false;
-readStdin((input) => {
-  if (done) return;
-  done = true;
+/**
+ * BUG-343: build the warning text for a `renew --auto` failure so the hook can
+ * SURFACE it instead of swallowing it. Always returns a non-empty, multi-line
+ * string. Two failure shapes are distinguished:
+ *
+ *   - Wake-recovery REFUSAL — claude-sync reached a verdict and exited nonzero
+ *     (previous slot retired/parked, or held by another window after a wake).
+ *     The permit is GONE and the session must be told, loudly, carrying
+ *     claude-sync's own explanation and the recovery command.
+ *   - Non-verdict failure — a spawn error / timeout with no numeric exit status.
+ *     No permit decision was reached, but it still must not vanish in silence.
+ *
+ * @param {any} err  the error thrown by execSync (has .status/.stderr/.stdout/.message)
+ * @param {string} windowId  this window's session id (may be '')
+ * @returns {string} the warning to surface
+ */
+function describeRenewFailure(err, windowId) {
+  const sess = windowId ? ` (session ${windowId})` : '';
+  const stderrText = err && err.stderr != null ? String(err.stderr).trim() : '';
+  const stdoutText = err && err.stdout != null ? String(err.stdout).trim() : '';
+  const detail = [stderrText, stdoutText].filter(Boolean).join('\n');
+  const status = err && typeof err.status === 'number' ? err.status : null;
+  if (status !== null && status !== 0) {
+    // A verdict was reached and it refused: the permit for this window is lost.
+    return `[claude-ping-check] WAKE RECOVERY FAILED — permit LOST for this window${sess}.\n` +
+      (detail ? detail + '\n' : '') +
+      `[claude-ping-check] Re-checkin explicitly: node claude-sync.js checkin --name <live slot>`;
+  }
+  // No exit verdict — spawn failure, timeout, or similar. Still surface it (GR#1).
+  const msg = err && err.message ? String(err.message).trim() : 'unknown error';
+  return `[claude-ping-check] permit renew check could not complete${sess}: ${msg}` +
+    (detail ? `\n${detail}` : '');
+}
 
-  // Window ID: prefer the hook payload, fall back to inherited env
-  let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
-  try {
-    const data = JSON.parse(input);
-    if (data.session_id) windowId = data.session_id;
-  } catch { /* no/invalid payload — env fallback stands */ }
-
-  // Per-window throttle file: a shared one would let window A's ping suppress
-  // window B's renewals entirely.
-  const pingFile = path.join(dotClaudeDir, windowId ? `.last-ping-${windowId}` : '.last-ping');
-
-  let lastPingMs = 0;
-  try {
-    lastPingMs = parseInt(fs.readFileSync(pingFile, 'utf8').trim(), 10) || 0;
-  } catch { /* first run */ }
-
-  const nowMs = Date.now();
-  if (nowMs - lastPingMs < CHECK_INTERVAL_MS) {
-    process.exit(0);  // Fast path: not time yet
+function main() {
+  // Ensure .claude directory exists
+  if (!fs.existsSync(DOT_CLAUDE_DIR)) {
+    fs.mkdirSync(DOT_CLAUDE_DIR, { recursive: true });
   }
 
-  // Update timestamp FIRST to avoid retry spam on network errors
-  fs.writeFileSync(pingFile, String(nowMs), 'utf8');
+  let done = false;
+  readStdin((input) => {
+    if (done) return;
+    done = true;
 
-  try {
-    const output = execSync(`node "${SYNC_SCRIPT}" renew --auto`, {
-      encoding: 'utf8',
-      timeout: 15000,
-      cwd: __dirname,
-      env: { ...process.env, CLAUDE_CODE_SESSION_ID: windowId }
-    });
-    if (output.trim()) {
-      // Wake-recovery notices (re-acquired name / IDENTITY CHANGED) surface here
-      process.stdout.write(output);
+    // Window ID: prefer the hook payload, fall back to inherited env
+    let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
+    try {
+      const data = JSON.parse(input);
+      if (data.session_id) windowId = data.session_id;
+    } catch { /* no/invalid payload — env fallback stands */ }
+
+    // Per-window throttle file: a shared one would let window A's ping suppress
+    // window B's renewals entirely.
+    const pingFile = path.join(DOT_CLAUDE_DIR, windowId ? `.last-ping-${windowId}` : '.last-ping');
+
+    let lastPingMs = 0;
+    try {
+      lastPingMs = parseInt(fs.readFileSync(pingFile, 'utf8').trim(), 10) || 0;
+    } catch { /* first run */ }
+
+    const nowMs = Date.now();
+    if (nowMs - lastPingMs < CHECK_INTERVAL_MS) {
+      process.exit(0);  // Fast path: not time yet
     }
-  } catch {
-    // Network error or timeout — .last-ping already updated, avoid retry spam
-  }
-  process.exit(0);
-});
+
+    // Update timestamp FIRST to avoid retry spam on network errors
+    fs.writeFileSync(pingFile, String(nowMs), 'utf8');
+
+    try {
+      const output = execSync(`node "${SYNC_SCRIPT}" renew --auto`, {
+        encoding: 'utf8',
+        timeout: 15000,
+        cwd: __dirname,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, CLAUDE_CODE_SESSION_ID: windowId }
+      });
+      if (output.trim()) {
+        // Wake-recovery notices (re-acquired name / IDENTITY CHANGED) surface here
+        process.stdout.write(output);
+      }
+    } catch (err) {
+      // BUG-343: do NOT swallow. Wake recovery fails LOUD (console.error + exit 1)
+      // when the previous slot is unavailable after a wake; execSync then throws on
+      // the nonzero exit. An empty catch here silently loses the permit — a GR#1
+      // (aggressive error trapping) + GR#17 (silent-failure detection) violation.
+      // Surface it on stdout (the channel this hook relays to the session, exactly
+      // as the success path above does) AND stderr, so the session SEES
+      // "WAKE RECOVERY FAILED — permit LOST" instead of nothing. The hook still
+      // stays fail-open for the tool call: exit 0, and .last-ping is already
+      // updated so this never retry-spams.
+      const warning = describeRenewFailure(err, windowId);
+      process.stdout.write(warning + '\n');
+      process.stderr.write(warning + '\n');
+    }
+    process.exit(0);
+  });
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { describeRenewFailure };
