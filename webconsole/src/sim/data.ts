@@ -222,19 +222,55 @@ export function waterBalanceOf(s: SimState): {
   return { clean, waste, ratio, leak: clean > 0 && ratio < 0.8 };
 }
 
-export function utilisationOf(s: SimState, b: SimState['buildings'][number]): number | null {
+/**
+ * Per-building utilisation: fraction of capacity in actual use (0..1), with a
+ * basis name describing the formula applied. Returns null when the sim has no
+ * per-building signal for this kind (GR#15 honest absence).
+ *
+ * CRITICAL DESIGN NOTE (2026-08-27): The sim models capacity as CITY-WIDE aggregates,
+ * not per-building state. Residential occupancy, power demand, school places, and job
+ * counts are all derived from population + building specs, then assigned city-wide.
+ * This module assigns the city-wide ratio to every building of its kind (residential
+ * blocks all show the same occupancy %, power plants all show the same draw %, etc).
+ * This is a PLACEHOLDER pending per-building capacity tracking in the engine (not
+ * yet implemented). The basis string admits this: "citywide occupancy", etc., not
+ * "occupancy vs capacity" (which would imply per-building derivation).
+ *
+ * Derivation (SSOT):
+ *   residential = citywide occupancy (population / residents-capacity aggregate)
+ *   workplaces (commercial/office/industrial/mine) = citywide workers vs jobs
+ *   service buildings (health/police/school/water) = citywide coverage (via serviceCoverageOf)
+ *   power = citywide MW draw vs capacity
+ *   others (parks, landmarks, leisure, fire, civic, transport) = documented null-basis (no per-building signal)
+ */
+export interface Utilisation {
+  ratio: number; // 0..1, clamped
+  basis: string; // formula name for display; "citywide *" admits aggregate assignment
+}
+
+export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Utilisation | null {
   const sp = SPECS[b.spec];
   if (!sp) return null;
-  const pct = (have: number, cap: number) =>
-    cap > 0 ? Math.round(Math.min(150, (have / cap) * 100)) : null;
+
+  const ratio = (have: number, cap: number): number =>
+    cap > 0 ? Math.min(1, Math.max(0, have / cap)) : 0;
+
   switch (sp.kind) {
     case 'residential': {
       const cap = residentsCapacity(s);
-      return cap > 0 ? pct(s.population, cap) : null;
+      if (cap <= 0) return null;
+      return {
+        ratio: ratio(s.population, cap),
+        basis: 'citywide occupancy',
+      };
     }
     case 'power': {
       const pw = powerStats(s);
-      return pct(pw.need, pw.cap);
+      if (pw.cap <= 0) return null;
+      return {
+        ratio: ratio(pw.need, pw.cap),
+        basis: 'citywide MW draw',
+      };
     }
     case 'school': {
       let places = 0;
@@ -242,19 +278,63 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): nu
         const os = SPECS[o.spec];
         if (os?.children) places += os.children;
       }
-      return pct(s.population * 0.18, places);
+      if (places <= 0) return null;
+      return {
+        ratio: ratio(s.population * 0.18, places),
+        basis: 'citywide student places',
+      };
     }
     case 'water': {
       const { clean } = waterCaps(s);
-      return pct(s.population, clean);
+      if (clean <= 0) return null;
+      return {
+        ratio: ratio(s.population, clean),
+        basis: 'citywide clean water usage',
+      };
+    }
+    case 'health': {
+      // Aggregate health capacity from GP + hospital
+      const gp = sumBy(s, (sp) => sp.id === 'hea_clinic', (sp) => sp.served ?? 0);
+      const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital', (sp) => sp.served ?? 0);
+      const cap = gp + hosp;
+      if (cap <= 0) return null;
+      return {
+        ratio: ratio(s.population, cap),
+        basis: 'citywide health coverage',
+      };
+    }
+    case 'police': {
+      const cap = sumBy(s, (sp) => sp.id === 'pol_station', (sp) => sp.served ?? 0);
+      if (cap <= 0) return null;
+      return {
+        ratio: ratio(s.population, cap),
+        basis: 'citywide police coverage',
+      };
     }
     case 'commercial':
     case 'office':
     case 'industrial':
     case 'mine': {
       const jobs = totalJobs(s);
-      return pct(s.population * 0.55, jobs);
+      if (jobs <= 0) return null;
+      return {
+        ratio: ratio(s.population * 0.55, jobs),
+        basis: 'citywide workers vs jobs',
+      };
     }
+    // Honest null-basis kinds with no per-building capacity model:
+    case 'park':
+    case 'landmark':
+    case 'leisure':
+    case 'fire':
+    case 'civic':
+    case 'transport':
+    case 'road':
+    case 'motorway':
+    case 'rail':
+    case 'station':
+    case 'pylon':
+      return null;
     default:
       return null;
   }

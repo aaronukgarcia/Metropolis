@@ -52,6 +52,7 @@ import {
   residentsCapacity,
   serviceDemandOf,
   totalJobs,
+  utilisationOf,
   waterBalanceOf,
 } from './data.ts';
 import {
@@ -107,6 +108,8 @@ export interface DebugJsonBuilding {
   tier: 1 | 2 | 3 | null;
   /** Occupancy estimate 0..1 (3 dp), null where not applicable. */
   occ: number | null;
+  /** Per-building utilisation: ratio 0..1 (3 dp) + basis formula name, null where not applicable. */
+  util: { ratio: number; basis: string } | null;
 }
 
 export interface ConsistencyReportJson {
@@ -341,6 +344,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   const list: DebugJsonBuilding[] = s.buildings.map((b: Building) => {
     const sp = SPECS[b.spec];
     const occ = blockOccupancy(s, b);
+    const util = utilisationOf(s, b);
     return {
       id: b.id,
       spec: b.spec,
@@ -350,6 +354,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       online: sp ? isOnline(s, b) : false,
       tier: sp && sp.category === 'zones' ? densityTier(sp) : null,
       occ: occ == null ? null : round3(occ),
+      util: util == null ? null : { ratio: round3(util.ratio), basis: util.basis },
     };
   });
 

@@ -22,6 +22,7 @@ import {
   TIER_COLORS,
   blockOccupancy,
   PIPE_TIERS,
+  utilisationOf,
 } from '../sim/data';
 import { useSim, levelOf, demandOf } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
@@ -200,6 +201,27 @@ export function MapView() {
         const fh = rh * occ;
         if (fh > 0) ctx.fillRect(rx, ry + rh - fh, rw, fh);
       }
+
+      // FEAT-1972079855 map utilisation cue: thin edge bar at bottom showing
+      // per-building utilisation for non-residential kinds. Color-coded:
+      // green (good 0-30%), amber (medium 30-70%), red (over 70%).
+      // Residential skips this (occupancy fill above is the cue).
+      // Null-basis kinds don't render (util returns null).
+      if (sp.kind !== 'residential' && online && geom.s > 3) {
+        const util = utilisationOf(state, b);
+        if (util !== null) {
+          const barH = Math.max(2, geom.s * 0.4);
+          // ⚠ BALANCE-NUMBER PLACEHOLDER (Aaron 2026-08-13 regime): the 0.3/0.7
+          // thresholds and green/amber/red hazard semantics await the balance
+          // pass. Hazard reading (red = strained) fits services; a full shop is
+          // also "red" — per-kind semantics is an open design question for Aaron.
+          const barCol = util.ratio < 0.3 ? '#3fb950' : util.ratio < 0.7 ? '#e3b341' : '#ff7b72';
+          ctx.globalAlpha = baseAlpha * 0.8;
+          ctx.fillStyle = barCol;
+          ctx.fillRect(rx, ry + rh - barH, rw, barH);
+        }
+      }
+
       if (!online && geom.s > 3) {
         ctx.strokeStyle = 'rgba(255,255,255,0.7)';
         ctx.lineWidth = 1;
@@ -720,6 +742,7 @@ function BuildingCard({
   const { state } = useSim();
   const sp = SPECS[building.spec];
   if (!sp) return null;
+  const util = utilisationOf(state, building);
   return (
     <div className="building-card">
       <header>
@@ -737,6 +760,11 @@ function BuildingCard({
         <p className="mono">
           {sp.dims.x} × {sp.dims.y} m footprint ·{' '}
           {sp.dims.z < 0 ? `depth ${Math.abs(sp.dims.z)} m` : `${sp.dims.z} m tall`}
+        </p>
+      )}
+      {util && (
+        <p>
+          Utilisation {Math.round(util.ratio * 100)}% ({util.basis})
         </p>
       )}
       {sp.kind === 'water' && (
