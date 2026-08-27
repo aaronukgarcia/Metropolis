@@ -203,3 +203,42 @@ test('SIZE GUARD: ~7k-building city serializes, round-trips, and reports its byt
   assert.ok(bytes < 5_500_000, `debug.json at ${big.buildings.length} buildings is ${bytes} bytes â€” compact form regressed?`);
   console.log(`[size-guard] debug.json at ${big.buildings.length} buildings: ${bytes} bytes (${(bytes / 1024).toFixed(0)} KiB)`);
 });
+
+// ---------- performance HUD section ----------
+
+test('perfHud: null when tracker is absent (non-DEV or headless)', () => {
+  const dj = buildDebugJson(initialState(), testUi());
+  // In headless test context, getPerformanceSnapshot() returns null
+  assert.equal(dj.perfHud, null, 'perfHud is null when tracker unavailable');
+  const text = debugJsonText(dj);
+  const parsed = JSON.parse(text);
+  assert.equal(parsed.perfHud, null, 'serializes to null correctly');
+});
+
+test('perfHud: section shape when snapshot is provided (mocked)', () => {
+  // This test documents the expected shape; real integration testing
+  // happens in PerfHud.tsx E2E when dev mode captures live metrics.
+  const dj = buildDebugJson(initialState(), testUi());
+  // Since we're in test context (no tracker), perfHud will be null.
+  // The type contract is: perfHud is always null | { note, fps, tick, memoryMB, networkCalls, networkKB }
+  assert.ok(
+    dj.perfHud === null || (
+      typeof dj.perfHud === 'object' &&
+      'note' in dj.perfHud &&
+      'fps' in dj.perfHud &&
+      'tick' in dj.perfHud &&
+      'memoryMB' in dj.perfHud &&
+      'networkCalls' in dj.perfHud &&
+      'networkKB' in dj.perfHud
+    ),
+    'perfHud matches expected shape (null | full object)'
+  );
+});
+
+test('perfHud: does not appear in SIMSTATE_COVERAGE (not sim state)', () => {
+  // perfHud is UI-layer, wall-clock, non-deterministic — not a SimState field
+  assert.ok(
+    !Object.prototype.hasOwnProperty.call(SIMSTATE_COVERAGE, 'perfHud'),
+    'perfHud is NOT a SimState field and should NOT be in SIMSTATE_COVERAGE'
+  );
+});

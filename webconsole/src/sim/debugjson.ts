@@ -1,21 +1,21 @@
-// debugjson.ts — FEAT-1972079886: the FULL-STATE debug.json capture.
+﻿// debugjson.ts â€” FEAT-1972079886: the FULL-STATE debug.json capture.
 //
 // Aaron's requirement: the debug screen captures EVERYTHING about the running
-// game — every UI tab's status — written into debug.json. This module is the
+// game â€” every UI tab's status â€” written into debug.json. This module is the
 // single serializer for that file. It is PURE (no React, no Date.now, no
 // localStorage): everything comes in through its two arguments, so node --test
 // exercises the exact shipped logic and the same inputs always yield the same
 // JSON (determinism is asserted by test/debugjson.test.mjs).
 //
 // RAW NUMBERS ONLY. Unlike snapshot.ts (the human-facing display frame), no
-// value in this file goes through fmtMoney/fmtNum — debug.json is a machine
+// value in this file goes through fmtMoney/fmtNum â€” debug.json is a machine
 // artefact; the DISPLAY stays formatted elsewhere. The tests assert no
-// £-prefixed figure ever appears in the serialized output.
+// Â£-prefixed figure ever appears in the serialized output.
 //
 // COVERAGE GUARANTEE. SIMSTATE_COVERAGE below maps EVERY top-level SimState
 // key to the JSON path where it is represented. It is typed
 // Record<keyof SimState, string>, so adding a SimState field without deciding
-// where it lands in debug.json is a compile error — and the completeness test
+// where it lands in debug.json is a compile error â€” and the completeness test
 // walks the runtime keys of a real state object against this map and resolves
 // each path in the built JSON, so a forgotten serialization goes RED even if
 // the type is widened. A future tab that adds sim state cannot silently skip
@@ -69,6 +69,7 @@ import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
 import type { MapUiState } from './uistate.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import { businessTaxPerTick, councilTaxPerTick } from './fiscal.ts';
+import { getPerformanceSnapshot } from './perfhud.ts';
 
 /** Bumped when the serialized shape changes incompatibly. */
 export const DEBUG_JSON_FORMAT = 'metropolis-debug/1';
@@ -85,7 +86,7 @@ export interface CapturedError {
 
 /** Everything the pure builder needs that is NOT sim state. */
 export interface DebugUiInput {
-  /** Git-derived app version (versionRaw from sim/version — passed in, not
+  /** Git-derived app version (versionRaw from sim/version â€” passed in, not
    * imported, so this module stays node-resolvable without the generated
    * version file). */
   appVersion: string;
@@ -275,6 +276,14 @@ export interface DebugJson {
   };
   errors: CapturedError[];
   consistency: ConsistencyReportJson;
+  perfHud: {
+    note: string;
+    fps: { avgFps: number; p95Fps: number; worstFps: number } | null;
+    tick: { avgMs: number; p95Ms: number; worstMs: number } | null;
+    memoryMB: number | null;
+    networkCalls: number;
+    networkKB: number;
+  } | null;
   snapshotFrame: {
     takenAtMs: number;
     takenAt: string;
@@ -284,9 +293,14 @@ export interface DebugJson {
 
 /**
  * Where every top-level SimState key surfaces in the built DebugJson, as a
- * dot-path. Typed exhaustively over keyof SimState — see the coverage
+ * dot-path. Typed exhaustively over keyof SimState â€” see the coverage
  * guarantee in the file header. Paths are resolved at test time against a
  * real built object, so a stale path here also fails.
+ *
+ * NOTE: `perfHud` is NOT a SimState field; it is a UI-layer performance
+ * metric snapshot (wall-clock, non-deterministic) collected separately and
+ * included in the output for completeness. It does not affect the SIMSTATE
+ * coverage contract.
  */
 export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   tick: 'meta.tick',
@@ -336,7 +350,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   const generatedAt = new Date(ui.frameAtMs).toISOString();
   const consistency = runConsistencyChecks(s);
 
-  // buildings — full per-building list + present-kind counts
+  // buildings â€” full per-building list + present-kind counts
   const byKind: Partial<Record<ZoneKind, number>> = {};
   for (const [kind, n] of Object.entries(c) as [ZoneKind, number][]) {
     if (n > 0) byKind[kind] = n;
@@ -358,7 +372,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
     };
   });
 
-  // fiscal trend summary — mirrors LeftDock's TrendSummary, raw
+  // fiscal trend summary â€” mirrors LeftDock's TrendSummary, raw
   const h72 = s.history.slice(-72);
   const trendSummary =
     h72.length < 2
@@ -587,6 +601,18 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
     buildings: { count: s.buildings.length, byKind, list },
     errors: ui.errors,
     consistency,
+    perfHud: (() => {
+      const snap = getPerformanceSnapshot();
+      if (!snap) return null;
+      return {
+        note: 'wall-clock, non-deterministic',
+        fps: { avgFps: round3(snap.fps.avgFps), p95Fps: round3(snap.fps.p95Fps), worstFps: round3(snap.fps.worstFps) },
+        tick: { avgMs: round3(snap.tick.avgMs), p95Ms: round3(snap.tick.p95Ms), worstMs: round3(snap.tick.worstMs) },
+        memoryMB: snap.memoryBytes === null ? null : round3(snap.memoryBytes / 1024 / 1024),
+        networkCalls: snap.network.fetchCount,
+        networkKB: round3(snap.network.fetchBytes / 1024),
+      };
+    })(),
     snapshotFrame: {
       takenAtMs: ui.frameAtMs,
       takenAt: generatedAt,
@@ -601,11 +627,11 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
 const BUILDINGS_MARK = '@@BUILDINGS_LIST@@';
 
 /**
- * Serialize a DebugJson to its canonical pretty text — indent 2 everywhere
+ * Serialize a DebugJson to its canonical pretty text â€” indent 2 everywhere
  * EXCEPT buildings.list, whose entries are rendered one compact line each.
  * That keeps a 7,000-building city's file readable AND bounded: fully
  * indenting each building object would multiply the file several times over
- * for zero information. The JSON itself stays complete — nothing is elided.
+ * for zero information. The JSON itself stays complete â€” nothing is elided.
  */
 export function debugJsonText(dj: DebugJson): string {
   const withMark = {
@@ -621,7 +647,7 @@ export function debugJsonText(dj: DebugJson): string {
   const token = JSON.stringify(BUILDINGS_MARK); // the quoted marker in `pretty`
   const i = pretty.indexOf(token);
   // The marker was placed by us two lines up; if it is somehow absent, return
-  // the marked text rather than throwing — a debug artefact must never crash
+  // the marked text rather than throwing â€” a debug artefact must never crash
   // the debug screen.
   if (i < 0) return pretty;
   return pretty.slice(0, i) + inline + pretty.slice(i + token.length);

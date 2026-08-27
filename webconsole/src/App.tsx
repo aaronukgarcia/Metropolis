@@ -6,6 +6,7 @@ import { DemandDock } from './components/left/DemandDock';
 import { RightDock } from './components/right/RightDock';
 import { BottomBar } from './components/bottom/BottomBar';
 import { MapView } from './components/MapView';
+import { PerfHud } from './components/PerfHud';
 
 // Layout (FEAT-1972079874): map stays centre; the docks are re-homed —
 //   LEFT   : build palette (BottomBar) + Start Over button
@@ -29,6 +30,7 @@ export default function App() {
           <div className="col-wrap bottom-col">
             <RightDock />
           </div>
+          <PerfHud />
         </div>
         <BusyIndicator />
       </SimProvider>

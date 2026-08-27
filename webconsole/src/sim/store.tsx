@@ -3,6 +3,8 @@ import type { Dispatch, ReactNode } from 'react';
 import type { SimState } from './types';
 import { reducer, initialState, SPEED_MS } from './engine';
 import type { Action } from './engine';
+import { getGlobalTickTracker, recordTickDuration } from './perfhud';
+import type { TickTrackerState } from './perfhud';
 
 // Pure engine logic lives in engine.ts so it is unit-testable without JSX.
 // Re-exported here for backward compatibility with existing `'../sim/store'`
@@ -35,12 +37,30 @@ const SimContext = createContext<SimContextValue | null>(null);
 
 export function SimProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, initialState);
+
+  // Wrap dispatch to measure tick duration (FEAT-1972079856: perf HUD).
+  // Only in DEV mode and only for 'tick' actions.
+  const tickTracker: TickTrackerState | null = import.meta.env.DEV ? getGlobalTickTracker() : null;
+  const wrappedDispatch = useMemo(() => {
+    if (!tickTracker) return dispatch;
+    return (action: Action) => {
+      if (action.type === 'tick') {
+        const start = performance.now();
+        dispatch(action);
+        const duration = performance.now() - start;
+        recordTickDuration(tickTracker, duration);
+      } else {
+        dispatch(action);
+      }
+    };
+  }, [tickTracker]);
+
   useEffect(() => {
     if (state.speed === 0) return;
-    const id = setInterval(() => dispatch({ type: 'tick' }), SPEED_MS[state.speed]);
+    const id = setInterval(() => wrappedDispatch({ type: 'tick' }), SPEED_MS[state.speed]);
     return () => clearInterval(id);
-  }, [state.speed]);
-  const value = useMemo(() => ({ state, dispatch }), [state]);
+  }, [state.speed, wrappedDispatch]);
+  const value = useMemo(() => ({ state, dispatch: wrappedDispatch }), [state, wrappedDispatch]);
   return <SimContext.Provider value={value}>{children}</SimContext.Provider>;
 }
 
