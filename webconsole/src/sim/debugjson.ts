@@ -66,6 +66,8 @@ import {
 } from './engine.ts';
 import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
 import type { MapUiState } from './uistate.ts';
+import { runConsistencyChecks } from './consistency.ts';
+import { businessTaxPerTick, councilTaxPerTick } from './fiscal.ts';
 
 /** Bumped when the serialized shape changes incompatibly. */
 export const DEBUG_JSON_FORMAT = 'metropolis-debug/1';
@@ -107,6 +109,11 @@ export interface DebugJsonBuilding {
   occ: number | null;
 }
 
+export interface ConsistencyReportJson {
+  checks: Array<{ id: string; ok: boolean; detail: string }>;
+  failures: number;
+}
+
 export interface DebugJson {
   meta: {
     format: string;
@@ -134,6 +141,8 @@ export interface DebugJson {
     nextLedgerId: number;
     lastRewardedLevel: number;
     notice: LevelUpNotice | null;
+    conservation: { tickStart: number; tickEnd: number };
+    pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
   };
   flows: {
     inflows: FlowItem[];
@@ -262,6 +271,7 @@ export interface DebugJson {
     list: DebugJsonBuilding[];
   };
   errors: CapturedError[];
+  consistency: ConsistencyReportJson;
   snapshotFrame: {
     takenAtMs: number;
     takenAt: string;
@@ -294,6 +304,9 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   ledger: 'fiscal.ledger.entries',
   nextLedgerId: 'sim.nextLedgerId',
   lastFlows: 'flows',
+  fundsAtTickStart: 'sim.conservation.tickStart',
+  fundsAtTickEnd: 'sim.conservation.tickEnd',
+  pendingRewards: 'sim.pendingRewards',
   lastRewardedLevel: 'sim.lastRewardedLevel',
   notice: 'sim.notice',
 };
@@ -318,6 +331,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   const c = countByKind(s.buildings);
   const bal = waterBalanceOf(s);
   const generatedAt = new Date(ui.frameAtMs).toISOString();
+  const consistency = runConsistencyChecks(s);
 
   // buildings — full per-building list + present-kind counts
   const byKind: Partial<Record<ZoneKind, number>> = {};
@@ -377,8 +391,8 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   // Rates tab yields (same formulas as the tab / computeFlows bases)
   const t = s.taxRates;
   const yieldsPerTick: TaxRates = {
-    residential: Math.round((s.population * t.residential * 2) / 100),
-    commercial: Math.round(c.commercial * t.commercial * 0.4),
+    residential: councilTaxPerTick(s.population, t.residential),
+    commercial: businessTaxPerTick(c.commercial, t.commercial),
     industrial: Math.round(c.industrial * t.industrial * 0.55),
   };
 
@@ -475,6 +489,12 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       nextLedgerId: s.nextLedgerId,
       lastRewardedLevel: s.lastRewardedLevel,
       notice: s.notice,
+      // TICK-BOUNDARY INVARIANT (Round-6): Conservation snapshot for determinism checking
+      conservation: {
+        tickStart: s.fundsAtTickStart,
+        tickEnd: s.fundsAtTickEnd,
+      },
+      pendingRewards: s.pendingRewards,
     },
     flows: {
       inflows: s.lastFlows.inflows,
@@ -561,6 +581,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
     },
     buildings: { count: s.buildings.length, byKind, list },
     errors: ui.errors,
+    consistency,
     snapshotFrame: {
       takenAtMs: ui.frameAtMs,
       takenAt: generatedAt,

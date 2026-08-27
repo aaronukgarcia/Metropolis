@@ -24,6 +24,7 @@ import {
   MAP_H,
   MAP_W,
 } from './data.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -160,6 +161,9 @@ function rawState(): SimState {
     ledger: [],
     nextLedgerId: 1,
     lastFlows: { inflows: [], outflows: [] },
+    fundsAtTickStart: 10000000,
+    fundsAtTickEnd: 10000000,
+    pendingRewards: [],
     // Start already "at" the seed level so the opening state grants no reward.
     lastRewardedLevel: levelOf(30),
     notice: null,
@@ -194,8 +198,8 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   const c = countByKind(s.buildings);
   const t = s.taxRates;
   const inflows: FlowItem[] = [
-    { label: 'Council Tax', value: Math.round((s.population * t.residential * 2) / 100) },
-    { label: 'Business Tax', value: Math.round(c.commercial * t.commercial * 0.4) },
+    { label: 'Council Tax', value: councilTaxPerTick(s.population, t.residential) },
+    { label: 'Business Tax', value: businessTaxPerTick(c.commercial, t.commercial) },
     { label: 'Freight Tax', value: Math.round(c.industrial * t.industrial * 0.55) },
   ];
   // BUG-404 FIX: removed the duplicate tourismDrive Tourism entry here.
@@ -247,7 +251,7 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   let outflows: FlowItem[] = Object.entries(buckets)
     .filter(([, v]) => v > 0)
     .map(([label, value]) => ({ label, value }));
-  outflows.push({ label: 'Wages', value: Math.round(s.population * 0.5) });
+  outflows.push({ label: 'Wages', value: wagesPerTick(s.population) });
 
   const c3 = countByKind(s.buildings);
   const freightIdx = inflows.findIndex((f) => f.label === 'Freight Tax');
@@ -312,32 +316,89 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
  * notice EXACTLY ONCE per level. Idempotent: a no-op unless levelOf(xp) has
  * advanced past lastRewardedLevel, so it is safe to call after any xp change.
  */
-export function grantLevelRewards(s: SimState): SimState {
+/**
+ * SINGLE SOURCE OF TRUTH: Compute level-up rewards (one per level crossed).
+ * For queuing: multiple calls don't stack; each call drains the old queue and computes fresh.
+ * Called exactly once per grant action (tick-time cross, debugXp, place).
+ *
+ * PLACEHOLDER: Reward base is PRE-TICK (s.funds before flows), consistent with how
+ * citizens earned XP during that tick. This ensures the reward % reflects the fund state
+ * the citizen earned from, not post-expense states.
+ *
+ * Returns array of results (one per level crossed), or empty array if no crossing.
+ * Each result includes the per-level cash, notice, and the accumulated newLevel.
+ */
+export interface LevelRewardResult {
+  totalReward: number;
+  newLevel: number;
+  notice: LevelUpNotice;
+}
+
+export function computeLevelRewards(s: SimState): LevelRewardResult[] {
   const lv = levelOf(s.xp);
-  if (lv <= s.lastRewardedLevel) return s;
+  if (lv <= s.lastRewardedLevel) return [];
+  const results: LevelRewardResult[] = [];
   let funds = s.funds;
-  let notice: LevelUpNotice | null = s.notice;
-  // A single jump may cross several levels (e.g. debugXp); reward each crossed
-  // level once, compounding, and surface the most recent as the live notice.
   for (let L = s.lastRewardedLevel + 1; L <= lv; L++) {
     const cash = Math.round(funds * LEVEL_REWARD_RATE);
     funds += cash;
-    notice = { level: L, cash, unlocked: unlockedAtLevel(L) };
+    const notice = { level: L, cash, unlocked: unlockedAtLevel(L) };
+    results.push({
+      totalReward: cash, // Per-level cash, not cumulative
+      newLevel: L,
+      notice,
+    });
   }
-  return { ...s, funds, lastRewardedLevel: lv, notice };
+  return results;
+}
+
+/**
+ * Drain and apply pending rewards, updating funds and lastRewardedLevel atomically.
+ * Does NOT recompute; takes results verbatim from computeLevelRewards().
+ * Called by advance() to apply queued rewards through flows.
+ */
+export function grantLevelRewards(s: SimState): SimState {
+  if (s.pendingRewards.length === 0) return s;
+  let funds = s.funds;
+  let lastRewardedLevel = s.lastRewardedLevel;
+  let notice: LevelUpNotice | null = s.notice;
+  for (const lr of s.pendingRewards) {
+    funds += lr.totalReward;
+    lastRewardedLevel = lr.newLevel;
+    notice = lr.notice;
+  }
+  return { ...s, funds, lastRewardedLevel, notice };
 }
 
 function advance(s: SimState): SimState {
-  const { inflows, outflows } = computeFlows(s);
+  // TICK-BOUNDARY INVARIANT (Round-6): Record funds at tick start for conservation checking.
+  const fundsAtTickStart = s.funds;
+
+  let { inflows, outflows } = computeFlows(s);
+  const tick = s.tick + 1;
+
+  // BUG-406 FIX: route regional grant through lastFlows for conservation tracking
+  // (was: funds += 800 without recording in flows, breaking conservation check).
+  if (tick % 30 === 0) {
+    inflows = [...inflows, { label: 'Regional Grant', value: 800 }];
+  }
+
+  // Drain pending rewards queue (from debugXp and place actions).
+  // Each applies through flows so it's visible in fiscal panel and counts for conservation.
+  let nextNotice = s.notice;
+  for (const pr of s.pendingRewards) {
+    inflows = [...inflows, { label: 'Level Rewards', value: pr.totalReward }];
+    nextNotice = pr.notice; // Last notice wins (multiple crossings rare but possible)
+  }
+
   const income = inflows.reduce((a, b) => a + b.value, 0);
   const expense = outflows.reduce((a, b) => a + b.value, 0);
   let funds = s.funds + income - expense;
   let ledger: LedgerEntry[] = s.ledger;
   let nextLedger = s.nextLedgerId;
-  const tick = s.tick + 1;
 
+  // Ledger entry for grant (mirrors the flow inflow for audit consistency)
   if (tick % 30 === 0) {
-    funds += 800;
     ledger = [{ id: nextLedger++, tick, label: 'Regional Grant', amount: 800 }, ...ledger].slice(0, LEDGER_CAP);
   }
 
@@ -371,17 +432,47 @@ function advance(s: SimState): SimState {
     population = Math.max(capacity, population - Math.ceil((population - capacity) * 0.1));
   }
 
-  return grantLevelRewards({
+  // Compute in-tick level rewards (if any) EXACTLY ONCE to add to flows for conservation tracking.
+  // Increment XP first so computeLevelRewards can check the new level.
+  // computeLevelRewards now returns array (one per level crossed, or empty).
+  const newXp = s.xp + 1;
+  const tempState = { ...s, xp: newXp };
+  const inTickRewards = computeLevelRewards(tempState);
+  for (const lr of inTickRewards) {
+    // Record each per-level reward as a separate inflow for fiscal panel visibility.
+    inflows = [...inflows, { label: 'Level Rewards', value: lr.totalReward }];
+    funds += lr.totalReward; // CRITICAL: Apply reward to funds (BUG-406 R7 fix)
+    nextNotice = lr.notice; // Latest level's notice (usually just one in-tick)
+  }
+
+  // Update lastRewardedLevel for all rewards (both pending and in-tick).
+  let lastRewardedLevel = s.lastRewardedLevel;
+  for (const pr of s.pendingRewards) {
+    lastRewardedLevel = pr.newLevel;
+  }
+  for (const lr of inTickRewards) {
+    lastRewardedLevel = lr.newLevel;
+  }
+
+  // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking.
+  const fundsAtTickEnd = funds;
+
+  return {
     ...s,
     tick,
     funds,
+    fundsAtTickStart,
+    fundsAtTickEnd,
+    pendingRewards: [], // Drained
     population,
-    xp: s.xp + 1,
+    xp: newXp,
     history: [...s.history, { tick, funds, income, expense, population }].slice(-HISTORY_CAP),
     ledger,
     nextLedgerId: nextLedger,
     lastFlows: { inflows, outflows },
-  });
+    lastRewardedLevel,
+    notice: nextNotice,
+  };
 }
 
 function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'ledger' | 'nextLedgerId'> {
@@ -437,7 +528,7 @@ export function reducer(state: SimState, action: Action): SimState {
       )
         return state;
       if (!fits(occupiedSet(state), sp.w, sp.h, action.x, action.y)) return state;
-      return grantLevelRewards({
+      const updated = {
         ...state,
         funds: state.funds - cost,
         xp: state.xp + 4,
@@ -447,7 +538,23 @@ export function reducer(state: SimState, action: Action): SimState {
           { id: state.nextId, spec: action.spec, x: action.x, y: action.y, builtTick: state.tick },
         ],
         ...logEvent(state, `Started ${sp.name}`, -cost),
-      });
+      };
+      const rewards = computeLevelRewards(updated);
+      if (rewards.length === 0) return updated;
+      // Push rewards to pending queue instead of applying immediately.
+      // advance() will drain and apply through flows (visible in fiscal panel).
+      // Gameplay: reward cash lands at next tick (sub-second at normal speed).
+      // CRITICAL: Update lastRewardedLevel NOW so advance() doesn't recompute these rewards
+      let lastRewardedLevel = state.lastRewardedLevel;
+      for (const r of rewards) {
+        lastRewardedLevel = r.newLevel;
+      }
+      return {
+        ...updated,
+        pendingRewards: [...state.pendingRewards, ...rewards],
+        lastRewardedLevel, // Mark as rewarded now (funds apply later)
+        notice: rewards[rewards.length - 1].notice, // Show latest level's notice immediately for UX
+      };
     }
 
     case 'bulldoze': {
@@ -549,10 +656,30 @@ export function reducer(state: SimState, action: Action): SimState {
     }
 
     case 'debugFunds':
+      // Tick-boundary invariant (Round-6): between-tick mutations never affect
+      // conservation checks (they use funcsAtTickStart/End only, not working-tree funds).
+      // No re-baselining needed.
       return { ...state, funds: state.funds + action.amount };
 
-    case 'debugXp':
-      return grantLevelRewards({ ...state, xp: state.xp + action.amount });
+    case 'debugXp': {
+      const updated = { ...state, xp: state.xp + action.amount };
+      const rewards = computeLevelRewards(updated);
+      if (rewards.length === 0) return updated;
+      // Push each reward to pending queue instead of applying immediately.
+      // advance() will drain and apply through flows (visible in fiscal panel).
+      // Gameplay: reward cash lands at next tick (sub-second at normal speed).
+      // CRITICAL: Update lastRewardedLevel NOW so advance() doesn't recompute these rewards
+      let lastRewardedLevel = state.lastRewardedLevel;
+      for (const r of rewards) {
+        lastRewardedLevel = r.newLevel;
+      }
+      return {
+        ...updated,
+        pendingRewards: [...state.pendingRewards, ...rewards],
+        lastRewardedLevel, // Mark as rewarded now (funds apply later)
+        notice: rewards[rewards.length - 1].notice, // Show latest level's notice immediately for UX
+      };
+    }
 
     case 'dismissNotice':
       return state.notice == null ? state : { ...state, notice: null };

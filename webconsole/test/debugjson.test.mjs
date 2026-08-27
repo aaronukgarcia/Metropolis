@@ -197,8 +197,9 @@ test('SIZE GUARD: ~7k-building city serializes, round-trips, and reports its byt
   assert.equal(parsed.buildings.list.length, big.buildings.length, 'no building lost at scale');
   // One compact line per building keeps the file linear in the city size, and
   // a building row is ~100 bytes — 8 MB would mean the compact form regressed
-  // to fully-indented output (~9 lines/building). Structural bound, not a
-  // wall-clock one.
-  assert.ok(bytes < 4_000_000, `debug.json at ${big.buildings.length} buildings is ${bytes} bytes — compact form regressed?`);
+  // to fully-indented output (~9 lines/building). Consistency checks add ~50 bytes
+  // per building (many checks with terse details), so the bound is now ~5.5 MB.
+  // Structural bound, not a wall-clock one.
+  assert.ok(bytes < 5_500_000, `debug.json at ${big.buildings.length} buildings is ${bytes} bytes — compact form regressed?`);
   console.log(`[size-guard] debug.json at ${big.buildings.length} buildings: ${bytes} bytes (${(bytes / 1024).toFixed(0)} KiB)`);
 });

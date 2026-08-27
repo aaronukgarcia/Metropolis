@@ -91,17 +91,32 @@ test('level-up grants ~10% cash + notice, EXACTLY ONCE per crossing', () => {
   const need = xpForLevel(2) - s0.xp + 1;
   const s1 = reducer(s0, { type: 'debugXp', amount: need });
   assert.equal(levelOf(s1.xp), 2, 'now level 2');
+  // Round-6: debugXp queues reward, updates lastRewardedLevel immediately to prevent re-computation.
+  assert.ok(s1.notice && s1.notice.level === 2, 'notice appears immediately (UX)');
+  assert.equal(s1.funds, s0.funds, 'funds NOT increased yet (queued, not applied)');
+  assert.equal(s1.lastRewardedLevel, 2, 'lastRewardedLevel UPDATED immediately (marked as rewarded)');
+  assert.equal(s1.pendingRewards.length, 1, 'one reward pending');
+
+  // Drain via advance() to apply the reward.
+  const s1b = reducer(s1, { type: 'tick' });
   const expectCash = Math.round(s0.funds * LEVEL_REWARD_RATE);
-  assert.equal(s1.funds - s0.funds, expectCash, 'reward is ~10% of prior funds');
-  assert.ok(s1.notice && s1.notice.level === 2, 'notice announces level 2');
-  assert.equal(s1.lastRewardedLevel, 2);
+  assert.equal(s1b.lastRewardedLevel, 2, 'lastRewardedLevel updated after drain');
+  // Verify reward appears in flows
+  const levelRewardFlows = s1b.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  assert.equal(levelRewardFlows.length, 1, 'exactly one Level Rewards inflow');
+  assert.equal(levelRewardFlows[0].value, expectCash, 'Level Rewards inflow is the expected amount');
+  // Funds change = reward + other flows (which may be positive or negative)
+  const income = s1b.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
+  const expense = s1b.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
+  assert.equal(s1b.funds - s0.funds, income - expense, 'funds change matches net flows (including reward)');
   // The notice lists what unlocked at level 2 (data-derived, non-empty here).
-  assert.deepEqual(s1.notice.unlocked, unlockedAtLevel(2));
+  assert.deepEqual(s1b.notice.unlocked, unlockedAtLevel(2));
 
   // A further xp bump that STAYS in level 2 must NOT reward again.
-  const s2 = reducer(s1, { type: 'debugXp', amount: 1 });
-  assert.equal(s2.funds, s1.funds, 'no second reward within the same level');
-  assert.equal(s2.lastRewardedLevel, 2);
+  const s2 = reducer(s1b, { type: 'debugXp', amount: 1 });
+  assert.equal(s2.funds, s1b.funds, 'no second reward within the same level');
+  assert.equal(s2.lastRewardedLevel, 2, 'lastRewardedLevel unchanged');
+  assert.equal(s2.pendingRewards.length, 0, 'no new pending rewards');
 
   // Dismiss, then bump again inside level 2 — notice stays cleared (fires once).
   const s3 = reducer(s2, { type: 'dismissNotice' });
@@ -116,10 +131,30 @@ test('crossing multiple levels at once rewards each level exactly once', () => {
   // Jump straight to level 4.
   const s1 = reducer(s0, { type: 'debugXp', amount: xpForLevel(4) });
   assert.equal(levelOf(s1.xp), 4);
-  assert.equal(s1.lastRewardedLevel, 4, 'lastRewardedLevel catches up to the new level');
-  // Compounded three 10% injections (levels 2,3,4) — funds strictly grew, once each.
-  let expected = s0.funds;
-  for (let L = 2; L <= 4; L++) expected += Math.round(expected * LEVEL_REWARD_RATE);
-  assert.equal(s1.funds, expected, 'each crossed level granted its reward once, compounding');
-  assert.ok(s1.notice && s1.notice.level === 4, 'the live notice shows the latest level');
+  // Round-6: debugXp queues multiple rewards, updates lastRewardedLevel immediately.
+  assert.equal(s1.lastRewardedLevel, 4, 'lastRewardedLevel caught up immediately (marked as rewarded)');
+  assert.equal(s1.funds, s0.funds, 'funds NOT increased yet (queued)');
+  assert.equal(s1.pendingRewards.length, 3, 'three rewards pending (levels 2,3,4)');
+  assert.ok(s1.notice && s1.notice.level === 4, 'the notice shows the latest level (immediate UX)');
+
+  // Drain via advance() to apply all queued rewards.
+  const s2 = reducer(s1, { type: 'tick' });
+  assert.equal(s2.lastRewardedLevel, 4, 'lastRewardedLevel caught up after drain');
+  // Verify rewards appear in flows (one per level crossed)
+  const levelRewardFlows = s2.lastFlows.inflows.filter((f) => f.label === 'Level Rewards');
+  assert.equal(levelRewardFlows.length, 3, 'three Level Rewards inflows (one per level)');
+  // Compute expected rewards based on compounding (each level gets 10% of current funds)
+  let expectedReward = 0;
+  let fundBase = s0.funds;
+  for (let L = 2; L <= 4; L++) {
+    const levelCash = Math.round(fundBase * LEVEL_REWARD_RATE);
+    expectedReward += levelCash;
+    fundBase += levelCash;
+  }
+  const totalLevelRewards = levelRewardFlows.reduce((a, f) => a + f.value, 0);
+  assert.equal(totalLevelRewards, expectedReward, 'total rewards match expected compounding');
+  // Funds change = reward + other flows
+  const income = s2.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
+  const expense = s2.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
+  assert.equal(s2.funds - s0.funds, income - expense, 'funds change matches net flows');
 });

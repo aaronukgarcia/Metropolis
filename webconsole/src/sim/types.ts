@@ -109,6 +109,24 @@ export interface SimState {
   nextLedgerId: number;
   lastFlows: { inflows: FlowItem[]; outflows: FlowItem[] };
   /**
+   * TICK-BOUNDARY INVARIANT (FEAT-1972079890, BUG-406, Round-6): Conservation is checked
+   * using tick snapshots, not working-tree funds. fundsAtTickStart is funds when
+   * the last advance() began (before flows). fundsAtTickEnd is funds when advance()
+   * returned (after flows + in-tick rewards). The checker verifies:
+   * fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows.
+   * Between-tick mutations (debugXp, place cost, dev +10M) never affect conservation
+   * checks and require no re-baselining tricks.
+   */
+  fundsAtTickStart: number;
+  fundsAtTickEnd: number;
+  /**
+   * Queue of level-up rewards granted outside the tick (debugXp, place action).
+   * Each advance() drains pendingRewards, applying each reward through flows so it
+   * appears in lastFlows and counts for conservation. Gameplay: reward cash lands
+   * at the next tick (sub-second at normal speed).
+   */
+  pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
+  /**
    * Highest experience level already rewarded (FEAT-1972079884). Guarantees the
    * milestone cash injection + notification fire EXACTLY ONCE per level crossing:
    * a reward only triggers while levelOf(xp) > lastRewardedLevel.
