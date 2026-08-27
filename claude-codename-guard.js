@@ -259,5 +259,14 @@ try {
     // own scan() uses.
     PATTERNS,
     isLowerLetter,
+    // BUG-416: exported so claude-codename-content-scan.js can reuse the
+    // lockfile exemption list (GR#3 single source of truth — one place to
+    // maintain the standard lockfile basenames list, never a second drifted
+    // copy). The content-scan enforcer needs the same file-path-aware filtering
+    // as this guard so integrity-hash-shaped lines are skipped only in known
+    // lockfiles, not in arbitrary source files where they'd be a real codename
+    // smuggle.
+    LOCKFILE_BASENAMES,
+    isKnownLockfileBasename,
   };
 }

@@ -83,6 +83,8 @@
 const { execFileSync } = require('child_process');
 const patterns = require('./claude-codename-patterns.js');
 const { splitDiffSections } = require('./claude-codename-diff.js');
+const { LOCKFILE_BASENAMES, isKnownLockfileBasename } = require('./claude-codename-guard.js');
+const { NPM_INTEGRITY_HASH_RE } = require('./claude-codename-patterns.js');
 
 /** Runs `git diff --cached --unified=0` and returns the added-line content
  * (never the working tree, never unstaged changes — AC-2). Throws on any
@@ -148,17 +150,56 @@ function stagedPathHeaderLines() {
   return splitDiffSections(diff).pathHeaderLines;
 }
 
+/** BUG-416: returns the diff's `sections` array (per-file breakdown of added
+ * lines) from splitDiffSections(). This allows scanStagedDiff() to apply
+ * file-specific filtering: integrity-hash-shaped lines are scanned normally in
+ * most files, but skipped (only for integrity-hash shape AND in a known
+ * lockfile basename) to prevent false positives from machine-generated npm
+ * lockfile hashes. The same fail-closed contract as stagedAddedLines(): git
+ * invocation failure propagates to the caller. */
+function stagedDiffSections() {
+  if (process.env.CLAUDE_CODENAME_SCAN_FORCE_ERROR === '1') {
+    throw new Error('CLAUDE_CODENAME_SCAN_FORCE_ERROR forced failure (test-only escape hatch)');
+  }
+  const diff = execFileSync('git', ['diff', '--cached', '--unified=0', '--no-color'], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+  return splitDiffSections(diff).sections;
+}
+
 /** Core check: scans the staged diff's added lines against the shared GR#22
  * pattern set (claude-codename-patterns.js — GR#3, no second copy). Returns
  * an array of human-readable hit descriptions (empty when clean). Throws if
  * `git diff` itself fails, or if the shared pattern module's scan() throws
  * (AC-4's "lazy implementation" trap: there is no fallback pattern list
  * here — a broken shared module means this scan cannot verify anything, so
- * it must not silently report "clean"). */
+ * it must not silently report "clean").
+ *
+ * BUG-416: applies file-specific filtering to the added lines before
+ * scanning: integrity-hash-shaped lines are skipped ONLY in known lockfile
+ * basenames (package-lock.json, npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml),
+ * preventing false positives from machine-generated npm integrity hashes. In all
+ * other files, integrity-hash-shaped lines are scanned normally (a crafted line
+ * carrying the reference title's numbered form in source code is caught). */
 function scanStagedDiff() {
-  const added = stagedAddedLines();
   const hits = [];
-  patterns.scan(added, 'staged content (added lines)', hits);
+
+  // BUG-416: scan added lines with file-specific filtering. Integrity-hash
+  // lines are skipped ONLY for known lockfile basenames, not in arbitrary
+  // source files where such a line would be a real smuggle attempt.
+  const sections = stagedDiffSections();
+  const filteredLines = [];
+  for (const section of sections) {
+    const isLockfile = isKnownLockfileBasename(section.filePath);
+    for (const line of section.addedLines) {
+      // Only skip integrity-hash lines if this is a known lockfile.
+      if (isLockfile && NPM_INTEGRITY_HASH_RE.test(line)) continue;
+      filteredLines.push(line);
+    }
+  }
+  patterns.scan(filteredLines.join('\n'), 'staged content (added lines)', hits);
 
   // BUG-183: also scan the new/renamed/copied file paths themselves, same
   // shared pattern set, same fail-closed posture — a violation living only
@@ -172,5 +213,6 @@ function scanStagedDiff() {
 module.exports = {
   stagedAddedLines,
   stagedPathHeaderLines,
+  stagedDiffSections,
   scanStagedDiff,
 };

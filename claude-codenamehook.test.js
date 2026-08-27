@@ -76,7 +76,7 @@ function initRepo(dir) {
   gitOk(dir, ['init', '-b', 'main']);
   gitOk(dir, ['config', 'user.name', SANCTIONED_NAME]);
   gitOk(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
-  for (const f of ['claude-author-identity.js', 'claude-codename-content-scan.js', 'claude-codename-patterns.js', 'claude-codename-diff.js']) {
+  for (const f of ['claude-author-identity.js', 'claude-codename-content-scan.js', 'claude-codename-patterns.js', 'claude-codename-diff.js', 'claude-codename-guard.js', 'claude-git-commit-trigger.js', 'claude-quote-mask.js']) {
     fs.copyFileSync(path.join(__dirname, f), path.join(dir, f));
   }
   install.install(dir);
@@ -571,4 +571,98 @@ test('AC-11: the hook header names the editor-composed commit-message-body gap e
   assert.match(src, /message body|MESSAGE BODY/i);
   const scanSrc = fs.readFileSync(path.join(__dirname, 'claude-codename-content-scan.js'), 'utf8');
   assert.match(scanSrc, /message body|MESSAGE BODY/i);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-416: npm lockfile integrity-hash exemption — integrity-hash-shaped
+// lines are skipped ONLY in known lockfile basenames (package-lock.json,
+// npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml), preventing false positives
+// from machine-generated hashes. In other files, integrity-hash-shaped lines
+// are scanned normally (a crafted line carrying the forbidden token is caught).
+// ---------------------------------------------------------------------------
+
+test('BUG-416 test 1: a fake integrity-hash line carrying the numbered abbreviation in a NON-lockfile (.ts/.go/.md) is FLAGGED', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    // Construct a line that LOOKS like an integrity hash but is in a TypeScript
+    // file (not a lockfile). The forbidden token is embedded in the base64
+    // portion. The line format matches NPM_INTEGRITY_HASH_RE but the file is
+    // not a known lockfile, so it should be scanned and flagged.
+    const fakeHashLine = `  "integrity": "sha512-${ABBR}abcdefghijklmnopqrstuvwxyz1234567890/+/=",\n`;
+    writeAndStage(dir, 'src.ts', fakeHashLine);
+    const before = commitCount(dir);
+    const r = git(dir, ['commit', '-m', 'fake integrity in ts file']);
+    assert.notEqual(r.status, 0, 'expected the forbidden token in a non-lockfile to be flagged, even if the line looks like an integrity hash');
+    assert.match(r.stderr || '', /CODENAME/);
+    assert.equal(commitCount(dir), before, 'no commit object should have been created');
+  });
+});
+
+test('BUG-416 test 2: a genuine integrity-hash line in package-lock.json with the numbered abbreviation by chance is SKIPPED', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    // A real package-lock.json file with an integrity-hash line containing
+    // the forbidden token by chance (simulating the tsx/esbuild scenario from
+    // BUG-416). The file is named exactly "package-lock.json" so it matches
+    // the known lockfile basename. The line should be skipped during scanning.
+    const lockFileContent = `{
+  "packages": {
+    "node_modules/tsx": {
+      "integrity": "sha512-${ABBR}abcdefghijklmnopqrstuvwxyz1234567890/+/=",
+      "name": "tsx"
+    }
+  }
+}
+`;
+    writeAndStage(dir, 'package-lock.json', lockFileContent);
+    const before = commitCount(dir);
+    const r = git(dir, ['commit', '-m', 'add tsx to lock file']);
+    assert.equal(r.status, 0, `expected integrity hash in package-lock.json to be skipped. stderr: ${r.stderr}`);
+    assert.equal(commitCount(dir), before + 1, 'the commit should succeed because the integrity hash line is skipped in lockfiles');
+  });
+});
+
+test('BUG-416 test 3: basename exactness — package-lock.json.bak and mypackage-lock.json are NOT treated as lockfiles (FLAGGED)', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    // A file named "package-lock.json.bak" (not an exact match) should NOT
+    // be treated as a lockfile, so the forbidden token should be flagged.
+    const fakeHashLine = `  "integrity": "sha512-${ABBR}abcdefghijklmnopqrstuvwxyz1234567890/+/=",\n`;
+    writeAndStage(dir, 'package-lock.json.bak', fakeHashLine);
+    const before = commitCount(dir);
+    const r = git(dir, ['commit', '-m', 'fake integrity in bak file']);
+    assert.notEqual(r.status, 0, 'expected the forbidden token in package-lock.json.bak to be flagged (not a known lockfile basename)');
+    assert.match(r.stderr || '', /CODENAME/);
+    assert.equal(commitCount(dir), before, 'no commit object should have been created');
+  });
+});
+
+test('BUG-416 test 3b: mypackage-lock.json (wrong prefix) is also NOT treated as a lockfile', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    // A file named "mypackage-lock.json" (basename doesn't match exactly)
+    // should NOT be treated as a lockfile.
+    const fakeHashLine = `  "integrity": "sha512-${ABBR}abcdefghijklmnopqrstuvwxyz1234567890/+/=",\n`;
+    writeAndStage(dir, 'mypackage-lock.json', fakeHashLine);
+    const before = commitCount(dir);
+    const r = git(dir, ['commit', '-m', 'fake integrity in mypackage-lock.json']);
+    assert.notEqual(r.status, 0, 'expected the forbidden token in mypackage-lock.json to be flagged (basename must match exactly)');
+    assert.match(r.stderr || '', /CODENAME/);
+    assert.equal(commitCount(dir), before, 'no commit object should have been created');
+  });
+});
+
+test('BUG-416 test 4: ordinary prose with the numbered abbreviation is still FLAGGED (integrity-hash shape alone does not exempt a line)', () => {
+  withTempRepo((dir) => {
+    initRepo(dir);
+    // A line that is NOT an integrity hash but contains the forbidden token
+    // should always be flagged, regardless of what file it's in.
+    const ordinaryProse = `This is a comment about ${ABBR} in the code.\n`;
+    writeAndStage(dir, 'package-lock.json', ordinaryProse);
+    const before = commitCount(dir);
+    const r = git(dir, ['commit', '-m', 'ordinary prose in lock file']);
+    assert.notEqual(r.status, 0, 'expected ordinary prose with the forbidden token to be flagged, even in a lockfile');
+    assert.match(r.stderr || '', /CODENAME/);
+    assert.equal(commitCount(dir), before, 'no commit object should have been created');
+  });
 });
