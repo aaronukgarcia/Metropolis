@@ -24,6 +24,12 @@ import (
 // NewTreasuryPrecondition/NewFixtureAction's correlationID parameter.
 const FixtureCorrelationID = "helperfixture-default"
 
+// errPreconditionEvalFailed is the registry code for TreasuryPrecondition
+// evaluation failures. Defined locally as a literal (not as
+// helper.ErrPreconditionEvalFailed) so the errs gate's AST scanner can
+// resolve it (the scanner only recognizes string literal const values).
+const errPreconditionEvalFailed = "MET-E704"
+
 // --- the shared pricing data source (AC-5's drift-test pattern) ---
 
 // sharedFixtureCostMicropounds is the SINGLE data source both
@@ -93,14 +99,14 @@ func (p treasuryPrecondition) Evaluate(state helper.GameStateView) (bool, error)
 		// would read to a caller as "the treasury is insufficient",
 		// which is a different, false claim from "this could not be
 		// checked at all".
-		return false, errs.Wrap(helper.ErrPreconditionEvalFailed, p.correlationID, err, map[string]any{
+		return false, errs.Wrap(errPreconditionEvalFailed, p.correlationID, err, map[string]any{
 			"preconditionID": p.ID(),
 			"cause":          "GameStateView missing field \"" + treasuryFieldName + "\"",
 		})
 	}
 	balance, ok := raw.(int64)
 	if !ok {
-		return false, errs.New(helper.ErrPreconditionEvalFailed, p.correlationID, map[string]any{
+		return false, errs.New(errPreconditionEvalFailed, p.correlationID, map[string]any{
 			"preconditionID": p.ID(),
 			"cause":          "GameStateView field \"" + treasuryFieldName + "\" is not an int64",
 		})

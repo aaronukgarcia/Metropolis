@@ -20,6 +20,20 @@ const errorTailLimit = 50
 // unbounded across a long session; only the most recent events are kept.
 const eventLogLimit = 100
 
+// Registry-sourced error codes for this package (module key ui.screen.debug).
+// Each code is registered in data/errors.json's "U200-U209" reserved range.
+const (
+	// ErrRegistryUnavailable: the engine's registry (phase, status, metrics)
+	// could not be queried or is nil.
+	ErrRegistryUnavailable = "MET-U200"
+
+	// ErrErrorTailUnavailable: the errs.Recent() tail could not be retrieved.
+	ErrErrorTailUnavailable = "MET-U201"
+
+	// ErrBoWUnavailable: the Book of Work source could not be queried.
+	ErrBoWUnavailable = "MET-U202"
+)
+
 // Screen is F12: see doc.go for the full package contract. The zero
 // value is not usable — construct with NewScreen.
 //
@@ -201,7 +215,7 @@ func (s *Screen) collectRegistry(reg *registry.Registry, snap *Snapshot) {
 	if reg == nil {
 		snap.RegistryAvailable = false
 		snap.RegistryReason = "module registry not booted"
-		s.logUnavailable("MET-U200", snap.RegistryReason)
+		s.logUnavailable(ErrRegistryUnavailable, snap.RegistryReason)
 		return
 	}
 	snap.RegistryAvailable = true
@@ -212,7 +226,7 @@ func (s *Screen) collectErrorTail(fn ErrorTailFunc, snap *Snapshot) {
 	if fn == nil {
 		snap.ErrorTailAvailable = false
 		snap.ErrorTailReason = "error-tail source not configured"
-		s.logUnavailable("MET-U201", snap.ErrorTailReason)
+		s.logUnavailable(ErrErrorTailUnavailable, snap.ErrorTailReason)
 		return
 	}
 	entries := fn()
@@ -254,14 +268,14 @@ func (s *Screen) collectBoW(src BoWSource, snap *Snapshot) {
 	if src == nil {
 		snap.BoWAvailable = false
 		snap.BoWReason = "BoW source not configured"
-		s.logUnavailable("MET-U202", snap.BoWReason)
+		s.logUnavailable(ErrBoWUnavailable, snap.BoWReason)
 		return
 	}
 	summary, err := src.Summary()
 	if err != nil {
 		snap.BoWAvailable = false
 		snap.BoWReason = err.Error()
-		s.logUnavailable("MET-U202", snap.BoWReason)
+		s.logUnavailable(ErrBoWUnavailable, snap.BoWReason)
 		return
 	}
 	snap.BoWAvailable = true

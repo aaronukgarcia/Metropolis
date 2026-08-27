@@ -185,17 +185,16 @@ func Load[T any, PT interface {
 
 	pv := PT(&v)
 	if err := pv.Validate(); err != nil {
-		code := CodeSchemaInvalid
 		ctx := map[string]any{"path": path}
 		var fe *FieldError
 		if errors.As(err, &fe) {
 			ctx["field"] = fe.Field
 			ctx["rule"] = fe.Rule
 			if fe.Field == "version" {
-				code = CodeMissingVersion
+				return zero, errs.Wrap(CodeMissingVersion, correlationID, err, ctx)
 			}
 		}
-		return zero, errs.Wrap(code, correlationID, err, ctx)
+		return zero, errs.Wrap(CodeSchemaInvalid, correlationID, err, ctx)
 	}
 
 	return v, nil
