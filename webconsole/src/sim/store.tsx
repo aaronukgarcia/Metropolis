@@ -7,6 +7,9 @@ import { getGlobalTickTracker, recordTickDuration } from './perfhud';
 import type { TickTrackerState } from './perfhud';
 import { recordAction, emptyJournal, persistJournal, loadJournal, journalTail, type Journal } from './journal';
 import { AUTOSAVE_INTERVAL_MS, persistSavepoint, createSavepoint, restoreFromSavepoint } from './replay';
+import { attemptWipe } from './captureBeforeWipe';
+import { versionRaw } from './version';
+import { recordError } from './backend';
 
 // Pure engine logic lives in engine.ts so it is unit-testable without JSX.
 // Re-exported here for backward compatibility with existing `'../sim/store'`
@@ -63,6 +66,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const [journal, setJournal] = useState<Journal>(boot.journal);
   const [lastSaveIndex, setLastSaveIndex] = useState<number>(boot.saveIndex);
   const [autoSaveError, setAutoSaveError] = useState<boolean>(false);
+  // GR#27 (BUG-420): surfaced when a Start Over / reset was ABORTED because the
+  // mandatory pre-wipe debug capture failed. The wipe did not happen; state is intact.
+  const [captureError, setCaptureError] = useState<string | null>(null);
 
   // Wrap dispatch to:
   // 1. Record state-affecting actions in the journal (FEAT-1972079854: journal recording)
@@ -74,7 +80,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // path runs under test — without it the mount test could only skip (BUG-412 round).
   const tickTracker: TickTrackerState | null = import.meta.env?.DEV ? getGlobalTickTracker() : null;
   const wrappedDispatch = useMemo(() => {
-    return (action: Action) => {
+    // Journal-record + dispatch the action (shared by the normal path and the
+    // guarded reset path below).
+    const recordAndDispatch = (action: Action) => {
       // Record action in journal if state-affecting.
       setJournal((j) => {
         const updated = recordAction(j, state.tick, action);
@@ -95,7 +103,28 @@ export function SimProvider({ children }: { children: ReactNode }) {
         timedAction();
       }
     };
-  }, [tickTracker, state.tick]);
+
+    return (action: Action) => {
+      // GR#27 CAPTURE BEFORE WIPE (fail-closed): a reset wipes the running
+      // SimState, so it may proceed ONLY after the full debug JSON of the
+      // current state is archived. attemptWipe captures first and runs the
+      // wipe callback only if the capture did not throw; on failure we abort
+      // (no journal record, no dispatch — state untouched) and surface an error.
+      if (action.type === 'reset') {
+        try {
+          attemptWipe(state, versionRaw, window.localStorage, () => recordAndDispatch(action));
+          setCaptureError(null);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          recordError(`Start Over aborted — pre-wipe debug capture failed: ${msg}. State left intact.`);
+          setCaptureError(msg);
+        }
+        return;
+      }
+
+      recordAndDispatch(action);
+    };
+  }, [tickTracker, state]);
 
   // Autosave timer: every AUTOSAVE_INTERVAL_MS, persist a savepoint.
   // FEAT-1972079854: rolling autosave with fail-safe error handling.
@@ -143,6 +172,29 @@ export function SimProvider({ children }: { children: ReactNode }) {
           title="Autosave failed; your progress may not be recoverable on reload"
         >
           ⚠ save
+        </div>
+      )}
+      {captureError && (
+        <div
+          role="alert"
+          style={{
+            position: 'fixed',
+            bottom: '8px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            maxWidth: '90vw',
+            padding: '6px 12px',
+            fontSize: '12px',
+            color: '#fff',
+            background: '#a11',
+            borderRadius: '4px',
+            fontFamily: 'monospace',
+            zIndex: 2,
+          }}
+          title="The reset was aborted because the mandatory pre-wipe debug capture failed. Your city is unchanged."
+          onClick={() => setCaptureError(null)}
+        >
+          ⚠ Start Over aborted — could not archive debug snapshot ({captureError}). Your city is intact.
         </div>
       )}
       {children}
