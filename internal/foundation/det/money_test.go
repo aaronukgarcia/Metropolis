@@ -88,3 +88,95 @@ func TestMulRat_NoOverflow(t *testing.T) {
 		t.Fatalf("MulRat(1_000_000, 1, 10) = %d, want 100000", got)
 	}
 }
+
+// TestMulRat_DivisionOverflow verifies that MulRat catches the MinInt64/-1
+// division overflow case (AC-11: no silent wrapping). This is the specific
+// case where product == MinInt64 && den == -1 causes int64 division to
+// overflow and wrap silently without the fix.
+func TestMulRat_DivisionOverflow(t *testing.T) {
+	tests := []struct {
+		name string
+		a    Micropounds
+		num  int64
+		den  int64
+	}{
+		{
+			name: "MinInt64 / -1 direct",
+			a:    Micropounds(1),
+			num:  math.MinInt64,
+			den:  -1,
+		},
+		{
+			name: "MinInt64 / -1 from negative numerator",
+			a:    Micropounds(-1),
+			num:  math.MinInt64,
+			den:  -1,
+		},
+		{
+			name: "product wraps to MinInt64, den -1",
+			// This is the case from the bug: if somehow product == MinInt64,
+			// dividing by -1 would overflow.
+			a:   Micropounds(math.MinInt64),
+			num: 1,
+			den: -1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := MulRat("corr-bug-286", tt.a, tt.num, tt.den)
+			if err == nil {
+				t.Fatalf("MulRat(%d, %d, %d): want overflow error, got nil",
+					tt.a, tt.num, tt.den)
+			}
+		})
+	}
+}
+
+// TestMulRat_BoundaryNoOverflow verifies that MulRat handles boundary values
+// correctly when they do NOT overflow.
+func TestMulRat_BoundaryNoOverflow(t *testing.T) {
+	tests := []struct {
+		name     string
+		a        Micropounds
+		num      int64
+		den      int64
+		expected Micropounds
+	}{
+		{
+			name:     "MaxInt64 / 1 safe numerator",
+			a:        Micropounds(1),
+			num:      1,
+			den:      1,
+			expected: 1,
+		},
+		{
+			name:     "small values, den -1",
+			a:        Micropounds(100),
+			num:      1,
+			den:      -1,
+			expected: -100,
+		},
+		{
+			name:     "MinInt64+1 / -1 safe",
+			a:        Micropounds(math.MinInt64 + 1),
+			num:      1,
+			den:      -1,
+			expected: Micropounds(-(math.MinInt64 + 1)),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := MulRat("corr-boundary", tt.a, tt.num, tt.den)
+			if err != nil {
+				t.Fatalf("MulRat(%d, %d, %d): unexpected error: %v",
+					tt.a, tt.num, tt.den, err)
+			}
+			if got != tt.expected {
+				t.Fatalf("MulRat(%d, %d, %d) = %d, want %d",
+					tt.a, tt.num, tt.den, got, tt.expected)
+			}
+		})
+	}
+}

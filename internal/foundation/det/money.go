@@ -81,6 +81,14 @@ func MulRat(correlationID string, a Micropounds, num, den int64) (Micropounds, e
 			"op": "mulrat", "a": int64(a), "num": num, "den": den,
 		})
 	}
+	// product / den can overflow int64 when product == MinInt64 && den == -1
+	// (dividing MinInt64 by -1 would be MaxInt64+1, which overflows).
+	// Handle this explicitly to prevent silent wrapping (AC-11).
+	if product == math.MinInt64 && den == -1 {
+		return 0, errs.New(ErrMoneyOverflow, correlationID, map[string]any{
+			"op": "mulrat", "a": int64(a), "num": num, "den": den, "cause": "division overflow",
+		})
+	}
 	return Micropounds(product / den), nil
 }
 
