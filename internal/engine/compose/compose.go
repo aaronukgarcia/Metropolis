@@ -1030,13 +1030,41 @@ type simState struct {
 	// this is NOT batched to the month boundary via VitalEvents.
 	vitalBirths int64
 	vitalDeaths int64
+
+	// lastClosedTick tracks the last tick for which ledgers were closed (BUG-288).
+	// snapshot() uses this to ensure ledger closing (opening/delta reset) happens
+	// exactly once per tick, at the START of that tick's snapshot call.
+	lastClosedTick int64
+
+	// Previous closing values from the last snapshot, used to set opening for the
+	// current tick before any deltas are recorded.
+	previousClosingPop   int64
+	previousClosingMoney int64
+}
+
+// closeLedgerForTick closes the ledger for the given tick at the START of
+// snapshot, before reading state. Uses previousClosing values (set by the
+// previous snapshot) as opening for the current tick. Ensures ledger closing
+// happens exactly once per tick despite snapshot being called twice on the
+// same tick (BUG-288).
+func (st *simState) closeLedgerForTick(tick int64) {
+	if st.lastClosedTick >= tick {
+		return
+	}
+	// Set opening for this tick to the previous tick's closing.
+	// Deltas are reset AFTER reading the snapshot, not here.
+	st.peopleOpening = st.previousClosingPop
+	st.moneyOpening = st.previousClosingMoney
+	st.lastClosedTick = tick
 }
 
 // snapshot implements invariant.SnapshotProvider: it builds this tick's
-// conservation Snapshot and closes the ledgers. Called from the invariant
-// hook's RunShard (shard 0 only), so it is the single reader/writer of the
-// ledger on the daily-tick path — no map iteration, no wall clock.
+// conservation Snapshot. PURE: calling it twice on same tick returns identical
+// snapshot (ledger closing happens once at snapshot START via closeLedgerForTick).
+// Called from the invariant hook's RunShard (shard 0 only) — single reader/writer,
+// no map iteration, no wall clock (BUG-288).
 func (st *simState) snapshot(tick int64) invariant.Snapshot {
+	st.closeLedgerForTick(tick)
 	closingPop := int64(st.citizens.TotalPopulation(st.cid))
 
 	s := invariant.NewSnapshot(tick)
@@ -1046,8 +1074,6 @@ func (st *simState) snapshot(tick int64) invariant.Snapshot {
 		Closing:      closingPop,
 		TrackedDelta: st.peopleDelta,
 	}
-	st.peopleOpening = closingPop
-	st.peopleDelta = 0
 
 	totalMoney := num.SatAdd(st.treasury, st.citizenWealth)
 	s.Readings[invariant.StockMoney] = invariant.StockReading{
@@ -1056,8 +1082,6 @@ func (st *simState) snapshot(tick int64) invariant.Snapshot {
 		Closing:      totalMoney,
 		TrackedDelta: st.moneyDelta,
 	}
-	st.moneyOpening = totalMoney
-	st.moneyDelta = 0
 
 	// goods and vehicles are genuinely zero in baseline one (market has no
 	// goods flow yet, traffic does not exist). Report them registered at
@@ -1065,6 +1089,18 @@ func (st *simState) snapshot(tick int64) invariant.Snapshot {
 	// than being skipped.
 	s.Readings[invariant.StockGoods] = invariant.StockReading{Registered: true}
 	s.Readings[invariant.StockVehicles] = invariant.StockReading{Registered: true}
+
+	// Store closing values for use as opening in the next tick's snapshot.
+	// This must happen after reading the snapshot but before returning,
+	// so that the NEXT snapshot call can use these values via closeLedgerForTick.
+	st.previousClosingPop = closingPop
+	st.previousClosingMoney = totalMoney
+
+	// Reset deltas for the next tick. This happens AFTER reading the snapshot
+	// so that the snapshot includes the deltas accumulated during this tick.
+	// (Deltas are accumulated during the tick via life events, transactions, etc.)
+	st.peopleDelta = 0
+	st.moneyDelta = 0
 
 	return s
 }
