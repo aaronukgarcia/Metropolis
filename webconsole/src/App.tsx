@@ -19,28 +19,28 @@ export default function App() {
     <ErrorBoundary>
       <BusyProvider>
         <SimProvider>
-          <div className="app">
-            <TopBar />
-            <div className="col-wrap left-col">
-              <BottomBar />
-              <StartOverButton />
+          <ErrorBoundary>
+            <div className="app">
+              <TopBar />
+              <div className="col-wrap left-col">
+                <BottomBar />
+                <StartOverButton />
+              </div>
+              <MapView />
+              <div className="col-wrap right-col">
+                <DemandDock />
+                <LeftDock />
+              </div>
+              <div className="col-wrap bottom-col">
+                <RightDock />
+              </div>
+              <PerfHud />
             </div>
-            <MapView />
-            <div className="col-wrap right-col">
-              <DemandDock />
-              <LeftDock />
-            </div>
-            <div className="col-wrap bottom-col">
-              <RightDock />
-            </div>
-            <PerfHud />
-          </div>
-          <BusyIndicator />
+            <BusyIndicator />
+          </ErrorBoundary>
+          <VersionUpgradeToast />
         </SimProvider>
       </BusyProvider>
-      {/* Outside SimProvider: the upgrade toast needs no sim state and must
-          survive even a sim-tree error. */}
-      <VersionUpgradeToast />
     </ErrorBoundary>
   );
 }
