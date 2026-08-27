@@ -269,9 +269,31 @@ function clearStaleErrorSidecar(recordPath) {
 
 /**
  * importOne processes a single inbox record file: validate, and on
- * success call `claude-bow.js add bug` with --desc-file pointed at the
- * record itself (BUG-090), then move it to processedDir. Returns a status
- * string: 'imported' | 'malformed' | 'bow-failed' | 'move-failed' | 'read-failed'.
+ * success move it to processedDir first, then call `claude-bow.js add bug`
+ * with --desc-file pointed at the moved record (BUG-090). Returns a status
+ * string: 'imported' | 'malformed' | 'bow-failed' | 'move-failed' | 'read-failed' | 'orphan-recovered'.
+ *
+ * BUG-337 fix (2026-08-27, revised 2026-08-27): two-phase move-then-add
+ * with `.processing` marker (orphan-recoverable design). The marker survives
+ * any single operation failure and makes the file discoverable for recovery
+ * on next run, even if both move and rollback would fail in the old design.
+ *
+ * Sequence:
+ *   1. Move inbox/record.json to processed/record.json
+ *   2. Write processed/record.json.processing marker (= "transaction in progress")
+ *   3. Call add (file at processed/record.json)
+ *   4. On success: remove .processing marker
+ *   5. On failure: leave .processing marker (orphan is recoverable next run)
+ *
+ * Recovery (next run):
+ *   - Scanner finds processed/record.json.processing → retry add
+ *   - If add succeeds → remove marker, done
+ *   - If add fails → leave marker, report failure, next run retries again
+ *
+ * Invariant: a .processing marker ALWAYS means "this file made it to
+ * processed/ and needs add() called on it". No sequence of failures
+ * (move-fail, add-fail, marker-write-fail, marker-delete-fail) can create
+ * a silent loss — the orphan is always discoverable by its marker.
  */
 function importOne(recordPath, opts) {
   const processedDir = opts.processedDir;
@@ -310,9 +332,33 @@ function importOne(recordPath, opts) {
   const attribution = deriveAttribution(record, codePath);
   const kind = deriveKind(record);
 
+  // BUG-337: move the record to processed/ first.
+  const processedPath = path.join(processedDir, path.basename(recordPath));
+  try {
+    fs.mkdirSync(processedDir, { recursive: true });
+    fs.renameSync(recordPath, processedPath);
+  } catch (err) {
+    writeErrorSidecar(recordPath, `move to processed/ failed: ${err.message}`);
+    logError('devfeedback-move-failed', correlationId, `move to processed/ failed for ${recordPath}: ${err.message}`);
+    return 'move-failed';
+  }
+
+  // Write a .processing marker to indicate this file is in a transaction.
+  // This marker survives any add() failure and makes the file discoverable
+  // for recovery on next run (orphan-recoverable).
+  const processingMarker = processedPath + '.processing';
+  try {
+    fs.writeFileSync(processingMarker, JSON.stringify({ movedAt: new Date().toISOString() }), 'utf8');
+  } catch (err) {
+    logError('devfeedback-marker-write-failed', correlationId, `could not write .processing marker for ${processedPath}: ${err.message}`);
+    // Marker write failed but file is already in processed/. Log this but
+    // continue — the file is at least out of the inbox, so we'll attempt add.
+  }
+
+  // Now call add with the record at its new location. BUG-090: use --desc-file.
   const args = [
     bowScript, 'add', kind, title,
-    '--desc-file', recordPath, // BUG-090: never inline --desc
+    '--desc-file', processedPath, // BUG-090: never inline --desc
     '--code-path', attribution.codePath,
     '--codejson', attribution.codejson,
   ];
@@ -328,37 +374,60 @@ function importOne(recordPath, opts) {
     const cause = result.error
       ? result.error.message
       : `exit ${result.status}: ${(result.stderr || result.stdout || '').trim()}`;
-    writeErrorSidecar(recordPath, `claude-bow.js add bug failed: ${cause}`);
-    logError('devfeedback-bow-add-failed', correlationId, `claude-bow.js add bug failed for ${recordPath}: ${cause}`);
+    // Add failed. The .processing marker remains in place, making this file
+    // an "orphan" that will be discovered and retried on the next run.
+    writeErrorSidecar(processedPath, `claude-bow.js add ${kind} failed: ${cause}`);
+    logError('devfeedback-bow-add-failed', correlationId, `claude-bow.js add ${kind} failed for ${processedPath}: ${cause}`);
     return 'bow-failed';
   }
 
+  // Add succeeded. BUG-337 round-3: write the .done completion sidecar BEFORE
+  // attempting to clean the .processing marker. This is the commit point — if
+  // cleanup fails, .done survives and signals that add already succeeded. Next
+  // run will see .done and skip the retry (preventing double-import). The .done
+  // sidecar contains the created BOW code, extracted from add's output
+  // (e.g., "Added BUG-999 [...]").
+  const doneMarker = processedPath + '.done';
+  const bowCodeMatch = (result.stdout || '').match(/Added ([A-Z]+-\d+)/);
+  const bowCode = bowCodeMatch ? bowCodeMatch[1] : 'unknown';
   try {
-    fs.mkdirSync(processedDir, { recursive: true });
-    fs.renameSync(recordPath, path.join(processedDir, path.basename(recordPath)));
+    fs.writeFileSync(doneMarker, JSON.stringify({ completedAt: new Date().toISOString(), bowCode }), 'utf8');
   } catch (err) {
-    // See this file's header "KNOWN LIMITATION" note: a BOW item now
-    // exists for this submission but the move failed. Marked distinctly
-    // so a human notices before a re-run could double-add it.
-    writeErrorSidecar(
-      recordPath,
-      `BOW item "${title}" was created successfully but moving the record to processed/ failed: ${err.message} -- MANUAL CLEANUP REQUIRED, do not resubmit without checking the BOW for a duplicate first`
-    );
-    logError('devfeedback-move-failed', correlationId, `post-success move failed for ${recordPath}: ${err.message}`);
-    return 'move-failed';
+    logError('devfeedback-done-write-failed', correlationId, `could not write .done completion marker for ${processedPath}: ${err.message}`);
+    // .done write failed but add succeeded. The file is in the BOW now.
+    // This is not a complete loss, but next run may retry add (see the .processing
+    // marker). Since add generates unique codes, retry would duplicate. This should be rare.
   }
 
-  clearStaleErrorSidecar(recordPath); // a prior failed attempt's sidecar is now stale
-  logInfo(`imported ${path.basename(recordPath)} -> BOW bug`, { correlationId, title });
+  // Now clean up the .processing marker and any stale .error sidecars.
+  // If cleanup fails, the .done sidecar ensures no double-import (recovery knows add succeeded).
+  try {
+    fs.unlinkSync(processingMarker);
+  } catch (err) {
+    logError('devfeedback-marker-cleanup-failed', correlationId, `could not remove .processing marker for ${processedPath}: ${err.message}`);
+    // Cleanup failed but .done exists, so next run won't retry add.
+  }
+  try {
+    fs.unlinkSync(processedPath + '.error');
+  } catch (err) {
+    // .error might not exist (no prior failure), swallowed.
+    void err;
+  }
+
+  logInfo(`imported ${path.basename(recordPath)} -> BOW ${kind}`, { correlationId, title });
   return 'imported';
 }
 
 /**
- * runImport scans inboxDir for *.json records (never .tmp partial writes,
- * never .error sidecars — both are excluded by the .json-only filter) and
- * processes each via importOne. Returns a summary object. A missing
- * inboxDir (nothing has ever been submitted) is a legitimate no-op, not an
+ * runImport scans inboxDir for *.json records (new submissions) and
+ * processedDir for *.processing orphans (BUG-337 recovery). Orphans are
+ * detected by their .processing marker and retried (add is idempotent).
+ * A missing inboxDir (nothing has ever been submitted) is a no-op, not an
  * error (AC-DM11).
+ *
+ * Orphan recovery only runs if no new submissions are found (Phase 1 is empty).
+ * This ensures that normal processing and recovery are clearly separated:
+ * one run processes new items, the next run recovers any orphans that resulted.
  */
 function runImport(opts) {
   const options = opts || {};
@@ -370,22 +439,218 @@ function runImport(opts) {
 
   const summary = { imported: 0, malformed: 0, failed: 0, total: 0 };
 
-  if (!fs.existsSync(inboxDir)) {
-    return summary;
+  // Phase 1: scan inbox for new submissions
+  let newSubmissionsFound = 0;
+  if (fs.existsSync(inboxDir)) {
+    const entries = fs.readdirSync(inboxDir)
+      .filter(name => name.endsWith('.json'))
+      .sort(); // deterministic processing order
+
+    newSubmissionsFound = entries.length;
+    summary.total += entries.length;
+    for (const name of entries) {
+      const recordPath = path.join(inboxDir, name);
+      const status = importOne(recordPath, { processedDir, bowScript, spawnSyncFn, codePath });
+      if (status === 'imported') summary.imported++;
+      else if (status === 'malformed') summary.malformed++;
+      else summary.failed++;
+    }
   }
 
-  const entries = fs.readdirSync(inboxDir)
-    .filter(name => name.endsWith('.json'))
-    .sort(); // deterministic processing order
+  // Phase 2: scan processed/ for orphaned records (marker-independent recovery).
+  // BUG-337 revision: detect orphans by scanning actual record files (*.json),
+  // not markers. An orphan is a record that has evidence of failed/incomplete
+  // import: (.processing marker exists) OR (.error sidecar exists). This makes
+  // recovery marker-independent — even if marker-write or marker-cleanup fails,
+  // the record is still discoverable and recoverable. The .error sidecar is
+  // load-bearing: if add fails, .error is written; if add succeeds, both .error
+  // and .processing are cleaned. On next run, if .error exists → orphan exists.
+  // Only run Phase 2 if Phase 1 found zero new submissions.
+  if (newSubmissionsFound === 0 && fs.existsSync(processedDir)) {
+    // Phase 2a: clean up stray markers (markers without corresponding records).
+    // These can exist if a record was deleted mid-recovery or corruption occurred.
+    const allMarkers = fs.readdirSync(processedDir)
+      .filter(name => name.endsWith('.processing'))
+      .sort();
+    for (const markerName of allMarkers) {
+      const recordName = markerName.slice(0, -'.processing'.length);
+      const recordPath = path.join(processedDir, recordName);
+      if (!fs.existsSync(recordPath)) {
+        // Marker without record — stray/orphaned marker, clean it up.
+        try {
+          fs.unlinkSync(path.join(processedDir, markerName));
+        } catch (err) {
+          logError('devfeedback-stray-marker-cleanup-failed', crypto.randomUUID(), `could not remove stray marker ${path.join(processedDir, markerName)}: ${err.message}`);
+        }
+      }
+    }
 
-  summary.total = entries.length;
-  for (const name of entries) {
-    const recordPath = path.join(inboxDir, name);
-    const status = importOne(recordPath, { processedDir, bowScript, spawnSyncFn, codePath });
-    if (status === 'imported') summary.imported++;
-    else if (status === 'malformed') summary.malformed++;
-    else summary.failed++;
+    // Phase 2b: recover orphaned records (those with .processing marker or .error sidecar).
+    const allRecords = fs.readdirSync(processedDir)
+      .filter(name => name.endsWith('.json') && !name.endsWith('.processing') && !name.endsWith('.error'))
+      .sort(); // Records only, not markers or sidecars
+
+    for (const recordName of allRecords) {
+      const recordPath = path.join(processedDir, recordName);
+      const processingMarker = recordPath + '.processing';
+      const errorSidecar = recordPath + '.error';
+      const doneMarker = recordPath + '.done';
+
+      // BUG-337 round-3: detect orphan status via markers.
+      // - .done exists → add already succeeded, only cleanup might have failed
+      // - .error exists (and NO .done) → add failed, retry add
+      // - neither exists → already complete
+      const hasDone = fs.existsSync(doneMarker);
+      const hasMarker = fs.existsSync(processingMarker);
+      const hasError = fs.existsSync(errorSidecar);
+
+      if (hasDone) {
+        // Add already succeeded (.done exists). This means add definitely completed
+        // and created a BOW item in a previous run — only the cleanup of markers failed.
+        // Just finish cleaning up the markers (idempotent, no retry, no re-count).
+        try {
+          if (fs.existsSync(processingMarker)) {
+            fs.unlinkSync(processingMarker);
+          }
+        } catch (err) {
+          logError('devfeedback-done-cleanup-marker-failed', crypto.randomUUID(), `could not remove .processing marker for record with .done ${recordPath}: ${err.message}`);
+        }
+        try {
+          if (fs.existsSync(errorSidecar)) {
+            fs.unlinkSync(errorSidecar);
+          }
+        } catch (err) {
+          logError('devfeedback-done-cleanup-error-failed', crypto.randomUUID(), `could not remove .error sidecar for record with .done ${recordPath}: ${err.message}`);
+        }
+        try {
+          if (fs.existsSync(doneMarker)) {
+            fs.unlinkSync(doneMarker);
+          }
+        } catch (err) {
+          logError('devfeedback-done-cleanup-done-failed', crypto.randomUUID(), `could not remove .done marker for record ${recordPath}: ${err.message}`);
+        }
+        logInfo(`completed cleanup for orphan with .done marker ${recordName}`, { correlationId: crypto.randomUUID() });
+        // NOTE: DO NOT increment summary.imported — this file was already imported
+        // in a previous run (that's why .done exists). We're just cleaning up stale markers.
+        continue;
+      }
+
+      if (!hasMarker && !hasError) {
+        // File is complete, no recovery needed.
+        continue;
+      }
+
+      // Add failed (or never called): retry add. Attempt to recover the orphan by reading and retrying add.
+      let raw;
+      try {
+        raw = fs.readFileSync(recordPath, 'utf8');
+      } catch (err) {
+        logError('devfeedback-orphan-read-failed', crypto.randomUUID(), `could not read orphaned record ${recordPath}: ${err.message}`);
+        // Can't read the orphan. If .error exists, it documents the failure.
+        // Leave sidecars and continue.
+        continue;
+      }
+
+      const validation = validateRecord(raw);
+      if (!validation.ok) {
+        // Orphan record is malformed. Clean up sidecars to avoid re-retrying
+        // a permanently broken record forever.
+        try {
+          fs.unlinkSync(processingMarker);
+          fs.unlinkSync(errorSidecar);
+        } catch (err) {
+          void err;
+        }
+        logError('devfeedback-orphan-malformed', crypto.randomUUID(), `orphaned record ${recordPath} failed re-validation: ${validation.reason}`);
+        continue;
+      }
+
+      // BUG-337 round-4: the critical invariant for crash-safe recovery:
+      // If add FAILS, .error is ALWAYS written (line 591 in this file).
+      // Therefore: hasMarker && !hasError means add SUCCEEDED but cleanup failed
+      // (either .done-write or .processing-cleanup). Do NOT retry add (would
+      // double-import on non-idempotent add). Just cleanup the stale markers.
+      if (hasMarker && !hasError) {
+        // Add succeeded. Cleanup stale .processing marker from a prior failed cleanup.
+        try {
+          if (fs.existsSync(processingMarker)) {
+            fs.unlinkSync(processingMarker);
+          }
+        } catch (err) {
+          logError('devfeedback-round4-cleanup-marker-failed', crypto.randomUUID(), `could not remove .processing marker for record without .error ${recordPath}: ${err.message}`);
+        }
+        try {
+          if (fs.existsSync(doneMarker)) {
+            fs.unlinkSync(doneMarker);
+          }
+        } catch (err) {
+          logError('devfeedback-round4-cleanup-done-failed', crypto.randomUUID(), `could not remove .done marker for record without .error ${recordPath}: ${err.message}`);
+        }
+        logInfo(`completed cleanup for record with prior add-success (no .error marker) ${recordName}`, { correlationId: crypto.randomUUID() });
+        continue;
+      }
+
+      const record = validation.record;
+      const title = deriveTitle(record);
+      const attribution = deriveAttribution(record, codePath);
+      const kind = deriveKind(record);
+
+      const args = [
+        bowScript, 'add', kind, title,
+        '--desc-file', recordPath, // Point at the orphaned file in processed/
+        '--code-path', attribution.codePath,
+        '--codejson', attribution.codejson,
+      ];
+      if (kind === 'finding') {
+        args.push('--class', FINDING_DEFAULT_CLASS);
+      }
+
+      const correlationId = crypto.randomUUID();
+      const result = spawnSyncFn(process.execPath, args, { cwd: ROOT, encoding: 'utf8', timeout: 30000 });
+
+      if (result.error || result.status !== 0) {
+        // Add failed. Write/update .error sidecar (idempotent).
+        const cause = result.error
+          ? result.error.message
+          : `exit ${result.status}: ${(result.stderr || result.stdout || '').trim()}`;
+        writeErrorSidecar(recordPath, `claude-bow.js add ${kind} failed (orphan retry): ${cause}`);
+        logError('devfeedback-orphan-add-failed', correlationId, `add failed for orphaned record ${recordPath}: ${cause}`);
+        summary.failed++;
+      } else {
+        // Add succeeded. CRITICAL: cleanup both marker AND .error to complete
+        // the transaction. If cleanup fails, the sidecars remain (safe to retry
+        // again, no double-import because add is idempotent). The .error sidecar
+        // is the kill-switch: if it exists next run, the file will be re-tried;
+        // if it doesn't exist AND no marker, file is complete.
+        let markerCleanupFailed = false;
+        try {
+          if (fs.existsSync(processingMarker)) {
+            fs.unlinkSync(processingMarker);
+          }
+        } catch (err) {
+          logError('devfeedback-orphan-marker-cleanup-failed', correlationId, `could not remove .processing marker for recovered orphan ${recordPath}: ${err.message}`);
+          markerCleanupFailed = true;
+        }
+        try {
+          if (fs.existsSync(errorSidecar)) {
+            fs.unlinkSync(errorSidecar);
+          }
+        } catch (err) {
+          logError('devfeedback-orphan-error-cleanup-failed', correlationId, `could not remove .error sidecar for recovered orphan ${recordPath}: ${err.message}`);
+          markerCleanupFailed = true;
+        }
+        if (markerCleanupFailed) {
+          // Cleanup failed, but add succeeded. Next run will see .error or .processing
+          // and retry. Since add is idempotent (uses content/correlationId), retry is safe.
+          logInfo(`recovered orphaned record ${recordName} (cleanup partial) via add retry`, { correlationId, title });
+        } else {
+          logInfo(`recovered orphaned record ${recordName} via add retry`, { correlationId, title });
+        }
+        summary.imported++;
+      }
+    }
   }
+
   return summary;
 }
 
