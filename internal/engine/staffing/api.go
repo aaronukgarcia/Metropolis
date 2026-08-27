@@ -71,6 +71,9 @@ func New() *StaffingAPI {
 	return s
 }
 
+// checkNotCopied rejects a method invoked on a struct-copied StaffingAPI
+// before any lock is touched (SEC-020 family — a copy aliases the original's
+// mutex while holding an independent lock).
 func (s *StaffingAPI) checkNotCopied(method string) error {
 	if s.self.Load() != s {
 		return errs.New(ErrCopiedValue, s.correlationID, map[string]any{"method": method})
@@ -133,20 +136,20 @@ func (s *StaffingAPI) LoadConfig(dir string) error {
 	path := filepath.Join(dir, "staffing.json")
 	bytes, err := os.ReadFile(path)
 	if err != nil {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "cause": err.Error()})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "value": err.Error(), "cause": err.Error()})
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(bytes, &cfg); err != nil {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "cause": err.Error()})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "value": err.Error(), "cause": err.Error()})
 	}
 
 	// Validate config bounds: Strictly positive wages (Finding C)
 	if cfg.LocalWage <= 0 || cfg.ContractorCost <= 0 || cfg.ContractorCapacity < 0 {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"message": "config parameters must be positive"})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"value": "config parameters must be positive"})
 	}
 	if cfg.ContractorCost <= cfg.LocalWage {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"message": "contractor cost must be strictly greater than local wage"})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"value": "contractor cost must be strictly greater than local wage"})
 	}
 
 	s.cfg = cfg

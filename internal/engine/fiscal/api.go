@@ -183,7 +183,9 @@ func (f *FiscalAPI) moneyTimesRate(amount finance.Money, ratePercent float64) (f
 		// (SEC-147) — treat it as an overflow rather than silently
 		// defeating the negative-rate guard downstream.
 		return 0, errs.New(ErrFiscalOverflow, f.correlationID, map[string]any{
-			"amount": int64(amount), "ratePercent": ratePercent,
+			"field":       "rate conversion",
+			"amount":      int64(amount),
+			"ratePercent": ratePercent,
 		})
 	}
 	if bp == 0 {
@@ -192,7 +194,9 @@ func (f *FiscalAPI) moneyTimesRate(amount finance.Money, ratePercent float64) (f
 	p, overflow := num.SafeMul(int64(amount), bp)
 	if overflow {
 		return 0, errs.New(ErrFiscalOverflow, f.correlationID, map[string]any{
-			"amount": int64(amount), "ratePercent": ratePercent,
+			"field":       "amount * rate",
+			"amount":      int64(amount),
+			"ratePercent": ratePercent,
 		})
 	}
 	return finance.Money(p / basisPointScale), nil

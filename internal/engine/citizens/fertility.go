@@ -134,6 +134,7 @@ func LoadFertilityConfig(dir, correlationID string) (FertilityConfig, error) {
 	if err != nil {
 		return cfg, errs.Wrap(ErrFertilityDataInvalid, correlationID, err, map[string]any{
 			"path":  path,
+			"rule":  "file must exist and be readable",
 			"cause": err.Error(),
 		})
 	}
@@ -142,6 +143,7 @@ func LoadFertilityConfig(dir, correlationID string) (FertilityConfig, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return cfg, errs.Wrap(ErrFertilityDataInvalid, correlationID, err, map[string]any{
 			"path":  path,
+			"rule":  "JSON must decode with no unknown fields",
 			"cause": err.Error(),
 		})
 	}

@@ -294,7 +294,7 @@ func (t *TaxAPI) GetDistrictMultiplier(district DistrictID, instrumentID string)
 	defer t.mu.RUnlock()
 	if district == "" {
 		return 0, errs.New(ErrInvalidDistrictMultiplier, t.correlationID, map[string]any{
-			"instrument": instrumentID, "district": string(district),
+			"instrument": instrumentID, "district": string(district), "multiplier": "N/A (empty district)",
 		})
 	}
 	if _, err := t.lookupLocked(instrumentID); err != nil {

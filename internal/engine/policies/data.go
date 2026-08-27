@@ -220,6 +220,7 @@ func (p *policiesFile) buildLibrary(correlationID string) (map[PolicyID]*policyD
 					"field":    "entries.conflictsWith",
 					"policy":   e.Key,
 					"conflict": ck,
+					"cause":    "conflictsWith reference not found",
 				})
 			}
 			conflicts = append(conflicts, PolicyID(ck))

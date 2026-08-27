@@ -184,15 +184,17 @@ func LoadConfig(path, correlationID string) (config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return zero, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{
-			"path":  path,
-			"cause": err.Error(),
+			"path":   path,
+			"reason": err.Error(),
+			"cause":  err.Error(),
 		})
 	}
 	var raw rawCommsData
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return zero, errs.Wrap(ErrDataInvalid, correlationID, err, map[string]any{
-			"path":  path,
-			"cause": err.Error(),
+			"path":   path,
+			"reason": err.Error(),
+			"cause":  err.Error(),
 		})
 	}
 	return buildConfig(raw, path, correlationID)

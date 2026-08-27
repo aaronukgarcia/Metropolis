@@ -287,6 +287,7 @@ func (s *Screen) SetDistrictMultiplier(send SendCommandFunc, districtID, instrum
 		return errs.New(ErrInvalidDistrictMultiplier, s.correlationID, map[string]any{
 			"reason":       "district/instrument must be non-empty and multiplier must be a finite value >= 0 (mirrors internal/engine/tax/tax.go SetDistrictMultiplier)",
 			"district":     districtID,
+			"instrument":   instrumentID,
 			"instrumentId": instrumentID,
 			"multiplier":   multiplier,
 		})

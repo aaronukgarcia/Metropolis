@@ -148,6 +148,8 @@ func ParseConfig(data []byte, correlationID string) (Config, error) {
 	var raw configJSON
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Config{}, errs.Wrap(ErrConfigInvalid, correlationID, err, map[string]any{
+			"field": "JSON",
+			"value": err.Error(),
 			"cause": err.Error(),
 		})
 	}

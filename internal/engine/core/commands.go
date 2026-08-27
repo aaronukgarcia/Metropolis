@@ -228,7 +228,7 @@ func toErrorRef(err error) *protocol.ErrorRef {
 	if e, ok := err.(*errs.E); ok {
 		return &protocol.ErrorRef{Code: e.Code, Display: e.Display()}
 	}
-	wrapped := errs.Wrap(ErrUnhandledCommandKind, "", err, map[string]any{"cause": err.Error()})
+	wrapped := errs.Wrap(ErrUnhandledCommandKind, "", err, map[string]any{"kind": "unknown"})
 	return &protocol.ErrorRef{Code: wrapped.Code, Display: wrapped.Display()}
 }
 

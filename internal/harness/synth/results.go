@@ -117,7 +117,7 @@ func AppendResult(path string, rec PerfRecord) error {
 	// PerfResult.ImplausibleReason's doc comment, perf.go).
 	if reason := rec.Result.ImplausibleReason(); reason != "" {
 		return errs.New(codeImplausibleResult, errs.NewCorrelationID(), map[string]any{
-			"path": path, "preset": rec.Preset, "commitHash": rec.CommitHash, "reason": reason,
+			"path": path, "preset": rec.Preset, "commitHash": rec.CommitHash, "line": "unknown", "reason": reason,
 		})
 	}
 	// BUG-083: an accepted-regression override with no recorded

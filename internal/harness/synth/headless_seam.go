@@ -60,7 +60,9 @@ func runHeadless(correlationID string, hdr serialize.Header, months int) (tickEl
 	// Result.TicksAdvanced back.
 	scratch, mkErr := os.MkdirTemp("", "synth-perf-*")
 	if mkErr != nil {
-		return 0, 0, nil, errs.Wrap(codePerfRunFailed, correlationID, mkErr, nil)
+		return 0, 0, nil, errs.Wrap(codePerfRunFailed, correlationID, mkErr, map[string]any{
+			"n": months, "engineErrorCode": "N/A (mkdir failed)",
+		})
 	}
 	defer func() { _ = os.RemoveAll(scratch) }()
 
@@ -77,7 +79,9 @@ func runHeadless(correlationID string, hdr serialize.Header, months int) (tickEl
 	result, runErr := headless.Run(context.Background(), cfg)
 	elapsed := time.Since(start)
 	if runErr != nil {
-		return 0, 0, nil, errs.Wrap(codePerfRunFailed, correlationID, runErr, map[string]any{"months": months})
+		return 0, 0, nil, errs.Wrap(codePerfRunFailed, correlationID, runErr, map[string]any{
+			"n": months, "engineErrorCode": runErr.Error(),
+		})
 	}
 
 	return elapsed, result.TicksAdvanced, parsePhaseTimings(report.Bytes()), nil

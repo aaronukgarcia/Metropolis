@@ -94,6 +94,8 @@ func LoadFarmTypes(path, correlationID string) (FarmTypeCatalogue, error) {
 	if err != nil {
 		return zero, errs.Wrap(ErrFarmTypeDataInvalid, correlationID, err, map[string]any{
 			"path":  path,
+			"field": "file",
+			"rule":  "must exist and be readable",
 			"cause": err.Error(),
 		})
 	}
@@ -102,6 +104,8 @@ func LoadFarmTypes(path, correlationID string) (FarmTypeCatalogue, error) {
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return zero, errs.Wrap(ErrFarmTypeDataInvalid, correlationID, err, map[string]any{
 			"path":  path,
+			"field": "JSON",
+			"rule":  "must be valid JSON",
 			"cause": err.Error(),
 		})
 	}

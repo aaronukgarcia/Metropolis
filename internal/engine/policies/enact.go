@@ -139,6 +139,7 @@ func (a *PoliciesAPI) preflightEnactLocked(def *policyDef, scope Scope) error {
 		if cd.Tax.Mode != taxMoveDistrictMultiplier {
 			return errs.New(ErrPoliciesDataInvalid, a.correlationID, map[string]any{
 				"mode": cd.Tax.Mode, "instrument": cd.Tax.Instrument,
+				"cause": "unsupported tax move mode",
 			})
 		}
 	}
@@ -409,6 +410,7 @@ func (a *PoliciesAPI) applyTaxMoveLocked(scope Scope, mv TaxMove, delta float64)
 	default:
 		return appliedTaxMove{}, errs.New(ErrPoliciesDataInvalid, a.correlationID, map[string]any{
 			"mode": mv.Mode, "instrument": mv.Instrument,
+			"cause": "unknown tax move mode",
 		})
 	}
 }

@@ -131,6 +131,8 @@ func loadConfig(correlationID string) (config, error) {
 		if err := json.Unmarshal(embeddedCrimeJSON, &loadedCfg); err != nil {
 			configErr = errs.Wrap(ErrConfigInvalid, correlationID, err, map[string]any{
 				"file":  "crime.json",
+				"field": "JSON",
+				"value": err.Error(),
 				"cause": err.Error(),
 			})
 			return

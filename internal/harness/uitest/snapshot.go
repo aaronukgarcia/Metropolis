@@ -50,15 +50,15 @@ func snapshotPath(name string) (string, error) {
 
 	absDir, err := filepath.Abs(snapshotDir)
 	if err != nil {
-		return "", errs.Wrap(codeHostileSnapshotName, errs.NewCorrelationID(), err, map[string]any{"name": name})
+		return "", errs.Wrap(codeHostileSnapshotName, errs.NewCorrelationID(), err, map[string]any{"name": name, "segment": name})
 	}
 	absFull, err := filepath.Abs(full)
 	if err != nil {
-		return "", errs.Wrap(codeHostileSnapshotName, errs.NewCorrelationID(), err, map[string]any{"name": name})
+		return "", errs.Wrap(codeHostileSnapshotName, errs.NewCorrelationID(), err, map[string]any{"name": name, "segment": name})
 	}
 	if absFull != absDir && !strings.HasPrefix(absFull, absDir+string(filepath.Separator)) {
 		return "", errs.New(codeHostileSnapshotName, errs.NewCorrelationID(), map[string]any{
-			"name": name, "resolved": absFull, "cause": "resolved outside testdata/snapshots",
+			"name": name, "segment": name, "resolved": absFull, "cause": "resolved outside testdata/snapshots",
 		})
 	}
 	return full, nil

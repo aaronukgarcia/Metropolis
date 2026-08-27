@@ -157,7 +157,7 @@ func (w *WorkScheduleAPI) AtWork(worker Worker, tick int64) (bool, error) {
 		return h >= p.StartHour && h < p.EndHour, nil
 	case PatternShift:
 		if len(p.Rotations) == 0 {
-			return false, errs.New(ErrDataInvalid, w.correlationID, map[string]any{"kind": string(worker.Pattern), "rule": "no rotations"})
+			return false, errs.New(ErrDataInvalid, w.correlationID, map[string]any{"kind": string(worker.Pattern), "rule": "no rotations", "cause": "shift pattern has no rotations"})
 		}
 		rot := w.rotation(worker.ID, weekIndex(tick), p.Rotations)
 		return h >= rot.StartHour && h < rot.EndHour, nil

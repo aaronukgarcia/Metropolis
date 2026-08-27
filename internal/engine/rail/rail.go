@@ -127,6 +127,7 @@ func loadModalCaps(correlationID string) (map[freight.Mode]int64, map[freight.Mo
 				"path":  path,
 				"field": "modalCaps." + string(m),
 				"rule":  "required maxTonnesPerMovement > 0",
+				"cause": "required maxTonnesPerMovement > 0",
 			})
 		}
 		if rc.MinTonnesPerMovement < 0 {
@@ -134,6 +135,7 @@ func loadModalCaps(correlationID string) (map[freight.Mode]int64, map[freight.Mo
 				"path":  path,
 				"field": "modalCaps." + string(m) + ".minTonnesPerMovement",
 				"rule":  "must be >= 0",
+				"cause": "minTonnesPerMovement must be >= 0",
 			})
 		}
 		if rc.MinTonnesPerMovement > rc.MaxTonnesPerMovement {
@@ -141,6 +143,7 @@ func loadModalCaps(correlationID string) (map[freight.Mode]int64, map[freight.Mo
 				"path":  path,
 				"field": "modalCaps." + string(m) + ".minTonnesPerMovement",
 				"rule":  "must be <= maxTonnesPerMovement",
+				"cause": "minTonnesPerMovement must be <= maxTonnesPerMovement",
 			})
 		}
 		maxCaps[m] = rc.MaxTonnesPerMovement

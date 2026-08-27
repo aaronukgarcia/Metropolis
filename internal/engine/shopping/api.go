@@ -184,12 +184,12 @@ func (s *ShoppingAPI) LoadConfig(dir string) error {
 	path := filepath.Join(dir, "shopping.json")
 	bytes, err := os.ReadFile(path)
 	if err != nil {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "cause": err.Error()})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "value": err.Error(), "cause": err.Error()})
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(bytes, &cfg); err != nil {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "cause": err.Error()})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"path": path, "value": err.Error(), "cause": err.Error()})
 	}
 
 	if cfg.OnlineDeliveryShare < 0 || cfg.OnlineDeliveryShare > 1.0 {
@@ -198,7 +198,7 @@ func (s *ShoppingAPI) LoadConfig(dir string) error {
 
 	// Numerical Safety validation: Prevent division-by-zero in score factors (AC-5)
 	if cfg.CornerShopPriceMult <= 0 || cfg.MarketHallPriceMult <= 0 || cfg.SupermarketPriceMult <= 0 || cfg.RetailParkPriceMult <= 0 {
-		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"message": "price multipliers must be strictly positive"})
+		return errs.New(ErrInvalidInput, s.correlationID, map[string]any{"value": "price multipliers must be strictly positive"})
 	}
 
 	// Format weight validation (MOD-050 r4 verdict fix, AC-9/AC-11 style

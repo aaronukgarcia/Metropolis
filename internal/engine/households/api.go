@@ -95,6 +95,7 @@ func NewFromBuildings(b data.Buildings, correlationID string) (*HouseholdsAPI, e
 	typologies, order, err := loadTypologies(b)
 	if err != nil {
 		return nil, errs.Wrap(ErrTypologyDataInvalid, correlationID, err, map[string]any{
+			"dir":   "NewFromBuildings (direct)",
 			"cause": err.Error(),
 		})
 	}

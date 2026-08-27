@@ -3,6 +3,7 @@ package census
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -79,6 +80,7 @@ func safeFloat64(v float64, field, correlationID string) (float64, error) {
 		return 0, errs.New(ErrCensusDataInvalid, correlationID, map[string]any{
 			"field": field,
 			"value": v,
+			"cause": fmt.Sprintf("field %s has non-finite value %v", field, v),
 		})
 	}
 	return v, nil
@@ -107,6 +109,7 @@ func (cfg *Config) validate(correlationID string) error {
 		return errs.New(ErrCensusDataInvalid, correlationID, map[string]any{
 			"field": field,
 			"rule":  rule,
+			"cause": rule,
 		})
 	}
 

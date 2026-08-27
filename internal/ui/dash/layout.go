@@ -266,7 +266,7 @@ func tileFromWire(tw tileWire) (Tile, error) {
 	case KindTable:
 		if tw.Table == nil {
 			return Tile{}, errs.New(codeMalformedProfile, corr(), map[string]any{
-				"tileId": tw.ID, "reason": "table tile missing table payload",
+				"tileId": tw.ID, "reason": "table tile missing table payload", "cause": "table tile missing table payload",
 			})
 		}
 		for i := range tw.Table.Rows {
@@ -278,7 +278,7 @@ func tileFromWire(tw tileWire) (Tile, error) {
 	case KindDiagram:
 		if tw.Diagram == nil {
 			return Tile{}, errs.New(codeMalformedProfile, corr(), map[string]any{
-				"tileId": tw.ID, "reason": "diagram tile missing diagram payload",
+				"tileId": tw.ID, "reason": "diagram tile missing diagram payload", "cause": "diagram tile missing diagram payload",
 			})
 		}
 		for i := range tw.Diagram.Hits {
@@ -289,7 +289,7 @@ func tileFromWire(tw tileWire) (Tile, error) {
 		t.diagram = cloneDiagramSpec(tw.Diagram)
 	default:
 		return Tile{}, errs.New(codeMalformedProfile, corr(), map[string]any{
-			"tileId": tw.ID, "kind": string(tw.Kind), "reason": "unknown tile kind",
+			"tileId": tw.ID, "kind": string(tw.Kind), "reason": "unknown tile kind", "cause": "unknown tile kind",
 		})
 	}
 	return t, nil

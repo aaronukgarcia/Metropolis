@@ -528,7 +528,7 @@ func (s *SubscriptionServer) Publish(sink DeltaSink, tick protocol.Tick) {
 			// channel" situation EngineStatusView's degrade-to-zero doc
 			// comment already documents) — the next pump wake retries
 			// with fresh state.
-			_ = errs.Wrap(ErrSnapshotFailed, errs.NewCorrelationID(), err, map[string]any{"view": v})
+			_ = errs.Wrap(ErrSnapshotFailed, errs.NewCorrelationID(), err, map[string]any{"view": v, "shard": string(v)})
 		}
 	}
 

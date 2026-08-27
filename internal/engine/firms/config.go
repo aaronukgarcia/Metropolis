@@ -167,6 +167,7 @@ func buildConfig(raw rawFirmsData, path, correlationID string) (config, error) {
 			"path":  path,
 			"field": field,
 			"rule":  rule,
+			"cause": rule,
 		})
 	}
 	var c config

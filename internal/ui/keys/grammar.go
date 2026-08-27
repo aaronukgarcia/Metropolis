@@ -135,7 +135,9 @@ func NewKeyGrammar(clock Clock, idleTimeout time.Duration, dimAfterUses int, cor
 // identity guard exactly (see KeyGrammar.self's doc comment).
 func (g *KeyGrammar) checkNotCopied() error {
 	if g.self.Load() != g {
-		return errs.New(codeGrammarCopied, g.correlationID, nil)
+		return errs.New(codeGrammarCopied, g.correlationID, map[string]any{
+			"cause": "struct copy detected",
+		})
 	}
 	return nil
 }
@@ -161,7 +163,7 @@ func (g *KeyGrammar) Register(path []string, action Action) error {
 	}
 	if len(path) == 0 {
 		return errs.New(codeRegisterPrefixConflict, g.correlationID, map[string]any{
-			"path": path, "cause": "empty mnemonic path",
+			"path": path, "cause": "empty mnemonic path", "conflictsWith": nil,
 		})
 	}
 	if reservedTokens[path[0]] {

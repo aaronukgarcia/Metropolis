@@ -727,6 +727,7 @@ func (p *Pharma) Win(correlationID string) (WinResult, error) {
 	// firms regardless of how the Pharma was produced.
 	if spawn > maxSupplyChainFirms {
 		return WinResult{}, errs.New(ErrPharmaDataInvalid, correlationID, map[string]any{
+			"cause":  "supply-chain spawn exceeds the validation ceiling",
 			"reason": "supply-chain spawn exceeds the validation ceiling",
 			"spawn":  spawn,
 			"max":    maxSupplyChainFirms,

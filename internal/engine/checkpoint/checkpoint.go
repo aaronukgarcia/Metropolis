@@ -162,7 +162,7 @@ func (m *Manager) CreateCheckpoint(ctx save.Context, name string, parent ID) (Ch
 	}
 	if parent != "" {
 		if err := validateCheckpointID(parent); err != nil {
-			return Checkpoint{}, errs.Wrap(ErrInvalidCheckpointID, m.correlationID, err, map[string]any{"parent": string(parent), "cause": err.Error()})
+			return Checkpoint{}, errs.Wrap(ErrInvalidCheckpointID, m.correlationID, err, map[string]any{"parent": string(parent), "id": string(parent), "cause": err.Error()})
 		}
 		if !isCheckpoint(m.root, parent) {
 			return Checkpoint{}, errs.New(ErrParentNotFound, m.correlationID, map[string]any{"parent": string(parent)})
@@ -213,7 +213,7 @@ func (m *Manager) Revert(ctx save.Context, target ID) (Checkpoint, error) {
 	defer m.mu.Unlock()
 
 	if err := validateCheckpointID(target); err != nil {
-		return Checkpoint{}, errs.Wrap(ErrInvalidCheckpointID, m.correlationID, err, map[string]any{"target": string(target), "cause": err.Error()})
+		return Checkpoint{}, errs.Wrap(ErrInvalidCheckpointID, m.correlationID, err, map[string]any{"target": string(target), "id": string(target), "cause": err.Error()})
 	}
 	if !isCheckpoint(m.root, target) {
 		return Checkpoint{}, errs.New(ErrNotACheckpoint, m.correlationID, map[string]any{"target": string(target)})

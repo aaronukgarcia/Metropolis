@@ -195,7 +195,7 @@ func runOnce(rootCorrelationID string, seed uint64, months int, spec RunSpec) (s
 			Payload:         protocol.AdvanceTicksPayload{N: n},
 		}
 		if err := transport.SendCommand(cmd); err != nil {
-			return "", errs.Wrap(ErrCommandRejected, string(corr), err, map[string]any{"run": spec.Label, "n": n})
+			return "", errs.Wrap(ErrCommandRejected, string(corr), err, map[string]any{"run": spec.Label, "n": n, "engineErrorCode": "N/A (transport failure)"})
 		}
 
 		result := <-transport.Results()
