@@ -235,10 +235,24 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 	// draw* functions below, deliberately run outside mu to keep the
 	// critical section small) must never hold a reference to the live
 	// slice — that would be exactly the kind of data race AC-11's -race
-	// check exists to catch. The grid is at most Folkestone-64-sized
-	// (4096 cells) in Sprint 1, so a full copy per Render call is cheap.
-	grid := make([]cellData, len(m.grid))
-	copy(grid, m.grid)
+	// check exists to catch.
+	//
+	// BUG-331 optimization: the grid only changes on ApplyPatch (which calls
+	// applyFullLocked/applySparseLocked and sets gridDirty=true). Render is
+	// called many times per frame without grid changes, so caching the grid
+	// snapshot between changes eliminates the per-frame full-copy at real
+	// tile size (40K cells = 2.5MB). The other snapshot fields (offset,
+	// cursor, stale, overlay) change frequently and are always recomputed.
+	var grid []cellData
+	if m.gridDirty {
+		grid = make([]cellData, len(m.grid))
+		copy(grid, m.grid)
+		m.cachedGridSnapshot = grid
+		m.gridDirty = false
+	} else {
+		grid = m.cachedGridSnapshot
+	}
+
 	return renderSnapshot{
 		width:         m.width,
 		height:        m.height,
