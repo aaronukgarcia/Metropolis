@@ -88,9 +88,7 @@ func New(cfg Config, worldSeed uint64, correlationID string) (*DefenceAPI, error
 		correlationID = errs.NewCorrelationID()
 	}
 	if err := cfg.Validate(); err != nil {
-		return nil, errs.Wrap(ErrDefenceDataInvalid, correlationID, err, map[string]any{
-			"cause": err.Error(),
-		})
+		return nil, defenceDataInvalid(correlationID, err)
 	}
 	d := &DefenceAPI{
 		correlationID:   correlationID,

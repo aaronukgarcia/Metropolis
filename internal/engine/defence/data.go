@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
@@ -248,10 +247,7 @@ func Load(dir string, worldSeed uint64, correlationID string) (*DefenceAPI, erro
 	path := filepath.Join(dir, fileName)
 	cfg, err := data.Load[Config, *Config](path, correlationID)
 	if err != nil {
-		return nil, errs.Wrap(ErrDefenceDataInvalid, correlationID, err, map[string]any{
-			"dir":   dir,
-			"cause": err.Error(),
-		})
+		return nil, defenceDataInvalid(correlationID, err)
 	}
 	return New(cfg, worldSeed, correlationID)
 }

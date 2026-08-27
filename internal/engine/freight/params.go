@@ -249,11 +249,7 @@ func LoadConfig(path, correlationID string) (config, error) {
 
 func buildConfig(raw rawFreightData, path, correlationID string) (config, error) {
 	fail := func(field, rule string) (config, error) {
-		return config{}, errs.New(ErrFreightDataInvalid, correlationID, map[string]any{
-			"path":  path,
-			"field": field,
-			"rule":  rule,
-		})
+		return config{}, freightDataInvalidError(correlationID, field, rule)
 	}
 
 	var c config

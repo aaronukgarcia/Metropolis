@@ -146,16 +146,16 @@ func (t *TrafficAPI) LoadConfig(dir string) error {
 	path := filepath.Join(dir, "traffic.json")
 	bytes, err := os.ReadFile(path)
 	if err != nil {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"path": path, "cause": err.Error()})
+		return invalidInputf(t.correlationID, "read %q: %v", path, err)
 	}
 
 	var cfg Config
 	if err := json.Unmarshal(bytes, &cfg); err != nil {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"path": path, "cause": err.Error()})
+		return invalidInputf(t.correlationID, "unmarshal %q: %v", path, err)
 	}
 
 	if reason, ok := validateConfig(cfg); !ok {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"path": path, "reason": reason})
+		return invalidInputf(t.correlationID, "validate %q: %s", path, reason)
 	}
 
 	t.cfg = cfg
@@ -213,7 +213,7 @@ func (t *TrafficAPI) AddLink(id, start, end uint64, length float64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !num.IsFinite(length) || length < 0 {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"length": length})
+		return invalidInputf(t.correlationID, "link length %v is not finite and non-negative", length)
 	}
 	t.links[id] = &Link{
 		ID:     id,
@@ -232,7 +232,7 @@ func (t *TrafficAPI) AddLinkVolume(id uint64, volume float64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if !num.IsFinite(volume) || volume < 0 {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"volume": volume})
+		return invalidInputf(t.correlationID, "link volume %v is not finite and non-negative", volume)
 	}
 	if l, ok := t.links[id]; ok {
 		l.Volume += volume
@@ -261,7 +261,7 @@ func (t *TrafficAPI) LinkTravelTime(id uint64, atMonth int64) (float64, error) {
 
 	l, ok := t.links[id]
 	if !ok {
-		return 0, errs.New(ErrInvalidInput, t.correlationID, map[string]any{"link": id})
+		return 0, invalidInputf(t.correlationID, "link %d not found", id)
 	}
 
 	lanes := 1
@@ -347,7 +347,7 @@ func (t *TrafficAPI) AddTripDemand(d leisure.TripDemand) error {
 	defer t.mu.Unlock()
 
 	if d.Count < 0 {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"count": d.Count})
+		return invalidInputf(t.correlationID, "trip count %d must be non-negative", d.Count)
 	}
 
 	t.addDemandLocked(uint64(d.District), int64(d.Count))
@@ -363,7 +363,7 @@ func (t *TrafficAPI) RegisterTrip(d education.TripDemand) error {
 	defer t.mu.Unlock()
 
 	if d.Count < 0 {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"count": d.Count})
+		return invalidInputf(t.correlationID, "school trip count %d must be non-negative", d.Count)
 	}
 
 	t.addDemandLocked(d.SchoolID, int64(d.Count))
@@ -379,7 +379,7 @@ func (t *TrafficAPI) AddDemand(destinationID uint64, count int64) error {
 	defer t.mu.Unlock()
 
 	if count < 0 {
-		return errs.New(ErrInvalidInput, t.correlationID, map[string]any{"count": count})
+		return invalidInputf(t.correlationID, "demand count %d must be non-negative", count)
 	}
 
 	t.addDemandLocked(destinationID, count)

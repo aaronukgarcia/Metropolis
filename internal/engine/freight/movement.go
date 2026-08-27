@@ -58,10 +58,7 @@ func (f *FreightAPI) ModalCap(mode Mode) (ModalCap, error) {
 	defer f.mu.RUnlock()
 	cap, ok := f.cfg.ModalCaps[mode]
 	if !ok {
-		return ModalCap{}, errs.New(ErrModalCapExceeded, f.correlationID, map[string]any{
-			"mode":   string(mode),
-			"reason": "unknown transport mode",
-		})
+		return ModalCap{}, modalCapUnknownError(f.correlationID, f.cfg.ModalCaps, mode, 0)
 	}
 	return ModalCap{
 		Mode:                 mode,
@@ -73,35 +70,20 @@ func (f *FreightAPI) ModalCap(mode Mode) (ModalCap, error) {
 
 // validateModalCap rejects a movement whose declared tonnage exceeds the
 // mode's documented cap, or falls below the sea minimum bulk size (AC-13).
-// It returns ErrModalCapExceeded — never a silent clamp to the cap.
-func (f *FreightAPI) validateModalCap(mode Mode, tonnes int64) error {
+// It returns ErrModalCapExceeded or ErrNegativeTonnage — never a silent clamp to the cap.
+func (f *FreightAPI) validateModalCap(commodity Commodity, mode Mode, tonnes int64) error {
 	cap, ok := f.cfg.ModalCaps[mode]
 	if !ok {
-		return errs.New(ErrModalCapExceeded, f.correlationID, map[string]any{
-			"mode":   string(mode),
-			"tonnes": tonnes,
-			"reason": "unknown transport mode",
-		})
+		return modalCapUnknownError(f.correlationID, f.cfg.ModalCaps, mode, tonnes)
 	}
 	if tonnes <= 0 {
-		return errs.New(ErrNegativeTonnage, f.correlationID, map[string]any{
-			"mode":   string(mode),
-			"tonnes": tonnes,
-		})
+		return negativeTonnageError(f.correlationID, commodity, tonnes)
 	}
 	if tonnes > cap.MaxTonnesPerMovement {
-		return errs.New(ErrModalCapExceeded, f.correlationID, map[string]any{
-			"mode":   string(mode),
-			"tonnes": tonnes,
-			"max":    cap.MaxTonnesPerMovement,
-		})
+		return modalCapError(f.correlationID, mode, tonnes, cap.MaxTonnesPerMovement)
 	}
 	if tonnes < cap.MinTonnesPerMovement {
-		return errs.New(ErrModalCapExceeded, f.correlationID, map[string]any{
-			"mode":   string(mode),
-			"tonnes": tonnes,
-			"min":    cap.MinTonnesPerMovement,
-		})
+		return modalCapError(f.correlationID, mode, tonnes, cap.MinTonnesPerMovement)
 	}
 	return nil
 }
@@ -131,7 +113,7 @@ func (f *FreightAPI) Import(commodity Commodity, tonnes int64, mode Mode) (Movem
 	// Validate the DECLARED tonnage against the mode cap first (AC-13: a
 	// declared >cap movement is rejected, never silently bounded to what the
 	// market/logistics capacity happens to deliver).
-	if err := f.validateModalCap(mode, tonnes); err != nil {
+	if err := f.validateModalCap(commodity, mode, tonnes); err != nil {
 		return MovementResult{}, err
 	}
 
@@ -213,7 +195,7 @@ func (f *FreightAPI) Export(commodity Commodity, tonnes int64, mode Mode) (Movem
 			"commodity": string(commodity),
 		})
 	}
-	if err := f.validateModalCap(mode, tonnes); err != nil {
+	if err := f.validateModalCap(commodity, mode, tonnes); err != nil {
 		return MovementResult{}, err
 	}
 	site := f.cfg.canonicalSite[cc.StorageClass]
@@ -222,10 +204,7 @@ func (f *FreightAPI) Export(commodity Commodity, tonnes int64, mode Mode) (Movem
 		tonnes = current // a departure cannot exceed the stock held
 	}
 	if tonnes <= 0 {
-		return MovementResult{}, errs.New(ErrNegativeTonnage, f.correlationID, map[string]any{
-			"commodity": string(commodity),
-			"tonnes":    tonnes,
-		})
+		return MovementResult{}, negativeTonnageError(f.correlationID, commodity, tonnes)
 	}
 
 	f.sites[site].stock[commodity] = num.SatSub(current, tonnes)
@@ -282,19 +261,15 @@ func (f *FreightAPI) Ship(commodity Commodity, tonnes int64, to SiteType, mode M
 			"siteClass":      string(dest.cfg.CommodityClass),
 		})
 	}
-	if err := f.validateModalCap(mode, tonnes); err != nil {
+	if err := f.validateModalCap(commodity, mode, tonnes); err != nil {
 		return MovementResult{}, err
 	}
 
 	source := f.cfg.canonicalSite[cc.StorageClass]
 	current := f.sites[source].stock[commodity]
+	cap, _ := f.cfg.ModalCaps[mode]
 	if tonnes > current {
-		return MovementResult{}, errs.New(ErrModalCapExceeded, f.correlationID, map[string]any{
-			"commodity": string(commodity),
-			"tonnes":    tonnes,
-			"available": current,
-			"reason":    "insufficient stock at source",
-		})
+		return MovementResult{}, insufficientStockError(f.correlationID, commodity, tonnes, cap.MaxTonnesPerMovement)
 	}
 
 	f.sites[source].stock[commodity] = num.SatSub(current, tonnes)

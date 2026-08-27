@@ -75,13 +75,13 @@ func (d *DefenceAPI) RespondToMandate(req MandateResponse) (MandateResult, error
 		return MandateResult{}, errs.New(ErrInvalidChoice, d.correlationID, map[string]any{"mandate": req.MandateID, "choice": req.Choice})
 	}
 	if !req.Site.Tile.InExtent() || !req.Site.Local.InBounds() {
-		return MandateResult{}, errs.New(ErrIneligibleSite, d.correlationID, map[string]any{"site": req.Site.String()})
+		return MandateResult{}, ineligibleSiteError(d.correlationID, req.Site.String(), "site is outside world grid bounds or failed ownership check")
 	}
 	fc, ok := d.cfg.Facilities[choice.FacilityType]
 	if !ok {
 		// Unreachable with valid data (Validate enforces the reference), but
 		// fail closed rather than index a missing config.
-		return MandateResult{}, errs.New(ErrDefenceDataInvalid, d.correlationID, map[string]any{"facilityType": choice.FacilityType})
+		return MandateResult{}, missingFacilityTypeError(d.correlationID, choice.FacilityType)
 	}
 
 	// SEC-215: pre-flight the entire dependency surface BEFORE any mutation.
