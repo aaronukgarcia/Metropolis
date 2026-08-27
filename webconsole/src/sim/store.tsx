@@ -9,7 +9,7 @@ import { recordAction, emptyJournal, persistJournal, loadJournal, journalTail, t
 import { AUTOSAVE_INTERVAL_MS, persistSavepoint, createSavepoint, restoreFromSavepoint } from './replay';
 import { attemptWipe } from './captureBeforeWipe';
 import { versionRaw } from './version';
-import { recordError } from './backend';
+import { recordError, updateLastKnownState } from './backend';
 
 // Pure engine logic lives in engine.ts so it is unit-testable without JSX.
 // Re-exported here for backward compatibility with existing `'../sim/store'`
@@ -116,7 +116,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
           setCaptureError(null);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          recordError(`Start Over aborted — pre-wipe debug capture failed: ${msg}. State left intact.`);
+          recordError(`Start Over aborted — pre-wipe debug capture failed: ${msg}. State left intact.`, { type: 'reset-abort' });
           setCaptureError(msg);
         }
         return;
@@ -147,6 +147,14 @@ export function SimProvider({ children }: { children: ReactNode }) {
     }, AUTOSAVE_INTERVAL_MS);
     return () => clearInterval(intervalId);
   }, [state, journal, lastSaveIndex]);
+
+  // GR#1 (FEAT-1972079898): feed the error envelope's "heap" ref with a bounded
+  // snapshot of the live sim state, so any error trapped by recordError can attach
+  // the state at crash time. This lives OUTSIDE SimState — no Date.now/Math.random
+  // enters the reducer.
+  useEffect(() => {
+    updateLastKnownState(state);
+  }, [state]);
 
   useEffect(() => {
     if (state.speed === 0) return;

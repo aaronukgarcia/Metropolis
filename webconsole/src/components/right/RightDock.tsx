@@ -636,9 +636,42 @@ function DebugTab() {
         <p className="hint">No errors captured this session.</p>
       ) : (
         <ul className="error-list mono">
-          {errList.rows.map((e, i) => (
-            <li key={i}>
-              <span className="muted">{e.time}</span> {e.msg}
+          {errList.rows.map((e) => (
+            <li key={e.correlationId}>
+              <details>
+                <summary>
+                  <span className="muted">{e.time}</span>{' '}
+                  <span className="muted">#{e.correlationId}</span>{' '}
+                  <span className="muted">[{e.type}]</span> {e.msg}
+                  {e.count > 1 && <span className="muted"> ×{e.count}</span>}
+                </summary>
+                <div className="error-detail">
+                  {e.count > 1 && (
+                    <div className="muted">
+                      first {e.firstTime} · last {e.lastTime}
+                    </div>
+                  )}
+                  {e.stateSummary && (
+                    <div className="muted">
+                      heap: tick {fmtNum(e.stateSummary.tick)} · funds{' '}
+                      {fmtNum(e.stateSummary.funds)} · pop {fmtNum(e.stateSummary.population)} ·
+                      speed {e.stateSummary.speed}
+                    </div>
+                  )}
+                  {e.componentStack && (
+                    <>
+                      <div className="muted">component stack (trigger):</div>
+                      <pre className="mono">{e.componentStack}</pre>
+                    </>
+                  )}
+                  {e.stack && (
+                    <>
+                      <div className="muted">stack:</div>
+                      <pre className="mono">{e.stack}</pre>
+                    </>
+                  )}
+                </div>
+              </details>
             </li>
           ))}
         </ul>

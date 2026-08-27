@@ -77,14 +77,42 @@ import { getPerformanceSnapshot } from './perfhud.ts';
 /** Bumped when the serialized shape changes incompatibly. */
 export const DEBUG_JSON_FORMAT = 'metropolis-debug/1';
 
+/** A lightweight, bounded snapshot of the sim state at crash time ("the heap"). */
+export interface CapturedStateSummary {
+  tick: number;
+  funds: number;
+  population: number;
+  speed: number;
+  policies: Record<string, boolean>;
+}
+
 /**
- * One captured error. Shape contract for the FEAT-1972079885 reconciliation:
- * the metropolis-ui error-capture port lands entries of exactly this shape
- * (epoch-ms timestamp + message); today they come from backend.recentErrors().
+ * One captured error (GR#1, FEAT-1972079898): full context, not a bare line.
+ * Produced by backend.recordError() and surfaced both here (debug.json `errors`)
+ * and in the live "Errors captured" panel. Identical repeats are collapsed into
+ * one record via `count` + `firstAt`/`lastAt` (so e.g. the "useSim must be used
+ * inside SimProvider" spam becomes a single row).
  */
 export interface CapturedError {
-  at: number;
+  /** Unique per distinct error — the correlation id. */
+  correlationId: number;
+  /** Where it came from. */
+  type: 'window-error' | 'unhandledrejection' | 'render-crash' | 'reset-abort' | 'app';
   msg: string;
+  /** JS stack (error.stack), when available. */
+  stack?: string;
+  /** React component tree that triggered a render crash (errorInfo.componentStack). */
+  componentStack?: string;
+  /** Optional action/context label. */
+  action?: string;
+  /** Epoch-ms of the first occurrence (its stack/heap are preserved). */
+  firstAt: number;
+  /** Epoch-ms of the most recent occurrence. */
+  lastAt: number;
+  /** Occurrences collapsed into this record (>= 1). */
+  count: number;
+  /** Bounded sim-state snapshot at first-capture time ("the heap"). */
+  stateSummary: CapturedStateSummary | null;
 }
 
 /** Everything the pure builder needs that is NOT sim state. */

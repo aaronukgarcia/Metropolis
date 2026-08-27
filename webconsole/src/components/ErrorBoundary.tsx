@@ -26,9 +26,15 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    // Surface to the console + the app's error registry so it shows in the
-    // debug snapshot's `errors` list rather than vanishing.
-    recordError(`render crash: ${error.message}`);
+    // GR#1: surface the FULL context — the JS stack AND the React component tree
+    // (info.componentStack = what triggered it, e.g. a useSim consumer rendered
+    // outside SimProvider) — not just the message. This is an INTERNAL change;
+    // ErrorBoundary's props are unchanged (App.tsx owns that).
+    recordError(error.message, {
+      type: 'render-crash',
+      stack: error.stack,
+      componentStack: info.componentStack ?? undefined,
+    });
     // eslint-disable-next-line no-console
     console.error('[Metropolis] render crash caught by ErrorBoundary', error, info);
   }
