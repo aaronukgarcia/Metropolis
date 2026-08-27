@@ -1,6 +1,7 @@
 package roads
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
@@ -36,7 +37,7 @@ func (a *RoadsAPI) ScheduleRoadworks(cmd ScheduleRoadworksCommand) error {
 		return err
 	}
 	if !validWindow(cmd.Window) {
-		return roadsErr(a.correlationID, ErrInvalidRoadworks, map[string]any{"window": uint8(cmd.Window)})
+		return invalidRoadworksError(a.correlationID, fmt.Sprintf("invalid window value: %d", cmd.Window))
 	}
 
 	a.mu.Lock()
@@ -68,32 +69,30 @@ func validWindow(w RoadworksWindow) bool { return w == WindowAny || w == WindowS
 // predicate when Window is WindowSummer. Any violation is ErrInvalidRoadworks.
 func validateRoadworks(phases []RoadworksPhase, steadyLanes int, window RoadworksWindow, correlationID string) error {
 	if len(phases) == 0 {
-		return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{"reason": "empty schedule"})
+		return invalidRoadworksError(correlationID, "empty schedule")
 	}
 	var prevEnd int64
 	for i, p := range phases {
 		if p.StartMonth < 0 {
-			return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{"phase": i, "reason": "negative start month"})
+			return invalidRoadworksPhaseError(correlationID, i, "negative start month")
 		}
 		if p.DurationMonths <= 0 {
-			return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{"phase": i, "reason": "non-positive duration"})
+			return invalidRoadworksPhaseError(correlationID, i, "non-positive duration")
 		}
 		endMonth, overflowed := num.SatAddChecked(p.StartMonth, p.DurationMonths)
 		if overflowed {
-			return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{"phase": i, "reason": "end month overflow"})
+			return invalidRoadworksPhaseError(correlationID, i, "end month overflow")
 		}
 		if p.OpenLanes < 0 || p.OpenLanes > steadyLanes {
-			return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{
-				"phase": i, "openLanes": p.OpenLanes, "steadyLanes": steadyLanes,
-			})
+			return invalidRoadworksPhaseError(correlationID, i,
+				fmt.Sprintf("OpenLanes %d outside [0,%d]", p.OpenLanes, steadyLanes))
 		}
 		if i > 0 && p.StartMonth < prevEnd {
-			return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{"phase": i, "reason": "overlaps prior phase"})
+			return invalidRoadworksPhaseError(correlationID, i, "overlaps prior phase")
 		}
 		if window == WindowSummer && !isSummerMonth(p.StartMonth) {
-			return roadsErr(correlationID, ErrInvalidRoadworks, map[string]any{
-				"phase": i, "startMonth": p.StartMonth, "reason": "not a summer month",
-			})
+			return invalidRoadworksPhaseError(correlationID, i,
+				fmt.Sprintf("not a summer month (month %d)", p.StartMonth))
 		}
 		prevEnd = endMonth
 	}

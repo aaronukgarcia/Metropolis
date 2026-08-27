@@ -1,6 +1,7 @@
 package roads
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
@@ -181,12 +182,9 @@ func (a *RoadsAPI) upgradeCostLocked(rs *roadState, target RoadClass) (det.Micro
 	// clamp would still overflow tgtBase*num inside MulRat.
 	scaled, overflowed := num.SafeMul(rungDist, a.cfg.upgrade.RungDistanceCostPermille)
 	if overflowed {
-		return 0, roadsErr(a.correlationID, ErrInvalidInput, map[string]any{
-			"field":    "upgrade.rungDistanceCostPermille",
-			"rungDist": rungDist,
-			"permille": a.cfg.upgrade.RungDistanceCostPermille,
-			"reason":   "rung-distance cost numerator overflows int64",
-		})
+		return 0, invalidInputError(a.correlationID, "upgrade.rungDistanceCostPermille",
+			fmt.Sprintf("rung-distance cost overflow (rungDist=%d × permille=%d)",
+				rungDist, a.cfg.upgrade.RungDistanceCostPermille))
 	}
 	rungPenalty, err := det.MulRat(a.correlationID, tgtBase, scaled, 1000)
 	if err != nil {

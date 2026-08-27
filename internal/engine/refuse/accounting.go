@@ -1,7 +1,6 @@
 package refuse
 
 import (
-	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
@@ -12,22 +11,22 @@ import (
 //	TonnesGenerated == TonnesCollected + TonnesUncollected + TonnesInTransit + TonnesDisposalBacklog
 //
 // holds exactly (whole kilograms). Each of the four right-hand terms is
-// computed INDEPENDENTLY from its own source — none is ever inferred as the
+// computed INDEPENDENTLY from its own source â€” none is ever inferred as the
 // remainder of the others, so a bug in any one term's accounting makes the
 // identity fail rather than balancing tautologically by construction
 // (exactly analogous to engine.wellbeing.md AC-2/AC-3's additive-identity-
 // plus-independence pairing).
 
 // TonnesGenerated returns the cumulative waste generated into bins for a
-// stream (kg) — the independently-tracked generation counter (AC-11). An
-// unknown stream is rejected with ErrUnknownLandUse.
+// stream (kg) â€” the independently-tracked generation counter (AC-11). An
+// unknown stream is rejected with ErrUnknownStream.
 func (r *RefuseAPI) TonnesGenerated(s Stream) (int64, error) {
 	if err := r.checkNotCopied("TonnesGenerated"); err != nil {
 		return 0, err
 	}
 	idx := streamIndex(s)
 	if idx < 0 {
-		return 0, errs.New(ErrUnknownLandUse, r.correlationID, map[string]any{"stream": string(s)})
+		return 0, unknownStreamError(r.correlationID, s)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -36,7 +35,7 @@ func (r *RefuseAPI) TonnesGenerated(s Stream) (int64, error) {
 
 // TonnesCollected returns the cumulative waste that completed a round
 // delivery and was processed into its terminal form (landfill fill,
-// incineration, compost, or recycling resale) for a stream (kg) — the
+// incineration, compost, or recycling resale) for a stream (kg) â€” the
 // independently-tracked completed-delivery counter (AC-11).
 func (r *RefuseAPI) TonnesCollected(s Stream) (int64, error) {
 	if err := r.checkNotCopied("TonnesCollected"); err != nil {
@@ -44,7 +43,7 @@ func (r *RefuseAPI) TonnesCollected(s Stream) (int64, error) {
 	}
 	idx := streamIndex(s)
 	if idx < 0 {
-		return 0, errs.New(ErrUnknownLandUse, r.correlationID, map[string]any{"stream": string(s)})
+		return 0, unknownStreamError(r.correlationID, s)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -52,7 +51,7 @@ func (r *RefuseAPI) TonnesCollected(s Stream) (int64, error) {
 }
 
 // TonnesUncollected returns the current waste still at cells (in-bin plus
-// overflow) for a stream (kg), summed from the bin-stock state itself —
+// overflow) for a stream (kg), summed from the bin-stock state itself â€”
 // never inferred as a remainder (AC-11). It is computed on demand from the
 // cell ledger.
 func (r *RefuseAPI) TonnesUncollected(s Stream) (int64, error) {
@@ -61,7 +60,7 @@ func (r *RefuseAPI) TonnesUncollected(s Stream) (int64, error) {
 	}
 	idx := streamIndex(s)
 	if idx < 0 {
-		return 0, errs.New(ErrUnknownLandUse, r.correlationID, map[string]any{"stream": string(s)})
+		return 0, unknownStreamError(r.correlationID, s)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -73,7 +72,7 @@ func (r *RefuseAPI) TonnesUncollected(s Stream) (int64, error) {
 }
 
 // TonnesInTransit returns the current waste collected by a round but not
-// yet delivered to a disposal site (kg), summed from the round ledger —
+// yet delivered to a disposal site (kg), summed from the round ledger â€”
 // the refuse-side view of engine.logistics' movement (AC-11; at full
 // logistics depth this is the movement ledger, see doc.go).
 func (r *RefuseAPI) TonnesInTransit(s Stream) (int64, error) {
@@ -82,7 +81,7 @@ func (r *RefuseAPI) TonnesInTransit(s Stream) (int64, error) {
 	}
 	idx := streamIndex(s)
 	if idx < 0 {
-		return 0, errs.New(ErrUnknownLandUse, r.correlationID, map[string]any{"stream": string(s)})
+		return 0, unknownStreamError(r.correlationID, s)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -95,14 +94,14 @@ func (r *RefuseAPI) TonnesInTransit(s Stream) (int64, error) {
 
 // TonnesDisposalBacklog returns the current waste queued at disposal sites
 // awaiting processing (kg), summed from the disposal sites' own queues
-// (AC-11) — never inferred as a remainder.
+// (AC-11) â€” never inferred as a remainder.
 func (r *RefuseAPI) TonnesDisposalBacklog(s Stream) (int64, error) {
 	if err := r.checkNotCopied("TonnesDisposalBacklog"); err != nil {
 		return 0, err
 	}
 	idx := streamIndex(s)
 	if idx < 0 {
-		return 0, errs.New(ErrUnknownLandUse, r.correlationID, map[string]any{"stream": string(s)})
+		return 0, unknownStreamError(r.correlationID, s)
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()

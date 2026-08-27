@@ -85,4 +85,10 @@ const (
 	// root wires these before the first tick; an unwired call is rejected
 	// rather than silently treating a nil dependency as "empty".
 	ErrDependencyNotWired = "MET-G1908"
+
+	// ErrUnknownStream: a bin-stock query or accounting method was called
+	// with a Stream value that is not one of the three registered waste
+	// streams (general, recycling, food). Query-time, never a silently-created
+	// zero-value stream entry (AC-13).
+	ErrUnknownStream = "MET-G1909"
 )

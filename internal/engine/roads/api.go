@@ -1,6 +1,7 @@
 package roads
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -80,10 +81,7 @@ func Load(dir string, seed uint64, correlationID string) (*RoadsAPI, error) {
 	}
 	corpus, err := data.LoadNamingCorpus(dir, correlationID)
 	if err != nil {
-		return nil, errs.Wrap(ErrCorpusLoadFailed, correlationID, err, map[string]any{
-			"dir":   dir,
-			"cause": err.Error(),
-		})
+		return nil, corpusLoadFailedError(correlationID, err)
 	}
 	a := &RoadsAPI{
 		correlationID: correlationID,
@@ -172,13 +170,11 @@ func (a *RoadsAPI) AddNode(cmd AddNodeCommand) error {
 		return err
 	}
 	if cmd.ID == 0 {
-		return roadsErr(a.correlationID, ErrInvalidInput, map[string]any{"field": "ID"})
+		return invalidInputError(a.correlationID, "ID", "must be non-zero")
 	}
 	if !cellRefInDomain(cmd.Pos) {
-		return roadsErr(a.correlationID, ErrInvalidInput, map[string]any{
-			"field": "Pos",
-			"cell":  cellRefString(cmd.Pos),
-		})
+		return invalidInputError(a.correlationID, "Pos",
+			fmt.Sprintf("cell %s outside the 200x200 grid", cellRefString(cmd.Pos)))
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -232,13 +228,13 @@ func (a *RoadsAPI) AddRoad(cmd AddRoadCommand) (Road, error) {
 		return Road{}, err
 	}
 	if cmd.ID == 0 {
-		return Road{}, roadsErr(a.correlationID, ErrInvalidInput, map[string]any{"field": "ID"})
+		return Road{}, invalidInputError(a.correlationID, "ID", "must be non-zero")
 	}
 	if !cmd.Class.valid() {
 		return Road{}, roadsErr(a.correlationID, ErrInvalidClass, map[string]any{"class": uint8(cmd.Class)})
 	}
 	if cmd.Start == cmd.End {
-		return Road{}, roadsErr(a.correlationID, ErrInvalidInput, map[string]any{"reason": "self-loop edge"})
+		return Road{}, invalidInputError(a.correlationID, "Start/End", "must be different (self-loop edge)")
 	}
 
 	a.mu.Lock()

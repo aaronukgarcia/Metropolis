@@ -26,7 +26,7 @@ func (a *RoadsAPI) Rename(cmd RenameCommand) error {
 		return roadsErr(a.correlationID, ErrUnknownObjectKind, map[string]any{"kind": uint8(cmd.Kind)})
 	}
 	if cmd.NewName == "" {
-		return roadsErr(a.correlationID, ErrInvalidInput, map[string]any{"field": "NewName"})
+		return invalidInputError(a.correlationID, "NewName", "must be non-empty")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()

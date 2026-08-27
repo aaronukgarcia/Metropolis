@@ -2892,6 +2892,12 @@
       "message": "dependency not wired for method {method}",
       "remedy": "The operation drives the registered outbound edges (engine.logistics/engine.services) before Wire injected them. Wire the dependencies before the first tick — an unwired call is rejected rather than silently treating a nil dependency as empty (GR#20)."
     },
+    "MET-G1909": {
+      "severity": "error",
+      "module": "engine.refuse",
+      "message": "refuse stream {stream} is not a registered waste stream",
+      "remedy": "Use one of the three streams: general, recycling, or food"
+    },
     "MET-G1700": {
       "severity": "error",
       "module": "engine.rail",

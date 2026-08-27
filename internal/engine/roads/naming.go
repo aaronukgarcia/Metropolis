@@ -170,10 +170,8 @@ func (a *RoadsAPI) NameFor(kind ObjectKind, seed, id uint64) (string, error) {
 		return "", roadsErr(a.correlationID, ErrUnknownObjectKind, map[string]any{"kind": uint8(kind)})
 	}
 	if kind == KindRoad {
-		return "", roadsErr(a.correlationID, ErrInvalidInput, map[string]any{
-			"kind":   kind.String(),
-			"reason": "road naming requires a class; use NameRoad",
-		})
+		return "", invalidInputError(a.correlationID, "kind",
+			"KindRoad requires a RoadClass; use NameRoad instead")
 	}
 	return a.resolveName(nameKey{kind: kind, seed: seed, id: id}, func() string {
 		switch kind {

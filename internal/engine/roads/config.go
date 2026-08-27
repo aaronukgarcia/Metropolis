@@ -168,17 +168,11 @@ func LoadConfig(path, correlationID string) (config, error) {
 	var zero config
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return zero, errs.Wrap(ErrRoadsDataInvalid, correlationID, err, map[string]any{
-			"path":  path,
-			"cause": err.Error(),
-		})
+		return zero, roadsDataInvalidLoad(correlationID, path, err)
 	}
 	var raw rawRoadsData
 	if err := json.Unmarshal(b, &raw); err != nil {
-		return zero, errs.Wrap(ErrRoadsDataInvalid, correlationID, err, map[string]any{
-			"path":  path,
-			"cause": err.Error(),
-		})
+		return zero, roadsDataInvalidParse(correlationID, path, err)
 	}
 	return buildConfig(raw, path, correlationID)
 }
@@ -186,9 +180,9 @@ func LoadConfig(path, correlationID string) (config, error) {
 func buildConfig(raw rawRoadsData, path, correlationID string) (config, error) {
 	fail := func(field, rule string) (config, error) {
 		return config{}, errs.New(ErrRoadsDataInvalid, correlationID, map[string]any{
-			"path":   path,
 			"field":  field,
 			"reason": rule,
+			"cause":  "schema validation failure",
 		})
 	}
 	var c config

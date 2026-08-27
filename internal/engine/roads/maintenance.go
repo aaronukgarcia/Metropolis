@@ -61,7 +61,7 @@ func (a *RoadsAPI) RepairRoad(cmd RepairRoadCommand) error {
 		return err
 	}
 	if cmd.AmountMicropounds < 0 {
-		return roadsErr(a.correlationID, ErrInvalidInput, map[string]any{"field": "AmountMicropounds"})
+		return invalidInputError(a.correlationID, "AmountMicropounds", "must be non-negative")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
