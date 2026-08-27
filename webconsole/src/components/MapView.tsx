@@ -29,8 +29,10 @@ import { useSim, demandOf, specUnlocked } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
 import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
-import type { Building, ZoneKind } from '../sim/types';
-import { fmtMoney, fmtNum } from '../sim/utils';
+import type { Building, ZoneKind, TaxRates } from '../sim/types';
+import type { Spec } from '../sim/data';
+import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
+import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine } from '../sim/profile';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -897,6 +899,7 @@ function BuildingCard({
   onClose: () => void;
 }) {
   const { state } = useSim();
+  const [copied, setCopied] = useState(false);
   const sp = SPECS[building.spec];
   if (!sp) return null;
   const util = utilisationOf(state, building);
@@ -904,14 +907,40 @@ function BuildingCard({
   // panel's name·provision label (e.g. "Small Holding · #44") so the visible
   // report number matches the map overlay and the debug JSON's buildings[].id.
   const refLabel = buildingRefLabel(building, showRefs);
+  // Class-type number NNNN.L — stable per-TYPE id + level (distinct from #id).
+  const classLabel = specClassLabel(sp);
+
+  // Copy the building's full data as JSON so Aaron can paste it into chat.
+  // Guard navigator.clipboard (undefined in some contexts / insecure origins) —
+  // never throw if absent.
+  function copyJson() {
+    const payload = buildingCopyPayload(building, sp!, state.taxRates);
+    const text = JSON.stringify(payload, null, 2);
+    const clip = typeof navigator !== 'undefined' ? navigator.clipboard : undefined;
+    if (!clip || typeof clip.writeText !== 'function') return;
+    clip.writeText(text).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      },
+      () => {
+        /* clipboard write rejected (permissions) — silent, no throw */
+      },
+    );
+  }
+
   return (
     <div className="building-card">
       <header>
         <span className="swatch big" style={{ background: sp.color }} />
         <b>
           {sp.name}
+          <span className="mono"> · class {classLabel}</span>
           {refLabel && <span className="mono"> · {refLabel}</span>}
         </b>
+        <button className="btn tiny" title="Copy this building's data as JSON" onClick={copyJson}>
+          {copied ? 'Copied' : 'Copy'}
+        </button>
         <button className="btn tiny" onClick={onClose}>
           Close
         </button>
@@ -956,9 +985,66 @@ function BuildingCard({
             : 'Not connected — no road touches this station yet'}
         </p>
       )}
+      <BuildingProfileView spec={sp} taxRates={state.taxRates} />
+    </div>
+  );
+}
+
+// FEAT-1972079866: full per-object economic profile, sourced purely from the
+// spec (+ tax rates for the two clean fiscal contributions). Groups the spec's
+// inputs (REQUIRES) against its outputs (PRODUCES) so the player can inspect
+// exactly what a selected building costs, needs, and generates.
+function fmtProfileValue(line: ProfileLine): string {
+  if (line.value === null) return '';
+  switch (line.unit) {
+    case 'power':
+      return formatPower(line.value);
+    case 'moneyPerTick':
+      return `${fmtMoney(line.value)}/tick`;
+    case 'count':
+    default:
+      return fmtNum(line.value);
+  }
+}
+
+function ProfileLineRow({ line }: { line: ProfileLine }) {
+  const value = fmtProfileValue(line);
+  return (
+    <li>
+      <span>{line.label}</span>{' '}
+      {value ? <b>{value}</b> : line.note ? <i className="muted">{line.note}</i> : null}
+      {value && line.note ? <span className="muted"> ({line.note})</span> : null}
+    </li>
+  );
+}
+
+function BuildingProfileView({ spec, taxRates }: { spec: Spec; taxRates: TaxRates }) {
+  const profile = buildingProfile(spec, taxRates);
+  return (
+    <div className="building-profile">
       <p>
-        Cost {fmtMoney(sp.cost)} · upkeep {fmtMoney(sp.upkeep)}/tick
+        <b>CAPEX</b> {fmtMoney(profile.capex)} build · <b>OPEX</b> {fmtMoney(profile.opex)}/tick upkeep
       </p>
+      {profile.requires.length > 0 && (
+        <div>
+          <p className="profile-heading">REQUIRES</p>
+          <ul className="profile-list">
+            {profile.requires.map((line) => (
+              <ProfileLineRow key={line.key} line={line} />
+            ))}
+          </ul>
+        </div>
+      )}
+      {profile.produces.length > 0 && (
+        <div>
+          <p className="profile-heading">PRODUCES</p>
+          <ul className="profile-list">
+            {profile.produces.map((line) => (
+              <ProfileLineRow key={line.key} line={line} />
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
