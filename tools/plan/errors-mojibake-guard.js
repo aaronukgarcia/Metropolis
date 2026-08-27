@@ -122,17 +122,31 @@ function scanBuffer(buf) {
 }
 
 /**
- * Scan every data/*.json under dataDir. Returns
+ * Scan every data/*.json under dataDir (recursive). Returns
  * [{ file, hits: [...scanBuffer results] }] — files with zero hits still
  * appear with hits: [] so callers can report filesChecked.
+ *
+ * NOTE (2026-08-25): extended to recurse into subdirectories after discovering
+ * data/devfeedback/processed/smoke-test.json was not scanned (BUG-350 finding #2).
  */
 function scanDataDir(dataDir) {
-  const entries = fs.readdirSync(dataDir).filter((f) => f.endsWith('.json'));
-  return entries.map((f) => {
-    const file = path.join(dataDir, f);
-    const hits = scanBuffer(fs.readFileSync(file));
-    return { file, hits };
-  });
+  const results = [];
+
+  function walkDir(dir) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walkDir(fullPath);
+      } else if (entry.name.endsWith('.json')) {
+        const hits = scanBuffer(fs.readFileSync(fullPath));
+        results.push({ file: fullPath, hits });
+      }
+    }
+  }
+
+  walkDir(dataDir);
+  return results;
 }
 
 /**
