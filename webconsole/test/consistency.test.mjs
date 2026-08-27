@@ -252,6 +252,79 @@ test('RED FLOWS: upkeep diverges if building is removed', () => {
   assert.ok(check, 'upkeep check exists');
 });
 
+test('BUG-414 FIX: upkeep check excludes offline/under-construction buildings', () => {
+  // This test verifies the fix for BUG-414: the checker was summing upkeep for ALL buildings
+  // (including under-construction ones), while the engine only charges for online buildings.
+  // Expected divergence: ~35 offline buildings would cause checker to over-count by their total upkeep.
+  //
+  // Strategy: place a building with builtTick at current tick, then advance only once.
+  // The building will still be under construction (offline) and should be excluded from upkeep.
+  const s = initialState();
+  // s.tick is 1 at initialization; place a building here
+  const s1 = reducer(s, { type: 'place', spec: 'road', x: 50, y: 50 });
+  // s1.tick is still 1, the placed road has builtTick=1
+  // Road buildings have non-zero upkeep costs
+
+  // Advance once: s2.tick becomes 2
+  const s2 = reducer(s1, { type: 'tick' });
+  assert.equal(s2.tick, 2, 'tick advanced to 2');
+
+  // At tick 2, the road placed at tick 1 is still under construction (since construction takes ~3+ ticks)
+  // The engine's computeFlows excludes it via isOnline check
+  // The checker's recomputation should also exclude it via the same isOnline check
+  // So computed upkeep (excluding offline) should equal actual upkeep (engine excluded it too)
+
+  const report = runConsistencyChecks(s2);
+  const check = report.checks.find((c) => c.id === 'flows.upkeep-total-matches');
+  assert.ok(check, 'upkeep check exists');
+  assert.equal(check.ok, true,
+    'upkeep matches after placing building: both exclude offline buildings');
+  assert.ok(check.detail.includes('computed') && check.detail.includes('actual'),
+    'detail shows computed vs actual values');
+});
+
+test('BUG-414 FIX: multiple offline buildings excluded from upkeep total', () => {
+  // Place multiple buildings back-to-back at the same tick, advance once.
+  // All should be offline and excluded from both computed and actual upkeep.
+  const s = initialState();
+  let state = s;
+
+  // Place 5 roads (all have upkeep costs)
+  for (let i = 0; i < 5; i++) {
+    state = reducer(state, { type: 'place', spec: 'road', x: 40 + i, y: 50 });
+  }
+  // All roads have builtTick = 1 (placed at tick 1)
+
+  // Advance once
+  const s2 = reducer(state, { type: 'tick' });
+
+  // All 5 roads are offline (under construction), excluded from both computed and actual
+  const report = runConsistencyChecks(s2);
+  const check = report.checks.find((c) => c.id === 'flows.upkeep-total-matches');
+  assert.equal(check.ok, true,
+    'upkeep matches with multiple offline buildings');
+});
+
+test('BUG-414 FIX: online buildings ARE included in upkeep total', () => {
+  // Verify that once a building goes online, it IS included in the upkeep check.
+  // Start state has buildings already online (initial scenery).
+  // Place a new building, advance many ticks until it goes online, then check.
+  const s = initialState();
+  const s1 = reducer(s, { type: 'place', spec: 'road', x: 55, y: 55 });
+
+  // Road construction takes ~3 ticks, so advance 5 times to be sure it's online
+  let state = s1;
+  for (let i = 0; i < 5; i++) {
+    state = reducer(state, { type: 'tick' });
+  }
+
+  // Now the road should be online and included in upkeep calculations
+  const report = runConsistencyChecks(state);
+  const check = report.checks.find((c) => c.id === 'flows.upkeep-total-matches');
+  assert.equal(check.ok, true,
+    'upkeep matches after building goes online');
+});
+
 // ===== PALETTE RED TEST =====
 
 test('RED PALETTE: patch SPECS to remove color causes check FAIL', () => {

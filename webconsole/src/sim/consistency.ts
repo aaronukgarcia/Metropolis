@@ -13,6 +13,7 @@ import {
   densityTier,
   PALETTE_FLAT,
   countByKind,
+  isOnline,
 } from './data.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick } from './fiscal.ts';
 
@@ -324,15 +325,16 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       : `Wages diverged: computed ${recomputedWages} vs actual ${actualWages} (pop change without reflow?)`,
   });
 
-  // Recompute total upkeep: sum of online building upkeeps.
+  // Recompute total upkeep: sum of ONLINE building upkeeps only.
   // LIMITATION: This check verifies total upkeep magnitude but NOT per-bucket mapping
   // (e.g., roads upkeep stays within 'Roads' bucket, power stays in 'Power Grid', etc.).
   // A full per-bucket check would require tracking which flow label covers which UPKEEP_BUCKET.
+  // BUG-414 FIX: exclude offline/under-construction buildings to match engine.computeFlows behavior.
   let recomputedUpkeep = 0;
   for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue; // Skip buildings still under construction
     const sp = SPECS[b.spec];
     if (!sp || !sp.upkeep) continue;
-    // Simplified: assume all buildings with upkeep are contributing (no online timing check here).
     recomputedUpkeep += sp.upkeep;
   }
   // Sum actual upkeep from all outflow buckets (Roads, Power, Healthcare, etc.).
