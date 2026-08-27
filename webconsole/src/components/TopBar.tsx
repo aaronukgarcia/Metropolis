@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSim, levelOf, xpForLevel, wellbeingOf } from '../sim/store';
-import { fmtMoney, fmtNum } from '../sim/utils';
-import { versionBadgeLabel, versionRaw } from '../sim/version';
+import { fmtMoney, fmtNum, gameDate } from '../sim/utils';
+import { useLiveVersion } from '../sim/liveVersion';
 import { TrendArrows } from './Trend';
 import { useBusy } from './Busy';
 import { AboutModal } from './About';
@@ -13,15 +13,9 @@ const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 3, label: 'Turbo' },
 ];
 
-function gameDate(tick: number): string {
-  const year = Math.floor(tick / 360) + 1;
-  const day = (tick % 360) + 1;
-  const month = Math.floor(day / 30) + 1;
-  return `Y${year} D${day % 30 || 30}·M${month}`;
-}
-
 export function TopBar() {
   const { state, dispatch } = useSim();
+  const version = useLiveVersion();
   const [aboutOpen, setAboutOpen] = useState(false);
   const level = levelOf(state.xp);
   const cur = xpForLevel(level);
@@ -37,10 +31,10 @@ export function TopBar() {
         <span className="muted">Command Console</span>
         <button
           className="version-badge mono"
-          title={`Version ${versionRaw} — click for About & changelog`}
+          title={`Version ${version.raw} — updates hot on each commit; click for About & changelog`}
           onClick={() => setAboutOpen(true)}
         >
-          {versionBadgeLabel()}
+          {version.label}
         </button>
       </div>
       <div className="top-stats">

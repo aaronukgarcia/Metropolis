@@ -38,45 +38,41 @@ interface SimContextValue {
 const SimContext = createContext<SimContextValue | null>(null);
 
 export function SimProvider({ children }: { children: ReactNode }) {
-  // Initialize state from boot-time restore or fresh start.
-  // FEAT-1972079854: Boot-time recovery from persisted savepoint + journal replay.
-  const [initializedState, setInitializedState] = useState<SimState | null>(null);
-  const [initializedJournal, setInitializedJournal] = useState<Journal | null>(null);
-  const [lastSaveIndex, setLastSaveIndex] = useState<number>(0);
-
-  // On mount, attempt restore from localStorage; fall back to fresh state.
-  useEffect(() => {
-    // Try restore first (FEAT-1972079854: journal recovery on boot).
+  // FEAT-1972079854: boot-time recovery from a persisted savepoint + journal,
+  // computed SYNCHRONOUSLY in a lazy useState initializer (runs exactly once) so
+  // the context value is present on the very first render — there is no null
+  // phase — and every hook below is called UNCONDITIONALLY (Rules of Hooks).
+  // The prior mount-effect + early-return version rendered a null-context first
+  // pass that crashed every consumer with "useSim must be used inside
+  // SimProvider" (the whole app went blank), and also called useReducer/useState
+  // after a conditional return.
+  const [boot] = useState(() => {
     const restoreResult = restoreFromSavepoint(window.localStorage);
     if (restoreResult.success && restoreResult.state) {
-      // Restore succeeded: use recovered state and load journal.
-      setInitializedState(restoreResult.state);
       const loadedJournal = loadJournal(window.localStorage);
-      setInitializedJournal(loadedJournal);
-      setLastSaveIndex(loadedJournal.entries.length); // Mark this as the checkpoint.
-    } else {
-      // Restore failed or no savepoint: boot fresh.
-      setInitializedState(initialState());
-      setInitializedJournal(emptyJournal());
-      setLastSaveIndex(0);
+      return {
+        state: restoreResult.state,
+        journal: loadedJournal,
+        saveIndex: loadedJournal.entries.length,
+      };
     }
-  }, []); // Mount once only
+    return { state: initialState(), journal: emptyJournal(), saveIndex: 0 };
+  });
 
-  // Wait for initialization to complete before rendering sim.
-  if (!initializedState || !initializedJournal) {
-    return <SimContext.Provider value={null}>{children}</SimContext.Provider>;
-  }
-
-  // Now that state is initialized, set up the reducer + dispatch loop.
-  const [state, dispatch] = useReducer(reducer, initializedState);
-  const [journal, setJournal] = useState<Journal>(initializedJournal);
+  const [state, dispatch] = useReducer(reducer, boot.state);
+  const [journal, setJournal] = useState<Journal>(boot.journal);
+  const [lastSaveIndex, setLastSaveIndex] = useState<number>(boot.saveIndex);
   const [autoSaveError, setAutoSaveError] = useState<boolean>(false);
 
   // Wrap dispatch to:
   // 1. Record state-affecting actions in the journal (FEAT-1972079854: journal recording)
   // 2. Persist journal to localStorage (FEAT-1972079854: journal survival across reload)
   // 3. Measure tick duration (FEAT-1972079856: perf HUD)
-  const tickTracker: TickTrackerState | null = import.meta.env.DEV ? getGlobalTickTracker() : null;
+  // Optional chaining: import.meta.env is a Vite build-time replacement and is
+  // ABSENT under a bare Node/tsx runtime (e.g. the mount smoke test). `?.` degrades
+  // to undefined (→ no tick tracker) there instead of throwing, so the real render
+  // path runs under test — without it the mount test could only skip (BUG-412 round).
+  const tickTracker: TickTrackerState | null = import.meta.env?.DEV ? getGlobalTickTracker() : null;
   const wrappedDispatch = useMemo(() => {
     return (action: Action) => {
       // Record action in journal if state-affecting.

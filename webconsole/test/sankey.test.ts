@@ -2,7 +2,7 @@
 // Tests: correctness, conservation, empty-state, deficit, determinism.
 
 import { describe, it } from 'node:test';
-import { strictEqual, deepStrictEqual, ok } from 'node:assert';
+import { strictEqual, ok } from 'node:assert';
 import { buildFiscalSankey } from '../src/sim/sankey.ts';
 import { initialState } from '../src/sim/engine.ts';
 import type { SimState } from '../src/sim/types.ts';

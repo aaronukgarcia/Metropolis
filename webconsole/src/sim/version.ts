@@ -23,12 +23,21 @@ import { versionInfo } from '../generated/version';
  * a stray token. The full raw string is always available for the About page.
  */
 export function versionBadgeLabel(): string {
+  // Aaron (2026-08-27): the title/badge must show a 1.2.3.4-style number that
+  // INCREASES on every commit. numericVersion is MAJOR.MINOR.PATCH.<commits-since-tag>
+  // (derived from git in gen-version.mjs — GR#2, never hand-maintained), so it
+  // ticks up 0.3.0.61 -> 0.3.0.62 with each commit. The full git-describe string
+  // stays available in the tooltip / About page (versionRaw).
+  const n = versionInfo.numericVersion;
+  if (n && n !== '0.0.0.0') return `v${n}`;
+  // Degraded (git unavailable / no history): fall back to the describe string.
   const v = versionInfo.version;
   if (!v || v === 'dev' || v === 'unknown') return 'dev';
-  if (/^v\d/.test(v)) return v; // already a v-tag form
-  // No milestone (vX.Y.Z) tag reachable — show the describe output as a build id.
   return v;
 }
+
+/** The 1.2.3.4-style numeric version (increments per commit). */
+export const versionNumeric = versionInfo.numericVersion;
 
 /** The full, unabbreviated git-describe string (for tooltips / About). */
 export const versionRaw = versionInfo.version;

@@ -20,6 +20,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..'); // webconsole/scripts -> repo root
 const OUT_FILE = resolve(__dirname, '..', 'src', 'generated', 'version.ts');
+// LIVE version file (Aaron, 2026-08-27): a plain JSON at the webconsole root that
+// is NOT in Vite's module graph and NOT watched for HMR (see vite.config.ts's
+// server.watch.ignored + the /version.json middleware). The post-commit hook
+// rewrites ONLY this file, so a commit updates the running app's version HOT —
+// no page reload, no sim reset. The app polls /version.json for it.
+const LIVE_FILE = resolve(__dirname, '..', 'version.live.json');
 
 // CAP: the About changelog is baked at build time from the last N commits.
 // This is a deliberate, documented cap (no-silent-caps rule) -- the About page
@@ -33,6 +39,7 @@ const SEP = String.fromCharCode(31); // 0x1f unit separator
 
 const FALLBACK = {
   version: 'dev',
+  numericVersion: '0.0.0.0',
   gitAvailable: false,
   generatedAt: new Date().toISOString(),
   changelog: [],
@@ -44,6 +51,38 @@ function git(args) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   }).trim();
+}
+
+/**
+ * A 1.2.3.4-style numeric version whose 4th component INCREASES on every commit,
+ * so the title/badge visibly ticks up with each commit (Aaron, 2026-08-27).
+ *
+ * Derived (GR#2: from git, never hand-maintained): MAJOR.MINOR.PATCH come from
+ * the latest semver tag; the 4th part is the number of commits SINCE that tag
+ * (so a new commit bumps 0.3.0.61 -> 0.3.0.62, and a new tag resets to .0 while
+ * bumping the semver, e.g. 0.4.0.0 — still monotonically greater). With no tag
+ * in history it degrades to 0.0.0.<total-commit-count> so it still always rises.
+ */
+function computeNumericVersion() {
+  try {
+    // --long always emits the "-<n>-g<hash>" suffix, even when exactly on a tag,
+    // so parsing is uniform (e.g. "v0.3.0-0-g<hash>" on the tag itself).
+    const long = git(['describe', '--tags', '--long']);
+    const m = long.match(/^v?(\d+)\.(\d+)\.(\d+)-(\d+)-g[0-9a-f]+/i);
+    if (m) {
+      const [, maj, min, patch, since] = m;
+      return `${maj}.${min}.${patch}.${since}`;
+    }
+  } catch {
+    // no tag reachable — fall through to a total-commit-count based number
+  }
+  try {
+    const count = git(['rev-list', '--count', 'HEAD']);
+    if (/^\d+$/.test(count)) return `0.0.0.${count}`;
+  } catch {
+    // git unavailable
+  }
+  return '0.0.0.0';
 }
 
 /**
@@ -77,6 +116,7 @@ export function generate() {
 
     return {
       version,
+      numericVersion: computeNumericVersion(),
       gitAvailable: true,
       generatedAt: new Date().toISOString(),
       changelogCap: CHANGELOG_COMMIT_CAP,
@@ -85,6 +125,27 @@ export function generate() {
   } catch {
     return { ...FALLBACK, changelogCap: CHANGELOG_COMMIT_CAP, generatedAt: new Date().toISOString() };
   }
+}
+
+/**
+ * Write the live version JSON (version.live.json) that the running app polls.
+ * Kept tiny and dependency-free. This is the ONLY file the post-commit hook
+ * touches, so a commit never disturbs Vite's module graph (no reload, no reset).
+ */
+export function writeLiveVersion(data) {
+  const live = {
+    version: data.version,
+    numericVersion: data.numericVersion,
+    gitAvailable: data.gitAvailable,
+    generatedAt: data.generatedAt,
+  };
+  writeFileSync(LIVE_FILE, JSON.stringify(live, null, 2) + '\n', 'utf8');
+  return live;
+}
+
+/** Regenerate ONLY version.live.json (for the post-commit hot-upgrade hook). */
+export function writeLiveVersionOnly() {
+  return writeLiveVersion(generate());
 }
 
 /** Write src/generated/version.ts from the git data. Returns the data. */
@@ -108,6 +169,7 @@ export function writeVersionModule() {
     '}\n\n' +
     'export interface VersionInfo {\n' +
     '  version: string;\n' +
+    '  numericVersion: string;\n' +
     '  gitAvailable: boolean;\n' +
     '  generatedAt: string;\n' +
     '  changelogCap: number;\n' +
@@ -117,19 +179,36 @@ export function writeVersionModule() {
     'export const versionInfo: VersionInfo = ' +
     JSON.stringify(data, null, 2) +
     ';\n\n' +
+    '// git-describe string (e.g. "v0.3.0-61-g3e0714e"); full detail for About.\n' +
     'export const APP_VERSION = versionInfo.version;\n' +
+    '// 1.2.3.4-style number that increments every commit — for the title/badge.\n' +
+    'export const APP_VERSION_NUMERIC = versionInfo.numericVersion;\n' +
     'export const CHANGELOG = versionInfo.changelog;\n';
 
   writeFileSync(OUT_FILE, body, 'utf8');
+  // Keep the live JSON in lockstep at build/dev-start so the initial poll matches
+  // the baked-in module (no spurious upgrade toast on first load).
+  writeLiveVersion(data);
   return data;
 }
 
-// Allow running directly: `node scripts/gen-version.mjs`
+// Allow running directly:
+//   node scripts/gen-version.mjs              -> writes the module + live JSON
+//   node scripts/gen-version.mjs --live-only  -> writes ONLY version.live.json
+//                                                (post-commit hot-upgrade hook)
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const d = writeVersionModule();
-  process.stdout.write(
-    `[gen-version] wrote ${OUT_FILE}\n` +
-      `  version: ${d.version}${d.gitAvailable ? '' : ' (FALLBACK -- git unavailable)'}\n` +
-      `  changelog entries: ${d.changelog.length}\n`
-  );
+  if (process.argv.includes('--live-only')) {
+    const live = writeLiveVersionOnly();
+    process.stdout.write(
+      `[gen-version] wrote ${LIVE_FILE} (live-only)\n` +
+        `  version: ${live.version}${live.gitAvailable ? '' : ' (FALLBACK -- git unavailable)'}\n`
+    );
+  } else {
+    const d = writeVersionModule();
+    process.stdout.write(
+      `[gen-version] wrote ${OUT_FILE} + ${LIVE_FILE}\n` +
+        `  version: ${d.version}${d.gitAvailable ? '' : ' (FALLBACK -- git unavailable)'}\n` +
+        `  changelog entries: ${d.changelog.length}\n`
+    );
+  }
 }
