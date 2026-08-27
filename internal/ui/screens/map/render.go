@@ -11,9 +11,11 @@ import (
 // Terrain glyphs — the foreground rune drawn for each terrain string the
 // "f1.viewport" schema can carry, overridden by an overlay glyph when the
 // cell also carries a road or building (cellStyleAndRune below). An
-// unrecognised/empty terrain string (a not-yet-known cell, or a future
-// terrain kind this package hasn't been taught) falls back to blankGlyph
-// rather than guessing.
+// A KNOWN cell whose terrain string this package hasn't been taught (a
+// future terrain kind, or a corrupt surface) draws glyphUnknown — a
+// VISIBLE "unknown terrain" marker, never blankGlyph (BUG-334): blankGlyph
+// is reserved for a genuinely not-yet-known cell (cellStyleAndRune's
+// !c.Known early-out), so unrecognised can never masquerade as nothing-here.
 //
 // TWO vocabularies are recognised, deliberately:
 //
@@ -48,6 +50,15 @@ const (
 	glyphWater    = '~'
 	glyphShingle  = ':'
 	glyphRock     = '^'
+
+	// glyphUnknown is drawn for a KNOWN cell whose terrain string is not one
+	// this package recognises (BUG-334): a future 6th surface kind, or a
+	// corrupt byte whose Surface.String() came through as "unknown". It is
+	// deliberately NOT blankGlyph — an unrecognised surface must read as
+	// "unknown terrain here", never as "nothing here" (the silent-blank
+	// family, sibling of BUG-330). blankGlyph stays reserved for a genuinely
+	// not-yet-known cell (cellStyleAndRune's !c.Known early-out).
+	glyphUnknown = '?'
 
 	// Overlay glyphs (AC-4's two-layer contract: these replace only the
 	// foreground rune, never the background terrain colour).
@@ -124,8 +135,25 @@ func terrainGlyph(terrain string) rune {
 	case "rock":
 		return glyphRock
 	default:
-		return blankGlyph
+		// BUG-334: an unrecognised/future surface draws a VISIBLE marker so
+		// the player sees "unknown terrain", never the same pixels as an
+		// empty cell. The dedup'd MET-U100 log for this case lives on the
+		// render path (noteUnrecognisedTerrainLocked), not here — terrainGlyph
+		// stays a pure, deterministic string→rune lookup (GR#21).
+		return glyphUnknown
 	}
+}
+
+// terrainRecognised reports whether terrain is one of the vocabularies
+// terrainGlyph draws a distinct, dedicated glyph for. It is derived from
+// terrainGlyph itself (single source of truth, GR#3): every recognised
+// surface maps to a rune other than glyphUnknown, and ONLY the default
+// (unrecognised) branch returns glyphUnknown — so "not recognised" is
+// exactly "would fall through to the unknown-terrain marker". Used by the
+// render path to decide whether an unrecognised surface needs its one
+// MET-U100 log (BUG-334).
+func terrainRecognised(terrain string) bool {
+	return terrainGlyph(terrain) != glyphUnknown
 }
 
 // minimapHeight is the fixed height, in rows, of the minimap summary
@@ -289,6 +317,13 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 		copy(grid, m.grid)
 		m.cachedGridSnapshot = grid
 		m.cachedHasKnown = anyKnownCell(grid)
+		// BUG-334: log any unrecognised surface ONCE here, on the grid-
+		// rebuild path (which only runs when ApplyPatch actually changed the
+		// grid), not per render frame and not per cell — noteUnrecognised-
+		// TerrainLocked's set collapses the repeats. The visible marker
+		// itself is drawn by terrainGlyph on the lock-free draw path; this is
+		// only the deduped diagnostic trail.
+		m.noteUnrecognisedTerrainInGridLocked(grid)
 		m.gridDirty = false
 	} else {
 		grid = m.cachedGridSnapshot
@@ -321,6 +356,21 @@ func anyKnownCell(grid []cellData) bool {
 		}
 	}
 	return false
+}
+
+// noteUnrecognisedTerrainInGridLocked scans grid (in deterministic index
+// order, GR#21) for KNOWN cells whose terrain string this package does not
+// recognise, handing each to the once-per-distinct-string MET-U100 dedup
+// (BUG-334). Unknown cells are skipped: an unknown cell is the genuine
+// "nothing here yet" state (blankGlyph), not an unrecognised surface. The
+// caller must hold m.mu; run once per grid rebuild (snapshotLocked).
+func (m *MapScreen) noteUnrecognisedTerrainInGridLocked(grid []cellData) {
+	for i := range grid {
+		c := grid[i]
+		if c.Known && !terrainRecognised(c.Terrain) {
+			m.noteUnrecognisedTerrainLocked(c.Terrain)
+		}
+	}
 }
 
 // cellAt returns the grid cell at absolute grid coordinates (x, y), or

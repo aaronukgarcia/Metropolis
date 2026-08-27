@@ -2,6 +2,7 @@ package mapscreen
 
 import (
 	"encoding/json"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -120,6 +121,16 @@ type MapScreen struct {
 	// OverlayOwnership) on a freshly constructed MapScreen, same as every
 	// other never-explicitly-set field.
 	overlayIdx int
+
+	// seenUnrecognisedTerrain deduplicates BUG-334's MET-U100 log: the set
+	// of distinct unrecognised terrain surface strings that have already
+	// been logged once. Without it, a 40,000-cell grid of one unknown
+	// surface would emit 40,000 identical warn lines every time the grid
+	// rebuilt — the cure worse than the disease. Guarded by mu (only
+	// touched under lock, from snapshotLocked's grid-rebuild path); nil
+	// until the first unrecognised surface is seen, and a nil map reads
+	// cleanly for the membership test.
+	seenUnrecognisedTerrain map[string]bool
 
 	// subs is the set of SubscriptionIDs bound to this screen (BUG-323),
 	// mirroring ui.screen.finance/ui.screen.services' identical field.
@@ -347,6 +358,32 @@ func (m *MapScreen) applySparseLocked(p wirePatch) {
 func (m *MapScreen) logMalformed(cause error) {
 	_ = errs.New("MET-U100", m.correlationID, map[string]any{
 		"cause": cause.Error(),
+	})
+}
+
+// noteUnrecognisedTerrainLocked logs an unrecognised terrain surface string
+// through the MET-U100 path AT MOST ONCE per distinct string over this
+// screen's lifetime (BUG-334). The caller must hold m.mu.
+//
+// The dedup is the whole point: terrainGlyph now draws a VISIBLE marker for
+// any surface it doesn't recognise, but a 40,000-cell grid all carrying the
+// same unknown surface must still leave exactly ONE log line, not 40,000 —
+// so the first sighting of each distinct string logs, and every later
+// sighting (this grid or any future one) is a set-membership no-op. This is
+// deliberately NOT a per-cell call: snapshotLocked drives it once per grid
+// rebuild (see there), and even within one rebuild the set collapses the
+// repeats.
+func (m *MapScreen) noteUnrecognisedTerrainLocked(terrain string) {
+	if m.seenUnrecognisedTerrain[terrain] {
+		return
+	}
+	if m.seenUnrecognisedTerrain == nil {
+		m.seenUnrecognisedTerrain = make(map[string]bool)
+	}
+	m.seenUnrecognisedTerrain[terrain] = true
+	_ = errs.New("MET-U100", m.correlationID, map[string]any{
+		"cause":   "unrecognised terrain surface " + strconv.Quote(terrain) + " rendered as the unknown-terrain marker (BUG-334)",
+		"terrain": terrain,
 	})
 }
 
