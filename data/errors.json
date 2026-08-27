@@ -2178,6 +2178,12 @@
       "message": "BuildAPI dependency {dependency} is not wired for operation {operation}",
       "remedy": "Wire the missing dependency before using the operation: SetWorld before SubmitZoneCommand/SubmitBuildCommand/SubmitDemolishCommand/PurchasePrice, SetSeason before SubmitBuildCommand, and SetLogistics before Tick. engine.build never silently no-ops a command because a dependency was forgotten (GR#1/GR#17)."
     },
+    "MET-G509": {
+      "severity": "error",
+      "module": "engine.build",
+      "message": "SetDistrict validation failed: {cause}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
     "MET-G600": {
       "severity": "error",
       "module": "engine.households",
@@ -2453,6 +2459,12 @@
       "module": "engine.freight",
       "message": "unknown factory type {type}",
       "remedy": "A factory-type resolve named a key that is not one of the eight modelled types (assembler/steelMill/electronics/chemicalsConverter/foodProcessing/textiles/cement/glass). Check the key against data/factorytypes.json — freight never silently creates a default-substituted factory-type parameter set."
+    },
+    "MET-G1011": {
+      "severity": "error",
+      "module": "engine.freight",
+      "message": "Ship source lacks sufficient stock: {commodity} request {tonnes} exceeds available ({max})",
+      "remedy": "See the module's documentation for remediation guidance."
     },
     "MET-G1100": {
       "severity": "error",
@@ -3156,6 +3168,12 @@
       "message": "refinery build rejected: {reason}",
       "remedy": "The refinery build was refused — the feat.facilitypermits permit authority did not grant it (build is permit-gated, AC-8), or the facility is already built. No facility state is mutated on a rejected build."
     },
+    "MET-G2607": {
+      "severity": "error",
+      "module": "feat.refinery",
+      "message": "refinery Operate rejected negative crude tonnes ({tonnes})",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
     "MET-G2500": {
       "severity": "error",
       "module": "feat.pharmacampus",
@@ -3191,6 +3209,12 @@
       "module": "feat.pharmacampus",
       "message": "won pharma campus could not route its export flow through the trade edge: {reason}",
       "remedy": "The engine.freight trade edge rejected the campus's per-day export tonnage. The win is refused rather than a campus whose exports bypass the balance-of-trade surface (AC-6/AC-8)."
+    },
+    "MET-G2506": {
+      "severity": "error",
+      "module": "feat.pharmacampus",
+      "message": "pharma supply-chain spawn count {spawn} exceeds the validation ceiling ({max})",
+      "remedy": "See the module's documentation for remediation guidance."
     },
     "MET-G2800": {
       "severity": "error",

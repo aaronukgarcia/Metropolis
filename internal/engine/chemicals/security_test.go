@@ -318,8 +318,8 @@ func TestOperateRejectsNegativeCrude(t *testing.T) {
 	wireOperate(t, r, &stubFreight{capT: -1}, &stubFuel{}, &stubDispatch{})
 
 	res, err := r.Operate(0, -100)
-	if !errors.Is(err, &errs.E{Code: ErrRefineryDataInvalid}) {
-		t.Fatalf("expected ErrRefineryDataInvalid for negative crude, got res=%+v err=%v", res, err)
+	if !errors.Is(err, &errs.E{Code: ErrRefineryNegativeCrude}) {
+		t.Fatalf("expected ErrRefineryNegativeCrude for negative crude, got res=%+v err=%v", res, err)
 	}
 }
 
@@ -368,8 +368,8 @@ func TestOperateRejectsNegativeLanding(t *testing.T) {
 	refinery, _ := r.Facility("refinery")
 
 	res, err := r.Operate(0, refinery.ThroughputTonnesPerDay)
-	if !errors.Is(err, &errs.E{Code: ErrRefineryDataInvalid}) {
-		t.Fatalf("expected ErrRefineryDataInvalid for a negative landing, got res=%+v err=%v", res, err)
+	if !errors.Is(err, &errs.E{Code: ErrRefineryNegativeCrude}) {
+		t.Fatalf("expected ErrRefineryNegativeCrude for a negative landing, got res=%+v err=%v", res, err)
 	}
 }
 

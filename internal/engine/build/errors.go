@@ -63,4 +63,8 @@ const (
 	// dependency (world/season/logistics) was wired via the Set* setters.
 	// Never a silent no-op (GR#1/GR#17).
 	ErrDependencyMissing = "MET-G508"
+
+	// ErrInvalidDistrict: SetDistrict was given an invalid district parameter
+	// (empty string). District identifiers are required and must be non-empty.
+	ErrInvalidDistrict = "MET-G509"
 )

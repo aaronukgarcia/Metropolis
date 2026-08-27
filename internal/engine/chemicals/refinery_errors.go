@@ -38,4 +38,10 @@ const (
 	// ErrRefineryBuildRejected: the refinery build was refused — either the
 	// permit authority did not grant it, or it is already built.
 	ErrRefineryBuildRejected = "MET-G2606"
+
+	// ErrRefineryNegativeCrude: Operate was called with negative or zero crude
+	// tonnes (AC-9). A negative crude request is rejected at the API boundary
+	// rather than passed downstream to the freight seam, which would report a
+	// nonsensical negative landing (SEC-165).
+	ErrRefineryNegativeCrude = "MET-G2607"
 )

@@ -310,7 +310,7 @@ func (b *BuildAPI) SetDistrict(d string) error {
 		return err
 	}
 	if d == "" {
-		return errs.New(ErrZoneDataInvalid, b.correlationID, map[string]any{"dir": "", "cause": "district must be non-empty"})
+		return errs.New(ErrInvalidDistrict, b.correlationID, map[string]any{"cause": "district must be non-empty"})
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

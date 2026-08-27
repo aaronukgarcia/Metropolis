@@ -26,3 +26,13 @@ func refineryDataInvalidForCommodity(correlationID, commodity string, details ..
 		"cause": cause,
 	})
 }
+
+// refineryNegativeCrudeError constructs an ErrRefineryNegativeCrude error for
+// Operate's boundary rejection of negative crude tonnes (AC-9). It supplies
+// the {tonnes} token required by the MET-G2607 template: "refinery Operate
+// rejected negative crude tonnes ({tonnes})".
+func refineryNegativeCrudeError(correlationID string, tonnes int64) error {
+	return errs.New(ErrRefineryNegativeCrude, correlationID, map[string]any{
+		"tonnes": tonnes,
+	})
+}

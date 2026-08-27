@@ -47,17 +47,15 @@ func modalCapUnknownError(correlationID string, caps map[Mode]modalCap, mode Mod
 	return modalCapError(correlationID, mode, tonnes, maxModalCapTonnes(caps))
 }
 
-// insufficientStockError constructs an ErrModalCapExceeded error (the code the
-// existing call site already uses; a dedicated stock code is a registry
-// decision, flagged on BUG-357) for a Ship whose source lacks sufficient
-// stock. The template's {mode} token is filled with "unknown" because the
-// mode was already validated before this branch and is not what failed.
+// insufficientStockError constructs an ErrInsufficientStock error for a Ship
+// whose source lacks sufficient stock. It supplies the {commodity}, {tonnes},
+// and {max} tokens required by the MET-G1011 template: "Ship source lacks
+// sufficient stock: {commodity} request {tonnes} exceeds available ({max})".
 func insufficientStockError(correlationID string, commodity Commodity, tonnes int64, maxTonnes int64) error {
-	return errs.New(ErrModalCapExceeded, correlationID, map[string]any{
-		"tonnes":    tonnes,
-		"mode":      "unknown",
-		"max":       maxTonnes,
+	return errs.New(ErrInsufficientStock, correlationID, map[string]any{
 		"commodity": string(commodity),
+		"tonnes":    tonnes,
+		"max":       maxTonnes,
 	})
 }
 

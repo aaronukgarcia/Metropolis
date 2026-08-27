@@ -55,4 +55,10 @@ const (
 	// is refused rather than a campus whose exports bypass the
 	// balance-of-trade surface (feat.pharmacampus AC-6/AC-8).
 	ErrPharmaExportRejected = "MET-G2505"
+
+	// ErrPharmaSpawnExceeded: the pharma supply-chain spawn count would exceed
+	// the validation ceiling (SEC-122). This is a runtime guard that prevents
+	// a hostile or malformed parameter set from unbounded FirmsAPI growth,
+	// distinct from the data-load validation that occurs at [NewPharma] time.
+	ErrPharmaSpawnExceeded = "MET-G2506"
 )

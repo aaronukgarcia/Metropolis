@@ -521,7 +521,7 @@ func (r *Refinery) Operate(tick int64, crudeTonnes int64) (OperateResult, error)
 	// downstream accounting consumer would record (SEC-165). Zero is a valid
 	// "no crude this tick" request, mirroring ImportRefined's tonnes < 0 rule.
 	if crudeTonnes < 0 {
-		return OperateResult{}, refineryDataInvalid(r.correlationID, fmt.Sprintf("negative crude tonnes %d", crudeTonnes))
+		return OperateResult{}, refineryNegativeCrudeError(r.correlationID, crudeTonnes)
 	}
 
 	landed, err := freight.CrudeLanding(crudeTonnes)
@@ -532,7 +532,7 @@ func (r *Refinery) Operate(tick int64, crudeTonnes int64) (OperateResult, error)
 	// seam is a trust boundary: a negative landing is rejected rather than
 	// recorded, so CrudeLanded always lies within 0..throughput (SEC-166).
 	if landed < 0 {
-		return OperateResult{}, refineryDataInvalid(r.correlationID, fmt.Sprintf("negative crude landed %d", landed))
+		return OperateResult{}, refineryNegativeCrudeError(r.correlationID, landed)
 	}
 	// Throughput is the facility's processing capacity cap, not merely a
 	// scaling denominator: whatever the freight seam lands, a single refinery

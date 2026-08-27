@@ -92,4 +92,9 @@ const (
 	// chemicalsConverter/foodProcessing/textiles/cement/glass). Query-time,
 	// never a silently-created zero-value parameter set (AC-8).
 	ErrUnknownFactoryType = "MET-G1010"
+
+	// ErrInsufficientStock: a Ship command was rejected because the source
+	// commodity stock does not have sufficient supply to fulfil the request.
+	// Stock availability is a distinct concern from modal capacity (AC-13).
+	ErrInsufficientStock = "MET-G1011"
 )
