@@ -863,7 +863,6 @@ export function wellbeingOf(s: SimState): {
   overall: number;
   parts: { label: string; value: number }[];
 } {
-  const c = countByKind(s.buildings);
   const pop = s.population;
   // Early-game blend toward a 55 baseline while pop < 50 — same ramp as the
   // demand meters' earlyGameFactor so the two systems damp identically.
@@ -885,7 +884,20 @@ export function wellbeingOf(s: SimState): {
 
   // ⚠ BALANCE-NUMBER PLACEHOLDERS: parks formula and the equal (1/3) education
   // stage weights below, pending Aaron's pass.
-  const parks = blend(Math.round(clampN(((c.park * 40) / Math.max(pop, 20)) * 70, 0, 100)));
+  // BUG-415 FIX: parks coverage formula now matches the serviceCoverageOf pattern.
+  // Parks capacity = footprint sum (w × h per building). Parks need is pop-based.
+  // Coverage = capacity / need; wellbeing = part(coverage). This prevents underflow
+  // at high population (the old formula yielded 0 when pop > park_capacity * 70/0.5).
+  let parksCapacity = 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'park') parksCapacity += sp.w * sp.h;
+  }
+  // Parks need = pop * 0.002 (equivalent to "1 park per 500 people" expectation).
+  // For a city with 1M people, that's ~2000 parks needed. Coverage = capacity / need.
+  const parksNeed = Math.max(1, pop * 0.002);
+  const parksCoverage = parksCapacity / parksNeed;
+  const parks = part(Math.min(1, parksCoverage));
   const education = (ratio('nursery') + ratio('primary') + ratio('college')) / 3;
   // BUG-392 base: utilities coverage = min(power, clean water) — the weakest
   // grid utility bounds the part.
