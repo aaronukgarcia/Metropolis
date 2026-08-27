@@ -263,6 +263,109 @@ export function waterBalanceOf(s: SimState): {
 }
 
 /**
+ * Clean- and waste-water DEMAND for this tick (people needing supply / sewage
+ * treatment), a READ-OUT only (FEAT-1972079896). It deliberately reuses the ONE
+ * existing demand model — the `need` of the 'cleanwater' and 'waste' rows of
+ * serviceCoverageOf() (population-driven, GR#3 SSOT) — so the water panel can
+ * never disagree with the coverage meters. No new demand model is introduced;
+ * pairing this with waterCaps()/waterBalanceOf() makes headroom/shortfall
+ * (capacity − demand) directly visible without touching any water mechanic.
+ */
+export function waterDemandOf(s: SimState): { clean: number; waste: number } {
+  const cov = serviceCoverageOf(s);
+  const clean = cov.find((c) => c.id === 'cleanwater')?.need ?? 0;
+  const waste = cov.find((c) => c.id === 'waste')?.need ?? 0;
+  return { clean, waste };
+}
+
+/** Per-tier pipe aggregate for the water panel (FEAT-1972079896). */
+export interface PipeTierAgg {
+  /** Diameter label, e.g. "Ø300 mm". */
+  label: string;
+  /** Capacity multiplier applied to a plant's base `served`. */
+  mult: number;
+  upgradeCost: number;
+  /** Plants currently fitted with this diameter of main. */
+  plants: number;
+  /** Σ effServed of the plants on this tier (people served through it). */
+  effServedTotal: number;
+  /** mult / widest-tier mult (0..1): how far this diameter is toward the widest
+   *  available main. See waterPipeInfo() for why this is diameter headroom, not
+   *  absolute flow saturation. */
+  tierUtil: number;
+  /** This is the widest diameter — a pipe here cannot be upgraded further. */
+  atCeiling: boolean;
+}
+
+/** Per-plant pipe utilisation entry (FEAT-1972079896). */
+export interface PipePlantUtil {
+  id: number;
+  tier: number;
+  effServed: number;
+  tierUtil: number;
+  atCeiling: boolean;
+}
+
+/**
+ * Pipe utilisation READ-OUT (FEAT-1972079896) — "which pipes are at capacity".
+ * Uses ONLY data that already exists; invents no balance numbers.
+ *
+ * ⚠ WHAT IS *NOT* DEFINED IN THE DATA — the honest gap: there is NO absolute
+ * per-diameter throughput ceiling (e.g. "a Ø300 mm main carries at most N
+ * people"). PIPE_TIERS models a pipe as a per-plant MULTIPLIER on that plant's
+ * base `served` (plantEffServed = served × mult), so the same Ø300 tier
+ * legitimately carries 4,000 (Water Tower) up to 60,000 (Reservoir): there is
+ * no single Ø300 number to divide effServed by, and inventing one would
+ * contradict the model. A true flow-vs-pipe-max utilisation would require a NEW
+ * `maxThroughput` field (absolute people/tick) on each PIPE_TIERS entry — a
+ * balance number that is a PLACEHOLDER pending Aaron's sign-off.
+ *   TODO(FEAT-1972079896, Aaron balance pass): add PIPE_TIERS[].maxThroughput
+ *   and switch tierUtil to effServed / maxThroughput once signed off.
+ *
+ * What IS honest and delivered here (no invented numbers):
+ *   - tierUtil  = mult / widest-tier mult (0..1): diameter headroom. 1.0 means
+ *                 the pipe is already on the widest main.
+ *   - atCeiling = the pipe is on the widest tier and cannot be upgraded — if the
+ *                 network is short, the answer is another plant, not a wider pipe.
+ * Network-level shortfall (demand > capacity) is available separately via
+ * waterDemandOf() vs waterCaps() and is the primary "at capacity" signal.
+ */
+export function waterPipeInfo(s: SimState): {
+  maxTier: number;
+  perTier: Record<number, PipeTierAgg>;
+  plants: PipePlantUtil[];
+} {
+  const maxTier = PIPE_TIERS.length - 1;
+  const maxMult = PIPE_TIERS[maxTier]?.mult ?? 1;
+  const perTier: Record<number, PipeTierAgg> = {};
+  const plants: PipePlantUtil[] = [];
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind !== 'water') continue;
+    const tier = pipeTierOf(s, b.id);
+    const t = PIPE_TIERS[tier];
+    const eff = plantEffServed(s, b);
+    const tierUtil = maxMult > 0 ? t.mult / maxMult : 0;
+    const atCeiling = tier >= maxTier;
+    plants.push({ id: b.id, tier, effServed: eff, tierUtil, atCeiling });
+    const agg =
+      perTier[tier] ??
+      (perTier[tier] = {
+        label: t.label,
+        mult: t.mult,
+        upgradeCost: t.upgradeCost,
+        plants: 0,
+        effServedTotal: 0,
+        tierUtil,
+        atCeiling,
+      });
+    agg.plants += 1;
+    agg.effServedTotal += eff;
+  }
+  return { maxTier, perTier, plants };
+}
+
+/**
  * Per-building utilisation: fraction of capacity in actual use (0..1), with a
  * basis name describing the formula applied. Returns null when the sim has no
  * per-building signal for this kind (GR#15 honest absence).

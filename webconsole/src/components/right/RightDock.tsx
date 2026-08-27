@@ -10,6 +10,8 @@ import {
   PIPE_TIERS,
   PHYSICAL_ENTITIES,
   waterBalanceOf,
+  waterDemandOf,
+  waterPipeInfo,
   plantEffServed,
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
@@ -236,19 +238,38 @@ function UnitsTab() {
 function WaterTab() {
   const { state, dispatch } = useSim();
   const bal = waterBalanceOf(state);
+  const demand = waterDemandOf(state);
+  const pipeInfo = waterPipeInfo(state);
+  const plantUtil = new Map(pipeInfo.plants.map((p) => [p.id, p]));
   const plants = state.buildings.filter((b) => SPECS[b.spec]?.kind === 'water');
+  const cleanHeadroom = bal.clean - demand.clean;
+  const wasteHeadroom = bal.waste - demand.waste;
   return (
     <>
       <div className="tiles">
-        <div className="tile pos">
+        <div className={`tile ${cleanHeadroom < 0 ? 'neg' : 'pos'}`}>
           <div className="n">{fmtNum(bal.clean)}</div>
           <div className="l">Clean capacity</div>
         </div>
-        <div className={`tile ${bal.leak ? 'neg' : 'pos'}`}>
+        <div className={`tile ${wasteHeadroom < 0 || bal.leak ? 'neg' : 'pos'}`}>
           <div className="n">{fmtNum(bal.waste)}</div>
           <div className="l">Discharge capacity</div>
         </div>
       </div>
+      <div className="tiles">
+        <div className={`tile ${cleanHeadroom < 0 ? 'neg' : ''}`}>
+          <div className="n">{fmtNum(demand.clean)}</div>
+          <div className="l">Clean demand</div>
+        </div>
+        <div className={`tile ${wasteHeadroom < 0 ? 'neg' : ''}`}>
+          <div className="n">{fmtNum(demand.waste)}</div>
+          <div className="l">Waste demand</div>
+        </div>
+      </div>
+      <p className="hint">
+        Clean headroom {fmtNum(cleanHeadroom)} · discharge headroom {fmtNum(wasteHeadroom)}{' '}
+        (capacity − demand; negative = the network is over capacity and short).
+      </p>
       {bal.leak && (
         <p className="hint warn-text">
           Leakage risk: discharge is below 80% of clean capacity — sewage backs up (-5 approval).
@@ -263,23 +284,30 @@ function WaterTab() {
       <h4>Plants &amp; pipes</h4>
       <table className="table">
         <thead>
-          <tr><th>Plant</th><th>Grid</th><th>Pipe</th><th>Served</th><th /></tr>
+          <tr><th>Plant</th><th>Grid</th><th>Pipe</th><th>Served</th><th>Pipe use</th><th /></tr>
         </thead>
         <tbody>
           {plants.length === 0 && (
-            <tr><td colSpan={5} className="muted">No water infrastructure yet.</td></tr>
+            <tr><td colSpan={6} className="muted">No water infrastructure yet.</td></tr>
           )}
           {plants.map((b) => {
             const sp = SPECS[b.spec];
             const tier = state.pipeTier[b.id] ?? 0;
             const eff = plantEffServed(state, b);
             const next = PIPE_TIERS[tier + 1];
+            const pu = plantUtil.get(b.id);
+            const atCeiling = pu?.atCeiling ?? false;
             return (
               <tr key={b.id}>
                 <td className={sp.tag === 'clean' ? 'in' : 'out'}>{sp.name}</td>
                 <td className="mono">{b.x},{b.y}</td>
                 <td>{PIPE_TIERS[tier].label}</td>
                 <td>{fmtNum(eff)}</td>
+                <td className={atCeiling ? 'neg' : ''} title={atCeiling
+                  ? 'Widest main fitted — this pipe is at capacity; add another plant to grow'
+                  : 'Diameter headroom: this pipe can still be upgraded to a wider main'}>
+                  {fmtPct(pu?.tierUtil ?? 0)}{atCeiling ? ' • max' : ''}
+                </td>
                 <td>
                   {next && (
                     <button

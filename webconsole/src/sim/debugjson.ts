@@ -54,7 +54,10 @@ import {
   totalJobs,
   utilisationOf,
   waterBalanceOf,
+  waterDemandOf,
+  waterPipeInfo,
 } from './data.ts';
+import type { PipeTierAgg } from './data.ts';
 import {
   HISTORY_CAP,
   LEDGER_CAP,
@@ -214,10 +217,18 @@ export interface DebugJson {
     water: {
       cleanCapacity: number;
       wasteCapacity: number;
+      /** Clean-water demand this tick (people), from waterDemandOf (SSOT). */
+      cleanDemand: number;
+      /** Waste-water demand this tick (people), from waterDemandOf (SSOT). */
+      wasteDemand: number;
       ratio: number;
       leak: boolean;
-      /** Raw per-plant pipe tier index record (SimState.pipeTier). */
-      pipeTiers: Record<number, number>;
+      /** Per-tier pipe aggregate keyed by pipe-tier index (FEAT-1972079896):
+       *  diameter label, mult, plant count, Σ effServed carried, and diameter
+       *  headroom (tierUtil) + at-widest-diameter flag. See waterPipeInfo() for
+       *  why this is NOT absolute flow saturation (no per-diameter throughput
+       *  ceiling exists in the data — a PLACEHOLDER pending Aaron). */
+      pipeTiers: Record<number, PipeTierAgg>;
       plants: {
         id: number;
         spec: string;
@@ -227,6 +238,10 @@ export interface DebugJson {
         pipeTier: number;
         pipeLabel: string;
         effServed: number;
+        /** mult / widest-tier mult (0..1): pipe diameter headroom. */
+        tierUtil: number;
+        /** Pipe is on the widest tier — cannot be upgraded further. */
+        atCeiling: boolean;
       }[];
     };
     earnings: {
@@ -347,6 +362,8 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   const zoneDemand = demandOf(s);
   const c = countByKind(s.buildings);
   const bal = waterBalanceOf(s);
+  const waterDemand = waterDemandOf(s);
+  const pipeInfo = waterPipeInfo(s);
   const generatedAt = new Date(ui.frameAtMs).toISOString();
   const consistency = runConsistencyChecks(s);
 
@@ -421,6 +438,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
     .map((b) => {
       const sp = SPECS[b.spec];
       const tier = s.pipeTier[b.id] ?? 0;
+      const pu = pipeInfo.plants.find((p) => p.id === b.id);
       return {
         id: b.id,
         spec: b.spec,
@@ -430,8 +448,16 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         pipeTier: tier,
         pipeLabel: PIPE_TIERS[tier].label,
         effServed: plantEffServed(s, b),
+        tierUtil: round3(pu?.tierUtil ?? 0),
+        atCeiling: pu?.atCeiling ?? false,
       };
     });
+
+  // Per-tier pipe aggregate (FEAT-1972079896), rounded for byte-stable JSON.
+  const pipeTiers: Record<number, PipeTierAgg> = {};
+  for (const [k, v] of Object.entries(pipeInfo.perTier)) {
+    pipeTiers[Number(k)] = { ...v, tierUtil: round3(v.tierUtil) };
+  }
 
   // Earnings tab rows (raw mirror of EarningsTab)
   const inflowValue = (label: string) =>
@@ -570,9 +596,11 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       water: {
         cleanCapacity: bal.clean,
         wasteCapacity: bal.waste,
+        cleanDemand: waterDemand.clean,
+        wasteDemand: waterDemand.waste,
         ratio: round3(bal.ratio),
         leak: bal.leak,
-        pipeTiers: s.pipeTier,
+        pipeTiers,
         plants,
       },
       earnings: {
