@@ -270,6 +270,17 @@ type skeletonWiring struct {
 
 	mapScreen *mapscreen.MapScreen
 
+	// mapSubID is the SubscriptionID the "f1.viewport" prime learned for
+	// mapScreen (BUG-359). Captured when primeScreenSubscription binds the
+	// map (below) so mapDrawFunc can read router.SubscriptionStale(mapSubID)
+	// each render tick and push it into mapScreen.SetStale — reconnecting
+	// the staleness dot to the REAL per-subscription staleness router now
+	// owns (it was left permanently fresh when router replaced ViewsLoop;
+	// see mapDrawFunc's own doc comment). The zero SubscriptionID before the
+	// prime completes reads as "not stale" from SubscriptionStale, the same
+	// benign default a never-seen subscription reports.
+	mapSubID protocol.SubscriptionID
+
 	// statusBar is BUG-322's on-screen proof that time is moving: the
 	// live "engine.status" figures (tick, month, speed, paused), primed
 	// and router-bound exactly like financeScreen/servicesScreen, drawn
@@ -669,7 +680,14 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// rather than one frame of blank.
 	if err := primeScreenSubscription(transport, w.router, primed, mapCorrID, mapscreen.ViewSubscriptionName,
 		func() error { return w.mapScreen.Subscribe(transport.SendCommand) },
-		w.mapScreen.BindSubscription,
+		// BUG-359: capture the SubscriptionID the prime learned, in addition
+		// to binding it on the screen, so mapDrawFunc can ask
+		// router.SubscriptionStale(w.mapSubID) whether this exact
+		// subscription is currently stale.
+		func(id protocol.SubscriptionID) {
+			w.mapSubID = id
+			w.mapScreen.BindSubscription(id)
+		},
 		w.mapScreen.ApplyDelta,
 	); err != nil {
 		w.cancel()
@@ -797,7 +815,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// Register's own documented default — matching this binary's
 	// pre-FEAT-211 baseline (mapScreen was always what rendered).
 	w.screens = core.NewScreenRegistry(correlationID)
-	if err := w.screens.Register(core.ScreenEntry{ID: screenIDMap, Draw: mapDrawFunc(w.mapScreen)}); err != nil {
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDMap, Draw: mapDrawFunc(w.mapScreen, func() bool { return w.router.SubscriptionStale(w.mapSubID) })}); err != nil {
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
@@ -1263,40 +1281,37 @@ func (w *skeletonWiring) shutdown() {
 }
 
 // mapDrawFunc adapts MapScreen into a core.DrawFunc (AC-1a's render half):
-// each render tick, it applies whatever "f1.viewport" patch ui.core's
-// ViewsLoop has most recently published (per protocol.md's "last frame
-// stands" policy — see internal/protocol/transport.go's outbound
-// drop/stale doc) and surfaces the same subscription's staleness flag,
-// then draws.
+// each render tick it pushes the map subscription's CURRENT staleness into
+// ms.SetStale, then draws.
 //
-// There is exactly one live subscription in this skeleton binary (F1's),
-// so vm.Patches/vm.Stale hold at most one entry; the loop below takes
-// that sole entry (if any) rather than needing to track its
-// SubscriptionID explicitly — MapScreen's own doc comment describes
-// exactly this caller responsibility ("the caller is expected to route
-// only Deltas belonging to this screen's subscription into ApplyPatch").
-// A future multi-subscription screen would need real ID-based routing;
-// noted here rather than silently generalized, since inventing that
-// routing is out of this item's scope (only one F-screen exists yet).
-func mapDrawFunc(ms *mapscreen.MapScreen) core.DrawFunc {
+// staleFn reports whether F1's "f1.viewport" subscription is currently
+// stale — in production, a thin closure over router.SubscriptionStale(the
+// map's SubscriptionID) (bootCore). mapScreen's terrain itself arrives
+// through router-bound ApplyDelta, exactly like financeScreen's and
+// servicesScreen's, so this closure reads nothing from vm; staleFn is the
+// one remaining thing it must actively pull each frame, because staleness
+// is a per-subscription fact the router observes on the Delta stream (a Seq
+// gap), not something carried on the screen's own applied patches.
+func mapDrawFunc(ms *mapscreen.MapScreen, staleFn func() bool) core.DrawFunc {
 	return func(back *core.Buffer, _ *core.ViewModels) {
-		// BUG-323: this closure used to range vm.Patches and feed the
-		// first entry into ms.ApplyPatch/ms.SetStale — ui.core's
-		// ViewStore path, which FEAT-208 increment 2 left PERMANENTLY
-		// EMPTY in this binary when router replaced ViewsLoop (see
-		// skeletonWiring.viewStore's doc comment). mapScreen's terrain
-		// now arrives through router-bound ApplyDelta, exactly like
-		// financeScreen's and servicesScreen's, so this reads nothing
-		// from vm at all — same shape as financeDrawFunc. Leaving the
-		// old loop in place would be dead code today and a
-		// double-application hazard the moment anything ever published
-		// into viewStore again.
+		// BUG-359: reconnect the staleness dot to the REAL feed staleness.
 		//
-		// Known consequence, recorded rather than hidden: nothing calls
-		// ms.SetStale any more, so the staleness dot renders its
-		// "fresh" glyph permanently. router owns per-subscription
-		// staleness now and exposing it to a DrawFunc is a ui.router/
-		// ui.core surface change — out of this fix's scope.
+		// BUG-323 removed this closure's old vm.Patches/vm.Stale loop when
+		// terrain moved onto router-bound ApplyDelta, and left a recorded
+		// gap: nothing called ms.SetStale any more, so the dot rendered its
+		// "fresh" glyph permanently — a silent-failure indicator (GR#17)
+		// that could never fire. Router now owns per-subscription staleness
+		// (router.SubscriptionStale, the same `gap > 0` state ui.core's
+		// ViewsLoop used to publish), so mapDrawFunc pulls it here and hands
+		// it to the screen each frame. staleFn is nil-guarded so a caller
+		// that does not wire staleness (tests) still renders.
+		//
+		// Deterministic per GR#21: SubscriptionStale derives from the
+		// router's Seq tracking, never time.Now — this DrawFunc adds no
+		// wall-clock read of its own.
+		if staleFn != nil {
+			ms.SetStale(staleFn())
+		}
 		// BUG-324: the chrome top bar owns the top row, so screens draw
 		// inside screenContentRect (chromebar.go), not the raw buffer.
 		r := screenContentRect(back)

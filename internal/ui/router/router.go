@@ -94,6 +94,16 @@ type Router struct {
 	eventRoutes []eventRoute // registration order — never map range
 	currentTick protocol.Tick
 
+	// stale is per-subscription staleness (BUG-359): true once a Seq gap
+	// is observed on a subscription's Delta stream, cleared again by the
+	// next in-order Delta — exactly ui.core ViewsLoop.apply's
+	// `Stale[subID] = gap > 0` discipline (views.go), the state UI-SPEC §1's
+	// staleness dot reads. ViewsLoop published this on a ViewStore snapshot;
+	// this binary replaced ViewsLoop with Router (see doc.go), so Router now
+	// owns it and exposes it via SubscriptionStale. Seq-derived, never
+	// time.Now (GR#21). Guarded by mu.
+	stale map[protocol.SubscriptionID]bool
+
 	deltaGaps   atomic.Uint64
 	routeMisses atomic.Uint64
 	panics      atomic.Uint64
@@ -143,6 +153,7 @@ func New(transport protocol.Transport, opts ...Option) *Router {
 		pendingTTLTicks: defaultPendingResultTTLTicks,
 		pending:         make(map[protocol.CorrelationID]pendingResult),
 		subs:            make(map[protocol.SubscriptionID]DeltaReceiver),
+		stale:           make(map[protocol.SubscriptionID]bool),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -292,6 +303,14 @@ func (r *Router) handleDelta(d protocol.Delta) {
 	r.mu.Lock()
 	r.advanceTickLocked(d.Tick)
 	receiver := r.subs[d.SubscriptionID]
+	// BUG-359: record per-subscription staleness exactly as ui.core's
+	// ViewsLoop.apply did (`Stale[subID] = gap > 0`, views.go) — but only
+	// for an in-order (ok) delta. A duplicate/out-of-order arrival (!ok)
+	// returns below without trusting its Seq, so it must not touch the
+	// staleness flag either, matching ViewsLoop's own early-return there.
+	if ok {
+		r.stale[d.SubscriptionID] = gap > 0
+	}
 	r.pruneStaleLocked()
 	r.mu.Unlock()
 
@@ -466,6 +485,27 @@ func (r *Router) DeltaGapCount() uint64 {
 		return 0
 	}
 	return r.deltaGaps.Load()
+}
+
+// SubscriptionStale reports whether subscriptionID's Delta stream is
+// currently considered stale: a Seq gap was observed and no in-order Delta
+// has arrived since (BUG-359). This is the per-subscription input to
+// UI-SPEC §1's staleness dot — the state ui.core's ViewsLoop used to
+// publish on a ViewStore snapshot before Router replaced it as this
+// binary's transport consumer (doc.go). A subscription never seen (or one
+// whose only Deltas were in-order) reports false. Safe for concurrent use;
+// checkNotCopied guarded and lock-taking — mirrors PendingResultCount's
+// identical double-checked accessor pattern.
+func (r *Router) SubscriptionStale(subscriptionID protocol.SubscriptionID) bool {
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "SubscriptionStale"}); err != nil {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.checkNotCopied(r.correlationID, map[string]any{"method": "SubscriptionStale"}); err != nil {
+		return false
+	}
+	return r.stale[subscriptionID]
 }
 
 // RouteMissCount returns the cumulative number of routing-table misses
