@@ -319,6 +319,31 @@ async function ensureFkOnUpdateCascade(db, table, constraintName, columnName, re
   );
 }
 
+// BUG-332 r2 (REJECT finding 2): bow_git_refs.created_at must have the SAME
+// fractional-second precision as bow_destructive_verdicts.created_at
+// (timestamp(6), microseconds) — the tie rule in claude-destructive-guard.js
+// compares them by epoch ms, and a second-precision `timestamp` column
+// truncates a ref recorded later in the same wall-clock second to compare
+// EARLIER than its verdict, letting a same-second ref escape the post-attack
+// deny. Existing databases (created before this migration) still carry the
+// second-precision column, so CREATE TABLE IF NOT EXISTS is a no-op for them —
+// ALTER the live column when it is NOT already fractional (6). Idempotent:
+// checks information_schema.COLUMNS first; already-fractional (or absent
+// column/table) is a no-op.
+async function ensureGitRefCreatedAtFractional(db, tableName = 'bow_git_refs') {
+  const [rows] = await db.query(
+    `SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'created_at'`,
+    [tableName],
+  );
+  if (!rows.length) return; // table/column doesn't exist yet -- CREATE TABLE above declares timestamp(6)
+  const type = String(rows[0].COLUMN_TYPE).toLowerCase();
+  if (type.includes('(6)') && type.startsWith('timestamp')) return; // already migrated, no-op
+  await db.query(
+    `ALTER TABLE ${tableName} MODIFY created_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)`,
+  );
+}
+
 async function ensureSchema(db) {
   await db.query(`CREATE TABLE IF NOT EXISTS bow_items (
     guid        CHAR(36) PRIMARY KEY,
@@ -403,7 +428,7 @@ async function ensureSchema(db) {
     commit_hash VARCHAR(40) NOT NULL,
     branch      VARCHAR(128) NULL,
     note        VARCHAR(255) NULL,
-    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at  TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     CONSTRAINT fk_bow_ref_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE,
     INDEX idx_bow_ref_item (item_guid)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
@@ -439,6 +464,9 @@ async function ensureSchema(db) {
   await ensureFkOnUpdateCascade(db, 'bow_comments', 'fk_bow_comment_item', 'item_guid', 'bow_items', 'guid');
   await ensureFkOnUpdateCascade(db, 'bow_git_refs', 'fk_bow_ref_item', 'item_guid', 'bow_items', 'guid');
   await ensureFkOnUpdateCascade(db, 'bow_destructive_verdicts', 'fk_bow_destructive_item', 'item_guid', 'bow_items', 'guid');
+  // BUG-332 r2: align bow_git_refs.created_at to timestamp(6) so the verdict-tie
+  // rule's epoch-ms comparison cannot be escaped by same-second truncation.
+  await ensureGitRefCreatedAtFractional(db);
   // FEAT-061 (tool.sprintgate, GR#12/GR#15/GR#23): append-only per-check gate
   // verdicts, one row per check (1..5) per gate run, sharing a gate_run_guid
   // (AC-23/AC-25). Keyed on the plain `sprint` INT column bow_items already
@@ -1035,6 +1063,24 @@ async function latestDestructiveVerdict(db, ref) {
   if (!item) return null;
   const [rows] = await db.query(
     `SELECT * FROM bow_destructive_verdicts WHERE item_guid = ?
+     ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [item.guid]);
+  return rows.length ? rows[0] : null;
+}
+
+/**
+ * Most recent bow_git_refs row for an item (ref by code/GUID/mkey), or null
+ * if the ref does not resolve or no commit has ever been ref'd against the
+ * item. Same resolve-then-query shape as latestDestructiveVerdict, same
+ * created_at DESC, id DESC tiebreaker. Exported for claude-destructive-guard.js's
+ * verdict-tie rule (BUG-332 failure mode 2): a commit ref'd onto an item AFTER
+ * its latest accept verdict is code committed post-attack, hence un-attacked.
+ */
+async function latestGitRefForItem(db, ref) {
+  const item = await findItem(db, ref);
+  if (!item) return null;
+  const [rows] = await db.query(
+    `SELECT * FROM bow_git_refs WHERE item_guid = ?
      ORDER BY created_at DESC, id DESC LIMIT 1`,
     [item.guid]);
   return rows.length ? rows[0] : null;
@@ -3887,7 +3933,7 @@ module.exports = {
   // (GR#26 threshold rendering) — no DB, no network. See
   // claude-bow-trunkdiv.test.js.
   trunkDivergence, formatTrunkDivergence,
-  recordDestructiveVerdict, latestDestructiveVerdict,
+  recordDestructiveVerdict, latestDestructiveVerdict, latestGitRefForItem,
   // BUG-075: batch existence check exported for direct unit testing in
   // addition to the required real-subprocess CLI tests.
   cmdExists,
@@ -3899,6 +3945,11 @@ module.exports = {
   // connection/schema path for tests to drift from (GR#3).
   runLint, extractCodeTokens, splitSentences, findGatingReferences,
   codeTokenRegex, GATING_PHRASES, cmdLint, connect, ensureSchema, TYPE_PREFIX,
+  // BUG-332 r2: exported so the regression suite can prove the migration
+  // actually upgrades an existing second-precision bow_git_refs.created_at to
+  // timestamp(6) against a scratch DB (same reasoning as the connect/ensureSchema
+  // exports above, GR#3).
+  ensureGitRefCreatedAtFractional,
   // FEAT-061 (tool.sprintgate): exported for direct unit testing against
   // fixture rows/files, per the acceptance file's own scratch-DB + fixture-
   // file standard (same reasoning as the FEAT-060 exports above, GR#3).

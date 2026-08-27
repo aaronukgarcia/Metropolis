@@ -33,7 +33,10 @@
  * latestDestructiveVerdict(), required from claude-bow.js — never a second,
  * re-implemented query) must be `accept`. Any item missing a verdict, whose
  * latest verdict is `reject`, or whose tag does not resolve at all, is named
- * individually in the deny reason.
+ * individually in the deny reason. Additionally (BUG-332 failure mode 2, the
+ * verdict-tie rule): a resolved, accepted item whose most recent bow_git_refs
+ * entry (via latestGitRefForItem()) post-dates that accept verdict is DENIED as
+ * code committed post-attack — a fresh round is required for the new state.
  *
  * THE BYPASS TRAP (AC-16). A code-bearing commit whose message carries ZERO
  * recognisable tags is DENIED, not silently allowed. A gate that only checks
@@ -234,7 +237,7 @@ function loadDependencies() {
     );
   }
 
-  const requiredBowFns = ['findItemByRef', 'latestDestructiveVerdict'];
+  const requiredBowFns = ['findItemByRef', 'latestDestructiveVerdict', 'latestGitRefForItem'];
   const missingBowFns = requiredBowFns.filter(fn => typeof bowMod[fn] !== 'function');
   if (missingBowFns.length) {
     throw new Error(
@@ -262,6 +265,7 @@ function loadDependencies() {
     authorGuard: authorGuardMod,
     findItemByRef: bowMod.findItemByRef,
     latestDestructiveVerdict: bowMod.latestDestructiveVerdict,
+    latestGitRefForItem: bowMod.latestGitRefForItem,
     typePrefixes: new Set(Object.values(bowMod.TYPE_PREFIX)),
   };
 }
@@ -417,7 +421,59 @@ function isCommitInvocation(command, authorGuard) {
 // Directory-prefix half of the enforced-path set (AC-11). The root-script
 // half is derived at runtime from .claude/settings.json — see
 // deriveRootGuardScripts() below, never a second hardcoded list.
-const ENFORCED_DIR_RE = /^(cmd|internal|data|tools)\//;
+//
+// BUG-332 (2026-08-22): CASE-INSENSITIVE. On this repo's Windows dev
+// filesystem core.ignorecase folds `INTERNAL/engine/evil.go` onto
+// `internal/engine/evil.go` — the BUG-224 round proved a case-variant
+// enforced-dir prefix bypasses a case-sensitive regex while git happily
+// stages the real enforced file. A false-positive deny (a genuinely
+// case-distinct dir on a future case-sensitive host) costs seconds; the
+// silent-allow bypass costs a public-repo security guarantee.
+const ENFORCED_DIR_RE = /^(cmd|internal|data|tools)\//i;
+
+/** BUG-332 (2026-08-22): canonicalise a staged-path string exactly as git
+ *  resolves it, so a bypass spelling of an enforced-dir file cannot hide from
+ *  isEnforcedDirPath(). Normalises, in order:
+ *    1. backslashes to forward slashes (git on Windows reports `\`);
+ *    2. the magic root pathspec prefix `:/` (git's "from repo root") and the
+ *       explicit `:(top)` magic — both still mean "repo-root-relative";
+ *    3. any number of leading `./` segments;
+ *    4. duplicate slashes;
+ *    5. `.` and `..` segments, resolved lexically left-to-right (`..` climbs
+ *       toward the root, never above it) — so `docs/../internal/x.go`
+ *       canonicalises onto `internal/x.go`, matching what git actually stages.
+ *    6. BUG-332 r2 (REJECT fix): the git **pathspec-magic family** `:(<magic>)`
+ *       is the canonical syntax for root/case/literal-qualified pathspecs and
+ *       carries NO slash: `:(top)internal/x`, `:(top,icase)internal/x`,
+ *       `:(icase)internal/x`, `:(literal)internal/x` all stage real code while
+ *       the r1 fix only stripped `:(top)/` (a spelling git actually rejects)
+ *       and the bare `:/` root form — so the whole magic family bypassed the
+ *       enforced-dir set. Strip any leading `:(...)` (optionally followed by
+ *       `/`). `:(exclude)`/`:(attr:...)` are handled identically: git does not
+ *       stage an excluded path, and if it did the path would still be enforced
+ *       — fail-closed is the correct side. A literal path that truly begins
+ *       `:(` is impossible to stage without git itself parsing it as magic.
+ *  Case is deliberately NOT folded here: isEnforcedDirPath() is case-
+ *  insensitive (Windows FS folds anyway), but keeping the canonical form
+ *  case-true means a genuinely case-distinct path on a case-sensitive host is
+ *  still reported honestly. */
+function normalizeGitPath(filePath) {
+  let p = String(filePath || '').replace(/\\/g, '/');
+  // BUG-332 r2: strip the pathspec-magic prefix `:(...)` (optionally with a
+  // following slash) BEFORE the bare `:/` root form, so both families land on
+  // the real path. `[^)]+` matches any single magic word or comma-list.
+  p = p.replace(/^:\([^)]+\)\/?/, '');
+  if (p.startsWith(':/')) p = p.slice(2);
+  while (p.startsWith('./')) p = p.slice(2);
+  p = p.replace(/\/+/g, '/');
+  const out = [];
+  for (const seg of p.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (out.length) out.pop(); continue; }
+    out.push(seg);
+  }
+  return out.join('/');
+}
 
 // Bracketed tags: [tool.destructiveguard], [FEAT-040]. Extraction shape
 // reused VERBATIM from claude-bow-ref-check.js (AC-13) — do not diverge on
@@ -712,35 +768,235 @@ const GIT_TOKEN_FOR_ADD_RE =
  * Bounds a `git add`'s own argument list to its own command segment, so a
  * LATER `&& git commit ...` on the same line is never accidentally tokenized
  * as if it were more `git add` arguments. Returns `text.length` if no
- * boundary is found (the add invocation runs to the end of the text). */
+ * boundary is found (the add invocation runs to the end of the text).
+ *
+ * BUG-332 r2: a `)` is NOT an unconditional boundary. Git pathspec magic
+ * `:(top)internal/x` and shell constructs `$(...)` / `(...)` both contain
+ * parens; treating the magic's `)` as a command boundary truncated the add's
+ * argument list at `:(top` (boundary right after the `(`), so the staged path
+ * never reached classification. Paren depth is tracked: a `)` only closes the
+ * current command segment when it is UNMATCHED at the top level. */
 function findUnquotedShellBoundary(text, mask, start) {
+  let depth = 0;
   for (let i = start; i < text.length; i++) {
     if (mask[i]) continue;
     const c = text[i];
-    if (c === ';' || c === '\n' || c === '|' || c === '&' || c === ')') return i;
+    if (c === '(') { depth++; continue; }
+    if (c === ')') {
+      if (depth > 0) { depth--; continue; }
+      return i;
+    }
+    if (depth === 0 && (c === ';' || c === '\n' || c === '|' || c === '&')) return i;
   }
   return text.length;
+}
+
+// BUG-332 r5 (Finding 1): a cwd-changing shell command before a `git add`
+// shifts the base real git resolves relative paths against —
+// `cd internal/engine && git add evil.go && git commit -m "docs: tidy"` stages
+// internal/engine/evil.go while the guard, resolving from its own cwd,
+// classifies `evil.go` as non-code-bearing → silent ALLOW, zero verdict.
+// BUG-332 r6 (r5 REJECT): the r5 word list/boundary anchor was sidestepped by
+// `chdir`, PowerShell `Set-Location`/`sl`, `cd` nested in `for/while…do` /
+// `if…then` bodies, and compound `{ … }` groups — all now covered.
+// Command-boundary anchored (never a bare substring) and quote-aware, so
+// `echo "cd /tmp"` or a `-m "cd /tmp"` message cannot trip it.
+// BUG-332 r7 (r6 REJECT): the boundary-anchored regex itself was the flaw
+// ("a regex is not a shell parser") — reserved words (`else`, `!`, `if`,
+// `while`), prefix builtins (`builtin`, `command`, `time`, `exec`), env
+// prefixes (`X=1`), and quote-splitting (`c"d"`) all start a command outside
+// the boundary class. CWD_CHANGE_CMD_RE is DELETED; cwd detection now derives
+// from authorGuard.scanShellWords() via cwdChangedBeforeShell() below.
+// `git -C <dir> add ...` — the same cwd shift, INSIDE the add's own git
+// invocation. parseGitInvocation() consumes the -C option but does not expose
+// it, so the option run (git token → verb) is re-scanned for it. Uppercase
+// -C only: `-c key=value` is config, not a directory change.
+const C_DIR_OPT_RE = /(?:^|\s)-C(?=\s)/;
+
+/** Depth of the shell word containing `pos` (0 when `pos` is not inside a
+ * word — a separator). Gives each add its F14 subshell depth: a cwd change at
+ * depth D affects only adds at depth >= D. */
+function depthAtShell(words, pos) {
+  for (const w of words) {
+    if (pos >= w.start && pos < w.end) return w.depth;
+  }
+  return 0;
+}
+
+/** True when a cwd-changing command (`cd`/`pushd`/`popd`/`chdir`/
+ * `Set-Location`/`sl`) is a REAL command anywhere before `upTo` AND its target
+ * leaves the base git resolves relative paths against UNKNOWN.
+ * BUG-332 r7: derives entirely from authorGuard.scanShellWords() — the ONE
+ * lexer that answers "which words are commands, dequoted how, at what depth"
+ * — replacing CWD_CHANGE_CMD_RE, the boundary-anchored word list the r6
+ * attacker sidestepped twelve ways (reserved words, prefix builtins, env
+ * prefixes, quote-splitting). The depth rule closes the F14 over-block: a
+ * `cd` inside `$(...)` / backticks / `(...)` lives at a deeper subshell depth
+ * than an add outside it and CANNOT shift that add's base, so it is not
+ * flagged; a cwd change in the same or an outer subshell still is.
+ * BUG-332 r9 (r8 attacker F5): the r8 form flagged ANY real cwd command, so
+ * `builtin cd /tmp && git add docs/notes.md && git commit` was ambiguous and
+ * the commit DENIED — but an ABSOLUTE cd OUTSIDE the repo root cannot stage a
+ * repo file, which is the whole point of the docs-control the brief demands.
+ * A cwd command is now ambiguous ONLY when its target is relative /
+ * no-target / unknown OR an absolute path AT-OR-UNDER the repo root; an
+ * absolute target outside the repo is non-ambiguous (the add resolves against
+ * a KNOWN base). A relative cd is still always ambiguous — `cd internal/engine
+ * && git add evil.go` resolves `evil.go` against a base the guard cannot
+ * compute.
+ * `cwdWords` is authorGuard.CWD_COMMAND_WORDS (the single exported set). */
+function cwdChangedBeforeShell(words, upTo, addDepth, cwdWords) {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w.start >= upTo) break; // words are in text order
+    if (!w.commandStart) continue;
+    if (w.depth > addDepth) continue; // F14: deeper subshell cd can't shift this add
+    if (!cwdWords.has(w.value.toLowerCase())) continue;
+    if (cwdIsAmbiguous(words, i)) return true;
+  }
+  return false;
+}
+
+/** The target argument of the cwd command at `idx` — the first non-flag word
+ * that is not itself a new command — or null when the cwd command took no
+ * path (`cd` alone goes to $HOME, an unknown base). `-` (previous directory)
+ * and `+N` (pushd/popd stack index) are returned as targets — both are unknown
+ * bases and test as non-absolute, so they are ambiguous either way. `cd -L` /
+ * `cd -P` style flags are skipped to reach the path. */
+function cwdTargetFor(words, idx) {
+  for (let k = idx + 1; k < words.length; k++) {
+    const nxt = words[k];
+    if (nxt.commandStart) return null; // next command — this cd had no arg
+    if (/^-[A-Za-z]/.test(nxt.value)) continue; // cd -L / cd -P style flag
+    return nxt.value;
+  }
+  return null;
+}
+
+/** True when the cwd command at `idx` makes an add's base UNKNOWN: no target,
+ * a relative target, a `-`/`+N` meta target, or an absolute target AT-OR-UNDER
+ * the repo root. An absolute target OUTSIDE the repo root (a normalized,
+ * case-insensitive compare) is a KNOWN base and therefore non-ambiguous. */
+function cwdIsAmbiguous(words, idx) {
+  const target = cwdTargetFor(words, idx);
+  if (!target) return true; // `cd` alone → $HOME, unknown
+  const norm = normalizeRepoPath(target);
+  if (!isAbsolutePath(norm)) return true; // relative → shifts against the repo
+  const root = repoRoot();
+  if (!root) return true; // cannot compute the root → fail closed
+  const nroot = normalizeRepoPath(root);
+  if (norm === nroot || norm.startsWith(nroot + '/')) return true; // at/under
+  return false; // absolute, outside the repo → non-ambiguous
+}
+
+/** Normalizes a path to a comparable lowercase form: backslashes → slashes,
+ * the Git-Bash `/e/...` / `/e:/...` drive form → `E:/...`, duplicate slashes
+ * collapsed, trailing slash stripped, and `.`/`..` segments canonicalized.
+ * `E:\git\Metropolis`, `E:/git/Metropolis` and `/e/git/Metropolis` all become
+ * `e:/git/metropolis`, so an absolute cd target and the repo root compare
+ * correctly regardless of how the command spelled them.
+ *
+ * BUG-332 r10 (r9 attacker F5): the r9 form did NOT canonicalize `.`/`..`, so
+ * a dot-path cd target (`E:/git/./Metropolis/internal/ui/diagrams`,
+ * `E:/git/../git/Metropolis/...`) compared as `e:/git/./metropolis/...` /
+ * `e:/git/../git/metropolis/...` — neither `norm === nroot` nor
+ * `norm.startsWith(nroot + '/')` matched, so a cd to a path AT-OR-UNDER the
+ * real repo root was judged OUTSIDE it and a subsequent enforced-path add was
+ * allowed — while normalizeGitPath (the ADD-path normalizer) already resolves
+ * `.`/`..`. resolveDotSegments() now matches that behaviour, so the two halves
+ * of the comparison cannot diverge. An absolute path clamps at its root
+ * (`/a/..` → `/`, `E:/x/..` → `E:/`); a `..` that would rise above an
+ * absolute root is dropped. A leading `..` on a RELATIVE path survives
+ * (`../x`) — it is still relative, and cwdIsAmbiguous treats non-absolute
+ * targets as unknown bases. */
+function normalizeRepoPath(p) {
+  let s = String(p).replace(/\\/g, '/');
+  const m = /^\/+([a-zA-Z])(?::|\/|$)/.exec(s);
+  if (m) {
+    const drive = m[1].toUpperCase();
+    const rest = s.slice(m[0].length);
+    s = drive + ':' + (rest === '' ? '' : rest.startsWith('/') ? rest : '/' + rest);
+  }
+  s = s.replace(/\/+/g, '/');
+  s = resolveDotSegments(s);
+  s = s.toLowerCase();
+  if (s.length > 1 && s.endsWith('/')) s = s.slice(0, -1);
+  return s;
+}
+
+/** Canonicalizes `.`/`..` segments in a slash-normalized (absolute or
+ * relative) path. An absolute path's `..` clamps at the root — the first
+ * segment of a drive-form path (`e:`) is root-protected and a leading `/` is
+ * re-applied — while a relative `..` that would rise past the path start
+ * survives as `..` (it is still relative). */
+function resolveDotSegments(s) {
+  const absolute = s.startsWith('/') || /^[a-z]:/.test(s);
+  const out = [];
+  for (const seg of s.split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') {
+      const canRise = out.length > 1 ||
+        (out.length === 1 && out[0] !== '..' && !/^[a-z]:$/.test(out[0]));
+      if (canRise) out.pop();
+      else if (!absolute) out.push('..');
+      continue;
+    }
+    out.push(seg);
+  }
+  let r = out.join('/');
+  if (s.startsWith('/') && !r.startsWith('/')) r = '/' + r;
+  return r;
+}
+
+/** True when a NORMALIZED path is absolute — POSIX `/…` or a drive letter
+ * `x:/…`. Relative paths (`internal/engine`, `..\x`) are false. */
+function isAbsolutePath(norm) {
+  return norm.startsWith('/') || /^[a-z]:/.test(norm);
+}
+
+let cachedRepoRoot;
+/** The repository root git resolves relative paths against — `git rev-parse
+ * --show-toplevel`, cached. Falls back to process.cwd() when git cannot
+ * answer (the guard's own cwd is the project root in production, same
+ * directory); the fallback is always a path, never null. */
+function repoRoot() {
+  if (cachedRepoRoot === undefined) {
+    cachedRepoRoot = process.cwd();
+    try {
+      const out = execSync('git rev-parse --show-toplevel', { encoding: 'utf8' }).trim();
+      if (out) cachedRepoRoot = out;
+    } catch (e) { /* keep the cwd fallback */ }
+  }
+  return cachedRepoRoot;
 }
 
 /** Finds every `git add` invocation (any spelling GIT_TOKEN_FOR_ADD_RE
  * recognises, including inside a bash -c/pwsh -Command wrapper body via
  * authorGuard.gatherScanTexts()) in `command`. Returns an array of
- * { text, argsText } — `argsText` is the raw, unbounded-position substring
- * from right after the resolved `add` verb up to the next unquoted shell
- * boundary (or end of text), ready for authorGuard.tokenize(). A `git add`
- * mentioned only inside commit-message prose (`-m "run git add first"`) is
- * excluded via the same quote-mask skip logic isCommitInvocation()'s
- * underlying authorGuard.findCommitInvocation() already uses. */
+ * { text, argsText, ambiguous } — `argsText` is the raw, unbounded-position
+ * substring from right after the resolved `add` verb up to the next unquoted
+ * shell boundary (or end of text), ready for authorGuard.tokenize();
+ * `ambiguous` is true when the add's paths resolve against a base the guard
+ * cannot know (a preceding `cd`/`pushd`/`popd` or a `git -C` option) and the
+ * caller must fail closed. A `git add` mentioned only inside commit-message
+ * prose (`-m "run git add first"`) is excluded via the same quote-mask skip
+ * logic isCommitInvocation()'s underlying authorGuard.findCommitInvocation()
+ * already uses. */
 function findGitAddInvocations(command, authorGuard) {
   const results = [];
   const candidates = authorGuard.gatherScanTexts(command, 0);
   for (const text of candidates) {
     GIT_TOKEN_FOR_ADD_RE.lastIndex = 0;
     const quoteMask = authorGuard.buildQuoteMask(text);
+    // BUG-332 r7: one lexer pass per text, shared by the regex loop's
+    // position-dedupe and by the quote-split git-word fallback below.
+    const shellWords = authorGuard.scanShellWords(text, quoteMask);
+    const covered = new Set();
     let m;
     while ((m = GIT_TOKEN_FOR_ADD_RE.exec(text)) !== null) {
       const token = m[1];
       const tokenStart = m.index + (m[0].length - token.length);
+      covered.add(tokenStart);
       const isQuotedPathToken = token[0] === '"' || token[0] === "'";
       const skip = isQuotedPathToken
         ? tokenStart > 0 && quoteMask[tokenStart - 1]
@@ -748,13 +1004,53 @@ function findGitAddInvocations(command, authorGuard) {
       if (skip) continue;
       const inv = authorGuard.parseGitInvocation(text, m.index + m[0].length);
       if (!inv) continue;
-      const resolved = authorGuard.resolveAlias(inv.verbWord, 0, new Set());
+      // BUG-332 r5 (Finding 2): resolveAlias MUST see the invocation's own
+      // inline `-c alias.*` overrides. Passing a fresh Set() made an inline-
+      // aliased `git add` invisible (the guard saw only the bare trailing
+      // `git commit` against an empty index → silent ALLOW of a code-bearing
+      // file). The commit path already passes inv.overrides (line ~883 of
+      // claude-author-guard.js); this is the same fix on the add side.
+      const resolved = authorGuard.resolveAlias(inv.verbWord, 0, new Set(), inv.overrides);
       if (resolved === 'add') {
+        // BUG-332 r5 (Finding 1): a cwd change before this add (`cd`/`pushd`/
+        // `popd` as a real command) or inside the add's own invocation
+        // (`git -C <dir>`) shifts the base real git resolves relative paths
+        // against. The guard classifies from ITS cwd, so `cd internal/engine
+        // && git add evil.go && git commit -m "docs: tidy"` silently committed
+        // internal/engine/evil.go with zero verdict. Ambiguous → fail-closed
+        // deny, same class as globs/flags.
+        const optionRun = text.slice(m.index + m[0].length, inv.verbStart);
+        const cwdShifted =
+          cwdChangedBeforeShell(
+            shellWords, tokenStart, depthAtShell(shellWords, tokenStart),
+            authorGuard.CWD_COMMAND_WORDS) ||
+          C_DIR_OPT_RE.test(optionRun);
         const boundary = findUnquotedShellBoundary(text, quoteMask, inv.verbEnd);
-        results.push({ text, argsText: text.slice(inv.verbEnd, boundary) });
+        results.push({ text, argsText: text.slice(inv.verbEnd, boundary), ambiguous: cwdShifted });
       }
       // Keep scanning: multiple `git add` calls in one command string, and/or
       // an unrelated later `git commit`/other verb, must not stop this loop.
+    }
+    // BUG-332 r7: quote-split git spellings (`g"it" add x`, `/usr/"bin"/git
+    // add`) that GIT_TOKEN_FOR_ADD_RE's token group cannot recognise — the
+    // lexer concatenates the fragments, so a tokenizer-found git word NOT
+    // already covered by the regex loop is a real add invocation, parsed
+    // identically. r6 F13 made this urgent: `g"it" commit` over a pre-staged
+    // code file bypassed the ENTIRE guard because the commit gate never fired.
+    for (const w of shellWords) {
+      if (covered.has(w.start)) continue;
+      if (!authorGuard.isGitExecutableWord(w.value)) continue;
+      if (!authorGuard.isRealGitWord(w)) continue;
+      const inv = authorGuard.parseGitInvocation(text, w.end);
+      if (!inv) continue;
+      const resolved = authorGuard.resolveAlias(inv.verbWord, 0, new Set(), inv.overrides);
+      if (resolved !== 'add') continue;
+      const optionRun = text.slice(w.end, inv.verbStart);
+      const cwdShifted =
+        cwdChangedBeforeShell(shellWords, w.start, w.depth, authorGuard.CWD_COMMAND_WORDS) ||
+        C_DIR_OPT_RE.test(optionRun);
+      const boundary = findUnquotedShellBoundary(text, quoteMask, inv.verbEnd);
+      results.push({ text, argsText: text.slice(inv.verbEnd, boundary), ambiguous: cwdShifted });
     }
   }
   return results;
@@ -765,6 +1061,28 @@ function findGitAddInvocations(command, authorGuard) {
 // actually gets staged depends on the real filesystem at execution time,
 // which this guard cannot see from the command text alone.
 const ADD_GLOB_CHARS_RE = /[*?[\]{}]/;
+
+// BUG-332 r4 (independent attacker a90580d4bc2c89532 + Bill's own probe):
+// shell expansions are rewritten by the shell BEFORE git sees the argument,
+// so the command text alone cannot enumerate the staged paths — each silently
+// committed a code-bearing file with zero verdict pre-fix (`git add
+// $PWD/internal/engine/evil.go`, `git add $FILE`, `git add
+// ~/internal/engine/evil.go`). `$VAR`/`${VAR}`/`$(...)` and backticks expand
+// ANYWHERE in a word; `~` and `~user` expand only at the START of a word.
+// Same "cannot safely enumerate" class as globs/flags → fail-closed deny. A
+// literal `$` (or word-initial `~`) in a real filename is vanishingly rare,
+// and a false deny here costs seconds (split the call) against the exact
+// GR#23 harm it prevents.
+const SHELL_EXPANSION_CHARS_RE = /[\$`]/;
+
+// BUG-332 r5: an ABSOLUTE add path (`/abs`, `\abs`, `C:/abs`, `//share`) can
+// point straight at an enforced file the guard cannot see — `git add
+// /full/path/to/internal/engine/evil.go && git commit -m "docs: tidy"` was a
+// silent ALLOW (the path never matches the enforced-dir prefix). Resolving it
+// needs repo-root knowledge the guard does not carry here → ambiguous,
+// fail-closed. A relative `./internal/...` is NOT absolute — it is caught by
+// normalizeGitPath + the enforced set.
+const ABSOLUTE_PATH_RE = /^(?:\/|\\|[A-Za-z]:[\\/])/;
 
 /** Classifies one `git add` invocation's raw argument text. Returns
  * { ok: true, paths: [...] } only for a SIMPLE, fully-enumerable pathspec —
@@ -785,6 +1103,9 @@ function classifyAddArgs(argsText, authorGuard) {
     if (tok.startsWith('-')) return { ok: false, paths: [] };
     if (tok === '.' || tok === '..') return { ok: false, paths: [] };
     if (ADD_GLOB_CHARS_RE.test(tok)) return { ok: false, paths: [] };
+    if (SHELL_EXPANSION_CHARS_RE.test(tok)) return { ok: false, paths: [] };
+    if (tok.startsWith('~')) return { ok: false, paths: [] }; // tilde: word-initial only
+    if (ABSOLUTE_PATH_RE.test(tok)) return { ok: false, paths: [] };
     paths.push(tok);
   }
   if (paths.length === 0) return { ok: false, paths: [] };
@@ -810,6 +1131,7 @@ function computeAddedPathsOrAmbiguous(command, authorGuard) {
   if (invocations.length === 0) return { hasAdd: false, ambiguous: false, paths: [] };
   const allPaths = [];
   for (const inv of invocations) {
+    if (inv.ambiguous) return { hasAdd: true, ambiguous: true, paths: [] };
     const cls = classifyAddArgs(inv.argsText, authorGuard);
     if (!cls.ok) return { hasAdd: true, ambiguous: true, paths: [] };
     allPaths.push(...cls.paths);
@@ -835,6 +1157,30 @@ function ambiguousAddDenyMessage() {
     '',
     'Emergency bypass (operator-only, set BEFORE the session starts — never inline in this ' +
       'command, see this file\'s header): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1',
+  ].join('\n');
+}
+
+/** BUG-332 r15 (r14 attacker): the message when a command pipes a known
+ * deterministic decoder into a shell that executes its output. */
+function decoderFedShellDenyMessage() {
+  return [
+    '🛑 DESTRUCTIVE GUARD (GR#23, BUG-332): this command pipes a known ' +
+      'deterministic decoder (base64 -d, base64 --decode, xxd -r, openssl ' +
+      'base64 -d, b64 -d, base32 -d, uudecode, basenc -d) or a data-' +
+      'transforming filter (sed \'s/…/…/\', awk, tr — r18, F3) into a shell ' +
+      'that executes its output.',
+    '',
+    'A decoder\'s stdout is a pure function of its stdin, so the decoded text can ' +
+      'BE the git commit — `echo \'<b64>\' | base64 -d | bash` runs the payload as ' +
+      'commands, and this guard cannot see the decoded bytes to verify a ' +
+      'Destructive verdict exists for what they commit.',
+    '',
+    'Write the decoded command to a file and run it there, or type the plain ' +
+      'command instead — and record the Destructive verdict for any commit it ' +
+      'performs before retrying.',
+    '',
+    'Emergency bypass (operator-only, set BEFORE the session starts — never inline in ' +
+      'this command, see this file\'s header): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1',
   ].join('\n');
 }
 
@@ -1015,6 +1361,34 @@ function aliasedCommitDenyMessage() {
   ].join('\n');
 }
 
+function structuralIndirectionDenyMessage(reason) {
+  const detail = reason === 'alias'
+    ? 'this commit reaches the commit verb through a git ALIAS (the verb word is not the literal `commit`)'
+    : reason === 'replay-staging'
+      ? 'this command chains a replay verb with a NO-COMMIT flag ahead of the literal `git commit` (`git cherry-pick -n/--no-commit`, `git merge --no-commit`, `git revert -n`, `git am --no-commit`) — the replay stages working-tree/index content the guard cannot see in the pre-command index, so the later commit would commit un-attacked code silently'
+      : reason === 'hidden-commit'
+        ? 'this commit\'s executable word is a shell VARIABLE/EXPANSION reference the guard cannot resolve (`$GIT commit`, `$(echo $GIT) commit`, backticks) — the value may BE git, so the commit verb is reached through unattributable shell indirection (r18, F1)'
+        : reason === 'process-substitution'
+          ? 'this command feeds a PROCESS SUBSTITUTION (`<( ... )`) body to an executable — its inner text runs AS COMMANDS, so the guard must treat it as command content it cannot attribute (r19, F2)'
+        : 'this commit-shaped command carries shell indirection (a pipe, redirection, backtick, `$(...)`, env-prefix, wrapper, heredoc, or PowerShell execution surface) somewhere outside the commit\'s own quoted message text';
+  return [
+    '🛑 DESTRUCTIVE GUARD (GR#23, AARON RULING 2026-08-23): ' + detail + '. ' +
+      'Under the structural allowlist the guard recognises as a commit ONLY the plain benign form — a ' +
+      'literal `git commit` with ZERO shell indirection anywhere in the command. A commit reached ' +
+      'through shell indirection is COULD-NOT-EVALUATE and denied fail-closed: the r15 decoder-route ' +
+      'REJECT proved a denylist of bypass spellings is asymptotically incomplete ("a regex is not a ' +
+      'shell parser"), so the guard no longer tries to enumerate them. A false-positive deny is ' +
+      'recoverable; a false-negative allow is the hole.',
+    '',
+    'Run the commit as a plain command: `git add <paths>` in its own call, then `git commit -m ' +
+      '"..."` in its own call — no pipes, redirects, wrappers, aliases, or `&&` chains that reach a ' +
+      'shell.',
+    '',
+    'Emergency bypass (operator-only, set BEFORE the session starts — never inline in this ' +
+      'command): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1',
+  ].join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // BUG-232: fail-closed git-recognition sweep.
 //
@@ -1182,6 +1556,170 @@ function verdictDenyMessage(unresolved, missing) {
   return lines.join('\n');
 }
 
+// BUG-332 failure mode 2 (verdict-tie rule): a code-bearing commit ref'd onto a
+// BOW item AFTER that item's latest accept verdict is code committed post-attack,
+// hence un-attacked — GR#23 requires a fresh round for every new state of the code.
+function postAttackDenyMessage(postAttack) {
+  const lines = [
+    '🛑 DESTRUCTIVE GUARD (GR#23, tool.destructiveguard / FEAT-040): code committed after the ' +
+      'latest Destructive verdict.',
+    '',
+    'Item(s) with a git ref NEWER than their latest accepted verdict (the verdict no longer covers ' +
+      'the code being committed — a fresh round is required):',
+  ];
+  for (const p of postAttack) {
+    lines.push(
+      `  - ${p.code} "${p.title}" — git ref ${p.refHash.slice(0, 10)} (${p.refAt}) is newer than ` +
+        `accept verdict ${p.verdictAt}`
+    );
+  }
+  lines.push('');
+  lines.push('Record a fresh verdict against the CURRENT code: node claude-bow.js destructive <code> --verdict accept|reject --attacker "<name>" [--note "..."]');
+  lines.push('GR#23: every code-bearing commit needs a recorded Destructive verdict on the state actually being committed.');
+  lines.push('Emergency bypass (operator-only, set BEFORE the session starts — never inline in this command, see this file\'s header): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1');
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// BUG-332 r19 (independent attacker REJECT of the uncommitted guard estate):
+// two recognition-layer bypasses that both land on classifyCommitShape()'s
+// `{ kind: 'none' }` silent-allow branch because no literal `git` token
+// exists at any COMMAND position. Both backstops are scanned ONLY on that
+// 'none' path — they can never narrow or weaken the 'plain'/'indirect'
+// handling above them.
+// ---------------------------------------------------------------------------
+
+/** F1 — VARIABLE-INDIRECT COMMIT INVOCATION. `v='git commit -m evil'; $v`
+ * hides the payload inside the assignment's quoted value: findCommitInvocation()
+ * returns null (no literal git token at command position) and hasHiddenCommit()
+ * sees no `commit` WORD outside quotes (the only `commit` is prose) — so
+ * classifyCommitShape() classified 'none' and the command silently allowed.
+ * Detection: an UNQUOTED shell VARIABLE/EXPANSION reference (`$VAR`,
+ * `${VAR}`, `$(...)`, backticks) standing AT COMMAND POSITION as the
+ * executable word, PLUS a whole `git … commit` payload visible ANYWHERE in
+ * the same command string (looksLikeCommitFallback — deliberately
+ * quote-blind, because the payload is exactly the quoted text the structured
+ * parser skips). Either signal ALONE stays clear: `$EDITOR notes.txt` has no
+ * commit payload; `msg='git commit -m x'; echo "$msg"` never executes the
+ * payload as a command word. Together they are unattributable indirection —
+ * the variable may BE git — denied fail-closed per the AARON ruling.
+ *
+ * BUG-332 r20 (r2 independent REJECT, finding F-HIGH-1): the fire need not
+ * be at command position. A STRING-EXECUTOR WRAPPER before the fire runs its
+ * argument AS CODE just the same:
+ *   `v='git commit -m evil'; eval $v`   `v='…'; exec $v`
+ *   `v='git commit -m evil'; bash -c $v`  `pwsh -Command $script`
+ * Here `$v` is an ARGUMENT word, so the bare command-position check above
+ * never fires and the command still classified 'none' → silent allow.
+ * Detection: any non-prose word naming a shell/string executor (eval, exec,
+ * bash, sh, zsh, dash, ksh, pwsh, powershell) followed by a later word in
+ * the SAME command whose raw text contains an expansion (`$`/backtick) —
+ * quoting does NOT defang it, an expansion inside quotes passed to an
+ * executor still expands before execution. Either signal alone stays clear
+ * (same rule as F1); together with a visible commit payload it is
+ * unattributable indirection → deny fail-closed. */
+
+/** String-executor / shell names whose argument is executed as code rather
+ * than consumed as data. Matched case-insensitively on the dequoted word's
+ * last path segment with `.exe`/`.cmd` stripped (r19 F3 taught that lesson).
+ * NOTE: matched on ANY non-prose word, not just command positions — `exec`
+ * (and friends like `builtin`/`command`/`time`) are TRANSPARENT prefix
+ * builtins the lexer never marks as a command start (r7), yet `exec $v`
+ * runs its argument as code all the same. */
+const STRING_EXECUTOR_WORDS = new Set([
+  'eval', 'exec', 'bash', 'sh', 'zsh', 'dash', 'ksh', 'pwsh', 'powershell',
+]);
+
+function stringExecutorBareName(wordValue) {
+  const seg = String(wordValue).split(/[\\/]/).pop() || '';
+  return seg.toLowerCase().replace(/\.(exe|cmd)$/, '');
+}
+
+function hasVariableExecutedCommitPayload(command, authorGuard) {
+  const normalized = authorGuard.normalizeContinuations(command);
+  const mask = authorGuard.buildQuoteMask(normalized);
+  const words = authorGuard.scanShellWords(normalized, mask);
+  let varCommandWord = false;
+  let executorExpansionArg = false;
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w.prose) continue;
+    if (w.commandStart && /^\$|^`/.test(w.value)) { varCommandWord = true; break; }
+    // r20 F-HIGH-1: a STRING EXECUTOR anywhere — any later word carrying an
+    // expansion is its potential code argument.
+    if (!STRING_EXECUTOR_WORDS.has(stringExecutorBareName(w.value))) continue;
+    for (let j = i + 1; j < words.length; j++) {
+      const a = words[j];
+      // NOTE: prose words are NOT skipped here — a fully-quoted expansion
+      // (`sh -c "$s"`) lexes as prose, but an executor expands it before
+      // execution all the same. Quoting does not defang a code argument.
+      if (a.depth < w.depth) continue;
+      if (a.commandStart && a.depth === w.depth) break; // next command, same level
+      const raw = normalized.slice(a.start, a.end);
+      if (/[$`]/.test(raw)) { executorExpansionArg = true; break; }
+    }
+    if (executorExpansionArg) break;
+  }
+  if (!varCommandWord && !executorExpansionArg) return false;
+  return looksLikeCommitFallback(normalized);
+}
+
+/** Position of the `)` closing the `<(` process substitution opened at
+ * `open`, balanced and quote-aware (a `)` inside a quote or a nested `(` is
+ * not the close), or -1 when unterminated. */
+function findProcessSubstitutionClose(text, open) {
+  let depth = 1;
+  let quote = null;
+  let i = open + 2;
+  while (i < text.length) {
+    const c = text[i];
+    if (quote) {
+      if ((quote === '"' || quote === "'") && c === '\\' && i + 1 < text.length) { i += 2; continue; }
+      if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === '\\' && i + 1 < text.length) { i += 2; continue; }
+    if (c === '"' || c === "'") { quote = c; i++; continue; }
+    if (c === '(') { depth++; i++; continue; }
+    if (c === ')') { depth--; if (depth === 0) return i; i++; continue; }
+    i++;
+  }
+  return -1;
+}
+
+/** Extracts every UNQUOTED `<( … )` process-substitution body from
+ * `command` — quote-aware via buildQuoteMask, so a `<(` inside commit-message
+ * text (`-m "see <(x)"`) is never extracted. Unterminated spans are skipped. */
+function processSubstitutionBodies(command, authorGuard) {
+  const normalized = authorGuard.normalizeContinuations(command);
+  const mask = authorGuard.buildQuoteMask(normalized);
+  const bodies = [];
+  for (let i = 0; i < normalized.length - 1; i++) {
+    if (normalized[i] !== '<' || normalized[i + 1] !== '(' || mask[i]) continue;
+    const close = findProcessSubstitutionClose(normalized, i);
+    if (close < 0) continue;
+    bodies.push(normalized.slice(i + 2, close));
+    i = close;
+  }
+  return bodies;
+}
+
+/** F2 — PROCESS SUBSTITUTION. `bash <(echo "git commit -m evil")` executes
+ * the substitution's inner text AS COMMANDS via /dev/fd, but the payload
+ * sits inside echo's quoted argument, so recognition saw nothing and the
+ * command classified 'none' → silent allow. Every `<()` body is therefore
+ * treated as command content subject to the same commit-payload scan as F1:
+ * a body carrying a whole `git … commit` shape (looksLikeCommitFallback)
+ * denies fail-closed. Benign substitutions (`diff <(ls a) <(ls b)`) carry no
+ * commit payload and stay clear. */
+function processSubstitutionHidesCommit(command, authorGuard) {
+  for (const body of processSubstitutionBodies(command, authorGuard)) {
+    if (looksLikeCommitFallback(body)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -1245,7 +1783,7 @@ async function main() {
     allowSilently();
     return;
   }
-  const { authorGuard, findItemByRef, latestDestructiveVerdict, typePrefixes } = deps;
+  const { authorGuard, findItemByRef, latestDestructiveVerdict, latestGitRefForItem, typePrefixes } = deps;
 
   // BUG-232 fail-closed recognition sweep: run BEFORE the commit check, so a
   // git invocation that findCommitInvocation() reports as "null" because it
@@ -1257,10 +1795,50 @@ async function main() {
     return;
   }
 
-  if (!isCommitInvocation(command, authorGuard)) {
+  // BUG-332 r15 (r14 attacker): a KNOWN DETERMINISTIC DECODER fed into a shell
+  // (`echo '<b64>' | base64 -d | bash`) hides its commit entirely — the raw
+  // command has NO git verb, so the isCommitInvocation check below would ALLOW
+  // it silently. Fail-closed deny at RECOGNITION, before that allow.
+  if (authorGuard.hasDecoderFedShell(command)) {
+    deny(decoderFedShellDenyMessage());
+    return;
+  }
+
+  // AARON RULING 2026-08-23 (Bev on BOW BUG-332): STRUCTURAL ALLOWLIST for
+  // commit recognition. The r15 REJECT's 8 new decoder spellings proved the
+  // denylist is asymptotically incomplete, so recognition now proceeds ONLY on
+  // the plain benign form — a literal `git commit` with zero shell indirection
+  // anywhere in the command. Any commit-shaped command carrying an
+  // unattributable shell metacharacter is COULD-NOT-EVALUATE → deny fail-closed
+  // (false-positive deny is recoverable; false-negative allow is the hole).
+  // hasDecoderFedShell above already covers the invisible-commit case (no git
+  // verb in the raw text at all).
+  const commitShape = authorGuard.classifyCommitShape(command);
+  if (commitShape.kind === 'indirect') {
+    deny(structuralIndirectionDenyMessage(commitShape.reason));
+    return;
+  }
+  if (commitShape.kind === 'none') {
+    // BUG-332 r19 (attacker F1): a variable-executed commit payload
+    // (`v='git commit -m evil'; $v`) carries no literal git token at any
+    // command position, so it classified 'none' and silently allowed. The
+    // variable may BE git — unattributable indirection → deny fail-closed.
+    if (hasVariableExecutedCommitPayload(command, authorGuard)) {
+      deny(structuralIndirectionDenyMessage('hidden-commit'));
+      return;
+    }
+    // BUG-332 r19 (attacker F2): a process-substitution body is executed AS
+    // COMMANDS (`bash <(echo "git commit -m evil")`) — its inner text is
+    // command content and is scanned for a commit payload before the allow.
+    if (processSubstitutionHidesCommit(command, authorGuard)) {
+      deny(structuralIndirectionDenyMessage('process-substitution'));
+      return;
+    }
     allowSilently();
     return;
   }
+  // commitShape.kind === 'plain' — a plain benign `git commit`: fall through
+  // to the verdict flow below (staged files, BOW verdicts, exemptions).
 
   // From here on this is a real `git commit` invocation — every further
   // failure path DENIES (fail-closed), the opposite posture from
@@ -1271,7 +1849,10 @@ async function main() {
     encoding: 'utf8',
     timeout: 5000,
   });
-  const stagedFiles = stagedRaw.split('\n').map(f => f.trim()).filter(Boolean);
+  // BUG-332: normalise every staged path — git reports repo-relative paths so
+  // a leading `./`/`../` is unusual here, but uniform canonicalisation keeps
+  // every classification input on the same footing.
+  const stagedFiles = stagedRaw.split('\n').map(f => f.trim()).filter(Boolean).map(normalizeGitPath);
 
   // BUG-224: `git diff --cached` above reflects the index BEFORE this same
   // command's own `git add` (if any) has run — see the BUG-224 block above
@@ -1283,7 +1864,7 @@ async function main() {
     return;
   }
   let classificationFiles = addInfo.hasAdd
-    ? Array.from(new Set([...stagedFiles, ...addInfo.paths.map((p) => p.replace(/\\/g, '/'))]))
+    ? Array.from(new Set([...stagedFiles, ...addInfo.paths.map(normalizeGitPath)]))
     : stagedFiles;
 
   // FEAT-077 / BUG-213 / BUG-214: the commit invocation's OWN argv can stage
@@ -1324,7 +1905,7 @@ async function main() {
       timeout: 5000,
     });
     const wtFiles = wtRaw.split('\n').map(f => f.trim()).filter(Boolean);
-    classificationFiles = Array.from(new Set([...classificationFiles, ...wtFiles.map((p) => p.replace(/\\/g, '/'))]));
+    classificationFiles = Array.from(new Set([...classificationFiles, ...wtFiles.map(normalizeGitPath)]));
   }
 
   // FEAT-077 exemption: docs/test-only AND classifiable → exempt (Tester-level
@@ -1390,6 +1971,7 @@ async function main() {
   try {
     const unresolved = [];
     const missing = [];
+    const postAttack = [];
     for (const tag of tags) {
       // eslint-disable-next-line no-await-in-loop
       const item = await findItemByRef(db, tag);
@@ -1401,11 +1983,38 @@ async function main() {
       const verdict = await latestDestructiveVerdict(db, tag);
       if (!verdict || verdict.verdict !== 'accept') {
         missing.push({ code: item.code, title: item.title, state: verdict ? verdict.verdict : 'none' });
+        continue;
+      }
+      // BUG-332 failure mode 2 (verdict-tie rule): if a git ref was recorded on the
+      // item AT OR AFTER its latest accept verdict, the current code is un-attacked —
+      // GR#23 needs a fresh round. Compare by epoch ms: mysql2 returns TIMESTAMP
+      // columns as JS Date objects (locale-dependent String() form, NOT lexically
+      // comparable), so getTime() is the only safe comparator. `>=` not `>` (BUG-332
+      // r2 REJECT finding): a ref landing in the SAME wall-clock second as its accept
+      // verdict must still trip the tie rule — second-granularity TIMESTAMP makes
+      // same-second verdict+ref plausible, and weakening to `>` lets it through.
+      // Schema support: bow_git_refs.created_at is now timestamp(6) (aligned with
+      // bow_destructive_verdicts.created_at) so a later-in-second ref is never
+      // truncated to compare EARLIER than its verdict (r2 finding 2).
+      // eslint-disable-next-line no-await-in-loop
+      const gitRef = await latestGitRefForItem(db, tag);
+      if (gitRef && new Date(gitRef.created_at).getTime() >= new Date(verdict.created_at).getTime()) {
+        postAttack.push({
+          code: item.code,
+          title: item.title,
+          refHash: gitRef.commit_hash,
+          refAt: gitRef.created_at,
+          verdictAt: verdict.created_at,
+        });
       }
     }
 
     if (unresolved.length || missing.length) {
       deny(verdictDenyMessage(unresolved, missing));
+      return;
+    }
+    if (postAttack.length) {
+      deny(postAttackDenyMessage(postAttack));
       return;
     }
 
@@ -1438,9 +2047,11 @@ if (require.main === module) {
     looksLikeRealTag,
     deriveRootGuardScripts,
     isEnforcedDirPath,
+    normalizeGitPath,
     isRootLevel,
     noTagDenyMessage,
     verdictDenyMessage,
+    postAttackDenyMessage,
     loadDependencies,
     looksLikeCommitFallback,
     // BUG-224
@@ -1460,5 +2071,9 @@ if (require.main === module) {
     unparseableGitDenyMessage,
     shellEscapeAliasDenyMessage,
     unknownGitVerbDenyMessage,
+    // BUG-332 r19 (attacker F1/F2 — 'none'-branch backstops)
+    hasVariableExecutedCommitPayload,
+    processSubstitutionBodies,
+    processSubstitutionHidesCommit,
   };
 }

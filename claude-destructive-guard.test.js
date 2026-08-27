@@ -40,6 +40,7 @@ const {
   extractTags,
   looksLikeRealTag,
   isEnforcedDirPath,
+  normalizeGitPath,
   isRootLevel,
   deriveRootGuardScripts,
   noTagDenyMessage,
@@ -400,7 +401,7 @@ test('AC-16: a code-bearing commit with ZERO tags is denied (not vacuously allow
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, 'git commit -m "no bow tag whatsoever, just prose"');
     assert.equal(r.denied, true);
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -433,7 +434,7 @@ test('REGRESSION (Tester finding): `git.exe commit` with zero BOW tags is denied
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, 'git.exe commit -m "no bow tag whatsoever, via git.exe"');
     assert.equal(r.denied, true, 'git.exe must be recognised as a real git commit invocation');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -442,7 +443,7 @@ test('REGRESSION (Tester finding): `git.cmd commit` with zero BOW tags is denied
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, 'git.cmd commit -m "no bow tag whatsoever, via git.cmd"');
     assert.equal(r.denied, true, 'git.cmd must be recognised as a real git commit invocation');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -451,7 +452,7 @@ test('REGRESSION (Tester finding): a `bash -c "git commit ..."` shell-wrapped in
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, `bash -c "git commit -m 'no bow tag whatsoever, wrapped in bash -c'"`);
     assert.equal(r.denied, true, 'a git commit hidden inside a bash -c wrapper body must still be recognised');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -460,7 +461,7 @@ test('REGRESSION (Tester finding): a full PATH invocation of git.exe (unquoted, 
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, 'C:\\Git\\bin\\git.exe commit -m "no bow tag whatsoever, via full path"');
     assert.equal(r.denied, true, 'a full-path git.exe invocation must still be recognised as a real git commit');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -472,11 +473,11 @@ test('REGRESSION (Tester finding, exact repro): a QUOTED full PATH invocation of
       '"C:\\Program Files\\Git\\bin\\git.exe" commit -m "no bow tag whatsoever, via quoted full path"'
     );
     assert.equal(r.denied, true, 'a quoted full-path git.exe invocation (the real default Windows install path) must still be recognised as a real git commit');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
-test('REGRESSION: git.exe / git.cmd / a shell-wrapped commit still go through the FULL verdict pipeline (not just the tag check) — an accepted verdict passes, an unresolvable tag is named', async () => {
+test('REGRESSION: plain git spellings (git.exe / git.cmd) go through the FULL verdict pipeline — an accepted verdict passes, an unresolvable tag is named; a WRAPPED commit denies at the shape gate even with an accepted verdict (BUG-332 r16 AARON structural allowlist)', async () => {
   const db = await connectDb();
   const item = await createFixtureItem(db, 'exe-suffix-verdict');
   try {
@@ -490,15 +491,34 @@ test('REGRESSION: git.exe / git.cmd / a shell-wrapped commit still go through th
 
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
+      const rGood = runGuard(dir, `git.cmd commit -m "[${item.code}] change via git.cmd"`);
+      assert.equal(rGood.denied, false, 'git.cmd with an accepted verdict must pass, same as plain git');
+    });
+
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/foo.go', 'package foo\n');
       // BUG-152: CODE-shaped (prefix + "-" + purely numeric id) so it still
       // reaches BOW resolution instead of being filtered out as prose.
       // BUG-164: the prefix must be a REAL TYPE_PREFIX value (FEAT, not the
       // made-up "ZZZ") or looksLikeRealTag() now drops it as prose before it
       // ever reaches resolution — the id itself stays absurdly large so no
       // real item can ever collide with it.
-      const rBad = runGuard(dir, `bash -c "git commit -m '[FEAT-999999999] change'"`);
+      const rBad = runGuard(dir, `git.exe commit -m '[FEAT-999999999] change'`);
       assert.equal(rBad.denied, true);
-      assert.match(rBad.reason, /FEAT-999999999/, 'the unresolvable tag must still be named even when the invocation was wrapped');
+      assert.match(rBad.reason, /FEAT-999999999/, 'a PLAIN spelling with an unresolvable tag must name it');
+    });
+
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/foo.go', 'package foo\n');
+      // BUG-332 r16 (AARON structural allowlist): a WRAPPED commit is denied at
+      // the shape gate BEFORE verdict lookup. The allowlist proceeds only on a
+      // plain benign `git commit` with zero shell indirection — a `bash -c`
+      // wrapper means the guard cannot even be sure of the command text, so an
+      // accepted verdict does NOT rescue it (the verdict proves the code; the
+      // shape gate proves the command). Strongest form of the new bar.
+      const rWrapped = runGuard(dir, `bash -c "git commit -m '[${item.code}] change'"`);
+      assert.equal(rWrapped.denied, true, 'a wrapped commit must be denied even when it cites an accepted-verdict item');
+      assert.match(rWrapped.reason, /shell indirection|structural allowlist|AARON RULING/i, 'the deny must be the structural shape gate, not a verdict outcome');
     });
   } finally {
     await deleteFixtureItem(db, item.guid);
@@ -541,7 +561,7 @@ test('REGRESSION (adjacent gap closed by shared machinery, no Tester finding req
     // that the guard behaves identically to the plain zero-tag case.
     const r = runGuard(dir, 'git commit -m "reminder: please git commit later, no tag here"');
     assert.equal(r.denied, true);
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -625,7 +645,7 @@ test('ROUND-4 end-to-end: `"git" commit` with zero BOW tags on a code-bearing fi
     const r = runGuard(dir, '"git" commit -m "no bow tag whatsoever"');
     assert.equal(r.denied, true, '"git" commit must be recognised as a real git commit invocation');
     assert.notEqual(r.stdout, '', 'a decision payload must be emitted, not empty stdout (the exact symptom reported)');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -635,7 +655,7 @@ test('ROUND-4 end-to-end: `\'git\' commit` with zero BOW tags on a code-bearing 
     const r = runGuard(dir, "'git' commit -m 'no tag, single quoted'");
     assert.equal(r.denied, true, "'git' commit must be recognised as a real git commit invocation");
     assert.notEqual(r.stdout, '', 'a decision payload must be emitted, not empty stdout');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -1158,7 +1178,7 @@ test('BUG-224 (1) EXACT REPRO: combined `git add tools/bug224.js && git commit` 
     const r = runGuard(dir, 'git add tools/bug224.js && git commit -m "no bow tag whatsoever"');
     assert.equal(r.denied, true, 'the combined add+commit must be recognised as code-bearing and denied for lacking a BOW tag');
     assert.notEqual(r.stdout, '', 'a decision payload must be emitted — this is the exact bypass symptom (pre-fix: nothing at all)');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -1169,7 +1189,7 @@ test('BUG-224 (1) EXACT REPRO, newline-separated form (two lines in one Bash cal
     const r = runGuard(dir, 'git add tools/bug224b.js\ngit commit -m "no bow tag whatsoever, newline form"');
     assert.equal(r.denied, true);
     assert.notEqual(r.stdout, '');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -1215,7 +1235,7 @@ test('BUG-224 (3b): SEPARATE `git add` then `git commit` tool calls still work �
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, 'git commit -m "no bow tag whatsoever, separate calls"');
     assert.equal(r.denied, true, 'a separately-staged code-bearing file with zero tags must still be denied, exactly as before this fix');
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
   });
 });
 
@@ -1310,7 +1330,7 @@ test('BUG-224: `git add` mentioned only in commit-message PROSE is not mistaken 
     stageFile(dir, 'internal/foo.go', 'package foo\n');
     const r = runGuard(dir, 'git commit -m "reminder: run git add -A before committing next time, no tag here"');
     assert.equal(r.denied, true);
-    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]/i, 'must be denied for the ordinary zero-tag reason');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i, 'must be denied for the ordinary zero-tag reason');
     assert.doesNotMatch(r.reason, /ambiguous|split/i, 'prose mentioning "git add -A" must NOT trigger the BUG-224 ambiguous-add deny path');
   });
 });
@@ -1320,6 +1340,1725 @@ test('ambiguousAddDenyMessage names GR#23/BUG-224 and the split-into-separate-ca
   assert.match(msg, /GR#23/);
   assert.match(msg, /BUG-224/);
   assert.match(msg, /separate/i);
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 / BUG-224 path-normalisation family — the PROVEN-LIVE bypass that
+// let c6f2088 reach public main on 2026-08-21 ("feat: watchable pacing
+// placeholder - 30s per month [engine.core]": data/pacing.json +
+// internal/engine/core/clock.go, zero verdicts, guard silently allowed).
+//
+// MECHANISM (established from the code, 2026-08-22, not assumed): a combined
+// `git add <pathspec> && git commit` unioned its add paths into the
+// classification set with ONLY backslashes replaced (`p.replace(/\\/g,'/')`),
+// so a pathspec that spells an enforced-dir file without the literal prefix
+// `cmd/|internal/|data/|tools/` makes isEnforcedDirPath() false and the whole
+// commit is classified non-code-bearing — allowSilently() fires BEFORE the
+// tag/verdict pipeline ever runs. Proven spellings that all bypass the plain
+// regex (BUG-224 round, attacker findings, 2026-08-21):
+//   git add ./internal/engine/evil.go      (leading ./)
+//   git add internal\\engine\\evil.go       (backslash — actually caught today
+//                                            by the .replace, kept as a control)
+//   git add docs/../internal/engine/evil.go (.. traversal)
+//   git add :/internal/engine/evil.go       (magic root pathspec)
+//   git add INTERNAL/engine/evil.go         (case-variant — Windows FS folds it)
+// Each of these stages internal/engine/evil.go for real; the guard must see
+// it as code-bearing and DENY the no-tag commit.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 unit: normalizeGitPath collapses ./ .. // and magic-prefix spellings onto the canonical enforced-dir path', () => {
+  assert.equal(normalizeGitPath('./internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath('docs/../internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath(':/internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath('internal\\engine\\evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath('././internal//engine/../engine/evil.go'), 'internal/engine/evil.go');
+  // BUG-332 r2 (REJECT finding): the whole git pathspec-magic family `:(...)`,
+  // canonical syntax carries NO slash. Each of these is exactly what the r2
+  // attacker proved silently stages internal/engine/evil.go while the r1 fix
+  // allowed it.
+  assert.equal(normalizeGitPath(':(top)internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath(':(top,icase)internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath(':(icase)internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath(':(literal)internal/engine/evil.go'), 'internal/engine/evil.go');
+  // ...optionally with a trailing slash after the magic (git rejects this
+  // spelling, but normalizing it honestly costs nothing and keeps the path
+  // from silently surviving a future git that accepts it).
+  assert.equal(normalizeGitPath(':(top)/internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath(':(exclude)internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath('docs/notes.md'), 'docs/notes.md');
+  assert.equal(normalizeGitPath('data/pacing.json'), 'data/pacing.json');
+  assert.equal(normalizeGitPath('claude-bow.js'), 'claude-bow.js');
+  // A traversal that climbs above the repo root must not crash or leak.
+  assert.equal(normalizeGitPath('../../internal/engine/evil.go'), 'internal/engine/evil.go');
+  assert.equal(normalizeGitPath(''), '');
+});
+
+test('BUG-332: isEnforcedDirPath is case-insensitive (Windows case-folded paths must not escape the enforced set)', () => {
+  assert.equal(isEnforcedDirPath('internal/engine/evil.go'), true);
+  assert.equal(isEnforcedDirPath('INTERNAL/engine/evil.go'), true, 'Windows folds INTERNAL onto internal');
+  assert.equal(isEnforcedDirPath('Data/foo.json'), true, 'Data folds onto data on Windows');
+  assert.equal(isEnforcedDirPath('docs/notes.md'), false);
+});
+
+test('BUG-332 (1) EXACT REPRO: combined `git add ./internal/engine/evil.go && git commit -m "docs: tidy"` is DENIED (pre-fix: silently allowed)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add ./internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a leading ./ must not hide an enforced-dir file from the code-bearing classification');
+    assert.notEqual(r.stdout, '', 'a decision payload must be emitted — the exact silent-allow symptom');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 (2): combined `git add docs/../internal/engine/evil.go && git commit` is DENIED (.. traversal)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add docs/../internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a .. traversal must not escape the enforced-dir prefix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 (3): combined `git add :/internal/engine/evil.go && git commit` is DENIED (magic root pathspec)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add :/internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'the :/ magic pathspec must not escape the enforced-dir prefix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 (4): combined `git add INTERNAL/engine/evil.go && git commit` is DENIED (Windows case-fold)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add INTERNAL/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a case-variant enforced-dir prefix must not escape on a case-insensitive filesystem');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 (5) CONTROL: combined `git add internal/engine/evil.go && git commit` (plain spelling) stays DENIED — the fix does not weaken the plain path', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true);
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 (6) CONTROL: the same four bypass spellings with a real BOW code carrying zero verdicts stay DENIED (the c6f2088 scenario exactly)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332-pathexp');
+  try {
+    for (const spelling of ['./internal/engine/evil.go', 'docs/../internal/engine/evil.go', ':/internal/engine/evil.go']) {
+      withTempRepo((dir) => {
+        fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+        const r = runGuard(dir, `git add ${spelling} && git commit -m "[${item.code}] change"`);
+        assert.equal(r.denied, true, `spelling "${spelling}" with zero-verdict item must be denied (not allowed)`);
+        assert.match(r.reason, new RegExp(item.code));
+      });
+    }
+  } finally {
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-332 (7) CONTROL: a genuinely non-code-bearing docs/ path with a leading ./ is still silently ALLOWED (no over-block)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add ./docs/notes.md && git commit -m "docs update, no tag needed"');
+    assert.equal(r.denied, false);
+    assert.equal(r.stdout, '');
+  });
+});
+
+// BUG-332 r2 (REJECT finding 1): the git pathspec-magic family `:(...)` — each
+// spelling below was PROVEN by the r2 attacker to silently stage
+// internal/engine/evil.go while the r1 fix allowed it. The commit must be
+// DENIED (zero-verdict item = the c6f2088 shape exactly).
+test('BUG-332 r2 (12): `:(top)internal/...` magic pathspec is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add :(top)internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, ':(top) magic must not escape the enforced-dir prefix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r2 (13): `:(top,icase)internal/...` magic pathspec is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add :(top,icase)internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, ':(top,icase) magic must not escape the enforced-dir prefix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r2 (14): `:(icase)internal/...` magic pathspec is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add :(icase)internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, ':(icase) magic must not escape the enforced-dir prefix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r2 (15): `:(literal)internal/...` magic pathspec is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add :(literal)internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, ':(literal) magic must not escape the enforced-dir prefix');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r2 (16) CONTROL: a genuinely non-code-bearing path with a :(literal) magic prefix is still ALLOWED (no over-block)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add :(literal)docs/notes.md && git commit -m "docs update, no tag needed"');
+    assert.equal(r.denied, false, 'magic prefix on a docs/ path must not turn it code-bearing');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r4 (REJECT finding, attacker a90580d4bc2c89532) — shell expansion
+// in `git add` args bypasses the GR#23 gate. classifyAddArgs treated a token
+// like `$PWD/internal/engine/evil.go` or `$FILE` as a simple literal path; the
+// shell rewrites it before git runs, so the command text cannot enumerate the
+// staged files — `git add $PWD/internal/engine/evil.go && git commit -m "docs:
+// tidy"` committed a code-bearing file with zero verdict. Any `$`/backtick
+// expansion token is now the ambiguous-add class → fail-closed deny.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r4 (19) EXACT REPRO: combined `git add $PWD/internal/engine/evil.go && git commit` is DENIED (shell-expansion bypass)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add $PWD/internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, '$PWD/ expansion must not be treated as an enumerable literal path');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i, 'deny must name the ambiguous-add / fail-closed posture');
+  });
+});
+
+test('BUG-332 r4 (20) EXACT REPRO: combined `export FILE=...; git add $FILE && git commit` is DENIED (env-var expansion bypass)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'export FILE=internal/engine/evil.go; git add $FILE && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, '$FILE expansion must not be treated as an enumerable literal path');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r4 (21): combined `git add `pwd`/internal/engine/evil.go && git commit` is DENIED (backtick command substitution)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add `pwd`/internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'backtick substitution must not be treated as an enumerable literal path');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r4 (22): combined `git add $(pwd)/internal/engine/evil.go && git commit` is DENIED ($(...) command substitution, path does not surface as a literal token)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add $(pwd)/internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, '$(...) substitution must not be treated as an enumerable literal path');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r4 (23) CONTROL: a genuinely non-code-bearing docs/ path with NO shell-expansion characters is still ALLOWED (no over-block)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add docs/notes.md && git commit -m "docs update, no tag needed"');
+    assert.equal(r.denied, false, 'ordinary bare path must stay enumerable');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// BUG-332 r4 (Bill's own probe, same family the attacker named): tilde
+// expansion. `~/...` (or `~user/...`) is rewritten to an absolute path by the
+// shell BEFORE git sees it, and the unexpanded token is classified as a simple
+// literal path that never matches the enforced-dir prefix — verified live
+// (denied:false) against the real guard pre-fix. Closed with a WORD-INITIAL
+// rule so a mid-word `~` (e.g. a literal `backup~.md` filename) stays
+// enumerable and does not over-block.
+
+test('BUG-332 r4 (24) EXACT REPRO: combined `git add ~/internal/engine/evil.go && git commit` is DENIED (tilde expansion)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git add ~/internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, '~/ expansion must not be treated as an enumerable literal path');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i, 'deny must name the ambiguous-add / fail-closed posture');
+  });
+});
+
+test('BUG-332 r4 (25) CONTROL: a mid-word `~` in a literal docs filename is still ALLOWED (word-initial rule does not over-block)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'backup~.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add docs/backup~.md && git commit -m "docs update, no tag needed"');
+    assert.equal(r.denied, false, '~ mid-word is literal, not tilde expansion — must stay enumerable');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r5 (REJECT findings, attacker a4eb859218dbd0b83) — cwd redirection
+// and inline aliases defeat the combined add+commit gate.
+//   Finding 1: a `cd`/`pushd`/`popd` BEFORE the add, or a `git -C <dir>` on
+//   the add's own invocation, shifts the base real git resolves relative
+//   paths against. The guard resolves from ITS cwd, so `cd internal/engine &&
+//   git add evil.go && git commit -m "docs: tidy"` silently committed
+//   internal/engine/evil.go with zero verdict (proven end-to-end). Adjacent
+//   shape closed in the same round: an ABSOLUTE add path
+//   (`C:/.../internal/engine/evil.go`) never matches the enforced-dir prefix
+//   → also silent ALLOW (Bill's own live probe).
+//   Finding 2: findGitAddInvocations passed a fresh Set() to resolveAlias,
+//   discarding the invocation's inline `-c alias.*` overrides, so an aliased
+//   `git add` was invisible and only the bare trailing `git commit` against an
+//   empty index was seen → silent ALLOW. Persistent aliases were already
+//   caught; the hole was specifically the discarded inline overrides.
+// Each is now the ambiguous-add / enforced-path class → fail-closed DENY.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r5 (26) EXACT REPRO: combined `cd internal/engine && git add evil.go && git commit` is DENIED (cwd redirection)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'cd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a cd-shifted relative add must not be treated as enumerable from the guard cwd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i, 'deny must name the ambiguous-add / fail-closed posture');
+  });
+});
+
+test('BUG-332 r5 (27) EXACT REPRO: combined `git -C internal/engine add evil.go && git commit` is DENIED (git -C cwd shift)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git -C internal/engine add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a git -C add must not be treated as enumerable from the guard cwd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r5 (28): combined `git add <absolute path to internal/...>` is DENIED (absolute-path add, Bill probe)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const abs = path.join(dir, 'internal', 'engine', 'evil.go').replace(/\\/g, '/');
+    const r = runGuard(dir, `git add ${abs} && git commit -m "docs: tidy"`);
+    assert.equal(r.denied, true, 'an absolute add path must not be classified against the enforced set without repo-root knowledge');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r5 (29): combined `pushd internal/engine && git add evil.go && git commit` is DENIED (pushd cwd shift)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'pushd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a pushd-shifted relative add must not be treated as enumerable');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r5 (30) EXACT REPRO: inline `-c alias.ad="add internal/engine/evil.go" ad && git commit` is DENIED (inline alias carries the add)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git -c alias.ad="add internal/engine/evil.go" ad && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'an inline-aliased add must resolve like the plain spelling');
+    // The add is found, but its path is inside the ALIAS VALUE (unenumerable
+    // from the command text) → the guard fails closed via the ambiguous route.
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i, 'embedded alias path cannot be enumerated → ambiguous deny');
+  });
+});
+
+test('BUG-332 r5 (31) EXACT REPRO: inline `-c alias.ad="add" ad internal/engine/evil.go && git commit` is DENIED (inline alias + arg)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'git -c alias.ad="add" ad internal/engine/evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'an inline-aliased add with a trailing arg must resolve like the plain spelling');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r5 (32) CONTROL: lowercase `-c` config (not -C dir) on a docs add is still ALLOWED (the -C detector does not over-block config)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git -c core.quotepath=false add docs/notes.md && git commit -m "docs update, no tag needed"');
+    assert.equal(r.denied, false, '-c config must not trip the -C directory-shift detector');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r6 (r5 REJECT, attacker a4eb859218dbd0b83) — cwd-redirection word
+// gaps + eval/iex wrapper re-scan.
+//   The r5 `cd|pushd|popd` word list and `(?:^|[;&|(\n])` boundary anchor were
+//   trivially sidestepped by: `chdir` (cmd/bash), PowerShell `Set-Location` /
+//   its `sl` alias (also recognized in lowercase / mixed case via /i),
+//   `cd` nested in `for/while…do` and `if…then` bodies, `{ … }` brace groups,
+//   and `eval "…"` / `iex "…"` wrappers that run their string argument as a
+//   command (hidden verbs the scanner never descended into). Each is now the
+//   ambiguous-add / enforced-path class → fail-closed DENY.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r6 (33) F1: `for … do cd $d; git add evil.go` is DENIED (cd in loop body)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'for d in internal/engine; do cd $d; git add evil.go; git commit -m "docs: tidy"; done');
+    assert.equal(r.denied, true, 'a cd nested in a for…do body still shifts the base git resolves paths against');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (34) F2: `while …; do cd $d; git add evil.go` is DENIED (cd in while body)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'd=internal/engine; while [ -n "$d" ]; do cd $d; d=""; git add evil.go; git commit -m "x"; done');
+    assert.equal(r.denied, true, 'a cd nested in a while…do body must not be treated as enumerable from the guard cwd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (35) F3: PowerShell `Set-Location` before the add is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'Set-Location internal/engine; git add evil.go; git commit -m "x"');
+    assert.equal(r.denied, true, 'a Set-Location cwd shift must be treated like cd (fail-closed)');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (36) F4: PowerShell `sl` alias before the add is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'sl internal/engine; git add evil.go; git commit -m "x"');
+    assert.equal(r.denied, true, 'the sl alias of Set-Location must be treated like cd (fail-closed)');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (37) F5: `chdir` before the add is DENIED (cmd/bash alias of cd)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'chdir internal/engine; git add evil.go; git commit -m "x"');
+    assert.equal(r.denied, true, 'chdir is a real cwd change and must be treated like cd (fail-closed)');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (38) F6: `powershell -Command "Set-Location …; git add evil.go; git commit"` is DENIED (inner cwd shift)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'powershell -Command "Set-Location internal/engine; git add evil.go; git commit -m \\"x\\""');
+    assert.equal(r.denied, true, 'Set-Location inside the already-extracted -Command body must make the inner add ambiguous');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (39) F7: `eval "git add internal/engine/evil.go && git commit"` is DENIED (hidden verbs in eval body)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'eval "git add internal/engine/evil.go && git commit -m \\"docs: tidy\\""');
+    assert.equal(r.denied, true, 'the eval body is real command text and its enforced-path add must be denied');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r6 (40) CONTROL: a cd AFTER the add, and a cd only inside a -m message, must NOT over-block a docs add', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'git add docs/notes.md && cd docs && git commit -m "cd is a shell builtin, not a cwd shift of the add"');
+    assert.equal(r.denied, false, 'a cwd change AFTER the add must not make the add ambiguous');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-332 r6 (41): `if x; then cd y; git add evil.go` is DENIED (cd in then body)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'if [ -d internal/engine ]; then cd internal/engine; git add evil.go; git commit -m "x"; fi');
+    assert.equal(r.denied, true, 'a cd in an if…then body still shifts the base git resolves paths against');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r7 (r6 REJECT, attacker a4eb859218dbd0b83) — the structural
+// tokenizer. The r6 word-list/boundary-anchor regex was the flaw itself
+// ("a regex is not a shell parser", ASM-350): reserved words (`else`, `!`,
+// `if`, `while`), prefix builtins (`builtin`, `command`, `time`, `exec`),
+// env-prefix assignments (`X=1`), and quote-splitting (`c"d"` → `cd`,
+// `g"it"` → `git`) all start a command OUTSIDE the `(?:^|[;&|(\n{}])`
+// boundary class. CWD_CHANGE_CMD_RE is DELETED; cwd detection now derives
+// from authorGuard.scanShellWords() — ONE lexer that answers which words are
+// real commands, dequoted how, at what subshell depth. Each spelling below
+// is now the ambiguous-add class → fail-closed DENY. F14 is the CONTROL: a
+// `cd` inside `$(...)` lives at a deeper subshell depth than a top-level add
+// and must NOT make it ambiguous.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r7 (42) F1: `if cd internal/engine; then git add evil.go` is DENIED (cd in if condition)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'if cd internal/engine; then git add evil.go && git commit -m "docs: tidy"; fi');
+    assert.equal(r.denied, true, 'a cd in an if condition shifts the base git resolves paths against');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (43) F2: `else cd internal/engine; git add evil.go` is DENIED (cd in else body)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'if false; then :; else cd internal/engine; git add evil.go && git commit -m "docs: tidy"; fi');
+    assert.equal(r.denied, true, 'a cd after an else keyword is a real command and must shift the add base');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (44) F3: `! cd internal/engine && git add evil.go` is DENIED (! negation still runs cd)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, '! cd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, '! cd still executes cd; the add base shifts');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (45) F4: `builtin cd internal/engine && git add evil.go` is DENIED (builtin prefix)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'builtin cd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'the builtin prefix still runs cd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (46) F5: `command cd internal/engine && git add evil.go` is DENIED (command prefix)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'command cd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'the command prefix still runs cd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (47) F6: `X=1 cd internal/engine && git add evil.go` is DENIED (env-prefix assignment)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'X=1 cd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'an env-prefix assignment before cd still runs cd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (48) F7: `time cd internal/engine && git add evil.go` is DENIED (time wrapper)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'time cd internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'time cd still executes cd');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (49) F8: `c"d" internal/engine && git add evil.go` is DENIED (quote-split cd)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'c"d" internal/engine && git add evil.go && git commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a quote-split cd token is still the cd command');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (50) F9: `while cd internal/engine; do git add evil.go` is DENIED (cd in while condition)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'while cd internal/engine; do git add evil.go && git commit -m "docs: tidy"; done');
+    assert.equal(r.denied, true, 'a cd in a while condition shifts the add base');
+    assert.match(r.reason, /ambiguous|BUG-224|split|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r7 (51) F13a: quote-split `g"it" add internal/engine/evil.go && g"it" commit` is DENIED (git token unrecognisable to the regex)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'g"it" add internal/engine/evil.go && g"it" commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'a quote-split git token must be recognised as a real git invocation');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|ambiguous|BUG-224|split/i);
+  });
+});
+
+test('BUG-332 r7 (52) F13b: a PRE-STAGED code file committed via `g"it" commit` is DENIED (the r6 total-bypass vector)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
+    const r = runGuard(dir, 'g"it" commit -m "docs: tidy"');
+    assert.equal(r.denied, true, 'the commit gate must fire on a quote-split git token');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r16 (53) F14 CONTROL — SUPERSEDED by the AARON structural allowlist: `$(cd /tmp && pwd) > /dev/null; git add docs/notes.md && git commit` now DENIES fail-closed (it carries `$(...)` + redirection — the r7 "subshell cd is benign" control is collapsed by the strict allowlist, which proceeds on ZERO shell indirection anywhere in the command; a false-positive deny is recoverable, a false-negative allow is the hole)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, '$(cd /tmp && pwd) > /dev/null; git add docs/notes.md && git commit -m "docs, subshell cd only"');
+    assert.equal(r.denied, true, '`$(...)` and redirection are shell indirection → the AARON allowlist denies fail-closed regardless of how benign the substitution is');
+    assert.match(r.reason, /shell indirection|structural allowlist|AARON RULING/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r8 (r7 REJECT, attacker a70e40f847ad58b41) — the subprocess-prefix
+// arg-run model. r7's CRITICAL finding was a TOTAL bypass of the whole guard
+// class: the prefix-wrapper family (sudo/doas/nice/stdbuf/setsid/xargs/
+// timeout/env/nohup) was absent from SHELL_PREFIX_WORDS, so in `sudo bash -c
+// "cd internal/engine && git add evil.go && git commit -m 'docs: tidy'"` the
+// prefix word stole commandStart and the shell wrapper (`bash`) fell to
+// ARGUMENT position — wrapperBodiesFromWords never descended into the body, so
+// the inner git add+commit were invisible and the code-bearing commit was
+// ALLOWED with zero verdict. r8 marks every word of a subprocess prefix's
+// argument run `inPrefixArgs` and still extracts the run-string of a shell
+// wrapper word found there. Each family member (plus value-taking flag
+// variants: `sudo -n`, `env -i`, `nice -n 10`, `timeout 10`) now DENIES;
+// F15g is the CONTROL proving a wrapper word as a plain argument to a
+// NON-prefix command (`echo bash -c "…"`) does NOT over-block.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r8 (54) F15a: `sudo bash -c "cd internal/engine && git add evil.go && git commit"` — the r7 attacker\'s EXACT repro — is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'sudo bash -c "cd internal/engine && git add evil.go && git commit -m \'docs: tidy\'"');
+    assert.equal(r.denied, true, 'the subprocess-prefix run-string is real command text — the enforced-path add must be fail-closed denied');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r8 (55) F15a2: path-prefixed and combined-flag shell spellings are DENIED (r8 self-audit gaps)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'sudo /bin/bash -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo /usr/bin/bash -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo /bin/sh -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo bash -lc "git add internal/engine/evil.go && git commit -m \'x\'"',
+      's"udo" bash -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a path-named or combined-flag shell must still execute its run-string: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r8 (56) F15b: `sudo -n bash -c "…git add evil.go…"` — a flag between prefix and shell — is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'sudo -n bash -c "cd internal/engine && git add evil.go && git commit -m \'docs: tidy\'"');
+    assert.equal(r.denied, true, 'the -n flag must not hide the run-string (command position is the prefix\'s argument run)');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r8 (57) F15c: `env -i bash -c "…"` and `env -u VAR bash -c "…"` are DENIED (env with flags)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'env -i bash -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'env -u HOME bash -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `an env flag must not hide the run-string: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r8 (58) F15d: `doas nice -n 10 bash -c "…"` — chained prefixes with a flag-value — is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'doas nice -n 10 bash -c "git add internal/engine/evil.go && git commit -m \'x\'"');
+    assert.equal(r.denied, true, 'chained subprocess prefixes each use the argument-run model — the shell wrapper still executes its body');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r8 (59) F15e: `sudo powershell -Command "git add evil.go; git commit"` is DENIED (subprocess-prefix pwsh)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'sudo powershell -Command "git add internal/engine/evil.go; git commit -m \'x\'"');
+    assert.equal(r.denied, true, 'a powershell wrapper inside a subprocess-prefix argument run still executes its -Command body');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r8 (60) F15f: `sudo eval "git add evil.go && git commit"` is DENIED (subprocess-prefix eval)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'sudo eval "git add internal/engine/evil.go && git commit -m \'x\'"');
+    assert.equal(r.denied, true, 'an eval body inside a subprocess-prefix argument run is real command text');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r8 (61) F15g CONTROL: `echo bash -c "git add internal/engine/evil.go"` — the wrapper word is an echo ARGUMENT, never executed — is NOT denied', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'echo bash -c "git add internal/engine/evil.go"');
+    assert.equal(r.denied, false, 'echo merely prints its arguments — a bash word there is not a wrapper and must not over-block');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r9 (r8 REJECT, attacker aafe8e49df2df3cb9) — F1-F5. Four CRITICAL
+// total-bypass classes survived the r8 subprocess-prefix model: F1 an
+// unlisted shell name (`sudo ash -c "…"` — isShellExecutableWord was a closed
+// list), F2 a short-flag cluster CONTAINING `c` but not ending in it (`bash
+// -ci`/`-icf`/`-lci` — bash executes all as `-c`), F3 value-taking flags
+// parked between the shell and the run flag (`bash -O extglob -c "…"`, `-o
+// noclobber`, `--rcfile x`, `--init-file x`), and F4 a heredoc body fed to a
+// shell (`sudo bash <<'EOF' … EOF`) — buildQuoteMask masks the body opaque, so
+// the git verbs inside were never scanned. Plus one over-block: F5
+// `builtin cd /tmp && git add docs/notes.md && git commit` was DENIED though
+// an absolute cd OUTSIDE the repo root cannot stage a repo file — the docs-
+// control the brief demands. F16a-d prove the four bypass classes now DENY;
+// F16e-g prove the cd-path fix ALLOWS absolute-outside-repo docs control and
+// still DENIES relative (unknown-base) cds.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r9 (62) F16a (F1): `sudo ash -c "cd internal/engine && git add evil.go && git commit"` is DENIED (unlisted shell)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, 'sudo ash -c "cd internal/engine && git add evil.go && git commit -m \'docs: tidy\'"');
+    assert.equal(r.denied, true, 'an unlisted shell still executes its -c run-string — the enforced-path add must be fail-closed denied');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r9 (63) F16b (F2): `sudo bash -ci "git add evil.go && git commit"` is DENIED (cluster containing c)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'sudo bash -ci "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo bash -icf "git add internal/engine/evil.go && git commit -m \'x\'"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a short-flag cluster containing c is a run flag: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r9 (64) F16c (F3): `sudo bash -O extglob -c "git add evil.go && git commit"` is DENIED (value-taking flag before -c)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'sudo bash -O extglob -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo bash -o noclobber -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo bash --rcfile x -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+      'sudo bash --init-file x -c "git add internal/engine/evil.go && git commit -m \'x\'"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a value-taking flag+value cannot hide the later -c: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r9 (65) F16d (F4): `sudo bash <<EOF … git add evil.go … git commit … EOF` is DENIED (shell-fed heredoc body)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, "sudo bash <<'EOF'\ncd internal/engine\ngit add evil.go\ngit commit -m 'docs: tidy'\nEOF");
+    assert.equal(r.denied, true, 'a heredoc body fed to a shell is executed command text — the enforced-path add must be fail-closed denied');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r9 (66) F16e (F5): `builtin cd /tmp && git add docs/notes.md && git commit` is NOT denied (absolute cd outside the repo is a known base — the docs-control)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'builtin cd /tmp && git add docs/notes.md && git commit -m "docs, cd to absolute outside-repo path"');
+    assert.equal(r.denied, false, 'an absolute cd OUTSIDE the repo root cannot stage a repo file — docs control must not be ambiguous-denied');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-332 r9 (67) F16f (F5): `cd C:\\Windows\\Temp && git add docs/notes.md && git commit` is NOT denied (Windows absolute drive path outside repo)', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'cd C:\\Windows\\Temp && git add docs/notes.md && git commit -m "docs, Windows absolute path outside repo"');
+    assert.equal(r.denied, false, 'a Windows absolute drive path outside the repo is a known base — must not be ambiguous-denied');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-332 r9 (68) F16g CONTROL (F5): a RELATIVE cd before the add is still ambiguous and DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'cd internal/engine && git add docs/notes.md && git commit -m "x"',
+      'cd /tmp && cd internal/engine && git add evil.go && git commit -m "x"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a relative (or last-relative) cd leaves the add base unknown: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r10 (r9 attacker F1/F4/F5): the three CRITICAL closures the r9 round
+// left open, fixed to the attacker's exact acceptance bar —
+// F16h  COMMAND-position shells the r9 class omitted (`osh`/`posh`/`nu`) and
+//       the applet dispatcher (`busybox ash -c`) DENY end-to-end.
+// F16i  shell-fed heredocs via `sudo -s`/`sudo -i`, `su`, and `cat <<EOF |
+//       bash` DENY end-to-end.
+// F16j  pipe-fed shell text (`echo "... git add evil.go ..." | bash`) DENY.
+// F16k  DOT-PATH cd at/under the repo root (`E:/git/./Metropolis/…`,
+//       `E:/git/../git/Metropolis/…`) DENY — the r9 bypass normalizeGitPath
+//       resolved but normalizeRepoPath did not.
+// F16l  CONTROL: a dot-path cd OUTSIDE the repo stays non-ambiguous — the
+//       docs-control still ALLOWS.
+// F16m  CONTROL: heredoc/pipe-fed text with NO shell target (heredoc to cat,
+//       pipe to grep, transforming emitter) is data and stays ALLOWED.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r10 (69) F16h (F1): COMMAND-position unlisted shells and the applet-dispatcher spelling are DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'osh -c "cd internal/engine && git add evil.go && git commit -m \'x\'"',
+      'posh -c "cd internal/engine && git add evil.go && git commit -m \'x\'"',
+      'nu -c "cd internal/engine && git add evil.go && git commit -m \'x\'"',
+      'busybox ash -c "cd internal/engine && git add evil.go && git commit -m \'x\'"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a command-position unlisted shell still executes its -c run-string: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r10 (70) F16i (F4a): heredocs fed via `sudo -s`/`sudo -i`, `su`, or a right-of-pipe shell are DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const cases = [
+      "sudo -s <<'EOF'\ncd internal/engine\ngit add evil.go\ngit commit -m 'x'\nEOF",
+      "sudo -i <<'EOF'\ncd internal/engine\ngit add evil.go\ngit commit -m 'x'\nEOF",
+      "su root <<'EOF'\ncd internal/engine\ngit add evil.go\ngit commit -m 'x'\nEOF",
+      "cat <<'EOF' | bash\ncd internal/engine\ngit add evil.go\ngit commit -m 'x'\nEOF",
+    ];
+    for (const cmd of cases) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a shell-fed heredoc body is executed command text: ${cmd.split('\n')[0]}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r10 (71) F16j (F4b): pipe-fed shell text `echo "... git add ..." | bash` is DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | bash");
+    assert.equal(r.denied, true, 'bash executes the verbatim-echoed text — the enforced-path add must be fail-closed denied');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r10 (72) F16k (F5): a DOT-PATH cd AT/UNDER the repo root is still ambiguous and DENIED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    // Derive the dot-path target from the repo root exactly as git reports it
+    // (the guard's repoRoot() IS the comparison base) — os.tmpdir() on this
+    // box hands out the 8.3 short-name form (AARONG~1) while git rev-parse
+    // resolves the long form, and a test target built from the 8.3 form would
+    // normalize to a DIFFERENT string than the guard's root. The real-repo
+    // attacker shape (E:/git/./Metropolis/…) has no such ambiguity.
+    const root = git(dir, ['rev-parse', '--show-toplevel']).replace(/\\/g, '/');
+    const parentOfRoot = path.posix.dirname(root);
+    const repoName = path.posix.basename(root);
+    const grand = path.posix.basename(parentOfRoot);
+    for (const cmd of [
+      `cd ${parentOfRoot}/./${repoName}/internal/engine && git add evil.go && git commit -m "x"`,
+      `cd ${parentOfRoot}/../${grand}/${repoName}/internal/engine && git add evil.go && git commit -m "x"`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a dot-path cd to the repo root must be ambiguous: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r10 (73) F16l CONTROL (F5): a DOT-PATH cd OUTSIDE the repo stays non-ambiguous — the docs-control still ALLOWS', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'docs', 'notes.md'), '# notes\n', 'utf8');
+    const r = runGuard(dir, 'cd C:/temp/../temp2 && git add docs/notes.md && git commit -m "docs, dotted absolute path outside repo"');
+    assert.equal(r.denied, false, 'a dotted absolute path outside the repo is still a known base — docs control must not be ambiguous-denied');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-332 r10 (74) F16m CONTROL (F4): heredoc/pipe-fed text with NO shell target is data and stays ALLOWED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      // heredoc to a NON-shell: cat reads it as data.
+      "cat <<'EOF'\ngit add evil.go\ngit commit -m 'x'\nEOF",
+      // pipe to a NON-shell target: grep is not a shell.
+      'echo "cd internal/engine && git add evil.go && git commit -m x" | grep foo',
+      // transforming emitter: grep's output (not its pattern) is what bash
+      // would receive — statically unknowable, an honest limitation.
+      "grep 'git add' internal/engine/evil.go | bash",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `no shell executes this text — must NOT be ambiguous-denied: ${cmd.split('\n')[0]}`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r11 (r10 attacker C1-C4 + MINOR-1): end-to-end DENY of each
+// newly-closed shell-feeding shape against the enforced-path git add —
+// F17a  subprocess-prefix pipe targets (`| sudo bash`, `| doas bash`,
+//       `| sudo -s`) — the r10 attacker's CRITICAL-2 live proof.
+// F17b  `xargs -I{} bash -c "{}"` placeholder substitution (CRITICAL-3).
+// F17c  passthrough filters walked to the verbatim emitter (`| cat | bash`,
+//       `| tee | bash`, `| sed '' | bash`) (CRITICAL-4).
+// F17d  CONTROLs — xargs WITHOUT -I (input becomes ARGUMENTS), transforming
+//       emitters, and non-shell targets stay ALLOWED.
+// F17e  constant `$()`/backtick emitters in wrapper run-strings DENY;
+//       data substitutions (`echo "$(...)"`) stay ALLOWED (MINOR-1).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r11 (75) F17a (C2): subprocess-prefix pipe targets are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | sudo bash",
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | doas bash",
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | sudo -s",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the subprocess-prefix shell executes the piped text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r11 (76) F17b (C3): `xargs -I{} bash -c "{}"` placeholder substitution is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | xargs -I{} bash -c \"{}\"");
+    assert.equal(r.denied, true, 'xargs substitutes each piped line into the run-string — the enforced-path add is denied');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r11 (77) F17c (C4): passthrough filters (`cat`, `tee`, `sed ""`) are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | cat | bash",
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | tee /dev/null | bash",
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | sed '' | bash",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the passthrough still delivers the verbatim text to the shell: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r11 (78) F17d CONTROL (C2/C3/C4): xargs without -I, transforming emitters, and non-shell targets stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      // xargs WITHOUT -I turns the input into ARGUMENTS (a script filename).
+      'echo "git add evil.go" | xargs bash',
+      // transforming emitters — output statically unknowable.
+      'echo "git add evil.go" | grep foo | bash',
+      "grep 'git add' internal/engine/evil.go | bash",
+      // non-shell pipe target.
+      'echo "git add evil.go" | grep git',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `no shell executes this text — must NOT be ambiguous-denied: ${cmd.split('\n')[0]}`);
+    }
+  });
+});
+
+test('BUG-332 r11 (79) F17e (MINOR-1): constant `$()` emitters in run-strings DENY; data substitutions ALLOW', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    // Constant emitter: bash runs printf, then executes its output.
+    const deny = "bash -c \"$(printf 'cd internal/engine && git add evil.go && git commit -m x')\"";
+    const rDeny = runGuard(dir, deny);
+    assert.equal(rDeny.denied, true, 'the constant substitution output is executed command text');
+    assert.match(rDeny.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    // Data substitution: echo prints the text, never executes it.
+    const allow = "echo \"$(printf 'cd internal/engine && git add evil.go && git commit -m x')\"";
+    const rAllow = runGuard(dir, allow);
+    assert.equal(rAllow.denied, false, 'an echo argument substitution prints DATA, not commands');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r12 (r11 attacker NEW-1..NEW-4): end-to-end DENY of the four
+// r12-close shapes against the enforced-path git add —
+// F18a  herestring `<<<` operands fed to a shell (`bash <<<`, `sudo bash <<<`,
+//       `sudo -s <<<`) (NEW-1); `cat <<<` stays DATA.
+// F18b  `xargs -I {}` SPACE-separated placeholder (NEW-2); non-shell `-I {}`
+//       targets stay ALLOWED.
+// F18c  GNU `xargs --replace[=STR]` long form (NEW-3); the space-separated
+//       `--replace STR` form is NOT a substitution (empirically it executes
+//       `STR` as argv[0]) and stays ALLOWED.
+// F18d  constant `%s` printf emitters in run-strings DENY; echo DATA stays
+//       ALLOWED (NEW-4).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r12 (80) F18a (NEW-1): shell-fed herestring `<<<` operands are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "bash <<< \"cd internal/engine && git add evil.go && git commit -m 'x'\"",
+      "sudo bash <<< \"cd internal/engine && git add evil.go && git commit -m 'x'\"",
+      "sudo -s <<< \"cd internal/engine && git add evil.go && git commit -m 'x'\"",
+      'sudo -i bash <<< "cd internal/engine && git add evil.go && git commit -m x"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the shell executes the herestring operand as command text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // DATA herestring: cat reads the operand, never executes it.
+    const allow = 'cat <<< "cd internal/engine && git add evil.go"';
+    const rAllow = runGuard(dir, allow);
+    assert.equal(rAllow.denied, false, 'a herestring fed to cat is DATA, not commands');
+  });
+});
+
+test('BUG-332 r12 (81) F18b (NEW-2): `xargs -I {}` spaced placeholder is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | xargs -I {} bash -c \"{}\"");
+    assert.equal(r.denied, true, 'spaced -I {} still substitutes the piped text into the run-string');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    // NON-SHELL -I targets: the substituted text is an ARGUMENT, never executed.
+    for (const cmd of [
+      'echo "git add evil.go" | xargs -I {} grep {}',
+      'echo "git add evil.go" | xargs -I {} rm {}',
+    ]) {
+      const rAllow = runGuard(dir, cmd);
+      assert.equal(rAllow.denied, false, `grep/rm receives the text as an argument: ${cmd}`);
+    }
+  });
+});
+
+test('BUG-332 r12 (82) F18c (NEW-3): `xargs --replace[=STR]` long form is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | xargs --replace=C bash -c \"C\"",
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | xargs --replace bash -c \"{}\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `--replace[=STR] substitutes the piped text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // SPACE-separated --replace STR is NOT a substitution (GNU optional
+    // argument; empirically `xargs --replace CMD bash -c "CMD"` executes
+    // `CMD` as argv[0], printing a cmd banner) — so no placeholder exists.
+    const allow = "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | xargs --replace CMD bash -c \"CMD\"";
+    const rAllow = runGuard(dir, allow);
+    assert.equal(rAllow.denied, false, 'spaced --replace STR is not a substitution');
+  });
+});
+
+test('BUG-332 r12 (83) F18d (NEW-4): constant `%s` printf emitters DENY; echo DATA ALLOW', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "bash -c \"$(printf '%s\\n' 'cd internal/engine && git add evil.go && git commit -m x')\"",
+      "sh -c \"$(printf '%s %s' 'cd internal/engine && git add evil.go && git commit -m' 'x')\"",
+      "bash -c \"$(printf '%s%%' 'cd internal/engine && git add evil.go && git commit -m x')\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the constant printf output is executed command text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // DATA: echo prints printf output, never executes it.
+    const allow = "echo \"$(printf '%s\\n' 'cd internal/engine && git add evil.go')\"";
+    const rAllow = runGuard(dir, allow);
+    assert.equal(rAllow.denied, false, 'an echo printf substitution prints DATA, not commands');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r13 (r12 attacker NEW-A..NEW-D): end-to-end DENY of the four
+// r13-close shapes against the enforced-path git add —
+// F19a  herestring operand through a PASSTHROUGH pipe into a shell
+//       (`cat <<< "…" | bash`); the piped-to-NON-shell form stays ALLOWED.
+// F19b  xargs placeholder EMBEDDED in a larger run-string
+//       (`bash -c "{} && echo harmless"`).
+// F19c  `%b`/`%*s`/`%-s` printf conversions that PRESERVE the payload; a
+//       precision that truncates the payload away stays ALLOWED.
+// F19d  constant `$()` substitution as the herestring OPERAND
+//       (`bash <<< "$(printf …)"`).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r13 (84) F19a (NEW-A): herestring operands through a passthrough pipe into a shell are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "cat <<< \"cd internal/engine && git add evil.go && git commit -m 'x'\" | bash",
+      "tee <<< 'cd internal/engine && git add evil.go && git commit -m x' | bash",
+      "sed '' <<< 'cd internal/engine && git add evil.go && git commit -m x' | sh",
+      "cat <<< \"cd internal/engine && git add evil.go && git commit -m x\" | sudo bash",
+      "cat <<< \"cd internal/engine && git add evil.go && git commit -m x\" | xargs -I{} bash -c \"{}\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the shell executes the herestring operand through the passthrough pipe: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // The guard's contract is COMMIT-SCOPED (BUG-224): a pipe-to-shell that
+    // only STAGES an enforced-path file (no `git commit` verb in the operand)
+    // is out of scope — the same way a bare `git add internal/engine/evil.go`
+    // is allowed — because the eventual commit still reads `git diff --cached`
+    // and denies the enforced-path file then. Assert that honestly, both here
+    // and in F19d, so these never regress into a silent staging bypass:
+    for (const stagingOnly of [
+      "cat <<< \"cd internal/engine && git add evil.go\" | sudo bash",
+      "cat <<< \"cd internal/engine && git add evil.go\" | xargs -I{} bash -c \"{}\"",
+      "tee <<< 'cd internal/engine && git add evil.go' | bash",
+    ]) {
+      const rStage = runGuard(dir, stagingOnly);
+      assert.equal(rStage.denied, false, `staging-only pipe-to-shell is outside the commit-scoped contract: ${stagingOnly}`);
+    }
+    // pipe target is NOT a shell — grep transforms the operand as data.
+    const allow = "cat <<< \"cd internal/engine && git add evil.go\" | grep foo";
+    const rAllow = runGuard(dir, allow);
+    assert.equal(rAllow.denied, false, 'a non-shell pipe target receives the operand as data');
+  });
+});
+
+test('BUG-332 r13 (85) F19b (NEW-B): xargs placeholder EMBEDDED in a larger run-string is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const r = runGuard(dir, "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" | xargs -I{} bash -c \"{} && echo harmless\"");
+    assert.equal(r.denied, true, 'the embedded placeholder still substitutes the piped text into a command position');
+    assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r13 (86) F19c (NEW-C): `%b`/`%*s`/`%-s` printf conversions preserving the payload DENY end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "bash -c \"$(printf '%b\\n' 'cd internal/engine && git add evil.go && git commit -m x')\"",
+      "bash -c \"$(printf '%*s' 3 'cd internal/engine && git add evil.go && git commit -m x')\"",
+      "bash -c \"$(printf '%-s' 'cd internal/engine && git add evil.go && git commit -m x')\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the same-output printf is executed command text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+test('BUG-332 r13 (87) F19d (NEW-D): constant `$()` substitutions as herestring operands DENY end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "bash <<< \"$(printf '%s\\n' 'cd internal/engine && git add evil.go && git commit -m x')\"",
+      "bash <<< \"$(echo 'cd internal/engine && git add evil.go && git commit -m x')\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the operand's constant output is executed command text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // Staging-only constant operand (no `git commit` verb) is outside the
+    // guard's COMMIT-SCOPED contract — the eventual commit still sees the
+    // staged enforced-path file via `git diff --cached` and denies then. Same
+    // honest tripwire as F19a's staging-only controls:
+    const stageOnly = "bash <<< \"$(echo 'cd internal/engine && git add evil.go')\"";
+    const rStage = runGuard(dir, stageOnly);
+    assert.equal(rStage.denied, false, 'staging-only constant operand is outside the commit-scoped contract');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r14 (r13 attacker F1/F2/F3): end-to-end DENY of the three total
+// bypass classes the r13 independent attacker REJECTed on.
+// F20a  `|&` (stderr-merged) pipes — `echo "…" |& bash` never registered as a
+//       pipe target, so the piped text was never extracted.
+// F20b  UNESCAPED nested double quotes inside `$(…)` in a wrapper run-string
+//       (`bash -c "cat <<< '$(printf "%s\n" "…")' | bash"` and `eval "…"`) —
+//       the outer double-quote capture stopped at the first inner `"`, hiding
+//       the payload. The ESCAPED-inner-quote spelling is the attacker's own
+//       control and must STAY denied.
+// F20c  hex escapes in `printf %b` (`'\x67\x69\x74…'`) — evalBString kept them
+//       literal. The octal spelling stays a control (must STILL decode).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r14 (88) F20a (F1): `|&` (stderr-merged) pipes into a shell are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      "echo \"cd internal/engine && git add evil.go && git commit -m 'x'\" |& bash",
+      "printf '%s\\n' \"cd internal/engine && git add evil.go && git commit -m x\" |& bash",
+      "echo \"cd internal/engine && git add evil.go && git commit -m x\" |& xargs -I{} bash -c \"{}\"",
+      "echo \"cd internal/engine && git add evil.go && git commit -m x\" |& sudo bash",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the shell executes the |& piped text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // |& into a NON-shell target receives the text as data.
+    const allow = "echo \"cd internal/engine && git add evil.go && git commit -m x\" |& grep foo";
+    const rAllow = runGuard(dir, allow);
+    assert.equal(rAllow.denied, false, 'a |& pipe into a non-shell target is data, not command text');
+  });
+});
+
+test('BUG-332 r14 (89) F20b (F2): wrapper bodies with UNESCAPED nested double quotes inside `$(…)` are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    for (const cmd of [
+      'bash -c "cat <<< \'$(printf "%s\\n" "cd internal/engine && git add evil.go && git commit -m x")\' | bash"',
+      'eval "cat <<< \'$(printf "%s\\n" "cd internal/engine && git add evil.go && git commit -m x")\' | bash"',
+      'bash -c "echo \'$(printf "%s\\n" "cd internal/engine && git add evil.go && git commit -m x")\' | bash"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the nested-quote wrapper body is executed command text: ${cmd}`);
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+    // The r13 attacker's own control: the SAME body with the inner quotes
+    // ESCAPED (`\"`) must STAY denied — a regression here is a new bypass.
+    const escaped = 'bash -c "cat <<< \'$(printf \\"%s\\\\n\\" \\"cd internal/engine && git add evil.go && git commit -m x\\")\' | bash"';
+    const rEsc = runGuard(dir, escaped);
+    assert.equal(rEsc.denied, true, 'the escaped-inner-quote control must stay denied');
+  });
+});
+
+test('BUG-332 r14 (90) F20c (F3): hex-encoded payloads in `printf %b` are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const hex = payload.split('').map((c) => '\\x' + c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+    const octal = payload.split('').map((c) => '\\' + c.charCodeAt(0).toString(8).padStart(3, '0')).join('');
+    for (const cmd of [
+      `bash <<< "$(printf '%b' '${hex}')"`,
+      `bash -c "$(printf '%b' '${hex}')"`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the hex-encoded payload is executed command text: ${cmd}`);
+      // BUG-332 r16 (AARON structural allowlist): these are denied fail-closed
+      // by whichever recognition layer fires first — pre-r16 the escaped
+      // payload surfaced a commit that the verdict flow denied (no [mkey] tag);
+      // post-r16 the structural layer denies it as `bash`-wrapper indirection
+      // before the verdict flow ever runs. The invariant is the DENY.
+      assert.match(r.reason, /ambiguous|BUG-224|split|no.*BOW.*tag|NO \[mkey\]|indirection|shell|decoder|BUG-332/i);
+    }
+    // The octal spelling (already decoded since r12) must STAY denied — the
+    // hex fix must not regress the existing escape processing.
+    const rOct = runGuard(dir, `bash -c "$(printf '%b' '${octal}')"`);
+    assert.equal(rOct.denied, true, 'the octal-encoded payload must stay denied');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r15 (r14 attacker): deterministic decoder pipes — `echo '<b64>' |
+// base64 -d | bash` — end-to-end DENY
+// ---------------------------------------------------------------------------
+// The r14 independent attacker REJECTed the estate on a fresh total-bypass
+// class: a KNOWN DETERMINISTIC DECODER stage between a shell and the text
+// that feeds it. `base64 -d`, `base64 --decode`, `xxd -r -p`, `openssl
+// base64 -d`, `b64 -d` all have stdout that is a pure function of stdin, so
+// the guard could statically decode the constant operand — it instead FAILS
+// CLOSED at RECOGNITION (the raw command has NO git verb, so the commit check
+// would otherwise ALLOW it silently). The r15 acceptance bar is exactly these
+// spellings: every one must DENY, and the data-dependent / no-shell controls
+// must stay ALLOWED.
+
+test('BUG-332 r15 (91) F21a (r14 attacker): the six proven decoder-pipe spellings are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    const hex = Buffer.from(payload, 'utf8').toString('hex');
+    for (const cmd of [
+      `echo '${b64}' | base64 -d | bash`,
+      `base64 -d <<< '${b64}' | bash`,
+      `printf '%s' '${b64}' | base64 -d | bash`,
+      `echo '${b64}' | base64 --decode | bash`,
+      `echo '${hex}' | xxd -r -p | bash`,
+      `echo '${b64}' | openssl base64 -d | bash`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the decoded payload is executed command text: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64|xxd|openssl/i);
+    }
+  });
+});
+
+test('BUG-332 r15 (92) F21b: sibling decoder routes (b64/base32/heredoc/sudo/xargs/|&/nested wrapper) are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | b64 -d | bash`,
+      `echo '${b64}' | base32 -d | bash`,
+      `cat <<EOF | base64 -d | bash\n${payload}\nEOF`,
+      `echo '${b64}' | base64 -d | sudo bash`,
+      `echo '${b64}' | base64 -d | xargs -I{} bash -c "{}"`,
+      `echo '${b64}' | base64 -d |& bash`,
+      `sudo base64 -d <<< '${b64}' | bash`,
+      `bash -c "echo '${b64}' | base64 -d | bash"`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the sibling decoder route is executed command text: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64|xxd|openssl/i);
+    }
+  });
+});
+
+test('BUG-332 r15 (93) F21c CONTROL: data-dependent transforms, encode-mode base64, and no-shell pipes stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | base64 -d | grep foo`,      // decoder into a NON-shell — data
+      `echo '${payload}' | base64 | bash`,          // ENCODE mode — output is base64 text
+      `echo '${b64}' | base64 -d`,                  // decoder, no shell after
+      `base64 -d <<< '${b64}'`,                     // decoder, no pipe-right shell
+      `cat <<EOF | grep foo\n${payload}\nEOF`,      // transforming pipe-right
+      `echo '${payload}' | grep foo`,               // no shell target
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `this command has no decoder-fed shell: ${cmd}`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r16 (r15 attacker F1–F8): the REJECT's 8 NEW total-bypass classes,
+// end-to-end. Every class's proven spelling must DENY; the encode-mode / file-
+// operand / fixed-program / echo-arg controls must stay ALLOWED.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r16 (94) F22a (F1): clustered short decode flags are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | base64 -di | bash`,
+      `echo '${b64}' | base32 -di | bash`,
+      `echo '${b64}' | base64 -dix | bash`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `clustered flags are the same decode: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64|base32/i);
+    }
+  });
+});
+
+test('BUG-332 r16 (95) F22b (F2): openssl `enc -a -d` short-form base64 is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | openssl enc -a -d | bash`,
+      `echo '${b64}' | openssl enc -d -a | bash`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `openssl -a marks base64 mode: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|openssl/i);
+    }
+  });
+});
+
+test('BUG-332 r16 (96) F22c (F3): env-prefix wrappers before the decoder are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `X=1 base64 -d <<< '${b64}' | bash`,
+      `FOO=x echo '${b64}' | base64 -d | bash`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the env assignment is a prefix wrapper: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64/i);
+    }
+  });
+});
+
+test('BUG-332 r16 (97) F22d (F4): stdin-fed decompressors are DENIED end-to-end; a file operand stays ALLOWED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | base64 -d | gzip -d | bash`,
+      `echo '${b64}' | base64 -d | xz -d | bash`,
+      `echo '${b64}' | base64 -d | gunzip | bash`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the decompressor emits decoded bytes to the pipe: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|gzip|xz/i);
+    }
+    const fileOperand = runGuard(dir, `gzip -d file.gz | bash`);
+    assert.equal(fileOperand.denied, false, 'a file operand writes to a file — nothing piped to the shell');
+  });
+});
+
+test('BUG-332 r16 (98) F22e (F5): bare `xargs sh -c` — the piped line IS the program — is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    const dec = runGuard(dir, `echo '${b64}' | base64 -d | xargs sh -c`);
+    assert.equal(dec.denied, true, 'the DECODED line becomes the -c program');
+    const plain = runGuard(dir, `echo '${payload}' | xargs sh -c`);
+    assert.equal(plain.denied, true, 'the plaintext piped line IS the command string');
+    const fixed = runGuard(dir, `echo '${payload}' | xargs sh -c 'echo hi'`);
+    assert.equal(fixed.denied, false, 'a FIXED program makes stdin the ARGUMENTS, not command text');
+  });
+});
+
+test('BUG-332 r16 (99) F22f (F6): command-position command substitutions ending in a decoder are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `bash -c "$(echo '${b64}' | base64 -d)"`,
+      `$(echo '${b64}' | base64 -d) | bash`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the substitution output is decoded bytes a shell executes: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64/i);
+    }
+    const echoArg = runGuard(dir, `echo "$(echo '${b64}' | base64 -d)"`);
+    assert.equal(echoArg.denied, false, 'a substitution in an echo argument prints data — never executed');
+  });
+});
+
+test('BUG-332 r16 (100) F22g (F7): real backslash-newline continuations are DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | base64 -d |\\\nbash`,
+      `echo '${b64}' | base64 -d | \\\nbash`,
+      `echo '${b64}' | base64 -d |\\\nxargs sh -c`, // entangled: the bs-LF then xargs ALLOW was F5
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `the continuation is one real pipe chain: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64/i);
+    }
+  });
+});
+
+test('BUG-332 r16 (101) F22h (F8): the PowerShell base64 command surface is DENIED end-to-end', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | iex`,
+      `powershell -EncodedCommand ${b64}`,
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `PowerShell base64-decodes and executes: ${cmd}`);
+      assert.match(r.reason, /BUG-332|decoder|base64|powershell|iex/i);
+    }
+  });
+});
+
+test('BUG-332 r16 (102) F22i CONTROL: encode mode, file operands, fixed xargs programs, and echo-arg data stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    fs.mkdirSync(path.join(dir, 'internal', 'engine'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'internal', 'engine', 'evil.go'), 'package engine\n', 'utf8');
+    const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+    const b64 = Buffer.from(payload, 'utf8').toString('base64');
+    for (const cmd of [
+      `echo '${b64}' | base64 | bash`,                          // ENCODE mode
+      `gzip -d file.gz | bash`,                                 // file operand
+      `echo '${payload}' | xargs sh -c 'echo hi'`,              // fixed -c program
+      `echo "$(echo '${b64}' | base64 -d)"`,                    // substitution in an echo arg
+      `echo '${b64}' | openssl enc -d -aes-256-cbc | bash`,     // keyed cipher
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `this command has no executed-decoder path: ${cmd}`);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 failure mode 2 — the verdict-tie rule (code committed post-attack)
+// ---------------------------------------------------------------------------
+
+test('BUG-332 (8) unit: latestGitRefForItem is exported from claude-bow.js and resolves the most recent ref', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332-tieunit');
+  try {
+    assert.equal(typeof bow.latestGitRefForItem, 'function', 'latestGitRefForItem must be exported');
+
+    // No ref yet -> null.
+    assert.equal(await bow.latestGitRefForItem(db, item.code), null);
+
+    // Two refs -> the later one wins (explicit created_at beats default-NOW).
+    await db.query(
+      'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [item.guid, 'a'.repeat(40), 'main', 'older ref', new Date(Date.now() - 60_000)]);
+    await db.query(
+      'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [item.guid, 'b'.repeat(40), 'main', 'newer ref', new Date()]);
+    const latest = await bow.latestGitRefForItem(db, item.code);
+    assert.equal(latest.commit_hash, 'b'.repeat(40), 'must return the most recent ref, not the first inserted');
+  } finally {
+    await db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-332 (9): a code-bearing commit on an item whose git ref POST-DATES its accept verdict is DENIED (un-attacked)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332-tiepost');
+  try {
+    // Accept verdict first...
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    // ...then a git ref recorded AFTER the verdict (the code changed post-attack).
+    // Read the verdict's own created_at and add 2s so the ref is deterministically
+    // newer even when both would otherwise land in the same TIMESTAMP second.
+    const [[verdictRow]] = await db.query(
+      'SELECT created_at FROM bow_destructive_verdicts WHERE item_guid = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      [item.guid]);
+    const refCreatedAt = new Date(new Date(verdictRow.created_at).getTime() + 2000);
+    await db.query(
+      'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [item.guid, 'c'.repeat(40), 'main', 'committed after verdict', refCreatedAt]);
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
+      const r = runGuard(dir, `git commit -m "[${item.code}] change"`);
+      assert.equal(r.denied, true, 'code committed after the accept verdict must be denied (needs a fresh round)');
+      assert.match(r.reason, /post-attack|newer than/i, 'deny reason must name the post-attack state');
+      assert.match(r.reason, new RegExp(item.code));
+    });
+  } finally {
+    await db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-332 (10) CONTROL: a git ref PRE-DATING the accept verdict does NOT trip the tie rule (verdict still covers that code)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332-tiepre');
+  try {
+    // Ref first, verdict after — the verdict is the latest state decision, so commit passes.
+    await db.query(
+      'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [item.guid, 'd'.repeat(40), 'main', 'older ref', new Date(Date.now() - 120_000)]);
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
+      const r = runGuard(dir, `git commit -m "[${item.code}] change"`);
+      assert.equal(r.denied, false, 'a verdict recorded after the last git ref must still pass (nothing committed post-attack)');
+    });
+  } finally {
+    await db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+test('BUG-332 (11) CONTROL: an accepted verdict with NO git ref at all still passes (unchanged existing behavior)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332-tienoref');
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
+      const r = runGuard(dir, `git commit -m "[${item.code}] change"`);
+      assert.equal(r.denied, false, 'no git ref means no post-attack commit is provable; existing verdict stands');
+    });
+  } finally {
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+// BUG-332 r2 (REJECT finding 2, boundary half): the tie rule used strict `>`.
+// A ref whose created_at is EXACTLY EQUAL to the verdict's created_at (same
+// wall-clock instant — both columns are TIMESTAMP(6)) must be treated as
+// post-attack and DENIED, or a same-second commit sails through.
+test('BUG-332 r2 (17): a git ref at the SAME INSTANT as the accept verdict is DENIED (>= boundary, no same-second hole)', async () => {
+  const db = await connectDb();
+  const item = await createFixtureItem(db, 'bug332-tieeq');
+  try {
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    // Read back the exact verdict instant (TIMESTAMP(6) -> JS Date) and insert the
+    // ref at precisely that instant. Equal timestamps must trip the tie rule.
+    const [[verdictRow]] = await db.query(
+      'SELECT created_at FROM bow_destructive_verdicts WHERE item_guid = ? ORDER BY created_at DESC, id DESC LIMIT 1',
+      [item.guid]);
+    const exactInstant = new Date(verdictRow.created_at).getTime();
+    await db.query(
+      'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, ?)',
+      [item.guid, 'e'.repeat(40), 'main', 'ref at exact verdict instant', new Date(exactInstant)]);
+    withTempRepo((dir) => {
+      stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
+      const r = runGuard(dir, `git commit -m "[${item.code}] change"`);
+      assert.equal(r.denied, true, 'a ref recorded at the same instant as the accept verdict must be denied (>= boundary)');
+      assert.match(r.reason, /post-attack|newer than/i, 'deny reason must name the post-attack state');
+    });
+  } finally {
+    await db.query('DELETE FROM bow_git_refs WHERE item_guid = ?', [item.guid]);
+    await deleteFixtureItem(db, item.guid);
+    await db.end();
+  }
+});
+
+// BUG-332 r2 (REJECT finding 2, schema half): bow_git_refs.created_at was
+// TIMESTAMP (second precision) while bow_destructive_verdicts.created_at is
+// TIMESTAMP(6) — a ref recorded later in the same wall-clock second truncated
+// to compare EARLIER than the verdict. ensureGitRefCreatedAtFractional must be
+// exported and must genuinely upgrade a second-precision column (exercised here
+// against a scratch table via the table-name parameter).
+test('BUG-332 r2 (18): ensureGitRefCreatedAtFractional upgrades a second-precision created_at column', async () => {
+  const db = await connectDb();
+  // TEMPORARY tables are invisible to information_schema.COLUMNS, so the
+  // migration (which pre-checks via information_schema) cannot see one — use a
+  // real scratch table, created idempotently and dropped in `finally`.
+  const table = '_zz_gitref_migration_' + crypto.randomBytes(4).toString('hex');
+  try {
+    assert.equal(typeof bow.ensureGitRefCreatedAtFractional, 'function', 'must be exported from claude-bow.js');
+    await db.query(
+      `CREATE TABLE ${table} (
+         item_guid CHAR(36) NOT NULL,
+         commit_hash CHAR(40) NOT NULL,
+         branch VARCHAR(200) NOT NULL,
+         note VARCHAR(2000) NULL,
+         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+       )`);
+    const [[before]] = await db.query(
+      `SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'created_at'`,
+      [table]);
+    assert.equal(String(before.COLUMN_TYPE).toLowerCase(), 'timestamp', 'fixture column must start second-precision');
+    // Table-name param lets the test exercise the real ALTER path on a scratch
+    // table instead of mutating the live bow_git_refs column.
+    await bow.ensureGitRefCreatedAtFractional(db, table);
+    const [[after]] = await db.query(
+      `SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = 'created_at'`,
+      [table]);
+    assert.equal(String(after.COLUMN_TYPE).toLowerCase(), 'timestamp(6)', 'scratch column must be fractional after the migration');
+    // And the real column stays fractional after the default call (idempotent no-op).
+    await bow.ensureGitRefCreatedAtFractional(db);
+    const [[realCol]] = await db.query(
+      `SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bow_git_refs' AND COLUMN_NAME = 'created_at'`);
+    assert.equal(String(realCol.COLUMN_TYPE).toLowerCase(), 'timestamp(6)', 'real column must be fractional after idempotent run');
+  } finally {
+    await db.query(`DROP TABLE IF EXISTS ${table}`);
+    await db.end();
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1713,12 +3452,487 @@ test('BUG-232 end-to-end: a bare `git --version` / `git --help` is still silentl
   });
 });
 
-test('BUG-232 end-to-end (trailing-pipe fix): a docs-only commit with a trailing `2>&1 | tail` / `&& git push` is silently ALLOWED (pre-fix: falsely denied as a bare pathspec)', () => {
+test('BUG-232 end-to-end (trailing-pipe fix): a docs-only commit with a trailing `&& git push` is silently ALLOWED (pre-fix: falsely denied as a bare pathspec)', () => {
   withTempRepo((dir) => {
     stageFile(dir, 'docs/notes.md', '# notes\n');
-    for (const cmd of ['git commit -m "docs only" 2>&1 | tail', 'git commit -m "docs only" && git push']) {
+    // A trailing `&& git push` chain is NOT shell indirection — `&&` is a plain
+    // command separator, not a pipe/redirection/wrapper — so the structural
+    // allowlist (AARON RULING 2026-08-23) still recognises the commit and the
+    // docs-only exemption clears it. classifyCommitArgv (unit test above) is
+    // what BUG-232 fixed; the structural gate must not re-introduce that false
+    // deny.
+    const r = runGuard(dir, 'git commit -m "docs only" && git push');
+    assert.equal(r.denied, false, 'must not falsely deny the && chain');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-332 r16 end-to-end (AARON structural allowlist): a commit with a trailing `2>&1 | tail` is DENIED as shell indirection (overrides BUG-232\'s old ALLOW)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    // AARON RULING 2026-08-23 flipped commit recognition to an ALLOWLIST: the
+    // plain benign form is a literal `git commit` with ZERO shell indirection.
+    // `2>&1 | tail` is redirection + a pipe — unattributable shell metacharacters
+    // → COULD-NOT-EVALUATE → DENY fail-closed, even for a docs-only staged set.
+    // This intentionally supersedes BUG-232's pre-ruling ALLOW: false-positive
+    // deny is recoverable, false-negative allow is the hole. Run the commit
+    // plain (`git commit -m "..."` as its own call) and the guard's own
+    // execution captures the output.
+    const r = runGuard(dir, 'git commit -m "docs only" 2>&1 | tail');
+    assert.equal(r.denied, true, 'redirection + pipe is shell indirection under the structural allowlist');
+    assert.match(r.reason || '', /indirection|shell|pipe|redirect/i);
+  });
+});
+
+test('BUG-332 r16 end-to-end (AARON structural allowlist): plain benign commit forms reach the verdict flow and docs-only clears', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'git commit -m "docs only"',
+      'git commit -am "docs only"',
+      'git commit -m "docs only" --no-verify',
+      'git commit --amend -m "docs only"',
+      'git commit -m "docs only" -q',
+      'git add docs/notes.md && git commit -m "docs only"', // BUG-224 rhythm: && is a separator, not indirection
+    ]) {
       const r = runGuard(dir, cmd);
-      assert.equal(r.denied, false, `must not falsely deny: ${cmd}`);
+      assert.equal(r.denied, false, `plain benign commit must reach the verdict flow: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+test('BUG-332 r16 end-to-end (AARON structural allowlist): each shell-indirection class is DENIED even for a docs-only staged set', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'echo x | git commit -m "docs only"',            // pipe into the commit
+      'git commit -m "docs only" > /dev/null',         // redirection
+      'git commit -m "$(echo docs only)"',             // command substitution
+      'git commit -m "`echo docs only`"',              // backticks
+      'X=1 git commit -m "docs only"',                 // env-prefix (r15 F3)
+      'bash -c \'git commit -m "docs only"\'',         // wrapper: shell executing a string
+      'xargs sh -c \'git commit -m "docs only"\'',     // wrapper: xargs -> sh -c (r15 F5)
+      'env git commit -m "docs only"',                 // subprocess prefix (env)
+      'sudo git commit -m "docs only"',                // subprocess prefix (sudo)
+      'git commit -m "docs only" <<\'EOF\'',           // heredoc redirection
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `commit-shaped command with shell indirection must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /indirection|shell|alias|pipe|redirect|wrapper/i);
+    }
+  });
+});
+
+test('BUG-332 r16 end-to-end (AARON structural allowlist): a NON-shell git alias reaching the commit verb is DENIED structurally', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    git(dir, ['config', 'alias.cy', 'commit -a']); // plain alias, NOT a shell-escape — bypasses failClosedSweep
+    const r = runGuard(dir, 'git cy -m "docs only"');
+    assert.equal(r.denied, true, 'an aliased commit verb is not the literal `git commit` — deny structurally');
+    assert.match(r.reason || '', /alias/i);
+  });
+});
+
+test('BUG-332 r16 end-to-end (AARON structural allowlist): non-commit commands — including ones with pipes — stay silently ALLOWED', () => {
+  withTempRepo((dir) => {
+    for (const cmd of [
+      'ls',
+      'node claude-sync.js read',
+      'echo hi | grep foo',       // pipe with NO commit — 'none' shape, allow
+      'git status',
+      'git add docs/notes.md',
+      'git push',
+      'git rebase -i HEAD~1',
+      'go test ./...',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `no commit shape → must not be touched: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+// =============================================================================
+// BUG-332 r17 regressions — r16 attacker REJECT findings F1-F4 (the r17 bar).
+// Each attack test flips to a committed regression asserting the fail-closed
+// behavior on the fixed estate (round culture: inverted assertions on fix).
+// =============================================================================
+
+// F1 (CRITICAL): findCommitInvocation used to STOP at the FIRST known-verb
+// invocation, so a literal `git commit` LATER in a chain after a replay verb
+// (cherry-pick/merge/revert/am) was never examined → classifyCommitShape saw
+// the replay verb and mapped it 'none' → silent allow of a real code commit
+// (proven end-to-end as commit a4e7dd1). The recogniser now PREFERS a literal
+// `commit` verb anywhere in the chain, so these reach the verdict flow.
+test('BUG-332 r17 (r16 F1 CRITICAL): git cherry-pick -n X && git commit — literal commit later in the chain is recognised and gated', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/evil.go', 'package engine\nvar Evil = 1\n');
+    const r = runGuard(dir, 'git cherry-pick -n abc123 && git commit -m "no tag"');
+    assert.equal(r.denied, true, 'the literal `git commit` in the chain must be recognised, not hidden behind the cherry-pick');
+    assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r17 (r16 F1): merge --no-commit / revert --no-commit / am followed by a literal git commit are gated identically', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/evil.go', 'package engine\nvar Evil = 1\n');
+    for (const cmd of [
+      'git merge --no-commit origin/main && git commit -m "no tag"',
+      'git revert --no-commit HEAD && git commit -m "no tag"',
+      'git am p.patch && git commit -m "no tag"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a replay verb must not mask a later literal commit: ${cmd}`);
+      assert.match(r.reason, /no.*BOW.*tag|NO \[mkey\]|shell indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// Guard against the F1 fix OVER-reaching: a standalone replay verb WITHOUT a
+// later literal commit stays OUT of the trap (ROUND-4 "merge is not commit" —
+// the team's own local merges/cherry-picks must keep working).
+test('BUG-332 r17 (r16 F1 guard-rail): standalone cherry-pick / merge / revert / am with NO literal commit stays ALLOWED', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'git cherry-pick abc123',
+      'git merge origin/main',
+      'git revert HEAD',
+      'git am p.patch',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `replay verb alone is not commit → must not be touched: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+// F2: decoder-backstop gaps — Windows certutil and the string-executing
+// language runtimes (python -c / php -r / perl -e / ruby -e / node -e).
+test('BUG-332 r17 (r16 F2a): certutil -decode fed into a shell is a known decoder and DENIES', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    const r = runGuard(dir, 'echo Z2l0IGNvbW1pdA== | certutil -decode -f - | bash');
+    assert.equal(r.denied, true, 'certutil -decode is a deterministic decoder feeding a shell — deny fail-closed');
+    assert.match(r.reason, /decoder|shell|base64|decoded|indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r17 (r16 F2b/F2c): python -c / php -r / perl -e / ruby -e executing a commit through a shell DENIES', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'python -c \'import os; os.system("git add .; git commit -m y")\'',
+      'python -c \'import os; os.system("git commit -m y")\'',
+      'php -r \'system("git commit -m z");\'',
+      'perl -e \'system("git commit -m q");\'',
+      'ruby -e \'system("git commit -m r")\'',
+      'node -e \'require("child_process").execSync("git commit -m s")\'',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a string-executing runtime reaching a shell must fail closed: ${cmd}`);
+      assert.match(r.reason, /decoder|shell|base64|decoded|indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// F3: env-prefix forms the strict `X=1` regex missed.
+test('BUG-332 r17 (r16 F3): bash append-assign X+= and PowerShell $env:X= env-prefixes DENY', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'X+=append git commit -m "docs only"',
+      '$env:X="a" git commit -m "docs only"',
+      'X+=1 git commit -m "docs only"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `an env/var prefix the commit runs under is indirection: ${cmd}`);
+      assert.match(r.reason, /indirection|shell|alias|pipe|redirect|wrapper|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// F4: shells missing from INDIRECTION_COMMAND_WORDS — now the shell class is
+// tested by isShellExecutableWord (the one shell list, GR#3), so any name in
+// SHELL_EXECUTABLE_RE is caught.
+test('BUG-332 r17 (r16 F4): fish / tcsh / mksh / nu -c wrappers DENY (SHELL_EXECUTABLE_RE is the one shell list)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'fish -c "git commit -m docs only"',
+      'tcsh -c "git commit -m docs only"',
+      'mksh -c "git commit -m docs only"',
+      'nu -c "git commit -m docs only"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a shell executing a string is wrapper indirection: ${cmd}`);
+      assert.match(r.reason, /indirection|shell|alias|pipe|redirect|wrapper|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// F5: `echo git commit -m "no tag"` on staged code is DENIED — a documented,
+// deliberate RECOVERABLE false-positive, not a fix. The AARON ruling is
+// explicit: "false-positive deny is recoverable; false-negative allow is the
+// hole." Closing it would mean narrowing commit recognition to command
+// position, which opens the WORSE hole `echo git commit -m "..." | sh`
+// (git as data output through a shell → invisible → silent allow). The
+// structural layer deliberately does NOT do echo-semantics (that would be the
+// denylist game the ruling called asymptotically incomplete).
+test('BUG-332 r17 (r16 F5): echo of commit text on staged code DENIES (documented recoverable false-positive per ruling)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'internal/engine/evil.go', 'package engine\nvar Evil = 1\n');
+    const r = runGuard(dir, 'echo git commit -m "no tag"');
+    assert.equal(r.denied, true, 'echo git commit is recognised as a literal commit form and gated — ruling-blessed false-positive');
+  });
+});
+
+// F1-family completion (r17): a replay verb with a NO-COMMIT flag BEFORE a
+// literal `git commit` stages content the verdict flow CANNOT see — it reads
+// the pre-command index (`git diff --cached`) before the command runs, so the
+// cherry-pick-staged code is invisible and even a docs-exempt message would
+// sail through (probe8 showed the exact ALLOW). Same un-enumerable-staging
+// class as ambiguousAdd / --pathspec-from-file / a bare pathspec → fail-closed
+// deny (reason 'replay-staging'). Verb-aware: `-n` IS --no-commit for
+// cherry-pick/revert (also combined `-xn`), but for merge `-n` = --no-stat and
+// am has no short form — only --no-commit counts there.
+test('BUG-332 r17 (F1-family): no-commit replay verb before a literal git commit DENIES even on docs-staged content with a benign message (invisible staging)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'git cherry-pick -n abc123 && git commit -m "docs update, no tag needed"',
+      'git cherry-pick --no-commit abc123 && git commit -m "docs update, no tag needed"',
+      'git merge --no-commit origin/main && git commit -m "docs update, no tag needed"',
+      'git revert -n HEAD && git commit -m "docs update, no tag needed"',
+      'git am --no-commit p.patch && git commit -m "docs update, no tag needed"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a no-commit replay staging ahead of a literal commit must fail closed: ${cmd}`);
+      assert.match(r.reason, /replay|staging|cherry-pick|merge|revert|am|indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// Guard against replay-staging OVER-reaching: a no-commit replay with no
+// following literal commit stays out of the trap (ROUND-4), a replay WITHOUT
+// a no-commit flag stages nothing invisible (the cherry-pick commits its own
+// content; the index after is visible), and a replay AFTER the commit cannot
+// pollute that commit's index.
+test('BUG-332 r17 (F1-family guard-rails): no literal commit / no no-commit flag / replay after the commit all stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'git cherry-pick -n abc123 && git status',
+      'git cherry-pick abc123 && git commit -m "docs update, no tag needed"',
+      'git commit -m "docs update, no tag needed" && git cherry-pick -n abc123',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `must stay allowed: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r18 (r17 attacker REJECT F1-F3): end-to-end proofs on the shared
+// checkout — each false-negative allow hole the r17 attacker proved now DENIES
+// fail-closed (round culture: the attacker's findings are the next round's
+// acceptance bar).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r18 (r17 F1 e2e): a commit through a HIDDEN git executable (`$GIT commit`, `$(echo $GIT) commit`) DENIES structurally — no literal git token to gate on', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'GIT=git; $GIT commit -m "docs only"',
+      '$(echo $GIT) commit -m "docs only"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a commit reached through a hidden git executable must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /variable|VARIABLE|hidden|indirection|structural allowlist|AARON RULING/i);
+    }
+  });
+});
+
+test('BUG-332 r18 (r17 F2 e2e): a combined perl run flag (`perl -ne \'...\'`) feeding a shell DENIES — the exact-match run-flag list missed -ne', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    const r = runGuard(dir, "echo X | perl -ne 'system(\"git commit -m no-tag\")' | bash");
+    assert.equal(r.denied, true, 'a combined -ne run flag is code-exec — the string may BE the commit');
+    assert.match(r.reason || '', /decoder|transforming|shell|perl|indirection|AARON RULING|denied fail-closed/i);
+  });
+});
+
+test('BUG-332 r18 (r17 F3 e2e): a data-text transformer (sed/awk/tr with a program) feeding a shell DENIES — its output is invisible to the raw-text scan', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      "echo 'x' | sed 's/x/git commit -m \"no tag\"/' | bash",
+      "echo 'x' | awk '{print \"git commit\"}' | bash",
+      "echo 'x' | tr a-z A-Z | bash",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a transformer feeding a shell must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /decoder|transforming|transform|sed|awk|tr|shell|indirection|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r19 (independent attacker REJECT of the uncommitted guard estate):
+// three live findings, each RED-proven against the pre-fix tree. Round
+// culture: the attacker's findings are the next round's acceptance bar.
+// ---------------------------------------------------------------------------
+
+// F1 (HIGH): `v='git commit -m evil'; $v` — the payload sits INSIDE the
+// assignment's quoted value, so no literal `git` token exists at any command
+// position (findCommitInvocation → null) and hasHiddenCommit sees no `commit`
+// WORD outside quotes (the only `commit` is prose) → { kind: 'none' } →
+// silent allow of a real commit. The fix: when classification is 'none', a
+// bare variable/expansion reference AT COMMAND POSITION plus a whole
+// `git … commit` payload visible anywhere in the SAME string is the
+// unattributable indirection the ruling denies fail-closed.
+test('BUG-332 r19 (attacker F1): a whole-string VARIABLE holding the commit payload, executed as a bare `$var` command word, DENIES — variable-indirect commits enter the gate', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      "v='git commit -m evil'; $v",
+      'v="git commit -m evil"; ${v}',
+      'V="git add evil.go && git commit -m x"; $V',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a variable-executed commit payload must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /variable|VARIABLE|hidden|indirection|structural allowlist|AARON RULING/i);
+    }
+  });
+});
+
+// F1 guard-rails: either signal ALONE is benign — a variable command word
+// with no commit payload in the string, or a commit-payload string that is
+// never executed (only echoed as DATA).
+test('BUG-332 r19 (attacker F1 controls): a bare variable command word WITHOUT a git-commit payload, and a payload string never EXECUTED, stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    for (const cmd of [
+      'echo hello; $EDITOR notes.txt',
+      'ls $HOME/bin',
+      'msg=\'git commit -m evil\'; echo "$msg"',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `no executed commit payload → must not be touched: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+// F2 (HIGH): `bash <(echo "git commit -m evil")` — the substitution body is
+// executed AS COMMANDS via /dev/fd, but the payload hides inside echo's
+// quoted argument, so recognition sees nothing and { kind: 'none' } silently
+// allows. The fix: every `<( … )` body is treated as command content — a body
+// carrying a whole `git … commit` payload denies fail-closed.
+test('BUG-332 r19 (attacker F2): a process-substitution body fed to a shell (`bash <(echo "git commit -m evil")`) DENIES — its inner text is command content', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'bash <(echo "git commit -m evil")',
+      'sh <(echo \'git add evil.go; git commit -m x\')',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `a process substitution hiding a commit must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /substitution|process|indirection|structural allowlist|AARON RULING/i);
+    }
+  });
+});
+
+// F2 guard-rails: ordinary process substitutions carry no commit payload and
+// must keep working (diff-over-subshells is everyday shell practice).
+test('BUG-332 r19 (attacker F2 controls): ordinary process substitutions carrying no commit payload stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    for (const cmd of [
+      'diff <(ls docs) <(ls internal)',
+      'cat <(echo hi)',
+      'sort <(git log --oneline)',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `benign process substitution → must not be touched: ${cmd}`);
+      assert.equal(r.stdout, '');
+    }
+  });
+});
+
+// F3 (MEDIUM): `echo QUJD | base64.exe -d | bash` — isDeterministicDecoder-
+// Stage compared the RAW word (`base64.exe` ≠ `base64`), so the Windows
+// executable suffix evaded the known-decoder list and the invisible-commit
+// backstop silently allowed. The fix: the stage name is normalised the way
+// isGitExecutableWord normalises the git token (path prefix off, trailing
+// .exe/.cmd off, case-folded) before matching.
+test('BUG-332 r19 (attacker F3): a Windows `.exe` decoder spelling (`base64.exe -d`) piped into a shell DENIES — the decoder backstop survives the suffix', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      'echo QUJD | base64.exe -d | bash',
+      'echo QUJD | /usr/bin/base64.exe --decode | sh',
+      'echo QUJD | openssl.exe base64 -d | bash',
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `an .exe-suffixed deterministic decoder feeding a shell must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /decoder|shell|base64|decoded|indirection|structural allowlist|AARON RULING|denied fail-closed/i);
+    }
+  });
+});
+
+// F3 guard-rail: ENCODE mode through the same .exe spelling still emits base64
+// TEXT (never the payload) and must stay out of the trap, exactly like the
+// bare `base64` encode-mode control the r15 F21i bar established.
+test('BUG-332 r19 (attacker F3 control): ENCODE mode through an .exe spelling still stays ALLOWED', () => {
+  withTempRepo((dir) => {
+    const r = runGuard(dir, 'echo hello | base64.exe');
+    assert.equal(r.denied, false, 'encode-mode base64.exe emits base64 text, never the payload — must stay clear');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r20 (r2 independent REJECT, finding F-HIGH-1): STRING-EXECUTOR
+// WRAPPER BEFORE THE VARIABLE FIRE. The r19 F1 fix only fired when `$var`
+// stood at COMMAND position (`v='…'; $v`), so `v='git commit -m evil'; eval $v`
+// left the variable as eval's ARGUMENT — classification stayed 'none' and the
+// real commit silently allowed. An executor's expansion-bearing argument is
+// code: deny fail-closed whenever a commit payload is visible in the string.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r20 (F-HIGH-1): a variable holding the commit payload fired THROUGH a string executor (`eval $v` / `exec $v` / `bash -c $v`) DENIES', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'docs/notes.md', '# notes\n');
+    for (const cmd of [
+      "v='git commit -m evil'; eval $v",
+      'v="git commit -m evil"; exec ${v}',
+      'V="git add evil.go && git commit -m x"; bash -c $V',
+      's="git commit -m evil"; sh -c "$s"',
+      "c='git commit -m evil'; zsh -c \"$c\"",
+      "p='git commit -m evil'; pwsh -Command $p",
+      "d='git commit -m evil'; dash -c $d",
+      "k='git commit -m evil'; ksh -c \"$k\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, true, `an executor-fired variable commit payload must fail closed: ${cmd}`);
+      assert.match(r.reason || '', /variable|indirection|hidden|structural allowlist|AARON RULING/i);
+    }
+  });
+});
+
+// Guard-rails: an executor with a LITERAL argument carries no unattributable
+// indirection (the structured parser sees exactly what runs), and an executor
+// whose expansion argument carries NO commit payload is everyday shell.
+test('BUG-332 r20 (F-HIGH-1 controls): literal executor arguments and payload-free expansion arguments stay ALLOWED', () => {
+  withTempRepo((dir) => {
+    for (const cmd of [
+      "eval git log --oneline -5",
+      'bash -c "echo hello"',
+      "msg='git commit -m evil'; echo \"$msg\"",
+    ]) {
+      const r = runGuard(dir, cmd);
+      assert.equal(r.denied, false, `no executed unattributable commit payload → must not be touched: ${cmd}`);
       assert.equal(r.stdout, '');
     }
   });

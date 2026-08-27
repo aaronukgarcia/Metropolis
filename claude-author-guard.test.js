@@ -588,6 +588,1100 @@ test('BUG-045: git commit wrapped in powershell -Command "..." is now ADVISED, n
   });
 });
 
+test('BUG-332 r6: git commit hidden inside an eval \'...\' body is now ADVISED, not BLOCKED (WRAPPER_PATTERNS gains eval)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `eval "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'an eval-wrapped commit must be scanned like any other wrapper body');
+  });
+});
+
+test('BUG-332 r6: git commit hidden inside an iex \'...\' body is now ADVISED, not BLOCKED (PowerShell eval sibling)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `iex "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'an iex-wrapped commit must be scanned like any other wrapper body');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r7 (r6 REJECT, attacker a4eb859218dbd0b83) — the structural
+// tokenizer. The r6 wrapper-recognition regexes were anchored
+// `(?:^|[;&|(\n])`, so a wrapper word reached through a reserved word
+// (`else`), the `!` negation keyword, or a prefix builtin (`builtin`) never
+// matched — the r6 F10-F12 spellings. The lexer's command-position
+// detection (scanShellWords) recognises the wrapper word after any of those
+// and extracts the run-string. F13: GIT_TOKEN_RE's token class cannot see a
+// quote-SPLIT git token (`g"it"`), which r6 showed silently bypassed the
+// ENTIRE guard; the lexer concatenates the fragments.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r7 F10: `! eval "..."` — the reserved-word boundary the WRAPPER_PATTERNS anchor missed — is scanned (advisory)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `! eval "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'a `! eval "..."` wrapper must be scanned like the boundary-anchored spelling');
+  });
+});
+
+test('BUG-332 r7 F11: `builtin eval "..."` — the prefix-builtin boundary the anchor missed — is scanned (advisory)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `builtin eval "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'a `builtin eval "..."` wrapper must be scanned like the boundary-anchored spelling');
+  });
+});
+
+test('BUG-332 r7 F12: `else eval "..."` — the reserved-word boundary the anchor missed — is scanned (advisory)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `if true; then :; else eval "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"; fi`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'a `else eval "..."` wrapper must be scanned like the boundary-anchored spelling');
+  });
+});
+
+test('BUG-332 r7 F13 unit: findCommitInvocation detects a quote-split `g"it" commit`, ignores `g"it" status`', () => {
+  assert.ok(findCommitInvocation('g"it" commit -m "x"'), 'a quote-split git token must be a real commit invocation');
+  assert.equal(findCommitInvocation('g"it" status'), null, 'a quote-split git with no commit verb is not a commit invocation');
+  assert.ok(findCommitInvocation('/usr/"bin"/git commit -m "x"'), 'a quote-split inside a full path is recognised too');
+});
+
+test('BUG-332 r7 F13 e2e: `g"it" commit` with a fabricated --author is ADVISED (was a total silent bypass)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `g"it" commit --allow-empty --author='${id.name} <${id.email}>' -m x`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'a quote-split git token must be recognised as a real git invocation');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r8 (r7 REJECT, attacker a70e40f847ad58b41) — the subprocess-prefix
+// arg-run model. r7's CRITICAL finding: the prefix-wrapper family
+// (sudo/doas/nice/stdbuf/setsid/xargs/timeout/env/nohup) was entirely absent
+// from SHELL_PREFIX_WORDS, so `sudo bash -c "…git commit --author=…"` put the
+// run-string's words at ARGUMENT position (commandStart=false) and
+// wrapperBodiesFromWords skipped them — the forged-author commit inside the
+// body was never scanned → silent ALLOW. r8 splits prefixes into IN-SHELL
+// ({command,builtin,exec} — the next word is the real command, `builtin cd`
+// still shifts cwd) vs SUBPROCESS ({sudo,doas,nice,stdbuf,setsid,xargs,
+// timeout,env,nohup} — argument-run model: every word up to the next
+// separator is the prefix's argument, and a shell wrapper word at the end
+// still EXECUTES its run-string). F15a proves the body is extracted as a
+// distinct scan text for every family member; F15b is the CONTROL proving a
+// wrapper word as a plain argument to a NON-prefix command (`echo bash -c`)
+// stays invisible (no over-block); F15c-f prove a forged --author inside the
+// body is scanned like any other wrapper spelling.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r8 F15a unit: the run-string inside each subprocess-prefix wrapper is extracted as a distinct scan text', () => {
+  const cases = [
+    ['sudo', 'sudo bash -c "git commit -m x"'],
+    ['sudo -n (flag)', 'sudo -n bash -c "git commit -m x"'],
+    ['sudo -u root (flag-value)', 'sudo -u root bash -c "git commit -m x"'],
+    ['doas', 'doas bash -c "git commit -m x"'],
+    ['nice', 'nice bash -c "git commit -m x"'],
+    ['nice -n 10 (flag-value)', 'nice -n 10 bash -c "git commit -m x"'],
+    ['stdbuf', 'stdbuf bash -c "git commit -m x"'],
+    ['setsid', 'setsid bash -c "git commit -m x"'],
+    ['xargs', 'xargs -I{} bash -c "git commit -m x"'],
+    ['timeout', 'timeout 10 bash -c "git commit -m x"'],
+    ['env', 'env bash -c "git commit -m x"'],
+    ['env -i (flag)', 'env -i bash -c "git commit -m x"'],
+    ['nohup', 'nohup bash -c "git commit -m x"'],
+    // r8 self-audit additions: a shell named by path, a combined short-flag
+    // cluster, and a quote-split prefix word all still execute their run-string.
+    ['sudo /bin/bash (path)', 'sudo /bin/bash -c "git commit -m x"'],
+    ['sudo /usr/bin/bash (path)', 'sudo /usr/bin/bash -c "git commit -m x"'],
+    ['sudo /bin/sh (path)', 'sudo /bin/sh -c "git commit -m x"'],
+    ['sudo bash -lc (combined flag)', 'sudo bash -lc "git commit -m x"'],
+    ['sudo bash -l -c (split flags)', 'sudo bash -l -c "git commit -m x"'],
+    ['s"udo" bash (quote-split prefix)', 's"udo" bash -c "git commit -m x"'],
+  ];
+  for (const [name, cmd] of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${name}: gatherScanTexts must yield the whole text PLUS the extracted run-string`);
+    assert.equal(texts[1], 'git commit -m x', `${name}: the extracted body must be the run-string, scanned as its own text`);
+  }
+});
+
+test('BUG-332 r8 F15b unit: a wrapper word as a plain argument to a NON-prefix command is NOT extracted (CONTROL)', () => {
+  const texts = guard.gatherScanTexts('echo bash -c "git commit -m x"', 0);
+  assert.equal(texts.length, 1, 'echo just prints its arguments — the quoted text must stay an argument, never a body');
+});
+
+test('BUG-332 r8 F15c: `sudo bash -c "git commit --author=…"` — the r7 attacker\'s proven-ALLOWED spelling — is scanned (advisory)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `sudo bash -c "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'the forged author inside the subprocess-prefix run-string must be detected');
+  });
+});
+
+test('BUG-332 r8 F15d: `sudo -n bash -c "…"` — a flag between prefix and shell — is scanned (advisory)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `sudo -n bash -c "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'the -n flag must not hide the run-string (command position is the prefix\'s argument run)');
+  });
+});
+
+test('BUG-332 r8 F15e: `env -i bash -c "…"` — env with the -i flag — is scanned (advisory)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `env -i bash -c "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'an env -i run-string must be scanned like any other wrapper body');
+  });
+});
+
+test('BUG-332 r8 F15f CONTROL: `echo bash -c "git commit --author=…"` — the wrapper word is an echo ARGUMENT, never executed — stays invisible', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `echo bash -c "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, false, 'echo merely prints its arguments — a bash word there is not a wrapper and must not be scanned');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r9 (r8 REJECT, attacker aafe8e49df2df3cb9) — F1-F5. The r8 whole-run
+// scan only fired for SHELL_EXECUTABLE_WORDS and only recognised a run flag
+// whose cluster ENDED in `c`, so four total-bypass spellings survived: F1 an
+// unlisted shell (`sudo ash/fish/bash4 -c "…"`), F2 a short-flag cluster
+// CONTAINING `c` but not ending in it (`bash -ci/-icf/-lci "…"`), F3
+// value-taking flags parked between the shell and the run flag (`bash -O
+// extglob -c "…"`, `bash -o noclobber -c "…"`, `bash --rcfile x -c "…"`), and
+// F4 a heredoc body fed to a shell (`sudo bash <<'EOF' … EOF`), which
+// buildQuoteMask masks opaque so the git verbs inside were never scanned.
+// F16a proves the whole-run scan extracts a body for EVERY one of those
+// spellings; F16b the commandStart runStringBodyAt value-taking skip; F16c the
+// shell-fed heredoc body extraction; F16d the CONTROLs (non-shell heredoc,
+// quoted `<<`, plain-argument wrapper); F16e an end-to-end forged-author
+// advisory through an unlisted shell.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r9 F16a unit: the whole-run scan extracts a body for unlisted shells, cluster-`c` flags, and value-taking-flag spellings (F1/F2/F3)', () => {
+  const cases = [
+    // F1: shell names the closed list did not enumerate.
+    ['sudo ash', 'sudo ash -c "git commit -m x"'],
+    ['sudo fish', 'sudo fish -c "git commit -m x"'],
+    ['sudo tcsh', 'sudo tcsh -c "git commit -m x"'],
+    ['sudo bash4 (version suffix)', 'sudo bash4 -c "git commit -m x"'],
+    ['sudo mksh', 'sudo mksh -c "git commit -m x"'],
+    ['sudo busybox (ash)', 'sudo busybox ash -c "git commit -m x"'],
+    // F2: short-flag cluster CONTAINING c, not ending in it.
+    ['sudo bash -ci', 'sudo bash -ci "git commit -m x"'],
+    ['sudo bash -icf', 'sudo bash -icf "git commit -m x"'],
+    ['sudo bash -lci', 'sudo bash -lci "git commit -m x"'],
+    // F3: value-taking flags + values parked before the run flag.
+    ['sudo bash -O extglob -c', 'sudo bash -O extglob -c "git commit -m x"'],
+    ['sudo bash -o noclobber -c', 'sudo bash -o noclobber -c "git commit -m x"'],
+    ['sudo bash --rcfile x -c', 'sudo bash --rcfile x -c "git commit -m x"'],
+    ['sudo bash --init-file x -c', 'sudo bash --init-file x -c "git commit -m x"'],
+  ];
+  for (const [name, cmd] of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${name}: gatherScanTexts must yield the whole text PLUS the extracted run-string`);
+    assert.equal(texts[1], 'git commit -m x', `${name}: the extracted body must be the run-string, scanned as its own text`);
+  }
+});
+
+test('BUG-332 r9 F16b unit: a COMMAND-position shell with value-taking flags still reaches the run flag (F3, commandStart path)', () => {
+  const cases = [
+    'bash -O extglob -c "git commit -m x"',
+    'bash -o noclobber -c "git commit -m x"',
+    'bash --rcfile x -c "git commit -m x"',
+    'bash --init-file x -c "git commit -m x"',
+    'bash -ci "git commit -m x"',
+  ];
+  for (const cmd of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${cmd}: a command-position bash must have its run-string extracted`);
+    assert.equal(texts[1], 'git commit -m x', `${cmd}: extracted body must be the run-string`);
+  }
+});
+
+test('BUG-332 r9 F16c unit: a shell-fed heredoc body is extracted as its own scan text (F4)', () => {
+  const cases = [
+    ['sudo bash <<EOF', 'sudo bash <<EOF\ngit commit -m x\nEOF'],
+    ['bash <<"EOF" (quoted delimiter)', 'bash <<"EOF"\ngit add evil.go\nEOF'],
+    ["sudo bash <<'EOF' (single-quoted delimiter)", "sudo bash <<'EOF'\ngit commit -m x\nEOF"],
+    ['xargs -I{} bash <<EOF', 'xargs -I{} bash <<EOF\ngit commit -m x\nEOF'],
+    ['heredoc after a separator', 'echo hi; sudo bash <<EOF\ngit commit -m x\nEOF'],
+  ];
+  for (const [name, cmd] of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${name}: gatherScanTexts must yield the whole text PLUS the heredoc body`);
+    assert.match(texts[1] || '', /git (commit|add)/, `${name}: the extracted body must contain the git verb from inside the heredoc`);
+  }
+});
+
+test('BUG-332 r9 F16d unit CONTROL: a non-shell heredoc, a quoted `<<`, and a plain-argument wrapper are NOT extracted', () => {
+  const cases = [
+    ['cat <<EOF (data, not commands)', 'cat <<EOF\ngit commit -m x\nEOF'],
+    ['git add - <<EOF (data)', 'git add - <<EOF\nbinary\nEOF'],
+    ['echo "cat <<EOF" (quoted <<)', 'echo "cat <<EOF"\ngit commit -m x\nEOF'],
+    ['echo bash -c (plain argument)', 'echo bash -c "git commit -m x"'],
+  ];
+  for (const [name, cmd] of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 1, `${name}: must NOT be extracted — the text stays a single scan text`);
+  }
+});
+
+test('BUG-332 r9 F16e: a forged --author inside an unlisted-shell run-string is scanned (advisory, F1 end-to-end)', () => {
+  withTempRepo((dir) => {
+    initRepoWithHistory(dir, 3);
+    const id = fabricatedIdentity();
+    const cmd = `sudo ash -c "git commit --allow-empty --author='${id.name} <${id.email}>' -m x"`;
+    const result = runGuard(dir, cmd);
+    assert.equal(result.denied, false);
+    assert.equal(result.status, 0);
+    assert.equal(result.advisory, true, 'the forged author inside an unlisted-shell run-string must be detected');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r10 (r9 attacker F1/F4/F5): the three CRITICAL closures the r9 round
+// left open, fixed to the attacker's exact acceptance bar —
+// F16f  command-position shells the r9 class omitted (`osh`/`posh`/`sash`/`nu`
+//       /`rbash`) AND the applet-dispatcher spelling (`busybox ash -c`) — the
+//       commandStart path now uses the same whole-run scan as inPrefixArgs.
+// F16g  shell-fed heredocs through privilege wrappers (`sudo -s`/`sudo -i`,
+//       `su`) and right-of-pipe shells (`cat <<EOF | bash`).
+// F16h  pipe-fed shell text with no heredoc (`echo "..." | bash`) extracted,
+//       with the verbatim-emitter CONTROLs (grep/cat are not extracted — their
+//       output is statically unknowable, an honest documented limitation).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r10 F16f unit: COMMAND-position unlisted shells and the applet-dispatcher spelling have their run-strings extracted (F1)', () => {
+  const cases = [
+    // r9 attacker F1: shells the r9 class omitted, AT COMMAND position.
+    ['osh -c', 'osh -c "git commit -m x"'],
+    ['posh -c', 'posh -c "git commit -m x"'],
+    ['sash -c', 'sash -c "git commit -m x"'],
+    ['nu -c', 'nu -c "git commit -m x"'],
+    ['rbash -c', 'rbash -c "git commit -m x"'],
+    // applet dispatcher: `ash` is a non-flag word between the shell and -c —
+    // the r9 commandStart runStringBodyAt stopped at it.
+    ['busybox ash -c', 'busybox ash -c "git commit -m x"'],
+  ];
+  for (const [name, cmd] of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${name}: gatherScanTexts must yield the whole text PLUS the extracted run-string`);
+    assert.equal(texts[1], 'git commit -m x', `${name}: the extracted body must be the run-string`);
+  }
+});
+
+test('BUG-332 r10 F16g unit: heredocs fed via `sudo -s`/`sudo -i`, `su`, or a right-of-pipe shell are extracted (F4a)', () => {
+  const cases = [
+    ['sudo -s <<EOF', 'sudo -s <<EOF\ngit commit -m x\nEOF'],
+    ['sudo -i <<EOF', 'sudo -i <<EOF\ngit add evil.go\nEOF'],
+    ['su root <<EOF', 'su root <<EOF\ngit commit -m x\nEOF'],
+    ['cat <<EOF | bash (right-of-pipe shell)', 'cat <<EOF | bash\ngit commit -m x\nEOF'],
+    ['cat <<EOF | sh (right-of-pipe unlisted shell)', 'cat <<EOF | sh\ngit commit -m x\nEOF'],
+  ];
+  for (const [name, cmd] of cases) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${name}: gatherScanTexts must yield the whole text PLUS the heredoc body`);
+    assert.match(texts[1] || '', /git (commit|add)/, `${name}: the extracted body must contain the git verb from inside the heredoc`);
+  }
+});
+
+test('BUG-332 r10 F16h unit: pipe-fed shell text `echo "..." | bash` is extracted; transforming emitters and non-shell targets are NOT (F4b)', () => {
+  const extracted = [
+    ['echo "git commit -m x" | bash', 'echo "git commit -m x" | bash', 'git commit -m x'],
+    ['printf "git add evil.go" | sh', 'printf "git add evil.go" | sh', 'git add evil.go'],
+  ];
+  for (const [name, cmd, body] of extracted) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 2, `${name}: gatherScanTexts must yield the whole text PLUS the piped body`);
+    assert.equal(texts[1], body, `${name}: the piped quoted argument IS the command text bash executes`);
+  }
+  const controls = [
+    ['echo "git commit -m x" | grep foo (no shell target)', 'echo "git commit -m x" | grep foo'],
+    ['grep "git commit" f | bash (transforming emitter — honest limitation)', 'grep "git commit" f | bash'],
+    ['cat "git commit -m x" | bash (not a verbatim emitter)', 'cat "git commit -m x" | bash'],
+  ];
+  for (const [name, cmd] of controls) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 1, `${name}: must NOT be extracted — the text stays a single scan text`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r11 (r10 attacker C1-C4 + MINOR-1):
+// C1  `exec -a <argv0> <shell> -c "<body>"` — exec added to the subprocess
+//     prefix set, so the argv0 word keeps `bash` in the inPrefixArgs run and
+//     the whole-run scan finds the -c body (F17f).
+// C2  subprocess-prefix pipe targets (`echo "x" | sudo bash`, `| sudo -s`) —
+//     pipeFedShellBodies branch (b) + pipeEmitterToShell (F17a).
+// C3  `xargs -I{} <shell> -c "{}"` placeholder substitution (F17b).
+// C4  passthrough filters (`| cat |`, `| tee |`, `| sed '' |`) walked to the
+//     verbatim emitter (F17c).
+// MINOR-1 constant `$()`/backtick emitters in wrapper run-strings (F17e).
+// Each mechanism RED-proven (see the verdict note on the BOW item).
+// ---------------------------------------------------------------------------
+
+function hasExtractedBody(cmd, pattern) {
+  const texts = guard.gatherScanTexts(cmd, 0);
+  return texts.length > 1 && texts.slice(1).some((t) => pattern.test(t));
+}
+
+test('BUG-332 r11 F17a unit: subprocess-prefix pipe targets (`sudo bash`, `doas bash`, `sudo -s`, `env bash`) are extracted (C2)', () => {
+  const cases = [
+    'echo "cd internal/engine && git add evil.go && git commit -m x" | sudo bash',
+    'echo "cd internal/engine && git add evil.go && git commit -m x" | doas bash',
+    'printf "%s" "git add evil.go" | sudo sh',
+    'echo "git add evil.go" | sudo -s',
+    'echo "git add evil.go" | sudo -i',
+    'echo "git add evil.go" | env bash',
+  ];
+  for (const cmd of cases) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text: ${cmd}`);
+  }
+});
+
+test('BUG-332 r11 F17b unit: `xargs -I<ph> <shell> -c "<ph>"` placeholder substitution is extracted (C3)', () => {
+  const cases = [
+    'echo "cd internal/engine && git add evil.go && git commit -m x" | xargs -I{} bash -c "{}"',
+    'echo "git add evil.go" | xargs -I% sh -c "%"',
+    'printf "%s" "git add evil.go" | xargs -I{} bash -c "{}"',
+    'cat <<EOF | xargs -I{} bash -c "{}"\ngit add evil.go\nEOF',
+  ];
+  for (const cmd of cases) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text: ${cmd}`);
+  }
+});
+
+test('BUG-332 r11 F17c unit: passthrough filters (`cat`, `tee`, `sed ""`) are walked to the verbatim emitter (C4)', () => {
+  const cases = [
+    'echo "git add evil.go" | cat | bash',
+    'echo "git add evil.go" | tee /dev/null | bash',
+    'echo "git add evil.go" | sed "" | bash',
+    'printf "%s" "git add evil.go" | cat | sh',
+    'cat <<EOF | cat | bash\ngit add evil.go\nEOF',
+    'cat <<EOF | sed \'\' | bash\ngit add evil.go\nEOF',
+  ];
+  for (const cmd of cases) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text: ${cmd}`);
+  }
+});
+
+test('BUG-332 r11 F17d unit: CONTROLs — xargs without -I, transforming emitters, and non-shell targets stay invisible (C2/C3/C4)', () => {
+  const controls = [
+    'echo "git add evil.go" | xargs bash', // input becomes ARGUMENTS, not text
+    'cat <<EOF | xargs bash\ngit add evil.go\nEOF',
+    'echo "git add evil.go" | grep foo | bash', // transforming emitter
+    'echo "git add evil.go" | sed "s/x/y/" | bash',
+    'cat "git commit -m x" | bash',
+    'echo "git add evil.go" | grep git', // non-shell pipe target
+    'echo "git add evil.go" | xargs rm',
+  ];
+  for (const cmd of controls) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 1, `must NOT be extracted: ${cmd}`);
+  }
+});
+
+test('BUG-332 r11 F17e unit: constant `$()`/backtick emitters in wrapper run-strings are unwrapped; dynamic and data substitutions are NOT (MINOR-1)', () => {
+  const extracted = [
+    'bash -c "$(printf "git add evil.go && git commit -m x")"',
+    'bash -c "$(echo "git add evil.go")"',
+    'sh -c "$(printf \'git add evil.go\')"',
+    'bash -c "`printf "git add evil.go"`"',
+    'sudo sh -c "$(printf \'git add evil.go\')"',
+    'eval "$(printf \'git add evil.go\')"',
+    // BUG-332 r12 (r11 attacker NEW-4): a CONSTANT printf format is now
+    // statically evaluated (`%s`/`%%` plus a fixed escape set), so a `%s\n`
+    // format with constant args unwraps the exact string printf emits. These
+    // were CONTROLs in r11 (printf format = "a transform") and are the round's
+    // two reported payload spellings (double- and single-quoted inner value).
+    'bash -c "$(printf \'%s\n\' "git add evil.go")"',
+    'bash -c "$(printf \'%s\n\' \'git add evil.go\')"',
+    // BUG-332 r13 (r12 attacker NEW-C): the evaluated subset now covers the
+    // full `s`/`b` conversion — flags, width (literal or `*`), and precision.
+    // A width/flag that does NOT shorten the payload emits it verbatim, so the
+    // old "%10s is a boundary" control (which ENCODED the NEW-C bypass, real
+    // commits 4370c48/df28d64) flips to an extract case.
+    'bash -c "$(printf \'%10s\' "git add evil.go")"', // payload longer than width
+    'bash -c "$(printf \'%-s\' "git add evil.go")"', // left-justify flag
+    'bash -c "$(printf \'%*s\' "3" "git add evil.go")"', // width from constant value
+    'bash -c "$(printf \'%b\n\' "git add evil.go")"', // %b, backslash-free payload
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must unwrap the constant emitter: ${cmd}`);
+  }
+  const controls = [
+    'echo "$(printf \'git add evil.go\')"', // echo prints DATA, never executes
+    'cat "$(printf \'git add evil.go\')"',
+    'bash -c "$(printf \'git add $VAR\')"', // variable = dynamic
+    'bash -c "$(printf "git add $VAR")"',
+    // r14: the payload is SPLIT so the RAW wrapper body cannot contain `git
+    // add evil.go` contiguously (the r14 mask fix stopped truncating the
+    // `$()` body, which is the whole point of F20b) — a multi-command
+    // substitution is still dynamic, so only a genuine unwrap could surface
+    // it, and none does.
+    'bash -c "$(echo "a"; echo "git add" "evil.go")"', // multi-command = dynamic
+    'bash -c "$(git rev-parse --short HEAD)"', // non-emitter substitution
+    // BUG-332 r12 (NEW-4) declared boundaries — printf formats the evaluator
+    // cannot statically know stay unwrapped (GR#23 tripwire honesty):
+    'bash -c "$(printf \'%d\' \'42\')"', // non-%s conversion
+    // r13: precision TRUNCATES the payload. The payload is split across the
+    // values (`"git add" "evil.go"`), so the RAW body never contains the full
+    // literal either — the gate is purely the evaluator, which emits only
+    // `git a evil.go` (`%.5s` of `git add`), never the full payload.
+    'bash -c "$(printf \'%.5s %s\' "git add" "evil.go")"', // precision truncation
+    'bash -c "$(printf \'%s\' \'a\' \'b\')"', // extra values → format repeats
+    'echo "git add evil.go"',
+  ];
+  for (const cmd of controls) {
+    // garbled lexer wrapper bodies may still be extracted (pre-existing); the
+    // MINOR-1 gate is that the CONSTANT EMITTER'S text is never unwrapped.
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT unwrap: ${cmd}`);
+  }
+});
+
+test('BUG-332 r11 F17f unit: `exec -a <argv0> <shell> -c "<body>"` keeps the shell in the prefix run and extracts its body (C1)', () => {
+  const extracted = 'exec -a foo bash -c "cd internal/engine && git add evil.go && git commit -m x"';
+  assert.equal(hasExtractedBody(extracted, /git add evil\.go/), true, 'the argv0 word must NOT hide the -c body');
+  const controls = [
+    'exec echo hi', // no shell — no run-string
+    'exec git commit -m "docs: tidy"', // a real git invocation, NOT a wrapper
+  ];
+  for (const cmd of controls) {
+    const texts = guard.gatherScanTexts(cmd, 0);
+    assert.equal(texts.length, 1, `must NOT extract: ${cmd}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r12 (r11 attacker NEW-1..4): the four REJECT findings
+// NEW-1  `bash <<< "git add … && git commit"` herestring total bypass
+//        (F18a) — the lexer reads `<<<` as redirection and masks the operand
+//        as ONE prose word, so neither verb is detected; the body must be
+//        extracted like a shell-fed heredoc body.
+// NEW-2  `xargs -I {} bash -c "{}"` — the placeholder SPACE-separated from
+//        -I (F18b) — xargsPlaceholder stopped at the whitespace.
+// NEW-3  GNU `xargs --replace[=STR]` long form (F18c) — only the `-I` prefix
+//        was recognised. The SPACE-separated `--replace STR` is NOT a
+//        substitution (GNU --replace is an OPTIONAL argument; empirically
+//        `xargs --replace CMD bash -c "CMD"` executes `CMD`, never the piped
+//        text), so it must stay a control, not a placeholder.
+// NEW-4  constant `%s` printf emitters (F18d) — `printf '%s\n' 'git add
+//        evil.go'` emits `git add evil.go\n`, which the wrapper shell
+//        executes; a statically-evaluable format is no longer a "transform".
+//        Also closes the GNU `-i[replstr]` shorthand (same class as -I).
+// Each RED-proven (see the r12 verdict note on the BOW item).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r12 F18a unit: shell-fed herestring bodies are extracted (NEW-1)', () => {
+  const extracted = [
+    'bash <<< "cd internal/engine && git add evil.go && git commit -m x"',
+    "sudo bash <<< 'git add evil.go'",
+    'sudo -s <<< "git add evil.go"',
+    'sudo -i <<< "git add evil.go"',
+    'su <<< "git add evil.go"',
+    "bash <<< $'git add evil.go'",
+    "sh <<< 'git add evil.go'",
+    'bash <<< git\\ add\\ evil.go',
+    'xargs -I{} bash <<< "git add evil.go"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the herestring operand: ${cmd}`);
+  }
+  const controls = [
+    'cat <<< "git add evil.go"', // cat is not a shell — data, stays opaque
+    'echo "git add evil.go"', // no herestring at all
+    "bash <<< 'echo hi'", // shell-fed, but the operand holds no git add
+    "bash 3<<< 'git add evil.go'", // `[N]<<<` feeds fd N, NOT stdin — not executed
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT extract git add: ${cmd}`);
+  }
+});
+
+test('BUG-332 r12 F18b unit: `xargs -I {}` — placeholder SPACE-separated — is extracted (NEW-2)', () => {
+  const extracted = [
+    'echo "git add evil.go" | xargs -I {} bash -c "{}"',
+    'echo "git add evil.go" | xargs -I {} sh -c "{}"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text: ${cmd}`);
+  }
+  const controls = [
+    // -I with no shell run-string — input is substituted into grep's ARGUMENT.
+    'echo "git add evil.go" | xargs -I {} grep {}',
+    // -I {} still needs a shell to execute; the glued form stays a control in
+    // F17d, here the spaced form must equally stay invisible without a shell.
+    'echo "git add evil.go" | xargs -I {} rm {}',
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT extract: ${cmd}`);
+  }
+});
+
+test('BUG-332 r12 F18c unit: GNU `xargs --replace[=STR]` long form is extracted (NEW-3)', () => {
+  const extracted = [
+    'echo "git add evil.go" | xargs --replace=C bash -c "C"',
+    'echo "git add evil.go" | xargs --replace={} bash -c "{}"',
+    'echo "git add evil.go" | xargs --replace bash -c "{}"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text: ${cmd}`);
+  }
+  const controls = [
+    // EMPIRICAL (GNU findutils 4.10): --replace is an OPTIONAL argument, so a
+    // SPACE-separated `--replace STR` leaves STR as the COMMAND's argv[0]
+    // (`xargs --replace CMD bash -c "CMD"` runs `CMD`, never the piped text).
+    'echo "git add evil.go" | xargs --replace CMD bash -c "CMD"',
+    // --replace with no shell run-string — input becomes grep's ARGUMENT.
+    'echo "git add evil.go" | xargs --replace={} grep {}',
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT extract: ${cmd}`);
+  }
+});
+
+test('BUG-332 r12 F18d unit: constant `%s`/`%%` printf formats are evaluated (NEW-4)', () => {
+  const extracted = [
+    // DOUBLE-quoted inner values: an inner `"` truncates any garbled wrapper
+    // body, so the literal `git add evil.go` can only reach the scan here if
+    // the emitter was actually evaluated (the constant-printf unwrap itself).
+    'bash -c "$(printf \'%s\n\' "git add evil.go")"',
+    'sh -c "$(printf \'%s %s\' "git add" "evil.go")"',
+    'bash -c "$(printf \'%s%%\' "git add evil.go")"',
+    'eval "$(printf \'%s\n\' "git add evil.go")"',
+    // BUG-332 r13 (NEW-C): width/flag forms that PRESERVE the payload now
+    // evaluate (`%10s` of a payload longer than the width is verbatim, `%-s`,
+    // `%*s` with a constant width — quoted or unquoted integer, `%b`).
+    'bash -c "$(printf \'%10s\' "git add evil.go")"',
+    'bash -c "$(printf \'%-s\' "git add evil.go")"',
+    'bash -c "$(printf \'%*s\' "3" "git add evil.go")"',
+    'bash -c "$(printf \'%*s\' 3 "git add evil.go")"',
+    'bash -c "$(printf \'%b\n\' "git add evil.go")"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must unwrap the constant printf: ${cmd}`);
+  }
+  const controls = [
+    'bash -c "$(printf \'%d\' \'42\')"', // non-%s conversion — declared boundary
+    // r14: payload SPLIT across the values — the RAW body never holds the
+    // contiguous literal, and the evaluator emits only `git a evil.go`
+    // (`%.5s` truncates `git add`), never the full payload.
+    'bash -c "$(printf \'%.5s %s\' "git add" "evil.go")"', // precision truncates → no payload
+    'bash -c "$(printf \'%s\' \'a\' \'b\')"', // extra values — declared boundary
+    'bash -c "$(printf \'%s\' $VAR)"', // dynamic arg — not constant
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT unwrap: ${cmd}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r13 (r12 attacker NEW-A..NEW-D): the four REJECT findings
+// NEW-A  herestring operand flowing through a PASSTHROUGH pipe into a shell —
+//        `cat <<< "git add evil.go" | bash` (real commit ef4ad5f). The r12
+//        herestring gate only examined the pre-`<<<` command, so a herestring
+//        fed to cat/tee/sed '' whose stdout pipes into a shell was ALLOWED.
+//        F19a closes it with the SAME pipe-right check heredocs already use.
+// NEW-B  xargs placeholder EMBEDDED in a larger run-string — `bash -c "{} &&
+//        echo harmless"` (real commit 93d5334). pipeFedShellBodies required the
+//        run-string body to EQUAL the placeholder exactly. F19b counts a
+//        standalone placeholder word anywhere in the run-string.
+// NEW-C  printf conversions emitting the payload VERBATIM outside the
+//        `%s`/`%%` subset: `%b` (backslash-free payload), `%*s` (width from a
+//        constant value), `%-s` (flag) — real commits 4370c48, df28d64. F19c
+//        extends the evaluator; precision that TRUNCATES stays honest.
+// NEW-D  a CONSTANT command substitution as the herestring OPERAND — `bash <<<
+//        "$(printf '%s\n' 'git add evil.go')"` (real commit 2de10ff).
+//        maybeConstantBody was gated to wrapper run-strings only. F19d unwraps
+//        herestring operands too.
+// Each RED-proven: F19 + the flipped F17e/F18d %10s cases fail before the r13
+// source changes (see the r13 verdict note on the BOW item).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r13 F19a unit: herestring operands flowing through a passthrough pipe into a shell are extracted (NEW-A)', () => {
+  const extracted = [
+    'cat <<< "cd internal/engine && git add evil.go && git commit -m x" | bash',
+    "tee <<< 'git add evil.go' | bash",
+    "sed '' <<< 'git add evil.go' | sh",
+    'cat <<< "git add evil.go" | sudo bash',
+    'cat <<< "git add evil.go" | sudo -s',
+    'cat <<< "git add evil.go" | xargs -I{} bash -c "{}"',
+    'cat <<< "git add evil.go" | cat | bash',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the herestring operand through the pipe: ${cmd}`);
+  }
+  const controls = [
+    'cat <<< "git add evil.go"', // no pipe — cat is DATA, never executed
+    'cat <<< "git add evil.go" | grep foo', // pipe target is NOT a shell
+    'echo x | bash && cat <<< "git add evil.go"', // earlier command's pipe is not THIS herestring's
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT extract: ${cmd}`);
+  }
+});
+
+test('BUG-332 r13 F19b unit: xargs placeholder EMBEDDED in a larger run-string is extracted (NEW-B)', () => {
+  const extracted = [
+    'echo "cd internal/engine && git add evil.go && git commit -m x" | xargs -I{} bash -c "{} && echo harmless"',
+    'echo "git add evil.go" | xargs -I{} sh -c "cd /tmp && {}"',
+    'echo "git add evil.go" | xargs -I% bash -c "% && echo done"',
+    'echo "git add evil.go" | xargs -I{} bash -c "{} | sh"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text: ${cmd}`);
+  }
+  const controls = [
+    // placeholder glued inside a WORD is data, not a substitution site.
+    'echo "git add evil.go" | xargs -I{} bash -c "echo not{}"',
+    // non-shell xargs target — the substituted text is an ARGUMENT.
+    'echo "git add evil.go" | xargs -I{} grep {}',
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT extract: ${cmd}`);
+  }
+});
+
+test('BUG-332 r13 F19c unit: `%b`, `%*s`, `%-s` printf conversions preserving the payload are evaluated (NEW-C)', () => {
+  const extracted = [
+    'bash -c "$(printf \'%b\n\' "git add evil.go")"',
+    'bash -c "$(printf \'%*s\' 3 "git add evil.go")"',
+    'bash -c "$(printf \'%*s\' "3" "git add evil.go")"',
+    'bash -c "$(printf \'%-s\' "git add evil.go")"',
+    'bash -c "$(printf \'%10s\' "git add evil.go")"', // payload longer than width
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must unwrap the same-output printf: ${cmd}`);
+  }
+  const controls = [
+    // r14: payload SPLIT across the values — the RAW body never holds the
+    // contiguous literal, and the evaluator emits only `git a evil.go`
+    // (`%.5s` truncates `git add`), never the full payload.
+    'bash -c "$(printf \'%.5s %s\' "git add" "evil.go")"', // precision TRUNCATES → no payload
+    'bash -c "$(printf \'%d\' \'42\')"', // non-string conversion — boundary
+    'bash -c "$(printf \'%s\' \'a\' \'b\')"', // extra values → format repeats
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT unwrap: ${cmd}`);
+  }
+});
+
+test('BUG-332 r13 F19d unit: constant command substitutions as herestring operands are unwrapped (NEW-D)', () => {
+  // The payload is SPLIT across the format's values so the RAW operand body
+  // (`$(printf '%s %s' 'git add' 'evil.go')`) never contains `git add
+  // evil.go` contiguously — only the constant-substitution UNWRAP can produce
+  // it. This isolates the NEW-D mechanism (a raw-operand substring match would
+  // be a false pass, exactly the class this fix closes).
+  const extracted = [
+    'bash <<< "$(printf \'%s %s\' \'git add\' \'evil.go\')"',
+    'sh <<< "$(printf \'%s %s\' \'git add\' \'evil.go\')"',
+    'sudo bash <<< "$(printf \'%s %s\' \'git add\' \'evil.go\')"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must unwrap the constant operand: ${cmd}`);
+  }
+  const controls = [
+    'cat <<< "$(printf \'%s\n\' \'git add evil.go\')"', // cat is DATA, not a shell
+    'bash <<< "$(printf \'%d\' \'42\')"', // non-string conversion — boundary
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT unwrap: ${cmd}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r14 (r13 attacker F1/F2/F3): the three total-bypass classes the r13
+// independent attacker REJECTed on.
+// F20a  `|&` (stderr-merged) pipes — `isPipeTarget` and `pipeBefore` only
+//       recognised a bare `|` as the character before the target word, so
+//       `echo "…" |& bash` was never a pipe target.
+// F20b  UNESCAPED nested double quotes inside `$(…)` in a wrapper run-string —
+//       `bash -c "cat <<< '$(printf "%s\n" "…")' | bash"`. buildQuoteMask and
+//       the WRAPPER_PATTERNS double-quote capture both stopped the outer quote
+//       at the first inner `"`, truncating the body BEFORE the payload; and the
+//       double-quote dequotes (`dequoteShellToken` / `unescapeDoubleQuoted`)
+//       collapsed `\n`→`n`, mangling the `%s\n` format a constant-printf eval
+//       needs. A real shell parses the quotes INSIDE `$()` in their own context
+//       and keeps `\n` literal inside double quotes.
+// F20c  hex escapes in `printf %b` — evalBString decoded `\a…\nnn` but not
+//       `\xHH`, so a fully hex-encoded payload (`%b '\x67\x69\x74…'`) stayed
+//       literal and the emitted command was never recognised.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r14 F20a unit: `|&` (stderr-merged) pipes into a shell are extracted; a non-shell `|&` target is not (F1)', () => {
+  const extracted = [
+    'echo "git add evil.go && git commit -m x" |& bash',
+    "printf '%s\\n' \"git add evil.go\" |& bash",
+    'echo "git add evil.go" |& xargs -I{} bash -c "{}"',
+    'echo "git add evil.go" |& sudo bash',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the piped text through |&: ${cmd}`);
+  }
+  const controls = [
+    'echo "git add evil.go" |& grep foo', // |& into a NON-shell target is data
+    'echo "git add evil.go" & bash', // background & separator, not a pipe
+  ];
+  for (const cmd of controls) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), false, `must NOT extract: ${cmd}`);
+  }
+});
+
+test('BUG-332 r14 F20b unit: wrapper bodies with UNESCAPED nested double quotes inside `$(…)` are extracted whole (F2)', () => {
+  const extracted = [
+    'bash -c "cat <<< \'$(printf "%s\\n" "git add evil.go && git commit -m x")\' | bash"',
+    'eval "cat <<< \'$(printf "%s\\n" "git add evil.go && git commit -m x")\' | bash"',
+    'bash -c "echo \'$(printf "%s\\n" "git add evil.go && git commit -m x")\' | bash"',
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must extract the full body past the nested quotes: ${cmd}`);
+  }
+  // The ESCAPED-inner-quote spelling — the r13 attacker's own control, which
+  // must STAY denied — is the same body shape, just with `\"` instead of a bare
+  // `"`, so it must also extract (the guard cannot regress it into an ALLOW).
+  const escaped = 'bash -c "cat <<< \'$(printf \\"%s\\\\n\\" \\"git add evil.go && git commit -m x\\")\' | bash"';
+  assert.equal(hasExtractedBody(escaped, /git add evil\.go/), true, 'the escaped-inner-quote control must stay extracted');
+});
+
+test('BUG-332 r14 F20c unit: hex escapes in `printf %b` are decoded, exposing the emitted command (F3)', () => {
+  const hex = '\\x67\\x69\\x74\\x20\\x61\\x64\\x64\\x20\\x65\\x76\\x69\\x6c\\x2e\\x67\\x6f';
+  const extracted = [
+    `bash -c "$(printf '%b' '${hex}')"`,
+    `bash <<< "$(printf '%b' '${hex}')"`,
+  ];
+  for (const cmd of extracted) {
+    assert.equal(hasExtractedBody(cmd, /git add evil\.go/), true, `must decode the hex payload: ${cmd}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r15 (r14 attacker): deterministic decoder pipes — the recognition
+// layer must fail closed because the raw command has NO git verb (the decoded
+// payload is the commit). Unit tests assert guard.hasDecoderFedShell() (the
+// exported detector the destructive guard calls before isCommitInvocation).
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r15 F21 unit: the six proven decoder-pipe spellings all flag hasDecoderFedShell (r14 attacker bar)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  const hex = Buffer.from(payload, 'utf8').toString('hex');
+  const flagged = [
+    `echo '${b64}' | base64 -d | bash`,
+    `base64 -d <<< '${b64}' | bash`,
+    `printf '%s' '${b64}' | base64 -d | bash`,
+    `echo '${b64}' | base64 --decode | bash`,
+    `echo '${hex}' | xxd -r -p | bash`,
+    `echo '${b64}' | openssl base64 -d | bash`,
+  ];
+  for (const cmd of flagged) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the decoder-fed shell: ${cmd}`);
+  }
+});
+
+test('BUG-332 r15 F21 unit: sibling decoder routes flag; data/encode/no-shell controls stay clear', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  const flagged = [
+    `echo '${b64}' | b64 -d | bash`,
+    `echo '${b64}' | base32 -d | bash`,
+    `cat <<EOF | base64 -d | bash\n${payload}\nEOF`,
+    `echo '${b64}' | base64 -d | sudo bash`,
+    `echo '${b64}' | base64 -d | xargs -I{} bash -c "{}"`,
+    `echo '${b64}' | base64 -d |& bash`,
+    `sudo base64 -d <<< '${b64}' | bash`,
+    `bash -c "echo '${b64}' | base64 -d | bash"`,
+    `echo '${b64}' | base64 -d | cat | bash`,
+  ];
+  for (const cmd of flagged) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the sibling decoder route: ${cmd}`);
+  }
+  const clear = [
+    `echo '${b64}' | base64 -d | grep foo`,  // decoder into a NON-shell — data
+    `echo '${payload}' | base64 | bash`,      // ENCODE mode — output is base64 text, not the payload
+    `echo '${b64}' | base64 -d`,              // decoder, no shell after
+    `base64 -d <<< '${b64}'`,                 // decoder, no pipe-right shell
+    `cat <<EOF | grep foo\n${payload}\nEOF`,  // transforming pipe-right
+    `echo '${payload}' | grep foo`,           // no shell target
+    `git commit -m '${payload}'`,             // a plain commit, no decoder
+  ];
+  for (const cmd of clear) {
+    assert.equal(guard.hasDecoderFedShell(cmd), false, `must stay clear of a decoder-fed shell: ${cmd}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r16 (r15 attacker F1–F8): the REJECT listed 8 NEW sibling
+// total-bypass classes as the r16 acceptance bar. F22a–h each prove one
+// class now flags hasDecoderFedShell; F22i holds the controls that must stay
+// clear (encode mode, file operands, fixed xargs programs, echo-arg data,
+// keyed ciphers). RED-proven: every flagged case is false on the r15 source
+// (see probe-r16.js) and true after the F22 fixes; every clear case stays
+// false. The classes mirror the attacker's list exactly:
+//   F1 clustered short flags    `base64 -di` — GNU getopt clusters
+//   F2 openssl `-a` short form  `openssl enc -a -d`
+//   F3 env-prefix wrapper       `X=1 base64 -d`
+//   F4 decompressors            `gzip -d`, `xz -d`, `gunzip`
+//   F5 bare `xargs sh -c`       stdin line IS the -c program
+//   F6 command substitution     `$(echo B64 | base64 -d)` at command position
+//   F7 backslash-newline        real `\`+LF continuations (handled by
+//                               normalizeContinuations; entangled-with-F5
+//                               `| \<LF> xargs sh -c` is the F5 gap)
+//   F8 PowerShell surface       `-EncodedCommand`, `FromBase64String | iex`
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r16 F22a unit: clustered short decode flags flag hasDecoderFedShell (F1)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  for (const cmd of [
+    `echo '${b64}' | base64 -di | bash`,
+    `echo '${b64}' | base32 -di | bash`,
+    `echo '${b64}' | base64 -dix | bash`,
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the clustered flag: ${cmd}`);
+  }
+});
+
+test('BUG-332 r16 F22b unit: openssl `enc -a -d` short-form base64 flags it (F2)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  for (const cmd of [
+    `echo '${b64}' | openssl enc -a -d | bash`,
+    `echo '${b64}' | openssl enc -d -a | bash`,
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the openssl -a form: ${cmd}`);
+  }
+});
+
+test('BUG-332 r16 F22c unit: env-prefix wrappers before the decoder flag it (F3)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  for (const cmd of [
+    `X=1 base64 -d <<< '${b64}' | bash`,
+    `FOO=x echo '${b64}' | base64 -d | bash`,
+    `sudo X=1 base64 -d <<< '${b64}' | bash`,
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the env-prefixed decoder: ${cmd}`);
+  }
+});
+
+test('BUG-332 r16 F22d unit: decompressors as stdin→stdout stages flag it; a file operand stays clear (F4)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  for (const cmd of [
+    `echo '${b64}' | base64 -d | gzip -d | bash`,
+    `echo '${b64}' | base64 -d | xz -d | bash`,
+    `echo '${b64}' | base64 -d | gunzip | bash`,
+    `echo '${b64}' | base64 -d | zcat | bash`,
+    `gzip -d < file.gz | bash`, // stdin redirected — stdout still carries decoded bytes
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the stdin-fed decompressor: ${cmd}`);
+  }
+  assert.equal(guard.hasDecoderFedShell(`gzip -d file.gz | bash`), false,
+    'file operand writes to a file — nothing piped to the shell');
+});
+
+test('BUG-332 r16 F22e unit: bare `xargs sh -c` — the piped line IS the program (F5)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  // DECODER form: the xargs-piped line is the DECODED payload — the decoder
+  // signal must fire.
+  for (const cmd of [
+    `echo '${b64}' | base64 -d | xargs sh -c`,
+    `echo '${b64}' | base64 -d | xargs bash -c`,
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the decoder-fed bare xargs sh -c: ${cmd}`);
+  }
+  // PLAINTEXT form (no decoder): the piped line is the command string — it is
+  // not the decoder signal, but gatherScanTexts must EXTRACT the payload as a
+  // scan text so the commit verb is detected downstream.
+  const plain = `echo '${payload}' | xargs sh -c`;
+  assert.equal(guard.hasDecoderFedShell(plain), false,
+    'a plaintext pipe has no decoder — the decoder signal must not fire');
+  const texts = guard.gatherScanTexts(plain, 0);
+  assert.equal(texts.some((t) => t === payload), true,
+    'the plaintext xargs sh -c payload must be extracted as a scan text');
+  // CONTROLS: a FIXED program after -c makes stdin the ARGUMENTS, never the
+  // command string, so the piped text must NOT be extracted.
+  const fixed = `echo '${payload}' | xargs sh -c 'echo hi'`;
+  const fixedTexts = guard.gatherScanTexts(fixed, 0);
+  assert.equal(fixedTexts.some((t) => t === payload), false,
+    'a fixed -c program means stdin becomes arguments — the payload must NOT be extracted');
+  assert.equal(guard.hasDecoderFedShell(`echo '${b64}' | xargs sh -c 'echo hi'`), false,
+    'a FIXED program after -c makes stdin the ARGUMENTS, not command text');
+});
+
+test('BUG-332 r16 F22f unit: command-position command substitutions whose body ends in a decoder flag it (F6)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  for (const cmd of [
+    `bash -c "$(echo '${b64}' | base64 -d)"`,
+    `$(echo '${b64}' | base64 -d) | bash`,
+    `$(base64 -d <<< '${b64}') | bash`,
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the command-position substitution: ${cmd}`);
+  }
+  assert.equal(guard.hasDecoderFedShell(`echo "$(echo '${b64}' | base64 -d)"`), false,
+    'a substitution in an ECHO ARGUMENT prints the decoded text as data — never executed');
+});
+
+test('BUG-332 r16 F22g unit: real backslash-newline continuations are still caught; the entangled `xargs sh -c` tail is the F5 fix (F7)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  const cases = [
+    `echo '${b64}' | base64 -d |\\\nbash`,
+    `echo '${b64}' | base64 -d | \\\nbash`,
+    `echo '${b64}' | base64 -d |\\\r\nbash`,
+    `bash -c "echo '${b64}' | base64 -d |\\\nbash"`,
+    `echo '${b64}' | base64 -d |\\\nxargs sh -c`, // entangled: the bs-LF then xargs ALLOW was F5
+  ];
+  for (const cmd of cases) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the continued decoder pipe: ${cmd}`);
+  }
+});
+
+test('BUG-332 r16 F22h unit: the PowerShell base64 command surface flags it (F8)', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  for (const cmd of [
+    `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}')) | iex`,
+    `powershell -EncodedCommand ${b64}`,
+    `powershell -enc ${b64}`,
+    `iex ([Convert]::FromBase64String('${b64}'))`,
+  ]) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the PowerShell surface: ${cmd}`);
+  }
+  assert.equal(guard.hasDecoderFedShell(`powershell -Command "Write-Host 'hi'"`), false,
+    'a plain -Command with no base64 stays clear');
+});
+
+test('BUG-332 r16 F22i unit: controls stay clear — encode mode, non-shell targets, no-shell decoders, keyed ciphers', () => {
+  const payload = 'cd internal/engine && git add evil.go && git commit -m x';
+  const b64 = Buffer.from(payload, 'utf8').toString('base64');
+  const clear = [
+    `echo '${payload}' | bash`,                 // plain pipe, no decoder
+    `echo '${payload}' | grep foo`,             // transforming pipe-right
+    `echo '${b64}' | base64 | bash`,            // ENCODE mode — output is base64 text
+    `echo '${b64}' | base64 -d`,                // decoder, no shell after
+    `echo '${b64}' | base64 -d | grep foo`,     // decoder into a NON-shell
+    `git commit -m '${payload}'`,               // plain commit, no decoder
+    `base64 -d <<< '${b64}'`,                   // decoder, no pipe-right shell
+    `echo '${b64}' | openssl enc -d -aes-256-cbc | bash`, // keyed cipher — data-dependent
+    `echo '${b64}' | gzip | bash`,              // COMPRESS mode
+    `gzip -d file.gz | bash`,                   // file operand — writes a file
+    `echo '${b64}' | xargs sh -c 'echo hi'`,    // fixed -c program — stdin becomes args
+    `echo "$(echo '${b64}' | base64 -d)"`,      // substitution in an echo argument — data
+  ];
+  for (const cmd of clear) {
+    assert.equal(guard.hasDecoderFedShell(cmd), false, `must stay clear: ${cmd}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUG-332 r18 (r17 attacker REJECT F1-F3): three false-negative allow holes,
+// each RED-proven end-to-end by the r17 attacker. F1 is the structural layer
+// (classifyCommitShape); F2/F3 the decoder layer (hasDecoderFedShell). The
+// regression tests below mirror the attacker's e2e proofs; controls pin the
+// scope so the fix never over-reaches.
+// ---------------------------------------------------------------------------
+
+test('BUG-332 r18 (r17 F1): a commit executed through a HIDDEN git executable — no literal git token — classifies indirect and denies', () => {
+  for (const cmd of [
+    'GIT=git; $GIT commit -m "[FEAT-040] x"',
+    '$(echo $GIT) commit -m "x"',
+    'GIT=git $GIT commit -m "x"',
+  ]) {
+    const shape = guard.classifyCommitShape(cmd);
+    assert.equal(shape.kind, 'indirect', `hidden git executable must classify indirect: ${cmd}`);
+    assert.equal(shape.reason, 'hidden-commit', `reason must name hidden-commit: ${cmd}`);
+  }
+});
+
+test('BUG-332 r18 (r17 F1 controls): commit words NOT preceded by a variable reference classify exactly as before', () => {
+  assert.equal(guard.classifyCommitShape('git commit -m x').kind, 'plain');
+  assert.equal(guard.classifyCommitShape('echo commit').kind, 'none');
+  assert.equal(guard.classifyCommitShape('foo bar commit').kind, 'none');
+  // `$foo bar commit` — the commit's command word is `bar`, not the variable.
+  assert.equal(guard.classifyCommitShape('$foo bar commit').kind, 'none');
+});
+
+test('BUG-332 r18 (r17 F2): string-executor run-flag CLUSTERS (-ne/-pe/-ap, glued module + cluster) flag hasDecoderFedShell; -an stays clear', () => {
+  const flagged = [
+    "echo X | perl -MMIME::Base64 -ne 'print decode_base64($_)' | bash",
+    "echo X | perl -pe 'print decode_base64($_)' | bash",
+    "echo X | perl -ap 'print decode_base64($_)' | bash",
+    "perl -ne 'system(\"git commit -m x\")'",
+  ];
+  for (const cmd of flagged) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the clustered run flag: ${cmd}`);
+  }
+  // `-an` has NO code-exec letter (autosplit + loop) — stays a file/loop run.
+  assert.equal(guard.hasDecoderFedShell("echo X | perl -an 'print $_' | bash"), false,
+    'a -an cluster (no c/e/r/p/m) is not code-exec — must stay clear');
+});
+
+test('BUG-332 r18 (r17 F3): a known data-text TRANSFORMER (sed/awk/tr with a program) feeding a shell flags hasDecoderFedShell', () => {
+  const flagged = [
+    "echo 'x' | sed 's/x/git commit -m \"no tag\"/' | bash",
+    "echo 'x' | awk '{print \"git commit\"}' | bash",
+    "echo 'x' | tr a-z A-Z | bash",
+  ];
+  for (const cmd of flagged) {
+    assert.equal(guard.hasDecoderFedShell(cmd), true, `must flag the transformer feeding a shell: ${cmd}`);
+  }
+  // Scope pins: identity sed stays a passthrough walk (F17c); SELECTOR filters
+  // (grep) and unknown stages stay clear (F17d / F21i) — only REWRITERS that
+  // can inject text are the F3 class.
+  const clear = [
+    "echo 'x' | sed \"\" | bash",   // empty sed program = identity passthrough
+    "echo 'x' | sort | bash",        // unknown non-transformer stage stays clear
+    "echo 'x' | grep foo | bash",    // grep is a selector, out of the transformer class
+  ];
+  for (const cmd of clear) {
+    assert.equal(guard.hasDecoderFedShell(cmd), false, `must stay clear: ${cmd}`);
+  }
+});
+
 test('BUG-046: git cherry-pick with a -c user.email override is now ADVISED, not BLOCKED (was zero coverage)', () => {
   withTempRepo((dir) => {
     initRepoWithHistory(dir, 3);

@@ -24,10 +24,21 @@ const committhook = require('./claude-committhook-install.js');
 // one derivation, already consumed by the commit-msg hook and the demoted
 // PreToolUse guard) rather than a third, independent identity check.
 const identity = require('./claude-author-identity.js');
+// BUG-344 / BUG-354 D2: the slot roster is DERIVED from claude-sync.js's own
+// NAMES constant (single source of truth) — this file once hand-listed
+// ['bill','ben','bev'], which silently missed Bro (added 2026-08-20) and
+// would have treated a Bro-assigned startup checkin as a failure. claude-sync
+// only loads mysql2/claude-db at require time (no DB connection until a
+// command runs), so this is cheap and stops the two files from drifting.
+const { NAMES, isUnusable, readSessionKey } = require('./claude-sync.js');
+const VALID_NAMES = NAMES.map(n => n.toLowerCase());
+// Live (occupiable) slot names, capitalised — parked/retired excluded — for
+// the all-full and fallback messaging, so Ben (PARKED) and Bob (RETIRED) never
+// appear as occupiable slots.
+const LIVE_NAMES = NAMES.filter(n => !isUnusable(n)).map(n => n.toLowerCase());
 
 const projectRoot = __dirname;
 const identityPath = path.join(projectRoot, '.claude', '.identity');
-const VALID_NAMES = ['bill', 'ben', 'bev'];
 
 /** Claude window UUID — resolved from hook stdin JSON before main logic runs. */
 let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
@@ -38,9 +49,22 @@ let windowId = process.env.CLAUDE_CODE_SESSION_ID || '';
  *  including an operator-controlled CLAUDE_IDENTITY -- can break out into shell
  *  metacharacters ( &, |, ;, `, $(), etc.). Never rebuild this as a template
  *  string handed to execSync/exec — that reintroduces the injection. */
+/** Read this window's per-window session secret (BUG-354 r4, r5 F3). The
+ *  startup checkin must present it as an explicit `--session` so checkin
+ *  authenticates by secret, never by the ambient env CLAUDE_CODE_SESSION_ID —
+ *  which any process can set to another window's value. A fresh window with no
+ *  key file yet omits the flag (its checkin is a plain acquire, which writes
+ *  the file). Delegates to claude-sync's readSessionKey: per-user location
+ *  (os.homedir()/.claude/session-keys) with one-time legacy migration. */
+function readSessionSecret() {
+  return readSessionKey(windowId);
+}
+
 function tryCheckin(args) {
+  const secret = readSessionSecret();
+  const fullArgs = secret ? [...args, '--session', secret] : args;
   try {
-    const output = execFileSync('node', args, {
+    const output = execFileSync('node', fullArgs, {
       cwd: projectRoot,
       encoding: 'utf-8',
       timeout: 15000,
@@ -172,6 +196,15 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
   console.log(`IDENTITY: ${name}>`);
   console.log(`PREFIX EVERY RESPONSE with "${name}>". No exceptions.`);
   console.log(`HOOKS: ACTIVE.`);
+  // BUG-354 r4: relay this window's server-issued session secret into the
+  // startup block so the agent can present it as an explicit `--session` for
+  // manual identity commands (checkin/checkout/renew) — those commands no
+  // longer trust the ambient env CLAUDE_CODE_SESSION_ID. Absent when the
+  // checkin output has no Session line (fresh/plain-terminal acquire).
+  const sessionMatch = (checkinOutput || '').match(/^Session: (\S+)$/m);
+  if (sessionMatch) {
+    console.log(`SESSION SECRET (for manual claude-sync identity commands — checkin --name / checkout / renew): ${sessionMatch[1]}`);
+  }
   // FEAT-045 AC-14: printed unconditionally on every successful checkin, not
   // behind a skill/slash-command a human has to remember to run. The third
   // arg is test-only (lets a test point this at a throwaway repo instead of
@@ -245,7 +278,21 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
  *  see that function for FEAT-045 AC-14's test-only committhookRepoRoot
  *  override. */
 function emitSuccess(name, checkinOutput, committhookRepoRoot) {
-  fs.writeFileSync(identityPath, name, 'utf-8');
+  // BUG-354 D3: identity is keyed PER-WINDOW. Write the per-window marker
+  // (.identity-<session_id> — the same key claude-sync's acquire writes and
+  // the statusline / prefix hooks read first) instead of clobbering the shared
+  // .identity, which is cross-window last-checkin-wins state (Bill's 15m loop
+  // rewriting it told a Bev-holding window to answer as "bill>" — the live
+  // incident). This also covers the pure-renew startup path, where checkin
+  // renews an existing permit without calling acquire, so the per-window
+  // marker is still ensured to exist. A plain-terminal startup (no window id)
+  // has no per-window key and falls back to the shared file, same as
+  // claude-sync's writeIdentityFiles.
+  if (windowId) {
+    fs.writeFileSync(path.join(projectRoot, '.claude', `.identity-${windowId}`), name.toLowerCase(), 'utf-8');
+  } else {
+    fs.writeFileSync(identityPath, name, 'utf-8');
+  }
   printSessionSummary(name, checkinOutput, committhookRepoRoot);
 }
 
@@ -274,7 +321,7 @@ function emitDeferredCheckin(maxTTLMs, stderrSnippet) {
 
 /** Emit the hard-blocked message when all slots are full with long TTLs */
 function emitAllFull() {
-  console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (Bill, Ben, Bev all occupied, TTLs > 3 min).`);
+  console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (${LIVE_NAMES.join(', ')} all occupied, TTLs > 3 min).`);
   console.log(`YOU HAVE NO IDENTITY. DO NOT PREFIX RESPONSES WITH ANY NAME.`);
   console.log(`TELL THE USER IMMEDIATELY: "All three Claude slots are occupied. I cannot check in."`);
   console.log(`Ask the user to run: node claude-sync.js read  — to see who is active.`);
@@ -288,7 +335,10 @@ function emitTechnicalFailure(errMsg) {
   console.log(`YOU HAVE NO CONFIRMED IDENTITY.`);
   console.log(`DO NOT use any previous identity — it may be stale or wrong.`);
   console.log(`TELL THE USER: "Session checkin failed: ${errMsg}. Please run: node claude-sync.js checkin manually."`);
-  console.log(`You MUST still prefix responses with bill>, ben>, or bev> once you have checked in successfully.`);
+  const livePrefixes = LIVE_NAMES.length > 1
+    ? `${LIVE_NAMES.slice(0, -1).join('>, ')}, or ${LIVE_NAMES[LIVE_NAMES.length - 1]}>`
+    : `${LIVE_NAMES[0]}>`;
+  console.log(`You MUST still prefix responses with ${livePrefixes} once you have checked in successfully.`);
   console.log(`Read CLAUDE.md for full Golden Rules.`);
 }
 
@@ -325,12 +375,12 @@ if (requestedIdentity) {
     // Requested slot is taken (live holder) or reserved (idle holder may return)
     // — fall back to the next genuinely free slot
     console.log(`WARNING: ${requestedIdentity} slot is OCCUPIED or RESERVED by another session.`);
-    // Derived from VALID_NAMES (not hand-listed) so this line is correct
+    // Derived from LIVE_NAMES (not hand-listed) so this line is correct
     // regardless of which identity was requested, and never drifts when the
     // slot roster changes (this hardcoded-Bob/Ben text is exactly what went
-    // stale when Bob was retired — 2026-08-19).
-    const otherNames = VALID_NAMES.filter(n => n !== requestedIdentity.toLowerCase())
-      .map(n => n.charAt(0).toUpperCase() + n.slice(1));
+    // stale when Bob was retired — 2026-08-19; parked Ben is excluded too,
+    // BUG-354 D2).
+    const otherNames = LIVE_NAMES.filter(n => n.toLowerCase() !== requestedIdentity.toLowerCase());
     console.log(`Falling back to next available slot (${otherNames.join(' or ')})...`);
 
     const second = tryCheckin(['claude-sync.js', 'checkin', '--any']);
@@ -408,5 +458,5 @@ if (require.main === module) {
     setTimeout(start, 3000).unref();
   }
 } else {
-  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES, checkGitIdentity, gitIdentityLine, parseName };
+  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES, LIVE_NAMES, checkGitIdentity, gitIdentityLine, parseName };
 }

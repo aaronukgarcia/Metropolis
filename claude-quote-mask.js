@@ -92,6 +92,35 @@ function buildQuoteMask(text) {
         i += 2;
         continue;
       }
+      // BUG-332 r14 (r13 attacker F2): inside a double-quoted region, a
+      // `$(…)` command substitution (and a backtick substitution) is its OWN
+      // quote context — a real shell parses the quotes INSIDE it separately,
+      // so an inner `"` (or `'`) can never close the outer double-quote.
+      // Without this, `bash -c "cat <<< '$(printf "%s\n" "…")' | bash"`
+      // stopped the outer region at the first inner `"`, hiding the payload.
+      // The whole balanced `$()` span is masked opaque (depth-tracked, so
+      // nested `$(…)` and `$((…))` arithmetic work); an unterminated span
+      // swallows to EOF (the established fail-safe).
+      if (quote === '"' && c === '$' && text[i + 1] === '(') {
+        let depth = 1;
+        let p = i + 2;
+        while (p < text.length && depth > 0) {
+          const d = text[p];
+          if (d === '(') depth++;
+          else if (d === ')') depth--;
+          mask[p] = true;
+          p++;
+        }
+        i = p;
+        continue;
+      }
+      if (quote === '"' && c === '`') {
+        let p = i + 1;
+        while (p < text.length && text[p] !== '`') { mask[p] = true; p++; }
+        if (p < text.length) { mask[p] = true; p++; } // the closing backtick
+        i = p;
+        continue;
+      }
       const closeChar = quote === 'ansic' ? "'" : quote;
       if (c === closeChar) quote = null;
       i++;
@@ -201,6 +230,34 @@ function findHeredocBodyEnd(text, pos, word, stripLeadingTabs) {
 }
 
 /**
+ * heredocBodyRange(text, header) — the span of a heredoc's BODY ONLY (the
+ * first character after the header line's newline through the start of the
+ * terminator line), or null when there is no body (a header line with no
+ * following content, or a body that cannot be located). BUG-332 r9 needs the
+ * body as standalone command text: `sudo bash <<'EOF'` makes the body COMMANDS
+ * the shell executes, and extracting it as its own scan text is what lets the
+ * git-word detectors see the `git add`/`git commit` inside a body that
+ * buildQuoteMask masks opaque (BUG-078). `header` is the object returned by
+ * matchHeredocHeader(); the terminator is located with findHeredocBodyEnd(), so
+ * an unterminated heredoc's "body" extends to the end of `text` — the same
+ * fail-safe, and harmless: the guard never treats trailing outer text as a
+ * body, it only adds a scan text that over-reaches into text already scanned
+ * by the caller.
+ */
+function heredocBodyRange(text, header) {
+  const firstNewline = text.indexOf('\n', header.afterHeader);
+  if (firstNewline === -1) return null; // header line with no body
+  const start = firstNewline + 1;
+  const bodyEnd = findHeredocBodyEnd(text, header.afterHeader, header.word, header.stripLeadingTabs);
+  // bodyEnd is just past the terminator LINE; the body ends where that line
+  // starts (the newline before it, plus one). An unterminated heredoc has no
+  // terminator line, so the body runs to the end of text.
+  const terminatorStart = text.lastIndexOf('\n', bodyEnd - 2) + 1;
+  if (terminatorStart < start) return null;
+  return { start, end: terminatorStart };
+}
+
+/**
  * consumeShellToken(text, start, quoteMask) — walks forward from `start`
  * looking for the first position that is BOTH outside any quoted/heredoc
  * region (per `quoteMask`, built lazily from `text` if omitted) AND
@@ -258,10 +315,49 @@ function dequoteShellToken(token) {
   while (i < token.length) {
     const c = token[i];
     if (quote) {
-      if ((quote === '"' || quote === 'ansic') && c === '\\' && i + 1 < token.length) {
-        out += token[i + 1];
-        i += 2;
-        continue;
+      if (quote === '"') {
+        // BUG-332 r14 (r13 attacker F2): bash-accurate double-quote escapes —
+        // ONLY `\"` `\\` `\$` `` \` `` collapse; `\n`, `\t`, `\x41`, `\.` etc.
+        // stay as the literal two characters. The prior `\X`→`X` collapse
+        // mangled a `%s\n` printf format into `%sn`, which the constant-printf
+        // emitter (evalConstantPrintf) rejects — hiding the payload. And a
+        // `$(…)` / backtick substitution inside double quotes is its OWN quote
+        // context: its inner `"`/`'` never toggle the outer quote, and the
+        // span's content is appended RAW (a nested shell parses it), exactly
+        // as buildQuoteMask now masks it.
+        if (c === '\\' && i + 1 < token.length &&
+            (token[i + 1] === '"' || token[i + 1] === '\\' ||
+             token[i + 1] === '$' || token[i + 1] === '`')) {
+          out += token[i + 1];
+          i += 2;
+          continue;
+        }
+        if (c === '$' && token[i + 1] === '(') {
+          let depth = 1;
+          let p = i + 2;
+          while (p < token.length && depth > 0) {
+            const d = token[p];
+            if (d === '(') depth++;
+            else if (d === ')') depth--;
+            out += d;
+            p++;
+          }
+          i = p;
+          continue;
+        }
+        if (c === '`') {
+          let p = i + 1;
+          while (p < token.length && token[p] !== '`') { out += token[p]; p++; }
+          if (p < token.length) p++; // closing backtick consumed, not output
+          i = p;
+          continue;
+        }
+      } else if (quote === 'ansic') {
+        if (c === '\\' && i + 1 < token.length) {
+          out += token[i + 1];
+          i += 2;
+          continue;
+        }
       }
       const closeChar = quote === 'ansic' ? "'" : quote;
       if (c === closeChar) {
@@ -298,6 +394,7 @@ module.exports = {
   buildQuoteMask,
   matchHeredocHeader,
   findHeredocBodyEnd,
+  heredocBodyRange,
   consumeShellToken,
   dequoteShellToken,
 };
