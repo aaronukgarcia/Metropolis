@@ -11,7 +11,7 @@
 
 import type { SimState } from './types.ts';
 import type { Journal, JournalEntry } from './journal.ts';
-import { reducer, initialState as getInitialState } from './engine.ts';
+import { reducer, initialState as getInitialState, nextSafeBuildingId } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import { emptyJournal } from './journal.ts';
 
@@ -148,6 +148,11 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
     // Start from the snapshot state.
     let state = most.snapshot;
 
+    // BUG-413 FIX: Recalculate nextId to ensure it's > max existing building id.
+    // This prevents collision when new buildings are placed after restore.
+    // The saved nextId may be stale if journal replayed actions added buildings.
+    state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
+
     // Verify consistency BEFORE replay (snapshot should already be consistent).
     const beforeReport = runConsistencyChecks(state);
     if (beforeReport.failures > 0) {
@@ -163,6 +168,10 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
       state = reducer(state, entry.action);
       replayed++;
     }
+
+    // BUG-413 FIX: After replay, recalculate nextId again to ensure it accounts
+    // for any buildings added during the replay.
+    state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
 
     // Verify consistency AFTER replay (should still be consistent after deterministic replay).
     const afterReport = runConsistencyChecks(state);

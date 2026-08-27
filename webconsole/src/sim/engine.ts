@@ -141,7 +141,25 @@ function starterCity(): SimState['buildings'] {
   return out;
 }
 
+/**
+ * Calculate the next safe building ID: max(existing building ids) + 1.
+ * This ensures no collision between scenery, savepoint-restored buildings, and new placements.
+ *
+ * BUG-413 FIX: scenery starts at id=1 and can reach ~1900+ buildings,
+ * but nextId was hardcoded to 100, causing collision. This function computes
+ * the safe starting point for new gameplay buildings.
+ */
+export function nextSafeBuildingId(buildings: SimState['buildings']): number {
+  if (buildings.length === 0) return 1;
+  let maxId = 0;
+  for (const b of buildings) {
+    if (b.id > maxId) maxId = b.id;
+  }
+  return maxId + 1;
+}
+
 function rawState(): SimState {
+  const buildings = starterCity();
   return {
     tick: 0,
     speed: 1,
@@ -151,8 +169,8 @@ function rawState(): SimState {
     xp: 30,
     taxRates: { residential: 9, commercial: 11, industrial: 13 },
     policies: { recycling: false, transitSubsidy: false, tourismDrive: false, austerity: false },
-    buildings: starterCity(),
-    nextId: 100,
+    buildings,
+    nextId: nextSafeBuildingId(buildings),
     movingId: null,
     tool: { mode: 'select' },
     clipboard: null,
