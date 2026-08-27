@@ -49,6 +49,8 @@ export function isStateAffecting(action: Action): boolean {
       return false;
     case 'tool':
       return false;
+    case 'setClipboard':
+      return false;
     case 'dismissNotice':
       return false;
 
@@ -76,6 +78,10 @@ export function isStateAffecting(action: Action): boolean {
     case 'loan':
       return true;
     case 'repay':
+      return true;
+
+    // Clone-stamp — state-affecting (places/flattens buildings, deducts cost).
+    case 'stampRegion':
       return true;
 
     // Debug actions — state-affecting.

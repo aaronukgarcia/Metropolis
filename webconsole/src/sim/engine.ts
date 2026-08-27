@@ -496,6 +496,8 @@ export type Action =
   | { type: 'policy'; id: PolicyId }
   | { type: 'loan' }
   | { type: 'repay' }
+  | { type: 'setClipboard'; clipboard: SimState['clipboard'] }
+  | { type: 'stampRegion'; clipboard: SimState['clipboard']; x: number; y: number }
   | { type: 'debugFunds'; amount: number }
   | { type: 'debugXp'; amount: number }
   | { type: 'dismissNotice' }
@@ -611,6 +613,126 @@ export function reducer(state: SimState, action: Action): SimState {
     case 'cancelMove':
       return { ...state, movingId: null };
 
+    case 'stampRegion': {
+      // FEAT-1972079853: Clone-stamp tool — deterministically flatten + place a region.
+      // The clipboard carries relative offsets (dx, dy) from the region's origin.
+      // Stamp at (x, y) means each item lands at (x + item.dx, y + item.dy).
+      if (!action.clipboard) return state;
+
+      // Validate that all item footprints fit within bounds.
+      // For each item in clipboard, compute its actual world pos and check bounds.
+      for (const item of action.clipboard.items) {
+        const sp = SPECS[item.spec];
+        if (!sp) return state; // Unknown spec
+        const ax = action.x + item.dx;
+        const ay = action.y + item.dy;
+        if (ax < 0 || ay < 0 || ax + sp.w > MAP_W || ay + sp.h > MAP_H) {
+          return state; // Out of bounds
+        }
+      }
+
+      // Deterministic flatten: remove ALL buildings whose footprint overlaps the landing zone.
+      // To avoid non-determinism, iterate through buildings in a stable order (by id).
+      // Collect all cells that will be occupied by stamped items.
+      const landingCells = new Set<string>();
+      for (const item of action.clipboard.items) {
+        const sp = SPECS[item.spec];
+        const ax = action.x + item.dx;
+        const ay = action.y + item.dy;
+        for (let dy = 0; dy < sp.h; dy++) {
+          for (let dx = 0; dx < sp.w; dx++) {
+            landingCells.add(`${ax + dx},${ay + dy}`);
+          }
+        }
+      }
+
+      // Find all buildings that have ANY cell in the landing zone.
+      const toRemove = new Set<number>();
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (!sp) continue;
+        for (let dy = 0; dy < sp.h; dy++) {
+          for (let dx = 0; dx < sp.w; dx++) {
+            if (landingCells.has(`${b.x + dx},${b.y + dy}`)) {
+              toRemove.add(b.id);
+              break;
+            }
+          }
+          if (toRemove.has(b.id)) break;
+        }
+      }
+
+      // Calculate total refund and new buildings array.
+      let refundTotal = 0;
+      let newBuildings = state.buildings.filter((b) => {
+        if (toRemove.has(b.id)) {
+          const sp = SPECS[b.spec];
+          if (sp) refundTotal += Math.round(placementCost(sp) * 0.25);
+          return false;
+        }
+        return true;
+      });
+
+      // Calculate total placement cost for the stamped items.
+      let totalCost = 0;
+      for (const item of action.clipboard.items) {
+        const sp = SPECS[item.spec];
+        if (sp) totalCost += placementCost(sp);
+      }
+
+      // Check funds.
+      const netCost = totalCost - refundTotal;
+      if (state.funds < netCost) return state;
+
+      // Place all items.
+      let nextId = state.nextId;
+      for (const item of action.clipboard.items) {
+        const sp = SPECS[item.spec];
+        if (!sp) continue;
+        const ax = action.x + item.dx;
+        const ay = action.y + item.dy;
+        newBuildings.push({
+          id: nextId++,
+          spec: item.spec,
+          x: ax,
+          y: ay,
+          builtTick: state.tick,
+        });
+      }
+
+      // Compute XP: 4 XP per placed item (same as place action).
+      const xpGain = action.clipboard.items.length * 4;
+
+      // Build updated state.
+      const updated = {
+        ...state,
+        funds: state.funds - netCost,
+        xp: state.xp + xpGain,
+        nextId,
+        buildings: newBuildings,
+        ...logEvent(
+          state,
+          `Stamped region (${action.clipboard.items.length} items)`,
+          -netCost
+        ),
+      };
+
+      // Check for level rewards (same as place action).
+      const rewards = computeLevelRewards(updated);
+      if (rewards.length === 0) return updated;
+
+      let lastRewardedLevel = state.lastRewardedLevel;
+      for (const r of rewards) {
+        lastRewardedLevel = r.newLevel;
+      }
+      return {
+        ...updated,
+        pendingRewards: [...state.pendingRewards, ...rewards],
+        lastRewardedLevel,
+        notice: rewards[rewards.length - 1].notice,
+      };
+    }
+
     case 'pipeUpgrade': {
       const b = state.buildings.find((w) => w.id === action.id);
       if (!b) return state;
@@ -654,6 +776,11 @@ export function reducer(state: SimState, action: Action): SimState {
         ...logEvent(state, 'Loan repaid in full', -bal),
       };
     }
+
+    case 'setClipboard':
+      // FEAT-1972079853: UI-only action — just stores the clipboard for the ghost preview.
+      // Does not affect game state deterministically; stampRegion carries the full clipboard.
+      return { ...state, clipboard: action.clipboard };
 
     case 'debugFunds':
       // Tick-boundary invariant (Round-6): between-tick mutations never affect

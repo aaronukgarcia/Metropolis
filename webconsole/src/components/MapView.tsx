@@ -4,6 +4,7 @@ import {
   MAP_W,
   SPECS,
   PALETTE_FLAT,
+  POWER_LINES,
   countByKind,
   coordLabel,
   ROW_BAND,
@@ -58,11 +59,14 @@ export function MapView() {
   const [view, setView] = useState<View>({ zoom: 2.2, cx: 165, cy: 76 });
   const [frame, setFrame] = useState(0);
   const [showWater, setShowWater] = useState(false);
+  const [showPower, setShowPower] = useState(false);
+  const [cloneSelection, setCloneSelection] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const panRef = useRef<{ sx: number; sy: number; cx: number; cy: number; moved: boolean; btn: number } | null>(null);
   const paintRef = useRef(false);
   const lastPaintRef = useRef<string | null>(null);
+  const selectionAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
   useEffect(() => {
@@ -89,8 +93,9 @@ export function MapView() {
       view: { zoom: view.zoom, cx: view.cx, cy: view.cy },
       selectedBuildingId: selected?.id ?? null,
       showWater,
+      showPower,
     });
-  }, [view, selected, showWater]);
+  }, [view, selected, showWater, showPower]);
 
   const geom = useMemo(() => {
     if (size.w <= 0 || size.h <= 0) return { s: 0, ox: 0, oy: 0 };
@@ -286,6 +291,44 @@ export function MapView() {
       }
     }
 
+    // FEAT-1972079851: Power overlay — colour power infrastructure by class
+    // (currently only localGrid/pylons are real; superGrid/HVDC forward-declared).
+    // Dim the rest like water does: base alpha 0.4, full saturation on power tiles.
+    if (showPower) {
+      const powerColorMap = new Map(POWER_LINES.map((pc) => [pc.id, pc.color]));
+      // Classify buildings by their power class. Currently: pylon → localGrid only.
+      const pylonIds = new Set<number>();
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (sp?.kind === 'pylon') pylonIds.add(b.id);
+      }
+      // Dim pass: all non-power infrastructure at 0.4× alpha
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (!sp || pylonIds.has(b.id)) continue;
+        const px = geom.ox + b.x * geom.s;
+        const py = geom.oy + b.y * geom.s;
+        const pw = sp.w * geom.s;
+        const ph = sp.h * geom.s;
+        ctx.globalAlpha = 0.4;
+        ctx.fillStyle = sp.color;
+        ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
+      }
+      ctx.globalAlpha = 1;
+      // Full-saturation pass: power infrastructure at native colour + full alpha
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (!sp || !pylonIds.has(b.id)) continue;
+        const px = geom.ox + b.x * geom.s;
+        const py = geom.oy + b.y * geom.s;
+        const pw = sp.w * geom.s;
+        const ph = sp.h * geom.s;
+        ctx.fillStyle = powerColorMap.get('localGrid') || sp.color;
+        ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // station connectivity dots
     const links = stationLinks(state);
     for (const b of state.buildings) {
@@ -367,7 +410,26 @@ export function MapView() {
         ctx.strokeRect(px - 1, py - 1, sp.w * geom.s + 2, sp.h * geom.s + 2);
       }
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, selected, hover, geom, size, frame]);
+
+    // FEAT-1972079853: Clone-stamp ghost preview — render clipboard contents
+    // at the cursor position when clipboard is set and clone mode is active.
+    if (state.tool.mode === 'clone' && state.clipboard && hover && geom.s > 2) {
+      const cb = state.clipboard;
+      ctx.globalAlpha = 0.35;
+      for (const item of cb.items) {
+        const sp = SPECS[item.spec];
+        if (!sp) continue;
+        const ax = hover.x + item.dx;
+        const ay = hover.y + item.dy;
+        if (ax < 0 || ay < 0 || ax + sp.w > MAP_W || ay + sp.h > MAP_H) continue;
+        const px = geom.ox + ax * geom.s;
+        const py = geom.oy + ay * geom.s;
+        ctx.fillStyle = sp.color;
+        ctx.fillRect(px + 0.5, py + 0.5, sp.w * geom.s - 1, sp.h * geom.s - 1);
+      }
+      ctx.globalAlpha = 1;
+    }
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, selected, hover, showPower, cloneSelection, geom, size, frame]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;
@@ -540,6 +602,16 @@ export function MapView() {
         className={`map-canvas cur-${state.tool.mode}`}
         onContextMenu={(e) => e.preventDefault()}
         onPointerDown={(e) => {
+          // FEAT-1972079853: Clone mode drag-select (mutually exclusive with paint).
+          if (state.tool.mode === 'clone' && e.button === 0) {
+            const t = tileFrom(e.clientX, e.clientY);
+            if (t) {
+              setCloneSelection({ sx: t.x, sy: t.y, ex: t.x, ey: t.y });
+              selectionAnchorRef.current = { x: t.x, y: t.y };
+            }
+            e.currentTarget.setPointerCapture(e.pointerId);
+            return;
+          }
           if (state.tool.mode !== 'select' && state.tool.mode !== 'move' && e.button === 0) {
             paintRef.current = true;
             lastPaintRef.current = null;
@@ -555,6 +627,14 @@ export function MapView() {
         }}
         onPointerMove={(e) => {
           setHover(tileFrom(e.clientX, e.clientY));
+          // FEAT-1972079853: Clone mode drag-select rectangle.
+          if (cloneSelection && state.tool.mode === 'clone') {
+            const t = tileFrom(e.clientX, e.clientY);
+            if (t) {
+              setCloneSelection((prev) => (prev ? { ...prev, ex: t.x, ey: t.y } : null));
+            }
+            return;
+          }
           const p = panRef.current;
           if (p && geom.s > 0) {
             const dx = e.clientX - p.sx;
@@ -576,6 +656,41 @@ export function MapView() {
           }
         }}
         onPointerUp={(e) => {
+          // FEAT-1972079853: Clone mode completion.
+          if (cloneSelection && state.tool.mode === 'clone' && selectionAnchorRef.current) {
+            const sel = cloneSelection;
+            const minX = Math.min(sel.sx, sel.ex);
+            const maxX = Math.max(sel.sx, sel.ex);
+            const minY = Math.min(sel.sy, sel.ey);
+            const maxY = Math.max(sel.sy, sel.ey);
+
+            if (state.clipboard === null) {
+              // Capture buildings in the selection rect into clipboard.
+              const capturedItems: Array<{ spec: string; dx: number; dy: number }> = [];
+              for (const b of state.buildings) {
+                const sp = SPECS[b.spec];
+                if (!sp) continue;
+                // Check if building's footprint origin (top-left) is in the selection rect.
+                if (b.x >= minX && b.x <= maxX && b.y >= minY && b.y <= maxY) {
+                  const dx = b.x - minX;
+                  const dy = b.y - minY;
+                  capturedItems.push({ spec: b.spec, dx, dy });
+                }
+              }
+              const clipboardRect = { w: maxX - minX + 1, h: maxY - minY + 1, items: capturedItems };
+              dispatch({ type: 'setClipboard', clipboard: capturedItems.length > 0 ? clipboardRect : null });
+            } else {
+              // Stamp the clipboard at the selection anchor.
+              dispatch({
+                type: 'stampRegion',
+                clipboard: state.clipboard,
+                x: selectionAnchorRef.current.x,
+                y: selectionAnchorRef.current.y,
+              });
+            }
+            setCloneSelection(null);
+            selectionAnchorRef.current = null;
+          }
           const p = panRef.current;
           panRef.current = null;
           paintRef.current = false;
@@ -620,7 +735,9 @@ export function MapView() {
                 ? `Placing: ${SPECS[state.tool.spec]?.name}`
                 : state.tool.mode === 'bulldoze'
                   ? 'Bulldozing'
-                  : 'Move tool'}
+                  : state.tool.mode === 'clone'
+                    ? `Clone tool${state.clipboard ? ' (clipboard ready)' : ' (drag-select to capture)'}`
+                    : 'Move tool'}
           </b>
           <span>Esc / right-click to let go</span>
         </div>
@@ -639,6 +756,13 @@ export function MapView() {
           onClick={() => setShowWater((v) => !v)}
         >
           Water
+        </button>
+        <button
+          className={`btn tiny${showPower ? ' active' : ''}`}
+          title="Toggle power infrastructure overlay: highlights pylons and grid classes"
+          onClick={() => setShowPower((v) => !v)}
+        >
+          Power
         </button>
         <button
           className="btn tiny"

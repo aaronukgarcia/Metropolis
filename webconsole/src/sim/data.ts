@@ -94,6 +94,45 @@ export function pipeTierOf(s: SimState, id: number): number {
   return s.pipeTier[id] ?? 0;
 }
 
+/**
+ * Power line / infrastructure classes for the power overlay.
+ * Each class represents a different tier of power infrastructure.
+ *
+ * FORWARD-DECLARATION HONESTY (FEAT-1972079851):
+ * - localGrid: real, placeable today (HV Pylon structures)
+ * - superGrid: declared but not yet built (feature FEAT-1972079849)
+ * - hvdc: declared but not yet built (feature FEAT-1972079850)
+ *
+ * The overlay renders ONLY power infrastructure that exists in state.
+ * If only local-grid pylons are placed, only local-grid colour appears;
+ * super-grid and HVDC colours only render when those features ship and
+ * buildings of those kinds exist on the map.
+ */
+export interface PowerLineClass {
+  id: 'localGrid' | 'superGrid' | 'hvdc';
+  label: string;
+  /** PLACEHOLDER: colour awaits palette curation. */
+  color: string;
+}
+
+export const POWER_LINES: PowerLineClass[] = [
+  {
+    id: 'localGrid',
+    label: 'Local Grid',
+    color: '#9aa4ae', // PLACEHOLDER: matches pylon colour for now
+  },
+  {
+    id: 'superGrid',
+    label: 'Super Grid',
+    color: '#e3b341', // PLACEHOLDER: bold amber for high-capacity trunk
+  },
+  {
+    id: 'hvdc',
+    label: 'HVDC Interconnector',
+    color: '#ff7b72', // PLACEHOLDER: red for long-distance DC link
+  },
+];
+
 export function constructionTicks(sp: Spec): number {
   return Math.max(3, Math.round(sp.cost / 1500));
 }

@@ -22,12 +22,15 @@ export interface MapUiState {
   selectedBuildingId: number | null;
   /** Water-network overlay toggle. */
   showWater: boolean;
+  /** Power infrastructure overlay toggle (FEAT-1972079851). */
+  showPower: boolean;
 }
 
 export const EMPTY_MAP_UI: MapUiState = {
   view: null,
   selectedBuildingId: null,
   showWater: false,
+  showPower: false,
 };
 
 let current: MapUiState = EMPTY_MAP_UI;
