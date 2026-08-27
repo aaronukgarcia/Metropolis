@@ -27,6 +27,7 @@ import {
 } from '../sim/data';
 import { useSim, demandOf, specUnlocked } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
+import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
 import type { Building, ZoneKind } from '../sim/types';
 import { fmtMoney, fmtNum } from '../sim/utils';
@@ -60,6 +61,10 @@ export function MapView() {
   const [frame, setFrame] = useState(0);
   const [showWater, setShowWater] = useState(false);
   const [showPower, setShowPower] = useState(false);
+  // FEAT-1972079903: per-building reference-id overlay toggle. UI-only, default
+  // OFF — component-local like showWater/showPower, deliberately NOT in SimState
+  // or the journal (it never affects the sim; genesis-replay stays deterministic).
+  const [showRefs, setShowRefs] = useState(false);
   const [cloneSelection, setCloneSelection] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -257,6 +262,25 @@ export function MapView() {
         ctx.lineWidth = 2;
         ctx.strokeRect(px - 1, py - 1, pw + 2, ph + 2);
       }
+      // FEAT-1972079903: reference-id overlay — small text at the lower-left of
+      // the footprint so a player can report "re building 44". Deterministic
+      // (id-derived, no clock/random). Hidden at very low zoom where it would be
+      // unreadable — that's acceptable; the info panel still carries the ref.
+      if (showRefs && geom.s > 5) {
+        const label = buildingRef(b);
+        ctx.globalAlpha = 1;
+        ctx.font = '9px ui-monospace, Consolas, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'alphabetic';
+        const tx = px + 2;
+        const ty = py + ph - 2.5;
+        ctx.fillStyle = 'rgba(15, 18, 22, 0.72)';
+        const tw = ctx.measureText(label).width;
+        ctx.fillRect(tx - 1, ty - 8.5, tw + 2, 10);
+        ctx.fillStyle = 'rgba(240, 246, 252, 0.95)';
+        ctx.fillText(label, tx, ty);
+        ctx.textAlign = 'start';
+      }
     }
     ctx.globalAlpha = 1;
 
@@ -429,7 +453,7 @@ export function MapView() {
       }
       ctx.globalAlpha = 1;
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, selected, hover, showPower, cloneSelection, geom, size, frame]);
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, selected, hover, showPower, showRefs, cloneSelection, geom, size, frame]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;
@@ -764,6 +788,13 @@ export function MapView() {
           Power
         </button>
         <button
+          className={`btn tiny${showRefs ? ' active' : ''}`}
+          title="Toggle building reference ids on the map so you can report a bug by building number"
+          onClick={() => setShowRefs((v) => !v)}
+        >
+          Refs
+        </button>
+        <button
           className="btn tiny"
           title="Show whole map"
           onClick={() => setView({ zoom: MIN_ZOOM, cx: MAP_W / 2, cy: MAP_H / 2 })}
@@ -796,6 +827,7 @@ export function MapView() {
         <BuildingCard
           building={selected}
           connected={stationLinks(state).connectedIds.has(selected.id)}
+          showRefs={showRefs}
           onClose={() => setSelected(null)}
         />
       )}
@@ -856,21 +888,30 @@ function Compass() {
 function BuildingCard({
   building,
   connected,
+  showRefs,
   onClose,
 }: {
   building: Building;
   connected: boolean;
+  showRefs: boolean;
   onClose: () => void;
 }) {
   const { state } = useSim();
   const sp = SPECS[building.spec];
   if (!sp) return null;
   const util = utilisationOf(state, building);
+  // FEAT-1972079903: when the Refs overlay is on, append the building ref to the
+  // panel's name·provision label (e.g. "Small Holding · #44") so the visible
+  // report number matches the map overlay and the debug JSON's buildings[].id.
+  const refLabel = buildingRefLabel(building, showRefs);
   return (
     <div className="building-card">
       <header>
         <span className="swatch big" style={{ background: sp.color }} />
-        <b>{sp.name}</b>
+        <b>
+          {sp.name}
+          {refLabel && <span className="mono"> · {refLabel}</span>}
+        </b>
         <button className="btn tiny" onClick={onClose}>
           Close
         </button>
