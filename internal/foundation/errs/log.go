@@ -300,9 +300,22 @@ func (l *Logger) Log(e Entry) error {
 	}
 	line = append(line, '\n')
 
+	// BUG-307 issue 1: If a previous rotation failed, l.file may be nil.
+	// In that case, l.w is also nil and we cannot write to a nil interface.
+	// Return an error indicating logging is temporarily unavailable, but do not panic.
+	if l.w == nil {
+		return fmt.Errorf("logger write unavailable: previous rotation failed")
+	}
+
 	n, err := l.w.Write(line)
 	if err != nil {
 		return fmt.Errorf("write log entry: %w", err)
+	}
+
+	// Detect short writes: if fewer bytes were written than requested,
+	// that is a write failure and must be reported (BUG-307 issue 2).
+	if n != len(line) {
+		return fmt.Errorf("short write: wrote %d bytes of %d", n, len(line))
 	}
 
 	if l.file != nil {
@@ -359,8 +372,16 @@ func (l *Logger) rejectCopiedLog(e Entry) error {
 
 // rotateLocked performs the rename chain (path.N-1 -> path.N, ...,
 // path -> path.1) and reopens a fresh file at path. Caller must hold l.mu.
+// BUG-307 issue 1 fix: Ensure that if rotation fails partway through (e.g.,
+// rename fails or open fails), l.file and l.w are left in a usable state —
+// either still pointing to a valid open file, or set to nil. This prevents
+// subsequent writes from panicking or writing to a closed file descriptor.
 func (l *Logger) rotateLocked() error {
-	if err := l.file.Close(); err != nil {
+	oldFile := l.file
+
+	// Close the old file first (required on Windows; files cannot be renamed
+	// while open). If close fails, return early without touching l.file/l.w.
+	if err := oldFile.Close(); err != nil {
 		return err
 	}
 
@@ -372,19 +393,40 @@ func (l *Logger) rotateLocked() error {
 		dst := fmt.Sprintf("%s.%d", l.path, i+1)
 		if _, err := os.Stat(src); err == nil {
 			if err := os.Rename(src, dst); err != nil {
+				// Rotation rename failed. At this point, the old file is closed
+				// but we couldn't rename it to path.1. This is an error condition.
+				// We cannot proceed. l.file is still the old closed file pointer.
+				// To prevent subsequent writes from panicking, we set l.file to nil.
+				l.file = nil
+				l.w = nil
 				return err
 			}
 		}
 	}
 
 	if err := os.Rename(l.path, l.path+".1"); err != nil {
+		// Final rename failed. Same situation: old file is closed, path still
+		// exists and holds the current log data. l.file is the closed pointer.
+		l.file = nil
+		l.w = nil
 		return err
 	}
 
+	// Rotation successful so far. Now open the new file.
 	f, size, err := openAppend(l.path)
 	if err != nil {
+		// Open failed. At this point:
+		// - Old file has been closed (cannot reopen it — the file was already
+		//   rotated to path.1, so the original file descriptor is gone)
+		// - The file system now has path rotated to path.1 with old data
+		// - We cannot open a new path (openAppend failed)
+		// Set l.file/l.w to nil so Log() can detect this and degrade gracefully.
+		l.file = nil
+		l.w = nil
 		return err
 	}
+
+	// Success: new file opened. Update pointers.
 	l.file = f
 	l.w = f
 	l.size = size
@@ -566,7 +608,20 @@ func (r *ringBuffer) snapshot() []Entry {
 	defer r.mu.Unlock()
 	out := make([]Entry, r.count)
 	for i := 0; i < r.count; i++ {
-		out[i] = r.buf[(r.start+i)%len(r.buf)]
+		src := r.buf[(r.start+i)%len(r.buf)]
+		out[i] = src
+
+		// BUG-307 issue 3 fix: Deep-copy the Ctx map to avoid aliasing the
+		// live ring's state. Maps are reference types in Go, so a struct copy
+		// (out[i] = src) only copies the interface{} wrapper, not the backing
+		// map. Any mutation to the live ring's map would be visible in the
+		// snapshot, and vice versa. We must make a defensive copy of the map.
+		if src.Ctx != nil {
+			out[i].Ctx = make(map[string]any, len(src.Ctx))
+			for k, v := range src.Ctx {
+				out[i].Ctx[k] = v
+			}
+		}
 	}
 	return out
 }
