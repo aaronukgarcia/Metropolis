@@ -662,9 +662,10 @@ async function countUnread(db, name) {
 /** Plain-text rendering of the FEAT-107 unread COUNT line — used by checkin
  *  and renew's wake-recovery paths. Prints nothing when the count is zero,
  *  matching printUnread's existing "nothing to say, say nothing" contract
- *  for the zero-messages case. */
+ *  for the zero-messages case. Explicitly states the delivery contract: read
+ *  is required (GR#17 silent-failure detection, BUG-356). */
 function printUnreadCount(n) {
-  if (n > 0) console.log(`UNREAD: ${n} message(s) - run read to receive them.`);
+  if (n > 0) console.log(`UNREAD: ${n} message(s) - checkin shows count only; run 'read' to receive them (FEAT-107 delivery split).`);
 }
 
 /** Plain-text rendering of delivered messages — terminal tool output, no UI richness. */
@@ -808,6 +809,33 @@ function unusableMessage(candidate) {
 /** Live slot names in NAMES order — retired and parked slots excluded. */
 function liveNames() {
   return NAMES.filter(n => !isUnusable(n));
+}
+
+/**
+ * GR#17 silent-failure detection (BUG-356): determine if a standing loop spec
+ * is "checkin-only" — i.e. it invokes the checkin command but NOT the read
+ * command. After FEAT-107, checkin only prints an unread COUNT and does NOT
+ * deliver message bodies or advance the read cursor — only read does. A loop
+ * that calls checkin without read will check in every iteration, report a
+ * rising armed_count, look healthy in every status view, and NEVER receive any
+ * directed messages.
+ *
+ * Detection: match the actual claude-sync commands, not bare substrings. The
+ * spec invokes checkin if it contains "claude-sync.js checkin" or "claude-sync
+ * checkin" (the actual command line). Avoids false positives like "checkin-
+ * dashboard" (a hypothetical skill) or false negatives like "readme" (a docs
+ * reference). If the spec invokes a skill like "15m /oversight-sweep", we
+ * can't see what the skill does internally, so we don't flag it — that's a
+ * known limitation. Only specs that explicitly invoke claude-sync's checkin
+ * command without also invoking read are flagged.
+ */
+function isCheckinOnly(loopSpec) {
+  if (!loopSpec || typeof loopSpec !== 'string') return false;
+  // Match "claude-sync.js checkin" or "claude-sync checkin" (the actual command)
+  const hasCheckin = /claude-sync(\.js)?\s+checkin\b/.test(loopSpec);
+  // Match "claude-sync.js read" or "claude-sync read" (the read command)
+  const hasRead = /claude-sync(\.js)?\s+read\b/.test(loopSpec);
+  return hasCheckin && !hasRead;
 }
 
 // ── Commands ──────────────────────────────────────────────────────────────────
@@ -1633,6 +1661,25 @@ async function cmdMessage(db) {
     throw err;
   }
   console.log(`Message sent${toName ? ` to ${toName}` : ' (broadcast)'}.`);
+
+  // GR#17 silent-failure detection (BUG-356): if sending to a lane with a
+  // standing loop, check if it is checkin-only (deaf to messages since
+  // FEAT-107). The sender is blind to the failure — they see "Message sent"
+  // with no error — so we warn them explicitly here, at send time. The message
+  // MUST ALWAYS SEND (done above) regardless of this warning check — if the
+  // loop-config query throws (transient DB error), we skip the warning rather
+  // than crashing the entire message send. The warning is best-effort, never
+  // a blocker. Mirror the pattern at printSuccess (lines 539-542).
+  try {
+    if (toName) {
+      const [[loopRow]] = await db.query('SELECT spec FROM sync_loop_config WHERE name=?', [toName]);
+      if (loopRow && isCheckinOnly(loopRow.spec)) {
+        console.log(`⚠ WARNING: ${toName}'s standing loop is checkin-only and CANNOT deliver messages (FEAT-107 split) — it will not see this message. Fix ${toName}'s loop to include 'read', or use the file channel (metropolis-status/bev-to-${toName.toLowerCase()}.md).`);
+      }
+    }
+  } catch (err) {
+    console.log(`(loop-config check unavailable: ${err.message})`);
+  }
 }
 
 async function cmdClaim(db) {
@@ -1923,7 +1970,7 @@ module.exports = {
   unusableMessage, liveNames,
   connect, ensureSchema, findMine, findMineBySessionSecret, slotState, deliverUnread, printUnread,
   sessionKeyPath, readSessionKey,
-  countUnread, printUnreadCount,
+  countUnread, printUnreadCount, isCheckinOnly,
   cmdCheckin, cmdRenew, cmdMessage, cmdCheckout, cmdStatus, cmdWrite, cmdClaim,
   cmdRelease, cmdGc,
   cmdLoopSet, cmdLoopClear, cmdLoopShow, printLoopArmStatus,

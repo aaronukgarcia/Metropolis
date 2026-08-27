@@ -363,7 +363,7 @@ test('AC-7: checkin shows an UNREAD COUNT (never the body) and does not advance 
   const msgId = result.insertId;
   const res = checkin('Bev', 'ac7-session');
   assert.equal(res.status, 0, `checkin should succeed: ${res.stderr}`);
-  assert.match(res.stdout, /UNREAD: 1 message\(s\) - run read to receive them\./, 'checkin must show the count line verbatim');
+  assert.match(res.stdout, /UNREAD: 1 message\(s\) - checkin shows count only.*run.*read.*FEAT-107/, 'checkin must show the count line with the delivery contract stated (GR#17 strengthening, BUG-356)');
   assert.doesNotMatch(res.stdout, /hello Bev/, 'checkin must NEVER print the message body — that is read\'s job only (FEAT-107)');
   const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
   assert.equal(Number(rows[0].last_read_id), 0, 'checkin must NOT advance the cursor — only read does (FEAT-107)');
@@ -1806,4 +1806,173 @@ test('BUG-264: recent activity timestamps display without timezone skew', async 
     `displayed timestamp must equal inserted local time verbatim. ` +
     `displayed: "${displayedTs}", inserted: "${insertedTs}"`
   );
+});
+
+// ── BUG-356 (GR#17): sender-side detection of checkin-only deaf loops ────────
+// After FEAT-107, standing loops that only call `checkin` (not `read`) are
+// structurally deaf to messages — checkin no longer delivers bodies or advances
+// the cursor, only read does. This is silent on both sides: sender sees
+// "Message sent" with no error, receiver's loop looks healthy with a rising
+// armed_count, and the loop never receives a single message. The fix detects
+// this condition sender-side and warns the human explicitly (closing the
+// sender's blind spot), and strengthens the receiver-side unread line to
+// state the delivery contract (GR#17 detection).
+
+test('BUG-356 (sender warning): message to a lane with a checkin-only loop warns the sender', async () => {
+  const senderSid = 'bug356-sender-session';
+  assert.equal(checkin('Bev', senderSid).status, 0);
+
+  // Set up a checkin-only loop for Bill.
+  const billCi = checkin('Bill', 'bug356-bill-session');
+  assert.equal(billCi.status, 0);
+  const billSecret = captureSessionSecret(billCi);
+  const checkinOnlySpec = '15m node claude-sync.js checkin --name Bill';
+  assert.equal(loopSet(billSecret, checkinOnlySpec).status, 0);
+
+  // Send a directed message from Bev to Bill. The message succeeds, but with
+  // a LOUD warning that Bill's loop is deaf to it (BUG-356 / GR#17).
+  const msgRes = run(['message', 'hello Bill', '--to', 'Bill'], senderSid);
+  assert.equal(msgRes.status, 0, `message should succeed: ${msgRes.stderr}`);
+  assert.match(msgRes.stdout, /Message sent to Bill/);
+  assert.match(msgRes.stdout, /⚠ WARNING/, 'sender must be warned with a ⚠ symbol (loud, visible)');
+  assert.match(msgRes.stdout, /checkin-only/, 'warning must name the condition');
+  assert.match(msgRes.stdout, /CANNOT deliver messages/, 'warning must state the consequence');
+  assert.match(msgRes.stdout, /FEAT-107/, 'warning should reference the delivery-split feature');
+});
+
+test('BUG-356 (sender warning): NO warning when sending to a lane whose loop includes read', async () => {
+  const senderSid = 'bug356-sender-with-read-session';
+  assert.equal(checkin('Bev', senderSid).status, 0);
+
+  // Set up a loop that has BOTH checkin and read (not deaf).
+  const broCi = checkin('Bro', 'bug356-bro-session');
+  assert.equal(broCi.status, 0);
+  const broSecret = captureSessionSecret(broCi);
+  const healtySpec = '15m node claude-sync.js checkin --name Bro && node claude-sync.js read';
+  assert.equal(loopSet(broSecret, healtySpec).status, 0);
+
+  // Send a message to Bro — no warning, since the loop includes read.
+  const msgRes = run(['message', 'hello Bro', '--to', 'Bro'], senderSid);
+  assert.equal(msgRes.status, 0);
+  assert.match(msgRes.stdout, /Message sent to Bro/);
+  assert.doesNotMatch(msgRes.stdout, /⚠ WARNING/, 'no warning for a loop that includes read');
+});
+
+test('BUG-356 (sender warning): NO warning when sending to a lane with no standing loop', async () => {
+  const senderSid = 'bug356-sender-no-loop-session';
+  assert.equal(checkin('Bev', senderSid).status, 0);
+
+  // Don't configure any loop for Bill in this test — it has no standing loop.
+  // Send a message to Bill — no warning, since there's no loop at all.
+  const msgRes = run(['message', 'hello Bill (no loop)', '--to', 'Bill'], senderSid);
+  assert.equal(msgRes.status, 0);
+  assert.match(msgRes.stdout, /Message sent to Bill/);
+  assert.doesNotMatch(msgRes.stdout, /⚠ WARNING/, 'no warning when the target has no standing loop');
+});
+
+test('BUG-356 (sender warning): broadcast messages do NOT produce a warning (no target lane)', async () => {
+  const senderSid = 'bug356-broadcast-session';
+  assert.equal(checkin('Bev', senderSid).status, 0);
+
+  // Broadcast (no --to) must never warn, since it's not directed at a lane
+  // that might have a checkin-only loop.
+  const msgRes = run(['message', 'broadcast message'], senderSid);
+  assert.equal(msgRes.status, 0);
+  assert.match(msgRes.stdout, /Message sent \(broadcast\)/);
+  assert.doesNotMatch(msgRes.stdout, /⚠ WARNING/, 'broadcast messages do not trigger the checkin-only warning');
+});
+
+test('BUG-356 (receiver strengthening): checkin unread line explicitly states read is required', async () => {
+  // Insert an unread message manually so there's something to count.
+  await db.query("INSERT INTO sync_messages (from_name, to_name, body) VALUES ('Bill', 'Bev', 'test message')");
+
+  const sid = 'bug356-receiver-session';
+  const ciRes = checkin('Bev', sid);
+  assert.equal(ciRes.status, 0);
+
+  // The unread COUNT line must state the delivery contract: run read, and
+  // mention FEAT-107 so a human knows this is about the delivery split.
+  assert.match(ciRes.stdout, /UNREAD: 1 message\(s\)/);
+  assert.match(ciRes.stdout, /checkin shows count only/i, 'the line must state checkin\'s role (count-only)');
+  assert.match(ciRes.stdout, /run ['\"]?read['\"]?/i, 'the line must instruct the user to run read');
+  assert.match(ciRes.stdout, /FEAT-107/, 'the line must reference the delivery-split feature');
+
+  // Verify the count is real and the message is still undelivered.
+  const [rows] = await db.query('SELECT last_read_id FROM sync_read_cursor WHERE name="Bev"');
+  assert.equal(Number(rows[0].last_read_id), 0, 'checkin must NOT advance the cursor (only read does)');
+
+  // A subsequent read should deliver the message, proving the unread line was truthful.
+  const readRes = readCmd(sid);
+  assert.match(readRes.stdout, /test message/);
+});
+
+test('BUG-356 helper: isCheckinOnly() identifies checkin-only specs with regex matching (tightened)', async () => {
+  const sync = require('./claude-sync.js');
+
+  // True cases: invokes claude-sync checkin but NOT read (regex-matched command tokens)
+  assert.ok(sync.isCheckinOnly('15m node claude-sync.js checkin --name Bill'), 'basic checkin-only spec with node path');
+  assert.ok(sync.isCheckinOnly('15m claude-sync.js checkin --name Bill'), 'checkin-only without node prefix');
+  assert.ok(sync.isCheckinOnly('15m node claude-sync checkin --name Bill'), 'checkin-only with claude-sync (no .js)');
+
+  // False cases: either no claude-sync checkin command, or has both checkin and read
+  assert.ok(!sync.isCheckinOnly('15m /oversight-sweep'), 'no claude-sync checkin at all (skill call)');
+  assert.ok(!sync.isCheckinOnly('15m node claude-sync.js read'), 'read but no checkin command');
+  assert.ok(!sync.isCheckinOnly('15m node claude-sync.js checkin --name Bill && node claude-sync.js read'), 'has both checkin and read commands');
+  assert.ok(!sync.isCheckinOnly('15m node claude-sync.js checkin; node claude-sync.js read'), 'has both in sequence');
+  assert.ok(!sync.isCheckinOnly(''), 'empty string');
+  assert.ok(!sync.isCheckinOnly(null), 'null');
+  assert.ok(!sync.isCheckinOnly(undefined), 'undefined');
+
+  // False positives that the old bare-substring matching would have caught:
+  // (these now correctly DON'T match because they're not the actual command)
+  assert.ok(!sync.isCheckinOnly('15m /checkin-dashboard'), 'skill named checkin-dashboard (not the command)');
+  assert.ok(!sync.isCheckinOnly('15m /checkin-stats'), 'skill named checkin-stats');
+  assert.ok(!sync.isCheckinOnly('15m echo "checked in today"'), 'word checkin in a different context (echo)');
+});
+
+test('BUG-356 (fail-open): message send never crashes, loop-config query failure is handled gracefully', async () => {
+  // This test verifies that the loop-config query is wrapped in try-catch
+  // AFTER the message send (so send always completes), not before it.
+  const src = fs.readFileSync(path.join(ROOT, 'claude-sync.js'), 'utf8');
+  const cmdMessageSection = src.slice(src.indexOf('async function cmdMessage'));
+
+  // Find the key elements in order:
+  const insertIndex = cmdMessageSection.indexOf('INSERT INTO sync_messages');
+  const commitIndex = cmdMessageSection.indexOf('await db.commit()', insertIndex);
+  const tryIndex = cmdMessageSection.indexOf('try', commitIndex);
+  const loopConfigIndex = cmdMessageSection.indexOf('sync_loop_config', tryIndex);
+  const catchIndex = cmdMessageSection.indexOf('catch (err)', tryIndex);
+
+  // Verify order: message send (commit) happens BEFORE the try-catch
+  assert.ok(insertIndex > 0, 'must find INSERT INTO sync_messages');
+  assert.ok(commitIndex > insertIndex, 'must find commit after insert');
+  assert.ok(tryIndex > commitIndex, 'try block for loop-config must be AFTER commit');
+  assert.ok(loopConfigIndex > tryIndex, 'sync_loop_config query must be inside the try block');
+  assert.ok(catchIndex > loopConfigIndex, 'catch must follow the try block');
+
+  // Verify the catch handler prints a message and does not re-throw
+  const catchBlock = cmdMessageSection.slice(catchIndex, cmdMessageSection.indexOf('}', catchIndex) + 1);
+  assert.match(catchBlock, /console\.log\(`\(loop-config check unavailable/, 'catch must print a message, not crash');
+  assert.ok(!catchBlock.includes('throw err'), 'catch must NOT re-throw, allowing message to succeed');
+});
+
+test('BUG-356 (false-positive tightening): checkin-dashboard spec does NOT false-positive', async () => {
+  const senderSid = 'bug356-false-positive-session';
+  assert.equal(checkin('Bev', senderSid).status, 0);
+
+  // Set up a loop that runs a hypothetical skill named "checkin-dashboard",
+  // not the actual claude-sync checkin command.
+  const billCi = checkin('Bill', 'bug356-bill-fp-session');
+  assert.equal(billCi.status, 0);
+  const billSecret = captureSessionSecret(billCi);
+  const skillSpec = '15m /checkin-dashboard';
+  assert.equal(loopSet(billSecret, skillSpec).status, 0);
+
+  // Send a message to Bill. With the tightened regex, this should NOT produce
+  // a warning (no false positive) because "checkin-dashboard" is not the
+  // "claude-sync ... checkin" command.
+  const msgRes = run(['message', 'hello Bill', '--to', 'Bill'], senderSid);
+  assert.equal(msgRes.status, 0);
+  assert.match(msgRes.stdout, /Message sent to Bill/);
+  assert.doesNotMatch(msgRes.stdout, /⚠ WARNING/, 'checkin-dashboard skill should NOT trigger the warning (no false positive)');
 });
