@@ -970,6 +970,180 @@ function repoRoot() {
   return cachedRepoRoot;
 }
 
+/** Get the repository root for a given directory. Returns null on failure.
+ * BUG-386: used to resolve staged files from a -C target directory. */
+function repoRootForDir(dir) {
+  try {
+    const out = execSync('git rev-parse --show-toplevel', {
+      cwd: dir,
+      encoding: 'utf8',
+      timeout: 5000,
+    }).trim();
+    return out || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Check if a git command carries repository-redirecting options that the
+ * guard cannot reliably verify. Returns an object with:
+ *   - hasRedirect: true if any repo-redirecting option is found
+ *   - optionType: 'git-dir', 'work-tree', or null
+ *
+ * BUG-386 EXTENDED (round follow-up): --git-dir and --work-tree redirect
+ * the commit to a different repository/index, bypassing staged-set resolution
+ * exactly like `-C` did. These options are not part of normal in-repo commits
+ * and create uncertainty about which index will be used. A fail-closed deny
+ * is safe and consistent with the guard's philosophy.
+ *
+ * Checks for:
+ *   --git-dir=PATH, --git-dir PATH
+ *   --work-tree=PATH, --work-tree PATH
+ * (uppercase only; -c lowercase is config, not these directory options)
+ */
+function checkRepoRedirectOptions(text, authorGuardMod) {
+  const tokens = authorGuardMod.tokenize(text);
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok === '--git-dir' || tok === '--work-tree') {
+      return { hasRedirect: true, optionType: tok === '--git-dir' ? 'git-dir' : 'work-tree' };
+    }
+    if (tok.startsWith('--git-dir=') || tok.startsWith('--work-tree=')) {
+      const optionType = tok.startsWith('--git-dir=') ? 'git-dir' : 'work-tree';
+      return { hasRedirect: true, optionType };
+    }
+  }
+  return { hasRedirect: false, optionType: null };
+}
+
+/** Check if a git command carries config-injection redirects via `-c` options.
+ * Git's `-c key=value` sets a config value for just that invocation. A commit
+ * can be redirected by injecting core.gitdir or core.worktree:
+ *   `-c core.gitdir=/other/.git commit` → commits to /other/.git
+ *   `-c core.worktree=/other commit` → commits to /other working tree
+ *
+ * BUG-386 FURTHER EXTENDED: config-injection is the same redirect family as
+ * `-C` / `--git-dir` / `--work-tree`. The guard cannot verify the target index
+ * and these are not part of normal in-repo workflows, so fail-closed deny applies.
+ *
+ * Checks for (case-insensitive config keys; git config is case-insensitive):
+ *   `-c core.gitdir=X`, `-c core.gitdir X` (any case spelling)
+ *   `-c core.worktree=X`, `-c core.worktree X` (any case spelling)
+ *
+ * Returns: { hasRedirect: true, optionType: 'config-gitdir'|'config-worktree' }
+ *          or { hasRedirect: false, optionType: null }
+ */
+function checkConfigRedirectInjection(text, authorGuardMod) {
+  const tokens = authorGuardMod.tokenize(text);
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    // Bare `-c` with separate value token, OR `-c key=value` form
+    if (tok === '-c') {
+      if (i + 1 < tokens.length) {
+        const nextTok = tokens[i + 1];
+        const configKey = nextTok.split('=')[0].toLowerCase();
+        if (configKey === 'core.gitdir' || configKey === 'core.worktree') {
+          return {
+            hasRedirect: true,
+            optionType: configKey === 'core.gitdir' ? 'config-gitdir' : 'config-worktree',
+          };
+        }
+      }
+    } else if (tok.startsWith('-c') && tok.length > 2) {
+      // -ckey=value or -ckey value form (no space after -c)
+      const afterC = tok.slice(2);
+      const configKey = afterC.split('=')[0].toLowerCase();
+      if (configKey === 'core.gitdir' || configKey === 'core.worktree') {
+        return {
+          hasRedirect: true,
+          optionType: configKey === 'core.gitdir' ? 'config-gitdir' : 'config-worktree',
+        };
+      }
+    }
+  }
+  return { hasRedirect: false, optionType: null };
+}
+
+/** Extract the -C <dir> option(s) from a git command text (typically a
+ * commit invocation). Git applies multiple -C options cumulatively, so the
+ * LAST -C wins. Returns the resolved directory, or null if no -C is found
+ * or it cannot be resolved.
+ * BUG-386: extracts -C target for staged-file resolution from the commit's
+ * own working directory instead of the hook's cwd. Handles:
+ *   - Multiple -C options (last wins)
+ *   - -C appearing before or after the commit verb (git applies all global options)
+ *   - Quoted directory paths
+ * Returns the TARGET directory path (may be relative or absolute), or null
+ * if no -C is found. The caller is responsible for resolving it to an
+ * absolute path and validating it. */
+function extractTargetDirFromGitCommand(text, authorGuardMod) {
+  // Look for -C <dir> or -C<dir> (no space).
+  // The regex matches:
+  // - A word boundary or unquoted position
+  // - -C (uppercase only, -c is config not directory)
+  // - Either a space followed by an argument, or no space + argument immediately
+  // Quoted paths are handled via tokenization below
+  const tokens = authorGuardMod.tokenize(text);
+  let cDir = null;
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok === '-C') {
+      if (i + 1 < tokens.length) {
+        cDir = tokens[i + 1];
+        i++; // consume the directory
+      }
+    } else if (tok.startsWith('-C') && tok.length > 2) {
+      // -C<dir> form (no space)
+      cDir = tok.slice(2);
+    }
+  }
+  return cDir;
+}
+
+/** Check if a target directory is in the same repository as the repo root.
+ * Returns true if the directories are the same repository (by comparing
+ * git.dir paths), false otherwise.
+ * BUG-386: validates that a -C target is not escaping to a different repo. */
+function isSameRepository(targetDir, baseRepoRoot) {
+  if (!baseRepoRoot) return false;
+  try {
+    const normalBase = path.resolve(baseRepoRoot);
+    const normalTarget = path.resolve(targetDir);
+    // Check if target is the same as base, or is a subdirectory of base
+    // (common for worktree layouts)
+    if (normalTarget === normalBase) return true;
+    if (normalTarget.startsWith(normalBase + path.sep)) return true;
+    // Also check git's perspective: they should have the same git_dir
+    const baseGitDir = execSync('git rev-parse --git-dir', {
+      cwd: baseRepoRoot,
+      encoding: 'utf8',
+    }).trim();
+    const targetGitDir = execSync('git rev-parse --git-dir', {
+      cwd: targetDir,
+      encoding: 'utf8',
+    }).trim();
+    // Normalize to absolute paths for comparison
+    const baseGitAbs = path.resolve(baseRepoRoot, baseGitDir);
+    const targetGitAbs = path.resolve(targetDir, targetGitDir);
+    return baseGitAbs === targetGitAbs;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** Get staged files from a specific directory's index.
+ * BUG-386: queries git diff --cached from the target directory instead of
+ * the hook's cwd. Returns an array of normalized, canonicalized paths.
+ * Throws on unresolvable directory or git failure. */
+function getStagedFilesFromDir(targetDir) {
+  const stagedRaw = execSync('git diff --cached --name-only', {
+    cwd: targetDir,
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+  return stagedRaw.split('\n').map(f => f.trim()).filter(Boolean).map(normalizeGitPath);
+}
+
 /** Finds every `git add` invocation (any spelling GIT_TOKEN_FOR_ADD_RE
  * recognises, including inside a bash -c/pwsh -Command wrapper body via
  * authorGuard.gatherScanTexts()) in `command`. Returns an array of
@@ -1844,11 +2018,88 @@ async function main() {
   // failure path DENIES (fail-closed), the opposite posture from
   // claude-bow-ref-check.js. See header.
 
-  const stagedRaw = execSync('git diff --cached --name-only', {
-    cwd: rootDir(),
-    encoding: 'utf8',
-    timeout: 5000,
-  });
+  // BUG-386 EXTENDED: Check for repository-redirecting options that we cannot
+  // safely resolve. --git-dir and --work-tree redirect the commit to a
+  // different repository/index, similar to how -C does. Unlike -C (which we
+  // can resolve and validate), these options carry too much uncertainty about
+  // the actual target index. They are also not part of normal in-repo commit
+  // workflows, so a fail-closed deny is safe and consistent with the guard's
+  // philosophy (same reasoning as denying a -C to a different repo).
+  const redirectCheck = checkRepoRedirectOptions(command, authorGuard);
+  if (redirectCheck.hasRedirect) {
+    deny(
+      `🛑 DESTRUCTIVE GUARD (BUG-386 EXTENDED): this commit specifies a ${redirectCheck.optionType} ` +
+        'option that redirects to an unverifiable repository/index. The guard cannot determine ' +
+        'which staged files will be committed, so it fails closed (GR#23 is a security rule).\n\n' +
+        'Use the literal `git commit` in the target repository (no --git-dir/--work-tree indirection) ' +
+        'so the staged-file check runs against the correct index.\n\n' +
+        'Emergency bypass (operator-only, set BEFORE the session starts): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1'
+    );
+    return;
+  }
+
+  // BUG-386 FURTHER EXTENDED: Check for config-injection redirects via `-c` options.
+  // The commit can be redirected by `-c core.gitdir=/other/.git` or `-c core.worktree=/other`,
+  // which is the same redirect family as -C/--git-dir/--work-tree. These are not part of
+  // normal in-repo workflows and create unverifiable target-index uncertainty, so deny fail-closed.
+  const configRedirectCheck = checkConfigRedirectInjection(command, authorGuard);
+  if (configRedirectCheck.hasRedirect) {
+    const label = configRedirectCheck.optionType === 'config-gitdir' ? 'core.gitdir' : 'core.worktree';
+    deny(
+      `🛑 DESTRUCTIVE GUARD (BUG-386 FURTHER EXTENDED): this commit carries a -c ${label}=... ` +
+        'config injection that redirects to an unverifiable repository/index. The guard cannot ' +
+        'determine which staged files will be committed, so it fails closed (GR#23 is a security rule).\n\n' +
+        'Use the literal `git commit` in the target repository (no -c config-injection indirection) ' +
+        'so the staged-file check runs against the correct index.\n\n' +
+        'Emergency bypass (operator-only, set BEFORE the session starts): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1'
+    );
+    return;
+  }
+
+  // BUG-386: Extract the -C (change directory) option from the commit invocation,
+  // if present. Git applies multiple -C options cumulatively, so the last -C wins.
+  // If -C is found, resolve staged files from that directory's index instead of
+  // the hook's cwd (rootDir()). This prevents a commit invoked as
+  // `git -C /other/worktree commit` from evading the guard by staging files
+  // invisible to the main checkout's index.
+  let stagedFilesDir = rootDir();
+  const targetDirFromC = extractTargetDirFromGitCommand(command, authorGuard);
+  if (targetDirFromC) {
+    // -C was found — resolve it to an absolute path and validate it
+    const resolvedTargetDir = path.resolve(stagedFilesDir, targetDirFromC);
+    const baseRepoRoot = repoRoot();
+    if (!isSameRepository(resolvedTargetDir, baseRepoRoot)) {
+      // -C target is not in the same repository — deny fail-closed (AC-25)
+      deny(
+        '🛑 DESTRUCTIVE GUARD (BUG-386): this commit specifies a -C (change directory) option ' +
+          'pointing outside this repository. The guard cannot verify staged files in an unrelated ' +
+          'repository, so it fails closed (GR#23 is a security rule).\n\n' +
+          'Use the literal `git commit` in the target repository (no -C / --git-dir indirection) ' +
+          'so the staged-file check runs against the correct index.\n\n' +
+          'Emergency bypass (operator-only, set BEFORE the session starts): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1'
+      );
+      return;
+    }
+    stagedFilesDir = resolvedTargetDir;
+  }
+
+  let stagedRaw;
+  try {
+    stagedRaw = execSync('git diff --cached --name-only', {
+      cwd: stagedFilesDir,
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+  } catch (err) {
+    // Failed to query staged files from the resolved directory — deny fail-closed
+    deny(
+      `🛑 DESTRUCTIVE GUARD (BUG-386): could not query staged files from the resolved directory ` +
+        `(${err.message}). Denying (fail-closed; cannot verify a verdict exists). Fix the directory ` +
+        'and retry.'
+    );
+    return;
+  }
+
   // BUG-332: normalise every staged path — git reports repo-relative paths so
   // a leading `./`/`../` is unusual here, but uniform canonicalisation keeps
   // every classification input on the same footing.
@@ -1898,14 +2149,35 @@ async function main() {
   // BUG-224 (round-2 REJECT): -a/--all stages tracked-modified files at
   // commit-execution time. Union the working-tree diff so codeBearing sees
   // what will actually be committed, not just the pre-command snapshot.
+  // BUG-386: if -C was specified, query the working-tree diff from that
+  // directory, not from the hook's rootDir().
   if (argClass.allFlag) {
     const wtRaw = execSync('git diff --name-only', {
-      cwd: rootDir(),
+      cwd: stagedFilesDir,
       encoding: 'utf8',
       timeout: 5000,
     });
     const wtFiles = wtRaw.split('\n').map(f => f.trim()).filter(Boolean);
     classificationFiles = Array.from(new Set([...classificationFiles, ...wtFiles.map(normalizeGitPath)]));
+  }
+
+  // BUG-214: BLANKET CHECK for unclassifiable commits with unknown flags.
+  // The three specific cases above (pathspecFromFile, barePathspec, allFlag)
+  // are detected and handled explicitly. If classifiable is false BUT none of
+  // those cases apply, it means an unknown/unrecognized flag set classifiable
+  // to false without a specific handler — the guard cannot trust the stale
+  // --cached snapshot and must fail closed.
+  if (!argClass.classifiable && !argClass.pathspecFromFile && !argClass.barePathspec && !argClass.allFlag) {
+    deny(
+      '🛑 DESTRUCTIVE GUARD (GR#23, BUG-214): this commit carries an unrecognized or ' +
+        'unhandled git flag that this guard cannot enumerate — the staged-file check is ' +
+        'unreliable, so this guard fails closed (GR#23 is a security rule). Examples: ' +
+        '`--unknown-flag`, an unrecognised short flag letter.\n\n' +
+        'Use standard git commit flags only (see `git commit --help`), or split the operation ' +
+        'into `git add` and a plain `git commit` with standard flags.\n\n' +
+        'Emergency bypass (operator-only, set BEFORE the session starts): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1'
+    );
+    return;
   }
 
   // FEAT-077 exemption: docs/test-only AND classifiable → exempt (Tester-level
@@ -2075,5 +2347,12 @@ if (require.main === module) {
     hasVariableExecutedCommitPayload,
     processSubstitutionBodies,
     processSubstitutionHidesCommit,
+    // BUG-386 and BUG-214
+    checkRepoRedirectOptions,
+    checkConfigRedirectInjection,
+    extractTargetDirFromGitCommand,
+    isSameRepository,
+    getStagedFilesFromDir,
+    repoRootForDir,
   };
 }
