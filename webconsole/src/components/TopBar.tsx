@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSim, levelOf, xpForLevel, wellbeingOf } from '../sim/store';
+import { useSim, levelOf, xpForLevel, wellbeingOf, UNLOCK_ALL_COST } from '../sim/store';
 import { fmtMoney, fmtNum, gameDate } from '../sim/utils';
 import { useLiveVersion } from '../sim/liveVersion';
 import { TrendArrows } from './Trend';
@@ -82,8 +82,17 @@ export function TopBar() {
 // Kept as its own component so it can live inside the build column while still
 // reaching the sim dispatch + busy overlay.
 export function StartOverButton() {
-  const { dispatch } = useSim();
+  const { state, dispatch } = useSim();
   const { run } = useBusy();
+  // Unlock-all is a large cash gate (FEAT-1972079899). Disabled when already unlocked
+  // or when the treasury cannot cover UNLOCK_ALL_COST — the reducer is all-or-nothing,
+  // so the control never partially applies.
+  const canUnlockAll = !state.unlockedAll && state.funds >= UNLOCK_ALL_COST;
+  const unlockTitle = state.unlockedAll
+    ? 'God mode: every structure already unlocked'
+    : state.funds < UNLOCK_ALL_COST
+      ? `God mode: unlock all structures — needs ${fmtMoney(UNLOCK_ALL_COST)} in the treasury`
+      : `God mode: unlock every structure now for ${fmtMoney(UNLOCK_ALL_COST)}`;
   return (
     <div className="start-over-row">
       <button
@@ -92,6 +101,14 @@ export function StartOverButton() {
         onClick={() => run(() => dispatch({ type: 'reset' }))}
       >
         Start Over
+      </button>
+      <button
+        className="btn accent unlock-all"
+        disabled={!canUnlockAll}
+        title={unlockTitle}
+        onClick={() => run(() => dispatch({ type: 'unlockAll' }))}
+      >
+        {state.unlockedAll ? 'All Unlocked' : 'Unlock All'}
       </button>
       <DevFundsButton />
     </div>

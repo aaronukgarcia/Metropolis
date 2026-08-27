@@ -25,7 +25,7 @@ import {
   PIPE_TIERS,
   utilisationOf,
 } from '../sim/data';
-import { useSim, levelOf, demandOf } from '../sim/store';
+import { useSim, demandOf, specUnlocked } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
 import { useBusy } from './Busy';
 import type { Building, ZoneKind } from '../sim/types';
@@ -398,7 +398,7 @@ export function MapView() {
         const blocked =
           !fits(occupiedSet(state), sp.w, sp.h, ax, ay) ||
           state.funds < placementCost(sp) ||
-          sp.unlock > levelOf(state.xp);
+          !specUnlocked(state, sp);
         const px = geom.ox + ax * geom.s;
         const py = geom.oy + ay * geom.s;
         ctx.globalAlpha = 0.45;
@@ -537,7 +537,6 @@ export function MapView() {
     const c = countByKind(s.buildings);
     const income = s.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
     const expense = s.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
-    const lv = levelOf(s.xp);
     if (c.residential === 0 && s.population === 0)
       return {
         text: 'Welcome to the Hythe turning. Draw roads off the roundabout, then drag-paint housing alongside them.',
@@ -547,7 +546,7 @@ export function MapView() {
     const auto = pickAutoSpec(s);
     if (auto) {
       const sp = SPECS[auto.spec];
-      if (sp.unlock <= lv) {
+      if (specUnlocked(s, sp)) {
         return {
           text: `Do you want a ${sp.name} (${sp.blurb}) to cover ${auto.label.toLowerCase()}?`,
           go: () => {
@@ -582,7 +581,7 @@ export function MapView() {
     // BUG-392: positive demand = shortfall, so the WORST-covered service is
     // the highest value (the old surplus-positive index put it at the lowest).
     const worst = serviceDemandOf(s).sort((a, b) => b.value - a.value)[0];
-    if (worst && worst.value > 30 && SPECS[worst.spec] && SPECS[worst.spec].unlock > lv)
+    if (worst && worst.value > 30 && SPECS[worst.spec] && !specUnlocked(s, SPECS[worst.spec]))
       return {
         text: `${worst.label} is under-provided — the right structure unlocks at city level ${SPECS[worst.spec].unlock}.`,
         go: undefined,
@@ -784,7 +783,7 @@ export function MapView() {
           const ay = Math.min(hover.y, MAP_H - sp.h);
           if (!fits(occupiedSet(state), sp.w, sp.h, ax, ay))
             reason = `Needs a clear ${sp.w}×${sp.h} area`;
-          else if (sp.unlock > levelOf(state.xp))
+          else if (!specUnlocked(state, sp))
             reason = `Locked — reach city level ${sp.unlock}`;
           else if (state.funds < placementCost(sp)) reason = 'Insufficient funds';
           return reason ? (

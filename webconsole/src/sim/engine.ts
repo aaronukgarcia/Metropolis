@@ -25,6 +25,7 @@ import {
   MAP_W,
   powerStats,
 } from './data.ts';
+import type { Spec } from './data.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
 import type {
   FlowItem,
@@ -194,7 +195,24 @@ function rawState(): SimState {
     // Start already "at" the seed level so the opening state grants no reward.
     lastRewardedLevel: levelOf(30),
     notice: null,
+    unlockedAll: false,
   };
+}
+
+/**
+ * God-mode "Unlock all" price (FEAT-1972079899). PLACEHOLDER under the balance-number
+ * regime — a deliberately large cash gate pending Aaron's balance sign-off; not a
+ * derived/tuned value. Charged once by the `unlockAll` action to flip s.unlockedAll.
+ */
+export const UNLOCK_ALL_COST = 5_000_000;
+
+/**
+ * Single-source catalogue unlock gate (FEAT-1972079899). A spec is available for
+ * placement when the god-mode flag is set OR its unlock level has been reached.
+ * Behaviour-preserving when unlockedAll is false: identical to `sp.unlock <= level`.
+ */
+export function specUnlocked(s: SimState, sp: Spec): boolean {
+  return s.unlockedAll || sp.unlock <= levelOf(s.xp);
 }
 
 // UPKEEP_BUCKET moved to fiscal.ts (BUG-422 SSOT) so the consistency checker can
@@ -519,6 +537,7 @@ export type Action =
   | { type: 'debugFunds'; amount: number }
   | { type: 'debugXp'; amount: number }
   | { type: 'dismissNotice' }
+  | { type: 'unlockAll' }
   | { type: 'reset' };
 
 export function reducer(state: SimState, action: Action): SimState {
@@ -535,7 +554,7 @@ export function reducer(state: SimState, action: Action): SimState {
     case 'place': {
       const sp = SPECS[action.spec];
       if (!sp) return state;
-      if (sp.unlock > levelOf(state.xp)) return state;
+      if (!specUnlocked(state, sp)) return state;
       // Zoning is free (FEAT-1972079882): a zone charges £0, so the funds check
       // and deduction use placementCost, not the catalogue cost.
       const cost = placementCost(sp);
@@ -828,6 +847,23 @@ export function reducer(state: SimState, action: Action): SimState {
 
     case 'dismissNotice':
       return state.notice == null ? state : { ...state, notice: null };
+
+    case 'unlockAll': {
+      // God-mode "Unlock all" (FEAT-1972079899): flip the catalogue gate for a large
+      // cash gate. Deterministic + all-or-nothing — with insufficient funds the state
+      // is returned untouched (no partial unlock, no partial charge). The funds
+      // deduction is a between-tick mutation exactly like debugFunds/place cost, so it
+      // never disturbs the tick-boundary conservation invariant; a ledger entry is
+      // recorded for UI visibility (mirrors how `place` logs its spend).
+      if (state.unlockedAll) return state; // idempotent — already unlocked, no re-charge
+      if (state.funds < UNLOCK_ALL_COST) return state;
+      return {
+        ...state,
+        funds: state.funds - UNLOCK_ALL_COST,
+        unlockedAll: true,
+        ...logEvent(state, 'Unlock all (god mode)', -UNLOCK_ALL_COST),
+      };
+    }
 
     case 'reset': {
       const s = rawState();

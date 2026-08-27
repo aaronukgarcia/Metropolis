@@ -17,6 +17,8 @@ import { recordError, updateLastKnownState } from './backend';
 export {
   levelOf,
   xpForLevel,
+  specUnlocked,
+  UNLOCK_ALL_COST,
   demandOf,
   computeFlows,
   approvalOf,

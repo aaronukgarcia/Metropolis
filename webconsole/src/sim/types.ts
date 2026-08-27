@@ -144,4 +144,11 @@ export interface SimState {
   lastRewardedLevel: number;
   /** Active level-up notification banner, or null when dismissed / none pending. */
   notice: LevelUpNotice | null;
+  /**
+   * God-mode "Unlock all" flag (FEAT-1972079899). When true, every catalogue spec
+   * is available for placement regardless of its `unlock` level — the build gate
+   * becomes `unlockedAll || sp.unlock <= level`. Set once by the `unlockAll` action
+   * after charging UNLOCK_ALL_COST; default false. Journaled + deterministic.
+   */
+  unlockedAll: boolean;
 }

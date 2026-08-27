@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
-import { useSim, levelOf } from '../../sim/store';
+import { useSim, specUnlocked } from '../../sim/store';
 import { fmtMoney } from '../../sim/utils';
 import { Panel } from '../Tabs';
 
@@ -21,7 +21,6 @@ export function BottomBar() {
 
 function BuildTab() {
   const { state, dispatch } = useSim();
-  const level = levelOf(state.xp);
   const [fam, setFam] = useState(PALETTE[0].title);
   const famDef = PALETTE.find((p) => p.title === fam) ?? PALETTE[0];
 
@@ -66,7 +65,7 @@ function BuildTab() {
               console.error(`palette id "${id}" has no SPECS entry — skipped`);
               return null;
             }
-            const locked = sp.unlock > level;
+            const locked = !specUnlocked(state, sp);
             const active = state.tool.mode === 'build' && state.tool.spec === id;
             return (
               <button

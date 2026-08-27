@@ -90,6 +90,10 @@ export function isStateAffecting(action: Action): boolean {
     case 'debugXp':
       return true;
 
+    // God-mode "Unlock all" — state-affecting (deducts funds, flips unlockedAll).
+    case 'unlockAll':
+      return true;
+
     // System reset.
     case 'reset':
       return true;
