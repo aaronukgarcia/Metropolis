@@ -344,7 +344,9 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
       };
     }
     case 'police': {
-      const cap = sumBy(s, (sp) => sp.id === 'pol_station', (sp) => sp.served ?? 0);
+      // BUG-399 spec-drift fix: match serviceCoverageOf — count by KIND so a
+      // Divisional HQ (pol_hq) also registers police coverage in this panel.
+      const cap = sumBy(s, (sp) => sp.kind === 'police', (sp) => sp.served ?? 0);
       if (cap <= 0) return null;
       return {
         ratio: ratio(s.population, cap),
@@ -799,7 +801,13 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   const tertiary = sumBy(s, (sp) => sp.stage === 'tertiary', (sp) => sp.children ?? 0);
   const gp = sumBy(s, (sp) => sp.id === 'hea_clinic', (sp) => sp.served ?? 0);
   const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital', (sp) => sp.served ?? 0);
-  const police = sumBy(s, (sp) => sp.id === 'pol_station', (sp) => sp.served ?? 0);
+  // BUG-399 spec-drift fix: count police coverage by KIND, not a hardcoded id.
+  // Newer police buildings (e.g. pol_hq "Divisional HQ", served 60,000) pay
+  // upkeep and are unambiguously police coverage in the same served-population
+  // unit; keying on id === 'pol_station' left them invisible to the meter, so a
+  // fully-policed city read a pegged +100 shortfall. 'police' has exactly one
+  // capability (population coverage via `served`), so kind is the right key.
+  const police = sumBy(s, (sp) => sp.kind === 'police', (sp) => sp.served ?? 0);
   let clean = 0;
   let waste = 0;
   for (const b of s.buildings) {
