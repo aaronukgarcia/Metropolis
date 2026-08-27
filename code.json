@@ -2539,10 +2539,6 @@
         "pattern": null,
         "consumers": [
           {
-            "key": "feat.resourcesurvey",
-            "outboundGuid": "13e58e1a-05ec-417c-bfa9-d671aa776195"
-          },
-          {
             "key": "feat.skeleton",
             "outboundGuid": "a087c6c7-4bb7-4cf8-81ec-e0a0da66d61a"
           },
@@ -3772,10 +3768,6 @@
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
-            "key": "feat.decommission",
-            "outboundGuid": "06715084-efc4-48bd-bed0-43e0a0129c54"
-          },
-          {
             "key": "feat.facilitypermits",
             "outboundGuid": "2c711338-b95f-48e1-b179-1671eb211f41"
           },
@@ -4173,10 +4165,6 @@
           {
             "key": "feat.compositionroot",
             "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
-          },
-          {
-            "key": "feat.facilitypermits",
-            "outboundGuid": "2c711338-b95f-48e1-b179-1671eb211f41"
           },
           {
             "key": "ui.screen.build",
@@ -6692,10 +6680,6 @@
           {
             "key": "engine.refuse",
             "outboundGuid": "f4f37400-9913-4c53-b2eb-675921b8dc99"
-          },
-          {
-            "key": "feat.farmtypes",
-            "outboundGuid": "52f0c043-d23f-418a-9768-9b7003199803"
           }
         ]
       },
@@ -6769,14 +6753,6 @@
           {
             "key": "engine.tunnels",
             "outboundGuid": "2b5739de-8802-4887-8a6a-d0305a27c900"
-          },
-          {
-            "key": "feat.extraction",
-            "outboundGuid": "78f8aefc-aacc-48b6-8a72-92c54808ec56"
-          },
-          {
-            "key": "feat.minetypes",
-            "outboundGuid": "b66080d0-d838-470c-8a22-b5da93dbf6fc"
           },
           {
             "key": "feat.resourcesurvey",
@@ -6885,11 +6861,6 @@
         "guid": "13e58e1a-05ec-417c-bfa9-d671aa776195",
         "calls": [
           {
-            "key": "ui.screen.map",
-            "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
-            "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
-          },
-          {
             "key": "feat.resourcedeposits",
             "moduleGuid": "837a51a3-5726-4770-a4b8-f2094b6af198",
             "inboundGuid": "225e12ba-2cf4-4562-ab0f-6b842435d4e3"
@@ -6926,11 +6897,6 @@
         "guid": "78f8aefc-aacc-48b6-8a72-92c54808ec56",
         "calls": [
           {
-            "key": "engine.mining",
-            "moduleGuid": "9062c545-c846-4f1d-8bfb-a2590359599a",
-            "inboundGuid": "1696baf9-c153-4e81-b358-f2cbb74957dd"
-          },
-          {
             "key": "engine.projections",
             "moduleGuid": "56d13d82-76bd-4919-8b73-b796b4e37bf5",
             "inboundGuid": "4d6f5619-e6e2-4a10-9f77-71192d1299c4"
@@ -6961,11 +6927,6 @@
       "outbound": {
         "guid": "878aa1b8-9b5b-411e-b405-182a7734560b",
         "calls": [
-          {
-            "key": "engine.chemicals",
-            "moduleGuid": "4f18fc17-5d0d-468e-8aee-e5ef3bd29d29",
-            "inboundGuid": "182f5e0e-60f0-41c6-b8a7-774c8312572f"
-          },
           {
             "key": "engine.market",
             "moduleGuid": "bd0cc5e7-5941-41ee-a944-bd3ddc8d2b2f",
@@ -7015,11 +6976,6 @@
         "guid": "2c711338-b95f-48e1-b179-1671eb211f41",
         "calls": [
           {
-            "key": "engine.build",
-            "moduleGuid": "046d98bc-3850-4b7d-b909-a97b7eab0920",
-            "inboundGuid": "6fbc1a41-4d37-4ed5-81dc-3ae5e0ffa0a4"
-          },
-          {
             "key": "engine.finance",
             "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
             "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
@@ -7062,13 +7018,7 @@
       },
       "outbound": {
         "guid": "06715084-efc4-48bd-bed0-43e0a0129c54",
-        "calls": [
-          {
-            "key": "engine.finance",
-            "moduleGuid": "e8ad34bf-d214-46b0-9351-ae1456b358e4",
-            "inboundGuid": "d6a475f0-a86c-46db-883e-a48effe4205b"
-          }
-        ]
+        "calls": []
       },
       "securityScan": null
     },
@@ -7150,10 +7100,6 @@
           {
             "key": "engine.rail",
             "outboundGuid": "8cfa2a06-2d01-44af-8033-50dac845b33e"
-          },
-          {
-            "key": "feat.containerport",
-            "outboundGuid": "48638972-009e-4cce-8628-49612a88ec0b"
           },
           {
             "key": "feat.megafacilities",
@@ -8082,10 +8028,6 @@
           {
             "key": "engine.spaceport",
             "outboundGuid": "3d022c28-63d4-44ee-b671-a9d2deaf0ff3"
-          },
-          {
-            "key": "feat.pharmacampus",
-            "outboundGuid": "3e067a3a-00e2-44c0-948a-1d78b84ecdf3"
           }
         ]
       },
@@ -8380,16 +8322,7 @@
         "name": "ChemAPI",
         "format": "Go package API + deltas",
         "pattern": "chain stages as firms; pipeline as UtilityAPI-style network",
-        "consumers": [
-          {
-            "key": "feat.commoditymarket",
-            "outboundGuid": "878aa1b8-9b5b-411e-b405-182a7734560b"
-          },
-          {
-            "key": "feat.refinery",
-            "outboundGuid": "a8cb5af7-ba36-4680-afbc-f710e5bd6dd4"
-          }
-        ]
+        "consumers": []
       },
       "outbound": {
         "guid": "66c57025-8e56-45f2-a371-7b6aba74c97f",
@@ -8519,12 +8452,7 @@
         "name": "TunnelsAPI",
         "format": "Go package API + deltas",
         "pattern": "TBM programme state; tunnel km as BuildAPI orders",
-        "consumers": [
-          {
-            "key": "feat.channeltunnel",
-            "outboundGuid": "79948617-8202-4a4a-adc4-f52a2c7c068d"
-          }
-        ]
+        "consumers": []
       },
       "outbound": {
         "guid": "2b5739de-8802-4887-8a6a-d0305a27c900",
@@ -9795,11 +9723,6 @@
         "guid": "48638972-009e-4cce-8628-49612a88ec0b",
         "calls": [
           {
-            "key": "engine.freight",
-            "moduleGuid": "093a00ae-97d6-47ce-bf38-4dbc7aa48c5a",
-            "inboundGuid": "3ce6d7c8-1aa6-46f4-94d1-07a20cf656e3"
-          },
-          {
             "key": "engine.rail",
             "moduleGuid": "e436cd22-cec9-47d6-8aab-ac81ed7c4199",
             "inboundGuid": "09b5cb42-7f75-4aaa-b9c6-29e774662c28"
@@ -9840,11 +9763,6 @@
       "outbound": {
         "guid": "79948617-8202-4a4a-adc4-f52a2c7c068d",
         "calls": [
-          {
-            "key": "engine.tunnels",
-            "moduleGuid": "48bb44ac-c6b6-4897-9175-44c71f409b1f",
-            "inboundGuid": "4d524960-407e-498e-ab8f-cce8f8d459d8"
-          },
           {
             "key": "engine.rail",
             "moduleGuid": "e436cd22-cec9-47d6-8aab-ac81ed7c4199",
@@ -10019,11 +9937,6 @@
         "guid": "3e067a3a-00e2-44c0-948a-1d78b84ecdf3",
         "calls": [
           {
-            "key": "engine.fdi",
-            "moduleGuid": "2b9fb790-2d20-4512-b4f5-27ac3fbfddb0",
-            "inboundGuid": "83febe83-2068-4620-9ba4-88117dd89773"
-          },
-          {
             "key": "engine.education",
             "moduleGuid": "bf17030a-a808-41c7-ad5b-b0c174262b0c",
             "inboundGuid": "bae4923b-5043-45e1-82b7-7772afd79b0f"
@@ -10060,11 +9973,6 @@
         "guid": "a8cb5af7-ba36-4680-afbc-f710e5bd6dd4",
         "calls": [
           {
-            "key": "engine.chemicals",
-            "moduleGuid": "4f18fc17-5d0d-468e-8aee-e5ef3bd29d29",
-            "inboundGuid": "182f5e0e-60f0-41c6-b8a7-774c8312572f"
-          },
-          {
             "key": "engine.fuel",
             "moduleGuid": "85cdba62-361d-4ee1-9ae6-500da6676de5",
             "inboundGuid": "7ecc7077-8700-4f45-aa5f-9fe056c4ca73"
@@ -10096,11 +10004,6 @@
         "guid": "b66080d0-d838-470c-8a22-b5da93dbf6fc",
         "calls": [
           {
-            "key": "engine.mining",
-            "moduleGuid": "9062c545-c846-4f1d-8bfb-a2590359599a",
-            "inboundGuid": "1696baf9-c153-4e81-b358-f2cbb74957dd"
-          },
-          {
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
             "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
@@ -10131,11 +10034,6 @@
       "outbound": {
         "guid": "52f0c043-d23f-418a-9768-9b7003199803",
         "calls": [
-          {
-            "key": "engine.farming",
-            "moduleGuid": "bbc279ac-d904-4d29-8ad5-b8aeecf9c495",
-            "inboundGuid": "cb96fd60-5e1b-43e3-8aee-ee3167183c19"
-          },
           {
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",

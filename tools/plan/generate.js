@@ -121,6 +121,14 @@ for (const it of items) {
   if (it.sprint != null && (!Number.isInteger(it.sprint) || it.sprint < 0)) errors.push(`MET-T019 "${id}": sprint must be a non-negative integer or null`);
   if (!it.specRef) errors.push(`MET-T018 "${id}": missing specRef — every item must trace to the master document`);
 }
+// BUG-325: normalize paths for comparison (same-path self-references, not just same-key).
+// A feature at path P calling a module at the same path P is a self-call, even if keys differ.
+function normalizePath(p) {
+  if (!p) return null;
+  return p.replace(/[/\\]+$/, '').toLowerCase();
+}
+const pathByKey = new Map(items.map(it => [it.key, normalizePath(it.path)]));
+
 for (const it of items) {
   for (const dep of it.deps || []) {
     if (dep === it.key) errors.push(`MET-T020 "${it.key}": depends on itself`);
@@ -129,6 +137,10 @@ for (const it of items) {
   for (const call of it.calls || []) {
     if (call === it.key) errors.push(`MET-T022 "${it.key}": calls itself`);
     else if (!byKey.has(call)) errors.push(`MET-T023 "${it.key}": unknown call target "${call}"`);
+    // BUG-325: also reject same-path self-calls (different key, same path).
+    else if (pathByKey.get(it.key) && pathByKey.get(call) && pathByKey.get(it.key) === pathByKey.get(call)) {
+      errors.push(`MET-T022 "${it.key}": calls "${call}" — both at same path "${pathByKey.get(it.key)}", a feature living in its parent module's package cannot "call" that module`);
+    }
   }
 }
 // Collaborations drift check (BUG-058 part 2): an optional per-item

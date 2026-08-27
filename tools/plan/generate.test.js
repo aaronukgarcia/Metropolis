@@ -343,6 +343,116 @@ test('generate.js passes validation when a declared collaboration DOES have a ma
   }
 });
 
+// ── same-path self-calls (BUG-325): MET-T022 extended to catch same-path calls ──
+test('BUG-325: generate.js FAILS when a feature calls its parent module at the same path', () => {
+  const { fixturePath, cleanup } = makePlanFixture();
+  try {
+    const plan = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+    // Find an existing module to use as a base (engine.mining has features that call it).
+    const mining = plan.items.find(it => it.key === 'engine.mining');
+    assert.ok(mining, 'fixture assumption broke: engine.mining no longer exists in the master plan');
+    assert.ok(mining.path, 'fixture assumption broke: engine.mining has no path');
+
+    // Create a test feature at the SAME path but with a different key, calling the parent.
+    const testFeature = {
+      key: 'feat.testsamepath',
+      type: 'feature',
+      seq: 9999,
+      priority: 'P2',
+      milestone: 'M4',
+      layer: 'engine',
+      title: 'Test feature at same path as parent — should be rejected',
+      desc: 'This feature is at the same path as its parent module and calls it, a validation error.',
+      specRef: 'internal test',
+      path: mining.path, // SAME path as engine.mining
+      deps: ['engine.mining'],
+      calls: ['engine.mining'], // Calls the parent — MET-T022 should catch this
+    };
+    plan.items.push(testFeature);
+    fs.writeFileSync(fixturePath, JSON.stringify(plan, null, 2) + '\n', 'utf8');
+
+    const result = spawnSync(process.execPath, [GENERATE_PATH, '--check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, MET_PLAN_PATH: fixturePath },
+    });
+
+    assert.notEqual(result.status, 0, `generate.js --check should fail on same-path self-call, got exit ${result.status}. stderr:\n${result.stderr}`);
+    assert.match(result.stderr, /MET-T022/, `expected a MET-T022 error; stderr was:\n${result.stderr}`);
+    assert.ok(
+      result.stderr.includes('feat.testsamepath') && result.stderr.includes('engine.mining'),
+      `expected the error to name both feat.testsamepath and engine.mining; stderr was:\n${result.stderr}`
+    );
+    assert.ok(
+      result.stderr.includes('same path'),
+      `expected the error to mention "same path"; stderr was:\n${result.stderr}`
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test('BUG-325: generate.js passes validation when features call different modules (no false positive)', () => {
+  const { fixturePath, cleanup } = makePlanFixture();
+  try {
+    const plan = JSON.parse(fs.readFileSync(fixturePath, 'utf8'));
+    const mining = plan.items.find(it => it.key === 'engine.mining');
+    const world = plan.items.find(it => it.key === 'engine.world');
+    assert.ok(mining && world, 'fixture assumption broke: engine.mining or engine.world missing');
+    assert.notEqual(mining.path, world.path, 'fixture assumption broke: engine.mining and engine.world have the same path');
+
+    // BUG-325 cleanup: the 11 latent same-path calls are now caught by MET-T022.
+    // Remove them from the fixture so this test can verify the no-false-positive case.
+    const samePathPairs = [
+      ['feat.resourcesurvey', 'ui.screen.map'],
+      ['feat.extraction', 'engine.mining'],
+      ['feat.commoditymarket', 'engine.chemicals'],
+      ['feat.facilitypermits', 'engine.build'],
+      ['feat.decommission', 'engine.finance'],
+      ['feat.containerport', 'engine.freight'],
+      ['feat.channeltunnel', 'engine.tunnels'],
+      ['feat.pharmacampus', 'engine.fdi'],
+      ['feat.refinery', 'engine.chemicals'],
+      ['feat.minetypes', 'engine.mining'],
+      ['feat.farmtypes', 'engine.farming'],
+    ];
+    for (const [caller, target] of samePathPairs) {
+      const item = plan.items.find(it => it.key === caller);
+      if (item && item.calls) {
+        item.calls = item.calls.filter(c => c !== target);
+      }
+    }
+
+    // Create a feature that calls engine.world but is at mining's path — different targets, no error.
+    const testFeature = {
+      key: 'feat.testdifferentpath',
+      type: 'feature',
+      seq: 9998,
+      priority: 'P2',
+      milestone: 'M4',
+      layer: 'engine',
+      title: 'Test feature calling a different path',
+      desc: 'This feature calls engine.world, a different path — should be allowed.',
+      specRef: 'internal test',
+      path: mining.path,
+      deps: ['engine.mining'],
+      calls: ['engine.world'], // Calls a different module at a different path — OK
+    };
+    plan.items.push(testFeature);
+    fs.writeFileSync(fixturePath, JSON.stringify(plan, null, 2) + '\n', 'utf8');
+
+    const result = spawnSync(process.execPath, [GENERATE_PATH, '--check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, MET_PLAN_PATH: fixturePath },
+    });
+
+    assert.equal(result.status, 0, `generate.js --check should pass when feature calls a different path. stderr:\n${result.stderr}`);
+  } finally {
+    cleanup();
+  }
+});
+
 // ── units registry validation (MET-T032..T038) ─────────────────────────────
 // The F4 reject finding: the units validation shipped with no regression test,
 // so nothing pinned the fail-closed behaviour against drift. Each case mutates
