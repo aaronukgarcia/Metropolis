@@ -63,7 +63,7 @@ export function LeftDock() {
 
       {tab === 'flow' && (
         <>
-          <Sankey inflows={state.lastFlows.inflows} outflows={state.lastFlows.outflows} />
+          <Sankey state={state} />
           <table className="table">
             <thead>
               <tr><th>Stream</th><th>Per tick</th><th>Share</th></tr>
