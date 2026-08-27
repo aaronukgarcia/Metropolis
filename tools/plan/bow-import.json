@@ -3138,6 +3138,24 @@
         "feat.checkpoint",
         "feat.saveux"
       ]
+    },
+    {
+      "mkey": "tool.checkinpipeguard",
+      "type": "feature",
+      "title": "PreToolUse hygiene hook (FEAT-107): warns when a claude-sync.js checkin's own output is piped/redirected to a sink",
+      "desc": "Warn-only, fail-open PreToolUse guard that catches the message-hiding habit of piping/redirecting a `claude-sync.js checkin` (the FEAT-107 delivery split made checkin print only an UNREAD COUNT line, so sinking its stdout hides that mail is waiting on `read`). Detection is PIPELINE-SCOPED (BUG-346): it isolates the text belonging to the checkin's own pipeline and flags ANY pipe (| grep / findstr / Select-String / Out-Null / head / tail) or any stdout/all-stream redirect to a file or null (> file / >> file / > $null / NUL / /dev/null), while never false-firing on an unrelated pipe on a different stage of a compound command. Never denies. [spec: FEAT-107; M0-ENG §5 (hooks); BUG-346] [path: claude-checkin-pipe-guard.js]",
+      "seq": 1001,
+      "sprint": 0,
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "FEAT-107; M0-ENG §5 (hooks); BUG-346",
+      "guid": "becd0909-af91-4357-956f-2dfe5cff314b",
+      "guidIn": "ad4e728b-4aa2-4a22-8bfc-331500e4889f",
+      "guidOut": "e79424d0-d626-49a3-baa9-416b5ecd87e9",
+      "deps": [
+        "tool.sync"
+      ]
     }
   ]
 }

@@ -556,7 +556,7 @@
       "note": "Noise level — airport noiseLevelDBA, mining blight noiseRadius dBA."
     }
   ],
-  "moduleCount": 168,
+  "moduleCount": 169,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -10466,6 +10466,31 @@
             "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
           }
         ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "becd0909-af91-4357-956f-2dfe5cff314b",
+      "key": "tool.checkinpipeguard",
+      "bowType": "feature",
+      "seq": 1001,
+      "sprint": 0,
+      "title": "PreToolUse hygiene hook (FEAT-107): warns when a claude-sync.js checkin's own output is piped/redirected to a sink",
+      "priority": "P2",
+      "milestone": "M0",
+      "layer": "tooling",
+      "specRef": "FEAT-107; M0-ENG §5 (hooks); BUG-346",
+      "path": "claude-checkin-pipe-guard.js",
+      "inbound": {
+        "guid": "ad4e728b-4aa2-4a22-8bfc-331500e4889f",
+        "name": null,
+        "format": null,
+        "pattern": null,
+        "consumers": []
+      },
+      "outbound": {
+        "guid": "e79424d0-d626-49a3-baa9-416b5ecd87e9",
+        "calls": []
       },
       "securityScan": null
     }

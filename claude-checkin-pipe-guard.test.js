@@ -66,6 +66,44 @@ test('checkin piped through head / tail (the documented "tail-piping hangs" habi
   assert.equal(isSuppressedCheckin('node claude-sync.js checkin --any | tail -5'), true);
 });
 
+// ── BUG-346: sinks the old command-global allow-list regex MISSED ────────────
+
+test('BUG-346: checkin piped to findstr / grep (was MISSED by the old allow-list) triggers', () => {
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin | findstr YOU'), true);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin --any | findstr /C:"YOU ARE"'), true);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin | grep YOU'), true);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin 2>&1 | grep -i unread'), true);
+});
+
+test('BUG-346: checkin redirected to an ARBITRARY file (was MISSED — old regex only knew $null/NUL/dev-null) triggers', () => {
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin > out.txt'), true);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin >out.txt'), true);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin --any >> log.txt'), true);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin 1> capture.log'), true);
+});
+
+test('BUG-346: checkin piped to $null (pipe form, not redirect) triggers', () => {
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin | $null'), true);
+});
+
+test('BUG-346: pipeline-scoping — a pipe on an UNRELATED stage of a compound command does NOT trigger', () => {
+  // checkin has no sink of its own; the `| grep` belongs to a separate `ls`.
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin && ls | grep x'), false);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin --any ; git status | Select-String modified'), false);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin || echo done > out.txt'), false);
+});
+
+test('BUG-346: pipeline-scoping — checkin BEFORE the pipe still triggers across separators', () => {
+  // The sink IS on checkin's own pipeline (before the separator).
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin | grep YOU && ls'), true);
+  assert.equal(isSuppressedCheckin('ls ; node claude-sync.js checkin > out.txt'), true);
+});
+
+test('BUG-346: a stderr-only redirect / stream-merge is NOT a sink (stdout/UNREAD still shown)', () => {
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin 2> err.log'), false);
+  assert.equal(isSuppressedCheckin('node claude-sync.js checkin 2>&1'), false);
+});
+
 test('a suppressing sink on an UNRELATED command does not trigger', () => {
   assert.equal(isSuppressedCheckin('echo hello > $null'), false);
   assert.equal(isSuppressedCheckin('node claude-sync.js read | head -80'), false);
@@ -122,6 +160,21 @@ test('SPAWN (Bash): checkin | Out-Null WARNS, never denies', () => {
 test('SPAWN (PowerShell): checkin > $null WARNS via the PowerShell matcher tool_name too', () => {
   const r = runGuard('node claude-sync.js checkin > $null', 'PowerShell');
   assert.equal(isWarn(r), true, `expected a warn envelope, got: ${r.stdout}`);
+});
+
+test('SPAWN (BUG-346): checkin | findstr WARNS (a sink the old regex missed)', () => {
+  const r = runGuard('node claude-sync.js checkin | findstr YOU', 'PowerShell');
+  assert.equal(isWarn(r), true, `expected a warn envelope, got: ${r.stdout}`);
+});
+
+test('SPAWN (BUG-346): checkin > out.txt WARNS (arbitrary-file redirect the old regex missed)', () => {
+  const r = runGuard('node claude-sync.js checkin > out.txt', 'Bash');
+  assert.equal(isWarn(r), true, `expected a warn envelope, got: ${r.stdout}`);
+});
+
+test('SPAWN (BUG-346): checkin && ls | grep x is SILENT (unrelated pipe, pipeline-scoped)', () => {
+  const r = runGuard('node claude-sync.js checkin && ls | grep x', 'Bash');
+  assert.equal(isSilent(r), true, `expected silent allow, got: ${r.stdout}`);
 });
 
 test('SPAWN: bare checkin (no redirection) is SILENT — exit 0, empty stdout', () => {
