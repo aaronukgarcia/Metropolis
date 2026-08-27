@@ -677,12 +677,135 @@ test('BUG-144: guard still ALLOWS a fully lowercase-embedded occurrence on both 
       // Both neighbours are plain lowercase letters — a true continuing
       // lowercase run, the one case that must still be rejected under OR
       // semantics (rejected only when BOTH sides are lowercase-adjacent).
-      fs.writeFileSync(path.join(fixtureDir, 'notes.txt'), 'xcs1y is not a real token anywhere\n', 'utf8');
+      fs.writeFileSync(path.join(fixtureDir, 'notes.txt'), `x${ABBR}y is not a real token anywhere\n`, 'utf8');
       const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
       assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
 
       const outcome = runGuardAsHook('git commit -m "test: bug-144 false-positive control (should pass)"', gitEnv);
       assert.equal(outcome.denied, false, `expected the guard to allow a fully lowercase-embedded occurrence on both sides. raw stdout: ${outcome.raw.stdout}`);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BUG-416 regression: integrity-hash skip must be lockfile-scoped, not global
+// ---------------------------------------------------------------------------
+
+test('BUG-416 SECURITY: guard DENIES a crafted integrity-hash line with the forbidden pattern in a NON-lockfile (e.g., .go source)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug416_nonlockfile__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      // A crafted line that LOOKS like an integrity-hash but is in a .go file.
+      // The guard should NOT skip it just because of the shape; it must check
+      // that the file is a known lockfile basename first.
+      fs.writeFileSync(
+        path.join(fixtureDir, 'main.go'),
+        `package main\n  "integrity": "sha512-${ABBR}XYZ123456789"\n`,
+        'utf8'
+      );
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      const outcome = runGuardAsHook('git commit -m "test: bug-416 non-lockfile integrity-hash (should be blocked)"', gitEnv);
+      assert.equal(
+        outcome.denied,
+        true,
+        `expected the guard to DENY an integrity-hash-shaped line with the forbidden pattern in main.go ` +
+        `(not a lockfile basename). raw stdout: ${outcome.raw.stdout}`
+      );
+      assert.match(outcome.reason, /CODENAME GUARD/);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUG-416 SECURITY: guard ALLOWS a genuine integrity-hash in package-lock.json with the forbidden pattern (lockfile basename match)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug416_lockfile__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      // A genuine integrity-hash line in the actual package-lock.json file
+      // should be skipped, preventing false positives.
+      fs.writeFileSync(
+        path.join(fixtureDir, 'package-lock.json'),
+        `{\n  "integrity": "sha512-${ABBR}XYZ123456789+/=_abc"\n}\n`,
+        'utf8'
+      );
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      const outcome = runGuardAsHook('git commit -m "test: bug-416 lockfile integrity-hash (should pass)"', gitEnv);
+      assert.equal(
+        outcome.denied,
+        false,
+        `expected the guard to ALLOW an integrity-hash line in package-lock.json ` +
+        `even if it contains the forbidden pattern by chance. raw stdout: ${outcome.raw.stdout}`
+      );
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUG-416 SECURITY: guard DENIES integrity-hash in notalock.json (basename not exact match)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug416_notexact__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      // notalock.json is NOT the same basename as package-lock.json.
+      // The guard's allowlist must match basenames exactly, so this should be
+      // scanned and flagged.
+      fs.writeFileSync(
+        path.join(fixtureDir, 'notalock.json'),
+        `{\n  "integrity": "sha512-${ABBR}XYZ123456789"\n}\n`,
+        'utf8'
+      );
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      const outcome = runGuardAsHook('git commit -m "test: bug-416 non-exact basename (should be blocked)"', gitEnv);
+      assert.equal(
+        outcome.denied,
+        true,
+        `expected the guard to DENY an integrity-hash in notalock.json ` +
+        `(not an exact basename match). raw stdout: ${outcome.raw.stdout}`
+      );
+      assert.match(outcome.reason, /CODENAME GUARD/);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('BUG-416 SECURITY: guard ALLOWS genuine integrity-hash in npm-shrinkwrap.json (other lockfile basename)', { concurrency: false }, () => {
+  const fixtureDir = path.join(ROOT, '__codenameguard_e2e_fixture_bug416_shrinkwrap__');
+  fs.rmSync(fixtureDir, { recursive: true, force: true });
+  fs.mkdirSync(fixtureDir);
+  withThrowawayIndex(gitEnv => {
+    try {
+      // npm-shrinkwrap.json is a known lockfile basename (old-style npm lock)
+      // and should be skipped, just like package-lock.json.
+      fs.writeFileSync(
+        path.join(fixtureDir, 'npm-shrinkwrap.json'),
+        `{\n  "integrity": "sha512-${ABBR}XYZ123456789+/=_abc"\n}\n`,
+        'utf8'
+      );
+      const add = spawnSync('git', ['add', '--', fixtureDir], { cwd: ROOT, env: gitEnv, encoding: 'utf8' });
+      assert.equal(add.status, 0, `git add failed: ${add.stderr}`);
+
+      const outcome = runGuardAsHook('git commit -m "test: bug-416 npm-shrinkwrap.json (should pass)"', gitEnv);
+      assert.equal(
+        outcome.denied,
+        false,
+        `expected the guard to ALLOW npm-shrinkwrap.json even if it contains integrity-hash with the forbidden pattern. raw stdout: ${outcome.raw.stdout}`
+      );
     } finally {
       fs.rmSync(fixtureDir, { recursive: true, force: true });
     }

@@ -182,11 +182,33 @@ function lineMatchesWithBoundary(re, line) {
   return false;
 }
 
+/** Regex for npm package-lock.json integrity-hash entries: exactly
+ * "integrity": "sha<digits>-<base64>", with optional trailing comma.
+ * These are machine-generated base64 hashes (sha256/sha512). Base64's alphabet
+ * includes readable letters/digits, so the forbidden token can itself be valid
+ * base64 — the shape check ALONE is insufficient to exempt it safely from
+ * scanning. Only the guard (which has file path context) can safely skip these
+ * lines, and ONLY in actual lockfile basenames (package-lock.json,
+ * npm-shrinkwrap.json, yarn.lock, pnpm-lock.yaml). Exported for the guard's
+ * per-file filtering logic.
+ * BUG-416: skip decision is moved to claude-codename-guard.js (per-file scope);
+ * scan() is kept honest by default (no skips).
+ */
+const NPM_INTEGRITY_HASH_RE = /^\s*"integrity":\s*"sha\d+-[A-Za-z0-9+/=_-]+"\s*,?\s*$/;
+
+function isNpmIntegrityHashLine(line) {
+  return NPM_INTEGRITY_HASH_RE.test(line);
+}
+
 /** Scans `text` (split into lines) against every pattern in PATTERNS, pushing
  * one human-readable hit description per (pattern, first-matching-line) onto
  * `hits`. `where` names the surface being scanned for the hit description
  * (e.g. "staged content (added lines)"). This is the ONE scan entry point
- * both consumers call — neither consumer reimplements matching. */
+ * both consumers call — neither consumer reimplements matching.
+ *
+ * BUG-416: scan() makes NO file-specific exceptions (no integrity-hash skip).
+ * It is kept honest by default. The guard and content-scan callers have file
+ * context and must apply their own filtering before calling scan(). */
 function scan(text, where, hits) {
   if (!text) return;
   const lines = String(text).split(/\r?\n/);
@@ -210,4 +232,6 @@ module.exports = {
   lineMatches,
   lineMatchesWithBoundary,
   scan,
+  NPM_INTEGRITY_HASH_RE,
+  isNpmIntegrityHashLine,
 };

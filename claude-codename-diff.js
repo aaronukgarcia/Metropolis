@@ -64,12 +64,20 @@ function stripLeadingAnsi(line) {
  *     copied paths (BUG-137), path text extracted, joined by '\n'.
  * Both are produced from the SAME single pass, classifying each line as
  * header-region or hunk-body strictly by position (`inHunk`), never by
- * re-testing a line's own text against the header lines' shape. */
+ * re-testing a line's own text against the header lines' shape.
+ *
+ * BUG-416: also returns `sections` (per-file breakdown):
+ *   - sections: array of { filePath, addedLines (array, not joined) }
+ * This allows the guard to apply file-specific logic (e.g. skip integrity-hash
+ * lines only in lockfiles, not in arbitrary source files). */
 function splitDiffSections(diffText) {
   const lines = String(diffText).split(/\r?\n/);
   const added = [];
   const pathHeaders = [];
+  const sections = [];
   let inHunk = false;
+  let currentFilePath = null;
+  let currentSectionAdded = [];
 
   for (const line of lines) {
     // BUG-185 defense-in-depth: classification below is tested against a
@@ -84,7 +92,22 @@ function splitDiffSections(diffText) {
     if (FILE_START_RE.test(test)) {
       // A new file section always starts back in its own header region,
       // even though the previous file's last hunk left inHunk === true.
+      // BUG-416: push the previous section if it had content.
+      if (currentFilePath && currentSectionAdded.length > 0) {
+        sections.push({
+          filePath: currentFilePath,
+          addedLines: currentSectionAdded,
+        });
+      }
       inHunk = false;
+      // Extract the file path from 'diff --git a/... b/...' marker.
+      // Format: "diff --git a/path b/path" — extract b-path (the new version).
+      // Simple approach: match the ' b/' prefix and everything after it.
+      // (The git diff format always has " b/" before the b-path, making this
+      // match unambiguous even with complex path names.)
+      const fileStartMatch = test.match(/ b\/(.+)$/);
+      currentFilePath = fileStartMatch ? fileStartMatch[1] : null;
+      currentSectionAdded = [];
       continue;
     }
     if (HUNK_RE.test(test)) {
@@ -97,7 +120,11 @@ function splitDiffSections(diffText) {
       // Hunk body: a line starting with a single '+' is genuine added
       // content, whatever its own text looks like — a header line can never
       // structurally appear here.
-      if (test.startsWith('+')) added.push(test.slice(1));
+      if (test.startsWith('+')) {
+        const content = test.slice(1);
+        added.push(content);
+        currentSectionAdded.push(content);
+      }
     } else {
       // Still in the file-header region: this is where the real
       // '+++ b/<path>' / '--- a/<path>' / rename/copy lines actually live.
@@ -105,9 +132,18 @@ function splitDiffSections(diffText) {
     }
   }
 
+  // BUG-416: push the final section if it had content.
+  if (currentFilePath && currentSectionAdded.length > 0) {
+    sections.push({
+      filePath: currentFilePath,
+      addedLines: currentSectionAdded,
+    });
+  }
+
   return {
     addedLines: added.join('\n'),
     pathHeaderLines: pathHeaders.join('\n'),
+    sections, // BUG-416: per-file breakdown for file-specific filtering
   };
 }
 

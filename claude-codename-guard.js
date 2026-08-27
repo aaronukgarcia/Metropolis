@@ -63,8 +63,9 @@
 
 const { execSync } = require('child_process');
 const fs = require('fs');
+const path = require('path');
 const { buildBareGitVerbTriggerRegex } = require('./claude-git-commit-trigger.js');
-const { PATTERNS, isLowerLetter, lineMatches, lineMatchesWithBoundary, scan } = require('./claude-codename-patterns.js');
+const { PATTERNS, isLowerLetter, lineMatches, lineMatchesWithBoundary, scan, NPM_INTEGRITY_HASH_RE } = require('./claude-codename-patterns.js');
 const { splitDiffSections } = require('./claude-codename-diff.js');
 
 // BUG-123 (2026-08-12): this guard's trigger used to be the bare
@@ -93,6 +94,24 @@ function deny(reason) {
     })
   );
   process.exit(0);
+}
+
+// BUG-416: check if a file path's basename is a known npm/yarn lockfile.
+// Only these exact basenames are exempt from integrity-hash scanning;
+// integrity-hash-shaped lines in other files (even if named e.g.
+// package-lock.json.bak or .lock) are scanned normally. This list matches
+// standard tooling: npm (package-lock.json), npm old (npm-shrinkwrap.json),
+// yarn (yarn.lock), pnpm (pnpm-lock.yaml).
+const LOCKFILE_BASENAMES = new Set([
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+]);
+
+function isKnownLockfileBasename(filePath) {
+  const basename = path.basename(filePath);
+  return LOCKFILE_BASENAMES.has(basename);
 }
 
 // lineMatches/lineMatchesWithBoundary/scan now live in
@@ -152,8 +171,25 @@ function main() {
     // this exact same trap independently existed in
     // claude-codename-content-scan.js, so BUG-182 fixes both call sites by
     // routing them through this one shared function (GR#3).
-    const { addedLines, pathHeaderLines } = splitDiffSections(diff);
-    scan(addedLines, 'staged content (added lines)', hits);
+    // BUG-416: now also returns per-file sections so the guard can apply
+    // file-specific filtering (integrity-hash skip only for lockfiles).
+    const { addedLines, pathHeaderLines, sections } = splitDiffSections(diff);
+
+    // BUG-416: scan all added lines, filtering out integrity-hash entries only
+    // for known lockfile basenames. In other files, integrity-hash-shaped lines
+    // are scanned normally. This prevents a crafted integrity-hash-shaped line
+    // carrying the reference title's numbered form in arbitrary source files
+    // from bypassing the guard.
+    const filteredLines = [];
+    for (const section of sections) {
+      const isLockfile = isKnownLockfileBasename(section.filePath);
+      for (const line of section.addedLines) {
+        // Only skip integrity-hash lines if this is a known lockfile.
+        if (isLockfile && NPM_INTEGRITY_HASH_RE.test(line)) continue;
+        filteredLines.push(line);
+      }
+    }
+    scan(filteredLines.join('\n'), 'staged content (added lines)', hits);
 
     // BUG-137: a forbidden word appearing ONLY in a new/renamed/copied file's
     // PATH — never in file content or the commit message — bypassed the
