@@ -57,6 +57,15 @@ export const LEDGER_CAP = 200;
  */
 export const LEVEL_REWARD_RATE = 0.1;
 
+// BUG-394 FIX: Population growth rate constant
+// PLACEHOLDER (balance-number regime, pending Aaron's approval):
+// Per-tick population growth = (capacity - population) * POPULATION_GROWTH_RATE * growthFactor
+// Controls how responsive population is to available housing.
+// At 0.05: slow crawl (~100+ ticks to fill 1% surplus) -> freeze-like appearance
+// At 0.15: responsive growth (~30 ticks to fill 1% surplus) -> player-visible climbing
+// Directional: larger housing surplus drives faster climb toward capacity.
+export const POPULATION_GROWTH_RATE = 0.15;
+
 const XP_LEVELS: number[] = (() => {
   const a = [0];
   let step = 50;
@@ -449,13 +458,15 @@ function advance(s: SimState): SimState {
     const sp = SPECS[b.spec];
     if (sp?.kind === 'station') stationWeight += sp.id === 'station_ashford' ? 3 : 1;
   }
+
   let population = s.population;
   if (capacity > population) {
     const growthFactor =
       (1.4 - avgTax / 15) * (s.policies.transitSubsidy ? 1.25 : 1) *
       Math.max(0.3, 0.55 + demand.residential / 200) *
       (1 + 0.15 * Math.min(stationWeight, 6));
-    population += Math.max(0, Math.ceil((capacity - population) * 0.05 * growthFactor));
+    // BUG-394 FIX: use POPULATION_GROWTH_RATE instead of hardcoded 0.05
+    population += Math.max(0, Math.ceil((capacity - population) * POPULATION_GROWTH_RATE * growthFactor));
   } else if (population > capacity) {
     population = Math.max(capacity, population - Math.ceil((population - capacity) * 0.1));
   }
