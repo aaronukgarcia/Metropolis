@@ -73,6 +73,7 @@ import type { MapUiState } from './uistate.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import { businessTaxPerTick, councilTaxPerTick } from './fiscal.ts';
 import { getPerformanceSnapshot } from './perfhud.ts';
+import { getLiveVersion } from './liveVersionRef.ts';
 
 /** Bumped when the serialized shape changes incompatibly. */
 export const DEBUG_JSON_FORMAT = 'metropolis-debug/1';
@@ -117,9 +118,12 @@ export interface CapturedError {
 
 /** Everything the pure builder needs that is NOT sim state. */
 export interface DebugUiInput {
-  /** Git-derived app version (versionRaw from sim/version â€” passed in, not
-   * imported, so this module stays node-resolvable without the generated
-   * version file). */
+  /** BUILD-TIME git-derived app version (versionRaw from sim/version â€” passed
+   * in, not imported, so this module stays node-resolvable without the
+   * generated version file). This is the FROZEN last-full-build value; it is
+   * emitted as meta.buildVersion. meta.appVersion prefers the LIVE version (the
+   * badge/HMR value from liveVersionRef) and only falls back to this when no
+   * live poll has happened yet. See BUG-424. */
   appVersion: string;
   /** Epoch-ms of the frozen 15 s frame this JSON belongs to. */
   frameAtMs: number;
@@ -152,7 +156,13 @@ export interface ConsistencyReportJson {
 export interface DebugJson {
   meta: {
     format: string;
+    /** Freshest LIVE version (matches the badge). Diverges from buildVersion
+     * during a long HMR session where the badge advanced but version.ts did
+     * not — that divergence is itself diagnostic (BUG-424). Falls back to
+     * buildVersion before the first live poll. */
     appVersion: string;
+    /** The FROZEN build-time versionRaw (last full build). */
+    buildVersion: string;
     generatedAt: string;
     generatedAtMs: number;
     tick: number;
@@ -538,7 +548,12 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
   return {
     meta: {
       format: DEBUG_JSON_FORMAT,
-      appVersion: ui.appVersion,
+      // BUG-424: appVersion reflects the freshest LIVE version (the badge),
+      // falling back to the build-time value only before any live poll.
+      // buildVersion always carries the frozen last-full-build versionRaw, so a
+      // reader sees both and their divergence is diagnostic.
+      appVersion: getLiveVersion() ?? ui.appVersion,
+      buildVersion: ui.appVersion,
       generatedAt,
       generatedAtMs: ui.frameAtMs,
       tick: s.tick,

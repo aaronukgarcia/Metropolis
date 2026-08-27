@@ -18,6 +18,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { versionNumeric, versionRaw } from './version';
+import { setLiveVersion } from './liveVersionRef';
 
 /** How often to check for a newer build. Cheap: a tiny JSON, cache-busted. */
 const POLL_MS = 3000;
@@ -66,9 +67,14 @@ export function useLiveVersion(): LiveVersion {
         // A newer build exists while we're running. Surface it hot.
         seen.current = n;
         const r = typeof data?.version === 'string' ? data.version : versionRaw;
+        const label = labelFor(n, r);
+        // BUG-424: publish the freshest live version to the synchronous ref so
+        // buildDebugJson stamps meta.appVersion to match the badge, not the
+        // frozen build-time versionRaw.
+        setLiveVersion(label);
         setNumeric(n);
         setRaw(r);
-        setUpgradedTo(labelFor(n, r));
+        setUpgradedTo(label);
         if (toastTimer.current) clearTimeout(toastTimer.current);
         toastTimer.current = setTimeout(() => {
           if (alive) setUpgradedTo(null);
