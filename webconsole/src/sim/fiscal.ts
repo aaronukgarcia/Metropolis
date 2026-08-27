@@ -28,6 +28,23 @@ export function wagesPerTick(population: number): number {
   return Math.round(population * 0.5);
 }
 
+/**
+ * Grid Export tariff per MW sold to the regional grid (PLACEHOLDER, balance-number regime).
+ * Aaron's row-by-row balance sign-off pending. Suggested ~1.6 from the ~9,920/tick upkeep
+ * over ~6,095 MW basis (cost-of-service tariff model).
+ */
+export const GRID_EXPORT_TARIFF_PER_MW = 1.6;
+
+/**
+ * Calculate Grid Export revenue per tick.
+ * Returns (capMW - needMW) * tariff if cap > need, else 0.
+ * Pure function, deterministic.
+ */
+export function gridExportRevenuePerTick(capMW: number, needMW: number, tariff: number): number {
+  const exportMW = Math.max(0, capMW - needMW);
+  return Math.round(exportMW * tariff);
+}
+
 /** Coefficients for fiscal calculations (PLACEHOLDER, balance-number regime). */
 export const FISCAL_COEFFICIENTS = {
   /** Council tax: effective rate per citizen (as % of tax rate). */

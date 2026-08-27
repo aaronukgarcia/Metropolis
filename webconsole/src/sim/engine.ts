@@ -23,8 +23,9 @@ import {
   unlockedAtLevel,
   MAP_H,
   MAP_W,
+  powerStats,
 } from './data.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -255,6 +256,15 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     if (sp?.tourism) tourism += sp.tourism * Math.min(1, s.population / 300);
   }
   if (tourism > 0) inflows.push({ label: 'Tourism', value: Math.round(tourism) });
+
+  // MOD-049 inc1: Grid Export revenue (power surplus sold to regional grid).
+  // exportMW = max(0, capMW - needMW); exportRevenue = exportMW * tariff.
+  // Show "Grid Export" line only when revenue > 0 (per brief requirements).
+  const pw = powerStats(s);
+  const gridExportRevenue = gridExportRevenuePerTick(pw.cap, pw.need, GRID_EXPORT_TARIFF_PER_MW);
+  if (gridExportRevenue > 0) {
+    inflows.push({ label: 'Grid Export', value: gridExportRevenue });
+  }
 
   const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour') ? 1.4 : 1;
 
