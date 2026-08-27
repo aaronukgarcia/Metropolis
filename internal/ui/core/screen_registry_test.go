@@ -84,7 +84,7 @@ func TestScreenRegistry_Activate_UnknownID_Rejected(t *testing.T) {
 	if err := r.Register(ScreenEntry{ID: "map", Draw: noopDraw}); err != nil {
 		t.Fatalf("Register(map): %v", err)
 	}
-	err := r.Activate("finance")
+	err := r.Activate("finance", nil)
 	if err == nil {
 		t.Fatal("Activate(finance) with no such registered screen = nil error, want rejection (MET-U005)")
 	}
@@ -144,7 +144,7 @@ func TestScreenRegistry_Activate_SwitchesDraw(t *testing.T) {
 		t.Fatalf("before switching: mapCalls=%d financeCalls=%d, want 1,0", mapCalls, financeCalls)
 	}
 
-	if err := r.Activate("finance"); err != nil {
+	if err := r.Activate("finance", nil); err != nil {
 		t.Fatalf("Activate(finance): %v", err)
 	}
 	r.ActiveDraw()(nil, nil)
@@ -170,7 +170,7 @@ func TestScreenRegistry_Activate_SwitchesGrammar(t *testing.T) {
 	if g := r.ActiveGrammar(); g != nil {
 		t.Fatalf("ActiveGrammar() while map (nil-Grammar) is active = %v, want nil", g)
 	}
-	if err := r.Activate("services"); err != nil {
+	if err := r.Activate("services", nil); err != nil {
 		t.Fatalf("Activate(services): %v", err)
 	}
 	if g := r.ActiveGrammar(); g != svcGrammar {
@@ -222,7 +222,7 @@ func TestScreenRegistry_Activate_AbortsOutgoingScreensPendingGrammar(t *testing.
 	if !gMap.IsPending() {
 		t.Fatal("gMap.IsPending() = false right after feeding 'a' — fixture assumption broken")
 	}
-	if err := r.Activate("finance"); err != nil {
+	if err := r.Activate("finance", nil); err != nil {
 		t.Fatalf("Activate(finance): %v", err)
 	}
 	if gMap.IsPending() {
@@ -236,7 +236,7 @@ func TestScreenRegistry_Activate_AbortsOutgoingScreensPendingGrammar(t *testing.
 	if !gFin.IsPending() {
 		t.Fatal("gFin.IsPending() = false right after feeding 'a' — fixture assumption broken")
 	}
-	if err := r.Activate("finance"); err != nil { // finance is ALREADY active
+	if err := r.Activate("finance", nil); err != nil { // finance is ALREADY active
 		t.Fatalf("self Activate(finance): %v", err)
 	}
 	if gFin.IsPending() {
@@ -263,7 +263,7 @@ func TestScreenRegistry_WrongKeyDoesNotSwitch(t *testing.T) {
 			t.Fatalf("iteration %d: ActiveID() = %q, want unchanged %q with no Activate call in between", i, got, "map")
 		}
 	}
-	_ = r.Activate("nonexistent-screen")
+	_ = r.Activate("nonexistent-screen", nil)
 	if got := r.ActiveID(); got != "map" {
 		t.Fatalf("ActiveID() after a rejected Activate = %q, want still %q", got, "map")
 	}
@@ -298,7 +298,7 @@ func TestScreenRegistry_StructCopy_MethodsRejected(t *testing.T) {
 	} else if code := mustCode(t, err); code != ErrScreenRegistryCopied {
 		t.Errorf("cp.Register error code = %q, want %q", code, ErrScreenRegistryCopied)
 	}
-	if err := cp.Activate("map"); err == nil {
+	if err := cp.Activate("map", nil); err == nil {
 		t.Error("cp.Activate on a struct copy = nil error, want MET-U006 rejection")
 	}
 	if got := cp.ActiveID(); got != "" {
@@ -392,7 +392,7 @@ func TestScreenRegistry_Activate_CostIsConstant_NotProportionalToScreenCount(t *
 		}
 		i := 0
 		return testing.AllocsPerRun(200, func() {
-			if err := r.Activate(ids[i%len(ids)]); err != nil {
+			if err := r.Activate(ids[i%len(ids)], nil); err != nil {
 				t.Fatalf("Activate: %v", err)
 			}
 			i++

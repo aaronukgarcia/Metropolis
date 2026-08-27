@@ -836,7 +836,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// own countAdjust closure documents).
 	w.chromeGrammar = keys.NewKeyGrammar(nil, 0, 0, correlationID)
 	fKeyGlobal := func(id core.ScreenID, name string) keys.Action {
-		return keys.Action{Name: name, Run: func(keys.ActionArgs) { _ = w.screens.Activate(id) }}
+		return keys.Action{Name: name, Run: func(keys.ActionArgs) { _ = w.screens.Activate(id, w.chromeGrammar) }}
 	}
 	if err := w.chromeGrammar.RegisterGlobal(keys.Key{Special: "F1"}, fKeyGlobal(screenIDMap, "Switch to Map (F1)")); err != nil {
 		w.cancel()

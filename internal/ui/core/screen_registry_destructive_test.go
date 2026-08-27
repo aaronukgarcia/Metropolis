@@ -54,7 +54,7 @@ func TestScreenRegistry_SwitchingStorm_ConcurrentActivateAndReads(t *testing.T) 
 		go func(seed int) {
 			defer wg.Done()
 			for i := 0; i < iters; i++ {
-				if err := r.Activate(ids[(i+seed)%n]); err != nil {
+				if err := r.Activate(ids[(i+seed)%n], nil); err != nil {
 					t.Errorf("Activate: %v", err)
 					return
 				}
@@ -125,7 +125,7 @@ func TestScreenRegistry_AccessorsAreNotAnAtomicSnapshot(t *testing.T) {
 	if id != "map" {
 		t.Fatalf("sampled ActiveID() = %q, want map", id)
 	}
-	if err := r.Activate("finance"); err != nil {
+	if err := r.Activate("finance", nil); err != nil {
 		t.Fatalf("Activate(finance): %v", err)
 	}
 	close(switched)
@@ -217,7 +217,7 @@ func TestScreenRegistry_Activate_LateAbortCanCancelALiveSequence_Characterizatio
 	// — indistinguishable from a genuine concurrent caller — switches back
 	// to A. This is exactly what a second Activate could interleave for
 	// real between the first call's unlock and its own Abort().
-	if err := r.Activate("A"); err != nil {
+	if err := r.Activate("A", nil); err != nil {
 		t.Fatalf("Activate(A): %v", err)
 	}
 
@@ -267,7 +267,7 @@ func TestScreenRegistry_DrawCallbackCallingActivate_DoesNotDeadlock(t *testing.T
 	var reentered bool
 	reentrant := func(*Buffer, *ViewModels) {
 		reentered = true
-		if err := r.Activate("finance"); err != nil {
+		if err := r.Activate("finance", nil); err != nil {
 			t.Errorf("re-entrant Activate from inside a Draw: %v", err)
 		}
 		_ = r.ActiveID()
@@ -319,7 +319,7 @@ func TestScreenRegistry_BlockingDraw_DoesNotBlockActivate(t *testing.T) {
 	}()
 
 	<-entered // the Draw callback is provably mid-flight right now
-	if err := r.Activate("finance"); err != nil {
+	if err := r.Activate("finance", nil); err != nil {
 		t.Fatalf("Activate while a Draw is mid-flight: %v", err)
 	}
 	if got := r.ActiveID(); got != "finance" {
@@ -353,7 +353,7 @@ func TestScreenRegistry_PanickingDraw_LeavesRegistryUsable(t *testing.T) {
 
 	// Every method must still work after the panic unwound through the
 	// callback (i.e. mu was not held across it).
-	if err := r.Activate("finance"); err != nil {
+	if err := r.Activate("finance", nil); err != nil {
 		t.Fatalf("Activate after a panicking Draw: %v", err)
 	}
 	if got := r.ActiveID(); got != "finance" {
@@ -452,7 +452,7 @@ func TestScreenRegistry_WhitespaceIDs_AreDistinctAndNotTrimmed(t *testing.T) {
 	if got := len(r.RegisteredIDs()); got != 5 {
 		t.Fatalf("RegisteredIDs() = %d entries, want 5 (whitespace-variant IDs must not collide silently)", got)
 	}
-	if err := r.Activate(" map"); err != nil {
+	if err := r.Activate(" map", nil); err != nil {
 		t.Fatalf("Activate(\" map\"): %v", err)
 	}
 	if got := r.ActiveID(); got != " map" {
@@ -464,7 +464,7 @@ func TestScreenRegistry_WhitespaceIDs_AreDistinctAndNotTrimmed(t *testing.T) {
 // leaves the empty registry's accessors in their documented empty state.
 func TestScreenRegistry_ActivateBeforeAnyRegister(t *testing.T) {
 	r := NewScreenRegistry("destructive-activate-empty")
-	err := r.Activate("map")
+	err := r.Activate("map", nil)
 	if err == nil {
 		t.Fatal("Activate on an empty registry = nil error, want MET-U005")
 	}
@@ -511,7 +511,7 @@ func TestScreenRegistry_RegisterRacingActivate(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < n; i++ {
-			if err := r.Activate("map"); err != nil {
+			if err := r.Activate("map", nil); err != nil {
 				t.Errorf("Activate(map) during concurrent registration: %v", err)
 				return
 			}
@@ -554,7 +554,7 @@ func TestScreenRegistry_StructCopy_DoesNotMutateOriginal_UnderConcurrency(t *tes
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 200; i++ {
-			_ = cp.Activate("finance")
+			_ = cp.Activate("finance", nil)
 			_ = cp.ActiveID()
 			cp.ActiveDraw()(NewBuffer(2, 2), nil)
 			_ = cp.RegisteredIDs()
@@ -564,7 +564,7 @@ func TestScreenRegistry_StructCopy_DoesNotMutateOriginal_UnderConcurrency(t *tes
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 200; i++ {
-			if err := r.Activate("map"); err != nil {
+			if err := r.Activate("map", nil); err != nil {
 				t.Errorf("original Activate: %v", err)
 				return
 			}

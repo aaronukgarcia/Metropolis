@@ -186,7 +186,7 @@ func (r *ScreenRegistry) Register(e ScreenEntry) error {
 // never-registered ScreenID is a programming error that must be visible,
 // not swallowed.
 //
-// # Aborting the outgoing screen's pending grammar
+// # Aborting pending grammar state
 //
 // A switch that actually changes screens calls Abort() on the OUTGOING
 // screen's KeyGrammar, if it registered one — keys.KeyGrammar.Abort's own
@@ -198,6 +198,15 @@ func (r *ScreenRegistry) Register(e ScreenEntry) error {
 // the player never asked for on this visit (found by FEAT-211
 // increment 1's independent destructive round: F4, "s", "f", F1, F4, "+"
 // sent a live funding-adjust command to the engine).
+//
+// BUG-315 fix (2026-08-27): a switch also aborts the chromeGrammar passed
+// as the globalGrammar parameter, if non-nil. The chrome grammar is "global"
+// and always-fed (run.go's input routing feeds it before the active screen's
+// grammar), but ScreenRegistry.Activate only knew about the outgoing screen's
+// grammar, leaving chrome's pending state (especially invisible count prefixes)
+// behind after a switch. This made Esc silently get eaten clearing the invisible
+// prefix, rather than quitting as the player expected. Now both grammars are
+// cleared on a screen switch, the single switch primitive.
 //
 // This lives here, in Activate, rather than in cmd/metropolis's F-key
 // global actions, because Activate is by construction THE single switch
@@ -226,12 +235,12 @@ func (r *ScreenRegistry) Register(e ScreenEntry) error {
 // is already active (r.active >= 0), with no exception for id == the
 // current screen.
 //
-// Abort is called AFTER mu is released. It takes the grammar's own,
+// Abort is called AFTER mu is released. It takes each grammar's own,
 // unrelated mutex, so there is no lock-ordering hazard today, but holding
 // two independent components' locks at once is exactly how one gets
 // created later; and Abort runs no caller-supplied Action, so there is
 // nothing re-entrant to serialize against here.
-func (r *ScreenRegistry) Activate(id ScreenID) error {
+func (r *ScreenRegistry) Activate(id ScreenID, globalGrammar *keys.KeyGrammar) error {
 	correlationID := errs.NewCorrelationID()
 	if err := r.checkNotCopied(correlationID, map[string]any{"method": "Activate"}); err != nil {
 		return err
@@ -252,6 +261,9 @@ func (r *ScreenRegistry) Activate(id ScreenID) error {
 
 	if outgoing != nil {
 		outgoing.Abort()
+	}
+	if globalGrammar != nil {
+		globalGrammar.Abort()
 	}
 	return nil
 }

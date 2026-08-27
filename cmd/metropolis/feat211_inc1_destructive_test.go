@@ -286,7 +286,14 @@ func TestRouting_DigitKeystrokeIsFedToBothGrammars(t *testing.T) {
 // asserts only the survives-the-switch half; the expiry half is
 // TestRouting_IdleTimeoutIsDrivenByTheUITick below, which runs the real
 // loops.
-func TestRouting_ChromeCountPrefixSurvivesASwitchAndExpiresOnTheIdleTick(t *testing.T) {
+// TestRouting_ChromeCountPrefixIsAbortedOnSwitch is the BUG-315 fix
+// (2026-08-27, narrow fix): ScreenRegistry.Activate now aborts chromeGrammar
+// (passed as globalGrammar parameter) when switching screens, not just the
+// outgoing screen's grammar. This prevents invisible pending state (count
+// prefixes on chrome that chrome will never use) from surviving a screen
+// switch. Without this, Esc would be silently eaten clearing the invisible
+// prefix instead of quitting.
+func TestRouting_ChromeCountPrefixIsAbortedOnSwitch(t *testing.T) {
 	w := bootForScreenTest(t)
 	routeKeyInput(w, keyMsg(tcell.KeyRune, '7'))
 	if !w.chromeGrammar.IsPending() {
@@ -296,8 +303,9 @@ func TestRouting_ChromeCountPrefixSurvivesASwitchAndExpiresOnTheIdleTick(t *test
 	if got := w.screens.ActiveID(); got != screenIDFinance {
 		t.Fatalf("ActiveID() = %q, want %q", got, screenIDFinance)
 	}
-	if !w.chromeGrammar.IsPending() {
-		t.Fatal("chromeGrammar's count prefix was cleared by the switch — a global must not disturb pending state (grammar.go step 4); if that is now intended, update this test and grammar.go's contract together")
+	// BUG-315 fix: chromeGrammar is now cleared by Activate (passed as globalGrammar).
+	if w.chromeGrammar.IsPending() {
+		t.Fatal("BUG-315 fix: chromeGrammar's count prefix should be cleared by Activate(id, w.chromeGrammar)")
 	}
 }
 
@@ -495,5 +503,82 @@ func TestRouting_SwitchStormWhileKeysFlow(t *testing.T) {
 	}
 	if got := w.router.PanicCount(); got != panicsBefore {
 		t.Fatalf("router.PanicCount() = %d after a key storm, want unchanged %d", got, panicsBefore)
+	}
+}
+
+// TestBUG315_InvisibleCountPrefixOnChromeMakesEscANoop is BUG-315 (GR#17,
+// 2026-08-21 destructive finding F2). The bug: pressing a digit then F-key
+// leaves a count prefix on chromeGrammar (since ScreenRegistry.Activate only
+// aborted the outgoing screen's grammar, not chrome's). On the next Esc, the
+// invisible count would make Esc silently eat the keystroke instead of quitting —
+// the player presses Esc expecting to leave, gets a no-op, and has no idea
+// why (the prefix is invisible).
+//
+// Fix (BUG-315, narrow fix): ScreenRegistry.Activate now also aborts the
+// global grammar (chrome) when switching screens, not just the outgoing
+// screen's grammar. This prevents invisible pending state from surviving
+// a screen switch. The two-Esc UX (first Esc aborts a visible pending
+// sequence, second Esc quits) is preserved.
+//
+// Test scenario: digit on chrome, screen switch, Esc. With the bug, Esc
+// would clear the invisible digit and not quit (silent no-op). After the fix,
+// the F-key switch clears the chrome's count, so Esc has no pending state to
+// abort and quits normally (as part of the second Esc in the two-Esc pattern —
+// the first Esc was the switch itself triggering screen grammar abort).
+func TestBUG315_InvisibleCountPrefixOnChromeMakesEscANoop(t *testing.T) {
+	reg := registry.NewRegistry()
+	w, err := bootCore("bug315-chrome-abort", reg)
+	if err != nil {
+		t.Fatalf("bootCore: %v", err)
+	}
+	defer w.shutdown()
+
+	sim := tcell.NewSimulationScreen("")
+	if err := sim.Init(); err != nil {
+		t.Fatalf("sim.Init: %v", err)
+	}
+	sim.SetSize(120, 30)
+
+	done := make(chan struct{})
+	go func() {
+		runInteractive(w, sim)
+		close(done)
+	}()
+
+	// Arrange: accumulate an invisible count prefix on chrome.
+	// 1. Press F4 to switch to services.
+	sim.InjectKey(tcell.KeyF4, 0, tcell.ModNone)
+	waitFor(t, func() bool { return w.screens.ActiveID() == screenIDServices }, "F4 to activate services")
+
+	// 2. Press digit 3 (accumulates on both chromeGrammar and screen grammar).
+	sim.InjectKey(tcell.KeyRune, '3', tcell.ModNone)
+	waitFor(t, func() bool { return w.chromeGrammar.IsPending() }, "digit 3 to leave count pending on chrome")
+
+	// 3. Press F1 to switch away. With the narrow fix, this Activate call will
+	// now abort BOTH the screen grammar AND chromeGrammar (passed as globalGrammar).
+	sim.InjectKey(tcell.KeyF1, 0, tcell.ModNone)
+	waitFor(t, func() bool { return w.screens.ActiveID() == screenIDMap }, "F1 to switch to map")
+
+	// With the fix, chromeGrammar is now clear (aborted by Activate). Screen grammar
+	// was already clear (aborted by Activate when the outgoing screen changed).
+	// Nothing is pending, so Esc now behaves normally: it quits.
+	if w.chromeGrammar.IsPending() {
+		t.Fatal("BUG-315 fix: chromeGrammar should be cleared by Activate's globalGrammar.Abort() call")
+	}
+	if w.keyGrammar.IsPending() {
+		t.Fatal("screen grammar should be clear after switching (ScreenRegistry.Activate aborts it)")
+	}
+
+	// Act: press Esc expecting to quit (nothing is pending, so first Esc quits).
+	sim.InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+
+	// Assert: the game exits on Esc because the invisible prefix was already
+	// cleared on the screen switch (Activate clears chrome now). This breaks the
+	// silent-no-op bug: Esc quits as the player expects.
+	select {
+	case <-done:
+		// Success: game exited because nothing was pending to abort.
+	case <-time.After(2 * time.Second):
+		t.Fatal("runInteractive did not exit on Esc — the invisible chrome prefix should have been cleared by the screen switch, making Esc a quit key")
 	}
 }

@@ -251,7 +251,7 @@ func TestBUG324_ScreensAreInsetSoNoHeadingIsLost(t *testing.T) {
 	freezeClock(t, w)
 
 	for _, id := range []core.ScreenID{screenIDMap, screenIDFinance, screenIDServices} {
-		if err := w.screens.Activate(id); err != nil {
+		if err := w.screens.Activate(id, nil); err != nil {
 			t.Fatalf("Activate(%s): %v", id, err)
 		}
 
@@ -284,7 +284,7 @@ func TestBUG324_TopBarSurvivesAScreenSwitch(t *testing.T) {
 	fig := w.chromeUI.Figures()
 
 	for _, id := range []core.ScreenID{screenIDFinance, screenIDServices, screenIDMap} {
-		if err := w.screens.Activate(id); err != nil {
+		if err := w.screens.Activate(id, nil); err != nil {
 			t.Fatalf("Activate(%s): %v", id, err)
 		}
 		top := strings.TrimRight(row(renderAt(w, 100, 24), 0), " ")
@@ -444,7 +444,7 @@ func TestBUG324_RenderTheFrame(t *testing.T) {
 	// Every registered screen, so the capture shows the inset doing its
 	// job on all three rather than only on whichever boots active.
 	for _, id := range []core.ScreenID{screenIDMap, screenIDFinance, screenIDServices} {
-		if err := w.screens.Activate(id); err != nil {
+		if err := w.screens.Activate(id, nil); err != nil {
 			t.Fatalf("Activate(%s): %v", id, err)
 		}
 		back := renderAt(w, 100, 24)
