@@ -23,7 +23,7 @@ import {
   HISTORY_CAP,
   LEDGER_CAP,
 } from './engine.ts';
-import { fmtMoney, fmtNum, fmtSigned } from './utils.ts';
+import { fmtMoney, fmtNum, fmtSigned, formatPower } from './utils.ts';
 
 export interface DebugSnapshot {
   clock: {
@@ -106,7 +106,7 @@ export function buildDebugSnapshot(s: SimState): DebugSnapshot {
       population: fmtNum(s.population),
       housingCapacity: fmtNum(residentsCapacity(s)),
       jobs: fmtNum(totalJobs(s)),
-      powerMw: `${fmtNum(pw.cap)} / ${fmtNum(pw.need)} MW`,
+      powerMw: `${formatPower(pw.cap)} / ${formatPower(pw.need)}`,
       buildingsTotal: fmtNum(s.buildings.length),
       buildingsByKind: byKind,
       specCatalogueSize: Object.keys(SPECS).length,

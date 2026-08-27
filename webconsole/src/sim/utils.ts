@@ -29,6 +29,66 @@ export function fmtSigned(n: number): string {
   return `${v >= 0 ? '+' : '-'}£${fmtNum(Math.abs(v))}`;
 }
 
+/** Per-unit earnings: same £ prefix/sign as fmtMoney, two decimals when 0 < |n| < 1. */
+export function fmtMoneyEach(n: number): string {
+  const v = Number.isFinite(n) ? n : 0;
+  const sign = v < 0 ? '-' : '';
+  const abs = Math.abs(v);
+  if (abs > 0 && abs < 1) {
+    return `${sign}£${abs.toLocaleString(LOCALE, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return `${sign}£${fmtNum(abs)}`;
+}
+
 export function fmtPct(n: number, digits = 1): string {
   return `${(n * 100).toFixed(digits)}%`;
+}
+
+/** Calendar label for a sim tick: 360-day year, 30-day months, months 1..12. */
+export function gameDate(tick: number): string {
+  const dayOfYear = tick % 360;
+  const year = Math.floor(tick / 360) + 1;
+  const month = Math.floor(dayOfYear / 30) + 1;
+  const day = (dayOfYear % 30) + 1;
+  return `Y${year} D${day}·M${month}`;
+}
+
+/**
+ * Auto-scale power units from MW to GW/TW for large magnitudes.
+ * Pure formatting function — does not mutate input.
+ *
+ * Scaling rules (SI base unit MW):
+ *   mw < 1000        → "<n> MW"           (e.g. 950 MW)
+ *   1000 ≤ mw < 1M   → "<n.n> GW"        (one decimal, e.g. 1.5 GW, 17.3 GW)
+ *   mw >= 1M         → "<n.n> TW"        (one decimal, e.g. 1.2 TW)
+ *
+ * Trailing .0 is stripped (2000 MW → "2 GW", not "2.0 GW").
+ * Negative values keep the sign (-500 MW, -1.5 GW, etc.).
+ * Non-finite (NaN/Infinity) degrade to "0 MW" defensively.
+ */
+export function formatPower(mw: number): string {
+  if (!Number.isFinite(mw)) return '0 MW';
+
+  const abs = Math.abs(mw);
+  const sign = mw < 0 ? '-' : '';
+
+  if (abs < 1000) {
+    return `${sign}${Math.round(abs)} MW`;
+  }
+
+  if (abs < 1_000_000) {
+    const gw = abs / 1000;
+    // Round to one decimal
+    const rounded = Math.round(gw * 10) / 10;
+    // Strip trailing .0
+    const str = rounded === Math.floor(rounded) ? String(Math.floor(rounded)) : rounded.toFixed(1);
+    return `${sign}${str} GW`;
+  }
+
+  const tw = abs / 1_000_000;
+  // Round to one decimal
+  const rounded = Math.round(tw * 10) / 10;
+  // Strip trailing .0
+  const str = rounded === Math.floor(rounded) ? String(Math.floor(rounded)) : rounded.toFixed(1);
+  return `${sign}${str} TW`;
 }

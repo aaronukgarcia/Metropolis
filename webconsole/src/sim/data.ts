@@ -1,4 +1,5 @@
 import type { Dims, SimState, ZoneKind } from './types.ts';
+import { formatPower } from './utils.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -825,7 +826,7 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
     row('police', 'Police', pop, police, 'pol_station'),
     row('cleanwater', 'Clean water', pop, clean, 'wat_clean'),
     row('waste', 'Sewage', pop, waste, 'wat_waste'),
-    row('power', `Power (${pw.cap}/${pw.need} MW)`, pw.need, pw.cap, pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind'),
+    row('power', `Power (${formatPower(pw.cap)}/${formatPower(pw.need)})`, pw.need, pw.cap, pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind'),
   ];
 }
 
