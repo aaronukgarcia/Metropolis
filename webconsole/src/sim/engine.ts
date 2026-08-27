@@ -25,7 +25,7 @@ import {
   MAP_W,
   powerStats,
 } from './data.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -34,7 +34,6 @@ import type {
   SimState,
   TaxRates,
   Tool,
-  ZoneKind,
 } from './types.ts';
 
 export const LOAN_PRINCIPAL = 25000;
@@ -198,29 +197,8 @@ function rawState(): SimState {
   };
 }
 
-const UPKEEP_BUCKET: Partial<Record<ZoneKind, string>> = {
-  road: 'Roads',
-  pylon: 'Power Grid',
-  power: 'Power Grid',
-  water: 'Water & Waste',
-  health: 'Healthcare',
-  school: 'Education',
-  police: 'Policing',
-  park: 'Parks',
-  residential: 'Housing',
-  commercial: 'Commerce & Industry',
-  office: 'Commerce & Industry',
-  industrial: 'Commerce & Industry',
-  mine: 'Commerce & Industry',
-  station: 'Transport',
-  landmark: 'Civic & Landmarks',
-  // FEAT-1972079877: placeholder catalogue kinds — without these buckets the
-  // new structures' upkeep would silently vanish from the outflows.
-  transport: 'Transport',
-  fire: 'Fire & Rescue',
-  civic: 'Civic & Justice',
-  leisure: 'Leisure',
-};
+// UPKEEP_BUCKET moved to fiscal.ts (BUG-422 SSOT) so the consistency checker can
+// recompute per-bucket upkeep under the same labels the engine records.
 
 export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: FlowItem[] } {
   const c = countByKind(s.buildings);
@@ -336,14 +314,11 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     outflows.push({ label: 'Overdraft Interest', value: overdraftInterest });
   }
 
-  if (s.policies.recycling) {
-    const discounted = new Set(['Roads', 'Power Grid', 'Water & Waste', 'Healthcare', 'Education', 'Parks', 'Policing']);
-    outflows = outflows.map((o) =>
-      discounted.has(o.label) ? { ...o, value: Math.round(o.value * 0.93) } : o
-    );
-  }
-  if (s.policies.austerity)
-    outflows = outflows.map((o) => ({ ...o, value: Math.round(o.value * 0.9) }));
+  // BUG-422 (GR#3): post-policy outflow multipliers now live in the shared
+  // applyOutflowPolicies helper (fiscal.ts) so the consistency checker applies the
+  // IDENTICAL recycling(0.93 on discounted labels) + austerity(0.9 all) pipeline,
+  // in the same order with the same rounding, to its recomputed outflows.
+  outflows = applyOutflowPolicies(outflows, s.policies);
   return { inflows, outflows };
 }
 

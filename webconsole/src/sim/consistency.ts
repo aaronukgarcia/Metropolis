@@ -15,7 +15,13 @@ import {
   countByKind,
   isOnline,
 } from './data.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick } from './fiscal.ts';
+import {
+  councilTaxPerTick,
+  businessTaxPerTick,
+  wagesPerTick,
+  applyOutflowPolicies,
+  UPKEEP_BUCKET,
+} from './fiscal.ts';
 
 export interface ConsistencyCheck {
   id: string;
@@ -322,7 +328,14 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // The engine charges wages on the workforce present at tick start; new arrivals from
   // this tick's growth aren't paid yet. Recomputing against end-of-tick s.population
   // (which is larger after growth) is what made this check diverge (computed > actual).
-  const recomputedWages = wagesPerTick(flowBasisPop);
+  // BUG-422: the engine applies POLICY MULTIPLIERS to outflows AFTER building the raw
+  // amount (austerity ×0.9; Wages is not in the recycling 0.93 set). Recompute the raw
+  // wage on the BUG-419 start-of-tick basis, then run it through the SAME shared policy
+  // pipeline the engine used so the comparison is post-policy vs post-policy.
+  const recomputedWages = applyOutflowPolicies(
+    [{ label: 'Wages', value: wagesPerTick(flowBasisPop) }],
+    s.policies,
+  )[0].value;
   const actualWages = s.lastFlows.outflows.find((f) => f.label === 'Wages')?.value ?? 0;
   const wagesOk = recomputedWages === actualWages;
   checks.push({
@@ -338,13 +351,26 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // (e.g., roads upkeep stays within 'Roads' bucket, power stays in 'Power Grid', etc.).
   // A full per-bucket check would require tracking which flow label covers which UPKEEP_BUCKET.
   // BUG-414 FIX: exclude offline/under-construction buildings to match engine.computeFlows behavior.
-  let recomputedUpkeep = 0;
+  // BUG-422: recompute upkeep PER BUCKET LABEL (matching engine.computeFlows), then run
+  // the buckets through the SAME shared policy pipeline. Per-label matters: the recycling
+  // policy discounts only the service labels (Roads, Power Grid, ...) — a flat sum ×0.93
+  // would be wrong. austerity then ×0.9 every bucket. Summing the post-policy per-bucket
+  // values reproduces the aggregate the engine actually recorded.
+  const upkeepBuckets: Record<string, number> = {};
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue; // Skip buildings still under construction
     const sp = SPECS[b.spec];
     if (!sp || !sp.upkeep) continue;
-    recomputedUpkeep += sp.upkeep;
+    const k = UPKEEP_BUCKET[sp.kind];
+    if (k) upkeepBuckets[k] = (upkeepBuckets[k] ?? 0) + sp.upkeep;
   }
+  const upkeepEntries = Object.entries(upkeepBuckets)
+    .filter(([, v]) => v > 0)
+    .map(([label, value]) => ({ label, value }));
+  const recomputedUpkeep = applyOutflowPolicies(upkeepEntries, s.policies).reduce(
+    (a, e) => a + e.value,
+    0,
+  );
   // Sum actual upkeep from all outflow buckets (Roads, Power, Healthcare, etc.).
   // Excludes: Wages, Loan Interest, Overdraft Interest, Transit Subsidy (non-upkeep flows).
   let actualUpkeep = 0;
