@@ -101,6 +101,14 @@ test('every placeable kind has a FAMILIES legend row (status table / map legend)
   }
 });
 
+test('edu_city blurb matches School (5–15) demand meter, no 16 overlap with college', () => {
+  assert.ok(SPECS.edu_city.blurb.includes('5–15'), `edu_city blurb must include 5–15, got "${SPECS.edu_city.blurb}"`);
+  assert.ok(!SPECS.edu_city.blurb.includes('5–16'), `edu_city blurb must not include 5–16, got "${SPECS.edu_city.blurb}"`);
+  assert.ok(SPECS.edu_primary.blurb.includes('5–11'), `edu_primary blurb must stay 5–11, got "${SPECS.edu_primary.blurb}"`);
+  assert.ok(SPECS.edu_nursery.blurb.includes('0–4'), `edu_nursery blurb must stay 0–4, got "${SPECS.edu_nursery.blurb}"`);
+  assert.ok(SPECS.col_sixth.blurb.includes('16–19'), `col_sixth blurb must stay 16–19, got "${SPECS.col_sixth.blurb}"`);
+});
+
 test('palette families look POPULATED: the big families carry realistic counts', () => {
   const byTitle = new Map(PALETTE.map((f) => [f.title, f.items.length]));
   // Representative floor counts — go red if a family is gutted back to a stub.

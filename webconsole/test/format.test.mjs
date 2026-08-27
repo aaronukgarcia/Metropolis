@@ -10,7 +10,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtNum, fmtMoney, fmtSigned } from '../src/sim/utils.ts';
+import { fmtNum, fmtMoney, fmtMoneyEach, fmtSigned, gameDate } from '../src/sim/utils.ts';
 
 test('fmtNum inserts thousands separators', () => {
   assert.equal(fmtNum(33000000), '33,000,000');
@@ -46,4 +46,26 @@ test('fmtSigned always shows an explicit +£ / -£', () => {
   assert.equal(fmtSigned(1500), '+£1,500');
   assert.equal(fmtSigned(-340), '-£340');
   assert.equal(fmtSigned(0), '+£0');
+});
+
+test('gameDate maps ticks onto 360-day years and 30-day months 1..12', () => {
+  assert.equal(gameDate(0), 'Y1 D1·M1');
+  assert.equal(gameDate(29), 'Y1 D30·M1');
+  assert.equal(gameDate(30), 'Y1 D1·M2');
+  assert.equal(gameDate(359), 'Y1 D30·M12');
+  assert.equal(gameDate(360), 'Y2 D1·M1');
+  assert.equal(gameDate(53138), 'Y148 D9·M8');
+});
+
+test('fmtMoneyEach shows two decimals for sub-pound amounts', () => {
+  assert.equal(fmtMoneyEach(0.12), '£0.12');
+  assert.equal(fmtMoneyEach(0), '£0');
+  const tourismEach = fmtMoneyEach(188551 / 314252);
+  assert.notEqual(tourismEach, '£0');
+  assert.notEqual(tourismEach, '£1');
+  assert.equal(fmtMoneyEach(12), '£12');
+});
+
+test('fmtMoney stays integer for sub-pound funds', () => {
+  assert.equal(fmtMoney(0.12), '£0');
 });

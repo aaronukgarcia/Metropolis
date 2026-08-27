@@ -14,7 +14,7 @@ import {
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
-import { fmtMoney, fmtNum, fmtPct } from '../../sim/utils';
+import { fmtMoney, fmtMoneyEach, fmtNum, fmtPct } from '../../sim/utils';
 import { useBusy } from '../Busy';
 import { commitDebug, errorListModel, pendingCommits, recentErrors } from '../../sim/backend';
 import { debugActions } from '../../sim/debugactions';
@@ -357,7 +357,7 @@ function EarningsTab() {
             <td>{r.type}</td>
             <td className="muted">{r.count > 0 ? `${fmtNum(r.count)} ${r.unit}` : '—'}</td>
             <td className="in">{fmtMoney(r.gross)}</td>
-            <td>{r.count > 0 ? fmtMoney(r.gross / r.count) : '—'}</td>
+            <td>{r.count > 0 ? fmtMoneyEach(r.gross / r.count) : '—'}</td>
           </tr>
         ))}
         <tr>

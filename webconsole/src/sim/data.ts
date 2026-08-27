@@ -433,7 +433,7 @@ export const SPECS: Record<string, Spec> = {
 
   edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 1200, 22, '#ffd166', 'services', 2, { children: 30, stage: 'nursery' }),
   edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 5200, 70, '#f2c14e', 'services', 3, { children: 300, stage: 'primary' }),
-  edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–16', 3, 2, 32000, 320, '#e3a92f', 'services', 4, { children: 2000, stage: 'city' }),
+  edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 32000, 320, '#e3a92f', 'services', 4, { children: 2000, stage: 'city' }),
   col_sixth: P('col_sixth', 'school', 'College', '1,500 places · ages 16–19', 2, 2, 18000, 190, '#b58fd8', 'services', 4, { children: 1500, stage: 'tertiary' }),
   uni: P('uni', 'school', 'University', '6,000 students', 3, 3, 75000, 520, '#a371f7', 'services', 5, { children: 6000, stage: 'tertiary' }),
 

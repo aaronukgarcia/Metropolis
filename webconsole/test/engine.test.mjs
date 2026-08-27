@@ -162,3 +162,20 @@ test('RED: removing a bucket key makes upkeep vanish silently', () => {
     'If UPKEEP_BUCKET["road"] is deleted, this assertion fails (proving the bucket matters).'
   );
 });
+
+test('BUG-395: tourismDrive yields one Tourism inflow of pop*0.12', () => {
+  const state = {
+    ...baseState(),
+    population: 1000,
+    policies: { ...baseState().policies, tourismDrive: true },
+  };
+  const { inflows } = computeFlows(state);
+  const tourism = inflows.filter((f) => f.label === 'Tourism');
+  assert.equal(tourism.length, 1);
+  assert.equal(tourism[0].value, Math.round(1000 * 0.12));
+  assert.notEqual(
+    tourism.length,
+    2,
+    'two Tourism labels is forbidden'
+  );
+});
