@@ -288,7 +288,11 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // Recompute fiscal flows using shared formulas (fiscal.ts) for single source of truth.
   const c = countByKind(s.buildings);
   const t = s.taxRates;
-  const recomputedCouncilTax = councilTaxPerTick(s.population, t.residential);
+  // BUG-419: recompute against the START-of-tick population the engine actually charged
+  // (recorded in lastFlows.population), not the grown end-of-tick s.population. Fall back
+  // to s.population for states recorded before this field existed.
+  const flowBasisPop = s.lastFlows.population ?? s.population;
+  const recomputedCouncilTax = councilTaxPerTick(flowBasisPop, t.residential);
   const actualCouncilTax = s.lastFlows.inflows.find((f) => f.label === 'Council Tax')?.value ?? 0;
   const councilTaxOk = recomputedCouncilTax === actualCouncilTax;
   checks.push({
@@ -314,7 +318,11 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   });
 
   // Recompute Wages using shared formula (fiscal.ts).
-  const recomputedWages = wagesPerTick(s.population);
+  // BUG-419: use the START-of-tick basis (flowBasisPop) the engine charged wages on.
+  // The engine charges wages on the workforce present at tick start; new arrivals from
+  // this tick's growth aren't paid yet. Recomputing against end-of-tick s.population
+  // (which is larger after growth) is what made this check diverge (computed > actual).
+  const recomputedWages = wagesPerTick(flowBasisPop);
   const actualWages = s.lastFlows.outflows.find((f) => f.label === 'Wages')?.value ?? 0;
   const wagesOk = recomputedWages === actualWages;
   checks.push({

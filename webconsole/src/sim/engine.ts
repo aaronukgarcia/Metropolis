@@ -508,7 +508,11 @@ function advance(s: SimState): SimState {
     history: [...s.history, { tick, funds, income, expense, population }].slice(-HISTORY_CAP),
     ledger,
     nextLedgerId: nextLedger,
-    lastFlows: { inflows, outflows },
+    // BUG-419: record the START-of-tick population that computeFlows() charged
+    // population-scaled flows on (s.population, before the growth update above), so
+    // consistency checks recompute Wages/Council Tax against the SAME basis the engine
+    // used — not the grown end-of-tick population.
+    lastFlows: { inflows, outflows, population: s.population },
     lastRewardedLevel,
     notice: nextNotice,
   };

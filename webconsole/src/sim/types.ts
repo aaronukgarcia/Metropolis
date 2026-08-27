@@ -107,7 +107,17 @@ export interface SimState {
   history: TickRecord[];
   ledger: LedgerEntry[];
   nextLedgerId: number;
-  lastFlows: { inflows: FlowItem[]; outflows: FlowItem[] };
+  /**
+   * Flows recorded by the last advance().
+   * BUG-419: `population` records the START-of-tick population the engine actually
+   * charged population-scaled flows on (Council Tax, Wages, commuter, tourism, transit
+   * subsidy). computeFlows() runs on the incoming state BEFORE the in-tick population
+   * growth update, so end-of-tick `s.population` is the WRONG basis for recomputing
+   * those flows in consistency checks — the recorded basis is. Optional for backward
+   * tolerance: consumers fall back to `s.population` when absent (mirrors BUG-414's
+   * "checker recomputes against the same basis the engine used").
+   */
+  lastFlows: { inflows: FlowItem[]; outflows: FlowItem[]; population?: number };
   /**
    * TICK-BOUNDARY INVARIANT (FEAT-1972079890, BUG-406, Round-6): Conservation is checked
    * using tick snapshots, not working-tree funds. fundsAtTickStart is funds when

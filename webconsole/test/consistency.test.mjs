@@ -208,18 +208,25 @@ test('FLOWS-VS-RECOMPUTE: Wages match population * 0.5', () => {
   assert.equal(check.ok, true, 'wages match after advance');
 });
 
-test('RED FLOWS: wages diverge if population changed outside flows', () => {
+test('RED FLOWS: wages diverge if recorded wage flow does not match its basis', () => {
+  // BUG-419: the check now recomputes wages against the START-of-tick basis the engine
+  // charged (lastFlows.population), NOT the end-of-tick s.population — so bumping
+  // end-population alone is legitimate in-tick growth and must NOT fail. The genuine
+  // failure mode is a recorded Wages outflow that does not match wagesPerTick(basis):
+  // corrupt the recorded flow and the check must catch it.
   const s = initialState();
   const s1 = reducer(s, { type: 'tick' });
-  // Corrupt: change population without updating wages in flows
   const corrupted = {
     ...s1,
-    population: s1.population + 1000,
-    // lastFlows.outflows still have old wage calculation
+    lastFlows: {
+      ...s1.lastFlows,
+      outflows: s1.lastFlows.outflows.map((f) =>
+        f.label === 'Wages' ? { ...f, value: f.value + 1000 } : f
+      ),
+    },
   };
   const report = runConsistencyChecks(corrupted);
   const check = report.checks.find((c) => c.id === 'flows.wages-matches');
-  // Recomputed wages (with new population) won't match recorded wages
   assert.equal(check.ok, false, 'wage mismatch detected');
   assert.ok(check.detail.includes('diverged'), 'detail says diverged');
 });
