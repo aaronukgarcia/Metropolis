@@ -168,6 +168,13 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	if buf == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
+	// A struct-copied receiver is SEC-020's attack, NOT BUG-330's
+	// error-view state: the fail-closed contract here is deliberately to
+	// leave buf EXACTLY as the caller passed it (ASM-015 / sec020_test.go),
+	// freezing the screen on its last real frame rather than letting an
+	// untrusted copy write anything — including an error marker. BUG-330's
+	// EMPTY placeholder below is only reached on the trusted, non-copied
+	// path, so it can never regress that security posture.
 	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Render"}); err != nil {
 		return
 	}
@@ -198,7 +205,26 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	if minimapRect.H > 0 {
 		drawMinimap(buf, minimapRect, snap, m.palette)
 	}
+	// BUG-330 EMPTY state: with no snapshot (or a snapshot carrying no
+	// known cell) the viewport above is entirely blankGlyph — an ambiguous
+	// blank the player reads as broken. Overlay an explicit, muted "nothing
+	// to show yet" placeholder naming the view and why it is empty, drawn
+	// over the (blank) terrain but under the staleness dot.
+	if snap.isEmpty() {
+		widgets.PlaceholderEmpty(buf, viewportRect, "MAP", emptyMapReason(snap), m.palette, tcell.StyleDefault)
+	}
 	drawStalenessDot(buf, rect, snap.stale, m.palette)
+}
+
+// emptyMapReason picks the short explanation BUG-330's EMPTY placeholder
+// shows: distinguishing "no snapshot has arrived at all" (the pre-wiring /
+// waiting-on-the-engine case) from "a snapshot arrived but named no known
+// terrain" (a served-but-empty view).
+func emptyMapReason(snap renderSnapshot) string {
+	if !snap.haveSnapshot {
+		return "waiting for first map snapshot"
+	}
+	return "snapshot has no known terrain"
 }
 
 // splitRect divides rect into the main viewport area and the minimap
@@ -227,6 +253,20 @@ type renderSnapshot struct {
 	cursorX, cursorY int
 	stale            bool
 	activeOverlay    Overlay
+	// haveSnapshot/hasKnown drive BUG-330's EMPTY-view placeholder:
+	// haveSnapshot is false before the first full patch has ever been
+	// applied; hasKnown is false when the grid holds no Known cell at all
+	// (either no snapshot yet, or a snapshot that listed no cells). Either
+	// way the viewport would otherwise draw as an ambiguous all-blank
+	// rectangle — the "looks broken" state this closes.
+	haveSnapshot bool
+	hasKnown     bool
+}
+
+// isEmpty reports whether the viewport has nothing real to draw (BUG-330):
+// no snapshot has arrived, or the snapshot carries no known cell.
+func (s renderSnapshot) isEmpty() bool {
+	return !s.haveSnapshot || !s.hasKnown
 }
 
 func (m *MapScreen) snapshotLocked() renderSnapshot {
@@ -248,6 +288,7 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 		grid = make([]cellData, len(m.grid))
 		copy(grid, m.grid)
 		m.cachedGridSnapshot = grid
+		m.cachedHasKnown = anyKnownCell(grid)
 		m.gridDirty = false
 	} else {
 		grid = m.cachedGridSnapshot
@@ -265,7 +306,21 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 		cursorY:       m.cursorY,
 		stale:         m.stale,
 		activeOverlay: overlayOrder[m.overlayIdx],
+		haveSnapshot:  m.haveSnapshot,
+		hasKnown:      m.cachedHasKnown,
 	}
+}
+
+// anyKnownCell reports whether grid holds at least one Known cell —
+// BUG-330's "is the map genuinely empty" test, computed once per grid
+// rebuild (snapshotLocked) rather than per render frame.
+func anyKnownCell(grid []cellData) bool {
+	for i := range grid {
+		if grid[i].Known {
+			return true
+		}
+	}
+	return false
 }
 
 // cellAt returns the grid cell at absolute grid coordinates (x, y), or

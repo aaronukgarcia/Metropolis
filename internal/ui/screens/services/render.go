@@ -37,6 +37,14 @@ func RenderSliders(buf *core.Buffer, rect core.Rect, sliders []ServiceSlider, re
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
 		return
 	}
+	// BUG-330: data present but zero rows would otherwise draw only the
+	// header — an ambiguous near-blank. A pending rejection is its own,
+	// distinct signal (below), so the EMPTY placeholder is only for the
+	// genuinely-no-services-and-no-error case.
+	if len(sliders) == 0 && rejected == "" {
+		widgets.PlaceholderEmpty(buf, rect, "SERVICE FUNDING", "no services to fund yet", widgets.DefaultPalette, style)
+		return
+	}
 
 	y := rect.Y + 1
 	if rejected != "" {
@@ -69,6 +77,10 @@ func RenderCapacityDemand(buf *core.Buffer, rect core.Rect, cd []CapacityDemand,
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
 		return
 	}
+	if len(cd) == 0 {
+		widgets.PlaceholderEmpty(buf, rect, "CAPACITY VS DEMAND", "no services reporting yet", palette, style)
+		return
+	}
 
 	y := rect.Y + 2
 	for _, c := range cd {
@@ -96,6 +108,10 @@ func RenderResponseTimes(buf *core.Buffer, rect core.Rect, rt []ResponseTimeStat
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
 		return
 	}
+	if len(rt) == 0 {
+		widgets.PlaceholderEmpty(buf, rect, "RESPONSE TIMES", "no responses recorded yet", widgets.DefaultPalette, style)
+		return
+	}
 
 	y := rect.Y + 2
 	for _, r := range rt {
@@ -117,6 +133,10 @@ func RenderWaitingLists(buf *core.Buffer, rect core.Rect, wl []WaitingList, have
 	drawText(buf, rect, rect.X, rect.Y, "WAITING LISTS", style.Bold(true))
 	if !have {
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
+		return
+	}
+	if len(wl) == 0 {
+		widgets.PlaceholderEmpty(buf, rect, "WAITING LISTS", "no waiting lists yet", widgets.DefaultPalette, style)
 		return
 	}
 
@@ -148,6 +168,10 @@ func RenderPublicServicePie(buf *core.Buffer, rect core.Rect, pie PublicServiceP
 	drawText(buf, rect, rect.X, rect.Y, "PUBLIC SERVICE PIE (per 1,000 population)", style.Bold(true))
 	if !have {
 		drawText(buf, rect, rect.X, rect.Y+1, "unavailable", style.Italic(true))
+		return
+	}
+	if len(pie.Slices) == 0 {
+		widgets.PlaceholderEmpty(buf, rect, "PUBLIC SERVICE PIE", "no allocations yet", widgets.DefaultPalette, style)
 		return
 	}
 

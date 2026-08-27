@@ -99,6 +99,14 @@ type MapScreen struct {
 	// when gridDirty is false.
 	cachedGridSnapshot []cellData
 	gridDirty          bool
+	// cachedHasKnown mirrors cachedGridSnapshot: whether the cached grid
+	// holds at least one Known cell (BUG-330). Recomputed only when the
+	// grid is rebuilt (gridDirty), so Render's EMPTY-view detection costs
+	// nothing per-frame. A grid with a non-zero extent but no known cell
+	// (a full patch that listed no cells) is still "empty" for the
+	// player's purposes — an all-blank viewport — which is exactly the
+	// state BUG-330's placeholder must cover, not just the no-snapshot case.
+	cachedHasKnown bool
 
 	offsetX, offsetY     int // viewport pan origin, in grid coordinates
 	viewportW, viewportH int // last known visible viewport size (Render/SetViewportSize)
