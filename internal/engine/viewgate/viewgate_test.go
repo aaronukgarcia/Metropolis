@@ -71,7 +71,6 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -232,67 +231,41 @@ func scanViewNames(t testing.TB, repoRoot string, dirs ...string) []viewNameLit 
 		out = append(out, viewNameLit{Name: s, File: rel, Line: pos.Line})
 	}
 
-	for _, d := range dirs {
-		root := filepath.Join(repoRoot, d)
-		err := filepath.WalkDir(root, func(path string, de fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if de.IsDir() {
-				return nil
-			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-				return nil
-			}
-			file, perr := parser.ParseFile(fset, path, nil, 0)
-			if perr != nil {
-				t.Fatalf("parsing %s: %v", path, perr)
-			}
-			rel, rerr := filepath.Rel(repoRoot, path)
-			if rerr != nil {
-				rel = path
-			}
-			rel = filepath.ToSlash(rel)
-
-			ast.Inspect(file, func(n ast.Node) bool {
-				switch node := n.(type) {
-				case *ast.KeyValueExpr:
-					// `ViewName: "..."` in any composite literal.
-					if kid, ok := node.Key.(*ast.Ident); ok && kid.Name == "ViewName" {
-						if lit, ok := node.Value.(*ast.BasicLit); ok {
-							record(rel, lit)
-						}
-					}
-				case *ast.ValueSpec:
-					// const/var whose name follows the *ViewSubscriptionName
-					// convention, assigned a string literal.
-					for i, name := range node.Names {
-						if i >= len(node.Values) {
-							continue
-						}
-						if !strings.Contains(strings.ToLower(name.Name), "viewsubscriptionname") {
-							continue
-						}
-						if lit, ok := node.Values[i].(*ast.BasicLit); ok {
-							record(rel, lit)
-						}
-					}
-				case *ast.CallExpr:
-					// NewDrillTarget("...", ...) first arg.
-					if calleeName(node.Fun) == "NewDrillTarget" && len(node.Args) >= 1 {
-						if lit, ok := node.Args[0].(*ast.BasicLit); ok {
-							record(rel, lit)
-						}
+	walkGoSourceFiles(t, fset, repoRoot, dirs, func(file *ast.File, rel string) {
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.KeyValueExpr:
+				// `ViewName: "..."` in any composite literal.
+				if kid, ok := node.Key.(*ast.Ident); ok && kid.Name == "ViewName" {
+					if lit, ok := node.Value.(*ast.BasicLit); ok {
+						record(rel, lit)
 					}
 				}
-				return true
-			})
-			return nil
+			case *ast.ValueSpec:
+				// const/var whose name follows the *ViewSubscriptionName
+				// convention, assigned a string literal.
+				for i, name := range node.Names {
+					if i >= len(node.Values) {
+						continue
+					}
+					if !strings.Contains(strings.ToLower(name.Name), "viewsubscriptionname") {
+						continue
+					}
+					if lit, ok := node.Values[i].(*ast.BasicLit); ok {
+						record(rel, lit)
+					}
+				}
+			case *ast.CallExpr:
+				// NewDrillTarget("...", ...) first arg.
+				if calleeName(node.Fun) == "NewDrillTarget" && len(node.Args) >= 1 {
+					if lit, ok := node.Args[0].(*ast.BasicLit); ok {
+						record(rel, lit)
+					}
+				}
+			}
+			return true
 		})
-		if err != nil {
-			t.Fatalf("scanning %s: %v", root, err)
-		}
-	}
+	})
 
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].File != out[j].File {
