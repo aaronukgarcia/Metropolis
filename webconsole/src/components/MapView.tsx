@@ -25,6 +25,7 @@ import {
   lineUsageOf,
   isLineSpec,
   isRoadSpec,
+  isRailSpec,
   computeFailedGates,
 } from '../sim/data';
 import { computePath, type Tile } from '../sim/roadTracker';
@@ -484,8 +485,13 @@ export function MapView() {
       for (const b of state.buildings) {
         const sp = SPECS[b.spec];
         if (!sp) continue;
-        if (sp.kind === 'rail') {
-          railTiles.push({ spec: b.spec, x: b.x, y: b.y });
+        // FEAT-1972079910 inc3 (AC-7): isRailSpec includes both native rail ('rail', 'hs1')
+        // and rd_railbridge (grade-separated crossing, rail runs through it).
+        // AC-7 FIX: for rd_railbridge tiles, use bridgeOver to restore original line continuity
+        // so buildRailGeometry groups the bridge with its original line class.
+        if (isRailSpec(sp)) {
+          const lineSpec = b.bridgeOver ?? b.spec; // Use original line if bridged, else spec
+          railTiles.push({ spec: lineSpec, x: b.x, y: b.y });
         } else if (sp.kind === 'station') {
           for (let dx = 0; dx < sp.w; dx++)
             for (let dy = 0; dy < sp.h; dy++)

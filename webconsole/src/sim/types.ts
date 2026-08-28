@@ -29,6 +29,14 @@ export interface Building {
   y: number;
   /** tick placed; structure is under construction until tick - builtTick >= build time */
   builtTick?: number;
+  /**
+   * FEAT-1972079910 inc3 (AC-7): if spec='rd_railbridge', the original rail line spec
+   * this bridge crosses ('rail' or 'hs1'). Used to restore line continuity in train
+   * route geometry (buildRailGeometry groups by spec, so bridge must report the
+   * line it belongs to, not the bridge spec). Set during conversion in placeRoadPath,
+   * preserved through serialization and replay.
+   */
+  bridgeOver?: string;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';

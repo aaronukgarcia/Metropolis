@@ -154,6 +154,8 @@ export interface DebugJsonBuilding {
   occ: number | null;
   /** Per-building utilisation: ratio 0..1 (3 dp) + basis formula name, null where not applicable. */
   util: { ratio: number; basis: string } | null;
+  /** FEAT-1972079910 inc3 (AC-7): original rail line for rd_railbridge tiles. */
+  bridgeOver?: string;
 }
 
 export interface ConsistencyReportJson {
@@ -468,7 +470,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
     const sp = SPECS[b.spec];
     const occ = blockOccupancy(s, b);
     const util = utilisationOf(s, b);
-    return {
+    const result: DebugJsonBuilding = {
       id: b.id,
       spec: b.spec,
       x: b.x,
@@ -479,6 +481,9 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       occ: occ == null ? null : round3(occ),
       util: util == null ? null : { ratio: round3(util.ratio), basis: util.basis },
     };
+    // AC-7: include bridgeOver for rail bridges
+    if ((b as any).bridgeOver) result.bridgeOver = (b as any).bridgeOver;
+    return result;
   });
 
   // fiscal trend summary â€” mirrors LeftDock's TrendSummary, raw

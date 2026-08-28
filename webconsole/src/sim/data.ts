@@ -244,6 +244,19 @@ export const ROAD_TIER_CAPACITY: Record<RoadTier, number> = {
 };
 
 /**
+ * FEAT-1972079910 inc3 (AC-7): Cost multiplier for rail bridge (grade-separated
+ * crossing where a dual+ road crosses a rail tile). Bridge cost = road cost × this.
+ * PLACEHOLDER-balance (Aaron's balance pass pending).
+ */
+export const RAIL_BRIDGE_COST_MULTIPLIER = 4;
+
+/**
+ * FEAT-1972079910 inc3 (AC-8): Flat cost for motorway junction (where a road
+ * crosses the highest-tier motorway-class road). PLACEHOLDER-balance.
+ */
+export const MOTORWAY_JUNCTION_COST = 250000;
+
+/**
  * Road tier of a spec, or 0 when it is not a drivable road. Reads `roadTier`
  * (set on the road specs); non-road specs return 0.
  */
@@ -254,6 +267,25 @@ export function roadTierOf(sp: Spec | undefined): number {
 /** True when this spec is a drivable road tile (participates in the network). */
 export function isRoadSpec(sp: Spec | undefined): boolean {
   return roadTierOf(sp) > 0;
+}
+
+/**
+ * FEAT-1972079910 inc3 (AC-7): True when this spec is a rail tile that carries
+ * train traffic. Includes both native rail lines ('rail', 'hs1') and rd_railbridge
+ * (grade-separated crossing: rail runs through it). Used to identify all tiles
+ * that participate in rail connectivity and train routing (trains.ts, railConnect.ts).
+ */
+export function isRailSpec(sp: Spec | undefined): boolean {
+  return sp?.kind === 'rail' || sp?.id === 'rd_railbridge';
+}
+
+/**
+ * FEAT-1972079910 inc3 (AC-8): True when this spec is a motorway-class road
+ * (the highest tier). Identifies specs whose roadTier equals the maximum tier.
+ * Used to detect motorway junctions in placeRoadPath. Currently only m20 is tier 5.
+ */
+export function isMotorwayClassSpec(sp: Spec | undefined): boolean {
+  return (sp?.roadTier ?? 0) === 5;
 }
 
 /**
@@ -1123,6 +1155,19 @@ export const SPECS: Record<string, Spec> = {
   // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
   rd_junction: P('rd_junction', 'road', 'Crossroads', 'Plain crossing · auto-placed', 1, 1, 15, 1, '#5a626d', 'network', 99, { roadTier: 1, capacity: 100 }),
   rd_roundabout: P('rd_roundabout', 'road', 'Roundabout', 'Traffic circle · auto-placed', 1, 1, 50, 3, '#515961', 'network', 99, { roadTier: 2, capacity: 250 }),
+
+  // FEAT-1972079910 inc3 (AC-7): rail bridge — auto-placed grade-separated crossing
+  // where a dual+ road crosses a rail tile. Spec has kind:'rail' so it participates
+  // in rail connectivity (isRailSpec includes it). Cost is computed per-placement as
+  // road_cost × RAIL_BRIDGE_COST_MULTIPLIER. unlock: 99 (auto-placed, never manual).
+  // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
+  rd_railbridge: P('rd_railbridge', 'rail', 'Rail Bridge', 'Grade-separated rail crossing · auto-placed', 1, 1, 0, 0, '#8a6d3b', 'network', 99, { roadTier: 4, capacity: 1000 }),
+
+  // FEAT-1972079910 inc3 (AC-8): motorway junction — auto-placed where a road
+  // crosses the highest-tier motorway-class spec (m20). Both roads are continuous
+  // through the junction. unlock: 99 (auto-placed, never manual).
+  // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
+  rd_mwyjunction: P('rd_mwyjunction', 'road', 'Motorway Junction', 'Grade-separated motorway crossing · auto-placed', 1, 1, 250000, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
 
   rail_branch: PH('rail_branch', 'rail', 'Branch Line', 'Planned — single-track branch railway', 1, 1, '#8a6d3b', 'network', 6),
 

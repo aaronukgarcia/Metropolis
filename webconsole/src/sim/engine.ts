@@ -26,6 +26,8 @@ import {
   MAP_W,
   powerStats,
   isRoadSpec,
+  isRailSpec,
+  isMotorwayClassSpec,
   roadTierOf,
   fittingTier,
   ROAD_TIER_SPECS,
@@ -36,6 +38,8 @@ import {
   landfillTippingOf,
   recyclingRevenueOf,
   compostRevenueOf,
+  RAIL_BRIDGE_COST_MULTIPLIER,
+  MOTORWAY_JUNCTION_COST,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -989,18 +993,26 @@ function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
   // Board sets from the CURRENT buildings (includes the just-placed gateway).
   // `occupied` is every building footprint (impassable — route around them).
   // `lineTiles[specId]` is the set of tiles belonging to each target line class.
+  // AC-7 FIX: rd_railbridge tiles with bridgeOver='rail'/'hs1' count as valid targets
+  // for branch routing (they are part of the line they cross).
   const occupied = new Set<string>();
   const lineTiles: Record<string, Set<string>> = {};
   for (const id of GATEWAY_BRANCH_TARGET_SPECS) lineTiles[id] = new Set<string>();
   for (const b of s.buildings) {
     const bs = SPECS[b.spec];
     if (!bs) continue;
-    const lineSet = lineTiles[b.spec]; // non-undefined only for 'rail' / 'hs1'
     for (let dx = 0; dx < bs.w; dx++)
       for (let dy = 0; dy < bs.h; dy++) {
         const k = `${b.x + dx},${b.y + dy}`;
         occupied.add(k);
+        // Standard line tiles
+        const lineSet = lineTiles[b.spec]; // non-undefined only for 'rail' / 'hs1'
         if (lineSet) lineSet.add(k);
+        // AC-7: bridge tiles targeting their original line
+        if (b.spec === 'rd_railbridge' && (b as any).bridgeOver) {
+          const bridgeLineSet = lineTiles[(b as any).bridgeOver];
+          if (bridgeLineSet) bridgeLineSet.add(k);
+        }
       }
   }
 
@@ -1205,17 +1217,28 @@ function reduceCore(state: SimState, action: Action): SimState {
       if (!canEnterSim(sp)) return state;
       if (!specUnlocked(state, sp)) return state;
 
-      // Build a map of existing road tiles and their building references.
-      // AC-6: when new road crosses existing road, convert existing building spec in place.
+      // Build maps of existing tile types and their building references.
+      // AC-6/7/8: when new road crosses existing road/rail/motorway, convert in place.
       // One-building-per-tile invariant: no stacking, no double upkeep.
+      // ⚠ Check MOTORWAY FIRST: m20 is both motorway-class AND a road spec (roadTier 5),
+      // so it must be classified as motorway to trigger AC-8 logic, not AC-6 logic.
       const existingRoadByTile = new Map<string, { building: SimState['buildings'][number]; spec: Spec }>();
+      const existingRailByTile = new Map<string, { building: SimState['buildings'][number]; spec: Spec }>();
+      const existingMotorwayByTile = new Map<string, { building: SimState['buildings'][number]; spec: Spec }>();
       for (const b of state.buildings) {
         const bsp = SPECS[b.spec];
-        if (!bsp || !isRoadSpec(bsp)) continue;
+        if (!bsp) continue;
         for (let dx = 0; dx < bsp.w; dx++)
           for (let dy = 0; dy < bsp.h; dy++) {
             const k = `${b.x + dx},${b.y + dy}`;
-            existingRoadByTile.set(k, { building: b, spec: bsp });
+            if (isMotorwayClassSpec(bsp)) {
+              // Check motorway FIRST (before isRoadSpec) since m20 is both
+              existingMotorwayByTile.set(k, { building: b, spec: bsp });
+            } else if (isRailSpec(bsp)) {
+              existingRailByTile.set(k, { building: b, spec: bsp });
+            } else if (isRoadSpec(bsp)) {
+              existingRoadByTile.set(k, { building: b, spec: bsp });
+            }
           }
       }
 
@@ -1230,40 +1253,74 @@ function reduceCore(state: SimState, action: Action): SimState {
         }
       }
 
-      // Identify conversions (existing roads to convert to junctions) and new roads.
+      // Identify conversions (existing roads/rail/motorway to convert) and new roads.
+      // AC-6: road crossing road → junction
+      // AC-7: dual+ road crossing rail → rail bridge (4x cost multiplier)
+      // AC-8: road crossing motorway → motorway junction (flat £250k cost)
       // Same-spec overlaps are deduped (no placement, no charge).
       const newRoadTier = roadTierOf(sp);
+
+      // AC-7b validation: reject entire path if below-dual road would cross rail
+      // (level crossings not implemented; whole-path occupied rejection).
+      if (newRoadTier < 4) {
+        for (const tile of dedupPath) {
+          const k = `${tile.x},${tile.y}`;
+          if (existingRailByTile.has(k)) {
+            // Below-dual road crossing rail: reject entire path
+            return state; // No placement, no cost, no notice (unchanged behaviour)
+          }
+        }
+      }
       const tilesToPlace: Array<{ x: number; y: number; spec: string; isConversion: boolean; cost: number }> = [];
-      const conversions = new Map<string, { buildingId: number; newSpec: string }>();
+      const conversions = new Map<string, { buildingId: number; newSpec: string; bridgeOver?: string }>();
 
       for (const tile of dedupPath) {
         const k = `${tile.x},${tile.y}`;
-        const existing = existingRoadByTile.get(k);
+        const existingRoad = existingRoadByTile.get(k);
+        const existingRail = existingRailByTile.get(k);
+        const existingMotorway = existingMotorwayByTile.get(k);
 
-        if (existing) {
-          // Crossing an existing road: check for dedup or conversion.
+        if (existingRoad) {
+          // Crossing an existing road: check for dedup or conversion to junction.
           // Dedup: if existing spec is SAME as new road spec, skip entirely (no placement, no cost).
-          if (existing.spec.id === action.spec) {
+          if (existingRoad.spec.id === action.spec) {
             // Same-spec dedup: road over same road (e.g., repeat-drag)
             tilesToPlace.push({ x: tile.x, y: tile.y, spec: action.spec, isConversion: false, cost: 0 });
           } else {
             // Different specs: convert to junction (DD2 tier rule).
-            const existingTier = roadTierOf(existing.spec);
+            const existingTier = roadTierOf(existingRoad.spec);
             const junctionTier = Math.max(newRoadTier, existingTier);
             const junctionSpec = junctionTier >= 2 ? 'rd_roundabout' : 'rd_junction';
 
             // Check if already the right junction type (no conversion needed).
-            if (existing.spec.id === junctionSpec) {
+            if (existingRoad.spec.id === junctionSpec) {
               tilesToPlace.push({ x: tile.x, y: tile.y, spec: junctionSpec, isConversion: false, cost: 0 });
             } else {
               // Conversion: will update existing building's spec to junction.
-              conversions.set(k, { buildingId: existing.building.id, newSpec: junctionSpec });
+              conversions.set(k, { buildingId: existingRoad.building.id, newSpec: junctionSpec });
               const junctionCost = placementCost(SPECS[junctionSpec] ?? SPECS['rd_junction']);
               tilesToPlace.push({ x: tile.x, y: tile.y, spec: junctionSpec, isConversion: true, cost: junctionCost });
             }
           }
+        } else if (existingRail) {
+          // FEAT-1972079910 inc3 (AC-7): crossing an existing rail tile.
+          // AC-7: dual+ road → convert to rd_railbridge at 4x cost; below-dual → rejected (no placement).
+          if (newRoadTier >= 4) {
+            // Dual carriageway or above: convert to rail bridge.
+            // AC-7 FIX: record the original rail spec so buildRailGeometry can restore line continuity
+            conversions.set(k, { buildingId: existingRail.building.id, newSpec: 'rd_railbridge', bridgeOver: existingRail.spec.id });
+            // Cost: road cost × 4x multiplier
+            const bridgeCost = placementCost(sp) * RAIL_BRIDGE_COST_MULTIPLIER;
+            tilesToPlace.push({ x: tile.x, y: tile.y, spec: 'rd_railbridge', isConversion: true, cost: bridgeCost });
+          }
+          // Below-dual: no placement, no cost (unchanged behaviour — level crossing not implemented).
+        } else if (existingMotorway) {
+          // FEAT-1972079910 inc3 (AC-8): crossing an existing motorway-class road.
+          // Any road crossing motorway → convert to rd_mwyjunction at flat cost.
+          conversions.set(k, { buildingId: existingMotorway.building.id, newSpec: 'rd_mwyjunction' });
+          tilesToPlace.push({ x: tile.x, y: tile.y, spec: 'rd_mwyjunction', isConversion: true, cost: MOTORWAY_JUNCTION_COST });
         } else {
-          // No existing road: place a new road tile
+          // No existing road/rail/motorway: place a new road tile
           tilesToPlace.push({ x: tile.x, y: tile.y, spec: action.spec, isConversion: false, cost: placementCost(sp) });
         }
       }
@@ -1298,7 +1355,8 @@ function reduceCore(state: SimState, action: Action): SimState {
           const found = Array.from(conversions.values()).find((c) => c.buildingId === b.id);
           if (!found) return b;
           conversionCount++;
-          return { ...b, spec: found.newSpec };
+          // AC-7 FIX: preserve the original rail spec so trains see line continuity
+          return { ...b, spec: found.newSpec, ...(found.bridgeOver ? { bridgeOver: found.bridgeOver } : {}) };
         }),
       };
 
