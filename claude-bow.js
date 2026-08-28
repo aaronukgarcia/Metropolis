@@ -7,7 +7,7 @@
  * The BOW is the single source of truth for planned/active work on Metropolis:
  * modules, features, bugs and interfaces. Every item has a GUID (primary key),
  * a short human code (MOD-001 / FEAT-001 / BUG-001 / INT-001), a priority
- * (P0..P3), status, dependency links, comments (optionally carrying example
+ * (P0..P5), status, dependency links, comments (optionally carrying example
  * code), and git commit references.
  *
  * Tables (database `metro`, created on first run):
@@ -162,7 +162,9 @@ const FINDING_CLASSES = [
   'resource-exhaustion', 'error-disclosure', 'injection', 'auth-trust-boundary',
   'crypto-randomness', 'other',
 ];
-const PRIORITIES = ['P0', 'P1', 'P2', 'P3'];
+// P4 = below-the-line backlog (Aaron 2026-08-28); P5 = filed distractions
+// (northstar.md §3 — parked by design, revisited after the spine ships).
+const PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4', 'P5'];
 const STATUSES = ['open', 'in_progress', 'blocked', 'done', 'cancelled'];
 const OPEN_STATUSES = ['open', 'in_progress', 'blocked'];
 const SUMMARY_MARKER = '── METROPOLIS STARTUP SUMMARY ──';
@@ -351,7 +353,7 @@ async function ensureSchema(db) {
     item_type   ENUM('module','feature','bug','interface') NOT NULL,
     title       VARCHAR(255) NOT NULL,
     description TEXT NULL,
-    priority    ENUM('P0','P1','P2','P3') NOT NULL DEFAULT 'P2',
+    priority    ENUM('P0','P1','P2','P3','P4','P5') NOT NULL DEFAULT 'P2',
     status      ENUM('open','in_progress','blocked','done','cancelled') NOT NULL DEFAULT 'open',
     created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -712,7 +714,7 @@ async function cmdAdd(db) {
   const type = String(positional[0] || '').toLowerCase();
   const title = positional[1];
   if (!TYPES.includes(type) || !title) {
-    console.error('Usage: node claude-bow.js add <module|feature|bug|interface|assumption> "title" [--priority P0..P3] [--desc "..." | --desc-file <path>]');
+    console.error('Usage: node claude-bow.js add <module|feature|bug|interface|assumption> "title" [--priority P0..P5] [--desc "..." | --desc-file <path>]');
     console.error('  assumption additionally REQUIRES: --code-path "<file or dir>" --codejson "<module key or GUID>"');
     console.error('  BUG-090: if --desc content contains a backtick, "$(...)", an embedded quote, or spans multiple lines, use --desc-file <path> instead — the outer shell reinterprets those characters in an inline --desc value before this tool ever sees them.');
     process.exit(1);
@@ -3039,7 +3041,7 @@ async function cmdSet(db) {
   // previously RIGHT and is now wrong, `amend` is the sanctioned path: same
   // -file safety shape, plus a mandatory --reason and an auto-comment audit
   // trail (old value, new value, reason, author) that `set` has never had.
-  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P3] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--guid G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]  (--guid reconciles the item\'s guid column to code.json\'s registered value for its mkey -- refused unless it exactly matches; correcting prose that is wrong, not merely empty? use `amend` instead -- audited, --reason required)'); process.exit(1); }
+  if (!updates.length) { console.error('Usage: node claude-bow.js set <code> [--priority P0..P5] [--status ...] [--mkey K] [--seq N] [--milestone M1] [--layer L] [--spec "§n"] [--guid-in G] [--guid-out G] [--guid G] [--estimate D] [--code-path P] [--codejson K] [--desc "..." | --desc-file <path>]  (--guid reconciles the item\'s guid column to code.json\'s registered value for its mkey -- refused unless it exactly matches; correcting prose that is wrong, not merely empty? use `amend` instead -- audited, --reason required)'); process.exit(1); }
   params.push(item.guid);
   await db.query(`UPDATE bow_items SET ${updates.join(', ')} WHERE guid = ?`, params);
   console.log(`${item.code} updated${flags.priority ? ` priority=${String(flags.priority).toUpperCase()}` : ''}${flags.status ? ` status=${String(flags.status).toLowerCase()}` : ''}.`);
