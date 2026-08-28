@@ -176,6 +176,16 @@ export interface SimState {
    */
   railNotice: string | null;
   /**
+   * BUG-396 — transient placement-blocked notice. Set to a short message (e.g.
+   * "Insufficient funds — £X needed") when a PAID placement is blocked because the
+   * player cannot afford it, so the player learns why nothing happened instead of a
+   * silent no-op. null otherwise. Cleared on the next successful `place`.
+   * A cost-0 (free zone) placement is NEVER blocked and never sets this — a free
+   * zone is always affordable, even while the treasury is negative. Deterministic,
+   * serialisable sim-state — mirrors `roadNotice` / `railNotice`.
+   */
+  placeNotice: string | null;
+  /**
    * FEAT-1972079907 inc2 — one-year traffic monitors. When auto-connect lays a
    * connector, each connector tile + the joined road tile is registered here and
    * watched for one in-game year (TICKS_PER_YEAR). On each monthly aggregate the

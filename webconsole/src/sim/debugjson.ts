@@ -199,6 +199,7 @@ export interface DebugJson {
     unlockedAll: boolean;
     roadNotice: string | null;
     railNotice: string | null;
+    placeNotice: string | null;
     roadMonitors: RoadMonitor[];
     /** FEAT-1972079891 inc1 — connected road network (sorted "x,y" tiles). */
     roadConnectivity: { connectedRoadTiles: string[] };
@@ -431,6 +432,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   unlockedAll: 'sim.unlockedAll',
   roadNotice: 'sim.roadNotice',
   railNotice: 'sim.railNotice',
+  placeNotice: 'sim.placeNotice',
   roadMonitors: 'sim.roadMonitors',
   roadConnectivity: 'sim.roadConnectivity',
 };
@@ -635,6 +637,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       unlockedAll: s.unlockedAll,
       roadNotice: s.roadNotice,
       railNotice: s.railNotice,
+      placeNotice: s.placeNotice,
       roadMonitors: s.roadMonitors,
       // FEAT-1972079891 inc1: connected road network (defaults to empty when a
       // legacy/bespoke state predates the graph — see SimState.roadConnectivity).

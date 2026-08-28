@@ -2217,8 +2217,19 @@ export function pickAutoSpec(
   // ⚠ BALANCE-NUMBER PLACEHOLDER: the >25 trigger threshold is directional
   // only, pending Aaron's balance pass.
   const meters = serviceDemandOf(s).sort((a, b) => b.value - a.value);
-  if (meters.length && meters[0].value > 25) {
-    return { spec: meters[0].spec, label: meters[0].label };
+  // BUG-396 FIX: never offer a build the player cannot afford. Walk the shortfall
+  // meters worst-first (already sorted desc) and return the FIRST under-provided
+  // service (value > 25) whose spec exists and whose placement cost is coverable by
+  // current funds. A free zone (placementCost 0) is always affordable. If the worst
+  // service is unaffordable, this falls through to a cheaper-but-still-short one, and
+  // only returns null when nothing short is affordable — so the advisor stops nagging
+  // the player to build things they have no money for. Deterministic (sorted, pure).
+  for (const m of meters) {
+    if (m.value <= 25) break; // sorted desc — everything after is below the trigger.
+    const sp = SPECS[m.spec];
+    if (sp && placementCost(sp) <= s.funds) {
+      return { spec: m.spec, label: m.label };
+    }
   }
   return null;
 }

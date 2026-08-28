@@ -86,9 +86,14 @@ body {
 /* ---------- top bar ---------- */
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; letter-spacing: -0.01em; white-space: nowrap; }
 .brand-mark { width: 12px; height: 12px; border-radius: 3px; background: linear-gradient(135deg, var(--accent), var(--done)); }
-.top-stats { display: flex; gap: 16px; margin-left: auto; align-items: center; flex-wrap: wrap; }
+/* BUG-396: the topbar row is a fixed 48px. With flex-wrap:wrap a large treasury
+   pushed the stats onto a 2nd line that the fixed row clipped. Keep them on ONE
+   line and scroll horizontally if the figures get very wide, so the money never
+   clips mid-figure. */
+.top-stats { display: flex; gap: 16px; margin-left: auto; align-items: center; flex-wrap: nowrap; min-width: 0; overflow-x: auto; }
 .stat { font-weight: 600; white-space: nowrap; }
-.stat.acc { color: var(--accent); }
+/* The treasury figure must never be compressed/clipped, however large. */
+.stat.acc { color: var(--accent); flex-shrink: 0; }
 .speed-ctl { display: flex; gap: 4px; }
 
 .xp-mini { display: inline-block; width: 44px; height: 5px; background: var(--surface-2); border-radius: 3px; margin-left: 6px; overflow: hidden; vertical-align: middle; }
@@ -107,7 +112,11 @@ body {
 /* ---------- tiles ---------- */
 .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; margin-bottom: 10px; }
 .tile { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px; }
-.tile .n { font: 700 17px/1.15 ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; word-break: break-all; }
+/* BUG-396: money/number tiles must never split a figure mid-digit. `break-all`
+   used to hyphenate a large "£33,000,000" across lines between digits, making it
+   illegible. Keep the whole number on one line and let the tile scroll horizontally
+   at extreme magnitudes instead — digits stay together and legible. */
+.tile .n { font: 700 17px/1.15 ui-monospace, Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; overflow-x: auto; }
 .tile .l { font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 700; margin-top: 3px; }
 .tile.pos .n { color: var(--done); }
 .tile.neg .n { color: var(--danger); }

@@ -42,6 +42,7 @@ import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type { Building, RoadMonitor } from './types.ts';
+import { fmtMoney } from './utils.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
 import type {
   FlowItem,
@@ -214,6 +215,7 @@ function rawState(): SimState {
     unlockedAll: false,
     roadNotice: null,
     railNotice: null,
+    placeNotice: null,
     roadMonitors: [],
   };
 }
@@ -1156,7 +1158,18 @@ function reduceCore(state: SimState, action: Action): SimState {
       // Zoning is free (FEAT-1972079882): a zone charges £0, so the funds check
       // and deduction use placementCost, not the catalogue cost.
       const cost = placementCost(sp);
-      if (state.funds < cost) return state;
+      // BUG-396 FIX (free-place + silent-fail): only an ACTUAL spend the player
+      // cannot cover blocks a placement. A cost-0 placement (a free zone) is always
+      // affordable and MUST proceed regardless of funds — even while the treasury is
+      // negative — so the `cost > 0` guard keeps insolvency from freezing free zoning.
+      // A blocked PAID placement now surfaces a notice (mirrors roadNotice/railNotice)
+      // so the player learns why nothing happened instead of a silent no-op.
+      // NOTE: this does NOT introduce a funds floor / insolvency halt — funds can still
+      // go negative via upkeep; only the up-front paid-placement affordability is gated
+      // here. The insolvency STATE (floor / halt-growth / shed) is DEFERRED to Aaron.
+      if (cost > 0 && state.funds < cost) {
+        return { ...state, placeNotice: `Insufficient funds — ${fmtMoney(cost)} needed` };
+      }
       if (
         action.x < 0 ||
         action.y < 0 ||
@@ -1172,6 +1185,8 @@ function reduceCore(state: SimState, action: Action): SimState {
         xp: state.xp + 4,
         nextId: state.nextId + 1,
         buildings: [...state.buildings, placedBuilding],
+        // BUG-396: a successful placement clears any prior "insufficient funds" notice.
+        placeNotice: null,
         ...logEvent(state, `Started ${sp.name}`, -cost),
       };
       // FEAT-1972079907 inc1: auto-wire the building to the road network (lay a
