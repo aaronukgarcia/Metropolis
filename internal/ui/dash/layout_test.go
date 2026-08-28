@@ -34,6 +34,40 @@ func TestDefaultLayoutF1(t *testing.T) {
 	}
 }
 
+// TestDefaultLayoutFinanceDrillIsRegisteredView is the BUG-428 regression:
+// the F1 default-layout finance tiles ("f1.cash", "f1.ledger") must drill to
+// the finance screen's REGISTERED view name "f2.finance", never the old,
+// unregistered "f2.ledger" codename (which Subscribe rejects, opening F2
+// blank). Asserting the exact expected target here makes a future regression
+// to any other name fail, complementing the viewgate one-view-registry gate.
+func TestDefaultLayoutFinanceDrillIsRegisteredView(t *testing.T) {
+	l := dash.DefaultLayout("f1")
+	const financeView = "f2.finance"
+	financeTiles := map[string]bool{"f1.cash": false, "f1.ledger": false}
+	for _, tile := range l.Tiles() {
+		if _, ok := financeTiles[tile.ID()]; !ok {
+			continue
+		}
+		financeTiles[tile.ID()] = true
+		if got := tile.Drill().ViewName; got != financeView {
+			t.Errorf("default f1 tile %q drills to view %q, want the registered %q", tile.ID(), got, financeView)
+		}
+		// Table tiles carry a per-row DrillTarget too; those must match.
+		if spec := tile.Table(); spec != nil {
+			for i, row := range spec.Rows {
+				if got := row.Drill.ViewName; got != "" && got != financeView {
+					t.Errorf("default f1 tile %q row %d drills to view %q, want the registered %q", tile.ID(), i, got, financeView)
+				}
+			}
+		}
+	}
+	for id, seen := range financeTiles {
+		if !seen {
+			t.Errorf("expected default f1 layout to contain finance tile %q", id)
+		}
+	}
+}
+
 // TestDefaultLayoutUnknownScreenEmpty is the non-F1 default: a valid,
 // empty dashboard, not an error.
 func TestDefaultLayoutUnknownScreenEmpty(t *testing.T) {

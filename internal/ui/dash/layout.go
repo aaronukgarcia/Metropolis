@@ -345,16 +345,23 @@ func DefaultLayout(screen string) Layout {
 		DrillTarget{ViewName: "f1.viewport"},
 		GaugeSpec{Label: "Job capacity", Value: 0},
 	)))
+	// BUG-428: these finance dashboard tiles drill to the finance screen's
+	// REGISTERED view name "f2.finance" (compose.viewRegistrationOrder /
+	// ui.screen.finance ViewSubscriptionName). They previously targeted
+	// "f2.ledger" — the old ledger codename — which is NOT in
+	// viewRegistrationOrder, so Subscribe rejected it and F2 opened blank.
+	// The finance screen is one registered view; "ledger" is content within
+	// it, not a separate view. The registry is the SSOT; the drill was the bug.
 	l.tiles = append(l.tiles, must(NewSparkTile("f1.cash",
-		DrillTarget{ViewName: "f2.ledger"},
+		DrillTarget{ViewName: "f2.finance"},
 		SparkSpec{Label: "Cash trend", Series: []float64{0}},
 	)))
 	l.tiles = append(l.tiles, must(NewTableTile("f1.ledger",
-		DrillTarget{ViewName: "f2.ledger"},
+		DrillTarget{ViewName: "f2.finance"},
 		TableSpec{
 			Columns: []widgets.Column{{Title: "Line", Width: 8}, {Title: "Amount", Width: 12}},
 			Rows: []TableRow{
-				{Cells: []string{"Balance", "0"}, Drill: DrillTarget{ViewName: "f2.ledger"}},
+				{Cells: []string{"Balance", "0"}, Drill: DrillTarget{ViewName: "f2.finance"}},
 			},
 		},
 	)))
