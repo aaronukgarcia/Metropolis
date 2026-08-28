@@ -57,6 +57,10 @@ import {
   waterBalanceOf,
   waterDemandOf,
   waterPipeInfo,
+  wasteStatsOf,
+  collectionOpexOf,
+  processingMixOf,
+  efwPowerOf,
 } from './data.ts';
 import type { PipeTierAgg } from './data.ts';
 import {
@@ -290,6 +294,29 @@ export interface DebugJson {
         /** Pipe is on the widest tier — cannot be upgraded further. */
         atCeiling: boolean;
       }[];
+    };
+    /**
+     * FEAT-1972079906 refuse — GENERATION + COLLECTION (inc1) and PROCESSING MIX
+     * + DIVERSION KPI (inc2). All DERIVED (no SimState field), so this is a pure
+     * read-out surfaced for the monitorable debug snapshot and the diversion KPI.
+     */
+    waste: {
+      generated: number;
+      collected: number;
+      coverage: number;
+      uncollected: number;
+      collectionOpex: number;
+      /** Tonnes routed to each processor this tick; landfill = the remainder. */
+      efw: number;
+      mrf: number;
+      compost: number;
+      landfill: number;
+      /** efw + mrf + compost. */
+      diverted: number;
+      /** 1 − landfill share = diverted/collected — the total-recycling KPI (0..1). */
+      diversionRate: number;
+      /** MW the EfW plants add to grid capacity (throughput × MW-per-tonne). */
+      efwPowerMw: number;
     };
     earnings: {
       rows: {
@@ -668,6 +695,24 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         pipeTiers,
         plants,
       },
+      waste: (() => {
+        const ws = wasteStatsOf(s);
+        const pm = processingMixOf(s);
+        return {
+          generated: round3(ws.generated),
+          collected: round3(ws.collected),
+          coverage: round3(ws.coverage),
+          uncollected: round3(ws.uncollected),
+          collectionOpex: collectionOpexOf(s),
+          efw: round3(pm.efw),
+          mrf: round3(pm.mrf),
+          compost: round3(pm.compost),
+          landfill: round3(pm.landfill),
+          diverted: round3(pm.diverted),
+          diversionRate: round3(pm.diversionRate),
+          efwPowerMw: round3(efwPowerOf(s)),
+        };
+      })(),
       earnings: {
         rows: earningsRows,
         totalInPerTick: earningsIn,

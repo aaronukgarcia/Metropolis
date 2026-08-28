@@ -62,6 +62,15 @@ export interface Spec {
    */
   wasteCapacity?: number;
   /**
+   * FEAT-1972079906 inc2 — refuse PROCESSING throughput, tonnes/tick a single
+   * processor (landfill / EfW / MRF / compost) can take of the COLLECTED tonnage.
+   * Present ONLY on processing specs (waste_landfill / waste_incinerator /
+   * waste_recycling / waste_compost). Drives processingMixOf() the same way
+   * `wasteCapacity` drives collection coverage.
+   * ⚠ PLACEHOLDER-balance (Aaron's sign-off pending) — directional only.
+   */
+  processCapacity?: number;
+  /**
    * FEAT-1972079877 placeholder catalogue: true marks a planned-but-unbuilt type
    * shown GREYED-OUT / "coming soon" in the build catalogue as a roadmap preview.
    * A placeholder is NEVER placeable (see isPlaceable) and carries zero sim stats
@@ -1099,12 +1108,18 @@ export const SPECS: Record<string, Spec> = {
   pow_reprocess: PH('pow_reprocess', 'power', 'THORP Reprocessing Plant', 'Planned — nuclear fuel reprocessing plant', 4, 4, '#e05d38', 'services', 18),
 
   // ---- Water & Waste ----
-  // FEAT-1972079906 inc1: waste_depot GRADUATED to a real spec (above) — refuse
-  // COLLECTION ships now; landfill/EfW/MRF/compost stay roadmap placeholders (inc2).
-  waste_landfill: PH('waste_landfill', 'water', 'Landfill', 'Planned — engineered landfill site', 3, 3, '#5f7f66', 'services', 5),
-  waste_incinerator: PH('waste_incinerator', 'water', 'Energy-from-Waste', 'Planned — waste incineration plant', 3, 3, '#6b8f71', 'services', 9),
-  waste_recycling: PH('waste_recycling', 'water', 'Recycling Centre', 'Planned — materials recycling facility', 2, 2, '#5f9e6a', 'services', 6),
-  waste_compost: PH('waste_compost', 'water', 'Composting Site', 'Planned — green-waste composting site', 2, 2, '#6b9e6b', 'services', 5),
+  // FEAT-1972079906 inc1: waste_depot GRADUATED (refuse COLLECTION).
+  // FEAT-1972079906 inc2: the four PROCESSING specs GRADUATE from roadmap
+  // placeholders to real placeable buildings, each carrying a `processCapacity`
+  // (tonnes/tick of collected refuse it can take) that drives processingMixOf().
+  // No `tag` (they are not clean/waste-WATER plants). The EfW plant carries NO
+  // static `mw`: its grid contribution is THROUGHPUT-based (efwPowerOf), so an
+  // idle incinerator produces no power. ⚠ cost / upkeep / processCapacity are all
+  // PLACEHOLDER-balance — Aaron's row-by-row pass.
+  waste_landfill: P('waste_landfill', 'water', 'Landfill', 'Buries residual refuse · cheap, finite · 300 t/tick', 3, 3, 5000, 30, '#5f7f66', 'services', 5, { processCapacity: 300 }),
+  waste_incinerator: P('waste_incinerator', 'water', 'Energy-from-Waste', 'Burns residual for grid power · 60 t/tick', 3, 3, 42000, 180, '#6b8f71', 'services', 9, { processCapacity: 60 }),
+  waste_recycling: P('waste_recycling', 'water', 'Recycling Centre', 'MRF recovers materials for sale · 40 t/tick', 2, 2, 8000, 70, '#5f9e6a', 'services', 6, { processCapacity: 40 }),
+  waste_compost: P('waste_compost', 'water', 'Composting Site', 'Turns organics into compost · 30 t/tick', 2, 2, 3500, 30, '#6b9e6b', 'services', 5, { processCapacity: 30 }),
 
   // ---- Health & Deathcare ----
   death_cemetery: PH('death_cemetery', 'health', 'Cemetery', 'Planned — municipal cemetery', 3, 3, '#8a94a8', 'services', 4),
@@ -1466,7 +1481,11 @@ export function powerStats(s: SimState): { need: number; cap: number } {
   const c = countByKind(s.buildings);
   return {
     need: Math.round(s.population * 0.012 + c.industrial * 6 + c.office * 4 + c.mine * 8),
-    cap: sumBy(s, (sp) => sp.kind === 'power', (sp) => sp.mw ?? 0),
+    // FEAT-1972079906 inc2: Energy-from-Waste plants add THROUGHPUT-based MW to grid
+    // capacity (efwPowerOf) — it feeds the same surplus/Grid-Export path as any power
+    // plant. Cannot double-count: the EfW spec carries no `mw`, so it is absent from the
+    // power-plant sum above; a city with no EfW throughput adds exactly 0.
+    cap: sumBy(s, (sp) => sp.kind === 'power', (sp) => sp.mw ?? 0) + efwPowerOf(s),
   };
 }
 
@@ -1779,6 +1798,161 @@ export function collectionCoverageOf(s: SimState): number {
  */
 export function collectionOpexOf(s: SimState): number {
   return Math.round(wasteStatsOf(s).collected * COLLECTION_OPEX_PER_TONNE);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079906 inc2 — GARBAGE / WASTE: PROCESSING MIX + TOTAL-RECYCLING ENGINE.
+//
+// Of the COLLECTED tonnage (inc1's wasteStatsOf(s).collected), how much is routed
+// to each processor — landfill / energy-from-waste / MRF-recycling / compost — as a
+// deterministic function of the built ONLINE processor capacity. Landfill is the
+// FALLBACK sink for whatever the diverting processors (EfW/MRF/compost) cannot take,
+// so it always absorbs the remainder even with no landfill building placed. The
+// diversion % KPI (§6 Q3 resolved: a KPI, not a scored achievement) = diverted/collected.
+//
+// Economic hooks are booked through computeFlows() (engine.ts), conservation-safe:
+//   • landfill  → "Waste Disposal" OUTFLOW  (tipping cost ∝ landfilled tonnes)
+//   • MRF       → "Recycling Revenue" INFLOW (recovered tonnes × recovery rate × rate)
+//   • compost   → "Compost Revenue"  INFLOW  (composted tonnes × rate)
+//   • EfW power → added to powerStats.cap (efwPowerOf); its economic value is realised
+//                 through the EXISTING Grid Export revenue when there is a surplus, so
+//                 it is NOT booked as a second inflow (would double-count).
+// §6 Q4 resolved: recovered material is REVENUE ONLY for inc2 (real industrial-input
+// feedback deferred). All quantities are DERIVED read-outs — nothing is stored in
+// SimState, so processing cannot drift or break the consistency checker / replay.
+//
+// ⚠ BALANCE-NUMBER REGIME: every processor processCapacity (on the spec), the tipping
+// cost, recovery rate, revenue rates, and EfW MW-per-tonne are PLACEHOLDERS — directional
+// only, pending Aaron's row-by-row balance pass. Do not tune gameplay against them.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** £ charged per tonne of refuse sent to LANDFILL (the tipping fee). PLACEHOLDER. */
+export const TIPPING_COST_PER_TONNE = 8;
+/** Fraction of MRF-processed tonnage recovered as sellable material. PLACEHOLDER. */
+export const MRF_RECOVERY_RATE = 0.6;
+/** £ earned per tonne of RECOVERED material (revenue only, inc2). PLACEHOLDER. */
+export const MATERIAL_REVENUE_PER_TONNE = 45;
+/** £ earned per tonne of refuse COMPOSTED. PLACEHOLDER. */
+export const COMPOST_REVENUE_PER_TONNE = 15;
+/** MW added to the grid per tonne of residual burned in an EfW plant. PLACEHOLDER. */
+export const EFW_MW_PER_TONNE = 0.5;
+
+/**
+ * Total ONLINE processing throughput for one processor spec, tonnes/tick (Σ of that
+ * spec's `processCapacity` over online buildings). Only ONLINE processors process —
+ * an under-construction / disconnected plant takes nothing. Order-independent, pure.
+ */
+function processCapacityOf(s: SimState, specId: string): number {
+  let cap = 0;
+  for (const b of s.buildings) {
+    if (b.spec !== specId) continue;
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.processCapacity) cap += sp.processCapacity;
+  }
+  return cap;
+}
+
+/** Derived processing read-out for a state (brief §2/§3). All tonnages tonnes/tick. */
+export interface ProcessingMix {
+  /** Collected refuse available to process (= wasteStatsOf(s).collected). */
+  collected: number;
+  /** Online processor capacities, tonnes/tick. */
+  efwCapacity: number;
+  mrfCapacity: number;
+  compostCapacity: number;
+  landfillCapacity: number;
+  /** Σ of the three DIVERTING capacities (everything that is not landfill). */
+  divertCapacity: number;
+  /** Tonnes actually routed to each processor this tick. */
+  efw: number;
+  mrf: number;
+  compost: number;
+  /** Landfill takes the remainder collected − diverted (the fallback sink). */
+  landfill: number;
+  /** efw + mrf + compost — everything kept out of landfill. */
+  diverted: number;
+  /** diverted / collected, 0 when nothing is collected. The total-recycling KPI. */
+  diversionRate: number;
+}
+
+/**
+ * Processing mix of the collected tonnage (brief §2/§3). Diverting processors
+ * (EfW/MRF/compost) take up to their combined capacity, split PROPORTIONALLY by
+ * capacity (order-independent); landfill absorbs the remainder. Pure/deterministic.
+ */
+export function processingMixOf(s: SimState): ProcessingMix {
+  const collected = wasteStatsOf(s).collected;
+  const efwCapacity = processCapacityOf(s, 'waste_incinerator');
+  const mrfCapacity = processCapacityOf(s, 'waste_recycling');
+  const compostCapacity = processCapacityOf(s, 'waste_compost');
+  const landfillCapacity = processCapacityOf(s, 'waste_landfill');
+  const divertCapacity = efwCapacity + mrfCapacity + compostCapacity;
+  const diverted = Math.min(collected, divertCapacity);
+  const share = (cap: number) => (divertCapacity > 0 ? diverted * (cap / divertCapacity) : 0);
+  const efw = share(efwCapacity);
+  const mrf = share(mrfCapacity);
+  const compost = share(compostCapacity);
+  // Landfill = remainder, computed as collected − diverted so landfill + diverted
+  // is EXACTLY collected (tonnage conservation, no float drift on the total).
+  const landfill = collected - diverted;
+  const diversionRate = collected > 0 ? diverted / collected : 0;
+  return {
+    collected,
+    efwCapacity,
+    mrfCapacity,
+    compostCapacity,
+    landfillCapacity,
+    divertCapacity,
+    efw,
+    mrf,
+    compost,
+    landfill,
+    diverted,
+    diversionRate,
+  };
+}
+
+/** Diversion rate 0..1 (brief §3) = 1 − landfill share = diverted/collected. The KPI. */
+export function diversionRateOf(s: SimState): number {
+  return processingMixOf(s).diversionRate;
+}
+
+/**
+ * EfW grid power this tick, MW (brief §3/§4): residual routed to EfW × MW-per-tonne.
+ * Added to powerStats.cap so it feeds the grid surplus / Grid Export exactly like a
+ * power plant, WITHOUT a static spec `mw` — so zero throughput ⇒ zero power (an idle
+ * incinerator adds nothing). Pure/deterministic; cannot double-count (the EfW spec
+ * carries no `mw`, so it never contributes to the power-plant sum in powerStats).
+ */
+export function efwPowerOf(s: SimState): number {
+  return processingMixOf(s).efw * EFW_MW_PER_TONNE;
+}
+
+/**
+ * Landfill tipping cost this tick, £ (brief §4): the fee ∝ tonnage sent to landfill
+ * (the remainder). Zero landfilled ⇒ zero. Charged through computeFlows() as the
+ * "Waste Disposal" outflow (conservation-safe). Integer £, deterministic. PLACEHOLDER.
+ */
+export function landfillTippingOf(s: SimState): number {
+  return Math.round(processingMixOf(s).landfill * TIPPING_COST_PER_TONNE);
+}
+
+/**
+ * MRF material revenue this tick, £ (brief §4): recovered tonnage (MRF throughput ×
+ * recovery rate) × price per recovered tonne. Booked as the "Recycling Revenue" inflow.
+ * Integer £, deterministic. PLACEHOLDER rates.
+ */
+export function recyclingRevenueOf(s: SimState): number {
+  return Math.round(processingMixOf(s).mrf * MRF_RECOVERY_RATE * MATERIAL_REVENUE_PER_TONNE);
+}
+
+/**
+ * Compost revenue this tick, £ (brief §4): composted tonnage × price per tonne. Booked
+ * as the "Compost Revenue" inflow. Integer £, deterministic. PLACEHOLDER rate.
+ */
+export function compostRevenueOf(s: SimState): number {
+  return Math.round(processingMixOf(s).compost * COMPOST_REVENUE_PER_TONNE);
 }
 
 // ---------- placement planner ----------

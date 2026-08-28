@@ -415,7 +415,12 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       // (collected tonnes × rate), NOT recurring per-building `upkeep` — exclude it
       // from the upkeep-total reconciliation exactly like Wages / Road Auto-Scale.
       // (The depot's FIXED upkeep IS a normal Water & Waste bucket and stays in.)
-      flow.label !== 'Refuse Collection'
+      flow.label !== 'Refuse Collection' &&
+      // FEAT-1972079906 inc2: 'Waste Disposal' is landfill TIPPING (landfilled tonnes ×
+      // rate) — a tonnage-based operating cost, NOT recurring per-building `upkeep` —
+      // exclude it from the upkeep-total reconciliation exactly like Refuse Collection.
+      // (The processors' FIXED upkeep IS a normal Water & Waste bucket and stays in.)
+      flow.label !== 'Waste Disposal'
     ) {
       actualUpkeep += flow.value;
     }

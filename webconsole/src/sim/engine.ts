@@ -34,6 +34,9 @@ import {
   GRACE_TICKS,
   collectionCoverageOf,
   collectionOpexOf,
+  landfillTippingOf,
+  recyclingRevenueOf,
+  compostRevenueOf,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -358,6 +361,21 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   // flows normally via the Water & Waste bucket.
   const refuseOpex = collectionOpexOf(s);
   if (refuseOpex > 0) outflows.push({ label: 'Refuse Collection', value: refuseOpex });
+
+  // FEAT-1972079906 inc2: refuse PROCESSING economics (all conservation-safe via the
+  // flows). Landfill tipping is a tonnage-based OUTFLOW; MRF material + compost are
+  // tonnage-based INFLOWS. Each only emitted when > 0 (a city with no processing sees
+  // no new lines). EfW power is NOT booked here — it feeds powerStats.cap and is
+  // monetised through the existing Grid Export inflow when there is a surplus, so
+  // booking it again would double-count. "Waste Disposal" is a tonnage-based operating
+  // cost, NOT a per-building `upkeep` bucket, so it is excluded from the consistency
+  // upkeep reconciliation alongside Wages / Refuse Collection (see consistency.ts).
+  const recyclingRevenue = recyclingRevenueOf(s);
+  if (recyclingRevenue > 0) inflows.push({ label: 'Recycling Revenue', value: recyclingRevenue });
+  const compostRevenue = compostRevenueOf(s);
+  if (compostRevenue > 0) inflows.push({ label: 'Compost Revenue', value: compostRevenue });
+  const landfillTipping = landfillTippingOf(s);
+  if (landfillTipping > 0) outflows.push({ label: 'Waste Disposal', value: landfillTipping });
 
   // BUG-422 (GR#3): post-policy outflow multipliers now live in the shared
   // applyOutflowPolicies helper (fiscal.ts) so the consistency checker applies the

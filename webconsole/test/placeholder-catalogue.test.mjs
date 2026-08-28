@@ -48,9 +48,11 @@ const PLACEHOLDER_IDS = [
   // Power (incl. Five Gorges Dam)
   'pow_hydro', 'pow_hvdc', 'pow_reprocess',
   // Water & Waste
-  // FEAT-1972079906 inc1: waste_depot GRADUATED to a real placeable collection
-  // depot (wasteCapacity + real cost/upkeep), so it is no longer a placeholder.
-  'waste_landfill', 'waste_incinerator', 'waste_recycling', 'waste_compost',
+  // FEAT-1972079906 inc1: waste_depot GRADUATED (collection depot).
+  // FEAT-1972079906 inc2: the four PROCESSING specs (waste_landfill /
+  // waste_incinerator / waste_recycling / waste_compost) GRADUATED to real
+  // placeable buildings (processCapacity + real cost/upkeep), so they are no
+  // longer placeholders.
   // Health & Deathcare
   'death_cemetery', 'death_crematorium', 'air_heliport',
   // Fire & Rescue
@@ -93,7 +95,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
 test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
   const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
   assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, 41, 'expected 41 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1)');
+  assert.equal(flagged.length, 37, 'expected 37 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1; the 4 waste PROCESSING specs graduated in FEAT-1972079906 inc2)');
 });
 
 test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {
@@ -147,7 +149,7 @@ test('REDUCER: dispatching place for a placeholder with unlockedAll does NOT ent
   // Free empty tile away from the seeded map corner; unlockedAll=true so the ONLY
   // thing that can stop the placement is the placeholder guard itself.
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_hydro', 'res_estate', 'land_cern', 'rail_branch', 'waste_landfill']) {
+  for (const id of ['pow_hydro', 'res_estate', 'land_cern', 'rail_branch', 'ind_refinery']) {
     const sp = SPECS[id];
     assert.equal(specUnlocked(s, sp), true, `precondition: ${id} passes the unlock gate under god-mode`);
     const after = reducer(s, { type: 'place', spec: id, x: 200, y: 120 });
