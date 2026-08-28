@@ -1309,6 +1309,54 @@ export function underConstructionResidents(s: SimState): number {
   return Math.max(0, residentsCapacity(s) - onlineResidentsCapacity(s));
 }
 
+/**
+ * BUG-394 — split the OFFLINE residential capacity (the "+N" from
+ * underConstructionResidents) by its ROOT CAUSE, so the display can distinguish
+ * the self-resolving reason from the actionable one:
+ *
+ *   • construction  — the dwelling is genuinely still being built (G1). Fills
+ *                     itself once construction finishes; the player need do
+ *                     nothing.
+ *   • disconnected  — the dwelling is built but sits off the road network
+ *                     (G2 not road-adjacent / G3 not road-connected). It will
+ *                     NEVER house anyone until the player connects roads. This
+ *                     is the legible signal for the BUG-394 pop-freeze: a city
+ *                     that looks full but is pinned at online capacity because
+ *                     densely-placed dwellings were never wired to a road.
+ *
+ * Attribution reuses the committed activation gate (computeFailedGates) — it does
+ * NOT reimplement or change the gate. computeFailedGates reports construction OR a
+ * road gate but never both (it returns early while a building is still under
+ * construction, because the road gates aren't meaningful yet). So the
+ * both-gates-fail tie-break is resolved by the gate itself: while a dwelling is
+ * still building it is 'construction'; only once built does a road failure
+ * surface. If any failed gate is a road gate we count 'disconnected' (the
+ * more-actionable cause); otherwise 'construction'.
+ *
+ * Pure derivation (GR#21): a function of SimState only, no Date/Math.random. The
+ * two buckets partition exactly the offline residential capacity, so
+ * `construction + disconnected === underConstructionResidents(s)` — every offline
+ * resident is attributed once, none lost or double-counted.
+ */
+export function offlineResidentsByReason(s: SimState): {
+  construction: number;
+  disconnected: number;
+} {
+  let construction = 0;
+  let disconnected = 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind !== 'residential') continue;
+    if (isOnline(s, b)) continue;
+    const residents = sp.residents ?? 8;
+    const gates = computeFailedGates(s, b);
+    const road = gates.some((g) => g.gate === 'road-adjacent' || g.gate === 'road-connected');
+    if (road) disconnected += residents;
+    else construction += residents;
+  }
+  return { construction, disconnected };
+}
+
 export interface StationLinkInfo {
   total: number;
   connectedIds: Set<number>;

@@ -15,7 +15,7 @@ import {
   plantEffServed,
   lineUsageOf,
   onlineResidentsCapacity,
-  underConstructionResidents,
+  offlineResidentsByReason,
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
@@ -77,7 +77,11 @@ function StatusTab() {
   // not house anyone yet). The gross total stays visible as a "+N under
   // construction" breakdown so the mismatch is legible, not hidden.
   const capacity = onlineResidentsCapacity(state);
-  const underConstruction = underConstructionResidents(state);
+  // BUG-394: split the offline "+N" by root cause so the pop-freeze is legible.
+  // `disconnected` is the ACTIONABLE reason (dwellings built but off the road
+  // network — they never house anyone until the player connects roads);
+  // `building` self-resolves once construction finishes.
+  const { construction: buildingResidents, disconnected } = offlineResidentsByReason(state);
   const approval = approvalOf(state);
   const wb = wellbeingOf(state);
   const income = state.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
@@ -101,11 +105,22 @@ function StatusTab() {
           <div className="n">{fmtNum(capacity)}</div>
           <div className="l">
             Housing cap
-            {underConstruction > 0 && (
+            {buildingResidents > 0 && (
               <>
                 {' '}
                 <span className="sub" title="Residential capacity still under construction — not yet online, so nobody lives here yet">
-                  (+{fmtNum(underConstruction)} building)
+                  (+{fmtNum(buildingResidents)} building)
+                </span>
+              </>
+            )}
+            {disconnected > 0 && (
+              <>
+                {' '}
+                <span
+                  className="sub warn-text"
+                  title="Residential capacity built but NOT on the road network — connect roads to these dwellings to grow the population"
+                >
+                  +{fmtNum(disconnected)} not on road network — connect to grow
                 </span>
               </>
             )}

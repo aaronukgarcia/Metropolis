@@ -53,6 +53,7 @@ import {
   residentsCapacity,
   onlineResidentsCapacity,
   underConstructionResidents,
+  offlineResidentsByReason,
   serviceDemandOf,
   totalJobs,
   utilisationOf,
@@ -256,6 +257,10 @@ export interface DebugJson {
       housingCapacity: number;
       /** BUG-417: capacity still under construction (gross − online). */
       housingCapacityUnderConstruction: number;
+      /** BUG-394: offline residential capacity built but stranded OFF the road
+       *  network (G2/G3) — the actionable slice of housingCapacityUnderConstruction
+       *  that needs the player to connect roads, distinct from genuinely-building. */
+      housingCapacityDisconnected: number;
       /** BUG-417: gross residential capacity incl. offline dwellings (residentsCapacity). */
       housingCapacityGross: number;
       jobs: number;
@@ -681,6 +686,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         // the debug JSON explains a population pinned below the gross figure.
         housingCapacity: onlineResidentsCapacity(s),
         housingCapacityUnderConstruction: underConstructionResidents(s),
+        housingCapacityDisconnected: offlineResidentsByReason(s).disconnected,
         housingCapacityGross: residentsCapacity(s),
         jobs: totalJobs(s),
         solvent: net >= 0,
