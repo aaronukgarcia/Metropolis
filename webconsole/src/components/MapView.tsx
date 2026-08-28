@@ -27,6 +27,7 @@ import {
   lineUsageOf,
   isLineSpec,
 } from '../sim/data';
+import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim, demandOf, specUnlocked } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
 import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
@@ -433,48 +434,58 @@ export function MapView() {
       ctx.stroke();
     }
 
-    // train along the rail line
-    const railCells = state.buildings
-      .filter((b) => SPECS[b.spec]?.kind === 'rail')
-      .map((b) => ({ x: b.x, y: b.y }))
-      .sort((a, b) => a.y - b.y || a.x - b.x);
-    if (railCells.length > 1) {
-      const t = (Date.now() / 220) % railCells.length;
-      const i = Math.floor(t);
-      const fr = t - i;
-      const a = railCells[i];
-      const b2 = railCells[(i + 1) % railCells.length];
-      const px = geom.ox + (a.x + (b2.x - a.x) * fr + 0.5) * geom.s;
-      const py = geom.oy + (a.y + (b2.y - a.y) * fr + 0.5) * geom.s;
-      const ts = Math.max(geom.s * 1.5, 4);
-
-      const conn = links.connectedIds.size;
-      const demandF = Math.min(1, state.population / 400);
-      const wave = Math.abs(Math.sin(((state.tick % 30) / 30) * Math.PI * 2));
-      let load = Math.min(1, (0.25 + 0.75 * wave) * demandF) * (conn > 0 ? 1 : 0.15);
-      if (state.population === 0) load = conn > 0 ? 0.08 : 0;
-
-      ctx.fillStyle = '#22272e';
-      ctx.fillRect(px - ts / 2, py - ts / 2, ts, ts);
-      const pad = Math.max(1, ts * 0.16);
-      const strips = 4;
-      const innerW = ts - pad * 2;
-      const innerH = ts - pad * 2;
-      const stripW = innerW / strips;
-      const col = load > 0.8 ? '#ff7b72' : load >= 0.5 ? '#e3b341' : '#3fb950';
-      const filledStrips = Math.round(load * strips);
-      for (let sIdx = 0; sIdx < strips; sIdx++) {
-        ctx.fillStyle = sIdx < filledStrips ? col : '#3a424c';
-        ctx.fillRect(
-          px - ts / 2 + pad + sIdx * stripW + 0.5,
-          py - ts / 2 + pad,
-          Math.max(stripW - 1, 0.8),
-          innerH
-        );
+    // FEAT-1972079902 inc2: LIVE DETERMINISTIC TRAINS. Positions come solely from
+    // trainPositions(geometry, demand, state.tick) — a pure function of the sim
+    // tick (see trains.ts). NO Date.now / random: the old wall-clock preview glyph
+    // it replaces is gone. Trains are quantised to whole ticks so a replay draws
+    // byte-identical glyphs; the 50ms `frame` repaint only redraws the SAME
+    // positions (a repaint pump, never a position source). Gated behind the
+    // existing "Lines" overlay toggle, so it rides the same demand read-out.
+    if (showLines) {
+      const railTiles: RailTile[] = [];
+      const stationTiles: StationTile[] = [];
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (!sp) continue;
+        if (sp.kind === 'rail') {
+          railTiles.push({ spec: b.spec, x: b.x, y: b.y });
+        } else if (sp.kind === 'station') {
+          for (let dx = 0; dx < sp.w; dx++)
+            for (let dy = 0; dy < sp.h; dy++)
+              stationTiles.push({ x: b.x + dx, y: b.y + dy });
+        }
       }
-      ctx.strokeStyle = '#14181d';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(px - ts / 2, py - ts / 2, ts, ts);
+      const geoms = buildRailGeometry(railTiles, stationTiles);
+      const railDemand = lineUsageOf(state)
+        .filter((l) => l.kind === 'rail')
+        .map((l) => ({ spec: l.spec, saturation: l.saturation, overCapacity: l.overCapacity }));
+      const lineTrains = trainPositions(geoms, railDemand, state.tick);
+      for (const lt of lineTrains) {
+        for (const tr of lt.trains) {
+          const px = geom.ox + (tr.x + 0.5) * geom.s;
+          const py = geom.oy + (tr.y + 0.5) * geom.s;
+          // Size grows a little with load (colour/size by usage, #6).
+          const ts = Math.max(geom.s * (1.1 + 0.6 * tr.saturation), 4);
+          // BUG-425 split tokens ONLY: over capacity → danger red, else done green.
+          const col = tr.bucket === 'hot' ? '#ff7b72' : '#3fb950';
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#22272e';
+          ctx.fillRect(px - ts / 2, py - ts / 2, ts, ts);
+          const pad = Math.max(1, ts * 0.2);
+          ctx.fillStyle = col;
+          ctx.fillRect(px - ts / 2 + pad, py - ts / 2 + pad, ts - pad * 2, ts - pad * 2);
+          // A stopped train gets a bright halt ring so the station pause reads.
+          if (tr.stoppedAtStation) {
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(px - ts / 2 - 1, py - ts / 2 - 1, ts + 2, ts + 2);
+          }
+          ctx.strokeStyle = '#14181d';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(px - ts / 2, py - ts / 2, ts, ts);
+        }
+      }
+      ctx.globalAlpha = 1;
     }
 
     if (state.tool.mode === 'build' && state.tool.spec && hover && geom.s > 2) {
@@ -792,7 +803,7 @@ export function MapView() {
         onPointerLeave={() => setHover(null)}
       />
       <Compass />
-      <span className="map-hint">wheel zoom · right-drag pan · left-drag paint · 1-9 pick · Esc cancel · train strips = % full (green/amber/red)</span>
+      <span className="map-hint">wheel zoom · right-drag pan · left-drag paint · 1-9 pick · Esc cancel · Lines overlay shows live trains (green = headroom, red = over capacity)</span>
       <div
         className="tier-legend"
         title="Zone block border = density/level tier. Block fill height = percent occupied (residents vs capacity; workers vs jobs)."
