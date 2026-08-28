@@ -781,7 +781,7 @@ function isRetired(candidate) {
  *  caller-supplied-name site (checkin --name / CLAUDE_IDENTITY, message
  *  --to, checkout --force) so the message is identical wherever it fires. */
 function retiredMessage(candidate) {
-  return `${candidate} is retired (Aaron, 2026-08-18) - roles: Bev=lead, Bill=RM/BA/allocator+oversight, Ben=coder.`;
+  return `${candidate} is retired (Aaron, 2026-08-18) - live slots: ${liveNames().join(', ')}.`;
 }
 
 /** True if `candidate` (case-insensitive) names a PARKED slot (Ben). */
@@ -1202,6 +1202,16 @@ async function cmdCheckin(db) {
     await db.commit();
     await printSuccess(name, sessionId, db);
     return;
+  }
+
+  // BUG-344: `--any` ignores CLAUDE_IDENTITY as a slot preference, but a
+  // retired name in that env must still fail closed with the RETIRED
+  // rejection — not silently land on the next live slot. isRetired is
+  // otherwise only consulted when !flags.any (envPref / --name).
+  if (!preferred && process.env.CLAUDE_IDENTITY && isRetired(process.env.CLAUDE_IDENTITY)) {
+    await db.rollback();
+    console.error(retiredMessage(process.env.CLAUDE_IDENTITY));
+    process.exit(1);
   }
 
   // No specific name — prefer THIS window's own last-held identity (per

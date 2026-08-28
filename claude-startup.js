@@ -323,7 +323,7 @@ function emitDeferredCheckin(maxTTLMs, stderrSnippet) {
 function emitAllFull() {
   console.log(`ERROR: ALL PERMIT SLOTS ARE FULL (${LIVE_NAMES.join(', ')} all occupied, TTLs > 3 min).`);
   console.log(`YOU HAVE NO IDENTITY. DO NOT PREFIX RESPONSES WITH ANY NAME.`);
-  console.log(`TELL THE USER IMMEDIATELY: "All three Claude slots are occupied. I cannot check in."`);
+  console.log(`TELL THE USER IMMEDIATELY: "All ${NAMES.length} Claude slots are occupied. I cannot check in."`);
   console.log(`Ask the user to run: node claude-sync.js read  — to see who is active.`);
   console.log(`Do NOT proceed with any work until you have a valid permit.`);
 }
@@ -458,5 +458,5 @@ if (require.main === module) {
     setTimeout(start, 3000).unref();
   }
 } else {
-  module.exports = { emitSuccess, printSessionSummary, projectRoot, VALID_NAMES, LIVE_NAMES, checkGitIdentity, gitIdentityLine, parseName };
+  module.exports = { emitSuccess, emitAllFull, emitTechnicalFailure, printSessionSummary, projectRoot, VALID_NAMES, LIVE_NAMES, checkGitIdentity, gitIdentityLine, parseName };
 }

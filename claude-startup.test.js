@@ -210,6 +210,19 @@ test('false-pass guard: parseName() still accepts the unaffected slots (Bill, Be
   assert.equal(startup.parseName('YOU ARE: Ben\nSession: abc-123\n'), 'ben');
 });
 
+test('BUG-344: emitAllFull derives slot count from NAMES, never hardcodes "All three"', () => {
+  const captured = captureLog(() => startup.emitAllFull());
+  assert.doesNotMatch(captured, /All three Claude slots/);
+  assert.match(captured, new RegExp(`All ${startup.VALID_NAMES.length} Claude slots are occupied`));
+  assert.ok(startup.VALID_NAMES.includes('bro'));
+});
+
+test('BUG-344: emitTechnicalFailure prefix list includes bro>', () => {
+  const captured = captureLog(() => startup.emitTechnicalFailure('boom'));
+  assert.match(captured, /bro>/);
+  assert.doesNotMatch(captured, /All three Claude slots/);
+});
+
 test('no remaining "Bob" literal in claude-startup.js source outside historical/comment context', () => {
   const src = fs.readFileSync(path.join(__dirname, 'claude-startup.js'), 'utf8');
   // Every remaining "bob"/"Bob" occurrence, if any, must be inside a // comment

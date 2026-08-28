@@ -964,8 +964,8 @@ test('checkin --name Bob is rejected with the retirement message, not a generic 
   const res = run(['checkin', '--name', 'Bob'], sid);
   assert.notEqual(res.status, 0, 'checkin --name Bob must fail');
   assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/, 'must be the specific retirement message');
-  assert.match(res.stderr, /Bev=lead.*Bill=RM\/BA\/allocator\+oversight.*Ben=coder/,
-    'retirement message must state the current team shape');
+  assert.match(res.stderr, /live slots:.*Bro/,
+    'retirement message must list live slots derived from NAMES (including Bro)');
   assert.doesNotMatch(res.stdout, /YOU ARE:/, 'no identity may be granted on a retired-name request');
 
   // False-pass guard: prove no row anywhere in sync_permits was touched by
@@ -989,6 +989,39 @@ test('CLAUDE_IDENTITY=Bob is equally rejected with the retirement message (not j
   });
   assert.notEqual(res.status, 0);
   assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+});
+
+test('BUG-344: checkin --any with CLAUDE_IDENTITY=Bob is rejected by isRetired (not silently assigned a live slot)', async () => {
+  const res = spawnSync(process.execPath, ['claude-sync.js', 'checkin', '--any'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      METRO_DB_HOST: DB_HOST, METRO_DB_PORT: String(DB_PORT), METRO_DB_USER: DB_USER, METRO_DB_PASSWORD: DB_PASSWORD,
+      METRO_DB_NAME: TEST_DB,
+      CLAUDE_CODE_SESSION_ID: 'bug344-any-retired',
+      CLAUDE_SESSION_ID: '',
+      CLAUDE_IDENTITY: 'Bob',
+    },
+  });
+  assert.notEqual(res.status, 0, '--any must not skip the retired-name rejection');
+  assert.match(res.stderr, /Bob is retired \(Aaron, 2026-08-18\)/);
+  assert.doesNotMatch(res.stdout, /YOU ARE:/, 'no identity may be granted on a retired --any checkin');
+  const [rows] = await db.query('SELECT window_id FROM sync_permits WHERE window_id=?', ['bug344-any-retired']);
+  assert.equal(rows.length, 0, 'a rejected retired --any checkin must not write this window_id onto any slot');
+});
+
+test('BUG-344: ALL SLOTS FULL names Bro (derived from liveNames / NAMES, not a hardcoded three-slot list)', () => {
+  assert.equal(checkin('Bill', 'bug344-full-w1').status, 0);
+  assert.equal(checkin('Bev', 'bug344-full-w2').status, 0);
+  assert.equal(checkin('Bro', 'bug344-full-w3').status, 0);
+  const res = run(['checkin', '--any'], 'bug344-full-any');
+  assert.notEqual(res.status, 0);
+  assert.match(res.stderr, /ALL SLOTS FULL/);
+  assert.match(res.stderr, /Bro/, 'ALL SLOTS FULL must name Bro');
+  const src = fs.readFileSync(path.join(ROOT, 'claude-sync.js'), 'utf8');
+  assert.doesNotMatch(src, /three named slots \(Bill, Ben, Bev\)/);
+  assert.doesNotMatch(src, /Bill, Ben and Bev are all occupied/);
 });
 
 test('message --to Bob is rejected with the retirement message, no row written', async () => {
