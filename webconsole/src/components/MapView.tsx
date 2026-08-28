@@ -24,6 +24,8 @@ import {
   blockOccupancy,
   PIPE_TIERS,
   utilisationOf,
+  lineUsageOf,
+  isLineSpec,
 } from '../sim/data';
 import { useSim, demandOf, specUnlocked } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
@@ -69,6 +71,9 @@ export function MapView() {
   // OFF — component-local like showWater/showPower, deliberately NOT in SimState
   // or the journal (it never affects the sim; genesis-replay stays deterministic).
   const [showRefs, setShowRefs] = useState(false);
+  // FEAT-1972079902 rail-inc1: line-saturation overlay toggle. UI-only, default
+  // OFF — component-local like showWater/showPower, never in SimState/journal.
+  const [showLines, setShowLines] = useState(false);
   const [cloneSelection, setCloneSelection] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -377,6 +382,40 @@ export function MapView() {
       ctx.globalAlpha = 1;
     }
 
+    // FEAT-1972079902 rail-inc1: line-saturation overlay. Tints every LINE tile
+    // (road/m20/rail/hs1) by how loaded its line class is. Colour reuses the
+    // BUG-425 surplus-vs-shortfall split: over-capacity → danger red; within
+    // capacity → the "done" green, alpha scaled by saturation so a busy-but-OK
+    // line reads bright green and an idle line reads faint. Pure/deterministic —
+    // derived from lineUsageOf(state), never from Date.now.
+    if (showLines) {
+      const OK = '#3fb950'; // --done (surplus / within capacity)
+      const HOT = '#ff7b72'; // --danger (over capacity / shortfall)
+      const satBySpec = new Map<string, { saturation: number; over: boolean }>();
+      for (const lu of lineUsageOf(state)) {
+        satBySpec.set(lu.spec, { saturation: lu.saturation, over: lu.overCapacity });
+      }
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (!isLineSpec(sp)) continue;
+        const info = satBySpec.get(b.spec);
+        const px = geom.ox + b.x * geom.s;
+        const py = geom.oy + b.y * geom.s;
+        const pw = sp.w * geom.s;
+        const ph = sp.h * geom.s;
+        const sat = info?.saturation ?? 0;
+        if (info?.over) {
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = HOT;
+        } else {
+          ctx.globalAlpha = 0.25 + 0.6 * sat;
+          ctx.fillStyle = OK;
+        }
+        ctx.fillRect(px + 0.5, py + 0.5, Math.max(pw - 1, 1.5), Math.max(ph - 1, 1.5));
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // station connectivity dots
     const links = stationLinks(state);
     for (const b of state.buildings) {
@@ -477,7 +516,7 @@ export function MapView() {
       }
       ctx.globalAlpha = 1;
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, selected, hover, showPower, showRefs, cloneSelection, geom, size, frame]);
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, geom, size, frame]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;
@@ -810,6 +849,13 @@ export function MapView() {
           onClick={() => setShowPower((v) => !v)}
         >
           Power
+        </button>
+        <button
+          className={`btn tiny${showLines ? ' active' : ''}`}
+          title="Toggle line-saturation overlay: colours road/rail lines by how loaded they are (green = headroom, red = over capacity)"
+          onClick={() => setShowLines((v) => !v)}
+        >
+          Lines
         </button>
         <button
           className={`btn tiny${showRefs ? ' active' : ''}`}

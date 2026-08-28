@@ -5,6 +5,10 @@ import { formatPower } from './utils.ts';
 // function-only (call-time) cyclic import: neither module uses the other at
 // module-eval time, so ESM live bindings resolve it safely.
 import { specUnlocked } from './engine.ts';
+// FEAT-1972079902 rail-inc1: road/m20 line-usage reuses road inc2's per-building
+// traffic weight + city activity ramp (GR#3 SSOT) — call-time (cyclic-safe) imports,
+// same pattern as specUnlocked above. Neither is used at module-eval time.
+import { feederTrafficWeight, trafficActivity } from './engine.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -1011,6 +1015,186 @@ export function stationLinks(s: SimState): StationLinkInfo {
     if (linked) connectedIds.add(b.id);
   }
   return { total, connectedIds };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079902 — RAIL NETWORK inc1: LINE CAPACITY + COMMUTER-FLOW USAGE +
+// SATURATION. Display/metrics ONLY — nothing here is wired into the tick, mutates
+// state, or costs money (trains = inc2, the auto-branch router = inc3). Every
+// function below is PURE and DETERMINISTIC (GR#21): no Date.now / Math.random, no
+// map-iteration-with-break, strict (x,y) ordering — identical states produce
+// byte-identical usage. Usage is a DERIVED read-out (never stored in SimState),
+// so it cannot drift or break the consistency checker / genesis-replay.
+//
+// ⚠ BALANCE-NUMBER REGIME (Aaron's blanket rule): the rail/hs1 per-tile
+// throughput figures and the commuter-flow coefficients below are PLACEHOLDERS —
+// directional only, pending Aaron's row-by-row balance pass. road/m20 capacity is
+// NOT redefined here — it is REUSED from ROAD_TIER_CAPACITY.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Per-tile commuter throughput for the RAIL line classes (people/tick a single
+ * tile of the line can carry). road/m20 are deliberately absent — they reuse
+ * ROAD_TIER_CAPACITY via lineCapacityOf. ⚠ PLACEHOLDER-balance.
+ */
+export const LINE_CAPACITY: Record<string, number> = {
+  rail: 1200, // "Rail Line" — slow/regional commuter throughput per tile
+  hs1: 6000, // "HS1 High-Speed Line" — high-capacity per tile
+};
+
+/**
+ * Commuter-flow coefficients (rail classes). These deliberately MIRROR the
+ * existing "Commuter Revenue" term in engine.computeFlows (population × 0.08 ×
+ * min(commuterWeight, 6)) so the rail-usage read-out and the commuter income can
+ * never tell different stories. ⚠ PLACEHOLDER-balance (inherited magnitudes).
+ */
+export const LINE_COMMUTER_K = 0.08; // commuter trips per citizen per unit station weight
+export const LINE_COMMUTER_WEIGHT_CAP = 6; // matches min(commuterWeight, 6) in computeFlows
+
+/**
+ * Per-tile throughput capacity of a LINE spec (people or vehicles per tick):
+ *   - road / m20 (and every drivable road tier): REUSES ROAD_TIER_CAPACITY.
+ *   - rail / hs1: from LINE_CAPACITY.
+ *   - anything else (a house, a park, a station building): 0 (not a line).
+ * Pure function of the spec. ⚠ capacities are PLACEHOLDER-balance.
+ */
+export function lineCapacityOf(sp: Spec | undefined): number {
+  if (!sp) return 0;
+  const tier = roadTierOf(sp);
+  if (tier > 0) return ROAD_TIER_CAPACITY[tier as RoadTier]; // road / m20 / avenue…
+  return LINE_CAPACITY[sp.id] ?? 0; // rail / hs1
+}
+
+/** True when this spec is a network LINE that carries flow (road or rail). */
+export function isLineSpec(sp: Spec | undefined): boolean {
+  return lineCapacityOf(sp) > 0;
+}
+
+/**
+ * Per-line saturation read-out (FEAT-1972079902 inc1). One entry per line CLASS
+ * (spec id) that has at least one tile on the map, with the commuter/traffic flow
+ * it carries, its total capacity, and the saturation ratio 0..1.
+ *
+ * SIGN / COLOUR CONVENTION (matches the BUG-425 water headroom split): headroom =
+ * capacity − usage. headroom < 0 (overCapacity) is a SHORTFALL → the danger/`neg`
+ * colour; headroom ≥ 0 is surplus → the `pos` colour. No new colour language is
+ * introduced — callers reuse the existing pos/neg (—done/—danger) tokens.
+ */
+export interface LineUsage {
+  /** Line spec id: 'rail' | 'hs1' | 'road' | 'm20' (or another road tier). */
+  spec: string;
+  /** Coarse family for rendering: 'rail' (commuter flow) or 'road' (traffic). */
+  kind: 'rail' | 'road';
+  /** Human label (spec.name). */
+  name: string;
+  /** Tiles of this line class on the map. */
+  tiles: number;
+  /** Total throughput capacity = per-tile capacity × tiles. */
+  capacity: number;
+  /** Flow the line carries this state (people/vehicles per tick). */
+  usage: number;
+  /** usage / capacity, clamped to [0,1]. */
+  saturation: number;
+  /** capacity − usage. Negative ⇒ the line is over capacity (shortfall). */
+  headroom: number;
+  /** headroom < 0 — drives the BUG-425 surplus-vs-shortfall colour split. */
+  overCapacity: boolean;
+}
+
+/**
+ * Compute per-line-class usage/capacity/saturation. PURE + DETERMINISTIC.
+ *
+ * Rail classes (rail, hs1): commuter flow routed from the CONNECTED stations —
+ * Ashford International (the HS1 gateway, ×3 weight) feeds `hs1`, every other
+ * connected station (×1) feeds `rail`. Flow = population × LINE_COMMUTER_K ×
+ * min(weight, LINE_COMMUTER_WEIGHT_CAP), the same shape as Commuter Revenue.
+ *
+ * Road classes (road, m20, …): the city's coarse traffic demand
+ * (Σ feederTrafficWeight × trafficActivity — road inc2's exact idiom) shared
+ * across the drivable classes in proportion to each class's capacity.
+ */
+export function lineUsageOf(s: SimState): LineUsage[] {
+  // Tile count per present line class (order-independent aggregate).
+  const tilesBySpec = new Map<string, number>();
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!isLineSpec(sp)) continue;
+    tilesBySpec.set(b.spec, (tilesBySpec.get(b.spec) ?? 0) + 1);
+  }
+
+  // ---- rail commuter flow: weight connected stations by class ----
+  const links = stationLinks(s);
+  // Strict (x,y) order for GR#21 hygiene (addition commutes, but no ordering
+  // ambiguity is left to chance and there is no early break).
+  const stations = s.buildings
+    .filter((b) => SPECS[b.spec]?.kind === 'station' && links.connectedIds.has(b.id))
+    .sort((a, b) => a.x - b.x || a.y - b.y);
+  let railWeight = 0;
+  let hsWeight = 0;
+  for (const b of stations) {
+    if (b.spec === 'station_ashford') hsWeight += 3;
+    else railWeight += 1;
+  }
+  // Compute ONE combined commuter scalar — the EXACT economy term from
+  // engine.computeFlows: round(pop × K × min(w_rail + w_hs, cap)) — then apportion
+  // it across the hs1/rail buckets by their RAW weight share, so the two buckets
+  // SUM EXACTLY to the economy's Commuter Revenue basis (invariant restored: the
+  // panel can never claim more flow than the economy credits). Capping each bucket
+  // separately would overstate flow once the combined weight passes the cap, since
+  // min(a,cap)+min(b,cap) ≥ min(a+b,cap). Integer-exact: hs1 = floor(share), rail
+  // takes the remainder (deterministic), so hs1 + rail === combined with no drift.
+  const totalWeight = railWeight + hsWeight;
+  const combined = Math.round(
+    s.population * LINE_COMMUTER_K * Math.min(totalWeight, LINE_COMMUTER_WEIGHT_CAP)
+  );
+  const hs1Usage = totalWeight > 0 ? Math.floor((combined * hsWeight) / totalWeight) : 0;
+  const railUsage = combined - hs1Usage;
+  const railUsageBySpec: Record<string, number> = {
+    rail: railUsage,
+    hs1: hs1Usage,
+  };
+
+  // ---- road/motorway traffic flow (road inc2 idiom, read-only) ----
+  const activity = trafficActivity(s);
+  let totalFeeder = 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp) totalFeeder += feederTrafficWeight(sp);
+  }
+  const totalTraffic = Math.round(totalFeeder * activity);
+  let totalDrivableCap = 0;
+  for (const [spec, tiles] of tilesBySpec) {
+    const sp = SPECS[spec];
+    if (roadTierOf(sp) > 0) totalDrivableCap += lineCapacityOf(sp) * tiles;
+  }
+
+  const out: LineUsage[] = [];
+  for (const [spec, tiles] of tilesBySpec) {
+    const sp = SPECS[spec]!;
+    const capacity = lineCapacityOf(sp) * tiles;
+    const isRoad = roadTierOf(sp) > 0;
+    const usage = isRoad
+      ? totalDrivableCap > 0
+        ? Math.round((totalTraffic * capacity) / totalDrivableCap)
+        : 0
+      : railUsageBySpec[spec] ?? 0;
+    const saturation = capacity > 0 ? Math.min(1, Math.max(0, usage / capacity)) : 0;
+    const headroom = capacity - usage;
+    out.push({
+      spec,
+      kind: isRoad ? 'road' : 'rail',
+      name: sp.name,
+      tiles,
+      capacity,
+      usage,
+      saturation,
+      headroom,
+      overCapacity: headroom < 0,
+    });
+  }
+  // Deterministic, spec-id-sorted output.
+  out.sort((a, b) => (a.spec < b.spec ? -1 : a.spec > b.spec ? 1 : 0));
+  return out;
 }
 
 function sumBy(s: SimState, f: (sp: Spec) => boolean, g: (sp: Spec) => number): number {

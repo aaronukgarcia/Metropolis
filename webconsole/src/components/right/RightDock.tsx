@@ -13,6 +13,8 @@ import {
   waterDemandOf,
   waterPipeInfo,
   plantEffServed,
+  isOnline,
+  lineUsageOf,
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
@@ -30,6 +32,7 @@ const TABS = [
   { id: 'rates', label: 'Rates' },
   { id: 'units', label: 'Units' },
   { id: 'water', label: 'Water' },
+  { id: 'lines', label: 'Lines' },
   { id: 'earnings', label: 'Earnings' },
   { id: 'milestones', label: 'Milestones' },
   { id: 'xp', label: 'Experience' },
@@ -52,6 +55,7 @@ export function RightDock() {
       {tab === 'rates' && <RatesTab />}
       {tab === 'units' && <UnitsTab />}
       {tab === 'water' && <WaterTab />}
+      {tab === 'lines' && <LinesTab />}
       {tab === 'earnings' && <EarningsTab />}
       {tab === 'milestones' && <MilestonesTab />}
       {tab === 'xp' && <XpTab />}
@@ -67,6 +71,7 @@ function StatusTab() {
   const capacity = (() => {
     let cap = 0;
     for (const b of state.buildings) {
+      if (!isOnline(state, b)) continue;
       const sp = SPECS[b.spec];
       if (sp?.kind === 'residential') cap += sp.residents ?? 8;
     }
@@ -330,6 +335,52 @@ function WaterTab() {
         waste plants must discharge seaward (olive stub). Pipe capacity caps each plant's served
         population — upgrade when demand exceeds it.
       </p>
+    </>
+  );
+}
+
+// FEAT-1972079902 rail-inc1: line capacity / commuter-flow usage / saturation.
+// Display-only read-out (lineUsageOf is pure/derived — nothing stored in SimState).
+// Colours reuse the BUG-425 surplus-vs-shortfall split: over-capacity → `neg`
+// (danger), headroom → `pos` (done) — same tokens the water panel uses.
+function LinesTab() {
+  const { state } = useSim();
+  const lines = lineUsageOf(state);
+  return (
+    <>
+      <h4>Line saturation</h4>
+      {lines.length === 0 && (
+        <p className="muted">No road or rail lines on the map yet.</p>
+      )}
+      {lines.map((ln) => {
+        const pct = Math.round(ln.saturation * 100);
+        const over = ln.overCapacity;
+        const col = over ? 'var(--danger)' : 'var(--done)';
+        return (
+          <div key={ln.spec} className="wb-row" title={
+            `${ln.name}: ${fmtNum(ln.usage)} / ${fmtNum(ln.capacity)} per tick across ${ln.tiles} tile${ln.tiles === 1 ? '' : 's'}` +
+            ` — headroom ${fmtNum(ln.headroom)}${over ? ' (OVER CAPACITY)' : ''}`
+          }>
+            <span className="d-label">{ln.name}</span>
+            <div className="d-bar">
+              <span
+                className={`d-fill ${over ? 'neg' : 'pos'}`}
+                style={{ left: 0, width: `${Math.max(0, Math.min(100, pct))}%`, background: col }}
+              />
+            </div>
+            <span className="mono d-val" style={{ color: col }}>
+              {pct}%
+            </span>
+          </div>
+        );
+      })}
+      {lines.length > 0 && (
+        <p className="hint">
+          Usage is commuter flow (rail/HS1, from connected stations) or traffic demand (road/M20),
+          against per-tile capacity. Green = headroom; red = over capacity (capacity − usage &lt; 0).
+          Capacities are placeholder-balance pending sign-off.
+        </p>
+      )}
     </>
   );
 }

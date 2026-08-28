@@ -444,8 +444,11 @@ export const ROAD_TRAFFIC_FREIGHT_WEIGHT = 1; // extra per industrial/mine job (
 /** City population at which traffic activity ramps to 1.0. ⚠ PLACEHOLDER-balance. */
 export const ROAD_TRAFFIC_ACTIVITY_REF = 500;
 
-/** Per-building traffic contribution — population + jobs + freight. Pure. */
-function feederTrafficWeight(sp: Spec): number {
+/** Per-building traffic contribution — population + jobs + freight. Pure.
+ *  Exported (read-only) for FEAT-1972079902 rail-inc1 line-usage reuse (GR#3 SSOT):
+ *  data.ts's lineUsageOf carries road/m20 flow through THIS exact weight, so the
+ *  rail panel's road numbers can never disagree with road inc2's monitor load. */
+export function feederTrafficWeight(sp: Spec): number {
   const pop = sp.residents ?? 0;
   const jobs = sp.jobs ?? 0;
   const freight = sp.kind === 'industrial' || sp.kind === 'mine' ? jobs : 0;
@@ -460,8 +463,8 @@ function feederTrafficWeight(sp: Spec): number {
  * City-wide traffic activity 0..1 — ramps as the city fills toward
  * ROAD_TRAFFIC_ACTIVITY_REF. Pure function of s.population, so a segment's load
  * grows over its monitoring year exactly as the city grows. Deterministic.
- */
-function trafficActivity(s: SimState): number {
+ * Exported (read-only) for FEAT-1972079902 rail-inc1 line-usage reuse. */
+export function trafficActivity(s: SimState): number {
   if (s.population <= 0) return 0;
   return Math.min(1, s.population / ROAD_TRAFFIC_ACTIVITY_REF);
 }
