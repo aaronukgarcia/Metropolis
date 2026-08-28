@@ -1,0 +1,38 @@
+[
+  {
+    "view": "f2.ledger",
+    "reason": "TODO(FEAT-083/FEAT-231): internal/ui/dash/layout.go's DEFAULT dashboard tiles (f1.cash, f1.ledger) drill to \"f2.ledger\", but engine.finance registered its view as \"f2.finance\" (compose finance_publish.go / ui.screen.finance ViewSubscriptionName). \"f2.ledger\" is NOT in viewRegistrationOrder, so this drill is rejected at runtime and F2 opens blank via this path. Pre-existing name mismatch (the old ledger codename vs the finance screen's real view). Ratcheted for FEAT-231 V1 landing; do NOT edit dash product code here. Lead: decide whether the default-layout drill target should be re-pointed to \"f2.finance\" or the view re-registered under both names."
+  },
+  {
+    "view": "f3.build",
+    "reason": "TODO(FEAT-083): internal/ui/screens/build declares ViewSubscriptionName=\"f3.build\" but compose.viewRegistrationOrder does not publish it (no build_publish.go registration yet), so the F3 build screen's Subscribe is rejected and it renders blank. Known-unwired screen pending its composition-root wiring. Ratcheted for FEAT-231 V1."
+  },
+  {
+    "view": "f5.trade",
+    "reason": "TODO(FEAT-083): internal/ui/screens/trade declares ViewSubscriptionName=\"f5.trade\" but it is not in compose.viewRegistrationOrder, so F5 is unwired and renders blank on Subscribe rejection. Known-unwired screen pending composition-root wiring. Ratcheted for FEAT-231 V1."
+  },
+  {
+    "view": "f6.census",
+    "reason": "TODO(FEAT-083): internal/ui/screens/census declares ViewSubscriptionName=\"f6.census\" but it is not in compose.viewRegistrationOrder, so F6 is unwired and renders blank on Subscribe rejection. Known-unwired screen pending composition-root wiring. Ratcheted for FEAT-231 V1."
+  },
+  {
+    "view": "f7.projections",
+    "reason": "TODO(FEAT-083): internal/ui/screens/proj declares ViewSubscriptionName=\"f7.projections\" but it is not in compose.viewRegistrationOrder, so F7 is unwired and renders blank on Subscribe rejection. Known-unwired screen pending composition-root wiring. Ratcheted for FEAT-231 V1."
+  },
+  {
+    "view": "f8.districts",
+    "reason": "TODO(FEAT-083): internal/ui/screens/districts declares ViewSubscriptionName=\"f8.districts\" but it is not in compose.viewRegistrationOrder, so F8 is unwired and renders blank on Subscribe rejection. Known-unwired screen pending composition-root wiring. Ratcheted for FEAT-231 V1."
+  },
+  {
+    "view": "citizen.population",
+    "reason": "TODO(FEAT-083): internal/ui/screens/demo's DrillTargets() targets entity-scoped \"citizen.population\", which has no registered base in compose.viewRegistrationOrder. Demo/placeholder drill target pending a real entity-view registration. Ratcheted for FEAT-231 V1 (entity-scoped-base resolution is a documented V-next extension)."
+  },
+  {
+    "view": "extcommute.out",
+    "reason": "TODO(FEAT-083): internal/ui/screens/demo's DrillTargets() targets \"extcommute.out\", which has no registered base in compose.viewRegistrationOrder. Demo/placeholder drill target pending a real entity-view registration. Ratcheted for FEAT-231 V1."
+  },
+  {
+    "view": "extcommute.in",
+    "reason": "TODO(FEAT-083): internal/ui/screens/demo's DrillTargets() targets \"extcommute.in\", which has no registered base in compose.viewRegistrationOrder. Demo/placeholder drill target pending a real entity-view registration. Ratcheted for FEAT-231 V1."
+  }
+]
