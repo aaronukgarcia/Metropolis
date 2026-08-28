@@ -68,6 +68,12 @@ const (
 	ErrNegativeVenueCount = "MET-G5109"
 )
 
+// VitalityAPI is engine.cafe's public handle: it owns the registered
+// venues/centres, the vitality-index configuration (ASM-325: data-driven
+// placeholder weights), and computes venue-district vitality from season
+// and wellbeing inputs. Struct copies are rejected via the self atomic
+// pointer (SEC-020 family); methods must be called on the *VitalityAPI
+// returned by New/Load.
 type VitalityAPI struct {
 	mu            sync.RWMutex
 	self          atomic.Pointer[VitalityAPI]
@@ -100,6 +106,9 @@ func New() *VitalityAPI {
 	return v
 }
 
+// checkNotCopied rejects a method invoked on a struct-copied VitalityAPI
+// before any lock is touched (SEC-020 family — a copy aliases the original's
+// mutex while holding an independent lock).
 func (v *VitalityAPI) checkNotCopied(method string) error {
 	if v.self.Load() != v {
 		return errs.New(ErrCopiedValue, v.correlationID, map[string]any{"method": method})
