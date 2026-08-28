@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useReducer, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import type { Dispatch, ReactNode } from 'react';
 import type { SimState } from './types';
 import { reducer, initialState, SPEED_MS } from './engine';
@@ -20,7 +20,7 @@ import {
   rebuildReport,
   type RebuildReport,
 } from './genesisReplay';
-import { attemptWipe } from './captureBeforeWipe';
+import { attemptWipe, captureOnUnload } from './captureBeforeWipe';
 import { versionRaw, versionBadgeLabel } from './version';
 import { getLiveVersion } from './liveVersionRef';
 import { currentMapUi, type MapViewState } from './uistate';
@@ -211,6 +211,32 @@ export function SimProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     updateLastKnownState(state);
   }, [state]);
+
+  // BUG-427 / GR#27: track the LATEST state in a ref so the beforeunload handler
+  // (registered once) always archives the current city, never a stale closure.
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
+  // GR#27 CAPTURE BEFORE WIPE — RELOAD boundary (BUG-427). BUG-420's attemptWipe
+  // only guards the in-app `reset` reducer action; a page RELOAD / version-restart
+  // ALSO wipes the running in-memory sim (boot then restores the savepoint) but
+  // never fires that guard. Here we best-effort archive the current state to the
+  // same pre-wipe ring on `beforeunload`.
+  //
+  // FAIL-OPEN by nature: beforeunload cannot be blocked or awaited, so unlike the
+  // reset path (fail-CLOSED via attemptWipe, above) we cannot abort the wipe if the
+  // capture fails — captureOnUnload does only synchronous localStorage work and
+  // swallows every error so the unload is never obstructed. A near-immediate unload
+  // right after a reset capturing again is harmless (the ring buffer dedups by cap).
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      captureOnUnload(() => stateRef.current, versionRaw, window.localStorage);
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
 
   useEffect(() => {
     if (state.speed === 0) return;
