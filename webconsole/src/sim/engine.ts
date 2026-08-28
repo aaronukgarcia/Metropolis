@@ -30,6 +30,8 @@ import {
   fittingTier,
   ROAD_TIER_SPECS,
   ROAD_TIER_CAPACITY,
+  computeRoadConnectivity,
+  GRACE_TICKS,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -569,6 +571,12 @@ function advance(s: SimState): SimState {
     if (scaledBuildings !== s.buildings) s = { ...s, buildings: scaledBuildings };
   }
 
+  // FEAT-1972079891 inc1 (AC-1/AC-12): recompute the connected road network at the
+  // START of the tick, AFTER any monthly road auto-scale, so every gate check this
+  // tick (computeFlows → isOnline, capacity, consistency) reads the SAME frame's
+  // connectivity graph. Pure/deterministic; no Date/random.
+  s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
+
   let { inflows, outflows } = computeFlows(s);
 
   // BUG-406 FIX: route regional grant through lastFlows for conservation tracking
@@ -1035,7 +1043,30 @@ export type Action =
   | { type: 'unlockAll' }
   | { type: 'reset' };
 
-export function reducer(state: SimState, action: Action): SimState {
+/**
+ * FEAT-1972079891 inc1 (DD4 Option A) — stamp a migration grace window on the
+ * PRE-EXISTING, non-infrastructure buildings of a loaded state so the new road
+ * gates do not instant-blackout a legacy save. Each such building that lacks a
+ * graceTick gets `state.tick + graceTicks`; the road gates skip it until then.
+ * Buildings already carrying a graceTick, infrastructure (network), and
+ * still-unbuilt (no builtTick) buildings are left untouched. Pure/deterministic;
+ * returns the same reference when nothing needed stamping.
+ */
+export function applyActivationGrace(state: SimState, graceTicks: number = GRACE_TICKS): SimState {
+  let changed = false;
+  const buildings = state.buildings.map((b) => {
+    const sp = SPECS[b.spec];
+    if (!sp || sp.category === 'network') return b;
+    if (b.builtTick == null || b.graceTick != null) return b;
+    changed = true;
+    return { ...b, graceTick: state.tick + graceTicks };
+  });
+  return changed ? { ...state, buildings } : state;
+}
+
+// FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
+// to keep roadConnectivity consistent with buildings after every action.
+function reduceCore(state: SimState, action: Action): SimState {
   switch (action.type) {
     case 'tick':
       return advance(state);
@@ -1384,6 +1415,23 @@ export function reducer(state: SimState, action: Action): SimState {
       return advance(s);
     }
   }
+}
+
+/**
+ * FEAT-1972079891 inc1 (AC-12) — the public reducer. Delegates to reduceCore, then
+ * keeps `roadConnectivity` consistent with the resulting buildings so the road
+ * activation gates re-evaluate in the SAME tick a road is placed/removed (no delay
+ * tick), and so a state always carries a connectivity graph matching its buildings.
+ * Recomputes ONLY when buildings changed or the graph is missing — a pure,
+ * deterministic function of buildings (no Date/random). A plain `tick` already set
+ * the graph in advance() with the same buildings ref, so it is not recomputed.
+ */
+export function reducer(state: SimState, action: Action): SimState {
+  const next = reduceCore(state, action);
+  if (next.buildings !== state.buildings || !next.roadConnectivity) {
+    return { ...next, roadConnectivity: computeRoadConnectivity(next) };
+  }
+  return next;
 }
 
 export function approvalOf(s: SimState): number {

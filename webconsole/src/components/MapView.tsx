@@ -16,7 +16,6 @@ import {
   occupiedSet,
   stationLinks,
   isOnline,
-  constructionTicks,
   plantEffServed,
   placementCost,
   densityTier,
@@ -26,9 +25,11 @@ import {
   utilisationOf,
   lineUsageOf,
   isLineSpec,
+  isRoadSpec,
+  computeFailedGates,
 } from '../sim/data';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
-import { useSim, demandOf, specUnlocked } from '../sim/store';
+import { useSim, demandOf, specUnlocked, SPEED_MS } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
 import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
 import { applyStashedCameraToView } from '../sim/cameraApply';
@@ -314,6 +315,30 @@ export function MapView() {
     }
     ctx.globalAlpha = 1;
 
+    // FEAT-1972079891 inc1 (AC-6) — DISCONNECTED-ROAD FLASH. Any drivable-road tile
+    // NOT in the connected network pulses so the player can see which orphan road
+    // needs joining up. Rendered AFTER the building loop, on top of the road tile.
+    // Render-only + deterministic: the pulse is a pure function of state.tick (NOT
+    // Date.now — GR#21), and it NEVER feeds a gate. ⚠ PLACEHOLDER (DD2, flag Aaron):
+    // colour #ffd166 (warn yellow) + the sinusoidal cadence below.
+    {
+      const connected = new Set(state.roadConnectivity?.connectedRoadTiles ?? []);
+      const FLASH_COLOR = '#ffd166'; // PLACEHOLDER (DD2)
+      // Deterministic pulse from the sim tick (per AC-6 placeholder formula).
+      const alpha = 0.5 + 0.3 * Math.sin(((state.tick * SPEED_MS[state.speed]) / 500) * Math.PI * 2);
+      for (const b of state.buildings) {
+        const sp = SPECS[b.spec];
+        if (!sp || !isRoadSpec(sp)) continue;
+        if (connected.has(`${b.x},${b.y}`)) continue; // connected road — no flash.
+        const px = geom.ox + b.x * geom.s;
+        const py = geom.oy + b.y * geom.s;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = FLASH_COLOR;
+        ctx.fillRect(px + 0.5, py + 0.5, sp.w * geom.s - 1, sp.h * geom.s - 1);
+      }
+      ctx.globalAlpha = 1;
+    }
+
     // optional water layer: service radii, abstraction/discharge pipes
     if (showWater) {
       for (const b of state.buildings) {
@@ -527,7 +552,7 @@ export function MapView() {
       }
       ctx.globalAlpha = 1;
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, geom, size, frame]);
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, geom, size, frame]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;
@@ -1052,11 +1077,22 @@ function BuildingCard({
           </p>
         </>
       )}
-      {!isOnline(state, building) && (
-        <p className="out">
-          Under construction — {constructionTicks(sp) - (state.tick - (building.builtTick ?? 0))} ticks remaining
-        </p>
-      )}
+      {/* FEAT-1972079891 inc1 (AC-5) — WHY offline: list the failed activation
+          gate(s). Construction keeps its existing wording; the road gates add the
+          "not road-side" / "road not connected" reasons. Falls back to a generic
+          line if the building is offline for a reason inc1 doesn't itemise. */}
+      {!isOnline(state, building) &&
+        (() => {
+          const failed = computeFailedGates(state, building);
+          if (failed.length === 0) {
+            return <p className="out">Offline</p>;
+          }
+          return failed.map((g) => (
+            <p key={g.gate} className="out">
+              {g.reason}
+            </p>
+          ));
+        })()}
       {sp.kind === 'station' && (
         <p className={connected ? 'in' : 'out'}>
           {connected

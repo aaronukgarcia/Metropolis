@@ -124,7 +124,15 @@ test('deterministic: the same monitored scenario twice → byte-identical tiers 
       buildings: [
         laneAt(10, 10),
         { ...SOURCE },
-        { id: 3, spec: 'res_highrise', x: 30, y: 30, builtTick: -1000 },
+        // FEAT-1972079891 inc1: this population-driver highrise is intentionally
+        // road-disconnected here; without a grace window the new road-activation
+        // gate would take it OFFLINE (capacity→0→population decays→the lane no
+        // longer saturates twice), breaking this monitor scenario. As a
+        // pre-existing (builtTick<0) building it gets a DD4 migration grace that
+        // outlasts the 60-tick window, so it stays online exactly as a loaded
+        // legacy building would — keeping this test about traffic scaling, not
+        // road connectivity.
+        { id: 3, spec: 'res_highrise', x: 30, y: 30, builtTick: -1000, graceTick: 10 * TICKS_PER_YEAR },
       ],
       roadMonitors: [{ x: 10, y: 10, source: 2, until: TICKS_PER_YEAR }],
       population: 500,

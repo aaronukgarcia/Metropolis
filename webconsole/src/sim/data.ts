@@ -326,7 +326,238 @@ export function unlockedAtLevel(level: number): string[] {
 export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean {
   if (b.builtTick == null) return true;
   const sp = SPECS[b.spec];
-  return s.tick - b.builtTick >= constructionTicks(sp);
+  // G1 (construction time) — unchanged.
+  if (s.tick - b.builtTick < constructionTicks(sp)) return false;
+  // FEAT-1972079891 inc1 — ROAD ACTIVATION GATES (G2 road-adjacent, G3 road-connected).
+  // A non-infrastructure building only operates if it sits beside a road tile that
+  // reaches the connected road network (map edges + trunk m20/hs1/rail/stations).
+  // Infrastructure (category 'network' — road/motorway/rail/station/pylon) IS the
+  // network, so it is exempt. Gates are pure functions of SimState (GR#21): same
+  // state → same online set; no Date/Math.random.
+  //
+  // DD4 GRACE (migration rule): a building carrying `graceTick` keeps its prior
+  // online status while `s.tick < graceTick`. On save-load, pre-existing buildings
+  // are stamped with a graceTick (see applyActivationGrace / restoreFromSavepoint)
+  // so loading a legacy save does NOT instant-blackout unconnected buildings —
+  // they get GRACE_TICKS ticks to be connected before the gate bites.
+  //
+  // BACKWARD TOLERANCE: the road gates only apply once `s.roadConnectivity` has
+  // been computed (advance() computes it at the START of every tick and the
+  // reducer keeps it fresh — AC-12). A bespoke/legacy state that never went
+  // through advance()/reducer has no connectivity graph, so the gate is skipped
+  // (treated as pass) rather than failing closed on an unknowable network.
+  //
+  // DEFERRED (pending Aaron): G4 water / G5 power / G6 workers. As specified those
+  // gates test the CITY-WIDE serviceCoverageOf().coverage >= 1.0 as a PER-BUILDING
+  // gate — which takes the WHOLE city offline the instant coverage dips to 0.99, a
+  // mass-blackout cliff. That per-building-vs-global design question is open; inc1
+  // ships the road mechanic without the cliff. Do NOT add G4/G5/G6 here.
+  if (sp && sp.category !== 'network' && s.roadConnectivity) {
+    if (b.graceTick == null || s.tick >= b.graceTick) {
+      if (!isRoadAdjacent(s, b)) return false;
+      if (!isRoadConnected(s, b)) return false;
+    }
+  }
+  return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079891 inc1 — ROAD CONNECTIVITY + PER-BUILDING ROAD GATES.
+//
+// STORAGE/SERIALISATION DECISION (AC-1): a Set<string> is NOT JSON-serialisable,
+// so SimState stores `roadConnectivity.connectedRoadTiles` as a SORTED string[]
+// (keyed "x,y"). That round-trips cleanly through save/replay/debug.json and
+// compares byte-identically under genesis-replay's stableStringify. Use sites
+// build a Set on demand via connectedRoadTileSet() (memoised per state object).
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Grace window (ticks) granted to pre-existing buildings on save-load (DD4
+ *  Option A). PLACEHOLDER-balance (directional only, Aaron's pass). */
+export const GRACE_TICKS = 30;
+
+// Per-state memo of the drivable-road tile set, keyed on the buildings array
+// reference (immutable per tick), so isOnline's road gates stay ~O(footprint)
+// instead of O(buildings) each. Pure: a function of buildings only.
+const roadTileSetCache = new WeakMap<object, Set<string>>();
+function roadTileSetOf(s: SimState): Set<string> {
+  const cached = roadTileSetCache.get(s.buildings);
+  if (cached) return cached;
+  const set = new Set<string>();
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp || !isRoadSpec(sp)) continue;
+    for (let dx = 0; dx < sp.w; dx++)
+      for (let dy = 0; dy < sp.h; dy++) set.add(`${b.x + dx},${b.y + dy}`);
+  }
+  roadTileSetCache.set(s.buildings, set);
+  return set;
+}
+
+// Per-state memo of the connected-road tile Set, keyed on the roadConnectivity
+// object reference (replaced whenever connectivity is recomputed).
+const connectedSetCache = new WeakMap<object, Set<string>>();
+/** The connected road tiles as a Set (built from the stored sorted string[]). */
+export function connectedRoadTileSet(s: SimState): Set<string> {
+  const rc = s.roadConnectivity;
+  if (!rc) return new Set();
+  const cached = connectedSetCache.get(rc);
+  if (cached) return cached;
+  const set = new Set(rc.connectedRoadTiles);
+  connectedSetCache.set(rc, set);
+  return set;
+}
+
+const ORTHO: readonly [number, number][] = [
+  [1, 0],
+  [-1, 0],
+  [0, 1],
+  [0, -1],
+];
+
+/**
+ * AC-1 — deterministic flood-fill of the connected road network (DD1 Option A).
+ * A drivable-road tile is CONNECTED when reachable, via orthogonal road-to-road
+ * adjacency, from any SEED: a map-edge road tile, a motorway (m20 trunk) tile, or
+ * a road tile orthogonally touching a trunk tile (m20/hs1/rail/station). Returns a
+ * SORTED string[] (JSON-safe; see the storage note above). Pure/deterministic —
+ * the result is a full reachability set (order-independent) and the output is
+ * sorted, so it can never depend on buildings[] iteration order (no map-range-break
+ * nondeterminism). No Date/Math.random.
+ */
+export function computeRoadConnectivity(s: SimState): { connectedRoadTiles: string[] } {
+  const roadTiles = new Set<string>();
+  const trunkTiles = new Set<string>();
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    const road = isRoadSpec(sp);
+    const trunk = sp.kind === 'motorway' || sp.kind === 'rail' || sp.kind === 'station';
+    if (!road && !trunk) continue;
+    for (let dx = 0; dx < sp.w; dx++)
+      for (let dy = 0; dy < sp.h; dy++) {
+        const k = `${b.x + dx},${b.y + dy}`;
+        if (road) roadTiles.add(k);
+        if (trunk) trunkTiles.add(k);
+      }
+  }
+
+  // Seed = road tiles at a map edge, m20 trunk roads, or roads touching a trunk tile.
+  const connected = new Set<string>();
+  const queue: string[] = [];
+  const seed = (k: string) => {
+    if (roadTiles.has(k) && !connected.has(k)) {
+      connected.add(k);
+      queue.push(k);
+    }
+  };
+  for (const k of roadTiles) {
+    const c = k.indexOf(',');
+    const x = Number(k.slice(0, c));
+    const y = Number(k.slice(c + 1));
+    const edge = x === 0 || y === 0 || x === MAP_W - 1 || y === MAP_H - 1;
+    const trunkRoad = trunkTiles.has(k); // m20 is both a road AND a trunk
+    const nearTrunk =
+      trunkTiles.has(`${x + 1},${y}`) ||
+      trunkTiles.has(`${x - 1},${y}`) ||
+      trunkTiles.has(`${x},${y + 1}`) ||
+      trunkTiles.has(`${x},${y - 1}`);
+    if (edge || trunkRoad || nearTrunk) seed(k);
+  }
+
+  // BFS over road-to-road orthogonal adjacency. The reachable SET is
+  // order-independent, so seeding order does not affect the result.
+  while (queue.length > 0) {
+    const k = queue.shift()!;
+    const c = k.indexOf(',');
+    const x = Number(k.slice(0, c));
+    const y = Number(k.slice(c + 1));
+    for (const [ox, oy] of ORTHO) {
+      const nk = `${x + ox},${y + oy}`;
+      if (roadTiles.has(nk) && !connected.has(nk)) {
+        connected.add(nk);
+        queue.push(nk);
+      }
+    }
+  }
+
+  return { connectedRoadTiles: Array.from(connected).sort() };
+}
+
+/**
+ * AC-2 — a building is "road-side" iff any footprint tile has an orthogonal
+ * neighbour that is a drivable-road tile. Infrastructure (category 'network') is
+ * exempt: it IS the network. Pure/deterministic.
+ */
+export function isRoadAdjacent(s: SimState, b: SimState['buildings'][number]): boolean {
+  const sp = SPECS[b.spec];
+  if (!sp) return false;
+  if (sp.category === 'network') return true;
+  const roads = roadTileSetOf(s);
+  for (let dx = 0; dx < sp.w; dx++)
+    for (let dy = 0; dy < sp.h; dy++) {
+      const x = b.x + dx;
+      const y = b.y + dy;
+      for (const [ox, oy] of ORTHO) {
+        if (roads.has(`${x + ox},${y + oy}`)) return true;
+      }
+    }
+  return false;
+}
+
+/**
+ * AC-3 — a building is "road-connected" iff it is road-adjacent AND that adjacent
+ * road tile is in the connected network (roadConnectivity.connectedRoadTiles).
+ * Infrastructure is exempt. Pure/deterministic.
+ */
+export function isRoadConnected(s: SimState, b: SimState['buildings'][number]): boolean {
+  const sp = SPECS[b.spec];
+  if (!sp) return false;
+  if (sp.category === 'network') return true;
+  const roads = roadTileSetOf(s);
+  const connected = connectedRoadTileSet(s);
+  for (let dx = 0; dx < sp.w; dx++)
+    for (let dy = 0; dy < sp.h; dy++) {
+      const x = b.x + dx;
+      const y = b.y + dy;
+      for (const [ox, oy] of ORTHO) {
+        const nk = `${x + ox},${y + oy}`;
+        if (roads.has(nk) && connected.has(nk)) return true;
+      }
+    }
+  return false;
+}
+
+/** One failed activation gate, for the AC-5 WHY tooltip. inc1 = road gates only. */
+export interface FailedGate {
+  gate: 'construction' | 'road-adjacent' | 'road-connected';
+  reason: string;
+}
+
+/**
+ * AC-5 — the road-gate failure reasons for an OFFLINE building (empty when it is
+ * online, infrastructure, or connectivity has not been computed). Ordered:
+ * construction first, then road-adjacency, then road-connectivity. Pure.
+ */
+export function computeFailedGates(s: SimState, b: SimState['buildings'][number]): FailedGate[] {
+  const out: FailedGate[] = [];
+  const sp = SPECS[b.spec];
+  if (!sp) return out;
+  if (b.builtTick != null && s.tick - b.builtTick < constructionTicks(sp)) {
+    const remaining = constructionTicks(sp) - (s.tick - b.builtTick);
+    out.push({ gate: 'construction', reason: `Under construction — ${remaining} ticks remaining` });
+    return out; // still building: the road gates aren't meaningful yet.
+  }
+  if (sp.category === 'network' || !s.roadConnectivity) return out;
+  if (b.graceTick != null && s.tick < b.graceTick) return out; // within grace — gates skipped.
+  if (!isRoadAdjacent(s, b)) {
+    out.push({ gate: 'road-adjacent', reason: 'Not road-side — move adjacent to a road' });
+  } else if (!isRoadConnected(s, b)) {
+    out.push({
+      gate: 'road-connected',
+      reason: 'Road not connected — connect to the main road network',
+    });
+  }
+  return out;
 }
 
 export function plantEffServed(s: SimState, b: SimState['buildings'][number]): number {
@@ -974,6 +1205,16 @@ export function countByKind(buildings: SimState['buildings']): Record<ZoneKind, 
 export function residentsCapacity(s: SimState): number {
   let cap = 0;
   for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'residential') cap += sp.residents ?? 8;
+  }
+  return cap;
+}
+
+export function onlineResidentsCapacity(s: SimState): number {
+  let cap = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
     if (sp?.kind === 'residential') cap += sp.residents ?? 8;
   }

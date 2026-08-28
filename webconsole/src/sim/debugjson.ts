@@ -140,6 +140,8 @@ export interface DebugJsonBuilding {
   x: number;
   y: number;
   builtTick: number | null;
+  /** FEAT-1972079891 inc1 (DD4): migration grace tick, null when none. */
+  graceTick: number | null;
   online: boolean;
   /** Density/level tier 1..3 for zone blocks, null for network/services. */
   tier: 1 | 2 | 3 | null;
@@ -191,6 +193,8 @@ export interface DebugJson {
     roadNotice: string | null;
     railNotice: string | null;
     roadMonitors: RoadMonitor[];
+    /** FEAT-1972079891 inc1 — connected road network (sorted "x,y" tiles). */
+    roadConnectivity: { connectedRoadTiles: string[] };
     conservation: { tickStart: number; tickEnd: number };
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
   };
@@ -388,6 +392,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   roadNotice: 'sim.roadNotice',
   railNotice: 'sim.railNotice',
   roadMonitors: 'sim.roadMonitors',
+  roadConnectivity: 'sim.roadConnectivity',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -429,6 +434,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       x: b.x,
       y: b.y,
       builtTick: b.builtTick ?? null,
+      graceTick: b.graceTick ?? null,
       online: sp ? isOnline(s, b) : false,
       tier: sp && sp.category === 'zones' ? densityTier(sp) : null,
       occ: occ == null ? null : round3(occ),
@@ -590,6 +596,9 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       roadNotice: s.roadNotice,
       railNotice: s.railNotice,
       roadMonitors: s.roadMonitors,
+      // FEAT-1972079891 inc1: connected road network (defaults to empty when a
+      // legacy/bespoke state predates the graph — see SimState.roadConnectivity).
+      roadConnectivity: s.roadConnectivity ?? { connectedRoadTiles: [] },
       // TICK-BOUNDARY INVARIANT (Round-6): Conservation snapshot for determinism checking
       conservation: {
         tickStart: s.fundsAtTickStart,

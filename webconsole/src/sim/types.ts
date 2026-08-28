@@ -29,6 +29,15 @@ export interface Building {
   y: number;
   /** tick placed; structure is under construction until tick - builtTick >= build time */
   builtTick?: number;
+  /**
+   * FEAT-1972079891 inc1 (DD4 Option A migration grace): tick until which the new
+   * building-activation ROAD gates are skipped for this building. Stamped on
+   * pre-existing buildings at save-load so a legacy save is not instant-blacked-out
+   * by the new road-connectivity requirement; the gates apply normally once
+   * `tick >= graceTick`. Absent on buildings placed after the feature (auto-connect
+   * wires those to the network immediately). Deterministic, serialisable.
+   */
+  graceTick?: number;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';
@@ -176,6 +185,19 @@ export interface SimState {
    * genesis-replay; deterministic, tick-driven — NO wall-clock.
    */
   roadMonitors: RoadMonitor[];
+  /**
+   * FEAT-1972079891 inc1 — connected road network (AC-1). The set of drivable-road
+   * tiles (keyed "x,y") reachable from the map edges / trunk infrastructure, used
+   * by the per-building road-activation gates (isRoadConnected). Stored as a SORTED
+   * string[] rather than a Set because a Set is not JSON-serialisable — this shape
+   * round-trips through save/replay/debug.json and compares byte-identically under
+   * genesis-replay's stableStringify. Recomputed at the START of every advance()
+   * and kept fresh by the reducer whenever buildings change (AC-12), so it is
+   * always consistent with `buildings`. Optional for backward tolerance: a legacy
+   * state without it simply has the road gates skipped until it is computed. Use
+   * `connectedRoadTileSet(s)` (data.ts) to read it as a Set at use sites.
+   */
+  roadConnectivity?: { connectedRoadTiles: string[] };
 }
 
 /**
