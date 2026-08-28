@@ -97,6 +97,8 @@ const DIMS: Record<string, Dims> = {
   pow_wind: { x: 10, y: 10, z: 150 },
   pow_coal: { x: 280, y: 280, z: 200 },
   pow_nuke: { x: 630, y: 630, z: 60 },
+  // FEAT-1972079901 — Five Gorges Dam: 8×8 tiles = 400 m span, ~181 m crest height.
+  pow_hydro: { x: 400, y: 400, z: 181 },
   wat_clean: { x: 85, y: 85, z: 12 },
   wat_waste: { x: 85, y: 85, z: 12 },
   hea_clinic: { x: 40, y: 25, z: 11 },
@@ -913,7 +915,11 @@ export const SPECS: Record<string, Spec> = {
 
   pow_wind: P('pow_wind', 'power', 'Wind Turbine', '8 MW · clean', 1, 1, 1400, 8, '#7fb2e5', 'services', 2, { mw: 8 }),
   pow_coal: P('pow_coal', 'power', 'Coal Plant', '80 MW · polluting', 2, 2, 6500, 90, '#f0883e', 'services', 3, { mw: 80, tag: 'pollution' }),
-  pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 150000, 600, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution' }),
+  // FEAT-1972079901 realistic power costs: nuclear is the priciest generator to
+  // BUILD (Aaron's ask — nuclear VERY expensive up front). Capex raised 150k→560k
+  // (~£500/MW, above renewables/gas per-MW) and opex 600→1400. `mw`/footprint/tag
+  // UNCHANGED — cost-only retune. ⚠ PLACEHOLDER-balance — Aaron's row-by-row pass.
+  pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 560000, 1400, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution' }),
 
   wat_clean: P('wat_clean', 'water', 'Water Works', 'Clean water for 20,000', 2, 2, 2600, 38, '#39c5cf', 'services', 3, { tag: 'clean', served: 20000 }),
   wat_waste: P('wat_waste', 'water', 'Waste-Water Plant', 'Treats sewage for 20,000', 2, 2, 3400, 44, '#6b8f71', 'services', 3, { tag: 'waste', served: 20000 }),
@@ -1003,7 +1009,20 @@ export const SPECS: Record<string, Spec> = {
   pow_windfarm: P('pow_windfarm', 'power', 'Onshore Wind Farm', '60 MW · clean', 3, 3, 18000, 60, '#7fb2e5', 'services', 7, { mw: 60 }),
   pow_ccgt: P('pow_ccgt', 'power', 'CCGT Gas Plant', '420 MW · fast response', 3, 3, 42000, 260, '#f0883e', 'services', 8, { mw: 420, tag: 'pollution' }),
   pow_offshore: P('pow_offshore', 'power', 'Offshore Wind Array', '300 MW · clean', 3, 3, 90000, 240, '#5b8fc9', 'services', 12, { mw: 300 }),
-  pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 400000, 900, '#ff9f43', 'services', 19, { mw: 800 }),
+  // FEAT-1972079901 realistic power costs: experimental mega-plant, dearest per-MW
+  // capex of all generators (400k→520k, ~£650/MW; opex 900→1500). `mw` UNCHANGED.
+  pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 520000, 1500, '#ff9f43', 'services', 19, { mw: 800 }),
+
+  // FEAT-1972079901 — FIVE GORGES DAM (GRADUATED from a roadmap placeholder to a
+  // real, placeable mega-hydro GENERATOR). A single huge hydroelectric station:
+  // 5,000 MW dwarfs the 1,120 MW Nuclear Plant (~4.5×). It is a power generator, so
+  // its `mw` correctly adds to powerStats.cap like any plant. Deliberately carries
+  // NO water `tag`/`served` and NO `residents` — a power spec only, so it can never
+  // leak clean/waste-water or residential capacity (the waste_depot/estate lesson).
+  // Hydro is clean, so (like pow_wind/pow_solar) it takes no `pollution` tag.
+  // Huge 8×8 footprint + late unlock (16). ⚠ every figure PLACEHOLDER-balance —
+  // directional only, pending Aaron's row-by-row pass.
+  pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 600000, 900, '#5b8fc9', 'services', 16, { mw: 5000 }),
 
   // ---- Water & waste additions ----
   wat_tower: P('wat_tower', 'water', 'Water Tower', 'Pressure head for 4,000', 1, 1, 1500, 14, '#39c5cf', 'services', 2, { tag: 'clean', served: 4000 }),
@@ -1124,8 +1143,12 @@ export const SPECS: Record<string, Spec> = {
   lei_sportsground: PH('lei_sportsground', 'leisure', 'Sports Ground', 'Planned — playing fields and pavilion', 2, 2, '#d06fd0', 'services', 4),
   lei_stables: PH('lei_stables', 'leisure', 'Stables', 'Planned — riding stables and paddock', 2, 2, '#c95fc9', 'services', 6),
 
-  // ---- Power (incl. FEAT-1972079901 Five Gorges Dam) ----
-  pow_hydro: PH('pow_hydro', 'power', 'Five Gorges Dam', 'Planned — mega hydroelectric dam', 5, 5, '#5b8fc9', 'services', 16),
+  // ---- Power ----
+  // FEAT-1972079901: pow_hydro (Five Gorges Dam) GRADUATED to a real placeable
+  // mega-hydro generator above (in the Power additions block). pow_hvdc (a
+  // TRANSMISSION link, not a generator) and pow_reprocess (fuel reprocessing, not
+  // a generator) stay placeholders — giving either an `mw` would be a false grid
+  // generation leak, so they are intentionally NOT graduated here.
   pow_hvdc: PH('pow_hvdc', 'power', 'HVDC Interconnector', 'Planned — long-distance DC power link', 2, 2, '#ff7b72', 'services', 14),
   pow_reprocess: PH('pow_reprocess', 'power', 'THORP Reprocessing Plant', 'Planned — nuclear fuel reprocessing plant', 4, 4, '#e05d38', 'services', 18),
 
@@ -1188,7 +1211,7 @@ export const PALETTE: { title: string; items: string[] }[] = [
   { title: 'Mining', items: ['mine_quarry', 'mine_deep', 'mine_chalk', 'mine_clay', 'mine_coal'] },
   { title: 'Parks', items: ['park', 'park_playground', 'park_town', 'park_botanical', 'park_nature'] },
   { title: 'Leisure', items: ['lei_leisure', 'lei_cinema', 'lei_theatre', 'lei_museum', 'lei_arena', 'lei_themepark', 'lei_gym', 'lei_sportsground', 'lei_stables'] },
-  { title: 'Power', items: ['pow_wind', 'pow_coal', 'pow_substation', 'pow_nuke', 'pow_solar', 'pow_windfarm', 'pow_ccgt', 'pow_offshore', 'pow_fusion', 'pow_hvdc', 'pow_hydro', 'pow_reprocess'] },
+  { title: 'Power', items: ['pow_wind', 'pow_coal', 'pow_substation', 'pow_nuke', 'pow_solar', 'pow_windfarm', 'pow_ccgt', 'pow_offshore', 'pow_hydro', 'pow_fusion', 'pow_hvdc', 'pow_reprocess'] },
   { title: 'Water & Waste', items: ['wat_tower', 'wat_clean', 'wat_waste', 'wat_reservoir', 'wat_sewage_regional', 'waste_depot', 'waste_compost', 'waste_recycling', 'waste_landfill', 'waste_incinerator'] },
   { title: 'Health', items: ['hea_clinic', 'hea_hospital', 'hea_ambulance', 'hea_eldercare', 'hea_teaching', 'death_cemetery', 'death_crematorium', 'air_heliport'] },
   { title: 'Police & Justice', items: ['pol_station', 'civ_courthouse', 'pol_hq', 'civ_prison', 'civ_adx', 'air_police_helibase'] },

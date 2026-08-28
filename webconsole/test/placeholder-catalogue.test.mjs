@@ -47,8 +47,10 @@ const PLACEHOLDER_IDS = [
   'mine_chalk', 'mine_clay', 'mine_coal',
   // Leisure
   'lei_gym', 'lei_sportsground', 'lei_stables',
-  // Power (incl. Five Gorges Dam)
-  'pow_hydro', 'pow_hvdc', 'pow_reprocess',
+  // Power — FEAT-1972079901: pow_hydro (Five Gorges Dam) GRADUATED to a real
+  // placeable mega-hydro generator, so it is no longer a placeholder. pow_hvdc
+  // (transmission link) and pow_reprocess (fuel reprocessing) stay placeholders.
+  'pow_hvdc', 'pow_reprocess',
   // Water & Waste
   // FEAT-1972079906 inc1: waste_depot GRADUATED (collection depot).
   // FEAT-1972079906 inc2: the four PROCESSING specs (waste_landfill /
@@ -73,12 +75,15 @@ test('every planned placeholder exists in SPECS with placeholder===true', () => 
   }
 });
 
-test('FEAT-1972079901 Five Gorges Dam is a placeholder power type', () => {
+test('FEAT-1972079901 Five Gorges Dam is a REAL (graduated) mega-power spec', () => {
   const dam = SPECS.pow_hydro;
   assert.ok(dam, 'pow_hydro (Five Gorges Dam) missing');
   assert.equal(dam.name, 'Five Gorges Dam');
   assert.equal(dam.kind, 'power');
-  assert.equal(dam.placeholder, true);
+  // GRADUATED: no longer a placeholder — it is a real, placeable generator.
+  assert.notEqual(dam.placeholder, true);
+  assert.ok(dam.mw > 0, 'the dam generates power');
+  assert.ok(dam.cost > 0 && dam.upkeep > 0, 'the dam has real build/running costs');
 });
 
 test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', () => {
@@ -97,7 +102,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
 test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
   const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
   assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, 33, 'expected 33 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1; the 4 waste PROCESSING specs graduated in FEAT-1972079906 inc2; the 4 estates res_estate/off_businesspark/ind_estate/com_hypermarket graduated in FEAT-1972079900 inc1)');
+  assert.equal(flagged.length, 32, 'expected 32 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1; the 4 waste PROCESSING specs graduated in FEAT-1972079906 inc2; the 4 estates res_estate/off_businesspark/ind_estate/com_hypermarket graduated in FEAT-1972079900 inc1; pow_hydro/Five Gorges Dam graduated in FEAT-1972079901)');
 });
 
 test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {
@@ -151,7 +156,7 @@ test('REDUCER: dispatching place for a placeholder with unlockedAll does NOT ent
   // Free empty tile away from the seeded map corner; unlockedAll=true so the ONLY
   // thing that can stop the placement is the placeholder guard itself.
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_hydro', 'ind_chemworks', 'land_cern', 'rail_branch', 'ind_refinery']) {
+  for (const id of ['pow_reprocess', 'ind_chemworks', 'land_cern', 'rail_branch', 'ind_refinery']) {
     const sp = SPECS[id];
     assert.equal(specUnlocked(s, sp), true, `precondition: ${id} passes the unlock gate under god-mode`);
     const after = reducer(s, { type: 'place', spec: id, x: 200, y: 120 });
@@ -177,7 +182,7 @@ test('REDUCER: a real spec CAN still be placed on a free tile under unlockedAll 
 
 test('REDUCER: stampRegion with a placeholder clipboard item does NOT enter the sim (whole stamp refused)', () => {
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_hydro', 'land_gigafactory', 'rail_freightyard']) {
+  for (const id of ['pow_reprocess', 'land_gigafactory', 'rail_freightyard']) {
     const clipboard = { w: 5, h: 5, items: [{ spec: id, dx: 0, dy: 0 }] };
     const after = reducer(s, { type: 'stampRegion', clipboard, x: 200, y: 120 });
     assert.equal(after.buildings.length, s.buildings.length, `${id}: stampRegion must not add a placeholder building`);
@@ -191,7 +196,7 @@ test('REDUCER: stampRegion refuses a MIXED clipboard (real + placeholder) all-or
   const s = { ...initialState(), unlockedAll: true };
   // A real spec next to a placeholder: the presence of the placeholder rejects the
   // entire stamp, so the real one is NOT smuggled in alongside it.
-  const clipboard = { w: 5, h: 5, items: [{ spec: 'res_hut', dx: 0, dy: 0 }, { spec: 'pow_hydro', dx: 2, dy: 0 }] };
+  const clipboard = { w: 5, h: 5, items: [{ spec: 'res_hut', dx: 0, dy: 0 }, { spec: 'pow_reprocess', dx: 2, dy: 0 }] };
   const after = reducer(s, { type: 'stampRegion', clipboard, x: 200, y: 120 });
   assert.deepEqual(after, s, 'a mixed stamp containing any placeholder is rejected whole');
 });
@@ -215,14 +220,14 @@ test('CONSISTENCY: a placeholder building is flagged as a consistency FAILURE', 
 
   const dirty = {
     ...clean,
-    buildings: [...clean.buildings, { id: 999001, spec: 'pow_hydro', x: 200, y: 120, builtTick: 0 }],
+    buildings: [...clean.buildings, { id: 999001, spec: 'pow_reprocess', x: 200, y: 120, builtTick: 0 }],
   };
   const report = runConsistencyChecks(dirty);
   assert.ok(report.failures > 0, 'a placeholder building must make the state inconsistent');
   const check = report.checks.find((c) => c.id === 'placeholder.none-in-sim');
   assert.ok(check, 'the universal placeholder check must run');
   assert.equal(check.ok, false, 'the placeholder building must fail the check');
-  assert.match(check.detail, /pow_hydro/, 'the failing detail names the offending placeholder spec');
+  assert.match(check.detail, /pow_reprocess/, 'the failing detail names the offending placeholder spec');
 });
 
 test('CONSISTENCY: real buildings are NOT flagged by the placeholder check (not over-broad)', () => {
