@@ -10,6 +10,8 @@ import type { SimState, ZoneKind } from './types.ts';
 import {
   countByKind,
   residentsCapacity,
+  onlineResidentsCapacity,
+  underConstructionResidents,
   totalJobs,
   powerStats,
   SPECS,
@@ -47,7 +49,12 @@ export interface DebugSnapshot {
   };
   entities: {
     population: string;
+    /** BUG-417: ONLINE residential capacity (honest headline). */
     housingCapacity: string;
+    /** BUG-417: capacity still under construction (gross − online); omitted when 0. */
+    housingCapacityUnderConstruction?: string;
+    /** BUG-417: gross residential capacity incl. offline dwellings. */
+    housingCapacityGross: string;
     jobs: string;
     powerMw: string; // "cap / need MW"
     buildingsTotal: string;
@@ -104,7 +111,10 @@ export function buildDebugSnapshot(s: SimState): DebugSnapshot {
     },
     entities: {
       population: fmtNum(s.population),
-      housingCapacity: fmtNum(residentsCapacity(s)),
+      // BUG-417: honest headline = ONLINE capacity; gross + under-construction alongside.
+      housingCapacity: fmtNum(onlineResidentsCapacity(s)),
+      housingCapacityUnderConstruction: fmtNum(underConstructionResidents(s)),
+      housingCapacityGross: fmtNum(residentsCapacity(s)),
       jobs: fmtNum(totalJobs(s)),
       powerMw: `${formatPower(pw.cap)} / ${formatPower(pw.need)}`,
       buildingsTotal: fmtNum(s.buildings.length),

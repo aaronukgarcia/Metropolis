@@ -51,6 +51,8 @@ import {
   plantEffServed,
   powerStats,
   residentsCapacity,
+  onlineResidentsCapacity,
+  underConstructionResidents,
   serviceDemandOf,
   totalJobs,
   utilisationOf,
@@ -249,7 +251,13 @@ export interface DebugJson {
       wellbeingOverall: number;
       wellbeingParts: { label: string; value: number }[];
       population: number;
+      /** BUG-417: ONLINE residential capacity — what population can actually
+       *  fill (offline / under-construction dwellings excluded). Honest headline. */
       housingCapacity: number;
+      /** BUG-417: capacity still under construction (gross − online). */
+      housingCapacityUnderConstruction: number;
+      /** BUG-417: gross residential capacity incl. offline dwellings (residentsCapacity). */
+      housingCapacityGross: number;
       jobs: number;
       solvent: boolean;
       netPerTick: number;
@@ -668,7 +676,12 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         wellbeingOverall: wb.overall,
         wellbeingParts: wb.parts,
         population: s.population,
-        housingCapacity: residentsCapacity(s),
+        // BUG-417: honest headline = ONLINE capacity (what population can fill),
+        // with the gross total and the under-construction remainder alongside so
+        // the debug JSON explains a population pinned below the gross figure.
+        housingCapacity: onlineResidentsCapacity(s),
+        housingCapacityUnderConstruction: underConstructionResidents(s),
+        housingCapacityGross: residentsCapacity(s),
         jobs: totalJobs(s),
         solvent: net >= 0,
         netPerTick: net,

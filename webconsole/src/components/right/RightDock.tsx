@@ -13,8 +13,9 @@ import {
   waterDemandOf,
   waterPipeInfo,
   plantEffServed,
-  isOnline,
   lineUsageOf,
+  onlineResidentsCapacity,
+  underConstructionResidents,
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
@@ -71,15 +72,12 @@ export function RightDock() {
 
 function StatusTab() {
   const { state } = useSim();
-  const capacity = (() => {
-    let cap = 0;
-    for (const b of state.buildings) {
-      if (!isOnline(state, b)) continue;
-      const sp = SPECS[b.spec];
-      if (sp?.kind === 'residential') cap += sp.residents ?? 8;
-    }
-    return cap;
-  })();
+  // BUG-417: the headline "Housing cap" is the ONLINE figure — the capacity
+  // engine growth can actually fill (offline / under-construction dwellings do
+  // not house anyone yet). The gross total stays visible as a "+N under
+  // construction" breakdown so the mismatch is legible, not hidden.
+  const capacity = onlineResidentsCapacity(state);
+  const underConstruction = underConstructionResidents(state);
   const approval = approvalOf(state);
   const wb = wellbeingOf(state);
   const income = state.lastFlows.inflows.reduce((a, b) => a + b.value, 0);
@@ -101,7 +99,17 @@ function StatusTab() {
         </div>
         <div className="tile">
           <div className="n">{fmtNum(capacity)}</div>
-          <div className="l">Housing cap</div>
+          <div className="l">
+            Housing cap
+            {underConstruction > 0 && (
+              <>
+                {' '}
+                <span className="sub" title="Residential capacity still under construction — not yet online, so nobody lives here yet">
+                  (+{fmtNum(underConstruction)} building)
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
       <h4>Wellbeing breakdown</h4>

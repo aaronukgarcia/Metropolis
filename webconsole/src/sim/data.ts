@@ -1296,6 +1296,19 @@ export function onlineResidentsCapacity(s: SimState): number {
   return cap;
 }
 
+/**
+ * BUG-417 — housing capacity that is NOT yet live: residents that will come
+ * online once currently offline / under-construction dwellings finish. Pure
+ * derivation (GR#21): gross residential capacity minus the online-gated figure
+ * engine growth can actually fill. Kept as a display-layer split so the "Housing
+ * cap" readout can show the honest online headline plus a "+N under
+ * construction" breakdown WITHOUT changing residentsCapacity (other callers may
+ * want the gross total). Never negative — online ⊆ gross by construction.
+ */
+export function underConstructionResidents(s: SimState): number {
+  return Math.max(0, residentsCapacity(s) - onlineResidentsCapacity(s));
+}
+
 export interface StationLinkInfo {
   total: number;
   connectedIds: Set<number>;
