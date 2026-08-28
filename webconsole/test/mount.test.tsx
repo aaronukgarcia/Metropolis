@@ -514,3 +514,70 @@ test('REAL WIRING: Space toggles speed', async () => {
     assert.equal(calls.lastSpeed, expected, `Space from ${speed} should toggle to ${expected}`);
   }
 });
+
+// BUG-433: advisor bubble click target must have fixed screen position
+// The "click to place" affordance must stay in the same location so repeated clicks
+// need no mouse movement. Previously the advisor was centered (left: 50%; transform: translateX(-50%)),
+// so variable-length text would move it. Fix: anchor to fixed left: 8px.
+//
+// CRITICAL RED-PROOF: If .advisor is changed back to left: 50% or gets transform: translateX(-50%),
+// this test fails.
+test('BUG-433: advisor bubble positioning is fixed-left (not centered), so click target stays in same screen location', async () => {
+  const fs = await import('fs/promises');
+  const pathMod = await import('path');
+
+  let testDir = new URL(import.meta.url).pathname;
+  if (testDir.startsWith('/') && testDir[2] === ':') {
+    testDir = testDir.slice(1);
+  }
+  testDir = pathMod.dirname(testDir);
+
+  const stylesPath = pathMod.resolve(testDir, '../src/styles.css');
+  const styles = await fs.readFile(stylesPath, 'utf-8');
+
+  // Assertion 1: .advisor rule must exist
+  assert.ok(
+    styles.includes('.advisor {'),
+    'styles.css must contain .advisor CSS rule'
+  );
+
+  // Assertion 2: CRITICAL - .advisor must have fixed left positioning (left: 8px or similar),
+  // not centered (left: 50%).
+  // This catches if someone adds back the centering.
+  const advisorRule = styles.match(/\.advisor\s*\{[^}]+\}/);
+  assert.ok(advisorRule, '.advisor CSS rule must exist and be parseable');
+
+  const rule = advisorRule![0];
+  const hasFixedLeft = /left:\s*8px/.test(rule);
+  const hasCenteredPosition = /left:\s*50%/.test(rule);
+  const hasTransformCenter = /transform:\s*translateX\(-50%\)/.test(rule);
+
+  assert.ok(
+    hasFixedLeft,
+    'CRITICAL: .advisor must have left: 8px (fixed position). If this fails, the advisor bubble was changed back to centered positioning.'
+  );
+
+  assert.ok(
+    !hasCenteredPosition,
+    '.advisor must NOT have left: 50% (centered positioning that varies with text length)'
+  );
+
+  assert.ok(
+    !hasTransformCenter,
+    '.advisor must NOT have transform: translateX(-50%) (centering transform)'
+  );
+
+  // Assertion 3: Verify MapView.tsx renders the advisor with the clickable affordance
+  const mapViewPath = pathMod.resolve(testDir, '../src/components/MapView.tsx');
+  const mapViewSource = await fs.readFile(mapViewPath, 'utf-8');
+
+  assert.ok(
+    mapViewSource.includes('advisor') && mapViewSource.includes('clickable') && mapViewSource.includes('advisorContent.go'),
+    'MapView.tsx must render the advisor div with conditional clickable class based on advisorContent.go'
+  );
+
+  assert.ok(
+    mapViewSource.includes('adv-hint') && mapViewSource.includes('click to place'),
+    'MapView.tsx must render the adv-hint span as the click affordance'
+  );
+});

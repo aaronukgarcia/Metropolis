@@ -437,7 +437,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .demand.alert .d-label { color: var(--danger); }
 .demand.alert .d-val { color: var(--danger); }
 
-.advisor { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); max-width: 62%; background: rgba(15, 18, 22, 0.88); border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: 8px; padding: 5px 12px; font-size: 11.5px; color: var(--ink); pointer-events: none; box-shadow: var(--shadow); }
+.advisor { position: absolute; top: 8px; left: 8px; max-width: 62%; background: rgba(15, 18, 22, 0.88); border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: 8px; padding: 5px 12px; font-size: 11.5px; color: var(--ink); pointer-events: none; box-shadow: var(--shadow); }
 .advisor.clickable { pointer-events: auto; cursor: pointer; border-left-color: var(--done); }
 .advisor.clickable:hover { background: rgba(24, 28, 34, 0.95); }
 .adv-hint { margin-left: 10px; color: var(--accent); font-weight: 700; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; }
