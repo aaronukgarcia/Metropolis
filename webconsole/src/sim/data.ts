@@ -1584,24 +1584,42 @@ function sumBy(s: SimState, f: (sp: Spec) => boolean, g: (sp: Spec) => number): 
 }
 
 export function powerStats(s: SimState): { need: number; cap: number } {
-  const c = countByKind(s.buildings);
   // BUG-430 — a power plant only feeds the grid while it is ONLINE. Mirror the
   // building-activation gate (onlineResidentsCapacity / wasteGeneratedOf): a
   // road-disconnected or still-under-construction plant (incl. the Five Gorges
   // Dam) generates ZERO, exactly as an offline building draws/works/houses zero.
-  // Cannot use sumBy() here — it exposes only the Spec, not the building instance
-  // isOnline() needs — so the online-gated sum is inlined. Order-independent /
-  // pure (GR#21): same state → same cap; no Date/Math.random. The DD4 grace
-  // period is handled inside isOnline (a within-grace plant reads online → still
-  // counts), so it needs no special-case here.
+  // BUG-431 — the DEMAND side is the exact mirror: an OFFLINE consumer draws
+  // ZERO. Before BUG-431 the per-building consumer term used countByKind(all
+  // buildings), so a road-disconnected or still-under-construction industry /
+  // office / mine added power DEMAND it could never draw — inconsistent with the
+  // activation gate that already zeroes an offline building's jobs/draw and with
+  // BUG-430's online-gated cap. Both the plant sum and the consumer counts are
+  // gathered in ONE online-gated pass here: countByKind() cannot be reused for
+  // the consumer term because it exposes only the Spec, not the building instance
+  // isOnline() needs. Order-independent / pure (GR#21): same state → same
+  // need/cap; no Date/Math.random. The DD4 grace period is handled inside
+  // isOnline (a within-grace building reads online → still counts), so it needs
+  // no special-case here.
+  //
+  // The population term stays UNGATED: s.population already reflects only
+  // online-housed residents (onlineResidentsCapacity governs how many residents
+  // the engine seats), so it never counts offline dwellings — gating it would
+  // double-remove them.
   let staticMw = 0;
+  let industrial = 0;
+  let office = 0;
+  let mine = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
-    if (sp?.kind === 'power') staticMw += sp.mw ?? 0;
+    if (!sp) continue;
+    if (sp.kind === 'power') staticMw += sp.mw ?? 0;
+    else if (sp.kind === 'industrial') industrial++;
+    else if (sp.kind === 'office') office++;
+    else if (sp.kind === 'mine') mine++;
   }
   return {
-    need: Math.round(s.population * 0.012 + c.industrial * 6 + c.office * 4 + c.mine * 8),
+    need: Math.round(s.population * 0.012 + industrial * 6 + office * 4 + mine * 8),
     // FEAT-1972079906 inc2: Energy-from-Waste plants add THROUGHPUT-based MW to grid
     // capacity (efwPowerOf) — it feeds the same surplus/Grid-Export path as any power
     // plant. Cannot double-count: the EfW spec carries no `mw`, so it is absent from the
