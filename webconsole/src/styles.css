@@ -547,3 +547,109 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .perf-hint {
   font-size: 10px;
 }
+
+/* FEAT-1972079861 — Help overlay (keyboard controls modal) */
+.help-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 11, 0.62);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 24px;
+}
+
+.help-overlay-panel {
+  width: min(550px, 92vw);
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.help-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.help-overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.help-overlay-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.help-footer-text {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.help-category {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.help-category-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0 10px;
+}
+
+.help-bindings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.help-binding-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12px;
+  padding: 0 10px;
+}
+
+.help-key {
+  font-family: ui-monospace, Consolas, monospace;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 11px;
+  flex-shrink: 0;
+  min-width: 40px;
+  text-align: center;
+}
+
+.help-label {
+  font-weight: 600;
+  color: var(--ink);
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.help-description {
+  font-size: 11px;
+  color: var(--muted);
+  flex: 1;
+}

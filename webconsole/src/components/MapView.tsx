@@ -3,7 +3,6 @@ import {
   MAP_H,
   MAP_W,
   SPECS,
-  PALETTE_FLAT,
   POWER_LINES,
   countByKind,
   coordLabel,
@@ -35,6 +34,8 @@ import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
 import { applyStashedCameraToView } from '../sim/cameraApply';
 import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
+import { HelpOverlay } from './HelpOverlay';
+import { makeKeydownHandler } from '../sim/keyhandler';
 import type { Building, ZoneKind, TaxRates } from '../sim/types';
 import type { Spec } from '../sim/data';
 import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
@@ -76,6 +77,8 @@ export function MapView() {
   // FEAT-1972079902 rail-inc1: line-saturation overlay toggle. UI-only, default
   // OFF — component-local like showWater/showPower, never in SimState/journal.
   const [showLines, setShowLines] = useState(false);
+  // FEAT-1972079861: Help overlay toggle. UI-only, component-local state.
+  const [helpOpen, setHelpOpen] = useState(false);
   const [cloneSelection, setCloneSelection] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -640,20 +643,37 @@ export function MapView() {
   }
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelToSelect();
-        return;
-      }
-      const n = Number(e.key);
-      if (n >= 1 && n <= PALETTE_FLAT.length) {
-        dispatch({ type: 'tool', tool: { mode: 'build', spec: PALETTE_FLAT[n - 1] } });
-      }
+    // FEAT-1972079861: Use the real handler factory (testable via spy injection).
+    // The factory returns the ACTUAL event handler that listens to KEYBINDINGS.
+    const isTextInput = (target: any): boolean => {
+      return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
     };
+
+    const onKey = makeKeydownHandler({
+      dispatch,
+      getState: () => state,
+      setView,
+      clampView,
+      nudgeZoom,
+      setShowWater,
+      setShowPower,
+      setShowLines,
+      setShowRefs,
+      setHelpOpen,
+      helpOpen,
+      view,
+      size,
+      MAP_W,
+      MAP_H,
+      MIN_ZOOM,
+      isTextInput,
+      cancelToSelect,
+    });
+
+    // Attach the real handler (from factory)
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, [state.speed, helpOpen, size, state, view, dispatch]);
 
   const advisorContent = useMemo(() => {
     const s = state;
@@ -937,6 +957,7 @@ export function MapView() {
           onClose={() => setSelected(null)}
         />
       )}
+      <HelpOverlay isOpen={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 

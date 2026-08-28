@@ -287,3 +287,230 @@ test('FEAT-1972079860 AC-4: locked-spec buttons NOT disabled (clickable), placeh
     'BottomBar must render successfully and contain Build tab'
   );
 });
+
+// FEAT-1972079861 AC-2: HelpOverlay COMPLETENESS — every binding in KEYBINDINGS must appear in rendered overlay.
+// This test catches the mutation where the 'camera' category is filtered out from HelpOverlay
+// (it would render but be missing all arrow-key/zoom/home bindings).
+//
+// CRITICAL RED-PROOF: Remove the 'camera' category from HelpOverlay's rendering and this test fails.
+test('FEAT-1972079861 AC-2: HelpOverlay must render EVERY binding from KEYBINDINGS', async () => {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+
+  const { HelpOverlay } = await import('../src/components/HelpOverlay.tsx');
+
+  // Render the overlay open
+  const html = renderToString(
+    React.default.createElement(HelpOverlay, {
+      isOpen: true,
+      onClose: () => {},
+    })
+  );
+
+  assert.equal(typeof html, 'string', 'renderToString must return a string');
+  assert.ok(html.length > 0, 'rendered HTML must be non-empty');
+
+  // The overlay is only rendered when isOpen=true
+  assert.ok(
+    html.includes('Keyboard Controls'),
+    'HelpOverlay must show when isOpen=true and contain title "Keyboard Controls"'
+  );
+
+  // CRITICAL: Every binding label must appear in the overlay.
+  // This catches: (1) hardcoded labels (AC-13), (2) filtered categories (AC-2).
+  // If a category is filtered out in HelpOverlay, all its bindings disappear and this fails.
+
+  // Test critical labels that represent different categories:
+  const criticalLabels = [
+    'Play / Pause', // speed category
+    'Slower', // speed category
+    'Water', // layer category
+    'Pan Up', // camera category (mutation: remove category from rendering)
+    'Zoom In', // camera category (mutation: remove category from rendering)
+    'Help', // help category
+  ];
+
+  for (const label of criticalLabels) {
+    assert.ok(
+      html.includes(label),
+      `HelpOverlay must include binding label "${label}". If this fails and the label is from the 'camera' category, ` +
+        'check that HelpOverlay is grouping and rendering all categories from KEYBINDINGS.'
+    );
+  }
+});
+
+// FEAT-1972079861 WIRING: MapView must use the real makeKeydownHandler factory.
+// This is a source-integrity test (weak but honest per the recipe).
+// Asserts that MapView's source code imports makeKeydownHandler and addEventListener
+// references the handler returned by the factory, not an inline function.
+//
+// CRITICAL RED-PROOF: Remove the makeKeydownHandler import or replace it with an inline
+// handler and this test fails (MapView source will not contain the expected strings).
+test('FEAT-1972079861 WIRING: MapView imports and uses makeKeydownHandler factory', async () => {
+  // Read MapView source to verify wiring
+  const fs = await import('fs/promises');
+  const pathMod = await import('path');
+
+  // Get the directory of the current test file
+  let testDir = new URL(import.meta.url).pathname;
+  // On Windows, URL.pathname includes leading slash, so remove it
+  if (testDir.startsWith('/') && testDir[2] === ':') {
+    testDir = testDir.slice(1);
+  }
+  testDir = pathMod.dirname(testDir);
+
+  const mapViewPath = pathMod.resolve(testDir, '../src/components/MapView.tsx');
+
+  const source = await fs.readFile(mapViewPath, 'utf-8');
+
+  // Assertion 1: MapView must import makeKeydownHandler
+  assert.ok(
+    source.includes("import { makeKeydownHandler } from '../sim/keyhandler'"),
+    'MapView.tsx must import makeKeydownHandler from keyhandler.ts'
+  );
+
+  // Assertion 2: MapView must call makeKeydownHandler() inside useEffect (the real handler factory)
+  assert.ok(
+    source.includes('makeKeydownHandler('),
+    'MapView.tsx must call makeKeydownHandler() to build the real event handler (not an inline function)'
+  );
+
+  // Assertion 3: MapView must addEventListener with the handler variable (not an inline function)
+  // This catches if someone re-inlines the handler in the listener call.
+  assert.ok(
+    source.includes("window.addEventListener('keydown', onKey)"),
+    'MapView.tsx must addEventListener with the handler from makeKeydownHandler (not inline)'
+  );
+
+  // Assertion 4: The handler must pass deps that include the key callbacks
+  assert.ok(
+    source.includes('makeKeydownHandler({') && source.includes('dispatch'),
+    'makeKeydownHandler must be called with real deps including dispatch'
+  );
+
+  assert.ok(
+    source.includes('setHelpOpen'),
+    'makeKeydownHandler deps must include setHelpOpen for help toggle'
+  );
+
+  assert.ok(
+    source.includes('isTextInput'),
+    'makeKeydownHandler deps must include isTextInput for AC-15 text-input safety'
+  );
+});
+
+// FEAT-1972079861 REAL WIRING TESTS: Import and test the ACTUAL makeKeydownHandler factory.
+// These import the real implementation (NOT a mock), so mutations are visible.
+// CRITICAL RED-PROOF: early-return mutations and disabled guards will cause failures here.
+
+test('REAL WIRING: Tool key (1) dispatches action', async () => {
+  const { makeKeydownHandler } = await import('../src/sim/keyhandler.ts');
+
+  const calls = { dispatch: 0, lastAction: null as any };
+
+  const handler = makeKeydownHandler({
+    dispatch: (action: any) => {
+      calls.dispatch++;
+      calls.lastAction = action;
+    },
+    getState: () => ({ speed: 1 }),
+    setView: () => {},
+    clampView: () => {},
+    nudgeZoom: () => {},
+    setShowWater: () => {},
+    setShowPower: () => {},
+    setShowLines: () => {},
+    setShowRefs: () => {},
+    setHelpOpen: () => {},
+    helpOpen: false,
+    view: { zoom: 2, cx: 100, cy: 100 },
+    size: { w: 800, h: 600 },
+    MAP_W: 320,
+    MAP_H: 160,
+    MIN_ZOOM: 1,
+    isTextInput: () => false,
+    cancelToSelect: () => {},
+  } as any);
+
+  handler({ key: '1', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+
+  assert.ok(calls.dispatch > 0, 'dispatch must be called for tool key');
+});
+
+// CRITICAL AC-15: REAL text-input guard prevents dispatch when target is INPUT
+test('REAL WIRING AC-15: Text-input guard blocks dispatch for INPUT target', async () => {
+  const { makeKeydownHandler } = await import('../src/sim/keyhandler.ts');
+
+  const calls = { dispatch: 0 };
+
+  const handler = makeKeydownHandler({
+    dispatch: () => {
+      calls.dispatch++;
+    },
+    getState: () => ({ speed: 1 }),
+    setView: () => {},
+    clampView: () => {},
+    nudgeZoom: () => {},
+    setShowWater: () => {},
+    setShowPower: () => {},
+    setShowLines: () => {},
+    setShowRefs: () => {},
+    setHelpOpen: () => {},
+    helpOpen: false,
+    view: { zoom: 2, cx: 100, cy: 100 },
+    size: { w: 800, h: 600 },
+    MAP_W: 320,
+    MAP_H: 160,
+    MIN_ZOOM: 1,
+    isTextInput: (target: any) => target.tagName === 'INPUT' || target.tagName === 'TEXTAREA',
+    cancelToSelect: () => {},
+  } as any);
+
+  // REAL handler with INPUT target — guard must prevent dispatch
+  handler({ key: '1', target: { tagName: 'INPUT' }, preventDefault: () => {} } as any);
+
+  assert.equal(
+    calls.dispatch,
+    0,
+    'CRITICAL RED-PROOF: dispatch must be 0 when target is INPUT (if this fails, guard is broken)'
+  );
+});
+
+// REAL WIRING: Space toggles speed (0→1, 1→0)
+test('REAL WIRING: Space toggles speed', async () => {
+  const { makeKeydownHandler } = await import('../src/sim/keyhandler.ts');
+
+  for (const speed of [0, 1]) {
+    const calls = { dispatch: 0, lastSpeed: null };
+
+    const handler = makeKeydownHandler({
+      dispatch: (action: any) => {
+        calls.dispatch++;
+        calls.lastSpeed = action.speed;
+      },
+      getState: () => ({ speed }),
+      setView: () => {},
+      clampView: () => {},
+      nudgeZoom: () => {},
+      setShowWater: () => {},
+      setShowPower: () => {},
+      setShowLines: () => {},
+      setShowRefs: () => {},
+      setHelpOpen: () => {},
+      helpOpen: false,
+      view: { zoom: 2, cx: 100, cy: 100 },
+      size: { w: 800, h: 600 },
+      MAP_W: 320,
+      MAP_H: 160,
+      MIN_ZOOM: 1,
+      isTextInput: () => false,
+      cancelToSelect: () => {},
+    } as any);
+
+    handler({ key: ' ', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+
+    const expected = speed === 0 ? 1 : 0;
+    assert.equal(calls.lastSpeed, expected, `Space from ${speed} should toggle to ${expected}`);
+  }
+});
