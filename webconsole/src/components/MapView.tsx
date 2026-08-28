@@ -27,6 +27,8 @@ import {
 } from '../sim/data';
 import { useSim, demandOf, specUnlocked } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
+import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
+import { applyStashedCameraToView } from '../sim/cameraApply';
 import { buildingRef, buildingRefLabel } from '../sim/refs';
 import { useBusy } from './Busy';
 import type { Building, ZoneKind, TaxRates } from '../sim/types';
@@ -90,6 +92,26 @@ export function MapView() {
   useEffect(() => {
     const h = setInterval(() => setFrame((f) => f + 1), 50);
     return () => clearInterval(h);
+  }, []);
+
+  // FEAT-1972079897 inc2 RE-APPLY: on mount, restore the camera the player was
+  // looking at before a rebuild reload. cameraStash persisted it to localStorage
+  // (read-once); consumePersistedCamera returns the stashed {zoom, cx, cy} or
+  // null (missing / corrupt / non-finite already rejected there). A real camera
+  // re-homes the view so the map lands where it was — no snap-back to start. No
+  // stash → do nothing; the default start view stands. UI-only, deterministic:
+  // the camera never touches SimState or the journal. Runs exactly once ([]).
+  useEffect(() => {
+    let storage: StorageLike | null = null;
+    try {
+      storage = typeof window !== 'undefined' ? window.localStorage : null;
+    } catch {
+      // localStorage getter can throw in sandboxed frames — a lost restore is
+      // cosmetic; fall through to the default view.
+      storage = null;
+    }
+    const cam = consumePersistedCamera(storage);
+    if (cam) setView((v) => applyStashedCameraToView(v, cam));
   }, []);
 
   // FEAT-1972079886: publish camera / selection / layer state to the debug
