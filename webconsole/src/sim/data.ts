@@ -55,6 +55,13 @@ export interface Spec {
   roadTier?: 1 | 2 | 3 | 4 | 5;
   capacity?: number;
   /**
+   * FEAT-1972079906 inc1 — refuse COLLECTION capacity, tonnes/tick a single depot
+   * can collect on its rounds. Present ONLY on collection depots (waste_depot).
+   * Drives collectionCoverageOf() the same way `served` drives water coverage.
+   * ⚠ PLACEHOLDER-balance (Aaron's sign-off pending) — directional only.
+   */
+  wasteCapacity?: number;
+  /**
    * FEAT-1972079877 placeholder catalogue: true marks a planned-but-unbuilt type
    * shown GREYED-OUT / "coming soon" in the build catalogue as a roadmap preview.
    * A placeholder is NEVER placeable (see isPlaceable) and carries zero sim stats
@@ -994,6 +1001,13 @@ export const SPECS: Record<string, Spec> = {
   wat_reservoir: P('wat_reservoir', 'water', 'Reservoir', 'Valley dam · serves 60,000', 4, 4, 45000, 150, '#2ba7b1', 'services', 9, { tag: 'clean', served: 60000 }),
   wat_sewage_regional: P('wat_sewage_regional', 'water', 'Regional Sewage Works', 'Treats waste for 60,000', 3, 3, 38000, 170, '#6b8f71', 'services', 11, { tag: 'waste', served: 60000 }),
 
+  // FEAT-1972079906 inc1: the Refuse Depot GRADUATES from a "coming soon" roadmap
+  // placeholder to a real, placeable collection depot — runs the city's rounds.
+  // `wasteCapacity` (tonnes/tick collected) drives collectionCoverageOf(); it has
+  // NO water tag, so it never counts as clean/waste-water capacity. ⚠ cost /
+  // upkeep / wasteCapacity are PLACEHOLDER-balance — Aaron's row-by-row pass.
+  waste_depot: P('waste_depot', 'water', 'Refuse Depot', 'Collects refuse on city rounds · 50 t/tick', 2, 2, 3000, 40, '#6b8f71', 'services', 4, { wasteCapacity: 50 }),
+
   // ---- Education additions ----
   edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 24000, 210, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary' }),
 
@@ -1085,7 +1099,8 @@ export const SPECS: Record<string, Spec> = {
   pow_reprocess: PH('pow_reprocess', 'power', 'THORP Reprocessing Plant', 'Planned — nuclear fuel reprocessing plant', 4, 4, '#e05d38', 'services', 18),
 
   // ---- Water & Waste ----
-  waste_depot: PH('waste_depot', 'water', 'Refuse Depot', 'Planned — refuse collection depot', 2, 2, '#6b8f71', 'services', 4),
+  // FEAT-1972079906 inc1: waste_depot GRADUATED to a real spec (above) — refuse
+  // COLLECTION ships now; landfill/EfW/MRF/compost stay roadmap placeholders (inc2).
   waste_landfill: PH('waste_landfill', 'water', 'Landfill', 'Planned — engineered landfill site', 3, 3, '#5f7f66', 'services', 5),
   waste_incinerator: PH('waste_incinerator', 'water', 'Energy-from-Waste', 'Planned — waste incineration plant', 3, 3, '#6b8f71', 'services', 9),
   waste_recycling: PH('waste_recycling', 'water', 'Recycling Centre', 'Planned — materials recycling facility', 2, 2, '#5f9e6a', 'services', 6),
@@ -1633,6 +1648,137 @@ export function serviceDemandOf(
       : Math.round(demandIndexOf(c.coverage) * f);
     return { id: c.id, label: c.label, value, spec: c.spec, alert: deficit };
   });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079906 inc1 — GARBAGE / WASTE: GENERATION + COLLECTION COVERAGE +
+// WASTE-HEALTH SIGNAL.
+//
+// Waste generation, collection-depot coverage, and the derived collection OPEX
+// basis. ALL functions are PURE + DETERMINISTIC (GR#21): order-independent sums
+// over buildings, no Date.now / Math.random, no map-range-with-break. Every value
+// is a DERIVED read-out — NOTHING is stored in SimState, so it cannot drift or
+// break the consistency checker / genesis-replay (round-trips trivially).
+//
+// SCOPE (brief §5 inc1): single residual stream, collection only. Processing mix,
+// diversion %, recycling/EfW/compost revenue, and the landfill dial are inc2 and
+// are deliberately NOT modelled here.
+//
+// ⚠ BALANCE-NUMBER REGIME (Aaron's blanket rule): every per-resident / per-job
+// waste rate, the depot collection capacity (on the spec), and the collection
+// OPEX rate below are PLACEHOLDERS — directional only, pending Aaron's row-by-row
+// balance pass. Do not tune gameplay against these numbers.
+// ════════════════════════════════════════════════════════════════════════════
+
+/** Household refuse per housed resident, tonnes/tick. PLACEHOLDER-balance. */
+export const WASTE_PER_RESIDENT = 0.01;
+/** Commercial/industrial/office/mine refuse per job, tonnes/tick. PLACEHOLDER-balance. */
+export const WASTE_PER_JOB = 0.02;
+/** £ charged per tonne of refuse actually COLLECTED (the rounds OPEX). PLACEHOLDER-balance. */
+export const COLLECTION_OPEX_PER_TONNE = 12;
+
+/**
+ * Effective jobs a workplace spec carries — the SAME rule totalJobs() sums (GR#3
+ * SSOT): an explicit `jobs`, else the commercial/industrial category defaults.
+ * Offices and mines always carry an explicit `jobs`.
+ */
+function specJobs(sp: Spec): number {
+  if (sp.jobs) return sp.jobs;
+  if (sp.kind === 'commercial') return 12;
+  if (sp.kind === 'industrial') return 18;
+  return 0;
+}
+
+/**
+ * Waste GENERATED this tick, tonnes (brief §1). Households (residential capacity,
+ * the housing-stock proxy for households) + commerce/industry/office/mine jobs.
+ * Only ONLINE buildings contribute (isOnline) — an offline building generates no
+ * waste, exactly like it earns/consumes nothing. Order-independent sum, pure.
+ *
+ * NOTE (household basis): inc1 ties household refuse to residential CAPACITY, not
+ * live population, so the figure is a per-building online-gated quantity (a needed
+ * property — "offline buildings generate no waste"). A live-occupancy refinement
+ * (population / capacity) is a later increment. PLACEHOLDER-balance rates.
+ */
+export function wasteGeneratedOf(s: SimState): number {
+  let tonnes = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    if (sp.kind === 'residential') {
+      tonnes += (sp.residents ?? 8) * WASTE_PER_RESIDENT;
+    } else if (
+      sp.kind === 'commercial' ||
+      sp.kind === 'office' ||
+      sp.kind === 'industrial' ||
+      sp.kind === 'mine'
+    ) {
+      tonnes += specJobs(sp) * WASTE_PER_JOB;
+    }
+  }
+  return tonnes;
+}
+
+/**
+ * Total refuse COLLECTION capacity this tick, tonnes (Σ online depot wasteCapacity).
+ * Only ONLINE depots collect — an under-construction / disconnected depot runs no
+ * rounds. Order-independent sum, pure.
+ */
+export function collectionCapacityOf(s: SimState): number {
+  let cap = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.wasteCapacity) cap += sp.wasteCapacity;
+  }
+  return cap;
+}
+
+/** Derived waste read-out for a state (brief §2). All quantities tonnes/tick. */
+export interface WasteStats {
+  /** Refuse produced by online buildings. */
+  generated: number;
+  /** Online depot collection capacity. */
+  capacity: number;
+  /** Actually collected = min(generated, capacity). */
+  collected: number;
+  /** capacity / generated clamped to [0,1]; 1 when nothing is generated (nothing
+   *  to collect ⇒ fully covered — the water-coverage convention, need 0 ⇒ 1). */
+  coverage: number;
+  /** generated − collected (tonnes left on the street). */
+  uncollected: number;
+  /** 1 − coverage: the fraction driving the waste-health penalty. */
+  uncollectedFraction: number;
+}
+
+/**
+ * Collection coverage + uncollected tonnage (brief §2), the twin of waterCaps /
+ * serviceCoverageOf. coverage = min(1, capacity/generated); no depots and any
+ * generation ⇒ coverage 0 (everything uncollected). Pure/deterministic.
+ */
+export function wasteStatsOf(s: SimState): WasteStats {
+  const generated = wasteGeneratedOf(s);
+  const capacity = collectionCapacityOf(s);
+  const coverage = generated > 0 ? Math.min(1, capacity / generated) : 1;
+  const collected = Math.min(generated, capacity);
+  const uncollected = Math.max(0, generated - collected);
+  return { generated, capacity, collected, coverage, uncollected, uncollectedFraction: 1 - coverage };
+}
+
+/** Collection coverage 0..1 (brief §2) — min(1, depotCapacity/generated). */
+export function collectionCoverageOf(s: SimState): number {
+  return wasteStatsOf(s).coverage;
+}
+
+/**
+ * Collection OPEX this tick, £ (brief §2/§4): the rounds cost ∝ tonnage actually
+ * COLLECTED. Zero waste (or no depots ⇒ nothing collected) ⇒ zero OPEX. Charged
+ * through computeFlows() as the "Refuse Collection" outflow (conservation-safe).
+ * Integer £, deterministic. PLACEHOLDER-balance rate.
+ */
+export function collectionOpexOf(s: SimState): number {
+  return Math.round(wasteStatsOf(s).collected * COLLECTION_OPEX_PER_TONNE);
 }
 
 // ---------- placement planner ----------

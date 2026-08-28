@@ -48,7 +48,9 @@ const PLACEHOLDER_IDS = [
   // Power (incl. Five Gorges Dam)
   'pow_hydro', 'pow_hvdc', 'pow_reprocess',
   // Water & Waste
-  'waste_depot', 'waste_landfill', 'waste_incinerator', 'waste_recycling', 'waste_compost',
+  // FEAT-1972079906 inc1: waste_depot GRADUATED to a real placeable collection
+  // depot (wasteCapacity + real cost/upkeep), so it is no longer a placeholder.
+  'waste_landfill', 'waste_incinerator', 'waste_recycling', 'waste_compost',
   // Health & Deathcare
   'death_cemetery', 'death_crematorium', 'air_heliport',
   // Fire & Rescue
@@ -91,7 +93,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
 test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
   const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
   assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, 42, 'expected 42 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1)');
+  assert.equal(flagged.length, 41, 'expected 41 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1)');
 });
 
 test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {

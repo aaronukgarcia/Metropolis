@@ -32,6 +32,8 @@ import {
   ROAD_TIER_CAPACITY,
   computeRoadConnectivity,
   GRACE_TICKS,
+  collectionCoverageOf,
+  collectionOpexOf,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -345,6 +347,17 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     const overdraftInterest = Math.round(Math.abs(s.funds) * 0.004);
     outflows.push({ label: 'Overdraft Interest', value: overdraftInterest });
   }
+
+  // FEAT-1972079906 inc1: refuse COLLECTION OPEX — the rounds cost ∝ tonnage
+  // actually collected (collectionOpexOf, tonnes collected × rate). Only emitted
+  // when > 0 (no depots / no waste ⇒ nothing collected ⇒ no line), so a city with
+  // no refuse infrastructure sees no new outflow. Routed through the flows so it is
+  // conservation-safe; excluded from the consistency upkeep reconciliation (it is a
+  // tonnage-based operating cost, not a per-building `upkeep` bucket — see
+  // consistency.ts, alongside Wages / Road Auto-Scale). Depot FIXED upkeep still
+  // flows normally via the Water & Waste bucket.
+  const refuseOpex = collectionOpexOf(s);
+  if (refuseOpex > 0) outflows.push({ label: 'Refuse Collection', value: refuseOpex });
 
   // BUG-422 (GR#3): post-policy outflow multipliers now live in the shared
   // applyOutflowPolicies helper (fiscal.ts) so the consistency checker applies the
@@ -1513,6 +1526,14 @@ export function wellbeingOf(s: SimState): {
     { label: 'Safety', value: part(ratio('police')) },
     { label: 'Utilities', value: utilitiesValue },
     { label: 'Sewage', value: part(ratio('waste')) },
+    // FEAT-1972079906 inc1 — WASTE-HEALTH penalty. Uncollected refuse hurts
+    // wellbeing: the part tracks collection coverage (part(1) ⇒ ~100 = no penalty
+    // when fully collected; part(0) ⇒ ~0 when nothing is collected), so a higher
+    // uncollected fraction drags overall wellbeing down monotonically. When a city
+    // generates NO waste (no online residents/jobs) coverage is defined as 1, so
+    // the part is neutral and adds no penalty. (A disease/health track is inc2.)
+    // ⚠ BALANCE-NUMBER PLACEHOLDER: reuses the shared coverage→part map.
+    { label: 'Refuse', value: part(collectionCoverageOf(s)) },
   ];
   // ⚠ BALANCE-NUMBER PLACEHOLDER: equal part weights, pending Aaron's pass.
   const overall = Math.round(parts.reduce((a, p) => a + p.value, 0) / parts.length);

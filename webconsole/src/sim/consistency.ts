@@ -410,7 +410,12 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       flow.label !== 'Loan Interest' &&
       flow.label !== 'Overdraft Interest' &&
       flow.label !== 'Transit Subsidy' &&
-      flow.label !== 'Road Auto-Scale'
+      flow.label !== 'Road Auto-Scale' &&
+      // FEAT-1972079906 inc1: 'Refuse Collection' is a tonnage-based operating cost
+      // (collected tonnes × rate), NOT recurring per-building `upkeep` — exclude it
+      // from the upkeep-total reconciliation exactly like Wages / Road Auto-Scale.
+      // (The depot's FIXED upkeep IS a normal Water & Waste bucket and stays in.)
+      flow.label !== 'Refuse Collection'
     ) {
       actualUpkeep += flow.value;
     }
