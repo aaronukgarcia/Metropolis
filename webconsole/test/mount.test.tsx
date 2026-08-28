@@ -190,3 +190,100 @@ test('BUG-421: App tree (ErrorBoundary + VersionUpgradeToast as App does) does n
     'App tree must not surface a useSim provider error'
   );
 });
+
+// FEAT-1972079860 AC-4: Locked spec buttons must be clickable (disabled=false)
+// to open the requirements card. This test catches the regression where locked
+// specs were disabled, blocking their onClick handler.
+//
+// CRITICAL: This test must FAIL RED if locked is re-added to the disabled expression.
+// It specifically parses the HTML to find locked and placeholder buttons by spec
+// name and asserts disabled attribute presence/absence per button type.
+test('FEAT-1972079860 AC-4: locked-spec buttons NOT disabled (clickable), placeholder buttons ARE disabled', async () => {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimProvider } = await import('../src/sim/store.tsx');
+  const { BottomBar } = await import('../src/components/bottom/BottomBar.tsx');
+
+  // Render BottomBar inside SimProvider (required for useSim context).
+  // At level 1, we know:
+  // - res_hut (unlock 1) is AVAILABLE
+  // - pow_coal (unlock 3) is LOCKED
+  // - rail_branch is a PLACEHOLDER
+  const html = renderToString(
+    React.default.createElement(SimProvider, {
+      children: React.default.createElement(BottomBar),
+    })
+  );
+
+  assert.equal(typeof html, 'string', 'renderToString must return a string');
+  assert.ok(html.length > 0, 'rendered HTML must be non-empty');
+
+  // CRITICAL: Test the key regression — the disabled attribute logic.
+  // The test specifically checks that:
+  // 1. Locked buttons have aria-label="Locked — unlocks at city level X" (accessibility)
+  // 2. Placeholder buttons are disabled
+  // 3. Locked buttons do NOT appear with disabled attribute before their closing >
+  //
+  // If someone re-adds locked to the disabled expression (like disabled={isPh || locked || ...}),
+  // the pattern in assertion #3 will fail to match.
+
+  // Assertion 1: At least one locked button has aria-label with "Locked"
+  const hasAriaLabelLocked = /aria-label="[^"]*Locked[^"]*"/.test(html);
+  assert.ok(
+    hasAriaLabelLocked,
+    'BottomBar must render at least one locked button with aria-label containing "Locked"'
+  );
+
+  // Assertion 2: At least one button has locked CSS class
+  const hasLockedClass = /class="[^"]*locked[^"]*"/.test(html);
+  assert.ok(
+    hasLockedClass,
+    'BottomBar must render at least one locked button with pal-item locked CSS class'
+  );
+
+  // Assertion 3: CRITICAL - Locked buttons must NOT be disabled.
+  // Strategy: Find button tags that contain BOTH:
+  // - aria-label with "Locked"
+  // - class with "locked"
+  // Then verify the button tag does NOT contain "disabled" attribute.
+  //
+  // Split into two checks: (1) find buttons with locked class and aria-label="Locked",
+  // (2) verify they don't have disabled.
+  //
+  // If locked is added back to disabled expression, this will fail.
+
+  // Extract all button tags and check each one
+  const buttons = html.match(/<button[^>]*>/g) || [];
+  let foundLockedNotDisabled = false;
+  for (const button of buttons) {
+    const hasLockedLabel = /aria-label="[^"]*Locked[^"]*"/.test(button);
+    const hasLockedClass = /class="[^"]*locked[^"]*"/.test(button);
+    const hasDisabled = /\bdisabled\b/.test(button);
+
+    if (hasLockedLabel && hasLockedClass && !hasDisabled) {
+      foundLockedNotDisabled = true;
+      break;
+    }
+  }
+
+  assert.ok(
+    foundLockedNotDisabled,
+    'CRITICAL: locked buttons (with aria-label="Locked" and locked class) must NOT have disabled attribute. ' +
+      'If this fails, locked was re-added to the disabled expression in BottomBar.tsx line 86.'
+  );
+
+  // Assertion 4: Placeholder buttons must be disabled
+  const placeholderDisabledRegex = /class="[^"]*placeholder[^"]*"[^/]*disabled/;
+  const placeholderDisabled = placeholderDisabledRegex.test(html);
+  assert.ok(
+    placeholderDisabled,
+    'placeholder buttons (with pal-item placeholder class) must have disabled attribute'
+  );
+
+  // Assertion 5: The HTML should contain Build tab labels (smoke test)
+  assert.ok(
+    html.includes('Build'),
+    'BottomBar must render successfully and contain Build tab'
+  );
+});

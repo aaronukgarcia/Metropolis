@@ -881,6 +881,47 @@ export function isPlaceable(s: SimState, sp: Spec): boolean {
   return specUnlocked(s, sp);
 }
 
+/**
+ * FEAT-1972079860 AC-1: Sort palette items available-first, locked by unlock
+ * level, then placeholder. Pure, deterministic sort.
+ *
+ * Sort order:
+ * 1. Available real specs (isPlaceable && !placeholder) — first
+ * 2. Locked real specs (!isPlaceable && !placeholder) — by unlock level ascending
+ * 3. Placeholder specs (placeholder === true) — last
+ *
+ * Within each tier, original order is preserved (stable sort).
+ */
+export function sortPaletteItems(state: SimState, items: string[]): string[] {
+  return items.slice().sort((aId, bId) => {
+    const a = SPECS[aId];
+    const b = SPECS[bId];
+    if (!a || !b) return 0; // Missing specs maintain relative order
+
+    const aPlaceable = isPlaceable(state, a);
+    const bPlaceable = isPlaceable(state, b);
+    const aPlaceholder = a.placeholder === true;
+    const bPlaceholder = b.placeholder === true;
+
+    // Tier 1: available real specs (aPlaceable && !aPlaceholder)
+    // Tier 2: locked real specs (!aPlaceable && !aPlaceholder)
+    // Tier 3: placeholder specs (aPlaceholder)
+    const aTier = aPlaceholder ? 3 : aPlaceable ? 1 : 2;
+    const bTier = bPlaceholder ? 3 : bPlaceable ? 1 : 2;
+
+    // Sort by tier first
+    if (aTier !== bTier) return aTier - bTier;
+
+    // Within tier 2 (locked real specs), sort by unlock level ascending
+    if (aTier === 2) {
+      return a.unlock - b.unlock;
+    }
+
+    // Within tiers 1 and 3, maintain original order (stable sort via slice)
+    return 0;
+  });
+}
+
 export const SPECS: Record<string, Spec> = {
   m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
   rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 0, 0, '#8a6d3b', 'network', 99),

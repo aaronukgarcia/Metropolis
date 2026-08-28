@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable } from '../../sim/data';
+import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable, sortPaletteItems } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
 import { useSim, specUnlocked } from '../../sim/store';
 import { fmtMoney } from '../../sim/utils';
 import { Panel } from '../Tabs';
+import { SpecCard } from '../SpecCard';
 
 const TABS = [
   { id: 'build', label: 'Build' },
@@ -22,6 +23,7 @@ export function BottomBar() {
 function BuildTab() {
   const { state, dispatch } = useSim();
   const [fam, setFam] = useState(PALETTE[0].title);
+  const [openSpecId, setOpenSpecId] = useState<string | null>(null);
   const famDef = PALETTE.find((p) => p.title === fam) ?? PALETTE[0];
 
   // FEAT-1972079876 scroll-reset: the type list for each family shares one
@@ -33,6 +35,9 @@ function BuildTab() {
   useEffect(() => {
     if (detailRef.current) detailRef.current.scrollTop = 0;
   }, [fam]);
+
+  // FEAT-1972079860 AC-1: Sort items available-first, locked by unlock level, then placeholders.
+  const sortedItems = sortPaletteItems(state, famDef.items);
 
   return (
     <>
@@ -57,7 +62,7 @@ function BuildTab() {
           })}
         </div>
         <div className="tree-detail" ref={detailRef}>
-          {famDef.items.map((id) => {
+          {sortedItems.map((id) => {
             const sp = SPECS[id];
             if (!sp) {
               // a palette id missing from SPECS must degrade to a skipped entry,
@@ -76,19 +81,25 @@ function BuildTab() {
               <button
                 key={id}
                 className={`pal-item${active ? ' active' : ''}${!isPh && locked ? ' locked' : ''}${isPh ? ' placeholder' : ''}`}
-                disabled={isPh || locked || state.funds < placementCost(sp)}
+                disabled={isPh || (!locked && state.funds < placementCost(sp))}
                 aria-disabled={isPh || undefined}
+                aria-label={!isPh && locked ? `Locked — unlocks at city level ${sp.unlock}` : undefined}
                 style={isPh ? { opacity: 0.45, filter: 'grayscale(1)', cursor: 'default' } : undefined}
                 title={
                   isPh
                     ? `${sp.name} — coming soon (planned): ${sp.blurb}`
                     : locked
-                      ? `${sp.name} — unlocks at city level ${sp.unlock}`
+                      ? `${sp.name} — unlocks at city level ${sp.unlock}. Click for requirements & what it delivers.`
                       : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick${
                           isFreeZone(sp) ? ` · free to zone · ${constructionTicks(sp)} ticks to build` : ''
                         }`
                 }
                 onClick={() => {
+                  // FEAT-1972079860 AC-4: Click locked spec opens card.
+                  if (locked && !isPh) {
+                    setOpenSpecId(id);
+                    return;
+                  }
                   // A placeholder can never be selected/placed (defence in depth
                   // alongside disabled): clicking is a no-op.
                   if (isPh || !isPlaceable(state, sp)) return;
@@ -119,6 +130,9 @@ function BuildTab() {
           ? `Placing ${SPECS[state.tool.spec].name} — click a tile or drag to paint. Esc to let go.`
           : 'Hover a category to browse, pick a structure, then click the map (drag paints). Keys 1–9 quick-pick.'}
       </p>
+
+      {/* FEAT-1972079860 AC-4/AC-5: Spec card modal for locked items */}
+      {openSpecId && <SpecCard spec={SPECS[openSpecId] ?? null} onClose={() => setOpenSpecId(null)} />}
     </>
   );
 }
