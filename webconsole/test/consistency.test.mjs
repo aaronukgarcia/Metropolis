@@ -142,8 +142,9 @@ test('PLACE + PENDING QUEUE: place action queues reward if level crossed, draine
   s = reducer(s, { type: 'tick' }); // Drain the reward
   // Now s is at level 2
 
-  // Place a FREE zone (res_hut). This grants 4 XP, may trigger level cross.
-  const s1 = reducer(s, { type: 'place', spec: 'res_hut', x: 50, y: 50 });
+  // Place a FREE zone (res_hut) at a tile ADJACENT to the seeded M20 (y56 spans all
+  // x), so FEAT-1972079907 auto-connect lays no connector and the zone stays free.
+  const s1 = reducer(s, { type: 'place', spec: 'res_hut', x: 50, y: 55 });
   // res_hut is free, so funds stay the same; only XP changes
   assert.equal(s1.funds, s.funds, 'zone placement is free (no funds deducted)');
   assert.equal(s1.xp, s.xp + 4, 'placement grants 4 XP');

@@ -25,8 +25,14 @@ import {
   MAP_H,
   MAP_W,
   powerStats,
+  isRoadSpec,
+  roadTierOf,
+  fittingTier,
+  ROAD_TIER_SPECS,
 } from './data.ts';
 import type { Spec } from './data.ts';
+import { planConnector } from './roadConnect.ts';
+import type { Building } from './types.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
 import type {
   FlowItem,
@@ -197,6 +203,7 @@ function rawState(): SimState {
     lastRewardedLevel: levelOf(30),
     notice: null,
     unlockedAll: false,
+    roadNotice: null,
   };
 }
 
@@ -512,6 +519,142 @@ function advance(s: SimState): SimState {
   };
 }
 
+/**
+ * Kinds that are themselves network infrastructure and never auto-connect (a road
+ * does not wire itself to a road; rail/stations/pylons are not road-served here).
+ */
+const CONNECT_EXEMPT_KINDS = new Set<Spec['kind']>([
+  'road',
+  'motorway',
+  'rail',
+  'station',
+  'pylon',
+]);
+
+/**
+ * FEAT-1972079907 inc1 — AUTO-CONNECT + UPGRADE-ON-CONNECT.
+ *
+ * After a real building is placed, wire it to the road network:
+ *  1. If it already touches a road → no-op (clear notice).
+ *  2. Else route a connector of fittingTier(sp) from the building to the NEAREST
+ *     existing road via the deterministic grid router (roadConnect.planConnector),
+ *     laying each connector cell as a REAL road building (journaled through replay,
+ *     conservation-safe: cost charged through the ledger).
+ *  3. Upgrade-on-connect: any joined road tile whose tier < the connector's tier is
+ *     upgraded (spec swapped) to the connector spec at the junction.
+ *  4. If no route within budget (or the connector is unaffordable) → surface a
+ *     "no road access" notice; the building STAYS placed (inc1: no relocation).
+ *
+ * Pure + deterministic (GR#21): all tie-breaking flows from the router; no Date/random.
+ * Called with `s` = state AFTER the player's building was inserted.
+ */
+function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
+  if (CONNECT_EXEMPT_KINDS.has(sp.kind) || isRoadSpec(sp)) {
+    return { ...s, roadNotice: null };
+  }
+
+  // Board sets from the CURRENT buildings (includes the just-placed building).
+  const occupied = new Set<string>();
+  const roads = new Set<string>();
+  for (const b of s.buildings) {
+    const bs = SPECS[b.spec];
+    if (!bs) continue;
+    const road = isRoadSpec(bs);
+    for (let dx = 0; dx < bs.w; dx++)
+      for (let dy = 0; dy < bs.h; dy++) {
+        const k = `${b.x + dx},${b.y + dy}`;
+        occupied.add(k);
+        if (road) roads.add(k);
+      }
+  }
+
+  const plan = planConnector({
+    occupied,
+    roads,
+    bx: placed.x,
+    by: placed.y,
+    bw: sp.w,
+    bh: sp.h,
+    mapW: MAP_W,
+    mapH: MAP_H,
+  });
+
+  if (plan.connected) return { ...s, roadNotice: null };
+  if (plan.blocked) return { ...s, roadNotice: 'no road access' };
+
+  const tier = fittingTier(sp);
+  const connSpecId = ROAD_TIER_SPECS[tier];
+  const connSpec = SPECS[connSpecId];
+  // Connectors honour the SSOT insertion guard exactly like a manual place.
+  if (!canEnterSim(connSpec)) return { ...s, roadNotice: 'no road access' };
+
+  const tileCost = placementCost(connSpec);
+  const connectorCost = tileCost * plan.path.length;
+
+  // Upgrade-on-connect: junction road tiles below the connector tier jump up.
+  const junctionKeys = new Set(plan.junctions.map((p) => `${p.x},${p.y}`));
+  const upgradeIds: number[] = [];
+  let upgradeCost = 0;
+  for (const b of s.buildings) {
+    const bs = SPECS[b.spec];
+    if (!bs || !isRoadSpec(bs) || roadTierOf(bs) >= tier) continue;
+    let hit = false;
+    for (let dx = 0; dx < bs.w && !hit; dx++)
+      for (let dy = 0; dy < bs.h && !hit; dy++)
+        if (junctionKeys.has(`${b.x + dx},${b.y + dy}`)) hit = true;
+    if (hit) {
+      upgradeIds.push(b.id);
+      upgradeCost += Math.max(0, tileCost - placementCost(bs));
+    }
+  }
+
+  const totalCost = connectorCost + upgradeCost;
+  // Never fail the placement (inc1): if the connector is unaffordable, keep the
+  // building and surface the notice instead of laying a partial network.
+  if (s.funds < totalCost) return { ...s, roadNotice: 'no road access' };
+
+  // Lay connector tiles as real road buildings.
+  let nextId = s.nextId;
+  const newTiles: Building[] = plan.path.map((p) => ({
+    id: nextId++,
+    spec: connSpecId,
+    x: p.x,
+    y: p.y,
+    builtTick: s.tick,
+  }));
+
+  const upgradeSet = new Set(upgradeIds);
+  const buildings = s.buildings
+    .map((b) => (upgradeSet.has(b.id) ? { ...b, spec: connSpecId } : b))
+    .concat(newTiles);
+
+  // Ledger: connector spend, then any upgrade spend (mirrors how `place` logs).
+  let ledger = s.ledger;
+  let nextLedgerId = s.nextLedgerId;
+  if (plan.path.length > 0) {
+    ledger = [
+      { id: nextLedgerId++, tick: s.tick, label: `Connector ${connSpec.name} (${plan.path.length})`, amount: -connectorCost },
+      ...ledger,
+    ].slice(0, LEDGER_CAP);
+  }
+  if (upgradeIds.length > 0) {
+    ledger = [
+      { id: nextLedgerId++, tick: s.tick, label: `Upgraded ${upgradeIds.length} road tile(s) to ${connSpec.name}`, amount: -upgradeCost },
+      ...ledger,
+    ].slice(0, LEDGER_CAP);
+  }
+
+  return {
+    ...s,
+    funds: s.funds - totalCost,
+    nextId,
+    buildings,
+    ledger,
+    nextLedgerId,
+    roadNotice: null,
+  };
+}
+
 function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'ledger' | 'nextLedgerId'> {
   return {
     ledger: [{ id: s.nextLedgerId, tick: s.tick, label, amount }, ...s.ledger].slice(0, LEDGER_CAP),
@@ -573,17 +716,19 @@ export function reducer(state: SimState, action: Action): SimState {
       )
         return state;
       if (!fits(occupiedSet(state), sp.w, sp.h, action.x, action.y)) return state;
-      const updated = {
+      const placedBuilding = { id: state.nextId, spec: action.spec, x: action.x, y: action.y, builtTick: state.tick };
+      const placedState = {
         ...state,
         funds: state.funds - cost,
         xp: state.xp + 4,
         nextId: state.nextId + 1,
-        buildings: [
-          ...state.buildings,
-          { id: state.nextId, spec: action.spec, x: action.x, y: action.y, builtTick: state.tick },
-        ],
+        buildings: [...state.buildings, placedBuilding],
         ...logEvent(state, `Started ${sp.name}`, -cost),
       };
+      // FEAT-1972079907 inc1: auto-wire the building to the road network (lay a
+      // fitting connector to the nearest road + upgrade-on-connect), or surface a
+      // "no road access" notice. Deterministic; connectors journal via replay.
+      const updated = autoConnect(placedState, placedBuilding, sp);
       const rewards = computeLevelRewards(updated);
       if (rewards.length === 0) return updated;
       // Push rewards to pending queue instead of applying immediately.

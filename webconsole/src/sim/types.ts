@@ -151,4 +151,11 @@ export interface SimState {
    * after charging UNLOCK_ALL_COST; default false. Journaled + deterministic.
    */
   unlockedAll: boolean;
+  /**
+   * FEAT-1972079907 inc1 — transient road auto-connect notice. Set to a short
+   * message (e.g. "no road access") when a placed building could not be wired to
+   * the road network (no route within budget / unaffordable connector); null
+   * otherwise. Cleared/overwritten on the next `place`. Deterministic, sim-state.
+   */
+  roadNotice: string | null;
 }

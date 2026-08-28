@@ -12,8 +12,10 @@ import assert from 'node:assert/strict';
 import { reducer, initialState, levelOf, xpForLevel, LEVEL_REWARD_RATE } from '../src/sim/engine.ts';
 import { placementCost, isFreeZone, densityTier, blockOccupancy, unlockedAtLevel, SPECS } from '../src/sim/data.ts';
 
-// A tile far from the starter city (roads at y56/58/…, rail y84) — empty for a 1×1.
-const EMPTY = { x: 5, y: 5 };
+// An empty 1×1 tile ORTHOGONALLY ADJACENT to the seeded M20 (y56/58 span all x),
+// so FEAT-1972079907 auto-connect finds the building already road-connected and lays
+// NO connector — keeping these "zoning is free" assertions about the zone cost alone.
+const EMPTY = { x: 5, y: 55 };
 
 // ---------- FEAT-1972079882: zoning is free ----------
 

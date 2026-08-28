@@ -27,9 +27,11 @@ function mockStorage(seed = {}) {
 }
 
 // The exact roadmap placeholders this feature adds (mirrors the task list).
+// FEAT-1972079907 inc1: rd_avenue/rd_dual/rd_aroad GRADUATED to real placeable
+// road tiers (roadTier/capacity + real cost), so they are no longer placeholders.
 const PLACEHOLDER_IDS = [
   // Network
-  'rd_avenue', 'rd_dual', 'rd_aroad', 'rail_branch',
+  'rail_branch',
   // Transport
   'trans_parkride', 'trans_interchange', 'rail_freightyard', 'ev_charging_hub',
   // Estates
@@ -89,7 +91,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
 test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
   const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
   assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, 45, 'expected 45 roadmap placeholders');
+  assert.equal(flagged.length, 42, 'expected 42 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1)');
 });
 
 test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {
@@ -143,7 +145,7 @@ test('REDUCER: dispatching place for a placeholder with unlockedAll does NOT ent
   // Free empty tile away from the seeded map corner; unlockedAll=true so the ONLY
   // thing that can stop the placement is the placeholder guard itself.
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_hydro', 'res_estate', 'land_cern', 'rd_avenue', 'waste_landfill']) {
+  for (const id of ['pow_hydro', 'res_estate', 'land_cern', 'rail_branch', 'waste_landfill']) {
     const sp = SPECS[id];
     assert.equal(specUnlocked(s, sp), true, `precondition: ${id} passes the unlock gate under god-mode`);
     const after = reducer(s, { type: 'place', spec: id, x: 200, y: 120 });
@@ -237,7 +239,7 @@ test('RESTORE: a crafted savepoint with a placeholder building restores with NO 
   const genesis = initialState();
   const snapshot = {
     ...genesis,
-    buildings: [...genesis.buildings, { id: 999003, spec: 'rd_avenue', x: 200, y: 120, builtTick: 0 }],
+    buildings: [...genesis.buildings, { id: 999003, spec: 'rail_branch', x: 200, y: 120, builtTick: 0 }],
   };
   const savepoint = {
     savedAt: new Date().toISOString(),

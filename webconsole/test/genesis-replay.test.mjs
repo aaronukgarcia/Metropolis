@@ -101,7 +101,9 @@ describe('genesisReplay: placements + ticks reconstruct buildings and tick/popul
   test('buildings placed and tick/population advanced are reconstructed', () => {
     // A pure-tick baseline (no placements) to prove population growth is captured.
     const placeThenTicks = [
-      { type: 'place', spec: 'res_hut', x: 30, y: 30 },
+      // (30,55) is orthogonally adjacent to the seeded M20 (y56 spans all x), so
+      // FEAT-1972079907 auto-connect lays NO connector — exactly one building added.
+      { type: 'place', spec: 'res_hut', x: 30, y: 55 },
       ...Array.from({ length: 40 }, () => ({ type: 'tick' })),
     ];
     const { journal, liveState } = driveAndRecord(placeThenTicks);
@@ -118,7 +120,7 @@ describe('genesisReplay: placements + ticks reconstruct buildings and tick/popul
       'the placed res_hut is present after replay'
     );
     assert.ok(
-      replayed.buildings.some((b) => b.spec === 'res_hut' && b.x === 30 && b.y === 30),
+      replayed.buildings.some((b) => b.spec === 'res_hut' && b.x === 30 && b.y === 55),
       'the exact placed building is reconstructed'
     );
     // 40 tick actions were applied; genesis already sits at tick 1 (initialState

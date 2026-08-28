@@ -187,6 +187,7 @@ export interface DebugJson {
     lastRewardedLevel: number;
     notice: LevelUpNotice | null;
     unlockedAll: boolean;
+    roadNotice: string | null;
     conservation: { tickStart: number; tickEnd: number };
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
   };
@@ -381,6 +382,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   lastRewardedLevel: 'sim.lastRewardedLevel',
   notice: 'sim.notice',
   unlockedAll: 'sim.unlockedAll',
+  roadNotice: 'sim.roadNotice',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -580,6 +582,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       lastRewardedLevel: s.lastRewardedLevel,
       notice: s.notice,
       unlockedAll: s.unlockedAll,
+      roadNotice: s.roadNotice,
       // TICK-BOUNDARY INVARIANT (Round-6): Conservation snapshot for determinism checking
       conservation: {
         tickStart: s.fundsAtTickStart,

@@ -43,6 +43,14 @@ export interface Spec {
   tourism?: number;
   dims?: Dims;
   /**
+   * FEAT-1972079907 inc1 — road tier ladder (1..5) + per-tile vehicle capacity.
+   * Present ONLY on drivable road specs (kind 'road' / 'motorway'). `roadTier`
+   * orders the ladder (1 Lane → 5 Motorway); `capacity` is vehicles/tick.
+   * ⚠ PLACEHOLDER-balance (Aaron's sign-off pending) — directional only.
+   */
+  roadTier?: 1 | 2 | 3 | 4 | 5;
+  capacity?: number;
+  /**
    * FEAT-1972079877 placeholder catalogue: true marks a planned-but-unbuilt type
    * shown GREYED-OUT / "coming soon" in the build catalogue as a roadmap preview.
    * A placeholder is NEVER placeable (see isPlaceable) and carries zero sim stats
@@ -183,6 +191,75 @@ export function densityTier(sp: Spec): 1 | 2 | 3 {
   const score = area + cap / 20;
   if (score >= 12) return 3;
   if (score >= 4) return 2;
+  return 1;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079907 inc1 — ROAD TIER LADDER + FITTING RULE.
+// ⚠ BALANCE-NUMBER REGIME (Aaron's blanket rule): every capacity below and every
+// fittingTier threshold is a PLACEHOLDER — directional only, pending Aaron's
+// row-by-row balance pass. Do not tune gameplay against these numbers.
+// ════════════════════════════════════════════════════════════════════════════
+
+export type RoadTier = 1 | 2 | 3 | 4 | 5;
+
+/** Spec id laid for each tier (auto-connect connector + upgrade target). */
+export const ROAD_TIER_SPECS: Record<RoadTier, string> = {
+  1: 'road', // Lane
+  2: 'rd_avenue', // Avenue
+  3: 'rd_aroad', // A-Road
+  4: 'rd_dual', // Dual Carriageway
+  5: 'm20', // Motorway
+};
+
+/** Per-tile vehicle capacity (vehicles/tick) by tier. PLACEHOLDER-balance. */
+export const ROAD_TIER_CAPACITY: Record<RoadTier, number> = {
+  1: 100,
+  2: 250,
+  3: 500,
+  4: 1000,
+  5: 2500,
+};
+
+/**
+ * Road tier of a spec, or 0 when it is not a drivable road. Reads `roadTier`
+ * (set on the road specs); non-road specs return 0.
+ */
+export function roadTierOf(sp: Spec | undefined): number {
+  return sp?.roadTier ?? 0;
+}
+
+/** True when this spec is a drivable road tile (participates in the network). */
+export function isRoadSpec(sp: Spec | undefined): boolean {
+  return roadTierOf(sp) > 0;
+}
+
+/**
+ * FITTING RULE (FEAT-1972079907 inc1): the MINIMUM road tier a building's
+ * connector should be, from its footprint (w×h), kind and throughput
+ * (jobs / residents / served / children / mw). Small footprint & low traffic →
+ * tier 1; large footprint, industry, mega-facility → higher. Pure + deterministic.
+ * ⚠ PLACEHOLDER-balance thresholds — Aaron's sign-off pending.
+ */
+export function fittingTier(sp: Spec): RoadTier {
+  const area = sp.w * sp.h;
+  // Throughput proxy — the largest traffic-driving stat the building carries.
+  const cap = Math.max(
+    sp.jobs ?? 0,
+    sp.residents ?? 0,
+    Math.round((sp.served ?? 0) / 1000),
+    sp.children ? Math.round(sp.children / 20) : 0,
+    sp.mw ?? 0
+  );
+  // Industry / mining generate freight → need heavier roads.
+  const heavy = sp.kind === 'industrial' || sp.kind === 'mine';
+  let score = area + cap * 0.05 + (heavy ? 6 : 0);
+  // Landmarks (airport, stadium, spaceport) are city arterials.
+  if (sp.kind === 'landmark') score += 8;
+  if (score >= 24) return 5;
+  if (score >= 14) return 4;
+  if (score >= 7) return 3;
+  if (score >= 3) return 2;
   return 1;
 }
 
@@ -561,14 +638,14 @@ export function isPlaceable(s: SimState, sp: Spec): boolean {
 }
 
 export const SPECS: Record<string, Spec> = {
-  m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99),
+  m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
   rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 0, 0, '#8a6d3b', 'network', 99),
   station_sanderling: P('station_sanderling', 'station', 'Sanderling Station', '', 1, 1, 0, 15, '#d0a83c', 'network', 99),
   station_ashford: P('station_ashford', 'station', 'Ashford International', 'HS1 international gateway · 60,000 served · x3 commuter weight', 4, 2, 80000, 220, '#e0559f', 'network', 5, { served: 60000 }),
   hs1: P('hs1', 'rail', 'HS1 High-Speed Line', '', 1, 1, 0, 0, '#c2477e', 'network', 99),
   pylon: P('pylon', 'pylon', 'HV Pylon', '', 1, 1, 0, 5, '#9aa4ae', 'network', 99),
 
-  road: P('road', 'road', 'Road', '', 1, 1, 40, 3, '#4a525c', 'network', 1),
+  road: P('road', 'road', 'Road', '', 1, 1, 40, 3, '#4a525c', 'network', 1, { roadTier: 1, capacity: 100 }),
 
   res_hut: P('res_hut', 'residential', 'Small Holding', '8 residents', 1, 1, 220, 1, '#4c9aff', 'zones', 1, { residents: 8 }),
   res_block: P('res_block', 'residential', 'Estate Block', '60 residents', 2, 2, 1600, 6, '#4c9aff', 'zones', 2, { residents: 60 }),
@@ -724,9 +801,12 @@ export const SPECS: Record<string, Spec> = {
   // ════════════════════════════════════════════════════════════════════════
 
   // ---- Network (roads / rail lines) ----
-  rd_avenue: PH('rd_avenue', 'road', 'Avenue', 'Planned — tree-lined urban avenue', 1, 1, '#4a525c', 'network', 3),
-  rd_dual: PH('rd_dual', 'road', 'Dual Carriageway', 'Planned — high-capacity dual road', 1, 1, '#3f4650', 'network', 5),
-  rd_aroad: PH('rd_aroad', 'road', 'A-Road', 'Planned — arterial trunk road', 1, 1, '#454c56', 'network', 4),
+  // FEAT-1972079907 inc1: rd_avenue/rd_aroad/rd_dual GRADUATE from placeholders to
+  // real placeable road tiers — real cost/upkeep + roadTier/capacity, placeholder
+  // flag removed. ⚠ PLACEHOLDER-balance cost/upkeep/capacity — Aaron's sign-off.
+  rd_avenue: P('rd_avenue', 'road', 'Avenue', 'Tree-lined urban avenue · tier 2', 1, 1, 90, 6, '#4a525c', 'network', 3, { roadTier: 2, capacity: 250 }),
+  rd_aroad: P('rd_aroad', 'road', 'A-Road', 'Arterial trunk road · tier 3', 1, 1, 180, 10, '#454c56', 'network', 4, { roadTier: 3, capacity: 500 }),
+  rd_dual: P('rd_dual', 'road', 'Dual Carriageway', 'High-capacity dual road · tier 4', 1, 1, 320, 16, '#3f4650', 'network', 5, { roadTier: 4, capacity: 1000 }),
   rail_branch: PH('rail_branch', 'rail', 'Branch Line', 'Planned — single-track branch railway', 1, 1, '#8a6d3b', 'network', 6),
 
   // ---- Transport ----
@@ -806,24 +886,29 @@ for (const [id, d] of Object.entries(DIMS)) {
 // the tree doubles as a preview of the level ladder. Every id here MUST exist
 // in SPECS and appear in exactly ONE family (BUG-385 class — enforced by
 // test/catalogue.test.mjs).
+//
+// FEAT-1972079877 roadmap placeholders are appended to the END of their existing
+// family's item list, so they render greyed-out "coming soon" beneath the real,
+// placeable types. Every placeholder appears in exactly ONE family (the same
+// BUG-385 uniqueness rule catalogue.test.mjs enforces for real specs).
 export const PALETTE: { title: string; items: string[] }[] = [
-  { title: 'Network', items: ['road'] },
-  { title: 'Transport', items: ['bus_stop', 'bus_depot', 'car_park', 'station_ashford', 'bus_station', 'tram_depot', 'ferry_pier', 'metro_station', 'grand_terminus'] },
-  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse'] },
-  { title: 'Retail', items: ['com_shop', 'com_retail', 'com_market', 'com_super', 'com_mall'] },
-  { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics'] },
-  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data'] },
-  { title: 'Mining', items: ['mine_quarry', 'mine_deep'] },
+  { title: 'Network', items: ['road', 'rd_avenue', 'rd_aroad', 'rd_dual', 'rail_branch'] },
+  { title: 'Transport', items: ['bus_stop', 'bus_depot', 'car_park', 'station_ashford', 'bus_station', 'tram_depot', 'ferry_pier', 'metro_station', 'grand_terminus', 'ev_charging_hub', 'trans_parkride', 'rail_freightyard', 'trans_interchange'] },
+  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse', 'res_estate'] },
+  { title: 'Retail', items: ['com_shop', 'com_retail', 'com_market', 'com_super', 'com_mall', 'com_discounter', 'com_hypermarket', 'com_darkstore'] },
+  { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics', 'farm_dairy', 'farm_abattoir', 'ind_estate', 'harbour_fishing', 'ind_parcelhub', 'ind_chemworks', 'ind_fulfilment', 'ind_refinery'] },
+  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data', 'off_businesspark'] },
+  { title: 'Mining', items: ['mine_quarry', 'mine_deep', 'mine_chalk', 'mine_clay', 'mine_coal'] },
   { title: 'Parks', items: ['park', 'park_playground', 'park_town', 'park_botanical', 'park_nature'] },
-  { title: 'Leisure', items: ['lei_leisure', 'lei_cinema', 'lei_theatre', 'lei_museum', 'lei_arena', 'lei_themepark'] },
-  { title: 'Power', items: ['pow_wind', 'pow_coal', 'pow_substation', 'pow_nuke', 'pow_solar', 'pow_windfarm', 'pow_ccgt', 'pow_offshore', 'pow_fusion'] },
-  { title: 'Water & Waste', items: ['wat_tower', 'wat_clean', 'wat_waste', 'wat_reservoir', 'wat_sewage_regional'] },
-  { title: 'Health', items: ['hea_clinic', 'hea_hospital', 'hea_ambulance', 'hea_eldercare', 'hea_teaching'] },
-  { title: 'Police & Justice', items: ['pol_station', 'civ_courthouse', 'pol_hq', 'civ_prison', 'civ_adx'] },
-  { title: 'Fire & Rescue', items: ['fire_post', 'fire_station', 'fire_hq'] },
+  { title: 'Leisure', items: ['lei_leisure', 'lei_cinema', 'lei_theatre', 'lei_museum', 'lei_arena', 'lei_themepark', 'lei_gym', 'lei_sportsground', 'lei_stables'] },
+  { title: 'Power', items: ['pow_wind', 'pow_coal', 'pow_substation', 'pow_nuke', 'pow_solar', 'pow_windfarm', 'pow_ccgt', 'pow_offshore', 'pow_fusion', 'pow_hvdc', 'pow_hydro', 'pow_reprocess'] },
+  { title: 'Water & Waste', items: ['wat_tower', 'wat_clean', 'wat_waste', 'wat_reservoir', 'wat_sewage_regional', 'waste_depot', 'waste_compost', 'waste_recycling', 'waste_landfill', 'waste_incinerator'] },
+  { title: 'Health', items: ['hea_clinic', 'hea_hospital', 'hea_ambulance', 'hea_eldercare', 'hea_teaching', 'death_cemetery', 'death_crematorium', 'air_heliport'] },
+  { title: 'Police & Justice', items: ['pol_station', 'civ_courthouse', 'pol_hq', 'civ_prison', 'civ_adx', 'air_police_helibase'] },
+  { title: 'Fire & Rescue', items: ['fire_post', 'fire_station', 'fire_hq', 'air_fire_helibase'] },
   { title: 'Education', items: ['edu_nursery', 'edu_primary', 'edu_city', 'col_sixth', 'uni', 'edu_tech'] },
   { title: 'Civic', items: ['civ_library', 'civ_townhall', 'civ_cityhall'] },
-  { title: 'Landmarks', items: ['land_stadium', 'land_airport', 'land_harbour', 'land_cathedral', 'land_eye', 'land_tunnel', 'land_space'] },
+  { title: 'Landmarks', items: ['land_stadium', 'land_airport', 'land_harbour', 'land_cathedral', 'land_eye', 'land_tunnel', 'land_space', 'land_ferryterminal', 'land_containerport', 'land_gigafactory', 'land_semifab', 'land_cern'] },
 ];
 
 export const PALETTE_FLAT: string[] = PALETTE.flatMap((g) => g.items);
