@@ -11,6 +11,7 @@
 
 import type { SimState } from './types.ts';
 import type { Journal, JournalEntry } from './journal.ts';
+import type { MapViewState } from './uistate.ts';
 import { reducer, initialState as getInitialState, nextSafeBuildingId } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import { emptyJournal } from './journal.ts';
@@ -29,6 +30,21 @@ export interface Savepoint {
   snapshot: SimState;
   /** Journal entries added since the snapshot (replay these to reach current state). */
   journalTail: JournalEntry[];
+  /**
+   * FEAT-1972079897 inc2 (build stamping, brief §4.3): the build/live version this
+   * savepoint was produced under, so boot can detect a cross-build change and offer
+   * a rebuild. Optional for backward tolerance — a legacy savepoint written before
+   * inc2 has no stamp, and `needsRebuild` treats an absent stamp as "cannot prove a
+   * rules change" (no prompt), preserving the pre-inc2 restore path exactly.
+   */
+  buildVersion?: string;
+  /**
+   * FEAT-1972079897 inc2 (camera restore, Aaron 2026-08-27): the UI camera at save
+   * time (zoom + focus), captured so a post-rebuild resume can re-home the view
+   * instead of jumping to the default. Envelope/UI state — never part of SimState,
+   * so genesis replay stays deterministic. Optional (absent on legacy savepoints).
+   */
+  camera?: MapViewState | null;
 }
 
 /**
@@ -212,13 +228,20 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
 export function createSavepoint(
   state: SimState,
   journalTail: JournalEntry[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  buildVersion?: string,
+  camera?: MapViewState | null
 ): Savepoint {
   return {
     savedAt: now.toISOString(),
     snapshotTick: state.tick,
     snapshot: state,
     journalTail, // Real tail: actions recorded since last snapshot
+    // inc2: stamp the build the save was produced under + the current camera.
+    // Both are optional; omitted fields simply don't serialize, so a legacy
+    // reader (and needsRebuild) sees `undefined` and keeps old behaviour.
+    ...(buildVersion ? { buildVersion } : {}),
+    ...(camera ? { camera } : {}),
   };
 }
 

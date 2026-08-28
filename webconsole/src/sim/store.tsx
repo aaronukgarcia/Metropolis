@@ -6,10 +6,43 @@ import type { Action } from './engine';
 import { getGlobalTickTracker, recordTickDuration } from './perfhud';
 import type { TickTrackerState } from './perfhud';
 import { recordAction, emptyJournal, persistJournal, loadJournal, journalTail, type Journal } from './journal';
-import { AUTOSAVE_INTERVAL_MS, persistSavepoint, createSavepoint, restoreFromSavepoint } from './replay';
+import {
+  AUTOSAVE_INTERVAL_MS,
+  persistSavepoint,
+  createSavepoint,
+  restoreFromSavepoint,
+  readAllSavepoints,
+  mostRecentSavepoint,
+} from './replay';
+import {
+  needsRebuild,
+  replayFromGenesisDefensive,
+  rebuildReport,
+  type RebuildReport,
+} from './genesisReplay';
 import { attemptWipe } from './captureBeforeWipe';
-import { versionRaw } from './version';
+import { versionRaw, versionBadgeLabel } from './version';
+import { getLiveVersion } from './liveVersionRef';
+import { currentMapUi, type MapViewState } from './uistate';
+import { persistStashedCamera } from './cameraStash';
+import { RebuildPrompt, type RebuildPhase } from '../components/RebuildPrompt';
 import { recordError, updateLastKnownState } from './backend';
+
+/**
+ * FEAT-1972079897 inc2: the build the RUNNING engine represents. Prefer the
+ * freshest live/badge version (BUG-424's liveVersionRef, set by useLiveVersion on
+ * each poll); before any poll it is null, so fall back to the build-time badge
+ * label baked into version.ts. Used both to STAMP a save and to COMPARE at boot,
+ * so the two sides are always measured the same way.
+ */
+function currentBuildVersion(): string {
+  return getLiveVersion() ?? versionBadgeLabel();
+}
+
+/** The camera the player is currently looking at, or null before the map mounts. */
+function currentCamera(): MapViewState | null {
+  return currentMapUi().view;
+}
 
 // Pure engine logic lives in engine.ts so it is unit-testable without JSX.
 // Re-exported here for backward compatibility with existing `'../sim/store'`
@@ -52,6 +85,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // SimProvider" (the whole app went blank), and also called useReducer/useState
   // after a conditional return.
   const [boot] = useState(() => {
+    // inc2 (brief §4.3-4.4): if a persisted save was produced under a DIFFERENT
+    // build, do NOT silently snapshot-restore — flag a pending rebuild decision so
+    // the player is offered Rebuild / Keep / Fresh. We still restore the OLD
+    // snapshot underneath so the app is usable behind the prompt; the choice then
+    // either replays on the new engine, keeps this, or starts fresh.
+    const most = mostRecentSavepoint(readAllSavepoints(window.localStorage));
+    const running = currentBuildVersion();
+    const crossBuild = !!most && needsRebuild(most.buildVersion, running);
+
     const restoreResult = restoreFromSavepoint(window.localStorage);
     if (restoreResult.success && restoreResult.state) {
       const loadedJournal = loadJournal(window.localStorage);
@@ -59,9 +101,12 @@ export function SimProvider({ children }: { children: ReactNode }) {
         state: restoreResult.state,
         journal: loadedJournal,
         saveIndex: loadedJournal.entries.length,
+        pendingRebuild: crossBuild
+          ? { savedVersion: most?.buildVersion ?? null, currentVersion: running, camera: most?.camera ?? null }
+          : null,
       };
     }
-    return { state: initialState(), journal: emptyJournal(), saveIndex: 0 };
+    return { state: initialState(), journal: emptyJournal(), saveIndex: 0, pendingRebuild: null };
   });
 
   const [state, dispatch] = useReducer(reducer, boot.state);
@@ -71,6 +116,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // GR#27 (BUG-420): surfaced when a Start Over / reset was ABORTED because the
   // mandatory pre-wipe debug capture failed. The wipe did not happen; state is intact.
   const [captureError, setCaptureError] = useState<string | null>(null);
+  // inc2: cross-build rebuild prompt state. `rebuildDecision` non-null means a
+  // save from a different build is awaiting the player's choice; `rebuildPhase`
+  // drives the modal (prompt → running → report); `rebuildReportState` carries
+  // the before/after metrics once a rebuild has run.
+  const [rebuildDecision, setRebuildDecision] = useState(boot.pendingRebuild);
+  const [rebuildPhase, setRebuildPhase] = useState<RebuildPhase>('prompt');
+  const [rebuildReportState, setRebuildReportState] = useState<RebuildReport | null>(null);
 
   // Wrap dispatch to:
   // 1. Record state-affecting actions in the journal (FEAT-1972079854: journal recording)
@@ -135,7 +187,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
       try {
         // Calculate journalTail: entries added since last savepoint.
         const tail = journalTail(journal, lastSaveIndex);
-        const savepoint = createSavepoint(state, tail);
+        // inc2: stamp the save with the running build + current camera so a later
+        // boot on a new build can detect the change and offer a rebuild.
+        const savepoint = createSavepoint(state, tail, new Date(), currentBuildVersion(), currentCamera());
         const success = persistSavepoint(window.localStorage, savepoint);
         setAutoSaveError(!success);
         if (success) {
@@ -163,6 +217,59 @@ export function SimProvider({ children }: { children: ReactNode }) {
     const id = setInterval(() => wrappedDispatch({ type: 'tick' }), SPEED_MS[state.speed]);
     return () => clearInterval(id);
   }, [state.speed, wrappedDispatch]);
+
+  // inc2 rebuild handlers (brief §4.4). The genesis replay is a pure, synchronous
+  // headless loop (sub-second), so it runs inline; the whole thing is wrapped so a
+  // hard crash is caught and recorded (GR#1) and never bricks the boot.
+  const onRebuild = () => {
+    if (!rebuildDecision) return;
+    setRebuildPhase('running');
+    try {
+      const result = replayFromGenesisDefensive(journal);
+      if (result.crashed) {
+        recordError(`Rebuild crashed during replay: ${result.crashError}. Kept the old snapshot.`, {
+          type: 'app',
+          action: 'rebuild',
+        });
+        setRebuildDecision(null); // fall back to the already-restored old snapshot
+        return;
+      }
+      // Report compares the OLD restored snapshot (current `state`) to the replay.
+      const report = rebuildReport(state, result.state, result.skipped);
+      setRebuildReportState(report);
+      // Persist the rebuilt city as a fresh savepoint stamped with the CURRENT
+      // build, and carry the camera across the reload, so resuming boots straight
+      // into the new-engine city with no re-prompt and no view jump.
+      const running = currentBuildVersion();
+      const rebuiltSave = createSavepoint(result.state, [], new Date(), running, rebuildDecision.camera ?? currentCamera());
+      persistSavepoint(window.localStorage, rebuiltSave);
+      persistStashedCamera(window.localStorage, rebuildDecision.camera ?? currentCamera());
+      setRebuildPhase('report');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Rebuild failed: ${msg}. Kept the old snapshot.`, { type: 'app', action: 'rebuild' });
+      setRebuildDecision(null);
+    }
+  };
+
+  const onKeep = () => {
+    // Keep the old snapshot already restored at boot (pre-inc2 behaviour). The next
+    // autosave re-stamps it with the current build, so it stops prompting.
+    setRebuildDecision(null);
+  };
+
+  const onFresh = () => {
+    // Discard: reset routes through the guarded capture-before-wipe path.
+    setRebuildDecision(null);
+    wrappedDispatch({ type: 'reset' });
+  };
+
+  const onResume = () => {
+    // The rebuilt city is already persisted + stamped current; reload boots into it
+    // on the new engine with matching versions (no re-prompt).
+    setRebuildDecision(null);
+    window.location.reload();
+  };
 
   const value = useMemo(() => ({ state, dispatch: wrappedDispatch }), [state, wrappedDispatch]);
   // Use autoSaveError for quiet indicator (available for UI to display if desired).
@@ -206,6 +313,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
         >
           ⚠ Start Over aborted — could not archive debug snapshot ({captureError}). Your city is intact.
         </div>
+      )}
+      {rebuildDecision && (
+        <RebuildPrompt
+          phase={rebuildPhase}
+          savedVersion={rebuildDecision.savedVersion}
+          currentVersion={rebuildDecision.currentVersion}
+          report={rebuildReportState}
+          onRebuild={onRebuild}
+          onKeep={onKeep}
+          onFresh={onFresh}
+          onResume={onResume}
+        />
       )}
       {children}
     </SimContext.Provider>
