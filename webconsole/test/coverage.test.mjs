@@ -107,6 +107,24 @@ test('coverage rows: need and cap share units — full provision yields coverage
   assert.ok(gp.need > 100, 'need must be in people, not clinic count (pop/800 would be 25)');
 });
 
+test('BUG-418: teaching hospital is hospital-class coverage (served 120000 → coverage 1)', () => {
+  const s = city(120000, { hea_teaching: 1 });
+  const hosp = coverageOfService(s, 'hosp');
+  assert.equal(hosp.need, 120000);
+  assert.equal(hosp.cap, 120000, 'hea_teaching served must count toward Hospital cap');
+  assert.equal(hosp.coverage, 1, 'only hea_teaching at pop 120000 must read hospital coverage 1, not 0');
+  assert.equal(coverageOfService(s, 'gp').cap, 0, 'teaching hospital must not inflate GP cap');
+});
+
+test('BUG-418: elder-care home does not increase GP or Hospital cap', () => {
+  const bare = city(20000, {});
+  const withHome = city(20000, { hea_eldercare: 1 });
+  assert.equal(coverageOfService(withHome, 'gp').cap, coverageOfService(bare, 'gp').cap);
+  assert.equal(coverageOfService(withHome, 'hosp').cap, coverageOfService(bare, 'hosp').cap);
+  assert.equal(coverageOfService(withHome, 'gp').coverage, coverageOfService(bare, 'gp').coverage);
+  assert.equal(coverageOfService(withHome, 'hosp').coverage, coverageOfService(bare, 'hosp').coverage);
+});
+
 test('zero population: coverage defined as 1, demand 0 (nothing required = covered)', () => {
   const s = city(0, {});
   for (const r of serviceCoverageOf(s)) {

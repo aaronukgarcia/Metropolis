@@ -783,7 +783,7 @@ export function utilisationOf(s: SimState, b: SimState['buildings'][number]): Ut
     case 'health': {
       // Aggregate health capacity from GP + hospital
       const gp = sumBy(s, (sp) => sp.id === 'hea_clinic', (sp) => sp.served ?? 0);
-      const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital', (sp) => sp.served ?? 0);
+      const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital' || sp.id === 'hea_teaching', (sp) => sp.served ?? 0);
       const cap = gp + hosp;
       if (cap <= 0) return null;
       return {
@@ -1694,7 +1694,7 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
   const primary = sumBy(s, (sp) => sp.stage === 'primary' || sp.stage === 'city', (sp) => sp.children ?? 0);
   const tertiary = sumBy(s, (sp) => sp.stage === 'tertiary', (sp) => sp.children ?? 0);
   const gp = sumBy(s, (sp) => sp.id === 'hea_clinic', (sp) => sp.served ?? 0);
-  const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital', (sp) => sp.served ?? 0);
+  const hosp = sumBy(s, (sp) => sp.id === 'hea_hospital' || sp.id === 'hea_teaching', (sp) => sp.served ?? 0);
   // BUG-399 spec-drift fix: count police coverage by KIND, not a hardcoded id.
   // Newer police buildings (e.g. pol_hq "Divisional HQ", served 60,000) pay
   // upkeep and are unambiguously police coverage in the same served-population
