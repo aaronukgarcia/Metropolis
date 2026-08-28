@@ -88,3 +88,11 @@ The permit gate itself: a data-sourced "large facility" size threshold; a `Requi
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-509** — Expansion re-engages permit gate at each data-sourced size threshold.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-510** — Large-facility size = data-sourced per-class size tier.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-511** — Permit gate = size gate layered on buildings.json unlock gate, not a new unlock field.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-27)
+
+### ASM-506 — feat.facilitypermits→engine.unlocks is BLOCKED-EDGE; XP/milestone routes are injected seams (amends AC-6/AC-7)
+
+code.json `feat.facilitypermits` outbound is **`engine.finance` only** (no `engine.unlocks`, and no `engine.build` call edge either — same-package with `engine.build`). `engine.unlocks` inbound consumers do not include this feature. AC-6/AC-7 cannot legally call `UnlocksAPI`.
+
+- **AC-6/AC-7 amendment (GR#25 BLOCKED-EDGE; FEAT-161 injected seam).** The experience-points and milestone routes read XP/DP/milestone state through an injected `UnlockEconomySource` (or equivalent) Go interface, never `import` of `engine/unlocks`. The purchase route (AC-5) stays a real `FinanceAPI` call. Check: `go doc ./internal/engine/build` shows the seam; `grep -rn "engine/unlocks\\|unlocks\\." internal/engine/build/permit*.go` (excluding `_test.go`) finds **no** unlocks import; a passing test satisfies the XP route via a fake seam and asserts no fourth permit-owned points map (`grep -rn "func Test.*[Xx]pRoute\\|func Test.*[Mm]ilestoneRoute\\|func Test.*[Uu]nlockSeam" internal/engine/build/*_test.go`). **Tripwire:** `node -e "const m=require('./code.json').modules.find(x=>x.key==='feat.facilitypermits'); process.exit(m.outbound.calls.some(c=>c.key==='engine.unlocks')?1:0)"` must exit **0**. A nonzero exit means the edge landed and AC-6/AC-7 MUST be rewritten to a real `UnlocksAPI` call. **False-pass:** a permit-local XP/tier store, or an unregistered `unlocks` import. **register-guid:** Architect adds `feat.facilitypermits`→`engine.unlocks` (master-plan amendment) before live-call prose.

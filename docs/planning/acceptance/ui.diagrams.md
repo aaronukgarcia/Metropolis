@@ -45,6 +45,7 @@ Three auto-laid-out block-text diagram engines — chain diagrams, network schem
 ### Documentation
 
 - **AC-11.** The package doc states module key `ui.diagrams`, cites UI-SPEC §2 and the §33/§50/§54 subject-matter sections, and documents the caller contract from AC-1 and AC-5 explicitly: this package receives topology, never fetches it, and always returns per-element source identifiers alongside layout, because a future caller reusing this package's constructor without wiring AC-5's hit-test map through is exactly how a diagram-embedded number would quietly become a drill-through dead end.
+- **AC-12 (ASM-543, FEAT-084 SF fold).** This package's registry codes sit in reserved range `U900-U949` (`MET-U900` dangling-edge, `MET-U901` coord-out-of-range, `MET-U905` copy-guard). `ui.alerts` owns `U950-U999` (lead split 2026-08-14). Check: `data/errors.json` `ranges.reserved["U900-U949"]` names `ui.diagrams` and `["U950-U999"]` names `ui.alerts`; `grep -n "MET-U900" internal/ui/diagrams/errors.go` matches `codeMissingNode`; `grep -n "MET-U950" internal/ui/diagrams/*.go` returns no matches. False-pass: a source-scan that only checks "some MET-U9xx exists" would still pass the original overlapping claim with chrome.
 
 ## Out of scope
 
@@ -57,6 +58,7 @@ Three auto-laid-out block-text diagram engines — chain diagrams, network schem
 
 - **For Bill (code.json gap, distinct from BUG-058's known two).** `ui.diagrams`' registered `DiagramAPI` inbound (code.json, `ui.diagrams.inbound`) has an empty `consumers` list even though `FEAT-014` and `FEAT-017` both declare `MOD-037` as a dependency (`node claude-bow.js show MOD-037` "Blocks" section) and both are cited in this package's own spec refs as the consumers driving AC-2/AC-4. This is the same shape as BUG-058 (a spec-mandated call path with no registered edge) but on the *inbound* consumer-list side rather than an outbound-call gap — worth folding into BUG-058's scope or opening as a linked follow-up, since it will recur for every module built ahead of its consumers under the pipelined cadence (v1.4). Not blocking this item's own build (the caller contract is fully specified in AC-1/AC-5 regardless of registry bookkeeping), but flagging so the registry drift doesn't compound sprint over sprint.
 - **Assumption logged separately below (ASM-xxx, see report).** The layered-graph-drawing algorithm's specific tie-break rule for AC-8 (e.g. stable-sort nodes by caller-supplied ID when ranks are equal) is an implementer default — UI-SPEC §2 names the technique ("layered graph drawing, small n") but not a concrete algorithm or tie-break policy, consistent with the AC-4/AC-9-style "implementer default, documented not hardcoded" precedent already established in `ui.keys.md`.
+- **ASM-543 (FEAT-084 SF fold).** AC-12: diagrams owns `U900-U949` (`MET-U900`/`U901`/`U905`); alerts owns `U950-U999`.
 - **ASM-279 (confirm-and-close).** diagrams layered tie-break = stable sort by caller ID.
 - **ASM-536 (confirm-and-close).** Equal-rank nodes ordered by SourceID.
 - **ASM-537 (confirm-and-close).** Cyclic chain flattens to one rank with left-side loops (Kahn detect).

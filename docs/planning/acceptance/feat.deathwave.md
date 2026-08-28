@@ -83,3 +83,33 @@ The death-queue smoothing mechanism (select from the existing Gompertz-Makeham h
 - **For Bill/Aaron — ASM-580 (budget vs funeral throughput).** FEAT-088's description says "funeral throughput gates the death rate", which could mean the smoothing budget should ultimately *be* the death-services throughput rather than an independent data parameter. This file treats them as separable (AC-11 injects the drain rate, AC-5 data-files the budget) and leaves the coupling to the FEAT-088 BA/Bill. Logged as ASM-580.
 - **For Bill/Aaron — ASM-581 (queued-citizen semantics).** Whether a selected-but-unrealised citizen still ages, consumes, and appears in aggregates while queued affects GR#3 (single source of truth) and `engine.invariant`'s people-conservation stock. AC-3 commits to "alive until realised, still ages, counts in population" as the conservative default; if Aaron wants the queued to be frozen/non-participating, AC-3 changes. Logged as ASM-581.
 - **For Bill (dependency risk, per the draft-ahead pattern).** This item depends on `engine.citizens` (MOD-018, `open`) and `engine.season` (MOD-027, `open`), and hands off to FEAT-088 (`open`). The concrete `SeasonAPI`/`MortalityDeath` shapes are assumed as they exist today (`mortality.go` verified); if they land differently, the owning BA must refresh AC-1/AC-7/AC-9's signatures at dispatch. Recommend stub-first build with Tester re-verification once both land.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-27)
+
+> Substantive AC amendments folded from BA-6 ASM disposition. Where an entry conflicts with earlier wording in this file, the entry is authoritative.
+
+### ASM-579 — weather-emergency source is SeasonAPI curves; disasters drought BLOCKED (amends AC-7)
+
+The emergency declaration consumes **registered** `feat.deathwave` → `engine.season` (`SeasonAPI` month-index curves). It does **not** consume `engine.citizens` → `engine.season` (that edge is still absent) and does **not** consume `feat.disasters` aquifer-drought (unregistered). `SeasonAPI` has no `IsWeatherEmergency`; this file does not invent one.
+
+Until Aaron picks otherwise, the junior derives the flag locally from existing curves vs data-file thresholds (placeholders, GR#15): winter from `HealthWaveModifier`, drought-shaped months from `WaterDemandMultiplier` — direction/shape only, no cutoff invented here. Aquifer-drought *events* stay `feat.disasters` (AC-4 there) and are out of scope.
+
+- **AC-7 amendment.** Check: `grep -rn "season\.\(SeasonAPI\|HealthWaveModifier\|WaterDemandMultiplier\)" internal/engine/citizens/*.go` (excluding `_test.go`) shows a real `engine.season` call; `grep -rn "engine/events\|feat.disasters\|disasters\." internal/engine/citizens/*.go` (excluding `_test.go`) finds **no** disasters import; a passing test raises the emergency flag for at least one winter-shaped month and one high-water-demand month and not for a mild month, with thresholds loaded from the budget/mortality data file (`grep -rn "func Test.*[Ww]eatherEmergency\|func Test.*[Ee]mergencyDeclaration" internal/engine/citizens/*_test.go`). **Tripwire (disasters BLOCKED):** `node -e "const m=require('./code.json').modules.find(x=>x.key==='feat.deathwave'); process.exit(m.outbound.calls.some(c=>c.key==='feat.disasters')?1:0)"` must exit **0**. **False-pass:** a 12-entry mortality-local calendar, or treating every nonzero `HealthWaveModifier` as emergency with no data threshold. **register-guid:** Architect adds `feat.deathwave` → `feat.disasters` before any aquifer-drought-event prose.
+
+**AARON-DECISION (does not pick a winner):** (a) local threshold vs existing `SeasonAPI` curves (the only graph-legal path today — default until ruled); (b) new `SeasonAPI.IsWeatherEmergency` on `engine.season`'s owning item; (c) consume `feat.disasters` aquifer-drought — **blocked** until the edge is registered. Cutoff magnitudes are balance placeholders, not this BA's numbers.
+
+### ASM-580 — smoothing budget and funeral drain are two inputs (amends AC-11)
+
+The monthly smoothing budget (AC-5, data-filed) and the funeral drain capacity (AC-11, injected) are **independent**. This package does not derive one from the other. Non-emergency realisation in a month is `min(budget, drainCapacity, queued)` — funeral throughput can gate how fast the queue empties without replacing the budget, and the budget can bind even when hearses have spare capacity.
+
+- **AC-11 amendment.** Check: a passing test holds budget fixed, varies injected drain, and asserts realised deaths follow `min(budget, drain, queued)`; a second test holds drain fixed and varies the data-file budget the same way (`grep -rn "func Test.*[Bb]udget.*[Dd]rain\|func Test.*[Mm]in.*[Tt]hroughput" internal/engine/citizens/*_test.go`); `grep -nE "[0-9]{2,}" internal/engine/citizens/*.go` (excluding `_test.go`) still finds no bare funeral/hearse-rate literal. **False-pass:** computing the budget from hearse count (or the drain from the budget) inside this package, so the two knobs are secretly one. FEAT-088 still owns hearse/one-body-per-trip (`feat.deathservices.md` AC-7) — that file is not edited here.
+
+**AARON-DECISION:** whether the two parameters should collapse to a single funeral-throughput budget. Default until ruled: two knobs, realisation is the min.
+
+### ASM-581 — queued citizens stay alive, age, and count (amends AC-3; ruled 2026-08-27)
+
+AC-3's conservative default is load-bearing: a selected-but-unrealised citizen remains in the living population until realisation — still ages, still contributes to this package's population aggregates, and is selected once. Queuing is delay, not a freeze or a silent cull (§14/§19). This file does not add an `engine.consumption` call (unregistered on `engine.citizens` outbound).
+
+- **AC-3 amendment.** Check: a passing test selects a citizen, advances at least one month before realisation, and asserts (a) the citizen is in the living set, (b) age advanced, (c) the citizen still contributes to a population aggregate, (d) death realises exactly once (`grep -rn "func Test.*[Qq]ueued.*[Aa]live\|func Test.*[Ss]ingleEntry" internal/engine/citizens/*_test.go`). **False-pass:** a `queued` flag that still removes the citizen from living aggregates (smooth graph, cliff underneath — the same trap AC-1 names).
+
+Aaron confirmed 2026-08-27: queued death-wave citizens stay alive, age, and count as ordinary residents until the budget realises them — no freeze, no drop-the-queue.

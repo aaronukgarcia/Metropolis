@@ -69,3 +69,15 @@ The commodity registry (the nine tradable commodities per §6's table plus gas, 
 - **Assumption flagged — ASM-191 (Market/logistics scope boundary).** MOD-020's description says imports consume "logistics capacity in tonnes/slots" but MOD-025 (`engine.logistics`, the module that would own the live capacity ledger and JIT queue) is a separate, currently-open, later item. I have drawn the boundary at: Market exposes a capacity-bounded *query* (AC-5) sourced from configured ceilings in its own data, while the live consumption/queueing of that capacity across a running simulation is `engine.logistics`'s job. This is a scope-drawing assumption, not a spec-stated boundary — if Bill wants Market to own the live capacity ledger itself (with `engine.logistics` only queuing against it), AC-5 and this item's Scope section need revision.
 - **For Bill.** This item is P0, dependency-free (`MOD-006`/`MOD-012` both `done`), and next in the S3 queue per its own BOW record — no blocking escalation to raise beyond the three assumptions above.
 - **CC confirm-and-close (batch 2, folded).** ASM-377: MOD-020 ruling2 — guarded all 3 pointer derefs (Price/ExportPrice/Availability) with MET-E605, not just Price.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-27)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF).
+
+### ASM-486 — nine-commodity registry is domestic-only (new AC-17)
+
+- **AC-17 (international board is not an extension of this registry).** This module's commodity registry remains exactly the nine domestic needs-commodities AC-2 names (water, power, gas, food-staples, food-fresh, fuel, construction materials, consumer goods, waste). Ores, metals, chemicals, and pharma products are **not** added here. The international/world-price board is `feat.commoditymarket`'s own surface; that feature already has a registered outbound edge to `MarketAPI` and consumes it for money representation and domestic input prices only. Check: AC-2's count-and-named-lookup test still asserts exactly nine; `grep -nE "copper|uranium|pharma|plastic" internal/engine/market/*.go` (excluding `_test.go` and spec-citing comments) finds no new commodity cases (`grep -rn "func Test.*[Nn]ineCommodit" internal/engine/market/*_test.go`). **False-pass:** appending ores to `CommodityType` and still grepping for "MarketAPI exists".
+
+### ASM-489 — static v1 price; no dynamic world market on MarketAPI (new AC-18)
+
+- **AC-18 (always-on floor/ceiling is not this module's dynamic market).** `Price` remains the static v1 data-driven value AC-4 already requires. A dynamic supply/demand world price is out of scope for `engine.market` (I.3; §16 shelved). This AC does not specify `feat.commoditymarket`'s `WorldPrice` implementation. Check: AC-4's identical-repeat `Price()` test still holds; `go doc ./internal/engine/market MarketAPI` shows no `DynamicPrice`/`WorldPrice` method on this interface. **False-pass:** a config flag named "dynamic" that does not change behaviour, or a world-price method added onto `MarketAPI` that would collapse the two surfaces AC-17 keeps apart.

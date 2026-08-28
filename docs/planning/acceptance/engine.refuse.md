@@ -79,6 +79,7 @@ Per-cell waste generation into typed bin stock; scheduled, auto-optimised, playe
 - **For Ben (dependency risk).** This item depends on `MOD-025` (engine.logistics) and `MOD-033` (engine.services), both `done` (2026-08-16) — no longer a dependency block. AC-4's reuse requirement (rounds ARE logistics movements, not a parallel type) remains the AC most exposed to `engine.logistics`'s concrete API shape; recommend the junior build against `engine.logistics`'s interface stub first, with the Tester re-verifying AC-4 once the real dependency lands, consistent with `engine.logistics.md`'s own escalation on the same pattern.
 - **Assumption logged — ASM-1024 (P2, directional balance data).** `data/refuse.json`'s full figure set — bin capacities, waste rates, stream mix, contamination penalty, vermin rates, incineration energy/airshed, compost ratio, funding threshold, and truck capacity/crews — are all directional placeholders pending the M2 balance pass (balance-number regime, GR#15); none are spec-stated magnitudes.
 - **ASM-1237 (assumption — balance-number placeholder).** The bi-weekly refuse collection cadence is a data-defined placeholder default (§25 names collection rounds with no cadence); the food-to-waste mass-conservation mapping must not bake in a cadence Aaron's balance pass owns.
+- **ASM-1113 (ESCALATE, content-less).** Title is empty "MOD-039"; identified as engine.refuse. Nothing to fold. Leave open for manual triage.
 
 ## Spec-fold amendments (FEAT-084 SF wave, 2026-08-18)
 
@@ -141,6 +142,16 @@ Snapshotting dependencies under RLock is a point-in-time snapshot: a concurrent 
 - **ASM-1020 (FEAT-084 CC fold).** engine.refuse claims MET-G1900-G1999 (codes G1900-G1908 registered in data/errors.json): G1500 crime / G1600 farming / G1700 rail / G1800 education were claimed by parallel sibling modules, so G1900-G1999 was the next free four-digit G block.
 
 - **ASM-1025 (FEAT-084 SF fold).** The section 17 consumption-coefficient-derived waste rate is expressed as data/refuse.json wasteRates per land use because engine.consumption is NOT a registered outbound of engine.refuse (GR#25 flag: engine.refuse -> engine.consumption edge unregistered in code.json); when that edge lands, the rate should be sourced from engine.consumption instead.
+
+### ASM-836 — residual news/invariant edges stay BLOCKED-EDGE; BUG-058 is not the tracker (amends AC-7/AC-12)
+
+BUG-058 is **closed**. Residual: `engine.refuse`→`engine.news` absent; `engine.refuse`→`engine.invariant` absent (AC-12 tripwire already exits 0). AC-7's "ticker names the street" is a `RefuseAPI` ticker-event value, not a news import.
+
+Check: `grep -rn "engine/news\\|engine/invariant" internal/engine/refuse/*.go` (excluding `_test.go`) finds **no** those imports while the tripwires hold. **Tripwire news:** `node -e "const m=require('./code.json').modules.find(x=>x.key==='engine.refuse'); process.exit(m.outbound.calls.some(c=>c.key==='engine.news')?1:0)"` must exit **0**. Invariant tripwire remains AC-12's. **False-pass:** a refuse-local "conserved stock checker" that never registers with `engine.invariant`. **register-guid:** declare collaborations on refuse before live-call prose. **ESCALATE:** mining blight/reclamation and dispatch→invariant are not edited here.
+
+### ASM-1113 — ESCALATE: content-less assumption (title "MOD-039", empty description)
+
+ASM-1113 is filed against `internal/engine/refuse/generate.go` / `engine.refuse` with title **MOD-039** and **empty body**. Nothing to fold into an AC. Identified as refuse (MOD-039) by code.json key and path only. Left for manual triage; this file's ACs are unchanged.
 
 - **ASM-1112 (FEAT-084 CC fold).** Duplicate site registration reuses ErrDisposalSiteUnavailable (MET-G1906, site-domain, carries the site field) over ErrInvalidOverride (round-domain). data/errors.json wording was not updated (file claim held elsewhere); the code stays registry-sourced and the errors.go doc comment carries the rationale. (Roster routed to data.errors; code home is engine.refuse — folded here.)
 

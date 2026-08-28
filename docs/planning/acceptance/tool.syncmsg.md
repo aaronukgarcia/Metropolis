@@ -11,10 +11,7 @@ in full before drafting this file. `dev-team-process.md` v1.9 "an acceptance cri
 must be able to fail." `tool.bowcli.md`'s AC-1/AC-2 (`--desc-file`/`--note-file` free-text
 input pattern, BUG-090) — cited below as the precedent this file extends to the new `message`
 command's body text, for the identical shell-injection reason.
-**`code.json`:** `--desc` (no module registered) — this file proposes a module key (see
-Escalations) but does not decide it; GR#20 registration is Bill's call at `/register-guid`
-time, mirroring `feat.helper.md`'s ASM-454 precedent for an item whose criteria filename
-doesn't resolve its own module-key question.
+**`code.json`:** key `tool.syncmsg` is **ABSENT** (verified 2026-08-27: `grep -n '"key": "tool.syncmsg"' code.json` returns no matches). This file's filename and ASM-472 proposed that key; the fold records registration status, it does not invent a replacement key. GR#20 registration remains Bill's `/register-guid` call.
 **Date:** 2026-08-12
 **Status:** active — pre-dispatch, written ahead of the sprint building it (BA pipelining,
 `CLAUDE.md` Dev-Team Process).
@@ -251,3 +248,11 @@ to match the project's own convention:
 - **ASM-472 (module key proposal, `tool.syncmsg`)** — mirroring `feat.helper.md`'s ASM-454
   pattern for an item with no existing `code.json` module to attach to; escalated to Bill for
   `/register-guid`, not decided unilaterally by this BA.
+
+- **AC-14 (ASM-472 — key exists as this file; `code.json` registration is ABSENT).** The
+  module key `tool.syncmsg` exists as this acceptance filename and as the proposed GR#20
+  key. `code.json` does **not** contain `"key": "tool.syncmsg"`. This fold records that
+  fact; it does not invent a replacement key. Check: `grep -n "\"key\": \"tool.syncmsg\"" code.json`
+  returns no matches; `Test-Path docs/planning/acceptance/tool.syncmsg.md` is true.
+  **False-pass:** grepping `syncmsg` in this markdown file would always pass. The check is
+  against `code.json`.

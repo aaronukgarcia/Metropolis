@@ -192,10 +192,75 @@ instead of starting from the code again.
   proving the disable cannot be self-granted from within the command it
   gates.
 
+### F. Documented-unhandled gaps and SSOT (FEAT-084 BA-5 fold)
+
+- **AC-18 (ASM-188 / ASM-230 — `git commit -C`/`-c` reuse flags: deny OR document-unhandled).**
+  The author/message REUSE flags (`git commit -C <rev>` / `git commit -c <rev>`,
+  copying another commit's author/message wholesale — **not** `-c user.email=`)
+  are **not** identity-checked today. The contract is either DENY when `<rev>`'s
+  author is unsanctioned, or keep the gap explicit via a named test that must
+  not be greened as "handles `-C`". Current code: **document-unhandled** (header
+  "WHAT IS DELIBERATELY NOT HANDLED"; ASM-230 carried ASM-188 forward). Check: a
+  passing test named `testCommitReuseFlagsDashCAndLittleCAreDocumentedUnhandled`
+  feeds `git commit -C HEAD` and `git commit -c HEAD` (HEAD author unsanctioned)
+  and asserts ALLOW with an assertion message citing ASM-188/ASM-230
+  "documented-unhandled — this ALLOW is not identity-checked". A future deny
+  that actually resolves `<rev>` via `git log -1 --format=%ae` flips this test
+  to DENY; renaming the test to imply coverage without that deny is a fail.
+  **False-pass:** `grep -n -- "-C" claude-author-guard.js` matching only the
+  header comment would also pass a build that silently treated `-C` as
+  `-c user.email=` (different flag; already AC-6).
+- **AC-19 (ASM-224 — cherry-pick/revert/am/merge check override-or-config, not the inherited author).**
+  For `cherry-pick`/`revert`/`am`/`merge`, the guard checks author/committer from
+  an explicit override (`--author`, `GIT_AUTHOR_*`, `-c user.email=`) else
+  config/env — it does **not** inspect the picked/patched commit's true author
+  (a PreToolUse text hook cannot read that without a side-effecting `git log`).
+  Check: a passing test named `testCherryPickInheritedAuthorIsNotResolvedFromRev`
+  asserts `git cherry-pick <rev>` with no override (config sanctioned, picked
+  commit unsanctioned) is ALLOW; a second passing test asserts
+  `git -c user.email=evil@x.com cherry-pick <rev>` (evil unsanctioned) is DENIED.
+  Both halves required. **False-pass:** only the override-deny test would also
+  pass a build that never engaged cherry-pick at all, or a build that resolved
+  the picked author and denied the first case while claiming "inherited is
+  checked".
+- **AC-20 (ASM-228 — alias body not re-parsed: document-unhandled).**
+  `resolveAlias()` reads only the alias target's leading word; a
+  `!git -c user.email=x commit` shell-wrapper alias body is not re-parsed.
+  Check: a passing test named `testAliasShellWrapperBodyIsDocumentedUnhandled`
+  with `alias.ci=!git -c user.email=unsanctioned@x.com commit` asserts
+  `git ci -m x` is NOT recognised as a `commit` verb (leading word `!git` is
+  not in `KNOWN_COMMIT_VERBS`) — documented-unhandled, not a pass of identity
+  checking. **False-pass:** grepping `resolveAlias` in the source would pass a
+  recursive `!`-strip parser that still missed nested `-c` overrides.
+- **AC-21 (ASM-363 — `findCommitInvocation` first known-commit verb wins: document-unhandled).**
+  `findCommitInvocation()` returns the FIRST invocation whose resolved verb is
+  in `KNOWN_COMMIT_VERBS` and stops. `git cherry-pick X; git commit -m "[CODE] x"`
+  in one command string is documented-unhandled for the later `commit`. Check: a
+  passing test named `testFindCommitInvocationStopsAtFirstKnownVerb` asserts the
+  function returns `verb=cherry-pick` for that string and does not surface the
+  later `commit`. **False-pass:** a test that only feeds a single-verb command
+  would pass a keep-scanning rewrite.
+- **AC-22 (ASM-360 confirm-and-close — tokenizer SSOT is this file's export).**
+  `KNOWN_COMMIT_VERBS`, `findCommitInvocation`, and the quote-aware tokenizer
+  are exported from `claude-author-guard.js` (`module.exports` when required).
+  The former local-`GIT_TOKEN_RE` copy in `claude-destructive-guard.js` was
+  replaced by `authorGuard.findCommitInvocation()` (round-4 rewrite); the
+  divergence ASM-360 named is closed by construction, not by a promise to keep
+  two regexes in sync. Check: `grep -n "findCommitInvocation," claude-author-guard.js`
+  matches the export block; `grep -n "authorGuard.findCommitInvocation(" claude-destructive-guard.js`
+  matches a live call; `grep -n "const GIT_TOKEN_RE" claude-destructive-guard.js`
+  is empty. A passing test named `testTokenizerRecognisesGitExeGitCmdAndFullPath`
+  asserts `git.exe commit`, `git.cmd commit`, and a full-path `...\\git.exe commit`
+  are recognised. **False-pass:** grepping the comment "There is no longer a
+  second GIT_TOKEN_RE" would pass even if a new `const GIT_TOKEN_RE` were
+  reintroduced — the binding check is the empty `const GIT_TOKEN_RE` grep plus
+  the live call.
+
 ## Out of scope (stated, not silently absent)
 
 - `git commit -C <commit>` / `-c <commit>` (author/message reuse flags) —
-  ASM-188, still unhandled, logged again in the guard's own header.
+  folded as AC-18 (documented-unhandled; ASM-188 / ASM-230). Do not claim the
+  guard already handles them.
 - Command substitution (`` `...` ``/`$(...)`) reaching a nested `git`
   invocation — not defended anywhere in the current parser; not previously
   logged as an ASM under this exact name, so logged fresh in this report.

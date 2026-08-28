@@ -78,3 +78,11 @@ Per-farm soil quality; regional BDI as a driver-decomposed, multi-factor overlay
 - **ASM-1249 (FEAT-084 CC fold).** SEC-120 regression tests hardcode spec-stable section-31 taxonomy names (wheat, dairy, poultry, milk, dairy-chain destination) while magnitudes (HeadPerCell) come from the loaded data file (GR#15) — matching TestFarmTypeTaxonomyFiveTypes precedent; a taxonomy rename in data/farmtypes.json would fail these tests spuriously, which is acceptable.
 
 - **ASM-1250 (FEAT-084 CC fold).** SEC-120 fix uses a deep-copy-on-return clone() (copy-returning accessor) rather than redesigning FarmTypeParams read-only, matching foundation.registry.List(); the mutable-struct-with-exported-fields contract stays because engine.farming regime/BDI surface will consume these sets. A consumer mutating a returned copy instead of the catalogue is the GR#3 misuse SEC-120 condemns.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-27)
+
+### ASM-836 — residual BDI consumer edges are BLOCKED-EDGE; BUG-058 is not the tracker (amends US-6 / Escalations)
+
+BUG-058 is **closed** (c36778b). Residual gaps are un-declared edges, not that bug. Farming inbound consumers remain `engine.refuse` only.
+
+- **Behaviour.** BDI is a queryable `FarmingAPI` output (AC-2/AC-3/AC-4). `engine.tourism` / `engine.attract` / `engine.wellbeing` must **not** be imported from this package to "push" BDI. Those modules consume BDI only after **they** register an outbound to `engine.farming`. Check: `grep -rn "engine/tourism\\|engine/attract\\|engine/wellbeing" internal/engine/farming/*.go` (excluding `_test.go`) finds **no** those imports as BDI push clients. **Tripwire (three, all must exit 0):** `node -e "const m=require('./code.json').modules.find(x=>x.key==='engine.tourism'); process.exit(m.outbound.calls.some(c=>c.key==='engine.farming')?1:0)"`; same for `engine.attract` and `engine.wellbeing`. **False-pass:** a farming-owned "tourism score" that duplicates MOD-057's portfolio. **register-guid:** Architect declares the three consumer-side collaborations before live-call prose. **ESCALATE:** `engine.mining.md` blight-source / refuse-reclamation edges and `engine.dispatch.md` invariant edge are not edited here (BA-3 / BA-1).

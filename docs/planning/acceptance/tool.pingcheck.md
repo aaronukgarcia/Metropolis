@@ -37,7 +37,16 @@ Like the other `tool.*` hook files, this shipped without a criteria file; the co
 
 ## C. Tests
 
-- **AC-14 (the gap — written RED today).** **No test file exists** for this hook (`claude-ping-check.test.js` is absent from the repo root, alongside every other `claude-*.test.js`). ASM-724 records this. Every AC below is a test *that a future test file must contain* and is therefore **RED by absence** today — not "not yet written", but "no check currently proves any of the contract above, so a regression would land silently." Do not mark this file's ACs as passing without a `claude-ping-check.test.js` landing that covers AC-15–AC-20.
+- **AC-14 (ASM-724, amended 2026-08-27 — test file exists; throttle/window suite still RED).**
+  `claude-ping-check.test.js` now exists and covers BUG-343 (wake-recovery banner on
+  stdout, fail-open exit 0 via `describeRenewFailure`). The original "no test file"
+  claim is stale. AC-15–AC-20 (fast path no-spawn, slow path write-before-renew,
+  window-id precedence, per-window throttle isolation) remain the contract and are
+  **RED until those named tests land** — BUG-343 does not replace them. Check:
+  `Test-Path claude-ping-check.test.js` is true; `grep -n "describeRenewFailure\|WAKE RECOVERY" claude-ping-check.test.js`
+  matches; `grep -n "fast path\|CHECK_INTERVAL_MS\|per-window throttle\|write-before-renew" claude-ping-check.test.js`
+  is empty today (the remaining gap). **False-pass:** "a test file exists" would pass
+  a file that only covers BUG-343.
 - **AC-15.** A passing test asserts the fast path: fresh throttle file → exit 0 **and** no subprocess spawn (the binding half of AC-4).
 - **AC-16.** A passing test asserts the slow path: stale throttle → timestamp written **and** `renew --auto` spawned with the correct argv and `env.CLAUDE_CODE_SESSION_ID` (AC-5/AC-6).
 - **AC-17.** A passing test asserts window-id precedence: payload `session_id` beats the env fallback, and the env fallback is used when the payload is invalid (AC-2).
@@ -52,6 +61,6 @@ Like the other `tool.*` hook files, this shipped without a criteria file; the co
 
 ## Escalations / Assumptions
 
-- **ASM-724 — no test file.** The single largest gap: this hook has survived without automated coverage. Flagged for Bill: either a `claude-ping-check.test.js` is commissioned (turns AC-14 green), or Bill rules that PostToolUse freshness hooks are exempt from test coverage and says so in `dev-team-process.md` (right now the process document doesn't carve that out — it just silently didn't happen here).
+- **ASM-724 — no test file (amended).** `claude-ping-check.test.js` now exists (BUG-343). Remaining gap is AC-15–AC-20 throttle/window isolation, still RED. Flagged for Bill: commission those named tests (turns the rest of section C green) or rule PostToolUse freshness hooks exempt beyond BUG-343.
 - **ASM-725 — "No Firestore hit" is a stale prix6-ism.** The header (`claude-ping-check.js:26`) says the fast path avoids "a Firestore hit", but Metropolis has no Firestore. The accurate reading is: the fast path is a single local throttle-file read with no subprocess and no MariaDB access; the slow path shells to `claude-sync.js`, which hits the `metro` MariaDB. No behaviour is wrong — the comment's *word* drifted. Flagged as a one-line header tidy-up, not a defect.
 - **ASM-723 — fail-open posture.** Recorded deliberately (see AC-12); a future Destructive round should attack "can this hook ever block a tool or storm the DB" rather than "can it be bypassed", because there is no gate here to bypass.

@@ -116,3 +116,11 @@ The invariant-checker framework (hard assert in dev / registry-logged error in r
 
 §14's invariant-checker bullet is line 261 (not 259) and §19's nothing-despawns item 3 is line 339 (not 337); both citations point at the section header or item 1 rather than the quoted content. Section numbers remain valid — re-verify line anchors after each master-plan regeneration, or prefer section-plus-heading anchors.
 
+### ASM-571 — RegisterTransfer is out of scope (new AC-19)
+
+- **AC-19 (cross-module transfer primitive is out of scope for the BUG-067 surface).** BUG-067 shipped within-module `RegisterStock` / `RegisterStockWithTerms` (ins/outs on one stock). A cross-module `RegisterTransfer` (e.g. refuse→farming shared term, tick-alignment) is **not** required by this file and is not described as a call this package makes. Check: `grep -n "RegisterTransfer" internal/engine/invariant/*.go` finds no exported cross-module transfer primitive; AC-5's goods tests remain synthetic single-stock scenarios (`grep -rn "func Test.*[Gg]oods" internal/engine/invariant/*_test.go`). **False-pass:** a test named `TestRegisterTransfer` that only registers within-module ins/outs.
+
+### ASM-306 — goods-stock owner unresolved (new AC-20)
+
+- **AC-20 (goods conservation consumer not chosen).** §14's people/money/goods triad is 2/3 wired (people via `engine.citizens`, money via `engine.finance`). The registered owner of the **goods** stock — `engine.market` vs `engine.logistics` vs both — is unresolved. This AC does **not** name either module as a caller of `engine.invariant` (neither is a registered inbound consumer today). Goods conservation (AC-5) stays the synthetic/framework proof until Architect registers an owner. **Tripwire (mechanical, BUG-100):** `node -e "const m=require('./code.json').modules.find(x=>x.key==='engine.invariant'); const c=(m.inbound.consumers||[]).map(x=>x.key); process.exit((c.includes('engine.market')||c.includes('engine.logistics'))?1:0)"` must exit **0** (neither consumer registered). A nonzero exit means an owner landed and AC-5 must be re-armed against that module's real stock. **False-pass:** treating AC-2's `GoodsInvariant` type existence as a registered goods consumer.
+

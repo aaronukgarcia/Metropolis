@@ -13,9 +13,7 @@ protocol" (2026-08-12, in force per `CLAUDE.md`'s Dev-Team Process): "the lead s
 commits in batches on a self-paced `/loop`... worker windows run their own `/loop 15m` so no
 session ever idles" — this item is what makes that standing configuration survive a session
 restart without a human re-typing `/loop` every time a window relaunches.
-**`code.json`:** `--desc` (no module registered) — this file proposes a module key (see
-Escalations), does not decide it, same posture as `tool.syncmsg.md`/`feat.helper.md`'s
-ASM-454 precedent.
+**`code.json`:** key `tool.looparm` is **ABSENT** (verified 2026-08-27: `grep -n '"key": "tool.looparm"' code.json` returns no matches). This file's filename and ASM-473 proposed that key; the fold records registration status, it does not invent a replacement key. GR#20 registration remains Bill's `/register-guid` call.
 **Date:** 2026-08-12
 **Status:** active — pre-dispatch, written ahead of the sprint building it.
 **Package under test:** `claude-sync.js` (new `loop-set`/`loop-clear`/`loop-show` commands,
@@ -254,3 +252,13 @@ why the exact number is not this BA's call.
   escalated to Bill for `/register-guid`, not decided unilaterally by this BA. The 72h staleness
   default (see Escalations) is flagged in the same item so a future reader does not mistake the
   proposed number for a settled design decision.
+
+- **AC-14 (ASM-473 — key exists as this file; `code.json` registration is ABSENT).** The
+  module key `tool.looparm` exists as this acceptance filename and as the proposed GR#20
+  key. `code.json` does **not** contain `"key": "tool.looparm"`. `LOOP_STALE_MS` default 72h
+  remains a placeholder (`METRO_LOOP_STALE_MS` override, AC-8), not a settled design
+  number. Check: `grep -n "\"key\": \"tool.looparm\"" code.json` returns no matches;
+  `Test-Path docs/planning/acceptance/tool.looparm.md` is true; `grep -n "72" claude-sync.js`
+  (or the `LOOP_STALE_MS` default expression) is the placeholder, not an Aaron-signed
+  constant. **False-pass:** grepping `looparm` in this markdown file would always pass.
+  The registration check is against `code.json`.

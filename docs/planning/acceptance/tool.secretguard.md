@@ -1029,5 +1029,33 @@ Logged via `node claude-bow.js add assumption`:
   `/`, not `-`/`_` — the chosen rule as specified does NOT exempt it, since
   its segments are separated by `/`, a character this rule does not treat
   as a boundary). Recommend Bill decide, once SEC-021 lands, whether to
-  re-scope BUG-029's remaining entries against the shipped heuristic rather
-  than assume they are automatically closed by it.
+   re-scope BUG-029's remaining entries against the shipped heuristic rather
+   than assume they are automatically closed by it.
+
+---
+
+# ASM-484 fold (BUG-189 camelCase entropy residual)
+
+**BOW code:** ASM-484 (P2, open) — filed on `claude-secret-checker.js` /
+`code.json:tool.secretguard`.
+**Date:** 2026-08-27 (BA-5 fold)
+
+- **AC-484 (ASM-484 — camelCase letters-only residual is documented, not claimed closed).**
+  BUG-189 closed the unconditional-skip gap (93.6pct evasion) down to ~15pct via
+  an unconditional reassembly entropy check with threshold **3.75**. That
+  threshold is empirically near its safe ceiling (`lineMatchesWithBoundary`
+  reassembles to 4.00 bits/char — raising it further false-positives real
+  identifiers). The residual ~15pct for letters-only adversarial camelCase
+  secrets is **materially worse** than SEC-021's accepted ~1/7000
+  deliberate-separator gap and is **accepted-and-documented**, not equivalent
+  to that gap. A second detection layer (dictionary-word-membership, character-
+  class diversity, or a different heuristic family) is **out of contract** until
+  Bill/Aaron commission it. Check: a passing test named
+  `testCamelCaseLettersOnlyResidualIsDocumentedNotClaimedClosed` stages (a) a
+  letters-only camelCase fixture in the known residual class and records the
+  verdict with an assertion message that a miss is the documented residual, not
+  a silent detector failure; (b) a mixed-class high-entropy secret (base64 /
+  `+/=`) that MUST still flag `high-entropy`. `grep -n "3.75" claude-secret-checker.js`
+  shows the reassembly threshold. **False-pass:** asserting only that
+  `looksHighEntropy` exists, or only running SEC-021's hyphenated-ID fixtures,
+  would pass a detector that dropped the 3.75 reassembly check.

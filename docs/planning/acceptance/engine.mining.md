@@ -64,6 +64,7 @@ Geology-gated extraction (six site types, prospecting-revealed via `engine.world
 - `engine.wellbeing`'s and land-value's own formula for converting a "heard"/"seen" input into a citizen-level mental-health/land-value delta — this item supplies the input via the already-registered `engine.mining`→`engine.wellbeing` outbound edge; the driver math itself belongs to `engine.wellbeing`.
 - `engine.refuse`'s own landfill lifecycle mechanics — this item only hands off to them once the reclamation-to-landfill-void edge exists (AC-9).
 - Exact extraction rates, dBA-falloff curve shape, and subsidence-radius magnitude — balance data pending M2 tuning (ASM-316, ASM-317).
+- FEAT-048 expansion (ASM-835 / AC-17): deposit+shuffle (FEAT-049), survey (FEAT-050), extraction ladder (FEAT-051), mine types (FEAT-103). MOD-046 does not own those ACs.
 
 ## Escalations
 
@@ -81,3 +82,11 @@ Geology-gated extraction (six site types, prospecting-revealed via `engine.world
 ## Assumptions logged (FEAT-084 CC folds)
 
 - **ASM-1441** — MOD-046's ACs exercise only `engine.world` (CellAt/PocketGeology/IsProspected); the build/wellbeing/market/finance outbound edges are NOT consumed in this build (no `Set*` wiring, no imports). Wiring them now would be dead imports with no test exercising them; the `Set*` seams land when FEAT-051 owns the extraction ladder's market/finance/build posting. If a Tester/Bill expects the four edges consumed now, the fix is adding ACs that require them — not wiring here.
+
+### ASM-547 — E950–E999 reservation (new AC-16)
+
+- **AC-16 (error-range claim).** `engine.mining`'s registry-sourced errors occupy reserved range **E950–E999**; `feat.skeleton` is narrowed to **E900–E949** (skeleton ships MET-E900). This is the claimed allocation; reallocation is Bill/Aaron's if wrong. Check: `data/errors.json` `ranges.reserved` maps `E950-E999` to engine.mining and `E900-E949` to feat.skeleton; `grep -n "MET-E95" data/errors.json` finds mining codes in-range. **False-pass:** finding MET-E900 alone, or a comment that claims the range without the reserved-table keys.
+
+### ASM-835 — FEAT-048 expansion is delegated (new AC-17)
+
+- **AC-17 (MOD-046 remains blight/extraction baseline; expansion lives on feature items).** This file's AC set remains the shared blight/extraction baseline (six site types, blight model, reclamation, closure). FEAT-048 expansion is delegated: deposit+shuffle → FEAT-049, survey → FEAT-050, extraction ladder → FEAT-051, mine types → FEAT-103. This file does not add ACs that require ore/hydrocarbon market posting or decommission-liability posting (see ASM-1441). Check: Out-of-scope (below) lists those four feature pointers; no AC in this file greps `market.Price` or decommission accrual as a MOD-046 requirement. **False-pass:** reading MOD-046's BOW description (which names the expansion) as if this file's AC set already covered it.

@@ -108,3 +108,31 @@ The four tiers, each as a backend behind an existing seam: a **Blob-backed `Stat
 
 ### ASM-922 — determinism wording kept in sync with cloud.gpu (confirms AC-8's cross-module obligation)
 Audit dedup check confirmed: `cloud.gpu` AC-6 and this file's AC-8 encode the **same bit-identical-to-CPU invariant** against `int.solver`, and both files carry near-identical operational-number-regime boilerplate. This is an intentional shared contract, and the wording is currently in sync (both require `bytes.Equal` against the CPU payload, both are auto-P0 under GR#21, both ban a "returns something" false-pass). The standing cross-module obligation in the Escalations section remains the enforcement mechanism: if `cloud.gpu`'s determinism wording changes, AC-8 must be re-synced so both cloud backends read one consistent contract against the same `int.solver` gate.
+
+### ASM-918 / ASM-919 / ASM-920 — GR#25 unregistered edges (BA-5 fold, 2026-08-27)
+
+These ACs record registration status. They do **not** authorise implementing the unregistered collaborations, and they do not invent keys.
+
+- **AC-17 (ASM-918, GR#25 — `cloud.azure` → `balance.harness` is unregistered).**
+  `code.json` `cloud.azure.outbound.calls` is exactly `int.solver` and `int.serializer`.
+  AC-6/AC-7 (Batch / SweepRunner) remain **blocked for dispatch** until an Architect
+  registers `balance.harness` on that list in the master plan and regenerates
+  `code.json`. This AC does not authorise implementing SweepRunner consumption.
+  Check: the `cloud.azure` outbound.calls block in `code.json` lists only those two
+  keys (`grep` the module entry; no `balance.harness` key under that `calls` array).
+  **False-pass:** grepping this AC file for `balance.harness` would always pass.
+
+- **AC-18 (ASM-919, GR#25 — `cloud.azure` → `cloud.netpolicy` is unregistered).**
+  `code.json` `cloud.azure.outbound.calls` has no `cloud.netpolicy` edge. AC-12
+  (consume netpolicy, don't re-implement) remains **blocked for dispatch** until an
+  Architect registers the edge, or Bill rules a minimal local policy behind the
+  shared interface (ES-2). This AC does not authorise a parallel retry stack.
+  Check: the same outbound.calls block does not contain `"key": "cloud.netpolicy"`.
+  **False-pass:** grepping AC-12.
+
+- **AC-19 (ASM-920, GR#25 — `cloud.netpolicy` inbound contract is null).**
+  `code.json` `cloud.netpolicy` inbound `name`/`format`/`pattern` are `null` and
+  `consumers` is empty (INT-004). There is nothing to import today. Register the
+  inbound contract before dispatch, or Bill rules a minimal local policy.
+  Check: `code.json` `cloud.netpolicy.inbound` has `"name": null`. **False-pass:**
+  "the module key exists" — the check is the null inbound fields, not key presence.

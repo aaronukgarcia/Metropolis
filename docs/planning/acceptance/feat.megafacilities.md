@@ -97,3 +97,23 @@ The three end-game mega-facility classes as new catalogue entries in `buildings.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-516** — Gate params in data/megafacilities.json; catalogue extends buildings.json in place.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-517** — Felixstowe-class port sits above container_terminal at end-game milestone (M11/M12).
 - **Confirm-and-close (batch 3, folded).** ASM-876: FEAT-055 re-keyed to THORP/CANDU only; the Aldermaston-class science/defence mega-facility is assumed §55 defence (MOD-067) territory rather than THORP/CANDU scope — already recorded in this file's Escalation on the FEAT-055 vs FEAT-097/098/099 re-keying overlap.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-27)
+
+### ASM-514 — permit/decommission are BLOCKED-EDGE; catalogue inheritance until registered (amends AC-8/AC-9)
+
+code.json `feat.megafacilities` outbound remains `engine.education` + `engine.freight` only. There is **no** `feat.megafacilities`→`feat.facilitypermits` or →`feat.decommission` (or `engine.unlocks`) call edge. AC-8/AC-9 stay inheritance-via-catalogue (buildings.json + FEAT-053/FEAT-054), not live calls.
+
+- **AC-8/AC-9 amendment (GR#25 BLOCKED-EDGE; injected seams).** A mega-facility build path must not `import` `feat.facilitypermits` or `feat.decommission`. Permit/decommission obligations, if exercised in tests, go through injected `PermitGate` / `DecommissionSink` seams (FEAT-161 pattern) until the Architect registers the edges. Check: `grep -rn "facilitypermits\\|decommission" internal/engine/mining/megafacility*.go` (excluding `_test.go`) shows no cross-package import of those features; `doc.go` states catalogue inheritance. **Tripwire:** `node -e "const m=require('./code.json').modules.find(x=>x.key==='feat.megafacilities'); process.exit(m.outbound.calls.some(c=>c.key==='feat.facilitypermits'||c.key==='feat.decommission')?1:0)"` must exit **0**. **False-pass:** a megafacilities-local permit boolean or liability ledger. **register-guid:** Architect registers the two edges before any "delegates to the feature surface" check can require a real call.
+
+### ASM-843 — feat.megafacilities owns the Heathrow catalogue row (amends AC-2)
+
+Aaron confirmed 2026-08-27: `feat.megafacilities` **owns** `heathrow_class_international_airport`. `feat.airport` inherits that row and must remain **byte-equivalent** in existing fields (AC-2 wins). There is **no JSON extension** of the Heathrow row.
+
+- **AC-2 amendment (ASM-843).** After FEAT-055 and FEAT-096 land, `data/buildings.json` `heathrow_class_international_airport` existing fields (`unlock`/`costRaw`/`blightClass`/name/id) are byte-equivalent to the pre-feature row. Airport mechanics live outside that row (e.g. `data/airport.json` keyed to the existing id) — this file does not add Heathrow fields. Check: a passing AC-2 preserved-entry test still covers `heathrow_class_international_airport` (`grep -rn "func Test.*[Mm]egaProject.*[Pp]reserved\|func Test.*[Nn]oReplace" internal/engine/mining/*_test.go`); `grep -n "heathrow_class_international_airport" data/buildings.json` resolves to exactly one entry. **False-pass:** rewriting the row's `unlock`/`costRaw` under an airport or megafacilities "extend", or adding `airport_heathrow` beside the existing id.
+
+### ASM-929 — feat.megafacilities owns spaceport/accelerator catalogue rows (amends AC-1/AC-2)
+
+Aaron confirmed 2026-08-27: `feat.megafacilities` **owns** `space_launch_complex` and `hadron_research_ring`. `feat.spaceport` / `feat.particleaccelerator` inherit; they must remain byte-equivalent. FEAT-055 is the parent. No JSON extension of those rows.
+
+- **AC-1/AC-2 amendment (ASM-929).** Existing fields on `space_launch_complex` and `hadron_research_ring` stay byte-equivalent. Child features do not dual-own or mutate those rows. Shared expert-workforce gate (AC-3/AC-4/AC-5) stays this file's. Check: AC-2's preserved-entry test covers both ids (`grep -rn "func Test.*[Mm]egaProject.*[Pp]reserved\|func Test.*[Nn]oReplace" internal/engine/mining/*_test.go`); `grep -n "space_launch_complex\|hadron_research_ring" data/buildings.json` each resolve once. **False-pass:** a child feature shipping `spaceport_spacex` / `cern_class` beside the owned row, or rewriting `unlock`/`costRaw` on the parent row.

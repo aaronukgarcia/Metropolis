@@ -70,11 +70,14 @@ BOW code: MOD-009
 - **AC-15 (the named real-world case — F12's error tail).** A fixture constructs an `errs.Entry` (`internal/foundation/errs/log.go`) with `Msg` set to a string carrying a raw ESC-led sequence (e.g. `"connection reset\x1b]0;pwned\x07"`, an OSC title-bar-spoofing shape — the concrete attack class named in the finding's own text), routes it through the real debug-screen error-tail render path (`renderErrorTail`/equivalent → `cursor.line` → `drawText` → `Buffer.Set`, not a hand-rolled stand-in), into a real `*core.Buffer`, and then scans **every** `Cell` the render touched (not just the position a human would eyeball) asserting no `Cell.Rune` fails `unicode.IsPrint()`. This is the end-to-end proof that the specific path named in SEC-011's opening sentence is closed, not merely that the underlying primitive (AC-13) works in isolation.
   - **False-pass warning:** asserting only that the rendered *string representation* (if the render path is ever refactored to build a string before drawing) contains no ESC byte is not equivalent to this check — the finding is specifically that bytes reach a `Cell` via `SetContent`, so the assertion must read back `Cell` values from the `Buffer`, the same object `Flush` reads from to call `tcell.Screen.SetContent`.
 
+- **AC-16 (ASM-530, FEAT-084 SF fold — negative contract).** This package does not export `Navigate`/`Focus`/`SwitchScreen` or a speed-control/pause API. Consumers that need those own their seams (`ui.dash.Navigator`, `chrome.Effects`). This AC does not invent a `ui.core` navigation API. Check: `grep -nE "func .*Navigate|func .*SwitchScreen|func .*Focus|type Navigator" internal/ui/core/*.go` (excluding `_test.go`) returns no matches. False-pass: a chrome/dash comment that mentions `core.Navigate` would satisfy a consumer-side string grep while this package still has no such symbol — the check is on `internal/ui/core/`.
+
 ## Out of scope
 
 - Individual widgets (sparklines, Braille charts, etc.) — `ui.widgets` (`MOD-010`), a separate item built on top of this core.
 - The key-grammar/leader-sequence input language — `MOD-011`, separate item; `ui.core` only needs to deliver translated input events, not interpret the grammar.
 - Any specific F-screen's content — `ui.screen.map`, `ui.screen.debug`, etc., separate items.
+- Navigation / screen-focus / speed-control APIs (`Navigate`/`Focus`/`SwitchScreen`/pause) — not this package's surface (ASM-530). Consumers own their seams: `ui.dash.Navigator` and `ui.alerts` `chrome.Effects` (registered `ui.alerts`→`ui.dash` / `ui.alerts`→`int.protocol` edges). This file does not invent a `ui.core` navigation API.
 
 ## Escalations
 
@@ -84,3 +87,4 @@ BOW code: MOD-009
 - Otherwise none at draft time. `status: draft-ahead` — refresh against `int.protocol`'s frozen v1 schema before dispatch.
 - **ASM-421 (confirm-and-close).** SEC-011 sanitiser replaces non-printable with U+FFFD (not strip) — preserves cell alignment.
 - **ASM-422 (confirm-and-close).** Sanitiser enforced in core.Buffer.Set (single choke point).
+- **ASM-530 (FEAT-084 SF fold).** AC-16: this package exports no navigation/speed-control API; consumers own `dash.Navigator` / `chrome.Effects`.

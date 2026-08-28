@@ -189,3 +189,19 @@ A data-driven instrument taxonomy layered on top of MOD-022's existing loan/cred
 - **For Bill.** AC-30's "warning cleared" requirement is this BA's own addition beyond what the FEAT-068 brief asked for verbatim — the brief asked for lead-time and anti-cosmetic-wiring checks specifically, not a no-stale-warning requirement. Added because a permanently-latching warning would otherwise trivially satisfy AC-29 without giving the player a real signal, which seemed load-bearing enough to include rather than leave as a gap for a later Destructive finding. Flagging in case Bill judges it out of this item's intended scope and wants it split into its own follow-up.
 
 - **ASM-768 (FEAT-057 fold).** Borrowing instruments extend engine.finance existing CreditRating and IsInsolvent mechanics inside the existing module at internal/engine/finance via FinanceAPI; no separate engine.borrowing module. mkey feat.borrowing already registered; consumers feat.facilitypermits and feat.decommission already consume FinanceAPI so no new inbound edges are needed.
+
+## Spec-fold amendments (FEAT-084 SF wave, 2026-08-27)
+
+> Substantive AC amendments folded from the FEAT-084 ASM disposition (class SF). FEAT-057 instrument ACs remain authoritative in `feat.borrowing.md`.
+
+### ASM-769 — BLOCKED-EDGE: engine.finance → foundation.data absent (new AC-33)
+
+- **AC-33 (GR#20/GR#25; BLOCKED-EDGE tripwire).** `data/borrowing_instruments.json` is the GR#15 home for FEAT-057 rate/term placeholders, but `engine.finance` has **no** registered outbound edge to `foundation.data`. This AC does **not** require a `foundation.data` import or loader call. Until Architect registers the edge (master-plan collaborations + regenerate), the loader is blocked. **Tripwire (mechanical, BUG-100):** `node -e "const m=require('./code.json').modules.find(x=>x.key==='engine.finance'); process.exit(m.outbound.calls.some(c=>c.key==='foundation.data')?1:0)"` must exit **0** (edge still absent). A nonzero exit means the edge landed and this AC MUST be rewritten to a real load check before the next commit touching borrowing load in `internal/engine/finance/`; Tester/CI treat a nonzero exit as a hard FAIL. Until then: `grep -n "foundation/data" internal/engine/finance/*.go` (excluding `_test.go`) finds no import; `doc.go` (or borrowing doc) states the block. **False-pass:** prose that says "loads via foundation.data" while the tripwire still exits 0; or a hand-rolled `os.ReadFile` of the JSON that bypasses the registered loader.
+
+### ASM-500 — decommission liability is a distinct provision account (new AC-34)
+
+- **AC-34 (ledger taxonomy; provision ≠ flow ≠ loan).** The double-entry ledger can carry a **provision/liability** account or `Category` distinct from income/expense flow categories (`CatOpex`, `CatSpend`, …) and distinct from the debt/loan pair (`AcctDebt` / `CatLoan` / `CatDebtPrincipal` / `CatDebtService`). A decommission-liability booking uses that provision account — it is not an opex expense and not a loan draw. No rate or £ amount is pinned (balance-number regime). This AC specifies taxonomy on `engine.finance`; it does not describe an unregistered `feat.decommission` call. Check: `go doc ./internal/engine/finance` shows a provision/liability account or category distinct from `AcctDebt`/`CatLoan`/`CatOpex`; a passing test posts a synthetic provision entry and asserts `LinesByCategory` for that provision key is non-empty while `CatOpex` and `CatLoan` are unchanged (`grep -rn "func Test.*[Pp]rovision\|func Test.*[Dd]ecomm.*[Aa]ccount" internal/engine/finance/*_test.go`). **False-pass:** booking the liability as `CatOpex` or as another `CatLoan` draw against `AcctDebt`.
+
+### ASM-413 / ASM-414 — pointer
+
+Collateral forfeiture (ASM-413) and revenue-share base configurability (ASM-414) fold into `feat.borrowing.md` AC-14 / AC-4. This file's superseded FEAT-057 section is not edited.

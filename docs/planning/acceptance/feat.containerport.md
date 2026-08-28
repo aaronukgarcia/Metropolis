@@ -103,3 +103,7 @@ The deep-sea container terminal as a tier above `container_terminal`: berths × 
 - **ASM-1029 (FEAT-084 SF fold).** feat.containerport claims MET-G2000-G2099 (MET-G2000 build-rejected, MET-G2001 unknown-tier, MET-G2002 data-invalid), registered in data/errors.json reserved + codes; G1600-G1699 was taken by sibling engine.farming and G1700-G1799 is engine.rail's planned block.
 
 - **ASM-1033 (FEAT-084 CC fold).** data/containerport.json carries cargo_port_small + container_terminal figures mirroring data/buildings.json's PT catalogue and data/freight.json's active port (documented in the file's meta.ladderNote), so the deep-sea tier can be asserted a genuine rung above container_terminal for the AC-2/AC-3 scale ordering.
+
+### ASM-1286 — Escalation pointing at SEC-160 (not an AC)
+
+**Escalation — separate security dispatch; this fold writes no AC that claims the void Wire* methods are fine.** SEC-160 class persists in `internal/engine/freight/containerport.go`: `WireRail`, `WirePermit`, and `WireDecommission` are void setters — `checkNotCopied` rejection is swallowed (`if err != nil { return }`) and then `c.mu.Lock()` runs on the copy's mutex; `Tiers()` returns `nil` on copy (SEC-136 swallow). Byte-copy + Wire* is silent dead-wiring or a permanent wedge, the same class SEC-160 closed on the refinery. Out of this BA fold; track against SEC-160.

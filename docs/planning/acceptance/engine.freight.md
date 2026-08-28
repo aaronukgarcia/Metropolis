@@ -93,3 +93,11 @@ The tonnes-conservation invariant is specified in three acceptance files — `en
 
 - **ASM-1277 (confirm-and-close).** The conservation total 75 = three 25t rail-road transfers, where 25t is `road.maxTonnesPerMovement` read from `data/freight.json` (GR#15), not a hardcoded guess.
 - **ASM-609 (confirm-and-close).** AC-4 stages register as firms through the freight-owned `FirmRegistrar` seam (`RegisterFirm` returns a `freight.Firm` snapshot) because `engine.firms` (MOD-058) is not yet built; wiring `FirmsAPI` is mechanical when it lands.
+
+### ASM-611 — AC-11 remains BLOCKED-EDGE (amends AC-11)
+
+AC-11's invariant-registration requirement stays blocked: code.json still has no `engine.freight`→`engine.invariant` outbound edge (re-verified 2026-08-27; BUG-058 is closed — this is now a collaborations-gate registration, not "pending BUG-058"). Local AC-10 identity remains the interim proof. This fold does **not** require `invariant.Register` in freight production code. **Tripwire (unchanged, BUG-100):** `node -e "const m=require('./code.json').modules.find(x=>x.key==='engine.freight'); process.exit(m.outbound.calls.some(c=>c.key==='engine.invariant')?1:0)"` must exit **0**. A nonzero exit means the edge landed and AC-11 MUST be rewritten to a real registration check. **False-pass:** `doc.go` quoting "tonnes conserved (invariant)" treated as registration complete while the tripwire still exits 0.
+
+### ASM-1286 — Escalation (SEC-160 class; not an AC)
+
+**Escalation — not an acceptance criterion.** SEC-160 class persists in `internal/engine/freight/containerport.go`: `WireRail` / `WirePermit` / `WireDecommission` are void; `checkNotCopied` errors are swallowed (`return` with no error surface) then `c.mu.Lock()`; `Tiers()` returns `nil` on copy (SEC-136 swallow). This fold does **not** claim those void methods are fine. Left for a separate security dispatch pointing at SEC-160. See `feat.containerport.md` Escalations.

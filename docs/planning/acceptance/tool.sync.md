@@ -48,7 +48,12 @@ Three constants define the TTL/reservation contract:
 
 ### D. BUG-238 — checkin must not silently reassign an active window
 
-- **AC-17 (fix target — no silent reassignment).** A checkin from a window that already holds an identity must **preserve or re-confirm that identity**, never silently reassign it to a different name because the requested name happens to be held by another live window. The current guard is `findMine`'s renew-of-self (AC-13), which only fires when `WINDOW_ID` is reliably present; a **manual** checkin that runs without the hook-supplied session id can resolve against the shared last-writer-wins identity file instead of the window's own DB permit, which is exactly the BUG-238 failure ("Bob's window, running as Bill all session, was silently reassigned to Bob"). **Expected FAIL against current committed code** (ASM-732).
+- **AC-17 (fix target — no silent reassignment).** A checkin from a window that already holds an identity must **preserve or re-confirm that identity**, never silently reassign it to a different name because the requested name happens to be held by another live window. The current guard is `findMine`'s renew-of-self (AC-13), which only fires when `WINDOW_ID` is reliably present; a **manual** checkin that runs without the hook-supplied session id can resolve against the shared last-writer-wins identity file instead of the window's own DB permit, which is exactly the BUG-238 failure ("Bob's window, running as Bill all session, was   silently reassigned to Bob"). **Expected FAIL against current committed code** (ASM-732).
+  Check: a passing test named `testCheckinDoesNotSilentlyReassignActiveWindow` (to be
+  written as part of the BUG-238 fix) asserts a window that already holds Bill, checking
+  in without `WINDOW_ID` while Bob is requested/held elsewhere, still prints `YOU ARE: Bill`.
+  **False-pass:** a Tester marking this AC PASS against current committed code is a false
+  pass of the BUG-238 fix — the AC is a fix target, not pass-today.
 - **AC-18 (fix target — identity is per-window, not a shared file).** The authority for which window holds which name is the `sync_permits` row keyed to that window's session id; the shared `.claude/.identity` file is a statusline fallback only and must never be the basis for a slot assignment or reassignment. **Expected FAIL against current committed code** (ASM-744).
 
 ### E. Fail posture (open vs closed)
@@ -65,7 +70,11 @@ Three constants define the TTL/reservation contract:
 ### G. Test coverage
 
 - **AC-24 (`claude-sync.test.js` runs green, isolated from the live DB).** `node --test claude-sync.test.js` passes; the suite runs against a scratch DB (`metro_test_syncmsg_<pid>`), never the real `metro` database, and snapshots/restores `.claude/.identity` around its synthetic acquires. Verify: run the suite; grep the file for `METRO_DB_TEST_NAME`/`DROP DATABASE`.
-- **AC-25 (coverage-gap note — the core state machine has no dedicated suite).** `claude-sync.test.js` is scoped to FEAT-069 (message delivery) and FEAT-070 (standing-loop) — its `checkin`/`renew --auto` calls are fixtures for those ACs, not a test of the tool.sync contract itself. There is currently **no** dedicated test exercising TTL expiry, `RESERVE` transition, `--force --human-ok` eviction, `checkout`, `gc`, or wake-recovery IDENTITY CHANGED directly. This is a documented gap, not a pass (ASM-734). Verify: grep `claude-sync.test.js` for `checkout|--force|human-ok|gc|RESERVE|slotState` → zero hits.
+- **AC-25 (coverage-gap note — the core state machine has no dedicated suite).** `claude-sync.test.js` is scoped to FEAT-069 (message delivery) and FEAT-070 (standing-loop) — its `checkin`/`renew --auto` calls are fixtures for those ACs, not a test of the tool.sync contract itself. There is currently **no** dedicated test exercising TTL expiry, `RESERVE` transition, `--force --human-ok` eviction, `checkout`, `gc`, or wake-recovery IDENTITY CHANGED directly.   This is a documented gap, not a pass (ASM-734). Verify: grep `claude-sync.test.js` for `checkout|--force|human-ok|gc|RESERVE|slotState` → zero hits.
+  Check (gap still open): those grep hits remain zero until a dedicated suite lands;
+  a Tester marking AC-1–AC-16 green solely because `claude-sync.test.js` exits 0 is a
+  **false pass** — that suite's `checkin`/`renew --auto` calls are FEAT-069/070 fixtures,
+  not TTL/`RESERVE`/`gc`/wake-recovery coverage.
 
 ## Out of scope
 
@@ -79,3 +88,8 @@ Three constants define the TTL/reservation contract:
 
 1. **BUG-238 fix scope.** AC-17 and AC-18 are written against the open BUG-238 and are expected to FAIL against current code. They are the acceptance surface for the next fix round, not a current pass gate — a Tester should mark them "FAIL (open BUG-238)" rather than bounce committed work. Confirm this framing before the next wave sweeps.
 2. **Coverage gap.** AC-25 records that the tool.sync core state machine has no dedicated test suite. Recommend a small `tool.sync`-scoped regression file (TTL/renewal-threshold/RESERVE/eviction/checkout/gc/wake-recovery) be queued, or this gap be accepted as known debt.
+
+## Confirm-and-close folds (FEAT-084 BA-5, 2026-08-27)
+
+- **ASM-732 (confirm-and-close as RED fix-target).** Folded into AC-17: no-silent-reassignment is the BUG-238 contract, expected FAIL against current code. Not pass-today.
+- **ASM-734 (confirm-and-close as coverage gap).** Folded into AC-25: core permit state machine (TTL, RESERVE, force-evict, checkout, gc, wake-recovery) has no dedicated suite. Needs tests commissioned.

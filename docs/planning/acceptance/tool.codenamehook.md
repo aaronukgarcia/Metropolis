@@ -4,8 +4,9 @@ BOW code: FEAT-046
 
 **BOW code:** FEAT-046
 **code.json:** `tool.codenameguard` (GUID `7ece8624-f4d5-4883-b359-f39ec5a86a1c`, already
-registered — verified via `grep -n "codenameguard" code.json`; unlike FEAT-045 there is
-no registry-key mismatch to escalate here).
+registered). FEAT-046's BOW Key field is `tool.codenamehook` — a key with **no**
+`code.json` entry (ASM-933). The parent citation matches `code.json`; the BOW key is
+an orphaned alias, not a second module. See AC-12.
 **Spec refs:** FEAT-046 (this item's own description, quoted throughout below); GR#22
 (Codename Discipline — the whole point of this item); GR#3 (Single Source of Truth — no
 duplication without validation); GR#15 (Validators Derive From Data — no hardcoded
@@ -283,6 +284,14 @@ it does not weaken the first one.
   present (reviewed by eye) stating this specific gap; **this is flagged as an
   Escalation below**, not resolved by adding message-body scanning unilaterally, since
   expanding scope is a call for the lead/Aaron, not a criteria decision.
+- **AC-12 (ASM-933 — FEAT-046 BOW key `tool.codenamehook` is an orphaned alias).**
+  FEAT-046's BOW Key field is `tool.codenamehook`; `code.json` holds `tool.codenameguard`
+  and does **not** hold `tool.codenamehook`. This file's parent citation is the
+  `code.json` key. The BOW key is an orphaned alias, not a second module — no new key
+  is invented here. Check: `node claude-bow.js show FEAT-046` Key field equals
+  `tool.codenamehook`; `grep -n "\"key\": \"tool.codenamehook\"" code.json` is empty;
+  `grep -n "\"key\": \"tool.codenameguard\"" code.json` matches. **False-pass:**
+  grepping `codename` in this file would always pass.
 
 ## Out of scope
 

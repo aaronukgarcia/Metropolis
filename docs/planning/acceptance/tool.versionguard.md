@@ -260,3 +260,14 @@ instead of starting from the code again.
   recorded on FEAT-106, not on the legacy key. Recommend Bill back-link the
   historical commits (`git log -- claude-version-guard.js`) onto FEAT-106 so
   the owning item is complete.
+
+- **AC-22 (ASM-932 — eight FEAT-1xx owning items carry zero git refs).**
+  FEAT-106, FEAT-119, FEAT-120, FEAT-121, FEAT-129, FEAT-130, FEAT-131, and
+  FEAT-132 were created 2026-08-15 via `code.json` regeneration and carry
+  **zero** git refs, because the committed code predates them (shipped under
+  FEAT-046 `tool.codenameguard`, BUG-088 `tool.secretguard`, and
+  `legacy.versionguard` FEAT-002). This file escalates FEAT-106 via Escalation
+  B; the other seven are the same GR#6/BOW-completeness gap. Check: for each of
+  those eight codes, `node claude-bow.js show <CODE>` has no `Git refs:` block
+  (or an empty one). **False-pass:** "the items exist in BOW" — the check is the
+  empty refs list, not item presence. Back-linking is Bill's, not this BA's.

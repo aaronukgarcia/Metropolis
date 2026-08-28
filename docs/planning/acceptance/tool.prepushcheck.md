@@ -166,7 +166,9 @@ security gate."
   returns "clean" on a git failure, must make a test red). Check:
   `node --test claude-pre-push-check.test.js` is green, and the test corpus
   includes an explicit mutant/negative case per `dev-team-process.md`'s "an AC's
-  check must be able to fail" rule. See ASM-735.
+  check must be able to fail" rule. See ASM-735. **False-pass:** `Test-Path claude-pre-push-check.test.js`
+  is currently false; a Tester marking AC-17 green without that file (or without a
+  throwaway-repo `functions/`-touching deny case) is a false pass.
 - **AC-18.** The tests exercise the hook via spawned subprocesses
   (`spawnSync(process.execPath, [scriptPath], { input: JSON.stringify(...) })`)
   feeding the stdin JSON the hook expects, matching the pattern already used by

@@ -179,3 +179,11 @@ Build-time OS Terrain 50 import and downsample to the 10m/cell start-tile grid (
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-429** — SEC-043 does not reproduce on current tree (assertion 5 already catches it); verify-only Tester pass.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-434** — Curve-pinning uses 2 control points (0.75/0.375) — minimum closing BUG-065's two counterexamples.
 - **Confirm-and-close (prior CC, FEAT-084 batch 2): ASM-438** — IsProspected/GeologyBaseline/OffMapConnections gained error return (mirrors core.Clock); no consumer exists yet.
+
+---
+
+# FEAT-084 fold — ASM-214 (AC-22 residual)
+
+Terrain 50 tiles + OGL `licence.txt` landed in `81f471c` (`data/terrain50/`). AC-13's OSTN15 re-verification remains the original AC-13 check. This section closes only the residual AC-22 hole: `data/georef.json` still ships `source.attribution` with a literal `[YEAR]` placeholder, while the vendored licence file names a concrete year.
+
+- **AC-33 (ASM-214; AC-22 residual — attribution year from the vendored licence, not a placeholder).** `data/georef.json`'s `source.attribution` carries the OGL Crown-copyright year copied from `data/terrain50/licence.txt` (currently `2026`), never the literal `[YEAR]` token AC-22 named as the defect. Check: `grep -n "Crown copyright" data/georef.json` matches a 4-digit year; `grep -n "\[YEAR\]" data/georef.json` returns no match on the `attribution` line; `grep -n "Crown copyright" data/terrain50/licence.txt` yields the **same** 4-digit year as `georef.json`. **What a lazy implementation looks like:** replacing `[YEAR]` with whatever calendar year the junior's clock shows, or with a hardcoded `2024`, without reading `licence.txt` — that satisfies "not `[YEAR]`" while still being the generic-web-placeholder AC-22 forbids. **False-pass warning:** AC-22's original check (`grep -n "Crown copyright" data/georef.json`) already matches the current `[YEAR]` line, so a Tester running only that grep would mark AC-22 done while the placeholder is still shipping — AC-33's "no `[YEAR]`" clause plus the licence-file year-equality check are what make the residual fail-closed.
