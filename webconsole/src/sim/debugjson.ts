@@ -147,8 +147,6 @@ export interface DebugJsonBuilding {
   x: number;
   y: number;
   builtTick: number | null;
-  /** FEAT-1972079891 inc1 (DD4): migration grace tick, null when none. */
-  graceTick: number | null;
   online: boolean;
   /** Density/level tier 1..3 for zone blocks, null for network/services. */
   tier: 1 | 2 | 3 | null;
@@ -476,7 +474,6 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       x: b.x,
       y: b.y,
       builtTick: b.builtTick ?? null,
-      graceTick: b.graceTick ?? null,
       online: sp ? isOnline(s, b) : false,
       tier: sp && sp.category === 'zones' ? densityTier(sp) : null,
       occ: occ == null ? null : round3(occ),

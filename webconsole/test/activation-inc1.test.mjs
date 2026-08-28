@@ -22,7 +22,6 @@ import {
   computeRoadConnectivity,
   computeFailedGates,
   onlineResidentsCapacity,
-  GRACE_TICKS,
 } from '../src/sim/data.ts';
 import { initialState, reducer, computeFlows } from '../src/sim/engine.ts';
 import { replayFromGenesis, stableStringify } from '../src/sim/genesisReplay.ts';
@@ -242,18 +241,18 @@ test('AC-14: an offline (road-disconnected) building contributes ZERO upkeep + c
   );
 });
 
-// ===================== (8) DD4 grace window =====================
+// ===================== (8) DD4 immediate re-evaluation (Aaron, 2026-08-28, Option C) =====================
 
-test('grace: a pre-existing disconnected building stays online within grace, then goes offline', () => {
-  // No roads at all → the house can never be road-connected; only grace keeps it up.
-  const house = { id: 10, spec: 'res_hut', x: 50, y: 50, builtTick: -1000, graceTick: GRACE_TICKS };
+test('DD4=C: loaded state re-evaluates disconnected buildings immediately (no grace)', () => {
+  // No roads at all → the house can never be road-connected. On load, it is
+  // evaluated immediately against the gates, not given a grace period.
+  const house = { id: 10, spec: 'res_hut', x: 50, y: 50, builtTick: -1000 };
 
-  const during = mk({ buildings: [house], tick: GRACE_TICKS - 1 });
-  assert.equal(isOnline(during, during.buildings[0]), true, 'within grace (tick < graceTick) → online');
+  // After loading a state with this disconnected house, it should be OFFLINE immediately.
+  const loaded = mk({ buildings: [house], tick: 0 });
+  assert.equal(isOnline(loaded, loaded.buildings[0]), false, 'loaded disconnected building is OFFLINE immediately');
 
-  const after = mk({ buildings: [house], tick: GRACE_TICKS });
-  assert.equal(isOnline(after, after.buildings[0]), false, 'grace expired (tick >= graceTick) → offline');
-  // And the WHY tooltip explains it once grace lapses.
-  const reasons = computeFailedGates(after, after.buildings[0]).map((g) => g.gate);
-  assert.deepEqual(reasons, ['road-adjacent'], 'post-grace reason is the road gate, not construction');
+  // The WHY tooltip explains why it failed.
+  const reasons = computeFailedGates(loaded, loaded.buildings[0]).map((g) => g.gate);
+  assert.deepEqual(reasons, ['road-adjacent'], 'reason is the road gate');
 });

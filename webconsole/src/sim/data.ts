@@ -353,11 +353,8 @@ export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean
   // network, so it is exempt. Gates are pure functions of SimState (GR#21): same
   // state → same online set; no Date/Math.random.
   //
-  // DD4 GRACE (migration rule): a building carrying `graceTick` keeps its prior
-  // online status while `s.tick < graceTick`. On save-load, pre-existing buildings
-  // are stamped with a graceTick (see applyActivationGrace / restoreFromSavepoint)
-  // so loading a legacy save does NOT instant-blackout unconnected buildings —
-  // they get GRACE_TICKS ticks to be connected before the gate bites.
+  // DD4 (Aaron, 2026-08-28, Option C): ALL buildings re-evaluate activation gates
+  // IMMEDIATELY on save-load and at all times. No grace period, no legacy exemption.
   //
   // BACKWARD TOLERANCE: the road gates only apply once `s.roadConnectivity` has
   // been computed (advance() computes it at the START of every tick and the
@@ -371,10 +368,8 @@ export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean
   // mass-blackout cliff. That per-building-vs-global design question is open; inc1
   // ships the road mechanic without the cliff. Do NOT add G4/G5/G6 here.
   if (sp && sp.category !== 'network' && s.roadConnectivity) {
-    if (b.graceTick == null || s.tick >= b.graceTick) {
-      if (!isRoadAdjacent(s, b)) return false;
-      if (!isRoadConnected(s, b)) return false;
-    }
+    if (!isRoadAdjacent(s, b)) return false;
+    if (!isRoadConnected(s, b)) return false;
   }
   return true;
 }
@@ -389,9 +384,6 @@ export function isOnline(s: SimState, b: SimState['buildings'][number]): boolean
 // build a Set on demand via connectedRoadTileSet() (memoised per state object).
 // ════════════════════════════════════════════════════════════════════════════
 
-/** Grace window (ticks) granted to pre-existing buildings on save-load (DD4
- *  Option A). PLACEHOLDER-balance (directional only, Aaron's pass). */
-export const GRACE_TICKS = 30;
 
 // Per-state memo of the drivable-road tile set, keyed on the buildings array
 // reference (immutable per tick), so isOnline's road gates stay ~O(footprint)
@@ -566,7 +558,6 @@ export function computeFailedGates(s: SimState, b: SimState['buildings'][number]
     return out; // still building: the road gates aren't meaningful yet.
   }
   if (sp.category === 'network' || !s.roadConnectivity) return out;
-  if (b.graceTick != null && s.tick < b.graceTick) return out; // within grace — gates skipped.
   if (!isRoadAdjacent(s, b)) {
     out.push({ gate: 'road-adjacent', reason: 'Not road-side — move adjacent to a road' });
   } else if (!isRoadConnected(s, b)) {
@@ -1597,9 +1588,8 @@ export function powerStats(s: SimState): { need: number; cap: number } {
   // gathered in ONE online-gated pass here: countByKind() cannot be reused for
   // the consumer term because it exposes only the Spec, not the building instance
   // isOnline() needs. Order-independent / pure (GR#21): same state → same
-  // need/cap; no Date/Math.random. The DD4 grace period is handled inside
-  // isOnline (a within-grace building reads online → still counts), so it needs
-  // no special-case here.
+  // need/cap; no Date/Math.random. DD4=C (Aaron, 2026-08-28): there is no grace
+  // period — isOnline evaluates gates immediately, so no special-case here.
   //
   // The population term stays UNGATED: s.population already reflects only
   // online-housed residents (onlineResidentsCapacity governs how many residents

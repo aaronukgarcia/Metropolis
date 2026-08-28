@@ -119,20 +119,28 @@ test('cap: a tier-5 saturated segment does not upgrade past tier 5', () => {
 test('deterministic: the same monitored scenario twice → byte-identical tiers + ledger', () => {
   // A sustained city: res_highrise keeps population near capacity, so the ind_heavy
   // monitor genuinely saturates and scales across the window (not a no-op run).
+  // DD4=C (Aaron, 2026-08-28): no grace period — the building must be connected to
+  // the road network to stay online. Road at (10,10) is connected to the map edge
+  // via (0,10) so the entire segment is part of the connected network.
   const scenario = () =>
     mk({
       buildings: [
+        // Connect the monitored road to the network edge via map-edge road at (0,10).
+        laneAt(0, 10),
+        laneAt(1, 10),
+        laneAt(2, 10),
+        laneAt(3, 10),
+        laneAt(4, 10),
+        laneAt(5, 10),
+        laneAt(6, 10),
+        laneAt(7, 10),
+        laneAt(8, 10),
+        laneAt(9, 10),
         laneAt(10, 10),
         { ...SOURCE },
-        // FEAT-1972079891 inc1: this population-driver highrise is intentionally
-        // road-disconnected here; without a grace window the new road-activation
-        // gate would take it OFFLINE (capacity→0→population decays→the lane no
-        // longer saturates twice), breaking this monitor scenario. As a
-        // pre-existing (builtTick<0) building it gets a DD4 migration grace that
-        // outlasts the 60-tick window, so it stays online exactly as a loaded
-        // legacy building would — keeping this test about traffic scaling, not
-        // road connectivity.
-        { id: 3, spec: 'res_highrise', x: 30, y: 30, builtTick: -1000, graceTick: 10 * TICKS_PER_YEAR },
+        // res_highrise positioned at (10,11), adjacent to the connected road at (10,10),
+        // so it stays online and maintains the population for this traffic-scaling test.
+        { id: 3, spec: 'res_highrise', x: 10, y: 11, builtTick: -1000 },
       ],
       roadMonitors: [{ x: 10, y: 10, source: 2, until: TICKS_PER_YEAR }],
       population: 500,

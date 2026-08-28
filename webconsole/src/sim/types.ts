@@ -29,15 +29,6 @@ export interface Building {
   y: number;
   /** tick placed; structure is under construction until tick - builtTick >= build time */
   builtTick?: number;
-  /**
-   * FEAT-1972079891 inc1 (DD4 Option A migration grace): tick until which the new
-   * building-activation ROAD gates are skipped for this building. Stamped on
-   * pre-existing buildings at save-load so a legacy save is not instant-blacked-out
-   * by the new road-connectivity requirement; the gates apply normally once
-   * `tick >= graceTick`. Absent on buildings placed after the feature (auto-connect
-   * wires those to the network immediately). Deterministic, serialisable.
-   */
-  graceTick?: number;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';

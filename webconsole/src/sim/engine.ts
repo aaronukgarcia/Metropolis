@@ -31,7 +31,6 @@ import {
   ROAD_TIER_SPECS,
   ROAD_TIER_CAPACITY,
   computeRoadConnectivity,
-  GRACE_TICKS,
   collectionCoverageOf,
   collectionOpexOf,
   landfillTippingOf,
@@ -1111,27 +1110,6 @@ export type Action =
   | { type: 'dismissNotice' }
   | { type: 'unlockAll' }
   | { type: 'reset' };
-
-/**
- * FEAT-1972079891 inc1 (DD4 Option A) — stamp a migration grace window on the
- * PRE-EXISTING, non-infrastructure buildings of a loaded state so the new road
- * gates do not instant-blackout a legacy save. Each such building that lacks a
- * graceTick gets `state.tick + graceTicks`; the road gates skip it until then.
- * Buildings already carrying a graceTick, infrastructure (network), and
- * still-unbuilt (no builtTick) buildings are left untouched. Pure/deterministic;
- * returns the same reference when nothing needed stamping.
- */
-export function applyActivationGrace(state: SimState, graceTicks: number = GRACE_TICKS): SimState {
-  let changed = false;
-  const buildings = state.buildings.map((b) => {
-    const sp = SPECS[b.spec];
-    if (!sp || sp.category === 'network') return b;
-    if (b.builtTick == null || b.graceTick != null) return b;
-    changed = true;
-    return { ...b, graceTick: state.tick + graceTicks };
-  });
-  return changed ? { ...state, buildings } : state;
-}
 
 // FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
 // to keep roadConnectivity consistent with buildings after every action.

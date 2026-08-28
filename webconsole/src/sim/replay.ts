@@ -12,7 +12,7 @@
 import type { SimState } from './types.ts';
 import type { Journal, JournalEntry } from './journal.ts';
 import type { MapViewState } from './uistate.ts';
-import { reducer, initialState as getInitialState, nextSafeBuildingId, applyActivationGrace } from './engine.ts';
+import { reducer, initialState as getInitialState, nextSafeBuildingId } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
 import { SPECS } from './data.ts';
 import { emptyJournal } from './journal.ts';
@@ -184,12 +184,6 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
     // This prevents collision when new buildings are placed after restore.
     // The saved nextId may be stale if journal replayed actions added buildings.
     state = { ...state, nextId: nextSafeBuildingId(state.buildings) };
-
-    // FEAT-1972079891 inc1 (DD4 Option A): stamp a migration grace window on
-    // pre-existing non-infrastructure buildings so loading a legacy save is not
-    // instant-blacked-out by the new road-connectivity gate. No-op for buildings
-    // already carrying a graceTick or placed post-feature (auto-connected).
-    state = applyActivationGrace(state);
 
     // Verify consistency BEFORE replay (snapshot should already be consistent).
     const beforeReport = runConsistencyChecks(state);
