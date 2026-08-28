@@ -1094,6 +1094,7 @@ export type Action =
   | { type: 'speed'; speed: SimState['speed'] }
   | { type: 'tool'; tool: Tool }
   | { type: 'place'; spec: string; x: number; y: number }
+  | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[] }
   | { type: 'bulldoze'; x: number; y: number }
   | { type: 'pickup'; id: number }
   | { type: 'relocate'; x: number; y: number }
@@ -1192,6 +1193,71 @@ function reduceCore(state: SimState, action: Action): SimState {
         pendingRewards: [...state.pendingRewards, ...rewards],
         lastRewardedLevel, // Mark as rewarded now (funds apply later)
         notice: rewards[rewards.length - 1].notice, // Show latest level's notice immediately for UX
+      };
+    }
+
+    case 'placeRoadPath': {
+      // FEAT-1972079910 inc1 (AC-3, AC-4): atomic all-or-nothing road path placement.
+      // Place all tiles in the path as a single atomic action. If funds cannot cover
+      // the total cost, place NOTHING and surface the deficit notice.
+      const sp = SPECS[action.spec];
+      if (!canEnterSim(sp)) return state;
+      if (!specUnlocked(state, sp)) return state;
+
+      // Calculate the total cost for all tiles in the path.
+      const totalCost = action.tiles.length * placementCost(sp);
+
+      // All-or-nothing: check affordability before placing anything.
+      if (totalCost > 0 && state.funds < totalCost) {
+        return { ...state, placeNotice: `Insufficient funds — ${fmtMoney(totalCost)} needed for road path` };
+      }
+
+      // Check bounds and occupancy for all tiles before placing any.
+      const occupied = occupiedSet(state);
+      for (const tile of action.tiles) {
+        if (tile.x < 0 || tile.y < 0 || tile.x >= MAP_W || tile.y >= MAP_H) {
+          return state; // Out of bounds
+        }
+        if (!fits(occupied, sp.w, sp.h, tile.x, tile.y)) {
+          return state; // Occupied
+        }
+      }
+
+      // All checks passed; place all tiles.
+      let placedState = { ...state, funds: state.funds - totalCost, placeNotice: null };
+      for (const tile of action.tiles) {
+        const placedBuilding = {
+          id: placedState.nextId,
+          spec: action.spec,
+          x: tile.x,
+          y: tile.y,
+          builtTick: state.tick,
+        };
+        placedState = {
+          ...placedState,
+          nextId: placedState.nextId + 1,
+          buildings: [...placedState.buildings, placedBuilding],
+        };
+      }
+
+      // Apply ledger event for the total cost.
+      placedState = { ...placedState, ...logEvent(state, `Laid ${action.tiles.length} road tiles`, -totalCost) };
+
+      // Grant XP: 4 per tile (matching 'place' action).
+      placedState = { ...placedState, xp: placedState.xp + action.tiles.length * 4 };
+
+      // Recompute level rewards if any.
+      const rewards = computeLevelRewards(placedState);
+      if (rewards.length === 0) return placedState;
+      let lastRewardedLevel = state.lastRewardedLevel;
+      for (const r of rewards) {
+        lastRewardedLevel = r.newLevel;
+      }
+      return {
+        ...placedState,
+        pendingRewards: [...state.pendingRewards, ...rewards],
+        lastRewardedLevel,
+        notice: rewards[rewards.length - 1].notice,
       };
     }
 

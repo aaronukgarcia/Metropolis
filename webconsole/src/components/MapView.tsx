@@ -27,6 +27,7 @@ import {
   isRoadSpec,
   computeFailedGates,
 } from '../sim/data';
+import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim, demandOf, specUnlocked, SPEED_MS } from '../sim/store';
 import { publishMapUi } from '../sim/uistate';
@@ -80,6 +81,14 @@ export function MapView() {
   // FEAT-1972079861: Help overlay toggle. UI-only, component-local state.
   const [helpOpen, setHelpOpen] = useState(false);
   const [cloneSelection, setCloneSelection] = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null);
+  // FEAT-1972079910 inc1: road tracker state. Tracks anchor point and current path
+  // during a road-placement drag. The preview renders the path; pointerup commits.
+  const [roadTracker, setRoadTracker] = useState<{
+    anchorX: number;
+    anchorY: number;
+    currentPath: Tile[];
+    totalCost: number;
+  } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const panRef = useRef<{ sx: number; sy: number; cx: number; cy: number; moved: boolean; btn: number } | null>(null);
@@ -516,7 +525,23 @@ export function MapView() {
       ctx.globalAlpha = 1;
     }
 
-    if (state.tool.mode === 'build' && state.tool.spec && hover && geom.s > 2) {
+    // FEAT-1972079910 inc1: road tracker preview. Display the path as ghost tiles
+    // during a drag with running cost total. Renders only when tracker is active.
+    if (roadTracker && state.tool.spec && geom.s > 2) {
+      const sp = SPECS[state.tool.spec];
+      if (sp) {
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = sp.color;
+        for (const tile of roadTracker.currentPath) {
+          const px = geom.ox + tile.x * geom.s;
+          const py = geom.oy + tile.y * geom.s;
+          ctx.fillRect(px + 0.5, py + 0.5, sp.w * geom.s - 1, sp.h * geom.s - 1);
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    if (state.tool.mode === 'build' && state.tool.spec && hover && geom.s > 2 && !roadTracker) {
       const sp = SPECS[state.tool.spec];
       if (sp) {
         const ax = Math.min(hover.x, MAP_W - sp.w);
@@ -555,7 +580,7 @@ export function MapView() {
       }
       ctx.globalAlpha = 1;
     }
-  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, geom, size, frame]);
+  }, [state.buildings, state.movingId, state.tool, state.funds, state.clipboard, state.tick, state.speed, state.roadConnectivity, selected, hover, showWater, showPower, showLines, showRefs, cloneSelection, roadTracker, geom, size, frame]);
 
   function tileFrom(clientX: number, clientY: number): { x: number; y: number } | null {
     const cv = canvasRef.current;
@@ -631,6 +656,11 @@ export function MapView() {
   }
 
   function cancelToSelect() {
+    // FEAT-1972079910: Cancel road tracker if active.
+    if (roadTracker) {
+      setRoadTracker(null);
+      return;
+    }
     if (state.movingId != null) {
       dispatch({ type: 'cancelMove' });
       return;
@@ -754,6 +784,25 @@ export function MapView() {
             e.currentTarget.setPointerCapture(e.pointerId);
             return;
           }
+          // FEAT-1972079910 inc1: road tracker activation. Anchor the start tile
+          // when placing a road-like spec.
+          if (state.tool.mode === 'build' && state.tool.spec && e.button === 0) {
+            const sp = SPECS[state.tool.spec];
+            if (sp && isRoadSpec(sp)) {
+              const t = tileFrom(e.clientX, e.clientY);
+              if (t) {
+                setRoadTracker({
+                  anchorX: t.x,
+                  anchorY: t.y,
+                  currentPath: [{ x: t.x, y: t.y }],
+                  totalCost: placementCost(sp),
+                });
+                e.currentTarget.setPointerCapture(e.pointerId);
+                return;
+              }
+            }
+          }
+          // Non-road build mode and other tool modes.
           if (state.tool.mode !== 'select' && state.tool.mode !== 'move' && e.button === 0) {
             paintRef.current = true;
             lastPaintRef.current = null;
@@ -769,6 +818,26 @@ export function MapView() {
         }}
         onPointerMove={(e) => {
           setHover(tileFrom(e.clientX, e.clientY));
+          // FEAT-1972079910 inc1: road tracker path update. Compute path from anchor
+          // to current cursor and display the preview.
+          if (roadTracker) {
+            const t = tileFrom(e.clientX, e.clientY);
+            if (t) {
+              const path = computePath(roadTracker.anchorX, roadTracker.anchorY, t.x, t.y);
+              const sp = SPECS[state.tool.spec!];
+              const cost = sp ? placementCost(sp) * path.length : 0;
+              setRoadTracker((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      currentPath: path,
+                      totalCost: cost,
+                    }
+                  : null
+              );
+            }
+            return;
+          }
           // FEAT-1972079853: Clone mode drag-select rectangle.
           if (cloneSelection && state.tool.mode === 'clone') {
             const t = tileFrom(e.clientX, e.clientY);
@@ -798,6 +867,19 @@ export function MapView() {
           }
         }}
         onPointerUp={(e) => {
+          // FEAT-1972079910 inc1: road tracker completion. Commit the full path
+          // as a single atomic action. Single-click (path length 1) still places one tile.
+          if (roadTracker && state.tool.spec) {
+            if (roadTracker.currentPath.length > 0) {
+              dispatch({
+                type: 'placeRoadPath',
+                spec: state.tool.spec,
+                tiles: roadTracker.currentPath,
+              });
+            }
+            setRoadTracker(null);
+            return;
+          }
           // FEAT-1972079853: Clone mode completion.
           if (cloneSelection && state.tool.mode === 'clone' && selectionAnchorRef.current) {
             const sel = cloneSelection;

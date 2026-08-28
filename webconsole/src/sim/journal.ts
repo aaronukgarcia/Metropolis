@@ -57,6 +57,8 @@ export function isStateAffecting(action: Action): boolean {
     // Placement and demolition — state-affecting.
     case 'place':
       return true;
+    case 'placeRoadPath':
+      return true;
     case 'bulldoze':
       return true;
 
