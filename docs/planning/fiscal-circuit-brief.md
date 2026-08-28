@@ -3,7 +3,7 @@
 **Promoted 2026-08-22 by Bev** from the Google Drive-only copy at `docs/design/bank.txt`.
 This is a **source brief**, not a dispatch to mint a second BoW. Live tracking: FEAT-225 (occupation matrix + M1 + LIBOR), FEAT-228 (this promotion), BUG-355 (the wiring-poor diagnosis is now a filed bug).
 
-Sister notes still on Drive only: `E:\GoogleDrive\Projects\Metropolis\pay\gemini-code-*.md` (occupation matrix, generosity slider). Do not let those rot off Drive — copy them here when FEAT-225 starts.
+Sister notes promoted 2026-08-28 (FEAT-228): `docs/planning/pay/gemini-code-*.md` (occupation matrix, generosity slider) — the Drive copies under `Snap-shot-backup-1-Metropolis\pay\` are now the stale ones.
 
 ---
 # Claude Code Brief â€” Metropolis Fiscal Engine: Deep Plan & Book of Work

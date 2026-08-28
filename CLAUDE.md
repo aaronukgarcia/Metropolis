@@ -14,7 +14,7 @@ metro
 ```
 
 This runs `metro.bat`, which:
-1. Sets `CLAUDE_IDENTITY=Bill` (preferred slot for the primary window)
+1. Sets `CLAUDE_IDENTITY=Bev` (lead slot on the main checkout)
 2. Changes to `E:\git\Metropolis` and starts `claude --add-dir "E:\AI\Memory\source"`
 
 Session coordination is fully self-contained: `claude-sync.js` is a MariaDB port of the Prix Six permit system, backed by this project's own `metro` database (`sync_permits` / `sync_activity` / `sync_file_claims` / `sync_window_map` tables). No Firebase, no shared state with Prix Six.
