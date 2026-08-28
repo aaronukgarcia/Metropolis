@@ -80,6 +80,34 @@ function ensureMountWindow() {
   }
 }
 
+// FEAT-1972079906 inc3 (FEAT-1972079864): the Waste RightDock panel. WasteTab is
+// pure JSX over wasteDisplayModel (a display-only reshaping of the landed waste
+// reads). This smoke test renders the REAL component + useSim hook inside the
+// real SimProvider and asserts it does not throw and leaks no NaN/Infinity — the
+// zero-waste / generation NUMERIC sensibility is unit-tested against
+// wasteDisplayModel in test/waste-panel-inc3.test.mjs. It always executes.
+test('WasteTab smoke: renders inside SimProvider without throwing and leaks no NaN', async () => {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimProvider } = await import('../src/sim/store.tsx');
+  const { WasteTab } = await import('../src/components/right/RightDock.tsx');
+
+  const html = renderToString(
+    React.default.createElement(SimProvider, {
+      children: React.default.createElement(WasteTab),
+    })
+  );
+  assert.equal(typeof html, 'string', 'renderToString must return a string');
+  assert.ok(html.length > 0, 'rendered HTML must be non-empty');
+  assert.ok(
+    !html.includes('useSim must be used inside SimProvider'),
+    'WasteTab must render inside the provider without a context error'
+  );
+  assert.ok(/Diversion rate/.test(html), 'the Waste panel content rendered');
+  assert.ok(!/NaN|Infinity/.test(html), 'no NaN/Infinity in the rendered panel');
+});
+
 test('BUG-421 RED-prove: useSim in the VersionUpgradeToast slot (outside SimProvider) throws', async () => {
   ensureMountWindow();
   const React = await import('react');

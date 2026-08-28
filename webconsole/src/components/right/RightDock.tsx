@@ -18,7 +18,8 @@ import {
 } from '../../sim/data';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
-import { fmtMoney, fmtMoneyEach, fmtNum, fmtPct } from '../../sim/utils';
+import { fmtMoney, fmtMoneyEach, fmtNum, fmtPct, formatPower } from '../../sim/utils';
+import { wasteDisplayModel } from './wasteModel';
 import { useBusy } from '../Busy';
 import { commitDebug, errorListModel, pendingCommits, recentErrors } from '../../sim/backend';
 import { debugActions } from '../../sim/debugactions';
@@ -32,6 +33,7 @@ const TABS = [
   { id: 'rates', label: 'Rates' },
   { id: 'units', label: 'Units' },
   { id: 'water', label: 'Water' },
+  { id: 'waste', label: 'Waste' },
   { id: 'lines', label: 'Lines' },
   { id: 'earnings', label: 'Earnings' },
   { id: 'milestones', label: 'Milestones' },
@@ -55,6 +57,7 @@ export function RightDock() {
       {tab === 'rates' && <RatesTab />}
       {tab === 'units' && <UnitsTab />}
       {tab === 'water' && <WaterTab />}
+      {tab === 'waste' && <WasteTab />}
       {tab === 'lines' && <LinesTab />}
       {tab === 'earnings' && <EarningsTab />}
       {tab === 'milestones' && <MilestonesTab />}
@@ -334,6 +337,118 @@ function WaterTab() {
         Clean plants draw from the aquifer via their abstraction pipe (cyan stub on the map);
         waste plants must discharge seaward (olive stub). Pipe capacity caps each plant's served
         population — upgrade when demand exceeds it.
+      </p>
+    </>
+  );
+}
+
+// FEAT-1972079906 inc3 (FEAT-1972079864): the waste/recycling rota read-out —
+// collection coverage, the processing mix + diversion %, and recovered power/
+// materials. Display-only: wasteDisplayModel is a pure reshaping of the LANDED
+// inc1/inc2 derived reads (wasteStatsOf / processingMixOf / efwPowerOf / revenue
+// fns) — nothing is stored in SimState and no policy controls (those need the
+// unbuilt policy framework, out of scope). Meters reuse the water/Lines d-bar
+// idiom and the BUG-425 surplus/shortfall colour split (over/uncollected → `neg`
+// danger, headroom/diversion → `pos` done). Formatters are the shared SSOT ones.
+export function WasteTab() {
+  const { state } = useSim();
+  const m = wasteDisplayModel(state);
+  const coveragePct = Math.round(m.coverage * 100);
+  const covCol = m.hasUncollected ? 'var(--danger)' : 'var(--done)';
+  const divPct = Math.round(m.diversionRate * 100);
+  const divCol = 'var(--done)';
+  return (
+    <>
+      <div className="tiles">
+        <div className={`tile ${m.hasUncollected ? 'neg' : 'pos'}`}>
+          <div className="n">{fmtNum(m.generated)}</div>
+          <div className="l">Generated t/tick</div>
+        </div>
+        <div className={`tile ${m.hasUncollected ? 'neg' : 'pos'}`}>
+          <div className="n">{fmtNum(m.capacity)}</div>
+          <div className="l">Collection cap</div>
+        </div>
+      </div>
+      <h4>Collection coverage</h4>
+      <div className="wb-row" title={
+        `${fmtNum(m.collected)} / ${fmtNum(m.generated)} t collected` +
+        ` — uncollected ${fmtNum(m.uncollected)} t${m.hasUncollected ? ' (LEFT ON THE STREET)' : ''}`
+      }>
+        <span className="d-label">Collected</span>
+        <div className="d-bar">
+          <span
+            className={`d-fill ${m.hasUncollected ? 'neg' : 'pos'}`}
+            style={{ left: 0, width: `${Math.max(0, Math.min(100, coveragePct))}%`, background: covCol }}
+          />
+        </div>
+        <span className="mono d-val" style={{ color: covCol }}>
+          {coveragePct}%
+        </span>
+      </div>
+      {m.hasUncollected ? (
+        <p className="hint warn-text">
+          {fmtNum(m.uncollected)} t/tick left uncollected — refuse accumulates and drives the
+          waste-health penalty. Build more Refuse Depots to raise coverage.
+        </p>
+      ) : (
+        <p className="hint">
+          All generated refuse is collected (capacity ≥ generation). Green = headroom; red = refuse
+          left on the street (capacity − generated &lt; 0).
+        </p>
+      )}
+      <h4>Diversion rate</h4>
+      <div className="wb-row" title={
+        `${fmtNum(m.diverted)} t diverted / ${fmtNum(m.collected)} t collected` +
+        ` — ${fmtNum(m.landfilled)} t to landfill`
+      }>
+        <span className="d-label">Recycled / recovered</span>
+        <div className="d-bar">
+          <span
+            className="d-fill pos"
+            style={{ left: 0, width: `${Math.max(0, Math.min(100, divPct))}%`, background: divCol }}
+          />
+        </div>
+        <span className="mono d-val" style={{ color: divCol }}>
+          {fmtPct(m.diversionRate, 0)}
+        </span>
+      </div>
+      <p className="hint">
+        Diversion % = tonnage kept out of landfill (EfW + recycling + compost) ÷ collected. The
+        total-recycling KPI — build MRF / compost / EfW capacity to drive it toward 100%.
+      </p>
+      <h4>Processing mix</h4>
+      <table className="table">
+        <thead>
+          <tr><th>Route</th><th>Tonnes/tick</th><th>Share</th></tr>
+        </thead>
+        <tbody>
+          {m.collected === 0 && (
+            <tr><td colSpan={3} className="muted">Nothing collected yet — no refuse to process.</td></tr>
+          )}
+          {m.collected > 0 && m.mixRows.map((r) => (
+            <tr key={r.key}>
+              <td className={r.isSink ? 'out' : 'in'}>{r.label}</td>
+              <td>{fmtNum(r.tonnes)}</td>
+              <td className="mono">{fmtPct(r.fraction, 0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <h4>Recovered</h4>
+      <div className="tiles">
+        <div className="tile">
+          <div className="n">{formatPower(m.efwPowerMw)}</div>
+          <div className="l">EfW power</div>
+        </div>
+        <div className="tile in">
+          <div className="n">{fmtMoney(m.materialRevenue)}</div>
+          <div className="l">Material revenue</div>
+        </div>
+      </div>
+      <p className="hint">
+        EfW power feeds the grid (surplus sells as Grid Export). Material revenue = recycling{' '}
+        {fmtMoney(m.recyclingRevenue)} + compost {fmtMoney(m.compostRevenue)} per tick. Balance
+        numbers are placeholder pending sign-off.
       </p>
     </>
   );
