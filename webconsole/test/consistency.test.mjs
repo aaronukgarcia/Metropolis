@@ -49,19 +49,24 @@ test('CONSERVATION: dev +10M then advance still PASSES (debugFunds re-baselines)
   assert.equal(check.ok, true, 'conservation passes after dev grant + advance');
 });
 
-test('CONSERVATION: Regional Grant appears in flows (tick % 30 === 0)', () => {
-  // initialState() starts at tick 1, so we need to reach tick 60 (1 + 59 advances)
+test('CONSERVATION: Regional Grant is a smoothed per-tick inflow (BUG-400)', () => {
+  // BUG-400: the grant is no longer a monthly +800 lump — it is smoothed into a
+  // per-tick inflow booked through computeFlows, so it is present EVERY tick (no
+  // spike) and conservation holds. (Was: asserted a single 800 lump at tick 60.)
   let s = initialState();
   for (let i = 0; i < 59; i++) {
     s = reducer(s, { type: 'tick' });
   }
-  // Now at tick 60
   assert.equal(s.tick, 60, 'reached tick 60');
-  // Check that lastFlows has Regional Grant
+  // Regional Grant present in flows (every tick now, not just the month boundary).
   const grantFlow = s.lastFlows.inflows.find((f) => f.label === 'Regional Grant');
-  assert.ok(grantFlow, 'Regional Grant appears in flows at tick 60');
-  assert.equal(grantFlow.value, 800, 'grant amount is 800');
-  // And conservation still passes
+  assert.ok(grantFlow, 'Regional Grant appears in flows');
+  // Smoothed per-tick value is 800/30 -> integer 26 or 27, never the 800 lump.
+  assert.ok(
+    grantFlow.value === 26 || grantFlow.value === 27,
+    `smoothed grant is 26 or 27, got ${grantFlow.value}`,
+  );
+  // And conservation still passes.
   const report = runConsistencyChecks(s);
   const check = report.checks.find((c) => c.id === 'conservation.funds-vs-flows');
   assert.equal(check.ok, true, 'conservation passes with grant in flows');

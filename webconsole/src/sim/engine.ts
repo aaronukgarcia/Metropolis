@@ -237,6 +237,39 @@ export function specUnlocked(s: SimState, sp: Spec): boolean {
 // UPKEEP_BUCKET moved to fiscal.ts (BUG-422 SSOT) so the consistency checker can
 // recompute per-bucket upkeep under the same labels the engine records.
 
+/**
+ * Regional Grant — a fixed monthly regional stipend. PLACEHOLDER under the
+ * balance-number regime (directional only, pending Aaron's row-by-row pass).
+ */
+export const REGIONAL_GRANT_PER_MONTH = 800;
+
+/**
+ * BUG-400 FIX — the Regional Grant is SMOOTHED across the month into a per-tick
+ * inflow booked through computeFlows (see below), NOT a lump sum dropped on the
+ * single tick the month rolls over. Two reasons:
+ *   1. No 1000x spike — incomePerTick / margin / the fiscal trend read
+ *      Σ(lastFlows.inflows); a monthly lump made income jump on one tick and
+ *      distorted the per-tick view (Bro: +1.4M spike in a large economy). A
+ *      smoothed inflow keeps the per-tick income flat.
+ *   2. No side channel / no ledger eviction — the grant is now a normal named
+ *      inflow visible to Flow / Earnings / history.income (so history reconciles
+ *      with funds), and it no longer prepends a recurring "Regional Grant" row
+ *      into the 200-cap ledger every 30 ticks, which used to evict real player
+ *      events (build / loan / demolish).
+ *
+ * The floor-difference distribution pays an integer (26 or 27 for 800/30) each
+ * tick that sums to EXACTLY REGIONAL_GRANT_PER_MONTH per 30-tick month
+ * (telescoping over a full phase cycle), so funds stay integer and conservation
+ * is exact. Tick-driven and deterministic (GR#21) — no Date/Math.random.
+ */
+export function regionalGrantPerTick(tick: number): number {
+  const g = REGIONAL_GRANT_PER_MONTH;
+  const tpm = TICKS_PER_MONTH;
+  // Phase within the month, normalised so negative ticks are still 0..tpm-1.
+  const phase = ((Math.trunc(tick) % tpm) + tpm) % tpm;
+  return Math.floor((g * (phase + 1)) / tpm) - Math.floor((g * phase) / tpm);
+}
+
 export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: FlowItem[] } {
   const c = countByKind(s.buildings);
   const t = s.taxRates;
@@ -244,6 +277,9 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     { label: 'Council Tax', value: councilTaxPerTick(s.population, t.residential) },
     { label: 'Business Tax', value: businessTaxPerTick(c.commercial, t.commercial) },
     { label: 'Freight Tax', value: Math.round(c.industrial * t.industrial * 0.55) },
+    // BUG-400: Regional Grant is a proper, smoothed per-tick inflow booked through
+    // the SAME flows path as everything else (no side channel, no ledger eviction).
+    { label: 'Regional Grant', value: regionalGrantPerTick(s.tick) },
   ];
   // BUG-404 FIX: removed the duplicate tourismDrive Tourism entry here.
   // All tourism income (both policy and building-sourced) is calculated and added
@@ -610,11 +646,10 @@ function advance(s: SimState): SimState {
 
   let { inflows, outflows } = computeFlows(s);
 
-  // BUG-406 FIX: route regional grant through lastFlows for conservation tracking
-  // (was: funds += 800 without recording in flows, breaking conservation check).
-  if (tick % TICKS_PER_MONTH === 0) {
-    inflows = [...inflows, { label: 'Regional Grant', value: 800 }];
-  }
+  // BUG-400: the Regional Grant is no longer injected here as a monthly lump.
+  // computeFlows() now books it as a SMOOTHED per-tick inflow (regionalGrantPerTick),
+  // so it is already present in `inflows`, is visible to Flow/Earnings/history.income,
+  // reconciles with funds, and does not spike incomePerTick on the month boundary.
   // inc2: the auto-scale capital spend is an outflow so it counts for conservation.
   if (autoScaleCost > 0) {
     outflows = [...outflows, { label: 'Road Auto-Scale', value: autoScaleCost }];
@@ -634,10 +669,11 @@ function advance(s: SimState): SimState {
   let ledger: LedgerEntry[] = s.ledger;
   let nextLedger = s.nextLedgerId;
 
-  // Ledger entry for grant (mirrors the flow inflow for audit consistency)
-  if (tick % TICKS_PER_MONTH === 0) {
-    ledger = [{ id: nextLedger++, tick, label: 'Regional Grant', amount: 800 }, ...ledger].slice(0, LEDGER_CAP);
-  }
+  // BUG-400: the recurring monthly "Regional Grant" ledger row is GONE. It used to
+  // prepend a +800 event every 30 ticks into the 200-cap ledger, which over time
+  // evicted every real player event (build/loan/demolish). The grant is now fully
+  // visible in the flows/income views, so no per-tick event-log entry is needed and
+  // real events survive across arbitrarily many grant cycles.
   // Ledger entry for any auto-scale spend (mirrors the "Road Auto-Scale" outflow).
   if (autoScaleCost > 0) {
     ledger = [
