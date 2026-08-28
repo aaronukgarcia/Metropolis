@@ -34,10 +34,12 @@ const PLACEHOLDER_IDS = [
   'rail_branch',
   // Transport
   'trans_parkride', 'trans_interchange', 'rail_freightyard', 'ev_charging_hub',
-  // Estates
-  'res_estate', 'off_businesspark', 'ind_estate',
-  // Retail
-  'com_hypermarket', 'com_discounter', 'com_darkstore',
+  // Estates — FEAT-1972079900 inc1: res_estate/off_businesspark/ind_estate GRADUATED
+  // to real placeable estate-scale specs (residents/jobs + real cost/upkeep), so they
+  // are no longer placeholders.
+  // Retail — FEAT-1972079900 inc1: com_hypermarket GRADUATED to the real out-of-town
+  // retail estate.
+  'com_discounter', 'com_darkstore',
   // Industry & Farms
   'ind_chemworks', 'ind_refinery', 'ind_fulfilment', 'ind_parcelhub',
   'farm_dairy', 'farm_abattoir', 'harbour_fishing',
@@ -95,7 +97,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
 test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
   const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
   assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, 37, 'expected 37 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1; the 4 waste PROCESSING specs graduated in FEAT-1972079906 inc2)');
+  assert.equal(flagged.length, 33, 'expected 33 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1; the 4 waste PROCESSING specs graduated in FEAT-1972079906 inc2; the 4 estates res_estate/off_businesspark/ind_estate/com_hypermarket graduated in FEAT-1972079900 inc1)');
 });
 
 test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {
@@ -149,7 +151,7 @@ test('REDUCER: dispatching place for a placeholder with unlockedAll does NOT ent
   // Free empty tile away from the seeded map corner; unlockedAll=true so the ONLY
   // thing that can stop the placement is the placeholder guard itself.
   const s = { ...initialState(), unlockedAll: true };
-  for (const id of ['pow_hydro', 'res_estate', 'land_cern', 'rail_branch', 'ind_refinery']) {
+  for (const id of ['pow_hydro', 'ind_chemworks', 'land_cern', 'rail_branch', 'ind_refinery']) {
     const sp = SPECS[id];
     assert.equal(specUnlocked(s, sp), true, `precondition: ${id} passes the unlock gate under god-mode`);
     const after = reducer(s, { type: 'place', spec: id, x: 200, y: 120 });

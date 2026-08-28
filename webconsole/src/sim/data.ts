@@ -1074,12 +1074,34 @@ export const SPECS: Record<string, Spec> = {
   ev_charging_hub: PH('ev_charging_hub', 'transport', 'EV Charging Hub', 'Planned — rapid EV charging plaza', 1, 1, '#3d7ea6', 'services', 6),
 
   // ---- Housing / Offices / Industry estates ----
-  res_estate: PH('res_estate', 'residential', 'Housing Estate', 'Planned — master-planned housing estate', 3, 3, '#4c9aff', 'zones', 5),
-  off_businesspark: PH('off_businesspark', 'office', 'Business Park', 'Planned — landscaped out-of-town office park', 3, 3, '#43aa8b', 'zones', 7),
-  ind_estate: PH('ind_estate', 'industrial', 'Industrial Estate', 'Planned — mixed light-industrial estate', 3, 3, '#a371f7', 'zones', 6),
+  // FEAT-1972079900 inc1 — ESTATE-SCALE placeable specs (object density / LOD inc1).
+  // Each GRADUATES from a "coming soon" placeholder into a real, placeable object
+  // standing for a WHOLE estate: one big building carrying the AGGREGATE jobs /
+  // residents / upkeep / footprint of the ~N constituent buildings it represents
+  // (the placeable-tier reading of the brief — ICI-Wilton / out-of-town-retail /
+  // business-park / housing-estate scale). They flow through placement, road
+  // activation, economy and waste EXACTLY like any building — keyed off
+  // kind / category / jobs / residents — so NO sim LOGIC changed; they are pure DATA.
+  //   • Deliberately NO `mw`: power DRAW is count-based (powerStats counts one
+  //     industrial/office building), and `mw` on a NON-power spec would be summed
+  //     as grid GENERATION — a cross-system leak (the waste_depot lesson).
+  //   • Deliberately NO water `tag` / `served`: a housing estate must HOUSE
+  //     residents, never supply water capacity.
+  //   • The retail estate is com_hypermarket (an out-of-town superstore), graduated
+  //     below in the Retail group.
+  //   • Render-coarsening (auto-merge at zoom) + up-density variants are inc2 — NOT built here.
+  // ⚠ every footprint / job / resident / cost / upkeep figure is PLACEHOLDER-balance
+  // — directional only, anchored to the constituent specs, pending Aaron's row-by-row pass.
+  res_estate: P('res_estate', 'residential', 'Housing Estate', 'Master-planned housing estate · ≈ 12 low-rise blocks', 5, 5, 45000, 130, '#4c9aff', 'zones', 10, { residents: 1500 }),
+  off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000, 420, '#43aa8b', 'zones', 12, { jobs: 1200 }),
+  ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000 }),
 
   // ---- Retail ----
-  com_hypermarket: PH('com_hypermarket', 'commercial', 'Hypermarket', 'Planned — big-box hypermarket', 3, 3, '#e3b341', 'zones', 6),
+  // FEAT-1972079900 inc1 — the RETAIL estate (out-of-town shopping / retail park).
+  // Graduated from a placeholder into a real, placeable estate-scale retail object
+  // carrying the AGGREGATE retail jobs of an out-of-town superstore. Same DATA-only
+  // treatment as the other estates above (no mw, no water tag). PLACEHOLDER-balance.
+  com_hypermarket: P('com_hypermarket', 'commercial', 'Hypermarket', 'Out-of-town retail estate · ≈ 20 shops', 5, 5, 90000, 480, '#e3b341', 'zones', 10, { jobs: 800 }),
   com_discounter: PH('com_discounter', 'commercial', 'Discount Store', 'Planned — value discount retailer', 2, 2, '#d9a52e', 'zones', 5),
   com_darkstore: PH('com_darkstore', 'commercial', 'Dark Store', 'Planned — online-only fulfilment store', 2, 2, '#c99a2a', 'zones', 9),
 
