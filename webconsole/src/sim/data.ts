@@ -1585,13 +1585,30 @@ function sumBy(s: SimState, f: (sp: Spec) => boolean, g: (sp: Spec) => number): 
 
 export function powerStats(s: SimState): { need: number; cap: number } {
   const c = countByKind(s.buildings);
+  // BUG-430 — a power plant only feeds the grid while it is ONLINE. Mirror the
+  // building-activation gate (onlineResidentsCapacity / wasteGeneratedOf): a
+  // road-disconnected or still-under-construction plant (incl. the Five Gorges
+  // Dam) generates ZERO, exactly as an offline building draws/works/houses zero.
+  // Cannot use sumBy() here — it exposes only the Spec, not the building instance
+  // isOnline() needs — so the online-gated sum is inlined. Order-independent /
+  // pure (GR#21): same state → same cap; no Date/Math.random. The DD4 grace
+  // period is handled inside isOnline (a within-grace plant reads online → still
+  // counts), so it needs no special-case here.
+  let staticMw = 0;
+  for (const b of s.buildings) {
+    if (!isOnline(s, b)) continue;
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'power') staticMw += sp.mw ?? 0;
+  }
   return {
     need: Math.round(s.population * 0.012 + c.industrial * 6 + c.office * 4 + c.mine * 8),
     // FEAT-1972079906 inc2: Energy-from-Waste plants add THROUGHPUT-based MW to grid
     // capacity (efwPowerOf) — it feeds the same surplus/Grid-Export path as any power
     // plant. Cannot double-count: the EfW spec carries no `mw`, so it is absent from the
-    // power-plant sum above; a city with no EfW throughput adds exactly 0.
-    cap: sumBy(s, (sp) => sp.kind === 'power', (sp) => sp.mw ?? 0) + efwPowerOf(s),
+    // power-plant sum above; a city with no EfW throughput adds exactly 0. efwPowerOf is
+    // already online-gated (its throughput comes from online processors via
+    // processCapacityOf), so no double-gating is needed on the EfW term.
+    cap: staticMw + efwPowerOf(s),
   };
 }
 

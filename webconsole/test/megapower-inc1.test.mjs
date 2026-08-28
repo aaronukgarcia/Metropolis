@@ -74,10 +74,9 @@ test('feeds the grid: powerStats.cap rises by exactly the dam mw', () => {
 test('feeds the grid: activation gate takes a road-disconnected dam OFFLINE', () => {
   // A dam far from any road, past its construction window, with connectivity
   // computed → isOnline must be false (the building-level activation gate bites).
-  // This is the real online signal; powerStats aggregates nameplate capacity
-  // independently of it (see the honest note in the report), exactly as it does
-  // for every other plant (pow_nuke etc.) — a pre-existing engine trait, not
-  // introduced by this feature.
+  // This is the real online signal. Since BUG-430, powerStats.cap is online-gated
+  // too — a disconnected dam contributes ZERO nameplate MW (see bug430-power-gate
+  // .test.mjs); this test asserts only the online signal itself.
   const s = withBuilding('pow_hydro', 400, 250, { builtTick: 0 });
   s.tick = constructionTicks(SPECS.pow_hydro) + 5; // past construction
   s.roadConnectivity = computeRoadConnectivity(s); // no adjacent road → not connected
