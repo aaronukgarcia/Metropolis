@@ -1197,38 +1197,120 @@ function reduceCore(state: SimState, action: Action): SimState {
     }
 
     case 'placeRoadPath': {
-      // FEAT-1972079910 inc1 (AC-3, AC-4): atomic all-or-nothing road path placement.
-      // Place all tiles in the path as a single atomic action. If funds cannot cover
-      // the total cost, place NOTHING and surface the deficit notice.
+      // FEAT-1972079910 inc1–2 (AC-3, AC-4, AC-6): atomic all-or-nothing road path placement.
+      // Place all tiles in the path, detect junctions where path crosses existing roads,
+      // and place junction tiles. If funds cannot cover the total cost (road + junctions),
+      // place NOTHING and surface the deficit notice.
       const sp = SPECS[action.spec];
       if (!canEnterSim(sp)) return state;
       if (!specUnlocked(state, sp)) return state;
 
-      // Calculate the total cost for all tiles in the path.
-      const totalCost = action.tiles.length * placementCost(sp);
+      // Build a map of existing road tiles and their building references.
+      // AC-6: when new road crosses existing road, convert existing building spec in place.
+      // One-building-per-tile invariant: no stacking, no double upkeep.
+      const existingRoadByTile = new Map<string, { building: SimState['buildings'][number]; spec: Spec }>();
+      for (const b of state.buildings) {
+        const bsp = SPECS[b.spec];
+        if (!bsp || !isRoadSpec(bsp)) continue;
+        for (let dx = 0; dx < bsp.w; dx++)
+          for (let dy = 0; dy < bsp.h; dy++) {
+            const k = `${b.x + dx},${b.y + dy}`;
+            existingRoadByTile.set(k, { building: b, spec: bsp });
+          }
+      }
+
+      // AC-6e: dedup the path to avoid self-intersections (same tile twice in path).
+      const pathSet = new Set<string>();
+      const dedupPath: typeof action.tiles = [];
+      for (const tile of action.tiles) {
+        const k = `${tile.x},${tile.y}`;
+        if (!pathSet.has(k)) {
+          pathSet.add(k);
+          dedupPath.push(tile);
+        }
+      }
+
+      // Identify conversions (existing roads to convert to junctions) and new roads.
+      // Same-spec overlaps are deduped (no placement, no charge).
+      const newRoadTier = roadTierOf(sp);
+      const tilesToPlace: Array<{ x: number; y: number; spec: string; isConversion: boolean; cost: number }> = [];
+      const conversions = new Map<string, { buildingId: number; newSpec: string }>();
+
+      for (const tile of dedupPath) {
+        const k = `${tile.x},${tile.y}`;
+        const existing = existingRoadByTile.get(k);
+
+        if (existing) {
+          // Crossing an existing road: check for dedup or conversion.
+          // Dedup: if existing spec is SAME as new road spec, skip entirely (no placement, no cost).
+          if (existing.spec.id === action.spec) {
+            // Same-spec dedup: road over same road (e.g., repeat-drag)
+            tilesToPlace.push({ x: tile.x, y: tile.y, spec: action.spec, isConversion: false, cost: 0 });
+          } else {
+            // Different specs: convert to junction (DD2 tier rule).
+            const existingTier = roadTierOf(existing.spec);
+            const junctionTier = Math.max(newRoadTier, existingTier);
+            const junctionSpec = junctionTier >= 2 ? 'rd_roundabout' : 'rd_junction';
+
+            // Check if already the right junction type (no conversion needed).
+            if (existing.spec.id === junctionSpec) {
+              tilesToPlace.push({ x: tile.x, y: tile.y, spec: junctionSpec, isConversion: false, cost: 0 });
+            } else {
+              // Conversion: will update existing building's spec to junction.
+              conversions.set(k, { buildingId: existing.building.id, newSpec: junctionSpec });
+              const junctionCost = placementCost(SPECS[junctionSpec] ?? SPECS['rd_junction']);
+              tilesToPlace.push({ x: tile.x, y: tile.y, spec: junctionSpec, isConversion: true, cost: junctionCost });
+            }
+          }
+        } else {
+          // No existing road: place a new road tile
+          tilesToPlace.push({ x: tile.x, y: tile.y, spec: action.spec, isConversion: false, cost: placementCost(sp) });
+        }
+      }
+
+      // Calculate total cost (conversions charged at junction cost, new roads at road cost).
+      let totalCost = 0;
+      for (const tile of tilesToPlace) {
+        totalCost += tile.cost;
+      }
 
       // All-or-nothing: check affordability before placing anything.
       if (totalCost > 0 && state.funds < totalCost) {
         return { ...state, placeNotice: `Insufficient funds — ${fmtMoney(totalCost)} needed for road path` };
       }
 
-      // Check bounds and occupancy for all tiles before placing any.
-      const occupied = occupiedSet(state);
-      for (const tile of action.tiles) {
+      // Check bounds for all tiles.
+      for (const tile of tilesToPlace) {
         if (tile.x < 0 || tile.y < 0 || tile.x >= MAP_W || tile.y >= MAP_H) {
-          return state; // Out of bounds
-        }
-        if (!fits(occupied, sp.w, sp.h, tile.x, tile.y)) {
-          return state; // Occupied
+          return state;
         }
       }
 
-      // All checks passed; place all tiles.
+      // All checks passed; execute conversions and placements atomically.
       let placedState = { ...state, funds: state.funds - totalCost, placeNotice: null };
-      for (const tile of action.tiles) {
+      let newPlacementCount = 0;
+      let conversionCount = 0;
+
+      // Apply conversions: mutate existing road buildings' specs (preserve id/builtTick).
+      placedState = {
+        ...placedState,
+        buildings: placedState.buildings.map((b) => {
+          const found = Array.from(conversions.values()).find((c) => c.buildingId === b.id);
+          if (!found) return b;
+          conversionCount++;
+          return { ...b, spec: found.newSpec };
+        }),
+      };
+
+      // Place new road tiles (skip conversions and deduped zero-cost tiles).
+      for (const tile of tilesToPlace) {
+        const k = `${tile.x},${tile.y}`;
+        if (conversions.has(k)) continue; // Skip conversions (already handled above)
+        if (tile.cost === 0) continue; // Skip deduped tiles (same-spec overlap, already exists)
+
         const placedBuilding = {
           id: placedState.nextId,
-          spec: action.spec,
+          spec: tile.spec,
           x: tile.x,
           y: tile.y,
           builtTick: state.tick,
@@ -1238,13 +1320,17 @@ function reduceCore(state: SimState, action: Action): SimState {
           nextId: placedState.nextId + 1,
           buildings: [...placedState.buildings, placedBuilding],
         };
+        newPlacementCount++;
       }
 
       // Apply ledger event for the total cost.
-      placedState = { ...placedState, ...logEvent(state, `Laid ${action.tiles.length} road tiles`, -totalCost) };
+      const label = conversionCount > 0
+        ? `Laid ${newPlacementCount} road tiles + converted ${conversionCount} junctions`
+        : `Laid ${newPlacementCount} road tiles`;
+      placedState = { ...placedState, ...logEvent(state, label, -totalCost) };
 
-      // Grant XP: 4 per tile (matching 'place' action).
-      placedState = { ...placedState, xp: placedState.xp + action.tiles.length * 4 };
+      // Grant XP: 4 per new placement + 1 per conversion (lighter, no rebuilding).
+      placedState = { ...placedState, xp: placedState.xp + newPlacementCount * 4 + conversionCount * 1 };
 
       // Recompute level rewards if any.
       const rewards = computeLevelRewards(placedState);

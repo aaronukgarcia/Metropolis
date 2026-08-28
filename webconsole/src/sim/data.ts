@@ -1116,6 +1116,14 @@ export const SPECS: Record<string, Spec> = {
   rd_avenue: P('rd_avenue', 'road', 'Avenue', 'Tree-lined urban avenue · tier 2', 1, 1, 90, 6, '#4a525c', 'network', 3, { roadTier: 2, capacity: 250 }),
   rd_aroad: P('rd_aroad', 'road', 'A-Road', 'Arterial trunk road · tier 3', 1, 1, 180, 10, '#454c56', 'network', 4, { roadTier: 3, capacity: 500 }),
   rd_dual: P('rd_dual', 'road', 'Dual Carriageway', 'High-capacity dual road · tier 4', 1, 1, 320, 16, '#3f4650', 'network', 5, { roadTier: 4, capacity: 1000 }),
+
+  // FEAT-1972079910 inc2: auto-junction specs — placed at tile where new road crosses existing.
+  // AC-6: below avenue tier → plain crossroads; avenue+ → roundabout (tier = max of the two roads).
+  // unlock: 99 (seed infrastructure) because junctions are auto-placed, never manually selected.
+  // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
+  rd_junction: P('rd_junction', 'road', 'Crossroads', 'Plain crossing · auto-placed', 1, 1, 15, 1, '#5a626d', 'network', 99, { roadTier: 1, capacity: 100 }),
+  rd_roundabout: P('rd_roundabout', 'road', 'Roundabout', 'Traffic circle · auto-placed', 1, 1, 50, 3, '#515961', 'network', 99, { roadTier: 2, capacity: 250 }),
+
   rail_branch: PH('rail_branch', 'rail', 'Branch Line', 'Planned — single-track branch railway', 1, 1, '#8a6d3b', 'network', 6),
 
   // ---- Transport ----
