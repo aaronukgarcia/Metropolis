@@ -1,5 +1,10 @@
 import type { Dims, SimState, ZoneKind } from './types.ts';
 import { formatPower } from './utils.ts';
+// FEAT-1972079877: isPlaceable defers real specs to the existing unlock gate.
+// specUnlocked lives in engine.ts, which itself imports from data.ts — this is a
+// function-only (call-time) cyclic import: neither module uses the other at
+// module-eval time, so ESM live bindings resolve it safely.
+import { specUnlocked } from './engine.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -37,6 +42,14 @@ export interface Spec {
   jobs?: number;
   tourism?: number;
   dims?: Dims;
+  /**
+   * FEAT-1972079877 placeholder catalogue: true marks a planned-but-unbuilt type
+   * shown GREYED-OUT / "coming soon" in the build catalogue as a roadmap preview.
+   * A placeholder is NEVER placeable (see isPlaceable) and carries zero sim stats
+   * (cost/upkeep 0, no served/jobs/mw/residents), so it can never enter the running
+   * sim. Real specs never set this flag.
+   */
+  placeholder?: boolean;
 }
 
 /** Real-world reference sizes (metres). Tile grid = 50 m. */
@@ -220,7 +233,9 @@ export function unlockedAtLevel(level: number): string[] {
   for (const sp of Object.values(SPECS)) {
     // BUG-390: exclude 'network' category items to match XpTab (which hides them
     // from the unlock ladder). Keeps station_ashford etc. out of level-up notices.
-    if (sp.unlock === level && sp.unlock !== 99 && sp.category !== 'network') {
+    // FEAT-1972079877: exclude placeholders — a "coming soon" type is not actually
+    // made available by a level-up, so announcing it as unlocked would mislead.
+    if (sp.unlock === level && sp.unlock !== 99 && sp.category !== 'network' && !sp.placeholder) {
       names.push(sp.name);
     }
   }
@@ -500,6 +515,51 @@ const P = (
   extra: Partial<Spec> = {}
 ): Spec => ({ id, kind, name, blurb, w, h, cost, upkeep, color, category, unlock, ...extra });
 
+/**
+ * PH — placeholder-spec builder (FEAT-1972079877 / FEAT-1972079901 Five Gorges Dam).
+ * A thin wrapper over P that hard-codes SAFE ZERO STATS: cost 0, upkeep 0, and NO
+ * served/jobs/mw/residents/tourism/tag. It sets `placeholder: true`, which the
+ * catalogue renders greyed-out "coming soon" and which isPlaceable() rejects
+ * unconditionally — so a placeholder can never be selected, placed, or enter the
+ * running sim. These are roadmap previews only; do not tune gameplay against them.
+ */
+const PH = (
+  id: string,
+  kind: ZoneKind,
+  name: string,
+  blurb: string,
+  w: number,
+  h: number,
+  color: string,
+  category: Spec['category'],
+  unlock: number
+): Spec => P(id, kind, name, blurb, w, h, 0, 0, color, category, unlock, { placeholder: true });
+
+/**
+ * SINGLE SOURCE OF TRUTH (FEAT-1972079877) for "may this spec EVER become a real
+ * building in the running sim". State-independent: a placeholder ("coming soon"
+ * roadmap type) can NEVER enter buildings[] via ANY reducer path (place,
+ * stampRegion clone-stamp, replay, genesis-replay, debug console). Every
+ * building-INSERTION site in engine.ts MUST gate on this — it is the one guard
+ * that keeps placeholders out of the sim. Written as a type predicate so callers
+ * get `sp` narrowed to a defined Spec after the check.
+ */
+export function canEnterSim(sp: Spec | undefined): sp is Spec {
+  return !!sp && !sp.placeholder;
+}
+
+/**
+ * Placement gate (FEAT-1972079877): the SINGLE predicate for "can the player place
+ * this spec right now" in the UI. A placeholder is NEVER placeable — regardless of
+ * city level, unlock, or the god-mode unlockedAll flag (via canEnterSim). Any real
+ * (non-placeholder) spec defers to the existing unlock gate (specUnlocked), so
+ * real-spec behaviour is unchanged.
+ */
+export function isPlaceable(s: SimState, sp: Spec): boolean {
+  if (!canEnterSim(sp)) return false;
+  return specUnlocked(s, sp);
+}
+
 export const SPECS: Record<string, Spec> = {
   m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99),
   rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 0, 0, '#8a6d3b', 'network', 99),
@@ -653,6 +713,87 @@ export const SPECS: Record<string, Spec> = {
   land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 250000, 1200, '#c2477e', 'services', 18, { tourism: 80 }),
   land_space: P('land_space', 'landmark', 'Space Launch Complex', 'Kent spaceport · mega-project', 5, 5, 600000, 2500, '#ff9f43', 'services', 20, { tourism: 200 }),
   // ═══════════════════ end FEAT-1972079877 placeholder block ═══════════════
+
+  // ════════════════════════════════════════════════════════════════════════
+  // FEAT-1972079877 — GREYED-OUT "COMING SOON" ROADMAP PLACEHOLDERS.
+  // Planned-but-unbuilt types the player can SEE (greyed / disabled) so the
+  // catalogue previews the roadmap. Built via PH(): placeholder:true + ZERO
+  // sim stats. NEVER placeable (isPlaceable rejects them), so they never enter
+  // the running sim. Grouped into their existing catalogue families in PALETTE.
+  // Includes FEAT-1972079901 Five Gorges Dam (pow_hydro).
+  // ════════════════════════════════════════════════════════════════════════
+
+  // ---- Network (roads / rail lines) ----
+  rd_avenue: PH('rd_avenue', 'road', 'Avenue', 'Planned — tree-lined urban avenue', 1, 1, '#4a525c', 'network', 3),
+  rd_dual: PH('rd_dual', 'road', 'Dual Carriageway', 'Planned — high-capacity dual road', 1, 1, '#3f4650', 'network', 5),
+  rd_aroad: PH('rd_aroad', 'road', 'A-Road', 'Planned — arterial trunk road', 1, 1, '#454c56', 'network', 4),
+  rail_branch: PH('rail_branch', 'rail', 'Branch Line', 'Planned — single-track branch railway', 1, 1, '#8a6d3b', 'network', 6),
+
+  // ---- Transport ----
+  trans_parkride: PH('trans_parkride', 'transport', 'Park & Ride', 'Planned — edge-of-town commuter interchange', 2, 2, '#5ea0c8', 'services', 7),
+  trans_interchange: PH('trans_interchange', 'transport', 'Interchange Hub', 'Planned — multi-modal transport interchange', 2, 2, '#4d8fb8', 'services', 10),
+  rail_freightyard: PH('rail_freightyard', 'transport', 'Freight Yard', 'Planned — rail freight marshalling yard', 3, 2, '#7f6a3b', 'services', 8),
+  ev_charging_hub: PH('ev_charging_hub', 'transport', 'EV Charging Hub', 'Planned — rapid EV charging plaza', 1, 1, '#3d7ea6', 'services', 6),
+
+  // ---- Housing / Offices / Industry estates ----
+  res_estate: PH('res_estate', 'residential', 'Housing Estate', 'Planned — master-planned housing estate', 3, 3, '#4c9aff', 'zones', 5),
+  off_businesspark: PH('off_businesspark', 'office', 'Business Park', 'Planned — landscaped out-of-town office park', 3, 3, '#43aa8b', 'zones', 7),
+  ind_estate: PH('ind_estate', 'industrial', 'Industrial Estate', 'Planned — mixed light-industrial estate', 3, 3, '#a371f7', 'zones', 6),
+
+  // ---- Retail ----
+  com_hypermarket: PH('com_hypermarket', 'commercial', 'Hypermarket', 'Planned — big-box hypermarket', 3, 3, '#e3b341', 'zones', 6),
+  com_discounter: PH('com_discounter', 'commercial', 'Discount Store', 'Planned — value discount retailer', 2, 2, '#d9a52e', 'zones', 5),
+  com_darkstore: PH('com_darkstore', 'commercial', 'Dark Store', 'Planned — online-only fulfilment store', 2, 2, '#c99a2a', 'zones', 9),
+
+  // ---- Industry & Farms ----
+  ind_chemworks: PH('ind_chemworks', 'industrial', 'Chemical Works', 'Planned — heavy chemical plant', 3, 3, '#8957d9', 'zones', 10),
+  ind_refinery: PH('ind_refinery', 'industrial', 'Oil Refinery', 'Planned — petroleum refinery complex', 4, 4, '#7d4fc9', 'zones', 13),
+  ind_fulfilment: PH('ind_fulfilment', 'industrial', 'Fulfilment Centre', 'Planned — automated fulfilment warehouse', 3, 3, '#9a6ee0', 'zones', 11),
+  ind_parcelhub: PH('ind_parcelhub', 'industrial', 'Parcel Hub', 'Planned — parcel sortation hub', 2, 2, '#9a6ee0', 'zones', 9),
+  farm_dairy: PH('farm_dairy', 'industrial', 'Dairy', 'Planned — dairy processing farm', 2, 2, '#7da24f', 'zones', 3),
+  farm_abattoir: PH('farm_abattoir', 'industrial', 'Abattoir', 'Planned — livestock abattoir', 2, 2, '#8a6d3b', 'zones', 5),
+  harbour_fishing: PH('harbour_fishing', 'industrial', 'Fishing Harbour', 'Planned — coastal fishing harbour', 3, 2, '#5e8bb0', 'zones', 8),
+
+  // ---- Mining ----
+  mine_chalk: PH('mine_chalk', 'mine', 'Chalk Pit', 'Planned — chalk extraction pit', 2, 2, '#b08d55', 'zones', 4),
+  mine_clay: PH('mine_clay', 'mine', 'Clay Pit', 'Planned — clay extraction pit', 2, 2, '#a37f4a', 'zones', 5),
+  mine_coal: PH('mine_coal', 'mine', 'Deep Coal Mine', 'Planned — deep-shaft coal mine', 3, 3, '#9c6f3f', 'zones', 7),
+
+  // ---- Leisure ----
+  lei_gym: PH('lei_gym', 'leisure', 'Gym', 'Planned — fitness and gym centre', 1, 1, '#e07be0', 'services', 3),
+  lei_sportsground: PH('lei_sportsground', 'leisure', 'Sports Ground', 'Planned — playing fields and pavilion', 2, 2, '#d06fd0', 'services', 4),
+  lei_stables: PH('lei_stables', 'leisure', 'Stables', 'Planned — riding stables and paddock', 2, 2, '#c95fc9', 'services', 6),
+
+  // ---- Power (incl. FEAT-1972079901 Five Gorges Dam) ----
+  pow_hydro: PH('pow_hydro', 'power', 'Five Gorges Dam', 'Planned — mega hydroelectric dam', 5, 5, '#5b8fc9', 'services', 16),
+  pow_hvdc: PH('pow_hvdc', 'power', 'HVDC Interconnector', 'Planned — long-distance DC power link', 2, 2, '#ff7b72', 'services', 14),
+  pow_reprocess: PH('pow_reprocess', 'power', 'THORP Reprocessing Plant', 'Planned — nuclear fuel reprocessing plant', 4, 4, '#e05d38', 'services', 18),
+
+  // ---- Water & Waste ----
+  waste_depot: PH('waste_depot', 'water', 'Refuse Depot', 'Planned — refuse collection depot', 2, 2, '#6b8f71', 'services', 4),
+  waste_landfill: PH('waste_landfill', 'water', 'Landfill', 'Planned — engineered landfill site', 3, 3, '#5f7f66', 'services', 5),
+  waste_incinerator: PH('waste_incinerator', 'water', 'Energy-from-Waste', 'Planned — waste incineration plant', 3, 3, '#6b8f71', 'services', 9),
+  waste_recycling: PH('waste_recycling', 'water', 'Recycling Centre', 'Planned — materials recycling facility', 2, 2, '#5f9e6a', 'services', 6),
+  waste_compost: PH('waste_compost', 'water', 'Composting Site', 'Planned — green-waste composting site', 2, 2, '#6b9e6b', 'services', 5),
+
+  // ---- Health & Deathcare ----
+  death_cemetery: PH('death_cemetery', 'health', 'Cemetery', 'Planned — municipal cemetery', 3, 3, '#8a94a8', 'services', 4),
+  death_crematorium: PH('death_crematorium', 'health', 'Crematorium', 'Planned — crematorium and gardens', 2, 2, '#8a94a8', 'services', 7),
+  air_heliport: PH('air_heliport', 'health', 'Air-Ambulance Pad', 'Planned — air-ambulance helipad', 1, 1, '#ff7b72', 'services', 8),
+
+  // ---- Fire & Rescue ----
+  air_fire_helibase: PH('air_fire_helibase', 'fire', 'Fire Heli Base', 'Planned — aerial firefighting base', 2, 2, '#f65b56', 'services', 10),
+
+  // ---- Police & Justice ----
+  air_police_helibase: PH('air_police_helibase', 'police', 'Police Heli Base', 'Planned — police air-support base', 2, 2, '#6e7bd9', 'services', 10),
+
+  // ---- Landmarks ----
+  land_containerport: PH('land_containerport', 'landmark', 'Container Port', 'Planned — deep-water container port', 4, 4, '#5e8bb0', 'services', 12),
+  land_ferryterminal: PH('land_ferryterminal', 'landmark', 'Ferry Terminal', 'Planned — cross-channel ferry terminal', 3, 3, '#4a9dae', 'services', 10),
+  land_cern: PH('land_cern', 'landmark', 'Particle Accelerator', 'Planned — underground particle accelerator ring', 5, 5, '#a371f7', 'services', 19),
+  land_gigafactory: PH('land_gigafactory', 'landmark', 'Gigafactory', 'Planned — battery gigafactory', 5, 5, '#43aa8b', 'services', 15),
+  land_semifab: PH('land_semifab', 'landmark', 'Semiconductor Fab', 'Planned — semiconductor fabrication plant', 4, 4, '#2f8f74', 'services', 16),
+  // ═══════════════ end FEAT-1972079877 roadmap placeholders ═══════════════
 };
 
 for (const [id, d] of Object.entries(DIMS)) {

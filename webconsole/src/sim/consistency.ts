@@ -114,6 +114,33 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
     });
   }
 
+  // ===== UNIVERSAL PLACEHOLDER CATCH (FEAT-1972079877) =====
+  // A placeholder ("coming soon" roadmap type) is a valid SPECS entry — it has a
+  // colour, dims, a family — so every shape check above PASSES for it. But a
+  // placeholder must NEVER exist as a real building in the running sim: it is not
+  // functional and was never meant to be placeable. This is the SINGLE
+  // AUTHORITATIVE net that catches a placeholder building arriving via ANY path
+  // (a crafted savepoint restore, a future unguarded insertion site, a hand-edited
+  // debug-JSON load) — the reducer guards (place/stampRegion) and the restore
+  // filter are defence-in-depth in FRONT of this catch-all. Any placeholder
+  // building is an invalid state and fails consistency.
+  //
+  // ONE aggregate check (not one-per-building): the report is embedded in
+  // debug.json, so a per-building entry would bloat it linearly at city scale
+  // (the SIZE GUARD test). This fails if ANY building is a placeholder.
+  const placeholderBuildings = s.buildings.filter((b) => SPECS[b.spec]?.placeholder === true);
+  checks.push({
+    id: 'placeholder.none-in-sim',
+    ok: placeholderBuildings.length === 0,
+    detail:
+      placeholderBuildings.length === 0
+        ? 'no placeholder buildings in sim'
+        : `${placeholderBuildings.length} placeholder building(s) must not exist: ${placeholderBuildings
+            .slice(0, 5)
+            .map((b) => `#${b.id}(${b.spec})`)
+            .join(', ')}${placeholderBuildings.length > 5 ? ', …' : ''}`,
+  });
+
   const inflowLabels = new Set<string>();
   let inflowDupCount = 0;
   for (const f of s.lastFlows.inflows) {

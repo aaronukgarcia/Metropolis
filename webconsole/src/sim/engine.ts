@@ -8,6 +8,7 @@
 import {
   PIPE_TIERS,
   SPECS,
+  canEnterSim,
   countByKind,
   fits,
   isOnline,
@@ -553,7 +554,12 @@ export function reducer(state: SimState, action: Action): SimState {
 
     case 'place': {
       const sp = SPECS[action.spec];
-      if (!sp) return state;
+      // FEAT-1972079877: canEnterSim is the SSOT guard — rejects unknown specs AND
+      // placeholders ("coming soon" roadmap types). The reducer is the AUTHORITATIVE
+      // gate, so a placeholder can never enter buildings[] via ANY path (direct
+      // dispatch, replay, genesis-replay, debug console), not just the disabled UI
+      // button. Mirrors isPlaceable() in data.ts (UI defence-in-depth).
+      if (!canEnterSim(sp)) return state;
       if (!specUnlocked(state, sp)) return state;
       // Zoning is free (FEAT-1972079882): a zone charges £0, so the funds check
       // and deduction use placementCost, not the catalogue cost.
@@ -660,7 +666,12 @@ export function reducer(state: SimState, action: Action): SimState {
       // For each item in clipboard, compute its actual world pos and check bounds.
       for (const item of action.clipboard.items) {
         const sp = SPECS[item.spec];
-        if (!sp) return state; // Unknown spec
+        // FEAT-1972079877: SSOT guard — reject the WHOLE stamp (all-or-nothing,
+        // matching the bounds check) if any clipboard item is unknown OR a
+        // placeholder. Keeps a clone-stamp (reachable via a crafted debug-JSON
+        // clipboard + journaled/replayed stampRegion) from smuggling a
+        // "coming soon" type into buildings[].
+        if (!canEnterSim(sp)) return state;
         const ax = action.x + item.dx;
         const ay = action.y + item.dy;
         if (ax < 0 || ay < 0 || ax + sp.w > MAP_W || ay + sp.h > MAP_H) {

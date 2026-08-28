@@ -14,6 +14,7 @@ import type { Journal, JournalEntry } from './journal.ts';
 import type { MapViewState } from './uistate.ts';
 import { reducer, initialState as getInitialState, nextSafeBuildingId } from './engine.ts';
 import { runConsistencyChecks } from './consistency.ts';
+import { SPECS } from './data.ts';
 import { emptyJournal } from './journal.ts';
 
 /**
@@ -163,6 +164,21 @@ export function restoreFromSavepoint(storage: StorageLike): RestoreResult {
 
     // Start from the snapshot state.
     let state = most.snapshot;
+
+    // FEAT-1972079877 — close the savepoint-restore path: a snapshot's buildings[]
+    // is used VERBATIM (only the journal TAIL replays through the guarded reducer),
+    // so a crafted/hand-edited savepoint could smuggle a placeholder ("coming soon"
+    // roadmap type) building straight into the sim. Drop any placeholder-spec
+    // building here (drop-and-continue, so a legit savepoint still loads) BEFORE the
+    // consistency gate below — which independently flags placeholder buildings as a
+    // failure (the universal catch), so even without this filter the restore would
+    // be rejected rather than admit one.
+    {
+      const clean = state.buildings.filter((b) => SPECS[b.spec]?.placeholder !== true);
+      if (clean.length !== state.buildings.length) {
+        state = { ...state, buildings: clean };
+      }
+    }
 
     // BUG-413 FIX: Recalculate nextId to ensure it's > max existing building id.
     // This prevents collision when new buildings are placed after restore.

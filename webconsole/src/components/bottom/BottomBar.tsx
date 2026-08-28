@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks } from '../../sim/data';
+import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
 import { useSim, specUnlocked } from '../../sim/store';
 import { fmtMoney } from '../../sim/utils';
@@ -65,21 +65,35 @@ function BuildTab() {
               console.error(`palette id "${id}" has no SPECS entry — skipped`);
               return null;
             }
+            // FEAT-1972079877: a placeholder ("coming soon" roadmap type) is NEVER
+            // placeable — greyed-out, desaturated, disabled, and clicking does
+            // nothing. isPlaceable() is the single gate (placeholder-aware); the
+            // per-spec `locked` flag still drives the real specs' unlock badge.
+            const isPh = sp.placeholder === true;
             const locked = !specUnlocked(state, sp);
             const active = state.tool.mode === 'build' && state.tool.spec === id;
             return (
               <button
                 key={id}
-                className={`pal-item${active ? ' active' : ''}${locked ? ' locked' : ''}`}
-                disabled={locked || state.funds < placementCost(sp)}
+                className={`pal-item${active ? ' active' : ''}${!isPh && locked ? ' locked' : ''}${isPh ? ' placeholder' : ''}`}
+                disabled={isPh || locked || state.funds < placementCost(sp)}
+                aria-disabled={isPh || undefined}
+                style={isPh ? { opacity: 0.45, filter: 'grayscale(1)', cursor: 'default' } : undefined}
                 title={
-                  locked
-                    ? `${sp.name} — unlocks at city level ${sp.unlock}`
-                    : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick${
-                        isFreeZone(sp) ? ` · free to zone · ${constructionTicks(sp)} ticks to build` : ''
-                      }`
+                  isPh
+                    ? `${sp.name} — coming soon (planned): ${sp.blurb}`
+                    : locked
+                      ? `${sp.name} — unlocks at city level ${sp.unlock}`
+                      : `${sp.name} — ${sp.blurb}, upkeep ${fmtMoney(sp.upkeep)}/tick${
+                          isFreeZone(sp) ? ` · free to zone · ${constructionTicks(sp)} ticks to build` : ''
+                        }`
                 }
-                onClick={() => dispatch({ type: 'tool', tool: { mode: 'build', spec: id } })}
+                onClick={() => {
+                  // A placeholder can never be selected/placed (defence in depth
+                  // alongside disabled): clicking is a no-op.
+                  if (isPh || !isPlaceable(state, sp)) return;
+                  dispatch({ type: 'tool', tool: { mode: 'build', spec: id } });
+                }}
               >
                 <span className="swatch big" style={{ background: sp.color }} />
                 <span className="pal-text">
@@ -87,11 +101,13 @@ function BuildTab() {
                   <span className="pal-cap">{sp.blurb}</span>
                 </span>
                 <span className="pal-cost">
-                  {locked
-                    ? `Lv ${sp.unlock}`
-                    : isFreeZone(sp)
-                      ? `Free · ${constructionTicks(sp)}t · ${sp.w}×${sp.h}`
-                      : `${fmtMoney(sp.cost)} · ${sp.w}×${sp.h}`}
+                  {isPh
+                    ? 'Soon'
+                    : locked
+                      ? `Lv ${sp.unlock}`
+                      : isFreeZone(sp)
+                        ? `Free · ${constructionTicks(sp)}t · ${sp.w}×${sp.h}`
+                        : `${fmtMoney(sp.cost)} · ${sp.w}×${sp.h}`}
                 </span>
               </button>
             );
