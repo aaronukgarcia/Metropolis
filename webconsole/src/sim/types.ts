@@ -158,4 +158,27 @@ export interface SimState {
    * otherwise. Cleared/overwritten on the next `place`. Deterministic, sim-state.
    */
   roadNotice: string | null;
+  /**
+   * FEAT-1972079907 inc2 — one-year traffic monitors. When auto-connect lays a
+   * connector, each connector tile + the joined road tile is registered here and
+   * watched for one in-game year (TICKS_PER_YEAR). On each monthly aggregate the
+   * engine recomputes each monitored segment's coarse traffic load and auto-scales
+   * (upgrades one tier) the ones that saturate, then expires monitors past their
+   * window. Fully serialisable (plain numbers) so it round-trips through save and
+   * genesis-replay; deterministic, tick-driven — NO wall-clock.
+   */
+  roadMonitors: RoadMonitor[];
+}
+
+/**
+ * FEAT-1972079907 inc2 — a single monitored road segment (one road tile).
+ * All-number, JSON-round-trippable. `source` is the building id whose auto-connect
+ * created this monitor (its spec drives the segment's coarse traffic load). `until`
+ * is the tick the monitoring window closes (registeredTick + TICKS_PER_YEAR).
+ */
+export interface RoadMonitor {
+  x: number;
+  y: number;
+  source: number;
+  until: number;
 }

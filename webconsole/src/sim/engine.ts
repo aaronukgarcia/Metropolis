@@ -29,10 +29,11 @@ import {
   roadTierOf,
   fittingTier,
   ROAD_TIER_SPECS,
+  ROAD_TIER_CAPACITY,
 } from './data.ts';
-import type { Spec } from './data.ts';
+import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
-import type { Building } from './types.ts';
+import type { Building, RoadMonitor } from './types.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
 import type {
   FlowItem,
@@ -204,6 +205,7 @@ function rawState(): SimState {
     notice: null,
     unlockedAll: false,
     roadNotice: null,
+    roadMonitors: [],
   };
 }
 
@@ -408,17 +410,170 @@ export function grantLevelRewards(s: SimState): SimState {
   return { ...s, funds, lastRewardedLevel, notice };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079907 inc2 — ONE-YEAR TRAFFIC MONITORING + AUTO-SCALE.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Clock windows for road monitoring. Mirrors the calendar SSOT in utils.gameDate
+ * (30-day months, 12 months → a 360-tick year), so a monitored segment is watched
+ * for exactly one in-game YEAR of ticks. Tick-driven — NEVER wall-clock (GR#21).
+ */
+export const TICKS_PER_MONTH = 30;
+export const TICKS_PER_YEAR = TICKS_PER_MONTH * 12; // 360
+
+/**
+ * Saturation threshold: a monitored segment auto-scales ONE tier when its coarse
+ * traffic load reaches this fraction of the tile's current-tier capacity
+ * (ROAD_TIER_CAPACITY). ⚠ PLACEHOLDER-balance — directional only, Aaron's pass.
+ */
+export const ROAD_SATURATION_THRESHOLD = 0.85;
+
+/**
+ * Coarse per-segment traffic-load weights (⚠ PLACEHOLDER-balance). A monitored
+ * segment's demand is the FEEDING building's population + jobs + freight, each
+ * weighted, then ramped by city activity (population vs ROAD_TRAFFIC_ACTIVITY_REF).
+ * This reuses the per-building commuter-weight idiom from stationLinks / the
+ * Commuter Revenue term in computeFlows — a categorical weight per building, not a
+ * vehicle sim (brief §4: "a demand-vs-capacity scalar"). `residents` is the
+ * per-building population proxy (true per-building occupancy isn't tracked).
+ */
+export const ROAD_TRAFFIC_POP_WEIGHT = 1; // per resident of the feeding building
+export const ROAD_TRAFFIC_JOB_WEIGHT = 1; // per job
+export const ROAD_TRAFFIC_FREIGHT_WEIGHT = 1; // extra per industrial/mine job (freight)
+/** City population at which traffic activity ramps to 1.0. ⚠ PLACEHOLDER-balance. */
+export const ROAD_TRAFFIC_ACTIVITY_REF = 500;
+
+/** Per-building traffic contribution — population + jobs + freight. Pure. */
+function feederTrafficWeight(sp: Spec): number {
+  const pop = sp.residents ?? 0;
+  const jobs = sp.jobs ?? 0;
+  const freight = sp.kind === 'industrial' || sp.kind === 'mine' ? jobs : 0;
+  return (
+    pop * ROAD_TRAFFIC_POP_WEIGHT +
+    jobs * ROAD_TRAFFIC_JOB_WEIGHT +
+    freight * ROAD_TRAFFIC_FREIGHT_WEIGHT
+  );
+}
+
+/**
+ * City-wide traffic activity 0..1 — ramps as the city fills toward
+ * ROAD_TRAFFIC_ACTIVITY_REF. Pure function of s.population, so a segment's load
+ * grows over its monitoring year exactly as the city grows. Deterministic.
+ */
+function trafficActivity(s: SimState): number {
+  if (s.population <= 0) return 0;
+  return Math.min(1, s.population / ROAD_TRAFFIC_ACTIVITY_REF);
+}
+
+export interface RoadScaleResult {
+  /** buildings with any saturated monitored road tile bumped one tier (spec swap). */
+  buildings: Building[];
+  /** monitors still inside their window (expired ones dropped). */
+  monitors: RoadMonitor[];
+  /** total upgrade spend to charge through the ledger this pass. */
+  cost: number;
+  /** number of segments scaled this pass. */
+  upgraded: number;
+}
+
+/**
+ * Evaluate the road monitors at a monthly aggregate boundary (pure + deterministic).
+ *  1. Drop monitors whose window has closed (tick past `until`).
+ *  2. Process the survivors in strict (x,y) order (NEVER map-iteration order).
+ *  3. For each: read the CURRENT road tile there and its feeding source building;
+ *     the coarse load = feederTrafficWeight(source) × city activity.
+ *  4. If load ≥ threshold × tier-capacity and the tile is below the ladder max,
+ *     upgrade it ONE tier (brief §6 Q4: one tier per saturation event), booking the
+ *     placement-cost DELTA (mirrors inc1's upgrade-on-connect charge).
+ * Each tile scales at most once per pass; the cost is charged through the tick's
+ * flows so conservation holds and replay reproduces it.
+ */
+export function evaluateRoadMonitors(s: SimState, tick: number): RoadScaleResult {
+  // (1) expire — keep only monitors still inside their year-long window.
+  // Tolerate a state that predates the field (older snapshots / bespoke test states).
+  const active = (s.roadMonitors ?? []).filter((m) => tick <= m.until);
+  // (2) strict (x,y) order — deterministic, order-independent upgrades.
+  active.sort((a, b) => a.x - b.x || a.y - b.y);
+
+  const byId = new Map<number, Building>();
+  const roadAt = new Map<string, Building>();
+  for (const b of s.buildings) {
+    byId.set(b.id, b);
+    const sp = SPECS[b.spec];
+    if (sp && isRoadSpec(sp)) roadAt.set(`${b.x},${b.y}`, b);
+  }
+  const activity = trafficActivity(s);
+
+  const upgradeSpecById = new Map<number, string>();
+  let cost = 0;
+  let upgraded = 0;
+  for (const m of active) {
+    const road = roadAt.get(`${m.x},${m.y}`);
+    if (!road) continue; // tile is no longer a road (bulldozed) — nothing to scale.
+    if (upgradeSpecById.has(road.id)) continue; // already scaled this pass.
+    const curSpec = SPECS[road.spec];
+    const tier = roadTierOf(curSpec);
+    if (tier < 1 || tier >= 5) continue; // not a ladder road, or already at the max.
+    const src = byId.get(m.source);
+    const srcSpec = src ? SPECS[src.spec] : undefined;
+    const load = srcSpec ? feederTrafficWeight(srcSpec) * activity : 0;
+    const capacity = ROAD_TIER_CAPACITY[tier as RoadTier];
+    if (load < ROAD_SATURATION_THRESHOLD * capacity) continue; // below saturation.
+    const nextSpecId = ROAD_TIER_SPECS[(tier + 1) as RoadTier];
+    const nextSpec = SPECS[nextSpecId];
+    upgradeSpecById.set(road.id, nextSpecId);
+    cost += Math.max(0, placementCost(nextSpec) - placementCost(curSpec));
+    upgraded++;
+  }
+
+  const buildings =
+    upgradeSpecById.size === 0
+      ? s.buildings
+      : s.buildings.map((b) =>
+          upgradeSpecById.has(b.id) ? { ...b, spec: upgradeSpecById.get(b.id)! } : b
+        );
+
+  return { buildings, monitors: active, cost, upgraded };
+}
+
 function advance(s: SimState): SimState {
   // TICK-BOUNDARY INVARIANT (Round-6): Record funds at tick start for conservation checking.
   const fundsAtTickStart = s.funds;
+  const tick = s.tick + 1;
+
+  // FEAT-1972079907 inc2: MONTHLY road traffic monitoring + auto-scale. Runs on the
+  // existing monthly aggregate boundary (no new per-tick hot path). This happens
+  // FIRST — before flows/population — so the REST of the tick (upkeep, commuter
+  // links, everything) is computed against the upgraded roads. That keeps the tick
+  // internally consistent: the consistency checker recomputes upkeep from the FINAL
+  // buildings, so recording flows on the same (post-upgrade) buildings makes them
+  // agree. The one-off capital cost is charged as a "Road Auto-Scale" outflow below,
+  // so conservation holds and genesis-replay reproduces the whole thing.
+  let scaledBuildings = s.buildings;
+  let roadMonitors = s.roadMonitors;
+  let autoScaleCost = 0;
+  let autoScaleCount = 0;
+  if (tick % TICKS_PER_MONTH === 0) {
+    const scale = evaluateRoadMonitors(s, tick);
+    scaledBuildings = scale.buildings;
+    roadMonitors = scale.monitors;
+    autoScaleCost = scale.cost;
+    autoScaleCount = scale.upgraded;
+    // Re-bind s to the post-upgrade buildings for the remainder of the tick.
+    if (scaledBuildings !== s.buildings) s = { ...s, buildings: scaledBuildings };
+  }
 
   let { inflows, outflows } = computeFlows(s);
-  const tick = s.tick + 1;
 
   // BUG-406 FIX: route regional grant through lastFlows for conservation tracking
   // (was: funds += 800 without recording in flows, breaking conservation check).
-  if (tick % 30 === 0) {
+  if (tick % TICKS_PER_MONTH === 0) {
     inflows = [...inflows, { label: 'Regional Grant', value: 800 }];
+  }
+  // inc2: the auto-scale capital spend is an outflow so it counts for conservation.
+  if (autoScaleCost > 0) {
+    outflows = [...outflows, { label: 'Road Auto-Scale', value: autoScaleCost }];
   }
 
   // Drain pending rewards queue (from debugXp and place actions).
@@ -436,8 +591,15 @@ function advance(s: SimState): SimState {
   let nextLedger = s.nextLedgerId;
 
   // Ledger entry for grant (mirrors the flow inflow for audit consistency)
-  if (tick % 30 === 0) {
+  if (tick % TICKS_PER_MONTH === 0) {
     ledger = [{ id: nextLedger++, tick, label: 'Regional Grant', amount: 800 }, ...ledger].slice(0, LEDGER_CAP);
+  }
+  // Ledger entry for any auto-scale spend (mirrors the "Road Auto-Scale" outflow).
+  if (autoScaleCost > 0) {
+    ledger = [
+      { id: nextLedger++, tick, label: `Auto-scaled ${autoScaleCount} road segment(s)`, amount: -autoScaleCost },
+      ...ledger,
+    ].slice(0, LEDGER_CAP);
   }
 
   const capacity = (() => {
@@ -506,6 +668,10 @@ function advance(s: SimState): SimState {
     pendingRewards: [], // Drained
     population,
     xp: newXp,
+    // FEAT-1972079907 inc2: buildings may carry monthly auto-scale tier bumps;
+    // roadMonitors has expired entries dropped (both == the inputs off a non-monthly tick).
+    buildings: scaledBuildings,
+    roadMonitors,
     history: [...s.history, { tick, funds, income, expense, population }].slice(-HISTORY_CAP),
     ledger,
     nextLedgerId: nextLedger,
@@ -644,6 +810,30 @@ function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
     ].slice(0, LEDGER_CAP);
   }
 
+  // FEAT-1972079907 inc2: register the connector tiles + the joined road tile(s)
+  // for one-year traffic monitoring. `placed` is the feeding source; the whole
+  // connector chain bears that building's demand, so both the connector and the
+  // road it joined scale together as traffic grows. Dedup by (x,y) — a re-connect
+  // over the same tile refreshes (extends) the window. Deterministic (x,y) order.
+  const until = s.tick + TICKS_PER_YEAR;
+  const monitorByCell = new Map<string, RoadMonitor>();
+  for (const m of s.roadMonitors ?? []) monitorByCell.set(`${m.x},${m.y}`, m);
+  const registerMonitor = (x: number, y: number) => {
+    const k = `${x},${y}`;
+    const existing = monitorByCell.get(k);
+    monitorByCell.set(k, {
+      x,
+      y,
+      source: placed.id,
+      until: existing ? Math.max(existing.until, until) : until,
+    });
+  };
+  for (const p of plan.path) registerMonitor(p.x, p.y);
+  for (const p of plan.junctions) registerMonitor(p.x, p.y);
+  const roadMonitors = Array.from(monitorByCell.values()).sort(
+    (a, b) => a.x - b.x || a.y - b.y
+  );
+
   return {
     ...s,
     funds: s.funds - totalCost,
@@ -652,6 +842,7 @@ function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
     ledger,
     nextLedgerId,
     roadNotice: null,
+    roadMonitors,
   };
 }
 

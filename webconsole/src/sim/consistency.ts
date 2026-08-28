@@ -402,7 +402,16 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
   // Excludes: Wages, Loan Interest, Overdraft Interest, Transit Subsidy (non-upkeep flows).
   let actualUpkeep = 0;
   for (const flow of s.lastFlows.outflows) {
-    if (flow.label !== 'Wages' && flow.label !== 'Loan Interest' && flow.label !== 'Overdraft Interest' && flow.label !== 'Transit Subsidy') {
+    // FEAT-1972079907 inc2: 'Road Auto-Scale' is a monthly one-off capital spend
+    // (road tier upgrades), NOT recurring building upkeep — exclude it from the
+    // upkeep-total reconciliation exactly like Wages/interest/subsidy.
+    if (
+      flow.label !== 'Wages' &&
+      flow.label !== 'Loan Interest' &&
+      flow.label !== 'Overdraft Interest' &&
+      flow.label !== 'Transit Subsidy' &&
+      flow.label !== 'Road Auto-Scale'
+    ) {
       actualUpkeep += flow.value;
     }
   }

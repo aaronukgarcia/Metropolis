@@ -27,6 +27,7 @@ import type {
   FlowItem,
   LedgerEntry,
   LevelUpNotice,
+  RoadMonitor,
   SimState,
   TaxRates,
   TickRecord,
@@ -188,6 +189,7 @@ export interface DebugJson {
     notice: LevelUpNotice | null;
     unlockedAll: boolean;
     roadNotice: string | null;
+    roadMonitors: RoadMonitor[];
     conservation: { tickStart: number; tickEnd: number };
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
   };
@@ -383,6 +385,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   notice: 'sim.notice',
   unlockedAll: 'sim.unlockedAll',
   roadNotice: 'sim.roadNotice',
+  roadMonitors: 'sim.roadMonitors',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -583,6 +586,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       notice: s.notice,
       unlockedAll: s.unlockedAll,
       roadNotice: s.roadNotice,
+      roadMonitors: s.roadMonitors,
       // TICK-BOUNDARY INVARIANT (Round-6): Conservation snapshot for determinism checking
       conservation: {
         tickStart: s.fundsAtTickStart,
