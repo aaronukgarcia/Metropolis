@@ -189,6 +189,7 @@ export interface DebugJson {
     notice: LevelUpNotice | null;
     unlockedAll: boolean;
     roadNotice: string | null;
+    railNotice: string | null;
     roadMonitors: RoadMonitor[];
     conservation: { tickStart: number; tickEnd: number };
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
@@ -385,6 +386,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   notice: 'sim.notice',
   unlockedAll: 'sim.unlockedAll',
   roadNotice: 'sim.roadNotice',
+  railNotice: 'sim.railNotice',
   roadMonitors: 'sim.roadMonitors',
 };
 
@@ -586,6 +588,7 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       notice: s.notice,
       unlockedAll: s.unlockedAll,
       roadNotice: s.roadNotice,
+      railNotice: s.railNotice,
       roadMonitors: s.roadMonitors,
       // TICK-BOUNDARY INVARIANT (Round-6): Conservation snapshot for determinism checking
       conservation: {

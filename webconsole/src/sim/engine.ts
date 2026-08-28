@@ -33,6 +33,7 @@ import {
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
+import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type { Building, RoadMonitor } from './types.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
 import type {
@@ -205,6 +206,7 @@ function rawState(): SimState {
     notice: null,
     unlockedAll: false,
     roadNotice: null,
+    railNotice: null,
     roadMonitors: [],
   };
 }
@@ -849,6 +851,161 @@ function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
   };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079902 inc3 — AUTO-BRANCH-LINING ON GATEWAY PLACEMENT.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Gateway specs that trigger auto-branch-lining (brief §3.4, resolved default (b)):
+ * Ashford International (the HS1 station) and the International Airport. Placing
+ * either lays a deterministic branch to the nearest slow-rail line AND the nearest
+ * HS1 line. No new "Heathrow"-style spec — `land_airport` is the airport (data.ts).
+ */
+export const GATEWAY_SPEC_IDS = new Set<string>(['station_ashford', 'land_airport']);
+
+export function isGatewaySpec(sp: Spec | undefined): boolean {
+  return !!sp && GATEWAY_SPEC_IDS.has(sp.id);
+}
+
+/**
+ * The two target line classes a gateway branches to, in FIXED deterministic order:
+ * the slow 'rail' line first, then the 'hs1' high-speed line. Each branch is laid as
+ * tiles of the SAME spec as the line it joins (a 'rail' branch is 'rail' tiles; an
+ * 'hs1' branch is 'hs1' tiles), so the branch matches the target line's class. Both
+ * specs are real (never placeholder) so they pass the canEnterSim insertion guard.
+ *
+ * SINGLE-TRACK (inc3 decision, brief §3.4 step 2): a branch is one deterministic
+ * grid path of line tiles — a single track, matching the rail_branch catalogue
+ * blurb ("single-track branch railway"). Double-track is a cheap follow-up (lay a
+ * parallel offset path) but is NOT attempted here; inc3 ships the single path.
+ */
+const GATEWAY_BRANCH_TARGET_SPECS = ['rail', 'hs1'] as const;
+
+/** Rail-branch notice shown when a target line exists but no route reaches it. */
+export const NO_RAIL_ROUTE_NOTICE = 'no rail route';
+
+/**
+ * FEAT-1972079902 inc3 — auto-branch a placed GATEWAY to the rail network.
+ *
+ * After a gateway (Ashford International / International Airport) is placed, lay a
+ * deterministic bidirectional branch line from the gateway to (1) the nearest slow
+ * 'rail' line tile and (2) the nearest 'hs1' line tile, routing AROUND existing
+ * buildings via the deterministic grid router (railConnect.planRailBranch — the same
+ * BFS idiom as road inc1's planConnector). For each target line:
+ *   - line absent from the map → skip silently (nothing to connect to);
+ *   - gateway already touches the line → nothing to lay;
+ *   - route blocked within budget → lay NOTHING for that branch, surface the
+ *     "no rail route" notice (never partial-lay a dead-end, never bulldoze);
+ *   - otherwise → lay each branch cell as a REAL line tile (journaled through the
+ *     gateway `place` action via replay; conservation-safe: cost charged through the
+ *     ledger, exactly like road inc1's connector).
+ *
+ * The rail branch is laid FIRST and its tiles become impassable for the HS1 branch,
+ * so the two branches deterministically route around each other. Pure + deterministic
+ * (GR#21): all tie-breaking flows from the router; no Date/random.
+ *
+ * Called with `s` = state AFTER the gateway building was inserted (and after
+ * autoConnect). A non-gateway placement is a no-op that just clears railNotice.
+ */
+function autoBranchRail(s: SimState, placed: Building, sp: Spec): SimState {
+  if (!isGatewaySpec(sp)) return { ...s, railNotice: null };
+
+  // Board sets from the CURRENT buildings (includes the just-placed gateway).
+  // `occupied` is every building footprint (impassable — route around them).
+  // `lineTiles[specId]` is the set of tiles belonging to each target line class.
+  const occupied = new Set<string>();
+  const lineTiles: Record<string, Set<string>> = {};
+  for (const id of GATEWAY_BRANCH_TARGET_SPECS) lineTiles[id] = new Set<string>();
+  for (const b of s.buildings) {
+    const bs = SPECS[b.spec];
+    if (!bs) continue;
+    const lineSet = lineTiles[b.spec]; // non-undefined only for 'rail' / 'hs1'
+    for (let dx = 0; dx < bs.w; dx++)
+      for (let dy = 0; dy < bs.h; dy++) {
+        const k = `${b.x + dx},${b.y + dy}`;
+        occupied.add(k);
+        if (lineSet) lineSet.add(k);
+      }
+  }
+
+  let funds = s.funds;
+  let nextId = s.nextId;
+  let ledger = s.ledger;
+  let nextLedgerId = s.nextLedgerId;
+  const newTiles: Building[] = [];
+  let blockedAny = false;
+
+  for (const lineSpecId of GATEWAY_BRANCH_TARGET_SPECS) {
+    const targets = lineTiles[lineSpecId];
+    if (targets.size === 0) continue; // line absent — nothing to connect to (skip silently).
+
+    const plan = planRailBranch({
+      occupied,
+      targets,
+      bx: placed.x,
+      by: placed.y,
+      bw: sp.w,
+      bh: sp.h,
+      mapW: MAP_W,
+      mapH: MAP_H,
+      budget: RAIL_BRANCH_BUDGET,
+    });
+
+    if (plan.connected) continue; // gateway already touches this line — nothing to lay.
+    if (plan.blocked) {
+      blockedAny = true; // walled off within budget — lay nothing for this branch.
+      continue;
+    }
+
+    const lineSpec = SPECS[lineSpecId];
+    // Honour the SSOT insertion guard exactly like a manual place (defence in depth).
+    if (!canEnterSim(lineSpec)) {
+      blockedAny = true;
+      continue;
+    }
+    // Branch tiles cost placementCost of the line spec, charged through the ledger —
+    // the EXACT idiom road inc1 uses for its connector. Today 'rail'/'hs1' are free
+    // to lay (placementCost 0), so a branch spends £0; a future per-tile branch cost
+    // is a PLACEHOLDER balance number that would flow through here unchanged.
+    const tileCost = placementCost(lineSpec);
+    const branchCost = tileCost * plan.path.length;
+    // Never fail the placement: an unaffordable branch lays nothing + surfaces the
+    // notice (mirrors road inc1). With tileCost 0 this can't trigger today.
+    if (funds < branchCost) {
+      blockedAny = true;
+      continue;
+    }
+
+    for (const p of plan.path) {
+      const tile: Building = { id: nextId++, spec: lineSpecId, x: p.x, y: p.y, builtTick: s.tick };
+      newTiles.push(tile);
+      // The freshly-laid branch tiles are impassable for the NEXT branch, so the
+      // rail branch and the HS1 branch deterministically route around each other.
+      occupied.add(`${p.x},${p.y}`);
+    }
+    funds -= branchCost;
+    ledger = [
+      {
+        id: nextLedgerId++,
+        tick: s.tick,
+        label: `Rail branch to ${lineSpec.name} (${plan.path.length})`,
+        amount: -branchCost,
+      },
+      ...ledger,
+    ].slice(0, LEDGER_CAP);
+  }
+
+  return {
+    ...s,
+    funds,
+    nextId,
+    buildings: newTiles.length > 0 ? [...s.buildings, ...newTiles] : s.buildings,
+    ledger,
+    nextLedgerId,
+    railNotice: blockedAny ? NO_RAIL_ROUTE_NOTICE : null,
+  };
+}
+
 function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'ledger' | 'nextLedgerId'> {
   return {
     ledger: [{ id: s.nextLedgerId, tick: s.tick, label, amount }, ...s.ledger].slice(0, LEDGER_CAP),
@@ -922,7 +1079,13 @@ export function reducer(state: SimState, action: Action): SimState {
       // FEAT-1972079907 inc1: auto-wire the building to the road network (lay a
       // fitting connector to the nearest road + upgrade-on-connect), or surface a
       // "no road access" notice. Deterministic; connectors journal via replay.
-      const updated = autoConnect(placedState, placedBuilding, sp);
+      const connected = autoConnect(placedState, placedBuilding, sp);
+      // FEAT-1972079902 inc3: if this is a GATEWAY (Ashford International /
+      // International Airport), auto-lay deterministic branch lines to the nearest
+      // slow-rail line AND the nearest HS1 line (routing around buildings), or
+      // surface a "no rail route" notice. Deterministic; branch tiles journal via
+      // the gateway `place` action through replay. Non-gateways just clear railNotice.
+      const updated = autoBranchRail(connected, placedBuilding, sp);
       const rewards = computeLevelRewards(updated);
       if (rewards.length === 0) return updated;
       // Push rewards to pending queue instead of applying immediately.

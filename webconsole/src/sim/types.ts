@@ -159,6 +159,14 @@ export interface SimState {
    */
   roadNotice: string | null;
   /**
+   * FEAT-1972079902 inc3 — transient rail auto-branch notice. Set to a short
+   * message (e.g. "no rail route") when a placed GATEWAY (Ashford International /
+   * International Airport) could not lay a branch to a rail or HS1 line (no route
+   * within budget). null otherwise. Cleared/overwritten on the next `place`.
+   * Deterministic, serialisable sim-state — mirrors `roadNotice`.
+   */
+  railNotice: string | null;
+  /**
    * FEAT-1972079907 inc2 — one-year traffic monitors. When auto-connect lays a
    * connector, each connector tile + the joined road tile is registered here and
    * watched for one in-game year (TICKS_PER_YEAR). On each monthly aggregate the
