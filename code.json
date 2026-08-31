@@ -2572,11 +2572,6 @@
             "key": "harness.replay",
             "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
             "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
-          },
-          {
-            "key": "int.persist",
-            "moduleGuid": "82897e55-1135-46e1-9b71-7d18c99a6b7a",
-            "inboundGuid": "087edd5a-d6c4-427f-bc70-ce944f0d7280"
           }
         ]
       },
@@ -4864,6 +4859,11 @@
             "key": "harness.replay",
             "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
             "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
+          },
+          {
+            "key": "int.persist",
+            "moduleGuid": "82897e55-1135-46e1-9b71-7d18c99a6b7a",
+            "inboundGuid": "087edd5a-d6c4-427f-bc70-ce944f0d7280"
           }
         ]
       },
@@ -10959,8 +10959,8 @@
         "pattern": "per-CityKey journal append + snapshot put/get/list, cross-process rehydrate",
         "consumers": [
           {
-            "key": "engine.core",
-            "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           }
         ]
       },

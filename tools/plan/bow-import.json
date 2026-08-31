@@ -443,8 +443,7 @@
       "deps": [
         "foundation.det",
         "foundation.registry",
-        "int.protocol",
-        "int.persist"
+        "int.protocol"
       ]
     },
     {
@@ -935,7 +934,8 @@
         "engine.traffic",
         "engine.extcommute",
         "engine.services",
-        "engine.firms"
+        "engine.firms",
+        "int.persist"
       ]
     },
     {

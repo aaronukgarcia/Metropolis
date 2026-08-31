@@ -992,8 +992,7 @@
       "deps": [
         "foundation.det",
         "foundation.registry",
-        "int.protocol",
-        "int.persist"
+        "int.protocol"
       ],
       "calls": [
         "foundation.det",
@@ -1004,8 +1003,7 @@
         "foundation.data",
         "foundation.errors",
         "feat.debugmode",
-        "harness.replay",
-        "int.persist"
+        "harness.replay"
       ],
       "sprint": 1
     },
@@ -1728,7 +1726,8 @@
         "engine.traffic",
         "engine.extcommute",
         "engine.services",
-        "engine.firms"
+        "engine.firms",
+        "int.persist"
       ],
       "calls": [
         "engine.core",
@@ -1759,7 +1758,8 @@
         "ui.screen.finance",
         "ui.screen.services",
         "ui.screen.map",
-        "harness.replay"
+        "harness.replay",
+        "int.persist"
       ],
       "sprint": 6
     },
