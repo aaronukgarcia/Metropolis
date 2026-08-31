@@ -94,14 +94,28 @@ func TestWireVersion_IsZero(t *testing.T) {
 // TestCommandValidate_MinorTolerant_MajorNot is AC-1's exact mutation:
 // bump CurrentWireVersion's MINOR only, then validate an envelope stamped
 // with the OLD (lower) minor — must still pass (additive, no refusal).
-// Then bump the MAJOR too and re-validate the SAME old-stamped envelope —
-// must now fail (breaking change, refused). Both assertions run against
-// the same cmd value on the same test, per the doc's false-pass guard.
+// Then bump the MAJOR far enough to fall BELOW the supported window and
+// re-validate the SAME old-stamped envelope — must now fail (below the
+// window floor, refused). Both assertions run against the same cmd value
+// on the same test, per the doc's false-pass guard.
+//
+// FEAT-1972079936 Phase 0 inc2 note: a major bump of exactly
+// CurrentVersionWindowDepth or fewer is now IN-WINDOW and accepted (see
+// TestCommandValidate_InWindowOlderMajor_Accepted below) — this is the
+// deliberate change from inc1's "major must match exactly." This test is
+// updated (not deleted, GR#12) to bump the major PAST the window instead,
+// which is the one comparison that still discriminates "refused" from
+// "accepted" under inc2's new rule.
 func TestCommandValidate_MinorTolerant_MajorNot(t *testing.T) {
-	original := CurrentWireVersion
-	defer func() { CurrentWireVersion = original }()
+	originalVersion := CurrentWireVersion
+	originalDepth := CurrentVersionWindowDepth
+	defer func() {
+		CurrentWireVersion = originalVersion
+		CurrentVersionWindowDepth = originalDepth
+	}()
+	CurrentVersionWindowDepth = 2
 
-	oldVersion := WireVersion{Major: original.Major, Minor: original.Minor}
+	oldVersion := WireVersion{Major: originalVersion.Major, Minor: originalVersion.Minor}
 	cmd := Command{
 		ProtocolVersion: oldVersion.String(),
 		CorrelationID:   "test-corr-1",
@@ -116,11 +130,85 @@ func TestCommandValidate_MinorTolerant_MajorNot(t *testing.T) {
 		t.Fatalf("expected an older-minor Command to still validate against a newer-minor server, got: %v", err)
 	}
 
-	// Now bump the major too (breaking change) — the SAME old-stamped
-	// command must now be refused.
-	CurrentWireVersion = WireVersion{Major: oldVersion.Major + 1, Minor: 0}
+	// Now bump the major PAST the window (depth 2 + 1 = 3 majors ahead) —
+	// the SAME old-stamped command must now be refused as below-floor.
+	CurrentWireVersion = WireVersion{Major: oldVersion.Major + CurrentVersionWindowDepth + 1, Minor: 0}
 	if err := cmd.Validate(); !errors.Is(err, ErrUnsupportedProtocolVersion) {
-		t.Fatalf("expected an old-major Command to be refused against a newer-major server, got: %v", err)
+		t.Fatalf("expected a below-window-floor major Command to be refused, got: %v", err)
+	}
+}
+
+// TestCommandValidate_InWindowOlderMajor_Accepted is inc2's AC-3/AC-4
+// "in-window-connects" proof at the envelope level: a Command stamped
+// with a major 1 or 2 majors behind current (window depth 2, i.e. a
+// 3-major window) validates successfully — this is the actual behaviour
+// change from inc1, which refused ANY major mismatch.
+func TestCommandValidate_InWindowOlderMajor_Accepted(t *testing.T) {
+	originalVersion := CurrentWireVersion
+	originalDepth := CurrentVersionWindowDepth
+	defer func() {
+		CurrentWireVersion = originalVersion
+		CurrentVersionWindowDepth = originalDepth
+	}()
+	CurrentVersionWindowDepth = 2
+	CurrentWireVersion = WireVersion{Major: 5, Minor: 0}
+
+	for _, majorBack := range []int{0, 1, 2} {
+		v := WireVersion{Major: 5 - majorBack, Minor: 0}
+		cmd := Command{
+			ProtocolVersion: v.String(),
+			CorrelationID:   "test-corr-inwindow",
+			IssuedAtTick:    0,
+			Kind:            "AdvanceTicks",
+			Payload:         testPayload{},
+		}
+		if err := cmd.Validate(); err != nil {
+			t.Fatalf("major %d back (window depth 2): expected acceptance, got: %v", majorBack, err)
+		}
+	}
+}
+
+// TestCommandValidate_BelowWindowFloor_Refused is the other side of the
+// same boundary: a major exactly ONE step past the window floor (window
+// depth N -> floor major-N is accepted, major-N-1 is not) is refused —
+// proving the boundary is pinned at N, not merely "some refusal happens
+// somewhere" (the doc's AC-4 false-pass guard).
+func TestCommandValidate_BelowWindowFloor_Refused(t *testing.T) {
+	originalVersion := CurrentWireVersion
+	originalDepth := CurrentVersionWindowDepth
+	defer func() {
+		CurrentWireVersion = originalVersion
+		CurrentVersionWindowDepth = originalDepth
+	}()
+	CurrentVersionWindowDepth = 2
+	CurrentWireVersion = WireVersion{Major: 5, Minor: 0}
+
+	floor := WireVersion{Major: 3, Minor: 0}      // 5 - 2 = floor, must be accepted
+	belowFloor := WireVersion{Major: 2, Minor: 0} // one step further, must be refused
+
+	floorCmd := Command{ProtocolVersion: floor.String(), CorrelationID: "c1", Kind: "AdvanceTicks", Payload: testPayload{}}
+	if err := floorCmd.Validate(); err != nil {
+		t.Fatalf("expected the window FLOOR version itself to be accepted (boundary-inclusive), got: %v", err)
+	}
+
+	belowCmd := Command{ProtocolVersion: belowFloor.String(), CorrelationID: "c2", Kind: "AdvanceTicks", Payload: testPayload{}}
+	if err := belowCmd.Validate(); !errors.Is(err, ErrUnsupportedProtocolVersion) {
+		t.Fatalf("expected one-step-below-floor to be refused, got: %v", err)
+	}
+}
+
+// TestCommandValidate_NewerMajorThanServer_StillRefused proves inc2 did
+// not accidentally widen acceptance in the OTHER direction too: a major
+// NEWER than current is refused exactly like before, regardless of window
+// depth (a window only reaches backward, never forward).
+func TestCommandValidate_NewerMajorThanServer_StillRefused(t *testing.T) {
+	original := CurrentWireVersion
+	defer func() { CurrentWireVersion = original }()
+	CurrentWireVersion = WireVersion{Major: 1, Minor: 0}
+
+	cmd := Command{ProtocolVersion: "2.0", CorrelationID: "c3", Kind: "AdvanceTicks", Payload: testPayload{}}
+	if err := cmd.Validate(); !errors.Is(err, ErrUnsupportedProtocolVersion) {
+		t.Fatalf("expected a newer major than current to be refused, got: %v", err)
 	}
 }
 
@@ -155,6 +243,41 @@ func TestCommandValidate_MalformedProtocolVersion_Refused(t *testing.T) {
 	}
 	if err := cmd.Validate(); !errors.Is(err, ErrUnsupportedProtocolVersion) {
 		t.Fatalf("expected malformed ProtocolVersion to be refused, got: %v", err)
+	}
+}
+
+func TestWindowFloorMajor(t *testing.T) {
+	cases := []struct {
+		current WireVersion
+		n       int
+		want    int
+	}{
+		{WireVersion{5, 0}, 2, 3},
+		{WireVersion{1, 0}, 2, 0}, // clamped, never negative
+		{WireVersion{0, 0}, 2, 0},
+		{WireVersion{5, 0}, 0, 5}, // depth 0 -> only current itself
+	}
+	for _, c := range cases {
+		if got := WindowFloorMajor(c.current, c.n); got != c.want {
+			t.Errorf("WindowFloorMajor(%+v, %d) = %d, want %d", c.current, c.n, got, c.want)
+		}
+	}
+}
+
+func TestInVersionWindow(t *testing.T) {
+	current := WireVersion{Major: 5, Minor: 0}
+	n := 2
+	inWindow := []WireVersion{{5, 9}, {4, 0}, {3, 7}}
+	for _, v := range inWindow {
+		if !InVersionWindow(v, current, n) {
+			t.Errorf("InVersionWindow(%+v, current=%+v, n=%d) = false, want true", v, current, n)
+		}
+	}
+	outOfWindow := []WireVersion{{2, 0}, {6, 0}}
+	for _, v := range outOfWindow {
+		if InVersionWindow(v, current, n) {
+			t.Errorf("InVersionWindow(%+v, current=%+v, n=%d) = true, want false", v, current, n)
+		}
 	}
 }
 

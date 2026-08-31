@@ -11,10 +11,14 @@ import (
 // Phase 0 inc1) rather than an independently hand-maintained string — see
 // version.go's package doc for why a real major/minor pair replaced the
 // old opaque string. Every Command still carries it verbatim; Validate
-// below now accepts any minor at-or-below CurrentWireVersion's, for the
-// same major, rather than exact string equality — see docs/design/
-// protocol.md "Versioning & extension rules" for how v1.1 (additive)
-// differs from a v2 (breaking) bump, now formalized by WireVersion.Major.
+// below accepts any minor at-or-below CurrentWireVersion's for the SAME
+// major (unchanged since inc1), and — as of inc2, AC-3/AC-4 — any OLDER
+// major within CurrentVersionWindowDepth majors back, on the assumption
+// wsserver has already shimmed such a Command's wire shape before it
+// reaches here. See docs/design/protocol.md "Versioning & extension
+// rules" for how v1.1 (additive) differs from a v2 (breaking) bump, now
+// formalized by WireVersion.Major, and wireversion.go's window design
+// note for the window mechanism itself.
 
 // Tick is simulation time: the monotonically increasing logistics
 // day-tick / monthly-tick counter the engine's phase pipeline advances
@@ -116,15 +120,36 @@ func (cmd Command) Validate() error {
 		return fmt.Errorf("%w: got %q: %v", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, err)
 	}
 	current := CurrentWireVersion
-	// Major must match exactly (a breaking change — WireVersion's own doc
-	// comment) with no window/shim to bridge it in this increment (that
-	// is increments 2-3's job, AC-3/AC-4). Minor is additive-tolerant: an
-	// OLDER minor than this build's current is fine (an older client just
-	// never sent/reads the newer fields); a NEWER minor than this build
-	// knows about is refused, since this build genuinely does not
-	// understand what that minor may have added.
-	if got.Major != current.Major || got.Minor > current.Minor {
-		return fmt.Errorf("%w: got %q, want %q (major must match; minor must be <= current)", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, current.String())
+	// FEAT-1972079936 Phase 0 increment 2 (AC-3/AC-4, "in-window-connects"
+	// half): a Command's major no longer has to match CURRENT exactly —
+	// any major within the server's supported window (CurrentWireVersion
+	// down to CurrentVersionWindowDepth majors back, inclusive of the
+	// floor) is accepted, on the assumption that anything wsserver
+	// decoded from an older-major client has already been run through
+	// that major's compat shim (wsserver/shim.go) before reaching here,
+	// so the envelope-level check only needs to gate "is this major
+	// servable at all," not "is it byte-identical to current." A major
+	// NEWER than current, or older than the window floor, is refused —
+	// this build genuinely does not understand a future major, and a
+	// below-floor major has no shim to bridge it (increment 3, AC-4,
+	// gives that refusal its own dedicated registry code and message;
+	// today it shares ErrUnsupportedProtocolVersion — TODO(FEAT-1972079936
+	// inc3): claim a distinct below-floor code and stop reusing this one).
+	//
+	// On the current major specifically, minor stays additive-tolerant
+	// exactly as increment 1 left it: an OLDER minor is fine (an older
+	// client just never sent/reads the newer fields); a NEWER minor than
+	// this build knows about is refused, since this build genuinely does
+	// not understand what that minor may have added. Older majors are not
+	// minor-checked here at all — Phase 0 treats an entire older major as
+	// one shim-served unit (WireVersion.Compare's own doc comment doesn't
+	// promise cross-major minor semantics, and none exist yet).
+	if got.Major == current.Major {
+		if got.Minor > current.Minor {
+			return fmt.Errorf("%w: got %q, want %q (minor must be <= current for the current major)", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, current.String())
+		}
+	} else if !InVersionWindow(got, current, CurrentVersionWindowDepth) {
+		return fmt.Errorf("%w: got %q, want %q (major must be within the supported version window)", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, current.String())
 	}
 	if err := cmd.CorrelationID.Validate(); err != nil {
 		return err

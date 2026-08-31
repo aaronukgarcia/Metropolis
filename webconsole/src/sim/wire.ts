@@ -69,26 +69,54 @@ export interface WireVersion {
   minor: number;
 }
 
-/** The wire protocol version this build speaks, parsed from
- * PROTOCOL_VERSION. Mirrors version.go's CurrentWireVersion. Increment 1
- * only ever declares/expects this single value (window/shim serving is
- * increment 2) — this constant exists now so the handshake shape below
- * never has to change when that increment widens it. */
-export const CURRENT_WIRE_VERSION: WireVersion = parseWireVersionOrThrow(PROTOCOL_VERSION);
+/** Strict "is this a Go strconv.Atoi-shaped integer" matcher (BUG-470,
+ * FEAT-1972079936 Phase 0 inc2): an optional leading sign followed by one
+ * or more ASCII digits, nothing else. Used instead of bare `Number()` +
+ * `Number.isInteger`, which silently COERCES several shapes Go's
+ * ParseWireVersion (internal/protocol/wireversion.go) rejects outright —
+ * `Number('')` is `0` (empty string, not "no digits"), `Number(' 1 ')`
+ * trims whitespace, `Number('1e2')` accepts exponent notation, and
+ * `Number('0x1')` accepts hex — every one of those would let a malformed
+ * wire version slip through the pre-inc2 checker (isInteger only rejects
+ * a fractional RESULT, not the coercions that produced it). This regex
+ * runs FIRST so none of those coercions ever get a chance to fire. */
+const STRICT_INTEGER_RE = /^[+-]?\d+$/;
+
+/** Parses one "major"/"minor" part as a strict non-negative integer,
+ * mirroring Go's `strconv.Atoi` + the `< 0` check in
+ * wireversion.go's ParseWireVersion exactly (BUG-470). Returns null for
+ * anything STRICT_INTEGER_RE doesn't match, for a value outside
+ * Number.isSafeInteger (never silently truncated), or for a negative
+ * result. */
+function parseStrictNonNegativeInt(s: string): number | null {
+  if (!STRICT_INTEGER_RE.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isSafeInteger(n) || n < 0) return null;
+  return n;
+}
 
 /** Mirrors version.go's ParseWireVersion: parses a "major.minor" string
  * into a WireVersion, or returns null for anything malformed (no
  * exception — callers decide how a malformed wire version is surfaced,
- * consistent with this file's other decode helpers). */
+ * consistent with this file's other decode helpers).
+ *
+ * BUG-470 (FEAT-1972079936 Phase 0 inc2): tightened to strictly match
+ * the Go side's reject-set — integer-only, exactly two dot-separated
+ * parts, no whitespace/exponent/hex coercion via `Number()`. Before this
+ * fix, ".1" parsed as {major:0,minor:1} (Number('')===0) and "1." parsed
+ * as {major:1,minor:0} (same reason) — both are REJECTED by Go's
+ * ParseWireVersion (strconv.Atoi("") errors), so this side silently
+ * accepted two shapes the Go side refuses. See wire.test.mjs's
+ * TestParseWireVersion_MalformedMirrorsGo for the shared reject-set this
+ * now passes. */
 export function parseWireVersion(v: string): WireVersion | null {
   const parts = v.split('.');
   // A wire version is exactly two dot-separated parts: major.minor.
   const WIRE_VERSION_PART_COUNT = 2;
   if (parts.length !== WIRE_VERSION_PART_COUNT) return null;
-  const major = Number(parts[0]);
-  const minor = Number(parts[1]);
-  if (!Number.isInteger(major) || major < 0) return null;
-  if (!Number.isInteger(minor) || minor < 0) return null;
+  const major = parseStrictNonNegativeInt(parts[0]);
+  const minor = parseStrictNonNegativeInt(parts[1]);
+  if (major === null || minor === null) return null;
   return { major, minor };
 }
 
@@ -103,6 +131,13 @@ function parseWireVersionOrThrow(v: string): WireVersion {
   }
   return parsed;
 }
+
+/** The wire protocol version this build speaks, parsed from
+ * PROTOCOL_VERSION. Mirrors version.go's CurrentWireVersion. Increment 1
+ * only ever declares/expects this single value (window/shim serving is
+ * increment 2) — this constant exists now so the handshake shape below
+ * never has to change when that increment widens it. */
+export const CURRENT_WIRE_VERSION: WireVersion = parseWireVersionOrThrow(PROTOCOL_VERSION);
 
 /** Mirrors version.go's IntersectCapabilities: the set intersection of a
  * and b, de-duplicated, never their union and never either side's raw

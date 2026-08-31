@@ -13,6 +13,7 @@ import {
   isFinanceBalanceSheetPatch,
   decodeFinanceBalanceSheetPatch,
   normalizeProtocolVersion,
+  parseWireVersion,
 } from '../src/sim/wire.ts';
 
 describe('wire.ts constants', () => {
@@ -128,6 +129,65 @@ describe('decodeFinanceBalanceSheetPatch (AC-2)', () => {
       balanceSheet: { assets: [], liabilities: [], netWorth: 0 },
     };
     assert.ok(decodeFinanceBalanceSheetPatch(matched));
+  });
+});
+
+// BUG-470 (FEAT-1972079936 Phase 0 inc2): parseWireVersion must reject
+// exactly the same set internal/protocol/wireversion_test.go's
+// TestParseWireVersion_Malformed asserts against ParseWireVersion — this
+// list is the Go test's malformed-cases slice, copied verbatim so a
+// future edit to either side that drifts the two reject-sets apart shows
+// up as a diff between these two files, not a silent divergence.
+describe('parseWireVersion (BUG-470: strict mirror of Go ParseWireVersion)', () => {
+  const goMalformedCases = [
+    '', '1', '1.', '.1', '1.0.0', 'a.b', '1.a', 'a.1', '-1.0', '1.-1',
+    'v1.0', '1.0-dirty', '1.0-153-gABCD',
+  ];
+  for (const c of goMalformedCases) {
+    test(`rejects ${JSON.stringify(c)} (mirrors Go's ParseWireVersion reject-set)`, () => {
+      assert.equal(parseWireVersion(c), null);
+    });
+  }
+
+  // MUTATION-PROVE (BUG-470): before the fix, Number('')===0 made ".1"
+  // parse as {major:0,minor:1} and "1." parse as {major:1,minor:0} —
+  // both silently ACCEPTED despite being in the Go reject-set above.
+  // These two are called out explicitly so a regression back to
+  // Number()-based coercion is caught even if the loop above were ever
+  // trimmed.
+  test('rejects ".1" specifically (empty major must not coerce to 0)', () => {
+    assert.equal(parseWireVersion('.1'), null);
+  });
+  test('rejects "1." specifically (empty minor must not coerce to 0)', () => {
+    assert.equal(parseWireVersion('1.'), null);
+  });
+
+  // Additional JS-specific coercion shapes Number() would otherwise let
+  // through even though they were never in the original malformed list
+  // (Go's strconv.Atoi already rejects all of these; this is purely
+  // guarding the TS side's OWN coercion surface, BUG-470's stated scope).
+  test('rejects whitespace-padded parts', () => {
+    assert.equal(parseWireVersion(' 1.0'), null);
+    assert.equal(parseWireVersion('1. 0'), null);
+    assert.equal(parseWireVersion('1.0 '), null);
+  });
+  test('rejects exponent notation', () => {
+    assert.equal(parseWireVersion('1e2.0'), null);
+    assert.equal(parseWireVersion('1.0e2'), null);
+  });
+  test('rejects hexadecimal notation', () => {
+    assert.equal(parseWireVersion('0x1.0'), null);
+  });
+  test('rejects Infinity/NaN-shaped strings', () => {
+    assert.equal(parseWireVersion('Infinity.0'), null);
+    assert.equal(parseWireVersion('NaN.0'), null);
+  });
+
+  test('still accepts well-formed versions (no over-tightening)', () => {
+    assert.deepEqual(parseWireVersion('1.0'), { major: 1, minor: 0 });
+    assert.deepEqual(parseWireVersion('2.3'), { major: 2, minor: 3 });
+    assert.deepEqual(parseWireVersion('0.0'), { major: 0, minor: 0 });
+    assert.deepEqual(parseWireVersion('10.42'), { major: 10, minor: 42 });
   });
 });
 

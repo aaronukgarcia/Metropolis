@@ -31,18 +31,17 @@ import (
 //     issues, a new capability). An older-minor client keeps working
 //     unmodified.
 //
-// # Window design note (for increment 2)
+// # Window design note (increment 2 landed)
 //
-// This file's CurrentWireVersion is a single value because increment 1
-// only ever serves its own current version (window depth 0/1 — see the
-// acceptance doc's "Increment 1" scope note). Increment 2 is expected to
-// add a small ordered slice of {WireVersion, shim} pairs alongside this
-// single "current" value, plus a DefaultVersionWindowDepth constant and a
-// windowFloor() helper — none of that exists yet, deliberately: this
-// file's Compare/Parse/Equal primitives are exactly what that window
-// registry will need to order and bound its supported versions, so
-// nothing here needs to change shape when increment 2 lands, only grow a
-// sibling.
+// Increment 1 only ever served its own current version (window depth
+// 0/1). Increment 2 (FEAT-1972079936 Phase 0, AC-3) adds
+// DefaultVersionWindowDepth/CurrentVersionWindowDepth and the
+// WindowFloorMajor/InVersionWindow helpers below, plus wsserver's
+// versionShim registry keyed per-major-offset-from-current (wsserver/
+// shim.go) — this file's Compare/Parse/Equal primitives were exactly
+// what that window registry needed to order and bound its supported
+// versions, so nothing here changed shape, only grew a sibling, per the
+// plan this comment originally laid out.
 type WireVersion struct {
 	Major int `json:"major"`
 	Minor int `json:"minor"`
@@ -105,6 +104,52 @@ func (v WireVersion) Compare(other WireVersion) int {
 		return 1
 	}
 	return 0
+}
+
+// DefaultVersionWindowDepth is how many MAJOR versions back (in addition
+// to CurrentWireVersion) the server simultaneously serves via compat
+// shims (FEAT-1972079936 Phase 0 increment 2, AC-3). Aaron's ruling
+// (2026-08-31, compute-offload architecture doc section 3 point 3): the
+// window is 3 MAJOR versions wide — current plus 2 back — so N=2 here.
+// This is a PLACEHOLDER count Aaron may retune; it is a plain int
+// constant (not date/schedule-based) because deprecation in this project
+// is event-driven, not scheduled (Aaron's ruling, same DD).
+const DefaultVersionWindowDepth = 2
+
+// CurrentVersionWindowDepth is the window depth this build actually
+// enforces. A var, not a const, for the same reason CurrentWireVersion is
+// a var: AC-3's mutation tests need to temporarily narrow the window
+// (e.g. N=1) and observe the floor move, on the SAME running binary.
+// Production code must never assign to it outside of this file's own
+// definition; tests that mutate it MUST restore the original via `defer`.
+var CurrentVersionWindowDepth = DefaultVersionWindowDepth
+
+// WindowFloorMajor returns the oldest MAJOR version still served
+// (inclusive) given current's major and a window depth of n majors back.
+// Clamped at 0 — there is no such thing as a negative major, and a
+// window deeper than the current major simply means "every major ever
+// issued is still in-window."
+func WindowFloorMajor(current WireVersion, n int) int {
+	floor := current.Major - n
+	if floor < 0 {
+		floor = 0
+	}
+	return floor
+}
+
+// InVersionWindow reports whether v's MAJOR falls within the server's
+// currently-served window: [WindowFloorMajor(current, n), current.Major],
+// inclusive on both ends (AC-4: the floor version itself is never
+// refused; a version whose major is newer than current is never
+// in-window either — this build genuinely does not understand it).
+// Minor is deliberately ignored here: a shim (wsserver's versionShim
+// registry) is keyed per-MAJOR, not per-minor, so any minor of an
+// in-window older major is treated as servable by that major's shim.
+func InVersionWindow(v, current WireVersion, n int) bool {
+	if v.Major > current.Major {
+		return false
+	}
+	return v.Major >= WindowFloorMajor(current, n)
 }
 
 // ErrMalformedWireVersion is returned by ParseWireVersion when s is not a

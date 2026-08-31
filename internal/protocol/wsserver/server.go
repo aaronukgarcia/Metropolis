@@ -25,24 +25,35 @@
 //
 // # Graceful negotiation is arriving (FEAT-1972079936 Phase 0)
 //
-// The paragraph above documents this package's CURRENT behaviour and
-// remains accurate for this increment — engineVersion-string equality is
-// still the accept/refuse gate. Aaron's superseding DD (2026-08-31, the
-// compute-offload epic, docs/planning/acceptance/
-// feat-1972079936-phase0-protocol-versioning.md) is that this refuse-on-
-// any-mismatch rule is too strict for the Azure-hosted target topology,
-// where a long-lived server outlives many client-tab refresh cycles: an
-// in-window older client should connect and work, not be kicked off by
-// every deploy. Phase 0 replaces this with a semver'd WireVersion
-// (protocol.WireVersion, version.go), a real connect-time negotiation
-// (this file's handshakeParams/handshakeResult, extended below), a
-// configurable version window with compat shims, and refusal reserved
-// for a client strictly below the window floor. Increment 1 (this
-// change) adds ONLY the new fields and a single-version echo — the
-// engineVersion-string gate above is untouched until increment 3, which
-// is also where this doc comment's "REFUSAL, never a silent degrade"
-// framing gets corrected to describe the window/negotiation behaviour in
-// full.
+// The paragraph above documents this package's engineVersion-STRING
+// behaviour, which remains untouched through increment 2 — equality on
+// that build string is still a separate, independent accept/refuse gate.
+// Aaron's superseding DD (2026-08-31, the compute-offload epic, docs/
+// planning/acceptance/feat-1972079936-phase0-protocol-versioning.md) is
+// that a refuse-on-any-mismatch rule is too strict for the Azure-hosted
+// target topology, where a long-lived server outlives many client-tab
+// refresh cycles: an in-window older client should connect and work, not
+// be kicked off by every deploy. Phase 0 replaces the WIRE-VERSION half
+// of this (the part that COULD be graceful — the build string, being a
+// same-commit identity check, is a different concern this phase
+// deliberately leaves alone) with a semver'd WireVersion
+// (protocol.WireVersion, wireversion.go), a real connect-time negotiation
+// (handshakeParams/handshakeResult, below), and a configurable version
+// window with compat shims (shim.go).
+//
+// Increment 1 added ONLY the new fields and a single-version echo.
+// Increment 2 (this change) adds the real window: negotiateVersion now
+// picks the highest version both the client's declared range and the
+// server's window support, an in-window OLDER-major connection is routed
+// through shim.go's per-offset versionShim so its Command/CommandResult
+// round-trips correctly, and a below-window-floor client is refused at
+// the handshake (reusing ErrHandshakeVersionMismatch for now — see
+// handshake's own doc comment for the inc3 TODO that gives this its own
+// dedicated code). Increment 3 adds capability-gated negotiation in
+// earnest and is also where this doc comment's "REFUSAL, never a silent
+// degrade" framing above gets corrected to describe the window/
+// negotiation behaviour in full, once the engineVersion-string gate
+// itself is revisited.
 //
 // # v1 scope (increment 1)
 //
@@ -197,21 +208,43 @@ type Server struct {
 	// case. A future increment can populate this via a constructor
 	// option once a real capability token exists.
 	capabilities []string
+	// versionWindowDepth (FEAT-1972079936 Phase 0 inc2, AC-3): how many
+	// MAJOR versions back from protocol.CurrentWireVersion this server
+	// simultaneously serves via shim.go's shimRegistry. Defaults to
+	// protocol.DefaultVersionWindowDepth; override via WithVersionWindowDepth.
+	versionWindowDepth int
+}
+
+// Option configures a Server at construction time (New's variadic
+// parameter). Added in increment 2 so New's existing 3-argument call
+// shape (cmd/metroserve/main.go's only real caller) stays source-compatible
+// -- opts is purely additive.
+type Option func(*Server)
+
+// WithVersionWindowDepth overrides the default version window depth
+// (FEAT-1972079936 Phase 0 inc2, AC-3) -- how many majors back from
+// protocol.CurrentWireVersion this server serves via a compat shim. Tests
+// use this to exercise a deliberately narrow window (e.g. N=1) without
+// mutating the package-level protocol.CurrentVersionWindowDepth global.
+func WithVersionWindowDepth(n int) Option {
+	return func(s *Server) { s.versionWindowDepth = n }
 }
 
 // New constructs a Server wrapping transport. engineVersion is this
 // build's own version string (GR#2: callers pass the git-describe-derived
 // value, never a hand-maintained literal) — it is what every connecting
 // client's handshake is compared against. A zero handshakeTimeout uses
-// DefaultHandshakeTimeout.
-func New(transport protocol.Transport, engineVersion string, handshakeTimeout time.Duration) *Server {
+// DefaultHandshakeTimeout. opts is additive (FEAT-1972079936 Phase 0 inc2)
+// -- every pre-existing 3-argument call site is unaffected.
+func New(transport protocol.Transport, engineVersion string, handshakeTimeout time.Duration, opts ...Option) *Server {
 	if handshakeTimeout <= 0 {
 		handshakeTimeout = DefaultHandshakeTimeout
 	}
-	return &Server{
-		transport:        transport,
-		engineVersion:    engineVersion,
-		handshakeTimeout: handshakeTimeout,
+	s := &Server{
+		transport:          transport,
+		engineVersion:      engineVersion,
+		handshakeTimeout:   handshakeTimeout,
+		versionWindowDepth: protocol.DefaultVersionWindowDepth,
 		upgrader: websocket.Upgrader{
 			// Dev-loopback tool, not a public-facing service (localhost
 			// port per the acceptance doc's DD1 note) -- origin checking
@@ -222,6 +255,10 @@ func New(transport protocol.Transport, engineVersion string, handshakeTimeout ti
 		},
 		newCorrelationID: func() string { return string(errs.NewCorrelationID()) },
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // ErrNoHandshake is returned internally (never sent over the wire as a
@@ -243,10 +280,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	if !s.handshake(conn) {
+	negotiated, ok := s.handshake(conn)
+	if !ok {
 		return
 	}
-	s.pump(conn)
+	s.pump(conn, negotiated)
 }
 
 // normalizeVersion strips the volatile "-dirty" suffix `git describe`
@@ -270,46 +308,68 @@ func normalizeVersion(v string) string {
 }
 
 // negotiateVersion computes the wire version this connection will speak
-// (FEAT-1972079936 Phase 0 inc1, AC-1/AC-2). clientMax is the client's
-// declared ceiling (handshakeParams.ClientMaxVersion); nil means an old
-// client that predates this field entirely.
+// (FEAT-1972079936 Phase 0 inc1/inc2, AC-1/AC-2/AC-3). clientMax is the
+// client's declared ceiling (handshakeParams.ClientMaxVersion); nil means
+// an old client that predates this field entirely. windowDepth is the
+// server's configured version-window depth (Server.versionWindowDepth).
 //
-// Increment 1's window has depth 0/1 — this server only ever actually
-// SERVES protocol.CurrentWireVersion (the real window/shim registry is
-// increment 2, AC-3) — so this is a single-version ECHO, not full
-// negotiation: it proves the response reflects the CLIENT's declared
-// ceiling when that ceiling is the lower of the two (AC-2's mutation:
-// a client one minor behind current must get ITS version back, not
-// silently the server's own latest), and otherwise falls back to the
-// server's current version (a nil/newer-than-current client, or one from
-// a different major — increment 3's AC-4 is where a genuine below-floor
-// case gets its own typed refusal instead of this permissive fallback).
-func negotiateVersion(clientMax *protocol.WireVersion) protocol.WireVersion {
+// Increment 1 only ever actually served protocol.CurrentWireVersion
+// (single-version echo). Increment 2 (AC-3) widens this to real window
+// negotiation across MAJORS: an in-window older-major client (its
+// declared ceiling's major is within windowDepth majors behind current,
+// inclusive of the floor) negotiates onto ITS OWN major — not silently
+// current's — because that older major is what its shim (shim.go) will
+// actually serve; Phase 0 tracks no per-minor history for an older major,
+// so the negotiated minor for an older major is always 0 (that major's
+// canonical/only servable point today). Same-major negotiation is
+// unchanged from inc1: the lower of the two minors. A client whose
+// ceiling is NEWER than current, or OLDER than the window floor, falls
+// back to current (inc1's existing permissive fallback for "newer than
+// we understand"; the below-floor half of this is now actually refused
+// earlier, at the handshake's window check, before negotiateVersion is
+// even called — see handshake's callsite).
+func negotiateVersion(clientMax *protocol.WireVersion, windowDepth int) protocol.WireVersion {
 	current := protocol.CurrentWireVersion
 	if clientMax == nil {
 		return current
 	}
-	if clientMax.Major == current.Major && clientMax.Minor < current.Minor {
-		return protocol.WireVersion{Major: current.Major, Minor: clientMax.Minor}
+	if clientMax.Major == current.Major {
+		if clientMax.Minor < current.Minor {
+			return protocol.WireVersion{Major: current.Major, Minor: clientMax.Minor}
+		}
+		return current
 	}
+	if clientMax.Major < current.Major && protocol.InVersionWindow(*clientMax, current, windowDepth) {
+		// In-window older major: negotiate onto the CLIENT's own major
+		// (AC-3's "an in-window client negotiates ITS major, not the
+		// current one"), minor pinned to 0 -- see doc comment above.
+		return protocol.WireVersion{Major: clientMax.Major, Minor: 0}
+	}
+	// Newer than current, or below the window floor: fall back to
+	// current (inc1 behaviour). A below-floor client should already have
+	// been refused by handshake's own window check before reaching here;
+	// this branch is the belt-and-braces fallback for a caller that
+	// calls negotiateVersion directly (as the AC-2 struct-level tests do)
+	// without going through that refusal path.
 	return current
 }
 
 // negotiateVersion is a method purely so call sites read naturally
-// alongside s.transport/s.capabilities; it has no receiver-dependent
-// state today (increment 2's window config will live on Server and this
-// will start reading it instead of the package-level current constant).
+// alongside s.transport/s.capabilities; it reads s.versionWindowDepth
+// (increment 2 — increment 1 had no per-instance window config yet).
 func (s *Server) negotiateVersion(clientMax *protocol.WireVersion) protocol.WireVersion {
-	return negotiateVersion(clientMax)
+	return negotiateVersion(clientMax, s.versionWindowDepth)
 }
 
 // handshake reads the connection's first frame, validates it is a
-// well-formed handshake naming a matching ClientVersion, and responds
-// accordingly. Returns true iff the handshake succeeded and the
-// connection should proceed to pump(); on any failure it has already
-// written the refusal frame and the caller must close the connection
-// without pumping further (Aaron DD: refuse, never degrade).
-func (s *Server) handshake(conn *websocket.Conn) bool {
+// well-formed handshake naming a matching ClientVersion and an in-window
+// wire version, and responds accordingly. Returns the negotiated wire
+// version and true iff the handshake succeeded and the connection should
+// proceed to pump(); on any failure it has already written the refusal
+// frame and the caller must close the connection without pumping further
+// (Aaron DD: refuse, never degrade -- still true below the window floor,
+// AC-4; graceful downgrade only applies WITHIN the window).
+func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, bool) {
 	_ = conn.SetReadDeadline(time.Now().Add(s.handshakeTimeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }() // no deadline for the steady-state pump
 
@@ -322,7 +382,7 @@ func (s *Server) handshake(conn *websocket.Conn) bool {
 		// to), so this failure is only visible server-side; still
 		// registry-logged (GR#1) rather than swallowed.
 		_ = errs.Wrap(protocol.ErrHandshakeTimeout, s.newCorrelationID(), err, map[string]any{"timeoutMs": s.handshakeTimeout.Milliseconds()})
-		return false
+		return protocol.WireVersion{}, false
 	}
 
 	var msg rpcMessage
@@ -335,7 +395,7 @@ func (s *Server) handshake(conn *websocket.Conn) bool {
 		}
 		e := errs.New(protocol.ErrHandshakeInvalid, s.newCorrelationID(), map[string]any{"reason": reason})
 		s.writeRefusal(conn, msg.ID, e)
-		return false
+		return protocol.WireVersion{}, false
 	}
 
 	var params handshakeParams
@@ -346,7 +406,7 @@ func (s *Server) handshake(conn *websocket.Conn) bool {
 		}
 		e := errs.New(protocol.ErrHandshakeInvalid, s.newCorrelationID(), map[string]any{"reason": reason})
 		s.writeRefusal(conn, msg.ID, e)
-		return false
+		return protocol.WireVersion{}, false
 	}
 
 	if normalizeVersion(params.ClientVersion) != normalizeVersion(s.engineVersion) {
@@ -355,20 +415,50 @@ func (s *Server) handshake(conn *websocket.Conn) bool {
 			"serverVersion": s.engineVersion,
 		})
 		s.writeRefusal(conn, msg.ID, e)
-		return false
+		return protocol.WireVersion{}, false
 	}
 
+	// FEAT-1972079936 Phase 0 inc2 (AC-3/AC-4, "in-window-connects" half):
+	// a client whose declared wire-version CEILING is older than the
+	// server's supported window floor cannot be served on ANY major it
+	// asked for (there is no shim for it) -- refuse here, before
+	// negotiation, rather than silently falling back to current (which
+	// would be exactly the "confident wrong data" failure GR#1 exists to
+	// prevent: the client asked for something this server cannot speak to
+	// it in). TODO(FEAT-1972079936 inc3, AC-4): this reuses
+	// ErrHandshakeVersionMismatch for now; inc3 claims a DEDICATED
+	// below-floor registry code (never MET-P010, whose meaning is the
+	// separate build-string mismatch above) carrying clientVersion/
+	// serverVersion/windowFloor context and a "minimum supported version"
+	// message, and retires this file's now-superseded package doc comment
+	// (lines 12-24) in the same increment.
+	if params.ClientMaxVersion != nil {
+		current := protocol.CurrentWireVersion
+		if !protocol.InVersionWindow(*params.ClientMaxVersion, current, s.versionWindowDepth) &&
+			params.ClientMaxVersion.Major <= current.Major {
+			e := errs.New(protocol.ErrHandshakeVersionMismatch, s.newCorrelationID(), map[string]any{
+				"clientMaxVersion":   params.ClientMaxVersion.String(),
+				"serverVersion":      current.String(),
+				"windowFloorMajor":   protocol.WindowFloorMajor(current, s.versionWindowDepth),
+				"versionWindowDepth": s.versionWindowDepth,
+			})
+			s.writeRefusal(conn, msg.ID, e)
+			return protocol.WireVersion{}, false
+		}
+	}
+
+	negotiated := s.negotiateVersion(params.ClientMaxVersion)
 	resultBytes, _ := json.Marshal(handshakeResult{
 		Accepted:          true,
 		ServerVersion:     s.engineVersion,
-		NegotiatedVersion: s.negotiateVersion(params.ClientMaxVersion),
+		NegotiatedVersion: negotiated,
 		Capabilities:      protocol.IntersectCapabilities(s.capabilities, params.Capabilities),
 	})
 	reply := rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: resultBytes}
 	if err := conn.WriteJSON(reply); err != nil {
-		return false
+		return protocol.WireVersion{}, false
 	}
-	return true
+	return negotiated, true
 }
 
 // writeRefusal sends a JSON-RPC error response carrying e's registry code
@@ -465,8 +555,17 @@ func (c *safeConn) writeJSON(v any) error {
 // drains the transport's three outbound channels. Both goroutines write
 // to the connection only through the shared safeConn (sc, below) — see
 // its doc comment for why a second writer existed and raced it.
-func (s *Server) pump(conn *websocket.Conn) {
+func (s *Server) pump(conn *websocket.Conn, negotiated protocol.WireVersion) {
 	sc := newSafeConn(conn)
+	// FEAT-1972079936 Phase 0 inc2 (AC-3): the shim (if any) this
+	// connection's negotiated major requires, resolved ONCE per
+	// connection at pump start rather than per-message -- a connection's
+	// negotiated version never changes mid-session (renegotiation is out
+	// of scope for Phase 0). offset<=0 (current major, or a client ahead
+	// of current that fell back to current) correctly yields ok=false --
+	// current-major traffic is never shimmed.
+	offset := protocol.CurrentWireVersion.Major - negotiated.Major
+	shim, hasShim := shimForOffset(offset)
 	done := make(chan struct{})
 	// closeOnce guards `done` being closed exactly once. Both the inbound
 	// (ServeHTTP's own goroutine, below) and outbound (the goroutine
@@ -496,21 +595,27 @@ func (s *Server) pump(conn *websocket.Conn) {
 				if !ok {
 					return
 				}
-				if !s.writeNotification(sc, methodResult, r) {
+				if !s.writeNotification(sc, methodResult, r, shim, hasShim) {
 					return
 				}
 			case e, ok := <-events:
 				if !ok {
 					return
 				}
-				if !s.writeNotification(sc, methodEvent, e) {
+				// Events/deltas are not the concrete shim this increment
+				// ships (see shim.go's doc comment) -- only the
+				// Command/CommandResult round-trip is shimmed today, so
+				// these two notification kinds are passed through
+				// unshimmed regardless of the connection's negotiated
+				// version.
+				if !s.writeNotification(sc, methodEvent, e, versionShim{}, false) {
 					return
 				}
 			case d, ok := <-deltas:
 				if !ok {
 					return
 				}
-				if !s.writeNotification(sc, methodDelta, d) {
+				if !s.writeNotification(sc, methodDelta, d, versionShim{}, false) {
 					return
 				}
 			}
@@ -530,7 +635,7 @@ func (s *Server) pump(conn *websocket.Conn) {
 		}
 		switch msg.Method {
 		case methodCommand:
-			s.handleCommand(sc, msg)
+			s.handleCommand(sc, msg, shim, hasShim)
 		default:
 			// Unknown method post-handshake: ignored. v1 scope is
 			// command-forwarding only (subscribe/unsubscribe travel as
@@ -546,7 +651,7 @@ func (s *Server) pump(conn *websocket.Conn) {
 // actual CommandResult (accepted/rejected, per the engine's own
 // processing) arrives later, asynchronously, as a "result" notification
 // via pump's outbound goroutine, exactly like every other CommandResult.
-func (s *Server) handleCommand(sc *safeConn, msg rpcMessage) {
+func (s *Server) handleCommand(sc *safeConn, msg rpcMessage, shim versionShim, hasShim bool) {
 	// Defence in depth (astgate's copyguard convention): sc.writeJSON
 	// itself checks this before ever touching sc.mu/sc.conn, but this
 	// package's other reachable-type entry points (handleCommand,
@@ -561,7 +666,24 @@ func (s *Server) handleCommand(sc *safeConn, msg rpcMessage) {
 		// as writeJSON's own silent-fail-safe on this condition.
 		return
 	}
-	cmd, err := protocol.DecodeCommand(msg.Params)
+	params := msg.Params
+	// FEAT-1972079936 Phase 0 inc2 (AC-3/AC-6): an in-window OLDER-major
+	// connection's raw wire bytes are rewritten into the CURRENT major's
+	// shape here, BEFORE protocol.DecodeCommand ever sees them -- this is
+	// the "unwrapped away at the wsserver boundary" step AC-6's
+	// determinism invariant requires: the decoded protocol.Command below
+	// must be byte-identical to what a current-major client would have
+	// produced, regardless of which major this connection negotiated.
+	if hasShim && shim.adaptCommandIn != nil {
+		adapted, err := shim.adaptCommandIn(params)
+		if err != nil {
+			e := errs.New(protocol.ErrCommandDecodeFailed, s.newCorrelationID(), map[string]any{"reason": "version shim: " + err.Error()})
+			s.replyErrorE(sc, msg.ID, e)
+			return
+		}
+		params = adapted
+	}
+	cmd, err := protocol.DecodeCommand(params)
 	if err != nil {
 		e := errs.New(protocol.ErrCommandDecodeFailed, s.newCorrelationID(), map[string]any{"reason": err.Error()})
 		s.replyErrorE(sc, msg.ID, e)
@@ -609,13 +731,26 @@ func (s *Server) replyErrorE(sc *safeConn, id *int64, e *errs.E) {
 // one-way (no id) JSON-RPC notification. Returns false on any write
 // failure (the caller's outbound goroutine treats that as "connection
 // gone" and stops).
-func (s *Server) writeNotification(sc *safeConn, method string, payload any) bool {
+func (s *Server) writeNotification(sc *safeConn, method string, payload any, shim versionShim, hasShim bool) bool {
 	if err := sc.checkNotCopied(); err != nil {
 		return false // see handleCommand's identical guard for why this is a silent no-op
 	}
 	paramsBytes, err := json.Marshal(payload)
 	if err != nil {
 		return true // should never happen for these concrete wire types; skip this one frame rather than killing the connection
+	}
+	// FEAT-1972079936 Phase 0 inc2 (AC-3): the mirror-image shim for the
+	// method this negotiated-older-major connection expects its response
+	// shaped as (shim.go's adaptResultOut) -- applied only for "result"
+	// notifications today, matching this increment's one concrete shim
+	// (a CommandResult's correlation-id field rename); events/deltas are
+	// called with hasShim=false by pump and never reach this branch.
+	if hasShim && method == methodResult && shim.adaptResultOut != nil {
+		adapted, err := shim.adaptResultOut(paramsBytes)
+		if err != nil {
+			return true // malformed-for-shimming payload: skip this one frame, don't kill the connection over it
+		}
+		paramsBytes = adapted
 	}
 	msg := rpcMessage{JSONRPC: rpcVersion, Method: method, Params: paramsBytes}
 	return sc.writeJSON(msg) == nil

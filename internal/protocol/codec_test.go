@@ -205,9 +205,21 @@ func TestCommandValidate_MissingCorrelationID(t *testing.T) {
 	}
 }
 
+// TestCommandValidate_WrongProtocolVersion. NOTE (FEAT-1972079936 Phase 0
+// inc2, GR#12): this used to assert "0.9" (a different MAJOR from
+// ProtocolVersion's "1.0") was refused outright. As of inc2's version
+// window (AC-3/AC-4), a different major is no longer automatically
+// wrong — major 0 now falls inside the default window
+// (CurrentVersionWindowDepth=2 back from major 1's floor of 0, see
+// wireversion_test.go's TestWindowFloorMajor) and validates successfully.
+// That behaviour is now covered explicitly by
+// TestCommandValidate_MajorZero_InDefaultWindow_Accepted below (not
+// silently dropped, GR#12) — this test is repointed at a major that is
+// genuinely wrong under BOTH the old and new rules: a NEWER major than
+// ProtocolVersion, which no window ever reaches forward to.
 func TestCommandValidate_WrongProtocolVersion(t *testing.T) {
 	cmd := Command{
-		ProtocolVersion: "0.9",
+		ProtocolVersion: "99.0",
 		CorrelationID:   "c1",
 		IssuedAtTick:    1,
 		Kind:            KindPause,
@@ -215,6 +227,23 @@ func TestCommandValidate_WrongProtocolVersion(t *testing.T) {
 	}
 	if err := cmd.Validate(); !errors.Is(err, ErrUnsupportedProtocolVersion) {
 		t.Fatalf("Validate() = %v, want ErrUnsupportedProtocolVersion", err)
+	}
+}
+
+// TestCommandValidate_MajorZero_InDefaultWindow_Accepted is the
+// replacement coverage this file's own comment above promises: at this
+// build's real ProtocolVersion ("1.0") and the DEFAULT window depth (2),
+// major 0 is in-window (floor = max(1-2, 0) = 0) and must validate.
+func TestCommandValidate_MajorZero_InDefaultWindow_Accepted(t *testing.T) {
+	cmd := Command{
+		ProtocolVersion: "0.9",
+		CorrelationID:   "c1",
+		IssuedAtTick:    1,
+		Kind:            KindPause,
+		Payload:         PausePayload{},
+	}
+	if err := cmd.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want acceptance (major 0 is in the default window at current major 1)", err)
 	}
 }
 
