@@ -2,7 +2,7 @@
   "planVersion": "1.1.0",
   "project": "Metropolis",
   "source": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
-  "updated": "2026-08-17",
+  "updated": "2026-08-31",
   "authoring": "Hand-authored single source of truth. tools/plan/generate.js derives code.json and tools/plan/bow-import.json from this file — never edit those outputs directly (GR#3). Sequence numbers are gapped by ~10 to allow insertions. v1.1.0 (2026-08-08): sprint assignments S0-S11 added (cloud/future items unscheduled); tool.bow decision enacted; tool.planguard + tool.ready added; engine.comms resequenced after engine.firms.",
   "designNorthStar": {
     "note": "Aaron's entertainment thesis (dictated 2026-08-11, transcribed docs/planning/design-north-star.md), extending Pillar 3 (docs/METROPOLIS-MASTER-v2.1.md I.2, 'squeezed never ambushed'). Deliberately 10,000 feet — the test other documents are held to, not a spec; do not decompose into features. Threaded through generate.js into code.json so BA acceptance-criteria vetting and balance passes can reference it programmatically (FEAT-043).",
@@ -637,6 +637,26 @@
       "sprint": 0
     },
     {
+      "key": "int.persist",
+      "type": "module",
+      "seq": 1003,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "interface",
+      "title": "Durable persistence Store: journal+snapshot, per-city isolation (local-disk now, Azure Blob later)",
+      "desc": "FEAT-1972079936 Phase 1 (compute-offload epic, Aaron 2026-08-31): the durable state tier that ends the localStorage/data-loss class. A Store interface over opaque []byte payloads (zero engine imports by construction — the engine hands it bytes, it never sees engine types), keyed by CityKey{TenantID,CityID} for per-tenant single-player isolation. DiskStore: CRC32(length||payload)-framed journal append+fsync (torn-write detection), snapshots/meta via atomic temp+fsync+rename, per-city single-writer mutex, SHA-256 traversal-proof key encoding. MemStore fake for tests. Local-disk backend first; the interface makes Azure Blob a swap (Phase 4). Snapshot cadence every N ticks or a journal-size threshold (placeholder N; reuse checkpoint's bounded-retention pruning). SEC-020 copy-guarded. Landed 4e266eb, two independent Opus destructive rounds. See docs/planning/compute-offload-architecture.md and docs/planning/acceptance/feat-1972079936-phase1-durable-persistence.md.",
+      "specRef": "FEAT-1972079936 Phase 1; docs/planning/compute-offload-architecture.md",
+      "path": "internal/persist/",
+      "inbound": {
+        "name": "Store",
+        "format": "Go interface, opaque []byte payloads",
+        "pattern": "per-CityKey journal append + snapshot put/get/list, cross-process rehydrate"
+      },
+      "deps": [],
+      "calls": [],
+      "sprint": 0
+    },
+    {
       "key": "foundation.errors",
       "type": "module",
       "seq": 50,
@@ -972,7 +992,8 @@
       "deps": [
         "foundation.det",
         "foundation.registry",
-        "int.protocol"
+        "int.protocol",
+        "int.persist"
       ],
       "calls": [
         "foundation.det",
@@ -983,7 +1004,8 @@
         "foundation.data",
         "foundation.errors",
         "feat.debugmode",
-        "harness.replay"
+        "harness.replay",
+        "int.persist"
       ],
       "sprint": 1
     },

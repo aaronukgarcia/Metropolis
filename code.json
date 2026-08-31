@@ -3,7 +3,7 @@
   "project": "Metropolis",
   "planVersion": "1.1.0",
   "specSource": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
-  "updated": "2026-08-17",
+  "updated": "2026-08-31",
   "conventions": {
     "naming": {
       "moduleKey": "dot-separated lowercase: <layer>.<name> (e.g. engine.traffic, ui.widgets); matches BOW mkey and code.json key",
@@ -556,7 +556,7 @@
       "note": "Noise level — airport noiseLevelDBA, mining blight noiseRadius dBA."
     }
   ],
-  "moduleCount": 170,
+  "moduleCount": 171,
   "modules": [
     {
       "guid": "4d7a055e-4116-4f1a-95ec-a71adc8bbf0b",
@@ -2572,6 +2572,11 @@
             "key": "harness.replay",
             "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
             "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
+          },
+          {
+            "key": "int.persist",
+            "moduleGuid": "82897e55-1135-46e1-9b71-7d18c99a6b7a",
+            "inboundGuid": "087edd5a-d6c4-427f-bc70-ce944f0d7280"
           }
         ]
       },
@@ -10932,6 +10937,36 @@
             "inboundGuid": "e5f22baa-24a4-41ef-8ca1-41ed677fac9b"
           }
         ]
+      },
+      "securityScan": null
+    },
+    {
+      "guid": "82897e55-1135-46e1-9b71-7d18c99a6b7a",
+      "key": "int.persist",
+      "bowType": "module",
+      "seq": 1003,
+      "sprint": 0,
+      "title": "Durable persistence Store: journal+snapshot, per-city isolation (local-disk now, Azure Blob later)",
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "interface",
+      "specRef": "FEAT-1972079936 Phase 1; docs/planning/compute-offload-architecture.md",
+      "path": "internal/persist/",
+      "inbound": {
+        "guid": "087edd5a-d6c4-427f-bc70-ce944f0d7280",
+        "name": "Store",
+        "format": "Go interface, opaque []byte payloads",
+        "pattern": "per-CityKey journal append + snapshot put/get/list, cross-process rehydrate",
+        "consumers": [
+          {
+            "key": "engine.core",
+            "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          }
+        ]
+      },
+      "outbound": {
+        "guid": "64cda04e-7c14-4e11-a62c-93e8818efe7e",
+        "calls": []
       },
       "securityScan": null
     }

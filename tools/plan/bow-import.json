@@ -443,7 +443,8 @@
       "deps": [
         "foundation.det",
         "foundation.registry",
-        "int.protocol"
+        "int.protocol",
+        "int.persist"
       ]
     },
     {
@@ -3171,6 +3172,22 @@
       "guid": "f1837a0a-16b8-4738-997e-6eb8d544e870",
       "guidIn": "7a41c257-0979-4fab-895a-651c7e73164d",
       "guidOut": "f0636817-52bb-4caf-a428-662c69aed30d",
+      "deps": []
+    },
+    {
+      "mkey": "int.persist",
+      "type": "module",
+      "title": "Durable persistence Store: journal+snapshot, per-city isolation (local-disk now, Azure Blob later)",
+      "desc": "FEAT-1972079936 Phase 1 (compute-offload epic, Aaron 2026-08-31): the durable state tier that ends the localStorage/data-loss class. A Store interface over opaque []byte payloads (zero engine imports by construction — the engine hands it bytes, it never sees engine types), keyed by CityKey{TenantID,CityID} for per-tenant single-player isolation. DiskStore: CRC32(length||payload)-framed journal append+fsync (torn-write detection), snapshots/meta via atomic temp+fsync+rename, per-city single-writer mutex, SHA-256 traversal-proof key encoding. MemStore fake for tests. Local-disk backend first; the interface makes Azure Blob a swap (Phase 4). Snapshot cadence every N ticks or a journal-size threshold (placeholder N; reuse checkpoint's bounded-retention pruning). SEC-020 copy-guarded. Landed 4e266eb, two independent Opus destructive rounds. See docs/planning/compute-offload-architecture.md and docs/planning/acceptance/feat-1972079936-phase1-durable-persistence.md. [spec: FEAT-1972079936 Phase 1; docs/planning/compute-offload-architecture.md] [path: internal/persist/]",
+      "seq": 1003,
+      "sprint": 0,
+      "priority": "P1",
+      "milestone": "M0",
+      "layer": "interface",
+      "specRef": "FEAT-1972079936 Phase 1; docs/planning/compute-offload-architecture.md",
+      "guid": "82897e55-1135-46e1-9b71-7d18c99a6b7a",
+      "guidIn": "087edd5a-d6c4-427f-bc70-ce944f0d7280",
+      "guidOut": "64cda04e-7c14-4e11-a62c-93e8818efe7e",
       "deps": []
     }
   ]
