@@ -23,6 +23,8 @@ import {
   persistJournal,
   loadJournal,
   JOURNAL_CAP,
+  JOURNAL_PERSIST_MAX_CHARS,
+  JOURNAL_KEY,
 } from '../src/sim/journal.ts';
 import {
   restoreFromSavepoint,
@@ -71,6 +73,7 @@ describe('isStateAffecting: action classification', () => {
     assert.ok(!isStateAffecting({ type: 'cancelMove' }));
     // Notice UI
     assert.ok(!isStateAffecting({ type: 'dismissNotice' }));
+    assert.ok(!isStateAffecting({ type: 'hydrate', state: initialState() }));
   });
 });
 
@@ -487,6 +490,105 @@ describe('savepoint: persistence and restoration', () => {
       crashState,
       'RED: dropping one tail action breaks determinism (proves tail matters)'
     );
+  });
+});
+
+// ===== BUG-437 BAR-2: persistJournal quota coverage =====
+//
+// journal.ts:166-190's real contract: pre-shrink BEFORE any setItem is attempted
+// once the serialized payload exceeds JOURNAL_PERSIST_MAX_CHARS, then on a setItem
+// throw, halve-and-retry down to a floor of 200 entries, and if even that throws,
+// removeItem(JOURNAL_KEY) and return false. Retention always keeps the TAIL (newest
+// entries — `entries.slice(-N)`), never the head.
+
+describe('persistJournal: quota / shrink-and-retry contract', () => {
+  function bigJournal(count) {
+    let j = emptyJournal();
+    for (let i = 0; i < count; i++) {
+      j = recordAction(j, i, { type: 'debugFunds', amount: i });
+    }
+    return j;
+  }
+
+  test('payload over JOURNAL_PERSIST_MAX_CHARS is pre-shrunk BEFORE any setItem is attempted', () => {
+    // 20,000 debugFunds entries serialize well past the 400k char cap.
+    const j = bigJournal(20_000);
+    const rawSize = JSON.stringify({ entries: j.entries }).length;
+    assert.ok(rawSize > JOURNAL_PERSIST_MAX_CHARS, 'fixture must actually exceed the cap to test pre-shrink');
+
+    const attempts = [];
+    const storage = {
+      setItem(k, v) {
+        attempts.push(v);
+      },
+      removeItem() {},
+    };
+
+    const ok = persistJournal(storage, j);
+    assert.ok(ok, 'persist should succeed once shrunk under the cap');
+    assert.ok(attempts.length >= 1, 'setItem must have been attempted');
+    assert.ok(
+      attempts[0].length <= JOURNAL_PERSIST_MAX_CHARS,
+      `first setItem attempt (${attempts[0].length} chars) must already be pre-shrunk under the ${JOURNAL_PERSIST_MAX_CHARS} cap`,
+    );
+  });
+
+  test('setItem throwing QuotaExceeded on the first N attempts → halves and retries down to success, keeping the NEWEST entries (tail retention)', () => {
+    const ENTRY_COUNT = 800;
+    const j = bigJournal(ENTRY_COUNT);
+    const THROW_ATTEMPTS = 2;
+
+    let attemptCount = 0;
+    const attempts = [];
+    const storage = {
+      setItem(k, v) {
+        attemptCount += 1;
+        attempts.push(v);
+        if (attemptCount <= THROW_ATTEMPTS) {
+          throw new Error('QuotaExceededError: simulated');
+        }
+      },
+      removeItem() {},
+    };
+
+    const ok = persistJournal(storage, j);
+    assert.ok(ok, 'persist should eventually succeed');
+    assert.equal(attemptCount, THROW_ATTEMPTS + 1, 'exactly one more attempt than the number of throws');
+
+    const persisted = JSON.parse(attempts[attempts.length - 1]).entries;
+    // 800 → halve → 400 → halve → 200 (floor), matching Math.floor(n/2) each retry.
+    assert.equal(persisted.length, 200);
+
+    // TAIL retention: the persisted entries must be the newest (highest tick),
+    // not the oldest (a head-slice mutation would fail this).
+    const expectedTail = j.entries.slice(-persisted.length);
+    assert.equal(persisted[0].action.amount, expectedTail[0].action.amount);
+    assert.equal(persisted[persisted.length - 1].action.amount, expectedTail[expectedTail.length - 1].action.amount);
+    assert.equal(persisted[persisted.length - 1].action.amount, ENTRY_COUNT - 1, 'the very newest entry must be retained');
+    assert.notEqual(persisted[0].action.amount, 0, 'the oldest entries must have been dropped, not kept');
+  });
+
+  test('setItem that ALWAYS throws → persistJournal removes the key and returns false', () => {
+    // Small journal (<=200 entries): the shrink loop's floor check short-circuits
+    // immediately (entries.length <= 200), so this proves the terminal give-up path,
+    // not just another halving round.
+    const j = bigJournal(10);
+    let removedKey = null;
+    let setItemCalls = 0;
+    const storage = {
+      setItem() {
+        setItemCalls += 1;
+        throw new Error('QuotaExceededError: always');
+      },
+      removeItem(k) {
+        removedKey = k;
+      },
+    };
+
+    const ok = persistJournal(storage, j);
+    assert.equal(ok, false, 'persistJournal must report failure when storage can never accept the write');
+    assert.ok(setItemCalls >= 1, 'setItem must have been attempted at least once');
+    assert.equal(removedKey, JOURNAL_KEY, 'the stale/partial journal key must be removed on terminal failure');
   });
 });
 

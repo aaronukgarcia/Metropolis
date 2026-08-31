@@ -5,15 +5,16 @@
 // timestamp; nothing here writes Date.now/Math.random into SimState.
 
 import type { SimState } from './types.ts';
-import { buildDebugJson, debugJsonText, type DebugJson } from './debugjson.ts';
+import { buildDebugJson, type DebugJson, type ConsistencyReportJson } from './debugjson.ts';
 import { currentMapUi } from './uistate.ts';
 import { recentErrors } from './backend.ts';
 import { reducer } from './engine.ts';
+import { getPrewipeCap } from './storageConfig.ts';
+
+export { PREWIPE_CAP, getPrewipeCap, setPrewipeCap } from './storageConfig.ts';
 
 /** localStorage key holding the pre-wipe ring buffer (newest last). */
 export const PREWIPE_ARCHIVE_KEY = 'metropolis.preWipeArchive';
-/** Ring-buffer cap: newest PREWIPE_CAP captures kept; oldest dropped. */
-export const PREWIPE_CAP = 10;
 
 export interface CaptureStorage {
   getItem(key: string): string | null;
@@ -48,8 +49,70 @@ function loadEntriesForAppend(storage: CaptureStorage): PreWipeArchiveEntry[] {
   }
 }
 
+export function compactDebugForArchive(dj: DebugJson): DebugJson {
+  const failed = (dj.consistency?.checks ?? []).filter((c) => c.ok === false);
+  const failures = dj.consistency?.failures ?? 0;
+  const consistency: ConsistencyReportJson = {
+    failures,
+    checks: failures === 0 ? [] : failed,
+  };
+  return {
+    ...dj,
+    consistency,
+    perfHud: null,
+    buildings: {
+      count: dj.buildings.count,
+      byKind: dj.buildings.byKind,
+      list: [],
+    },
+    sim: {
+      ...dj.sim,
+      roadMonitors: [],
+      roadConnectivity: { connectedRoadTiles: [] },
+    },
+  };
+}
+
+function downloadPreWipeEntry(entry: PreWipeArchiveEntry): void {
+  const filename = `pre-wipe-tick-${entry.tick}.json`;
+  const blob = new Blob([JSON.stringify(entry)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function persistCompactArchive(
+  storage: CaptureStorage,
+  entries: PreWipeArchiveEntry[],
+  entry: PreWipeArchiveEntry,
+  cap: number,
+): void {
+  try {
+    storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify(entries.slice(-cap)));
+    return;
+  } catch {
+    try {
+      storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify([entry]));
+      return;
+    } catch (second) {
+      if (typeof document === 'undefined') {
+        throw second;
+      }
+      try {
+        downloadPreWipeEntry(entry);
+        return;
+      } catch {
+        throw second;
+      }
+    }
+  }
+}
+
 /**
- * Persist the full debug JSON of `state` to the pre-wipe archive.
+ * Persist a compact debug JSON of `state` to the pre-wipe archive.
  * Throws on write failure — caller MUST abort the wipe.
  * `nowMs` is the envelope/debug-meta wall-clock (defaults to Date.now); it is
  * NOT written into SimState.
@@ -60,13 +123,14 @@ export function captureBeforeWipe(
   storage: CaptureStorage,
   nowMs: number = Date.now(),
 ): void {
-  const dj = buildDebugJson(state, {
-    appVersion,
-    frameAtMs: nowMs,
-    map: currentMapUi(),
-    errors: recentErrors(),
-  });
-  debugJsonText(dj);
+  const dj = compactDebugForArchive(
+    buildDebugJson(state, {
+      appVersion,
+      frameAtMs: nowMs,
+      map: currentMapUi(),
+      errors: recentErrors(),
+    }),
+  );
   const entry: PreWipeArchiveEntry = {
     capturedAtMs: nowMs,
     tick: state.tick,
@@ -74,7 +138,7 @@ export function captureBeforeWipe(
   };
   const entries = loadEntriesForAppend(storage);
   entries.push(entry);
-  storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify(entries.slice(-PREWIPE_CAP)));
+  persistCompactArchive(storage, entries, entry, getPrewipeCap(storage));
 }
 
 /**

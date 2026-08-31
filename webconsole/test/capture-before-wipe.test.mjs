@@ -6,7 +6,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   captureBeforeWipe,
+  compactDebugForArchive,
   resetWithCapture,
+  attemptWipe,
   readPreWipeArchive,
   PREWIPE_ARCHIVE_KEY,
   PREWIPE_CAP,
@@ -145,4 +147,93 @@ test('pre-wipe archive ring buffer keeps newest PREWIPE_CAP entries', () => {
   assert.equal(archive.length, PREWIPE_CAP);
   assert.equal(archive[0].tick, base.tick + 3);
   assert.equal(archive[PREWIPE_CAP - 1].tick, base.tick + PREWIPE_CAP + 2);
+});
+
+test('compactDebugForArchive keeps failures-only checks and nulls perfHud', () => {
+  const compact = compactDebugForArchive({
+    consistency: {
+      failures: 1,
+      checks: [
+        { id: 'colour.1.defined', ok: true, detail: 'ok' },
+        { id: 'funds.mismatch', ok: false, detail: 'fail' },
+      ],
+    },
+    perfHud: { note: 'wall-clock', fps: null, tick: null, memoryMB: 1, networkCalls: 0, networkKB: 0 },
+    sim: { tick: 9, funds: 100, population: 4 },
+    buildings: { count: 2 },
+    meta: { tick: 9 },
+  });
+  assert.equal(compact.perfHud, null);
+  assert.deepEqual(compact.consistency.checks, [{ id: 'funds.mismatch', ok: false, detail: 'fail' }]);
+  assert.equal(compact.consistency.failures, 1);
+  assert.equal(compact.sim.tick, 9);
+  assert.equal(compact.sim.funds, 100);
+  assert.equal(compact.sim.population, 4);
+  assert.equal(compact.buildings.count, 2);
+  assert.deepEqual(compact.buildings.list, []);
+  assert.equal(compact.meta.tick, 9);
+});
+
+// ===== BUG-437 BAR-1: attemptWipe direct coverage =====
+//
+// attemptWipe is the GR#27 wrapper wired to the reset dispatch at store.tsx:319.
+// r1 REJECTed because nothing exercised attemptWipe itself (only the lower-level
+// captureBeforeWipe/resetWithCapture were covered) — a swallowing try/catch around
+// its internal captureBeforeWipe call would still pass every prior test.
+
+test('attemptWipe: capture failure THROWS and does NOT invoke applyWipe', () => {
+  const state = dirtyCity();
+  const storage = throwingStorage();
+  let applyWipeCalls = 0;
+  assert.throws(
+    () => attemptWipe(state, APP_VERSION, storage, () => { applyWipeCalls += 1; }),
+    /setItem blocked/,
+  );
+  assert.equal(applyWipeCalls, 0, 'applyWipe must never run when the capture throws');
+});
+
+test('attemptWipe: working capture invokes applyWipe exactly once, AFTER the archive write lands', () => {
+  const state = dirtyCity();
+  const storage = memStorage();
+  let applyWipeCalls = 0;
+  let archiveSeenInsideCallback = null;
+
+  attemptWipe(state, APP_VERSION, storage, () => {
+    applyWipeCalls += 1;
+    // Read the raw storage (not a cached reference) so this proves ordering:
+    // the capture's setItem must have already landed by the time applyWipe runs.
+    archiveSeenInsideCallback = storage.getItem(PREWIPE_ARCHIVE_KEY);
+  });
+
+  assert.equal(applyWipeCalls, 1, 'applyWipe must run exactly once on a successful capture');
+  assert.ok(archiveSeenInsideCallback, 'the pre-wipe archive write must be visible in storage before applyWipe runs');
+
+  const archive = readPreWipeArchive(storage);
+  assert.equal(archive.length, 1);
+  assert.equal(archive[0].tick, state.tick);
+});
+
+test('compact archive has no ok:true consistency checks', () => {
+  const storage = memStorage();
+  const state = dirtyCity();
+  captureBeforeWipe(state, APP_VERSION, storage, NOW_MS);
+  const archive = readPreWipeArchive(storage);
+  assert.equal(archive.length, 1);
+  const cons = archive[0].debug.consistency;
+  const checks = cons.checks;
+  if (Array.isArray(checks)) {
+    for (const row of checks) {
+      assert.equal(row.ok, false, row.id);
+    }
+    if (cons.failures === 0) {
+      assert.equal(checks.length, 0);
+    }
+  }
+  assert.equal(archive[0].tick, state.tick);
+  assert.equal(archive[0].debug.meta.tick, state.tick);
+  assert.equal(archive[0].debug.sim.tick, state.tick);
+  assert.equal(archive[0].debug.sim.funds, state.funds);
+  assert.equal(archive[0].debug.sim.population, state.population);
+  assert.equal(archive[0].debug.buildings.count, state.buildings.length);
+  assert.equal(archive[0].debug.perfHud, null);
 });

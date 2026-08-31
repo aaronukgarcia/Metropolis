@@ -288,6 +288,54 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 }
 .version-badge:hover { border-color: var(--accent); color: var(--accent); }
 
+.brand-menu { position: relative; font-weight: 600; }
+.brand-menu-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 220px;
+  max-height: 70vh;
+  overflow: auto;
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+.brand-menu-city { padding: 4px 8px 6px; font-size: 11px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+.brand-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.brand-menu-item:hover { background: var(--surface-2); }
+.brand-menu-form { display: flex; gap: 6px; padding: 4px; flex-wrap: wrap; }
+.brand-menu-input {
+  flex: 1 1 120px;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: inherit;
+}
+.storage-meter { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+.storage-meter-fill { height: 100%; background: var(--accent); }
+.storage-keys { margin: 8px 0; padding-left: 18px; font-size: 11px; max-height: 28vh; overflow: auto; }
+.storage-cap { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 10px 0; }
+.storage-cap input { width: 64px; }
+
 .about-backdrop {
   position: fixed;
   inset: 0;
@@ -652,4 +700,13 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   font-size: 11px;
   color: var(--muted);
   flex: 1;
+}
+
+@keyframes spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }

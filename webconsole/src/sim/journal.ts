@@ -14,6 +14,11 @@ import type { Action } from './engine.ts';
 /** Max actions kept in the journal ring-buffer. PLACEHOLDER per spec. */
 export const JOURNAL_CAP = 50000;
 
+export const JOURNAL_KEY = 'metropolis.journal';
+
+/** Max JSON characters written to localStorage (UTF-16 ≈ 2× this in quota). */
+export const JOURNAL_PERSIST_MAX_CHARS = 400_000;
+
 /** One recorded action with its tick position. */
 export interface JournalEntry {
   /** Game tick when action was dispatched. */
@@ -100,6 +105,9 @@ export function isStateAffecting(action: Action): boolean {
     case 'reset':
       return true;
 
+    case 'hydrate':
+      return false;
+
     // Exhaustiveness check (TypeScript will error if Action gains a new case).
     default: {
       const _exhaustive: never = action;
@@ -157,11 +165,27 @@ export function drainJournal(journal: Journal): { entries: JournalEntry[]; journ
  */
 export function persistJournal(storage: Storage | null | undefined, journal: Journal): boolean {
   if (!storage) return false;
-  try {
-    storage.setItem('metropolis.journal', JSON.stringify(journal));
-    return true;
-  } catch {
-    return false; // QuotaExceededError, SecurityError, etc.
+  let entries = journal.entries;
+  for (;;) {
+    const payload = JSON.stringify({ entries });
+    if (payload.length > JOURNAL_PERSIST_MAX_CHARS && entries.length > 200) {
+      entries = entries.slice(-Math.max(200, Math.floor(entries.length / 2)));
+      continue;
+    }
+    try {
+      storage.setItem(JOURNAL_KEY, payload);
+      return true;
+    } catch {
+      if (entries.length <= 200) {
+        try {
+          storage.removeItem(JOURNAL_KEY);
+        } catch {
+          /* ignore */
+        }
+        return false;
+      }
+      entries = entries.slice(-Math.max(200, Math.floor(entries.length / 2)));
+    }
   }
 }
 
@@ -172,7 +196,7 @@ export function persistJournal(storage: Storage | null | undefined, journal: Jou
 export function loadJournal(storage: Storage | null | undefined): Journal {
   if (!storage) return emptyJournal();
   try {
-    const raw = storage.getItem('metropolis.journal');
+    const raw = storage.getItem(JOURNAL_KEY);
     if (!raw) return emptyJournal();
     const parsed = JSON.parse(raw) as Journal;
     return Array.isArray(parsed.entries) ? parsed : emptyJournal();
