@@ -268,6 +268,34 @@ type skeletonWiring struct {
 	screens       *core.ScreenRegistry
 	chromeGrammar *keys.KeyGrammar
 
+	// mapGrammar is the map screen's OWN per-screen KeyGrammar (BUG-362
+	// blocker #1: "no keyboard build path" — cmd/metropolis had zero
+	// KindBuy/KindZone/KindBuild references reachable from a keyboard,
+	// even though the engine-side gameplay seam (compose.go's
+	// handleGameplay) has handled these Kinds since FEAT-082). Registered
+	// against screenIDMap (below) exactly the way w.keyGrammar is
+	// registered against screenIDServices, so routeKeyInput's
+	// w.screens.ActiveGrammar() feed reaches it whenever Map is the
+	// active screen (map is the default active screen — see w.screens
+	// registration order's own comment). Bound actions: arrow keys move
+	// the cursor (mapScreen.MoveCursor, previously real but unbound to
+	// any key at all), 'y' buys the tile under the cursor (KindBuy), 'b'
+	// builds a dwelling there (KindBuild). These send raw
+	// protocol.Command values directly (not ui.screen.build's higher-level
+	// BuyLand/BuildOn helpers) because those helpers refuse a command
+	// client-side unless their OWN "f3.build" catalogue/zones view has
+	// already been populated — a view compose.go does not publish yet
+	// (registering it is a separate, larger increment: F3's full Land &
+	// Construction screen, tracked apart from this minimal keyboard-build
+	// path). The engine remains the sole authority on accept/reject
+	// either way (build.BuildAPI.SubmitBuildCommand/world.PurchaseTile
+	// validate server-side regardless of what the client checked first),
+	// so skipping the client-side pre-check here costs no safety — see
+	// ui/screens/build/commands.go's own doc comment ("The engine is the
+	// authority on accept/reject... never on a payload this screen
+	// builds").
+	mapGrammar *keys.KeyGrammar
+
 	mapScreen *mapscreen.MapScreen
 
 	// mapSubID is the SubscriptionID the "f1.viewport" prime learned for
@@ -805,6 +833,20 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 		})
 	}
 
+	// BUG-362 blocker #1: the map screen's OWN per-screen KeyGrammar (see
+	// w.mapGrammar's field doc comment) — arrow keys move the cursor,
+	// 'y' buys the tile under it, 'b' builds a dwelling there. This is
+	// the minimal keyboard path a player needs to place at least one
+	// building; ui.screen.build's full F3 Land & Construction screen
+	// (zoning selector, catalogue browser, demolition confirm) remains
+	// unwired and is tracked separately.
+	if err := registerMapBuildKeys(w, transport); err != nil {
+		w.cancel()
+		w.wg.Wait()
+		_ = transport.Close()
+		return nil, err
+	}
+
 	// FEAT-211 increment 1: the ScreenRegistry (internal/ui/core/
 	// screen_registry.go) — the ActiveScreen state owner that makes
 	// finance/services (and the funding keys just registered above)
@@ -815,7 +857,7 @@ func bootCore(correlationID string, reg *registry.Registry) (*skeletonWiring, er
 	// Register's own documented default — matching this binary's
 	// pre-FEAT-211 baseline (mapScreen was always what rendered).
 	w.screens = core.NewScreenRegistry(correlationID)
-	if err := w.screens.Register(core.ScreenEntry{ID: screenIDMap, Draw: mapDrawFunc(w.mapScreen, func() bool { return w.router.SubscriptionStale(w.mapSubID) })}); err != nil {
+	if err := w.screens.Register(core.ScreenEntry{ID: screenIDMap, Draw: mapDrawFunc(w.mapScreen, func() bool { return w.router.SubscriptionStale(w.mapSubID) }), Grammar: w.mapGrammar}); err != nil {
 		w.cancel()
 		w.wg.Wait()
 		_ = transport.Close()
@@ -973,6 +1015,97 @@ func registerClockKeys(w *skeletonWiring) error {
 		}
 	}
 	return nil
+}
+
+// mapBuildDefaultZone is the zone type BUG-362's minimal 'b' build key
+// submits. "dwelling" is one of engine.build's required §34 zone types
+// (internal/engine/build/zone.go's requiredZoneTypes) and is always
+// present in the loaded catalogue (buildCatalogue validates completeness
+// at load time) — a placeholder pick, not a design ruling on what a
+// player should build first, matching the "not building NASA code"
+// proportionality tier's placeholder posture (GR#23) for a keyboard path
+// this minimal.
+const mapBuildDefaultZone = "dwelling"
+
+// registerMapBuildKeys wires w.mapGrammar (see its field doc comment):
+// arrow keys move mapScreen's cursor, 'y' buys the tile under it
+// (protocol.KindBuy), 'b' builds mapBuildDefaultZone there
+// (protocol.KindBuild). Every send goes straight through transport —
+// these are fire-and-forget, exactly as mapScreen's own pre-existing
+// Pan/MoveCursor calls are purely local — with the CommandResult left to
+// ui/router's own ErrRouteMiss (MET-V400) accounting for an unregistered
+// CorrelationID (router.go), which is a loud, registry-sourced log entry,
+// never a silent drop (GR#1/GR#17). A future increment that wants
+// accept/reject feedback surfaced ON SCREEN (not just logged) registers a
+// real ResultReceiver here, the same way sendServicesCommand does for
+// servicesScreen.
+func registerMapBuildKeys(w *skeletonWiring, transport protocol.Transport) error {
+	w.mapGrammar = keys.NewKeyGrammar(nil, 0, 0, w.correlationID)
+
+	moveBindings := []struct {
+		key    keys.Key
+		name   string
+		dx, dy int
+	}{
+		{keys.Key{Special: "Up"}, "Move cursor up", 0, -1},
+		{keys.Key{Special: "Down"}, "Move cursor down", 0, 1},
+		{keys.Key{Special: "Left"}, "Move cursor left", -1, 0},
+		{keys.Key{Special: "Right"}, "Move cursor right", 1, 0},
+	}
+	for _, b := range moveBindings {
+		dx, dy := b.dx, b.dy
+		if err := w.mapGrammar.RegisterGlobal(b.key, keys.Action{Name: b.name, Run: func(keys.ActionArgs) { w.mapScreen.MoveCursor(dx, dy) }}); err != nil {
+			return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
+				"component": "ui.keys.RegisterGlobal", "key": b.key.Token(),
+			})
+		}
+	}
+
+	if err := w.mapGrammar.RegisterGlobal(keys.KeyRune('y'), keys.Action{Name: "Buy tile (y)", Run: func(keys.ActionArgs) {
+		x, y := w.mapScreen.CursorPos()
+		_ = transport.SendCommand(buyCommandAt(x, y))
+	}}); err != nil {
+		return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
+			"component": "ui.keys.RegisterGlobal", "key": "y",
+		})
+	}
+	if err := w.mapGrammar.RegisterGlobal(keys.KeyRune('b'), keys.Action{Name: "Build dwelling (b)", Run: func(keys.ActionArgs) {
+		x, y := w.mapScreen.CursorPos()
+		_ = transport.SendCommand(buildCommandAt(x, y, mapBuildDefaultZone))
+	}}); err != nil {
+		return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
+			"component": "ui.keys.RegisterGlobal", "key": "b",
+		})
+	}
+	return nil
+}
+
+// buyCommandAt constructs the protocol.Command the 'y' map key sends for
+// grid cell (x, y): a KindBuy command with a fresh CorrelationID.
+// Factored out of registerMapBuildKeys (pure, no *skeletonWiring/
+// transport needed) so a test can assert on the exact envelope a keypress
+// produces without booting a real engine — see
+// bug362_map_keyboard_build_test.go's TestBuyCommandAt_BuildsCorrectCellRef.
+func buyCommandAt(x, y int) protocol.Command {
+	return protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID(errs.NewCorrelationID()),
+		Kind:            protocol.KindBuy,
+		Payload:         protocol.BuyPayload{Cell: protocol.CellRef{X: x, Y: y}},
+	}
+}
+
+// buildCommandAt is buyCommandAt's KindBuild counterpart for the 'b' map
+// key: buildingType is mapBuildDefaultZone in production, parameterised
+// here purely so the test can also exercise an unknown-zone rejection
+// without a second production code path.
+func buildCommandAt(x, y int, buildingType string) protocol.Command {
+	return protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID(errs.NewCorrelationID()),
+		Kind:            protocol.KindBuild,
+		Payload:         protocol.BuildPayload{Cell: protocol.CellRef{X: x, Y: y}, BuildingType: buildingType},
+	}
 }
 
 // playerSpeeds is the speed ladder '[' and ']' walk, in ascending order —
