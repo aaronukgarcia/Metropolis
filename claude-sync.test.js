@@ -1729,7 +1729,12 @@ test('BUG-354 r6 R2 (r5 P1): fresh machine with NO session-keys dir does not sel
     // silent-failure family). After the fix, the dir is created.
     const env = {
       ...process.env,
+      // os.homedir() reads USERPROFILE on win32 but $HOME on POSIX — set BOTH
+      // so this test redirects the home dir on the Linux CI runner too (it was
+      // Windows-only before, so on CI the key landed in the real $HOME and the
+      // freshHome existsSync assertions failed: the last node-test CI red).
       USERPROFILE: freshHome,
+      HOME: freshHome,
       METRO_DB_HOST: DB_HOST,
       METRO_DB_PORT: String(DB_PORT),
       METRO_DB_USER: DB_USER,
