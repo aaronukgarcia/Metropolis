@@ -26,6 +26,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 	"github.com/aaronukgarcia/Metropolis/internal/harness/replay"
+	"github.com/aaronukgarcia/Metropolis/internal/persist"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -118,6 +119,16 @@ const (
 // composite (environmentTerm below) — a slice, never a map range (GR#21).
 var refuseStreams = []refuse.Stream{refuse.StreamGeneral, refuse.StreamRecycling, refuse.StreamFood}
 
+// defaultPersistCity is the PLACEHOLDER city identity used when durable
+// persistence is enabled (Deps.PersistStore != nil) but Deps.PersistCity is
+// left zero. Phase 1 is multi-tenant-single-player with a single fixed
+// tenant placeholder (FEAT-1972079936 epic open-Q #3): real per-account
+// tenant/city identity arrives with Phase 2 auth. Per the balance-number
+// regime, this is a documented PLACEHOLDER, not a spec-transcribed value —
+// nothing player-facing keys on it, and it flows in via Deps rather than
+// being hardcoded inside the adapter (persistjournal.go).
+var defaultPersistCity = persist.CityKey{TenantID: "local", CityID: "default"}
+
 // Deps carries the real module dependencies Wire composes. A nil *Deps
 // (the common boot case) means "construct the defaults" — world, citizens
 // and market are built fresh inside Wire. Callers that need to observe or
@@ -152,6 +163,24 @@ type Deps struct {
 	// to observe or fail journaling inject their own core.CommandJournaler
 	// here (mirrors LoadMarket's override shape above).
 	CommandJournaler core.CommandJournaler
+
+	// PersistStore enables durable, server-side command-journal persistence
+	// (FEAT-1972079936 Phase 1 inc2 — the localStorage/data-loss cure). A nil
+	// field (the common boot case) means persistence is OFF and behaviour is
+	// EXACTLY unchanged: the resolved CommandJournaler (the injected one, or
+	// the default in-memory *replay.Recorder) is wired verbatim. A non-nil
+	// Store makes Wire wrap the resolved journaler with the durable
+	// write-through adapter (persistjournal.go) so every accepted command is
+	// ALSO durably appended — the wrapped journaler stays whatever it was, so
+	// in-memory replay and durable persist both happen. Persistence is a pure
+	// side channel: it never influences engine state (AC-6).
+	PersistStore persist.Store
+
+	// PersistCity is the city/savegame identity durable records are keyed
+	// under when PersistStore is set. A zero value defaults to
+	// defaultPersistCity (the documented Phase 1 PLACEHOLDER) — real
+	// tenant/city identity is Phase 2. Ignored when PersistStore is nil.
+	PersistCity persist.CityKey
 
 	// Logistics overrides construction of the engine.logistics dependency
 	// build's Tick draws construction materials against (defaults to
@@ -857,6 +886,21 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	journaler := deps.CommandJournaler
 	if journaler == nil {
 		journaler = replay.NewRecorder()
+	}
+	// FEAT-1972079936 Phase 1 inc2: when durable persistence is enabled,
+	// wrap the resolved journaler with the write-through adapter so every
+	// accepted command is ALSO durably appended to the Store. Default-off:
+	// deps.PersistStore == nil leaves journaler exactly as resolved above, so
+	// every existing test and the default runnable path are byte-for-byte
+	// unaffected. The inner journaler stays whatever it already was (the
+	// injected Recorder/spy or the default one), so in-memory replay and
+	// durable persist both happen.
+	if deps.PersistStore != nil {
+		city := deps.PersistCity
+		if city == (persist.CityKey{}) {
+			city = defaultPersistCity // PLACEHOLDER (see defaultPersistCity).
+		}
+		journaler = newPersistCommandJournaler(journaler, deps.PersistStore, city)
 	}
 	st.journaler = journaler
 	if err := e.SetCommandJournaler(journaler); err != nil {
