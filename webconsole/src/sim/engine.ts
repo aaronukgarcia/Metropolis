@@ -1559,6 +1559,331 @@ function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'l
   };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079928 inc1: road re-planning on placement.
+//
+// Aaron's rulings (BOW comment, 2026-08-31), AUTHORITATIVE over the BA draft's
+// softer AC-3/AC-7 wording:
+//   (1) DEMOLITION = fully autonomous reroute — Aaron ruled re-plan MAY freely
+//       demolish/reroute EXISTING (incl player-placed) ROADS for the optimal
+//       layout, no confirmation. INC1 DOES NOT YET IMPLEMENT THIS: it only
+//       reuses a road tile, upgrades it in place, or lays a new tile on empty
+//       ground — it never removes/relocates an existing road segment to a
+//       different alignment. So Aaron's ruling (1) is only PARTIALLY met here.
+//       Full demolish-and-reroute-of-existing-roads is DEFERRED (BOW P2
+//       finding on FEAT-1972079928, awaiting Aaron's confirm on inc2 vs
+//       pull-forward). A blocked non-road cell is simply impassable and the
+//       search routes around it or skips the candidate — that part is inc1-safe.
+//   (2) RADIUS = medium trigger zone, but the CASCADE across that zone is
+//       computed to completion as ONE atomic transaction before any tile is
+//       redrawn/committed — see the "atomic cascade" note on planRoadReplanCascade.
+//   (3) HIERARCHY = STRONG preference — the per-tile traversal cost is
+//       discounted for higher road tiers, so a route through an existing
+//       higher-tier tile can beat a shorter all-local route (AC-3 semantics
+//       are superseded by this ruling: hierarchy is a real cost-shaping force,
+//       not a tie-breaker only).
+//   (4) UPGRADE COST = REPLAN_UPGRADE_COST_FRACTION (90%) of the full new-tier
+//       build cost, charged atomically with the rest of the cascade.
+//
+// Inc1 scope (BA increment split, Aaron-approved): radius detection (AC-1),
+// deterministic cost function (AC-2), strong hierarchy preference (AC-3,
+// strong-variant), atomic all-or-nothing funds (AC-6), non-destructive default
+// for the RECONNECTED road itself (AC-7 — the stranded candidate's own tile is
+// never touched, only the connecting cells between it and the new path), and
+// clean coexistence with the landed auto-junction convert-in-place (AC-8 — the
+// cascade only ever touches EMPTY cells or plain non-auto-junction road tiers,
+// never an already-converted rd_junction/rd_roundabout/rd_mwyjunction/
+// rd_railbridge tile). Anti-sprawl minor-into-major limiting (AC-4) and
+// motorway junction min-spacing/max-per-segment (AC-5) are explicitly deferred
+// to inc2/inc3 (BA's own increment split) — this pass does not enforce either.
+
+/** AC-1 placeholder-balance: search radius (tiles) around the new path's bbox. */
+export const REPLAN_RADIUS_TILES = 4;
+
+/**
+ * AC-2/AC-3 placeholder-balance: how strongly an existing higher road tier
+ * discounts the per-tile traversal cost of the re-plan's Dijkstra search.
+ * cost(existing tier t) = 1 / (1 + (t-1) × REPLAN_HIERARCHY_WEIGHT) — tier 1
+ * costs 1 (no discount), higher tiers cost meaningfully less to reuse, so the
+ * search can prefer a longer route through a higher tier over a shorter
+ * all-local one (Aaron ruling 3: STRONG preference, not a mere tie-breaker).
+ */
+export const REPLAN_HIERARCHY_WEIGHT = 3;
+
+/** Aaron ruling (4): upgrade cost fraction of the full new-tier build cost. */
+export const REPLAN_UPGRADE_COST_FRACTION = 0.9;
+
+/**
+ * Auto-placed junction/bridge specs from FEAT-1972079910 inc2/3. The re-plan
+ * cascade treats these as ordinary passable road tiles (their roadTier is
+ * still meaningful for the hierarchy discount) but NEVER upgrades or
+ * re-converts them (AC-8: no double-conversion, no ID churn on landed logic).
+ */
+const REPLAN_AUTO_JUNCTION_SPECS = new Set([
+  'rd_junction',
+  'rd_roundabout',
+  'rd_mwyjunction',
+  'rd_railbridge',
+]);
+
+/** One nearby road tile found by replanSearch (AC-1). */
+export interface ReplanNearbyRoad {
+  x: number;
+  y: number;
+  buildingId: number;
+  spec: string;
+  tier: number;
+}
+
+/**
+ * AC-1: bounding box of `newTiles` expanded by `radius` tiles on every side,
+ * clamped to the map bounds. Exported so tests can pin the exact box the
+ * cascade searches, independent of the road-tier discount / Dijkstra maths.
+ */
+export function replanBBox(
+  newTiles: { x: number; y: number }[],
+  radius: number
+): { lo: { x: number; y: number }; hi: { x: number; y: number } } | null {
+  if (newTiles.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const t of newTiles) {
+    if (t.x < minX) minX = t.x;
+    if (t.y < minY) minY = t.y;
+    if (t.x > maxX) maxX = t.x;
+    if (t.y > maxY) maxY = t.y;
+  }
+  return {
+    lo: { x: Math.max(0, minX - radius), y: Math.max(0, minY - radius) },
+    hi: { x: Math.min(MAP_W - 1, maxX + radius), y: Math.min(MAP_H - 1, maxY + radius) },
+  };
+}
+
+/**
+ * AC-1: every road building tile whose footprint falls within `radius` tiles
+ * of the bounding box of `newTiles` — EXCLUDING tiles that are themselves part
+ * of `newTiles` (the path just placed/converted by this same action). Pure,
+ * deterministic (iterates `state.buildings` in its existing, stable order —
+ * no Date/Math.random, no reliance on insertion timing beyond that order).
+ */
+export function replanSearch(
+  state: SimState,
+  newTiles: { x: number; y: number }[],
+  radius: number
+): ReplanNearbyRoad[] {
+  const box = replanBBox(newTiles, radius);
+  if (!box) return [];
+  const { lo, hi } = box;
+  const newSet = new Set(newTiles.map((t) => `${t.x},${t.y}`));
+  const results: ReplanNearbyRoad[] = [];
+  for (const b of state.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp || !isRoadSpec(sp)) continue;
+    for (let dx = 0; dx < sp.w; dx++) {
+      for (let dy = 0; dy < sp.h; dy++) {
+        const x = b.x + dx;
+        const y = b.y + dy;
+        if (x < lo.x || x > hi.x || y < lo.y || y > hi.y) continue;
+        const k = `${x},${y}`;
+        if (newSet.has(k)) continue;
+        results.push({ x, y, buildingId: b.id, spec: b.spec, tier: roadTierOf(sp) });
+      }
+    }
+  }
+  return results;
+}
+
+/** The atomic re-plan cascade computed by planRoadReplanCascade, pre-apply. */
+interface ReplanCascade {
+  /** Existing road tiles upgraded IN PLACE (id preserved) to `newTier`. */
+  conversions: Map<string, { buildingId: number; newSpec: string; cost: number }>;
+  /** Brand-new connector tiles placed on empty cells discovered by the search. */
+  newTilePlacements: Array<{ x: number; y: number; spec: string; cost: number }>;
+  totalCost: number;
+}
+
+/**
+ * FEAT-1972079928 inc1 (AC-1, AC-2, AC-3 strong-variant, AC-6, AC-7, AC-8):
+ * compute the FULL re-plan cascade for the region around `newTiles` — the
+ * whole thing is one pure function call that returns a plan object with NO
+ * side effects. This is the atomic-cascade-before-redraw mechanism Aaron
+ * flagged as the load-bearing correctness AC: the caller (the `placeRoadPath`
+ * reducer case) does not touch `buildings`/`funds` until this function has
+ * ALREADY finished computing every conversion/placement and their total cost —
+ * there is no code path that redraws tile N before tile N+1's cost has been
+ * decided, because nothing is written until the whole cascade is known. A
+ * reducer call is a single synchronous JS stack frame, so "compute fully, then
+ * commit" is structural, not a convention: this function returns a plan, and
+ * the caller either applies the WHOLE plan in one state transition or (if
+ * unaffordable) applies NONE of it — never a partial application.
+ *
+ * Algorithm: a deterministic multi-source Dijkstra (no heap — a plain O(V²)
+ * "scan for the unvisited min" loop over the (small, radius-bounded) bbox, so
+ * ties are broken by a fixed ascending "x,y" string compare, never by
+ * insertion order or Math.random) from every `newTiles` cell (distance 0)
+ * across the search bbox. Traversal cost per cell:
+ *   - a `newTiles` cell itself: 0 (already free, part of this placement).
+ *   - an existing road tile (not an auto-junction spec): hierarchy-discounted
+ *     reuse cost, see REPLAN_HIERARCHY_WEIGHT — strong preference for tier.
+ *   - an existing auto-junction/bridge tile (AC-8): same discount, by its own
+ *     roadTier, but flagged non-upgradable (never re-converted).
+ *   - an empty, buildable cell: base cost 1 (a brand-new connector tile would
+ *     be placed there, at the FULL cost of the new road's tier/spec).
+ *   - any other occupied cell (a non-road building): impassable (Infinity) —
+ *     inc1 does not demolish non-road buildings to force a route through them.
+ *
+ * For each `replanSearch` candidate NOT already reachable (dist === Infinity,
+ * i.e. boxed in), skip it — a safe, deterministic no-op, never a partial plan.
+ * Otherwise walk `prev` back from the candidate to its source, and for every
+ * INTERMEDIATE cell (excluding the candidate's own tile — AC-7 non-destructive
+ * default — and excluding `newTiles` cells, already free):
+ *   - an existing lower-tier, non-auto-junction road tile is upgraded in place
+ *     to the new tier, charged REPLAN_UPGRADE_COST_FRACTION × its full cost
+ *     (Aaron ruling 4).
+ *   - an empty cell gets a brand-new tile at the new tier, full cost.
+ * Cells shared by more than one candidate's path are only counted/charged
+ * once (a plain Map keyed by cell, built incrementally in one pass).
+ */
+function planRoadReplanCascade(
+  state: SimState,
+  newTiles: { x: number; y: number }[],
+  newRoadTier: number
+): ReplanCascade | null {
+  const nearby = replanSearch(state, newTiles, REPLAN_RADIUS_TILES);
+  if (nearby.length === 0) return null;
+
+  const box = replanBBox(newTiles, REPLAN_RADIUS_TILES);
+  if (!box) return null;
+  const { lo, hi } = box;
+  const newSet = new Set(newTiles.map((t) => `${t.x},${t.y}`));
+
+  type Cell =
+    | { kind: 'road'; tier: number; auto: boolean; buildingId: number }
+    | { kind: 'blocked' };
+  const grid = new Map<string, Cell>();
+  for (const b of state.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    for (let dx = 0; dx < sp.w; dx++) {
+      for (let dy = 0; dy < sp.h; dy++) {
+        const x = b.x + dx;
+        const y = b.y + dy;
+        if (x < lo.x || x > hi.x || y < lo.y || y > hi.y) continue;
+        const k = `${x},${y}`;
+        if (isRoadSpec(sp)) {
+          grid.set(k, { kind: 'road', tier: roadTierOf(sp), auto: REPLAN_AUTO_JUNCTION_SPECS.has(b.spec), buildingId: b.id });
+        } else {
+          grid.set(k, { kind: 'blocked' });
+        }
+      }
+    }
+  }
+
+  const stepCost = (k: string): number => {
+    if (newSet.has(k)) return 0;
+    const cell = grid.get(k);
+    if (!cell) return 1; // empty, buildable — a new connector tile would go here
+    if (cell.kind === 'blocked') return Infinity;
+    // Existing road reuse: strong hierarchy discount (Aaron ruling 3).
+    return 1 / (1 + (cell.tier - 1) * REPLAN_HIERARCHY_WEIGHT);
+  };
+
+  const cellsInBox: string[] = [];
+  for (let y = lo.y; y <= hi.y; y++) {
+    for (let x = lo.x; x <= hi.x; x++) cellsInBox.push(`${x},${y}`);
+  }
+
+  const dist = new Map<string, number>();
+  const prev = new Map<string, string | null>();
+  const visited = new Set<string>();
+  for (const t of newTiles) {
+    const k = `${t.x},${t.y}`;
+    dist.set(k, 0);
+    prev.set(k, null);
+  }
+
+  for (;;) {
+    let bestKey: string | null = null;
+    let bestDist = Infinity;
+    for (const k of cellsInBox) {
+      if (visited.has(k)) continue;
+      const d = dist.get(k);
+      if (d === undefined) continue;
+      if (d < bestDist || (d === bestDist && (bestKey === null || k < bestKey))) {
+        bestDist = d;
+        bestKey = k;
+      }
+    }
+    if (bestKey === null) break;
+    visited.add(bestKey);
+    const [bx, by] = bestKey.split(',').map(Number);
+    const neighbors: [number, number][] = [[bx + 1, by], [bx - 1, by], [bx, by + 1], [bx, by - 1]];
+    for (const [nx, ny] of neighbors) {
+      if (nx < lo.x || nx > hi.x || ny < lo.y || ny > hi.y) continue;
+      const nk = `${nx},${ny}`;
+      if (visited.has(nk)) continue;
+      const c = stepCost(nk);
+      if (!Number.isFinite(c)) continue;
+      const nd = bestDist + c;
+      const cur = dist.get(nk);
+      if (cur === undefined || nd < cur) {
+        dist.set(nk, nd);
+        prev.set(nk, bestKey);
+      }
+    }
+  }
+
+  const newTierSpecId = ROAD_TIER_SPECS[newRoadTier as RoadTier];
+  const newTierSpec = newTierSpecId ? SPECS[newTierSpecId] : undefined;
+  if (!newTierSpec) return null;
+
+  const conversions = new Map<string, { buildingId: number; newSpec: string; cost: number }>();
+  const newTilePlacements: Array<{ x: number; y: number; spec: string; cost: number }> = [];
+  const plannedCells = new Set<string>();
+
+  for (const cand of nearby) {
+    const candKey = `${cand.x},${cand.y}`;
+    if (dist.get(candKey) === undefined) continue; // boxed in — skip, no partial plan
+    // Walk the path back to its source, collecting intermediate cells only.
+    let cur: string | null = candKey;
+    const pathCells: string[] = [];
+    while (cur !== null) {
+      pathCells.push(cur);
+      cur = prev.get(cur) ?? null;
+    }
+    // pathCells[0] is the candidate itself (excluded, AC-7), the last entry is
+    // the newTiles source (already free) — everything between is "intermediate".
+    for (let i = 1; i < pathCells.length - 1; i++) {
+      const k = pathCells[i];
+      if (plannedCells.has(k) || newSet.has(k)) continue;
+      plannedCells.add(k);
+      const cell = grid.get(k);
+      if (!cell) {
+        // Empty cell: brand-new connector tile at the new path's tier, full cost.
+        const [x, y] = k.split(',').map(Number);
+        newTilePlacements.push({ x, y, spec: newTierSpecId, cost: placementCost(newTierSpec) });
+      } else if (cell.kind === 'road' && !cell.auto && cell.tier < newRoadTier) {
+        // Existing lower-tier road: upgrade in place at 90% of the full cost.
+        conversions.set(k, {
+          buildingId: cell.buildingId,
+          newSpec: newTierSpecId,
+          cost: Math.round(placementCost(newTierSpec) * REPLAN_UPGRADE_COST_FRACTION),
+        });
+      }
+      // Auto-junction tiles and already-sufficient-tier road tiles: free reuse,
+      // no change (AC-8 no-double-conversion; strong-hierarchy preference
+      // already made this route cheap enough to be selected).
+    }
+  }
+
+  if (conversions.size === 0 && newTilePlacements.length === 0) return null;
+
+  let totalCost = 0;
+  for (const c of conversions.values()) totalCost += c.cost;
+  for (const p of newTilePlacements) totalCost += p.cost;
+
+  return { conversions, newTilePlacements, totalCost };
+}
+
 export type Action =
   | { type: 'tick' }
   | { type: 'speed'; speed: SimState['speed'] }
@@ -1822,7 +2147,7 @@ function reduceCore(state: SimState, action: Action): SimState {
       }
 
       // All checks passed; execute conversions and placements atomically.
-      let placedState = { ...state, funds: state.funds - totalCost, placeNotice: null };
+      let placedState: SimState = { ...state, funds: state.funds - totalCost, placeNotice: null };
       let newPlacementCount = 0;
       let conversionCount = 0;
 
@@ -1867,6 +2192,42 @@ function reduceCore(state: SimState, action: Action): SimState {
 
       // Grant XP: 4 per new placement + 1 per conversion (lighter, no rebuilding).
       placedState = { ...placedState, xp: placedState.xp + newPlacementCount * 4 + conversionCount * 1 };
+
+      // FEAT-1972079928 inc1: road re-planning cascade, folded into THIS SAME
+      // placeRoadPath action (no new Action/journal type — the whole cascade is
+      // a pure function of state, so it replays byte-identically for free).
+      // planRoadReplanCascade computes the ENTIRE cascade — every upgrade and
+      // every new connector tile across the whole affected region — and
+      // returns it as a plan BEFORE any of it is applied (the atomic-cascade-
+      // before-redraw guarantee: see the function's doc comment). Only after
+      // the full plan (and its total cost) is known do we check affordability
+      // and apply it in one state transition; an unaffordable cascade leaves
+      // `placedState` completely untouched (AC-6 all-or-nothing — the original
+      // placeRoadPath placement still stands, only the RE-PLAN is rolled back).
+      const replanNewTiles = tilesToPlace.map((t) => ({ x: t.x, y: t.y }));
+      const replanPlan = planRoadReplanCascade(placedState, replanNewTiles, newRoadTier);
+      if (replanPlan && replanPlan.totalCost <= placedState.funds) {
+        let repState: SimState = {
+          ...placedState,
+          funds: placedState.funds - replanPlan.totalCost,
+          buildings: placedState.buildings.map((b) => {
+            const conv = replanPlan.conversions.get(`${b.x},${b.y}`);
+            if (!conv || conv.buildingId !== b.id) return b;
+            return { ...b, spec: conv.newSpec };
+          }),
+        };
+        for (const nt of replanPlan.newTilePlacements) {
+          repState = {
+            ...repState,
+            nextId: repState.nextId + 1,
+            buildings: [...repState.buildings, { id: repState.nextId, spec: nt.spec, x: nt.x, y: nt.y, builtTick: state.tick }],
+          };
+        }
+        const replanLabel = `Re-planned roads (${replanPlan.newTilePlacements.length} new, ${replanPlan.conversions.size} upgraded)`;
+        placedState = { ...repState, ...logEvent(repState, replanLabel, -replanPlan.totalCost) };
+      }
+      // replanPlan exists but is unaffordable: skip entirely, no partial spend,
+      // no ghost journal entry — placedState is exactly the pre-replan state.
 
       // Recompute level rewards if any.
       const rewards = computeLevelRewards(placedState);
