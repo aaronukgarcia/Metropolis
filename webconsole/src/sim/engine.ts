@@ -677,6 +677,29 @@ export const BUILDING_UTILIZATION_THRESHOLD = 0.85;
 export const BUILDING_AUTO_SCALE_COST_FRACTION = 0.15;
 
 /**
+ * BUG-466: the aggregate utilization gating (residents/capacity or jobs/capacity,
+ * identical for every monitored building) meant EVERY monitored non-maxed building
+ * upgraded in the SAME monthly pass once the city crossed BUILDING_UTILIZATION_THRESHOLD
+ * — e.g. 2000 buildings × ~£6,750 = £13.5M in one month, recurring every time population
+ * regrew into the ceiling (a treadmill). This caps how many buildings may be queued for
+ * upgrade in a single evaluateBuildingMonitors() pass, so the per-month charge is bounded
+ * (MAX × ~£6,750, not count-of-city × ~£6,750) and remaining eligible buildings roll over
+ * to later passes. The cap is applied over the EXISTING deterministic strict-buildingId
+ * order, so the same buildings are picked every replay of the same input.
+ * ⚠ PLACEHOLDER-balance — directional only, Aaron's pass.
+ */
+export const MAX_AUTO_SCALE_UPGRADES_PER_PASS = 25;
+
+/**
+ * BUG-466: minimum ticks a building must wait after auto-scaling before it is
+ * eligible to auto-scale again. Without this, the treadmill re-fires on the SAME
+ * buildings every time population regrows into the utilization ceiling. Paired with
+ * MAX_AUTO_SCALE_UPGRADES_PER_PASS above. ⚠ PLACEHOLDER-balance — directional only,
+ * Aaron's pass.
+ */
+export const AUTO_SCALE_COOLDOWN_TICKS = 2 * TICKS_PER_MONTH;
+
+/**
  * Coarse per-segment traffic-load weights (⚠ PLACEHOLDER-balance). A monitored
  * segment's demand is the FEEDING building's population + jobs + freight, each
  * weighted, then ramped by city activity (population vs ROAD_TRAFFIC_ACTIVITY_REF).
@@ -802,8 +825,10 @@ interface BuildingScaleResult {
  * FEAT-1972079878 inc1 (AC-7): Evaluate building monitors at a monthly boundary (pure + deterministic).
  * 1. Drop monitors whose window has closed (tick past `until`).
  * 2. Process survivors in strict buildingId order (NEVER map-iteration order).
- * 3. For each: if building is online AND utilization ≥ 0.85 threshold, upgrade
- *    capacityTier by 1, booking delta-cost (BUILDING_AUTO_SCALE_COST_FRACTION × base cost).
+ * 3. For each: if building is online, not in cooldown (BUG-466), AND utilization ≥ 0.85
+ *    threshold, upgrade capacityTier by 1, booking delta-cost
+ *    (BUILDING_AUTO_SCALE_COST_FRACTION × base cost) — up to
+ *    MAX_AUTO_SCALE_UPGRADES_PER_PASS per pass (BUG-466 rate limit).
  * Mirrors evaluateRoadMonitors pattern; each building scales at most once per pass.
  */
 export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingScaleResult {
@@ -843,6 +868,23 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
 
     if (tierUpgradeById.has(building.id)) continue; // already scaled this pass
 
+    // BUG-466: rate-limit — cap the number of buildings queued for upgrade THIS
+    // pass so a saturated city can't lump-charge every monitored building in one
+    // month. `active` is already in strict, stable buildingId order (sorted
+    // above), so the cap always selects the SAME buildings across replays of the
+    // same input (determinism, GR#21).
+    if (tierUpgradeById.size >= MAX_AUTO_SCALE_UPGRADES_PER_PASS) break;
+
+    // BUG-466: per-building cooldown — a building that just auto-scaled cannot
+    // auto-scale again until AUTO_SCALE_COOLDOWN_TICKS have passed. Without this,
+    // as soon as population regrows into the capacity ceiling, utilization climbs
+    // back over threshold and the SAME buildings re-upgrade every cycle (the
+    // treadmill). Buildings with no `lastAutoScaleTick` (older saves/snapshots
+    // predating this field) are treated as never having scaled, i.e. never in
+    // cooldown — backward compatible.
+    const lastAutoScaleTick = building.lastAutoScaleTick ?? -Infinity;
+    if (tick - lastAutoScaleTick < AUTO_SCALE_COOLDOWN_TICKS) continue;
+
     const sp = SPECS[building.spec];
     if (!sp || !sp.capacityTiers) continue; // spec missing or not scalable
 
@@ -879,7 +921,9 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
     tierUpgradeById.size === 0
       ? s.buildings
       : s.buildings.map((b) =>
-          tierUpgradeById.has(b.id) ? { ...b, capacityTier: tierUpgradeById.get(b.id)! } : b
+          tierUpgradeById.has(b.id)
+            ? { ...b, capacityTier: tierUpgradeById.get(b.id)!, lastAutoScaleTick: tick }
+            : b
         );
 
   return { buildings, monitors: active, cost, upgraded };

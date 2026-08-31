@@ -44,6 +44,15 @@ export interface Building {
    * Absent on buildings placed before this feature; treated as tier 0.
    */
   capacityTier?: number;
+  /**
+   * BUG-466: tick at which this building was last auto-scaled (capacityTier bumped
+   * by evaluateBuildingMonitors). Used to enforce AUTO_SCALE_COOLDOWN_TICKS so the
+   * same building can't re-upgrade every monthly pass once population regrows into
+   * the capacity ceiling (the treadmill that caused the £1.6M/tick drain).
+   * Absent on buildings that have never auto-scaled, or on saves/snapshots from
+   * before this field existed — treated as never in cooldown (backward compatible).
+   */
+  lastAutoScaleTick?: number;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';
