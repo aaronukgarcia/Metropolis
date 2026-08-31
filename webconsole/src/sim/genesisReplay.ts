@@ -18,7 +18,8 @@
 
 import type { SimState } from './types.ts';
 import type { Journal } from './journal.ts';
-import { initialState, reducer } from './engine.ts';
+import { initialState, reducer, setReplayMode } from './engine.ts';
+import { computeRoadConnectivity } from './data.ts';
 
 /**
  * Replay a journal from GENESIS: start at initialState() (NOT a snapshot) and
@@ -38,10 +39,21 @@ import { initialState, reducer } from './engine.ts';
  */
 export function replayFromGenesis(journal: Journal): SimState {
   let state = initialState();
-  for (const entry of journal.entries) {
-    state = reducer(state, entry.action);
+  // BUG-460 FIX A: no UI reads happen between actions during a headless replay,
+  // so the reducer's per-action roadConnectivity recompute is pure allocation
+  // churn here — skip it for the duration of the loop and do ONE final recompute
+  // below so the returned state is correct for the live game to resume from.
+  // Cleared in finally even on a thrown error (setReplayMode is a shared flag —
+  // leaving it set would silently break connectivity freshness for normal play).
+  setReplayMode(true);
+  try {
+    for (const entry of journal.entries) {
+      state = reducer(state, entry.action);
+    }
+  } finally {
+    setReplayMode(false);
   }
-  return state;
+  return { ...state, roadConnectivity: computeRoadConnectivity(state) };
 }
 
 /**
@@ -187,19 +199,34 @@ export function replayFromGenesisDefensive(
     };
   }
 
-  journal.entries.forEach((entry, index) => {
-    try {
-      state = engine.reduce(state, entry.action);
-    } catch (e) {
-      // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
-      skipped.push({
-        index,
-        tick: entry.tick,
-        type: (entry.action as { type?: string }).type ?? 'unknown',
-        error: errMsg(e),
-      });
-    }
-  });
+  // BUG-460 FIX A: see replayFromGenesis above — skip the wrapper's per-action
+  // roadConnectivity recompute for the duration of this headless replay loop;
+  // cleared in finally (even on a thrown error) and followed by one final
+  // recompute so the returned state is correct for the live game to resume from.
+  // Only meaningful when `engine` is the REAL reducer — a test-injected engine
+  // ignores the module-scoped flag entirely.
+  setReplayMode(true);
+  try {
+    journal.entries.forEach((entry, index) => {
+      try {
+        state = engine.reduce(state, entry.action);
+      } catch (e) {
+        // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
+        skipped.push({
+          index,
+          tick: entry.tick,
+          type: (entry.action as { type?: string }).type ?? 'unknown',
+          error: errMsg(e),
+        });
+      }
+    });
+  } finally {
+    setReplayMode(false);
+  }
+
+  if (engine === REAL_ENGINE) {
+    state = { ...state, roadConnectivity: computeRoadConnectivity(state) };
+  }
 
   return { state, skipped, crashed: false, crashError: '' };
 }
@@ -280,51 +307,65 @@ export function* replayFromGenesisDefensiveChunked(
   const entries = journal.entries;
   const total = entries.length;
 
-  // Yield progress after each chunk of ACTIONS_PER_CHUNK actions.
-  for (let i = 0; i < total; i += ACTIONS_PER_CHUNK) {
-    const chunkEnd = Math.min(i + ACTIONS_PER_CHUNK, total);
-    for (let j = i; j < chunkEnd; j++) {
-      const entry = entries[j];
-      try {
-        state = engine.reduce(state, entry.action);
-      } catch (e) {
-        // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
-        skipped.push({
-          index: j,
-          tick: entry.tick,
-          type: (entry.action as { type?: string }).type ?? 'unknown',
-          error: errMsg(e),
-        });
+  // BUG-460 FIX A: see replayFromGenesis above — skip the wrapper's per-action
+  // roadConnectivity recompute for the duration of this headless replay
+  // (cleared in finally below, even on a thrown error, and followed by one
+  // final recompute so the returned state is correct for live play to resume
+  // from). Only meaningful when `engine` is the REAL reducer.
+  setReplayMode(true);
+  try {
+    // Yield progress after each chunk of ACTIONS_PER_CHUNK actions.
+    for (let i = 0; i < total; i += ACTIONS_PER_CHUNK) {
+      const chunkEnd = Math.min(i + ACTIONS_PER_CHUNK, total);
+      for (let j = i; j < chunkEnd; j++) {
+        const entry = entries[j];
+        try {
+          state = engine.reduce(state, entry.action);
+        } catch (e) {
+          // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
+          skipped.push({
+            index: j,
+            tick: entry.tick,
+            type: (entry.action as { type?: string }).type ?? 'unknown',
+            error: errMsg(e),
+          });
+        }
       }
-    }
 
-    // After each chunk, derive a human-readable phase label from the action
-    // type of the action we just applied (if any in this chunk).
-    let phaseLabel = 'Replaying actions';
-    if (chunkEnd > 0) {
-      const lastAction = entries[chunkEnd - 1].action as { type?: string };
-      const actionType = lastAction.type ?? 'unknown';
-      // Capitalize and pluralize common action types.
-      const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-      const plural = {
-        place: 'Placing buildings',
-        bulldoze: 'Bulldozing',
-        tax: 'Adjusting taxes',
-        tick: 'Advancing ticks',
-        policy: 'Adjusting policies',
-        road: 'Building roads',
-        rail: 'Building rail',
-        water: 'Building water',
-        reset: 'Resetting',
-      }[actionType] || `Replaying ${capitalize(actionType)}s`;
-      phaseLabel = `${plural}... ${chunkEnd.toLocaleString()}/${total.toLocaleString()} actions`;
-    }
+      // After each chunk, derive a human-readable phase label from the action
+      // type of the action we just applied (if any in this chunk).
+      let phaseLabel = 'Replaying actions';
+      if (chunkEnd > 0) {
+        const lastAction = entries[chunkEnd - 1].action as { type?: string };
+        const actionType = lastAction.type ?? 'unknown';
+        // Capitalize and pluralize common action types.
+        const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+        const plural = {
+          place: 'Placing buildings',
+          bulldoze: 'Bulldozing',
+          tax: 'Adjusting taxes',
+          tick: 'Advancing ticks',
+          policy: 'Adjusting policies',
+          road: 'Building roads',
+          rail: 'Building rail',
+          water: 'Building water',
+          reset: 'Resetting',
+        }[actionType] || `Replaying ${capitalize(actionType)}s`;
+        phaseLabel = `${plural}... ${chunkEnd.toLocaleString()}/${total.toLocaleString()} actions`;
+      }
 
-    yield {
-      actionsDone: chunkEnd,
-      actionsTotal: total,
-      phaseLabel,
-    };
+      yield {
+        actionsDone: chunkEnd,
+        actionsTotal: total,
+        phaseLabel,
+      };
+    }
+  } finally {
+    setReplayMode(false);
+  }
+
+  if (engine === REAL_ENGINE) {
+    state = { ...state, roadConnectivity: computeRoadConnectivity(state) };
   }
 
   return { state, skipped, crashed: false, crashError: '' };

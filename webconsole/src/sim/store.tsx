@@ -489,6 +489,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // watchdog it might still be holding.
         if (isStaleRebuildChain(myGen, rebuildGenRef.current)) {
           clearWatchdog();
+          // BUG-460 FIX A: abandoning the generator without closing it would leave
+          // genesisReplay's module-scoped replay-mode flag stuck ON (its try/finally
+          // only runs to completion or on an explicit .return()/.throw()), silently
+          // starving every SUBSEQUENT normal reducer call of its roadConnectivity
+          // recompute. Close it so the finally fires.
+          try {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the
+            // return value is discarded; only the generator-close side effect matters.
+            gen.return(undefined as any);
+          } catch {
+            // Closing an already-finished/closed generator is a no-op; ignore.
+          }
           return;
         }
         try {

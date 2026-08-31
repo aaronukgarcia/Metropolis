@@ -538,8 +538,12 @@ export function computeRoadConnectivity(s: SimState): { connectedRoadTiles: stri
 
   // BFS over road-to-road orthogonal adjacency. The reachable SET is
   // order-independent, so seeding order does not affect the result.
-  while (queue.length > 0) {
-    const k = queue.shift()!;
+  // BUG-460 FIX B: an index pointer instead of queue.shift() avoids O(n) per-dequeue
+  // (Array.shift() re-indexes the whole remaining array), which made this O(n^2) on
+  // large road networks. The traversal order and reachable set are unchanged.
+  let head = 0;
+  while (head < queue.length) {
+    const k = queue[head++];
     const c = k.indexOf(',');
     const x = Number(k.slice(0, c));
     const y = Number(k.slice(c + 1));

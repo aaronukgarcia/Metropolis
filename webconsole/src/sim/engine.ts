@@ -2922,6 +2922,38 @@ function reduceCore(state: SimState, action: Action): SimState {
 }
 
 /**
+ * BUG-460 FIX A — headless genesis replay (webconsole/src/sim/genesisReplay.ts)
+ * drives the reducer through up to 50,000 journalled actions with NO UI reads in
+ * between. The wrapper's per-action `computeRoadConnectivity` recompute below
+ * exists so a UI read between actions always sees a fresh graph, but during a
+ * replay nothing reads `s.roadConnectivity` between actions (isOnline/computeFailedGates
+ * are only read from advance() (tick), which recomputes connectivity itself at
+ * its own start, and from UI query functions the replayer never calls) — so the
+ * wrapper's recompute during replay is pure allocation churn: a full Set+array+
+ * sort+BFS over the whole board for every `place`/`placeRoadPath` action, which
+ * is exactly the O(actions x buildings) allocation blowing the browser's GC
+ * budget (2.5 GB, tab death) on a big journal.
+ *
+ * `setReplayMode(true)` tells the reducer wrapper to skip its recompute; the
+ * replayer MUST clear it (try/finally) and then compute connectivity ONCE more
+ * on the final state so the returned state is correct for the live game to
+ * resume from. `advance()`'s own recompute (engine.ts, inside advance()) is
+ * UNTOUCHED — tick-time connectivity used for demand/economy gating always
+ * stays fresh, replay mode or not.
+ */
+let isReplaying = false;
+
+/**
+ * Enable/disable BUG-460 FIX A replay mode for the reducer wrapper. Callers
+ * MUST clear this in a try/finally around the replay loop (even on a thrown
+ * error) — leaving it set would silently stop the wrapper from keeping
+ * `roadConnectivity` fresh for ordinary (non-replay) play.
+ */
+export function setReplayMode(active: boolean): void {
+  isReplaying = active;
+}
+
+/**
  * FEAT-1972079891 inc1 (AC-12) — the public reducer. Delegates to reduceCore, then
  * keeps `roadConnectivity` consistent with the resulting buildings so the road
  * activation gates re-evaluate in the SAME tick a road is placed/removed (no delay
@@ -2944,6 +2976,7 @@ export function sanitizeTreasury(s: SimState): SimState {
 export function reducer(state: SimState, action: Action): SimState {
   const s = sanitizeTreasury(state);
   const next = reduceCore(s, action);
+  if (isReplaying) return next; // BUG-460 FIX A — see setReplayMode doc above.
   if (next.buildings !== s.buildings || !next.roadConnectivity) {
     return { ...next, roadConnectivity: computeRoadConnectivity(next) };
   }
