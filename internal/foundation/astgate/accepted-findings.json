@@ -1818,5 +1818,17 @@
   {
     "finding": "internal/engine/core/commands.go|*Engine|field access chain|journalAccepted|e.subs|*Engine.subs",
     "reason": "FEAT-1972079852 increment 3 (engine-owns-journal, 2026-08-31): same SEC-049 field-access over-approximation as SetCommandJournaler above -- journalAccepted's body (internal/engine/core/commands.go) was read in full and contains zero references to e.subs, only e.journaler. Mirrors this same file/registry's accept/reject/clockTickForResult e.subs field-access-chain entries exactly (those functions call e.subs just as little -- zero times -- and carry the identical accepted reasoning)."
+  },
+  {
+    "finding": "internal/persist/diskstore.go|*DiskStore|receiver method|cityDir|s|*DiskStore",
+    "reason": "FEAT-1972079936 Phase 1 int.persist copyguard round (2026-08-31, approvedBy Bev/lead): cityDir is an unexported pure path-calculation helper on *DiskStore -- it takes NO lock at all (no s.mu / lockFor), only joins root+sha256(key) segments, and is reachable ONLY from the exported entry points (AppendJournal/ReadJournal/PutSnapshot/GetSnapshot/ListSnapshots/ListCities/Exists) which EACH now call checkNotCopied() pre-lock. astgate is syntactic (no call-graph): it cannot see the helper sits behind an already-guarded entry point, the same known blind spot the citizens *Locked helpers and core snapshotStateLocked are accepted under. A copied DiskStore is rejected at every exported boundary before cityDir is ever reached."
+  },
+  {
+    "finding": "internal/persist/diskstore.go|*DiskStore|receiver method|ensureCityMeta|s|*DiskStore",
+    "reason": "FEAT-1972079936 Phase 1 int.persist copyguard round (2026-08-31, approvedBy Bev/lead): ensureCityMeta is an unexported helper reachable only from the exported entry points, and is invoked with the per-city lock already held by its caller (AppendJournal/PutSnapshot after lockFor+Lock). It never acquires a lock independently on an unguarded path. Every exported caller calls checkNotCopied() pre-lock first, so a copied DiskStore never reaches ensureCityMeta. Same syntactic-no-call-graph blind spot as the accepted core/citizens *Locked helpers."
+  },
+  {
+    "finding": "internal/persist/memstore.go|*MemStore|receiver method|getOrCreate|s|*MemStore",
+    "reason": "FEAT-1972079936 Phase 1 int.persist copyguard round (2026-08-31, approvedBy Bev/lead): getOrCreate is an unexported helper on *MemStore called only with m.mu already held by its exported caller; it does not lock independently. All 7 exported MemStore methods call checkNotCopied() pre-lock, so a copied MemStore is rejected before getOrCreate is reached. Unexported-helper-behind-guarded-entry-point, the established accepted precedent."
   }
 ]
