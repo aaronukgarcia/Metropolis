@@ -25,9 +25,11 @@ import type {
   Building,
   BuildingMonitor,
   Clipboard,
+  DemographicFlow,
   FlowItem,
   LedgerEntry,
   LevelUpNotice,
+  MonthlyDemographics,
   RoadMonitor,
   SimState,
   TaxRates,
@@ -221,6 +223,16 @@ export interface DebugJson {
     incomePerTick: number;
     expensePerTick: number;
     netPerTick: number;
+  };
+  /**
+   * FEAT-1972079925 — demographic flows: the LAST tick's births/deaths/
+   * move-ins/move-outs, the running this-month-so-far accumulator, and the
+   * bounded monthly history ring backing the population Sankey.
+   */
+  demographics: {
+    lastTick: DemographicFlow;
+    accumThisMonth: DemographicFlow;
+    monthlyHistory: MonthlyDemographics[];
   };
   demand: {
     zones: { residential: number; commercial: number; industrial: number };
@@ -445,6 +457,9 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   roadMonitors: 'sim.roadMonitors',
   buildingMonitors: 'sim.buildingMonitors',
   roadConnectivity: 'sim.roadConnectivity',
+  lastDemographics: 'demographics.lastTick',
+  demographicAccum: 'demographics.accumThisMonth',
+  demographicHistory: 'demographics.monthlyHistory',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -671,6 +686,13 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       incomePerTick: income,
       expensePerTick: expense,
       netPerTick: net,
+    },
+    // FEAT-1972079925: demographic flows — defaults cover a legacy/bespoke
+    // state predating this feature (backward tolerance, mirrors roadConnectivity).
+    demographics: {
+      lastTick: s.lastDemographics ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
+      accumThisMonth: s.demographicAccum ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
+      monthlyHistory: s.demographicHistory ?? [],
     },
     demand: {
       zones: zoneDemand,

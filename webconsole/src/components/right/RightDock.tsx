@@ -29,9 +29,11 @@ import { buildDebugJson, debugJsonText } from '../../sim/debugjson';
 import { currentMapUi } from '../../sim/uistate';
 import { versionRaw } from '../../sim/version';
 import { nextRefreshDue } from '../../sim/throttle';
+import { PopulationSankey } from '../PopulationSankey';
 
 const TABS = [
   { id: 'status', label: 'Status' },
+  { id: 'population', label: 'Population' },
   { id: 'rates', label: 'Rates' },
   { id: 'units', label: 'Units' },
   { id: 'water', label: 'Water' },
@@ -56,6 +58,7 @@ export function RightDock() {
   return (
     <Panel title="Information" tabs={TABS} active={tab} onSelect={setTab}>
       {tab === 'status' && <StatusTab />}
+      {tab === 'population' && <PopulationTab />}
       {tab === 'rates' && <RatesTab />}
       {tab === 'units' && <UnitsTab />}
       {tab === 'water' && <WaterTab />}
@@ -182,6 +185,39 @@ function StatusTab() {
         Fiscal state {income - expense >= 0 ? 'solvent' : 'in deficit'} · net{' '}
         {fmtMoney(income - expense)}/tick
       </p>
+    </>
+  );
+}
+
+// FEAT-1972079925 — the population Sankey tab. Display-only: the model
+// derivation lives in PopulationSankey.tsx (demographicSankeyModel), pure and
+// tested independently of this render. Also shows the LAST tick's flows so
+// the churn is legible even before a full month has closed into history.
+function PopulationTab() {
+  const { state } = useSim();
+  const last = state.lastDemographics;
+  return (
+    <>
+      <div className="tiles">
+        <div className="tile pos">
+          <div className="n">{fmtNum(last?.births ?? 0)}</div>
+          <div className="l">Births (last tick)</div>
+        </div>
+        <div className="tile acc">
+          <div className="n">{fmtNum(last?.moveIns ?? 0)}</div>
+          <div className="l">Move-ins (last tick)</div>
+        </div>
+        <div className="tile neg">
+          <div className="n">{fmtNum(last?.deaths ?? 0)}</div>
+          <div className="l">Deaths (last tick)</div>
+        </div>
+        <div className="tile neg">
+          <div className="n">{fmtNum(last?.moveOuts ?? 0)}</div>
+          <div className="l">Move-outs (last tick)</div>
+        </div>
+      </div>
+      <h4>Demographic flow</h4>
+      <PopulationSankey history={state.demographicHistory} />
     </>
   );
 }

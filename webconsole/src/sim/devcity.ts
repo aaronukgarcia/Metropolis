@@ -9,5 +9,16 @@ export function loadDevCity1(): SimState {
   if (!state.buildingMonitors) {
     state.buildingMonitors = [];
   }
+  // FEAT-1972079925: ensure demographic-flow fields exist for backward compatibility
+  // (the dev-city fixture predates this feature).
+  if (!state.demographicAccum) {
+    state.demographicAccum = { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
+  }
+  if (!state.demographicHistory) {
+    state.demographicHistory = [];
+  }
+  if (!state.lastDemographics) {
+    state.lastDemographics = { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
+  }
   return state;
 }

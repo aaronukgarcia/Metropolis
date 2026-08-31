@@ -45,7 +45,7 @@ import {
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
-import type { Building, RoadMonitor, BuildingMonitor } from './types.ts';
+import type { Building, RoadMonitor, BuildingMonitor, DemographicFlow, MonthlyDemographics } from './types.ts';
 import { fmtMoney } from './utils.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds } from './fiscal.ts';
 import type {
@@ -78,14 +78,37 @@ export const LEDGER_CAP = 200;
  */
 export const LEVEL_REWARD_RATE = 0.1;
 
-// BUG-394 FIX: Population growth rate constant
-// PLACEHOLDER (balance-number regime, pending Aaron's approval):
-// Per-tick population growth = (capacity - population) * POPULATION_GROWTH_RATE * growthFactor
-// Controls how responsive population is to available housing.
-// At 0.05: slow crawl (~100+ ticks to fill 1% surplus) -> freeze-like appearance
-// At 0.15: responsive growth (~30 ticks to fill 1% surplus) -> player-visible climbing
-// Directional: larger housing surplus drives faster climb toward capacity.
-export const POPULATION_GROWTH_RATE = 0.15;
+// FEAT-1972079925 — demographic flow rate constants. ALL PLACEHOLDER under the
+// balance-number regime (directional only, pending Aaron's row-by-row pass).
+// These replace the bare converge-to-capacity rule (former POPULATION_GROWTH_RATE,
+// BUG-394) with real per-tick births/deaths/move-ins/move-outs so a city AT
+// capacity shows churn instead of freezing at a single integer forever.
+
+/** Fraction of population born per tick. Slow background growth. */
+export const BIRTH_RATE_PER_TICK = 0.0008;
+/** Fraction of population dying per tick. Slightly below births so natural
+ * increase alone is small and positive — move-flows dominate the trajectory. */
+export const DEATH_RATE_PER_TICK = 0.0005;
+/**
+ * Fraction of EFFECTIVE headroom (see `advance()`) that moves in per tick,
+ * scaled by the attractiveness factor (tax/transit/demand/station terms —
+ * the same shape the old growthFactor used, renamed). Kept numerically equal
+ * to the retired POPULATION_GROWTH_RATE (0.15) so the below-capacity growth
+ * trajectory stays close to every already-landed scenario test.
+ */
+export const MOVE_IN_RATE = 1.2;
+/** Base fraction of population moving out per tick, before the wellbeing
+ * penalty below is applied. Small — most churn at capacity is backfilled. */
+export const MOVE_OUT_BASE_RATE = 0.003;
+/**
+ * How strongly falling wellbeing raises the move-out rate: effective rate =
+ * MOVE_OUT_BASE_RATE * (1 + WELLBEING_MOVEOUT_FACTOR * (100 - wellbeing) / 100).
+ * At wellbeing 100 the rate is exactly the base; at wellbeing 0 it is
+ * base * (1 + WELLBEING_MOVEOUT_FACTOR).
+ */
+export const WELLBEING_MOVEOUT_FACTOR = 1.5;
+/** Months of demographicHistory retained (bounded ring, mirrors HISTORY_CAP). */
+export const DEMOGRAPHIC_HISTORY_CAP = 120;
 
 const XP_LEVELS: number[] = (() => {
   const a = [0];
@@ -222,6 +245,9 @@ function rawState(): SimState {
     placeNotice: null,
     roadMonitors: [],
     buildingMonitors: [],
+    demographicAccum: { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
+    demographicHistory: [],
+    lastDemographics: { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
   };
 }
 
@@ -853,16 +879,91 @@ function advance(s: SimState): SimState {
     if (sp?.kind === 'station') stationWeight += sp.id === 'station_ashford' ? 3 : 1;
   }
 
-  let population = s.population;
-  if (capacity > population) {
-    const growthFactor =
-      (1.4 - avgTax / 15) * (s.policies.transitSubsidy ? 1.25 : 1) *
-      Math.max(0.3, 0.55 + demand.residential / 200) *
-      (1 + 0.15 * Math.min(stationWeight, 6));
-    // BUG-394 FIX: use POPULATION_GROWTH_RATE instead of hardcoded 0.05
-    population += Math.max(0, Math.ceil((capacity - population) * POPULATION_GROWTH_RATE * growthFactor));
-  } else if (population > capacity) {
-    population = Math.max(capacity, population - Math.ceil((population - capacity) * 0.1));
+  // FEAT-1972079925 — demographic FLOWS replace the bare converge-to-capacity
+  // rule (BUG-394's frozen-at-capacity city). `attractiveness` reuses the
+  // EXACT shape the retired growthFactor used (tax/transit/demand/station
+  // terms, unchanged) so the below-capacity growth trajectory stays close to
+  // every already-landed scenario test that exercises population growth.
+  const attractiveness =
+    (1.4 - avgTax / 15) * (s.policies.transitSubsidy ? 1.25 : 1) *
+    Math.max(0.3, 0.55 + demand.residential / 200) *
+    (1 + 0.15 * Math.min(stationWeight, 6));
+
+  const popBefore = s.population;
+  // Wellbeing read on the START-of-tick state (mirrors BUG-419's basis
+  // discipline: population-scaled effects are computed on the SAME frame the
+  // rest of this tick charges against, before the growth update below).
+  const wbOverall = wellbeingOf(s).overall;
+
+  let births = 0;
+  let deaths = 0;
+  let moveIns = 0;
+  let moveOuts = 0;
+  let population = popBefore;
+
+  if (popBefore <= capacity) {
+    // ⚠ BALANCE-NUMBER PLACEHOLDERS (BIRTH_RATE_PER_TICK / DEATH_RATE_PER_TICK /
+    // MOVE_IN_RATE / MOVE_OUT_BASE_RATE / WELLBEING_MOVEOUT_FACTOR) — directional
+    // only, pending Aaron's row-by-row balance pass.
+    births = Math.round(popBefore * BIRTH_RATE_PER_TICK);
+    deaths = Math.round(popBefore * DEATH_RATE_PER_TICK);
+    // Move-out rate rises as wellbeing falls (state-derived, deterministic —
+    // GR#21: no Date/random). At wellbeing 100 the rate is exactly the base.
+    const moveOutRate =
+      MOVE_OUT_BASE_RATE * (1 + (WELLBEING_MOVEOUT_FACTOR * (100 - wbOverall)) / 100);
+    moveOuts = Math.round(popBefore * moveOutRate);
+
+    const headroom = Math.max(0, capacity - popBefore);
+    // Move-ins are bounded by EFFECTIVE headroom: the raw vacancy plus the
+    // space THIS tick's own deaths/move-outs free up. Without the "+deaths+
+    // moveOuts" term a city sitting exactly at capacity would compute
+    // headroom=0 and freeze move-ins at 0 forever — exactly the BUG-394
+    // freeze this feature exists to fix. With it, at-capacity move-ins
+    // backfill departures (churn), while below-capacity headroom still
+    // dominates (fast fill), and the hard capacity ceiling below still caps
+    // the result every tick.
+    const effectiveHeadroom = Math.max(0, headroom + deaths + moveOuts);
+    moveIns = Math.max(
+      0,
+      Math.min(effectiveHeadroom, Math.round(effectiveHeadroom * MOVE_IN_RATE * attractiveness))
+    );
+
+    population = Math.max(0, Math.min(capacity, popBefore + births + moveIns - deaths - moveOuts));
+  } else {
+    // Over-capacity (e.g. right after a demolition drops capacity below the
+    // current population): retain the pre-existing 10%-per-tick decay-to-
+    // capacity behaviour. Recorded as pure move-out churn so the conservation
+    // identity (pop_after = pop_before + births + moveIns - deaths - moveOuts)
+    // still holds for the history/Sankey consumers.
+    population = Math.max(capacity, popBefore - Math.ceil((popBefore - capacity) * 0.1));
+    moveOuts = popBefore - population;
+  }
+
+  // Per-tick demographic flows (FEAT-1972079925): recorded exactly like
+  // lastFlows records fiscal flows, then accumulated into a bounded monthly
+  // history ring for the population Sankey + trend views (GR#15: the ring
+  // holds only REAL recorded flows, never a fabricated split).
+  const demographics: DemographicFlow = { births, deaths, moveIns, moveOuts };
+  const accumSoFar: DemographicFlow = s.demographicAccum ?? {
+    births: 0,
+    deaths: 0,
+    moveIns: 0,
+    moveOuts: 0,
+  };
+  const demographicAccum: DemographicFlow = {
+    births: accumSoFar.births + births,
+    deaths: accumSoFar.deaths + deaths,
+    moveIns: accumSoFar.moveIns + moveIns,
+    moveOuts: accumSoFar.moveOuts + moveOuts,
+  };
+  let demographicHistory: MonthlyDemographics[] = s.demographicHistory ?? [];
+  let nextDemographicAccum = demographicAccum;
+  if (tick % TICKS_PER_MONTH === 0) {
+    demographicHistory = [
+      ...demographicHistory,
+      { tick, population, ...demographicAccum },
+    ].slice(-DEMOGRAPHIC_HISTORY_CAP);
+    nextDemographicAccum = { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
   }
 
   // Compute in-tick level rewards (if any) EXACTLY ONCE to add to flows for conservation tracking.
@@ -904,6 +1005,10 @@ function advance(s: SimState): SimState {
     buildings: scaledBuildings,
     roadMonitors,
     history: [...s.history, { tick, funds, income, expense, population }].slice(-HISTORY_CAP),
+    // FEAT-1972079925: per-tick demographic flows + the monthly aggregate ring.
+    lastDemographics: demographics,
+    demographicAccum: nextDemographicAccum,
+    demographicHistory,
     ledger,
     nextLedgerId: nextLedger,
     // BUG-419: record the START-of-tick population that computeFlows() charged

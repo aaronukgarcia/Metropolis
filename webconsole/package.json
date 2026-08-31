@@ -10,7 +10,9 @@
     "prebuild": "node scripts/gen-version.mjs",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "node --test \"test/*.test.mjs\" && tsx --test test/mount.test.tsx test/rebuild-prompt.test.tsx test/store-dispatch.test.tsx test/error-boundary.test.tsx test/store-reset-capture.test.tsx",
+    "dogfood:build": "npm run build",
+    "dogfood": "npm run build && node scripts/serve-bundle.mjs 4173",
+    "test": "node --test \"test/*.test.mjs\" && tsx --test test/mount.test.tsx test/rebuild-prompt.test.tsx test/store-dispatch.test.tsx test/error-boundary.test.tsx test/store-reset-capture.test.tsx test/population-sankey.test.tsx",
     "test:mount": "tsx --test test/mount.test.tsx"
   },
   "dependencies": {

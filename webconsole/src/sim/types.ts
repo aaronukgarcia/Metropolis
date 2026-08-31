@@ -73,6 +73,29 @@ export interface TickRecord {
   population: number;
 }
 
+/**
+ * FEAT-1972079925 — one tick's (or one month's, when aggregated) demographic
+ * flows: births, deaths, move-ins, move-outs. All non-negative integers,
+ * state-derived and deterministic (GR#21: no Date/random).
+ */
+export interface DemographicFlow {
+  births: number;
+  deaths: number;
+  moveIns: number;
+  moveOuts: number;
+}
+
+/**
+ * FEAT-1972079925 — one closed month's aggregated demographic flows, plus the
+ * population and tick at the moment the month closed. Recorded into
+ * SimState.demographicHistory (a bounded ring) so the population Sankey and
+ * trend views read REAL recorded flows, never a fabricated split (GR#15).
+ */
+export interface MonthlyDemographics extends DemographicFlow {
+  tick: number;
+  population: number;
+}
+
 export interface LedgerEntry {
   id: number;
   tick: number;
@@ -224,6 +247,29 @@ export interface SimState {
    * and genesis-replay; deterministic, tick-driven — NO wall-clock.
    */
   buildingMonitors: BuildingMonitor[];
+  /**
+   * FEAT-1972079925 — running accumulator of this-month-so-far demographic
+   * flows, flushed into `demographicHistory` and reset to zero at every
+   * TICKS_PER_MONTH boundary (mirrors the roadMonitors/buildingMonitors
+   * monthly-aggregate pattern). Optional for backward tolerance: a legacy
+   * state without it starts accumulating from zero (see devcity.ts).
+   */
+  demographicAccum?: DemographicFlow;
+  /**
+   * FEAT-1972079925 — bounded ring of closed-month demographic aggregates
+   * (births/deaths/moveIns/moveOuts + population), newest last, capped at
+   * DEMOGRAPHIC_HISTORY_CAP months. Backs the population Sankey + trend
+   * views. Optional for backward tolerance: a legacy state without it has an
+   * empty history (honest empty state, not a fabricated one — GR#15).
+   */
+  demographicHistory?: MonthlyDemographics[];
+  /**
+   * FEAT-1972079925 — the four demographic flows computed by the LAST
+   * advance() (mirrors `lastFlows` for fiscal flows). Lets tests and any
+   * per-tick UI read the immediate churn without waiting for a month to
+   * close. Optional for backward tolerance.
+   */
+  lastDemographics?: DemographicFlow;
 }
 
 /**
