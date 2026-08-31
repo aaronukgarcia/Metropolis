@@ -71,6 +71,10 @@ export function isStateAffecting(action: Action): boolean {
       return true;
     case 'bulldoze':
       return true;
+    // FEAT-1972079923 inc2 (AC-4): forced asset sale — removes a building and
+    // credits the treasury, exactly like bulldoze — state-affecting.
+    case 'sellAsset':
+      return true;
 
     // Moving buildings — state-affecting only for the actual move, not UI pickup/cancel.
     case 'pickup':

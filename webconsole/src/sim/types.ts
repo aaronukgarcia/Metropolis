@@ -334,6 +334,19 @@ export interface SimState {
    * `dismissNotice`). null when no popup is pending. Optional for backward tolerance.
    */
   insolvencyPopup?: { state: InsolvencyState; enteredAt: number } | null;
+  /**
+   * FEAT-1972079923 inc2 (AC-2) — the IMF BAILOUT EVENT state machine. Set
+   * ONCE, on the same tick insolvencyPopup is stamped (band transitions INTO
+   * 'crisis' from a non-crisis band, and no bailout is already active), and
+   * cleared at the year-end re-evaluation (tick >= enteredAt +
+   * BAILOUT_DURATION_TICKS) IF funds have recovered above
+   * DEBT_THRESHOLD_FOR_BAILOUT by then — otherwise it stays active (no
+   * transition; Administration Mode / second bailout are inc3/4 scope).
+   * `enteredAt` is a tick number, never Date.now() (GR#21 determinism).
+   * Optional for backward tolerance: a legacy state without it is treated as
+   * no-bailout-active.
+   */
+  bailoutState?: { enteredAt: number } | null;
 }
 
 /**

@@ -56,7 +56,7 @@ import type {
   InsolvencyState,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -378,6 +378,8 @@ function rawState(): SimState {
     // FEAT-1972079923 inc1: opening treasury is well above both thresholds — solvent.
     insolvencyState: 'solvent',
     insolvencyPopup: null,
+    // FEAT-1972079923 inc2: no bailout active at game start.
+    bailoutState: null,
   };
 }
 
@@ -1147,17 +1149,53 @@ function advance(s: SimState): SimState {
     lastRewardedLevel = lr.newLevel;
   }
 
-  // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking.
-  const fundsAtTickEnd = funds;
-
   // FEAT-1972079923 inc1 (AC-1, AC-12): the insolvency band is PURELY derived from
   // the end-of-tick funds — deterministic, no Date/random, so replay reproduces
-  // every band transition at the same tick. AC-8 scenario 1 (bailout-entry popup):
-  // stamp insolvencyPopup ONCE, only on the tick the band transitions INTO 'crisis'
-  // from a non-crisis band, so the popup states the conditions exactly once per
-  // entry rather than re-appearing every subsequent tick while still in crisis.
+  // every band transition at the same tick. Classified BEFORE the inc2 bailout
+  // injection below (preInjectionFunds) so the same-tick rescue never masks the
+  // read of what actually happened this tick — the band records the crossing,
+  // not the bailout's own softening of it.
+  const preInjectionFunds = funds;
   const prevInsolvencyState: InsolvencyState = s.insolvencyState ?? 'solvent';
-  const insolvencyState = insolvencyStateForFunds(funds);
+  const insolvencyState = insolvencyStateForFunds(preInjectionFunds);
+
+  // FEAT-1972079923 inc2 (AC-1, AC-2, AC-12): the IMF BAILOUT EVENT state
+  // machine. Triggered exactly once — the SAME tick and SAME one-shot
+  // condition as insolvencyPopup below (band transitions INTO 'crisis'), and
+  // guarded by `prevBailoutState === null` so a tick that stays in crisis
+  // never re-fires the injection. The one-time BAILOUT_INCOME_INJECTION is
+  // booked as a normal labelled inflow (mirrors the Level Rewards pattern
+  // immediately above) BEFORE fundsAtTickEnd is captured, so the conservation
+  // invariant (fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows)
+  // holds exactly like every other in-tick inflow. Year-end re-evaluation
+  // (AC-2) is deterministic tick arithmetic only (tick >= enteredAt +
+  // BAILOUT_DURATION_TICKS) — no Date/random (GR#21) — so replay reproduces
+  // the exact entry AND exit ticks.
+  const prevBailoutState = s.bailoutState ?? null;
+  let bailoutState = prevBailoutState;
+  if (insolvencyState === 'crisis' && prevInsolvencyState !== 'crisis' && prevBailoutState === null) {
+    bailoutState = { enteredAt: tick };
+    funds += BAILOUT_INCOME_INJECTION;
+    inflows = [...inflows, { label: BAILOUT_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION }];
+  } else if (
+    prevBailoutState !== null &&
+    tick >= prevBailoutState.enteredAt + BAILOUT_DURATION_TICKS &&
+    funds >= DEBT_THRESHOLD_FOR_BAILOUT
+  ) {
+    // Solvency restored by the year-end checkpoint — bailout ends. Still
+    // insolvent: bailoutState is left unchanged (no transition), per AC-2 —
+    // Administration Mode / second bailout are inc3/4 scope.
+    bailoutState = null;
+  }
+
+  // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking
+  // (captured AFTER any bailout injection this tick, so it's a real inflow).
+  const fundsAtTickEnd = funds;
+
+  // AC-8 scenario 1: stamp insolvencyPopup ONCE, only on the tick the band
+  // transitions INTO 'crisis' from a non-crisis band, so the popup states the
+  // conditions exactly once per entry rather than re-appearing every
+  // subsequent tick while still in crisis.
   const insolvencyPopup =
     insolvencyState === 'crisis' && prevInsolvencyState !== 'crisis'
       ? { state: insolvencyState, enteredAt: tick }
@@ -1196,6 +1234,7 @@ function advance(s: SimState): SimState {
     notice: nextNotice,
     insolvencyState,
     insolvencyPopup,
+    bailoutState,
   };
 }
 
@@ -1891,6 +1930,7 @@ export type Action =
   | { type: 'place'; spec: string; x: number; y: number }
   | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[] }
   | { type: 'bulldoze'; x: number; y: number }
+  | { type: 'sellAsset'; id: number }
   | { type: 'pickup'; id: number }
   | { type: 'relocate'; x: number; y: number }
   | { type: 'cancelMove' }
@@ -2266,6 +2306,45 @@ function reduceCore(state: SimState, action: Action): SimState {
         buildings: state.buildings.filter((w) => w.id !== target.id),
         ...(state.movingId === target.id ? { movingId: null } : {}),
         ...logEvent(state, `Demolished ${def.name}`, refund),
+      };
+    }
+
+    // FEAT-1972079923 inc2 (AC-4) — FORCED ASSET SALE: the player sells a
+    // building from the bailout panel to raise funds and escape insolvency.
+    // Atomic (single reducer transition: building removed + treasury credited
+    // in the same returned state, journaled through replay like every other
+    // action). The sale value is credited through BOTH the ledger (logEvent,
+    // matching bulldoze's pattern) AND lastFlows.inflows — the latter is what
+    // AC-4 requires so the consistency checker can trace a funds jump back to
+    // a named inflow even for this between-tick action (bulldoze/loan/repay
+    // don't extend lastFlows; this one deliberately does, per the AC).
+    case 'sellAsset': {
+      const target = state.buildings.find((b) => b.id === action.id);
+      if (!target) return state;
+      const sp = SPECS[target.spec];
+      if (!sp) return state;
+      const capitalValue = placementCost(sp);
+      if (capitalValue <= 0) return state; // nothing to force-sell for £0
+      const saleValue = Math.round(capitalValue * ASSET_SALE_VALUE_FRACTION);
+      // Merge into any EXISTING 'Forced Asset Sale' inflow this same tick
+      // (rather than pushing a second entry) — the player can sell several
+      // assets from the panel before the next tick() call resets lastFlows,
+      // and a duplicate label would trip consistency.ts's
+      // 'flows.inflow-labels-unique' check (GR#3: one label, one entry).
+      const existingIdx = state.lastFlows.inflows.findIndex((f) => f.label === ASSET_SALE_LABEL);
+      const inflows =
+        existingIdx >= 0
+          ? state.lastFlows.inflows.map((f, i) =>
+              i === existingIdx ? { ...f, value: f.value + saleValue } : f,
+            )
+          : [...state.lastFlows.inflows, { label: ASSET_SALE_LABEL, value: saleValue }];
+      return {
+        ...state,
+        funds: state.funds + saleValue,
+        buildings: state.buildings.filter((w) => w.id !== target.id),
+        ...(state.movingId === target.id ? { movingId: null } : {}),
+        lastFlows: { ...state.lastFlows, inflows },
+        ...logEvent(state, `${ASSET_SALE_LABEL}: ${sp.name}`, saleValue),
       };
     }
 
@@ -2680,6 +2759,51 @@ export function utilitiesWellbeingUnpenalized(s: SimState): number {
   const part = (coverage: number) => blend(Math.round(clampN(coverage * 100, 0, 100)));
   const utilities = Math.min(ratio('power'), ratio('cleanwater'));
   return part(utilities);
+}
+
+/**
+ * FEAT-1972079923 inc2 (AC-3, task ruling supersedes the AC doc's stale
+ * construction-order text) — Aaron's ruling (BOW FEAT-1972079923 comment):
+ * the FORCED ASSET SALES list is sorted by CAPITAL VALUE DESCENDING, biggest
+ * first ("the stadium goes before the corner shop"). Pure/deterministic: the
+ * comparator is capitalValue desc, id asc as a stable tie-break — no
+ * Date/random (GR#21), so two identical states always render an identical
+ * order (byte-identical replay, AC-12).
+ *
+ * `capitalValue` is the building's placementCost (what was actually spent to
+ * place it — SSOT, matches the bulldoze-refund basis so a sale and a
+ * demolition price the same asset identically). Zero-cost assets (free
+ * zoning) are excluded — there is nothing to force-sell for £0.
+ * `saleValue` is the placeholder amount actually credited on sale (AC-4).
+ */
+export interface ForcedSaleAsset {
+  id: number;
+  spec: string;
+  name: string;
+  x: number;
+  y: number;
+  capitalValue: number;
+  saleValue: number;
+}
+
+export function forcedSaleAssets(s: SimState): ForcedSaleAsset[] {
+  const assets: ForcedSaleAsset[] = [];
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    const capitalValue = placementCost(sp);
+    if (capitalValue <= 0) continue;
+    assets.push({
+      id: b.id,
+      spec: b.spec,
+      name: sp.name,
+      x: b.x,
+      y: b.y,
+      capitalValue,
+      saleValue: Math.round(capitalValue * ASSET_SALE_VALUE_FRACTION),
+    });
+  }
+  return assets.sort((a, b) => b.capitalValue - a.capitalValue || a.id - b.id);
 }
 
 export function initialState(): SimState {

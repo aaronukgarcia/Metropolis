@@ -171,3 +171,45 @@ export function insolvencyStateForFunds(funds: number): InsolvencyState {
   if (funds <= INSOLVENCY_WARNING_THRESHOLD) return 'warning';
   return 'solvent';
 }
+
+/**
+ * FEAT-1972079923 inc2 (AC-2) — PLACEHOLDER (balance-number regime): the
+ * IMF bailout event lasts exactly one game-year. Must equal TICKS_PER_YEAR
+ * (engine.ts) — asserted by a test — so the year-end re-evaluation lands on a
+ * real calendar boundary, not an arbitrary tick count that drifts from the
+ * rest of the sim's yearly cadence.
+ */
+export const BAILOUT_DURATION_TICKS = 360;
+
+/**
+ * FEAT-1972079923 inc2 — PLACEHOLDER (balance-number regime): one-time cash
+ * injection credited to the treasury the SAME tick the bailout is entered.
+ * Aaron's ruling: this is a legitimate external inflow (like a grant), not
+ * manufactured money — booked as a normal labelled inflow (see
+ * BAILOUT_INJECTION_LABEL) so conservation (fundsAtTickEnd === fundsAtTickStart
+ * + Σinflows − Σoutflows) can trace it exactly like every other inflow.
+ */
+export const BAILOUT_INCOME_INJECTION = 2_000_000;
+
+/**
+ * FEAT-1972079923 inc2 (AC-4) — PLACEHOLDER (balance-number regime): fraction
+ * of a building's capital value (placementCost) credited to the treasury on a
+ * FORCED asset sale. Mirrors the existing bulldoze-refund pattern (25% of paid
+ * cost, engine.ts case 'bulldoze') but at a higher fraction since this is a
+ * deliberate sale under bailout conditions, not a demolition refund. Balance
+ * pass pending.
+ */
+export const ASSET_SALE_VALUE_FRACTION = 0.6;
+
+/**
+ * FEAT-1972079923 inc2 (AC-4) — SSOT label for the one-time bailout cash
+ * injection, so the ledger/lastFlows entry and the conservation/consistency
+ * checks always agree on the exact string (GR#3: no duplicated literal).
+ */
+export const BAILOUT_INJECTION_LABEL = 'IMF Bailout Injection';
+
+/**
+ * FEAT-1972079923 inc2 (AC-4) — SSOT label for a forced asset sale's ledger/
+ * lastFlows inflow entry (see BAILOUT_INJECTION_LABEL for the rationale).
+ */
+export const ASSET_SALE_LABEL = 'Forced Asset Sale';

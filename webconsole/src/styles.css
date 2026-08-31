@@ -331,6 +331,32 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .insolvency-popup ul { margin: 6px 0; padding-left: 18px; font-size: 12.5px; }
 .insolvency-popup-note { color: var(--muted); font-style: italic; font-size: 11px; }
 
+/* ---------- IMF insolvency flow inc2 (FEAT-1972079923) ---------- */
+/* Forced Asset Sales panel (AC-2/AC-3/AC-4) — visible for the whole active
+   bailout, listing sellable assets by capital value descending. */
+.forced-asset-sales-panel {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: rgba(15, 18, 22, 0.95);
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  padding: 10px 14px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  z-index: 17;
+}
+.forced-asset-sales-panel h4 { margin: 0 0 6px; color: var(--danger); font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; }
+.forced-asset-sales-note, .forced-asset-sales-empty { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
+.forced-asset-sales-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.forced-asset-sales-list li { display: flex; align-items: center; gap: 6px; font-size: 11.5px; }
+.forced-asset-sales-list .fas-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.forced-asset-sales-list .fas-loc { color: var(--muted); font-size: 10.5px; }
+.forced-asset-sales-list .fas-value { color: var(--done); font-weight: 600; }
+
 /* ---------- dev-only +£10m button (FEAT-1972079883) ---------- */
 .start-over-row { display: flex; gap: 6px; }
 .start-over-row .start-over { flex: 1 1 auto; width: auto; }

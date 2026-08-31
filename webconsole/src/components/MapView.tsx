@@ -31,7 +31,8 @@ import {
 import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
-import { demandOf, specUnlocked, SPEED_MS } from '../sim/engine';
+import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets } from '../sim/engine';
+import { BAILOUT_DURATION_TICKS } from '../sim/fiscal';
 import { publishMapUi } from '../sim/uistate';
 import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
 import { applyStashedCameraToView } from '../sim/cameraApply';
@@ -952,6 +953,7 @@ export function MapView() {
       <PlaceNoticeBanner />
       <InsolvencyBanner />
       <InsolvencyPopup />
+      <ForcedAssetSalesPanel />
       <div
         className={`advisor${advisorContent.go ? ' clickable' : ''}`}
         onClick={advisorContent.go}
@@ -1156,13 +1158,55 @@ function InsolvencyPopup() {
           <li>Enter Administration Mode — spending cut, one year to recover.</li>
         </ul>
         <p className="insolvency-popup-note">
-          (Forced asset sales and Administration Mode land in a later increment —
-          this notice exists so the bailout is never a surprise.)
+          (Administration Mode lands in a later increment — for now, sell assets
+          from the FORCED ASSET SALES panel below to restore solvency.)
         </p>
         <button className="btn" onClick={() => dispatch({ type: 'dismissInsolvencyPopup' })}>
           I understand
         </button>
       </div>
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc2 (AC-2, AC-3, AC-4): the FORCED ASSET SALES panel.
+// Visible for the full duration of an active bailout (state.bailoutState !=
+// null), regardless of whether the InsolvencyPopup has been dismissed — the
+// player needs the panel available throughout the bailout year, not just on
+// entry. Lists sellable assets sorted by CAPITAL VALUE DESCENDING (Aaron's
+// ruling: biggest first, "the stadium goes before the corner shop" — NOT
+// construction order). Selling dispatches 'sellAsset', which atomically
+// removes the building and credits the treasury the placeholder sale value
+// (journaled through replay like any other action).
+function ForcedAssetSalesPanel() {
+  const { state, dispatch } = useSim();
+  const bailout = state.bailoutState;
+  if (!bailout) return null;
+  const assets = forcedSaleAssets(state);
+  const ticksLeft = Math.max(0, bailout.enteredAt + BAILOUT_DURATION_TICKS - state.tick);
+  return (
+    <div className="forced-asset-sales-panel" role="region" aria-label="Forced Asset Sales">
+      <h4>FORCED ASSET SALES</h4>
+      <p className="forced-asset-sales-note">
+        IMF bailout active since tick {bailout.enteredAt} ({ticksLeft} ticks remaining this
+        year). Sell assets, biggest capital value first, to restore solvency.
+      </p>
+      {assets.length === 0 ? (
+        <p className="forced-asset-sales-empty">No sellable assets remain.</p>
+      ) : (
+        <ul className="forced-asset-sales-list">
+          {assets.map((a) => (
+            <li key={a.id}>
+              <span className="fas-name">{a.name}</span>
+              <span className="fas-loc">({a.x}, {a.y})</span>
+              <span className="fas-value">{fmtMoney(a.saleValue)}</span>
+              <button className="btn tiny" onClick={() => dispatch({ type: 'sellAsset', id: a.id })}>
+                Sell
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
