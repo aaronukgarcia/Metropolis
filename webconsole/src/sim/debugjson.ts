@@ -122,6 +122,12 @@ export interface CapturedError {
   count: number;
   /** Bounded sim-state snapshot at first-capture time ("the heap"). */
   stateSummary: CapturedStateSummary | null;
+  /** BAR-F5 (round-r1, FEAT-1972079916): true when this row is a cascade error
+   * (a failed cleanup/sibling crash following a first render error) rather
+   * than the root cause. */
+  cascade?: boolean;
+  /** BAR-F5: correlation id of the FIRST error this cascade followed. */
+  firstCorrelationId?: number;
 }
 
 /** Everything the pure builder needs that is NOT sim state. */

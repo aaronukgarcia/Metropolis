@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useState } from 'react';
 import type { ReactNode } from 'react';
+import { codedError } from '../sim/backend';
 
 interface BusyContextValue {
   busy: boolean;
@@ -27,7 +28,8 @@ export function BusyProvider({ children }: { children: ReactNode }) {
 
 export function useBusy(): BusyContextValue {
   const v = useContext(Ctx);
-  if (!v) throw new Error('useBusy must be used inside BusyProvider');
+  // FEAT-1972079916/GR#7 (BAR-F1): real registry-sourced code MET-V806 via .code.
+  if (!v) throw codedError('MET-V806', 'useBusy must be used inside BusyProvider');
   return v;
 }
 

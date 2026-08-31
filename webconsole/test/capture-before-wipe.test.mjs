@@ -237,3 +237,18 @@ test('compact archive has no ok:true consistency checks', () => {
   assert.equal(archive[0].debug.buildings.count, state.buildings.length);
   assert.equal(archive[0].debug.perfHud, null);
 });
+
+// ---------- FEAT-1972079916 BAR-F1: readPreWipeArchive throws a NAMED code ----------
+
+test('readPreWipeArchive on a non-array archive throws with .code MET-V807 (not a bare Error)', () => {
+  const storage = memStorage();
+  storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify({ not: 'an array' }));
+  assert.throws(
+    () => readPreWipeArchive(storage),
+    (err) => {
+      assert.equal(err.code, 'MET-V807', 'thrown error must carry the registry code MET-V807');
+      assert.match(err.message, /not an array/);
+      return true;
+    },
+  );
+});

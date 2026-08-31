@@ -7,7 +7,7 @@
 import type { SimState } from './types.ts';
 import { buildDebugJson, type DebugJson, type ConsistencyReportJson } from './debugjson.ts';
 import { currentMapUi } from './uistate.ts';
-import { recentErrors } from './backend.ts';
+import { recentErrors, codedError } from './backend.ts';
 import { reducer } from './engine.ts';
 import { getPrewipeCap } from './storageConfig.ts';
 
@@ -33,7 +33,8 @@ export function readPreWipeArchive(storage: CaptureStorage): PreWipeArchiveEntry
   if (!raw) return [];
   const parsed = JSON.parse(raw);
   if (!Array.isArray(parsed)) {
-    throw new Error('pre-wipe archive is not an array');
+    // FEAT-1972079916/GR#7 (BAR-F1): real registry-sourced code MET-V807 via .code.
+    throw codedError('MET-V807', 'pre-wipe archive is not an array');
   }
   return parsed as PreWipeArchiveEntry[];
 }

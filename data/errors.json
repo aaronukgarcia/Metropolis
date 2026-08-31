@@ -114,7 +114,8 @@
       "V600-V699": "reserved for ui.screen.districts (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5200-G5299": "reserved for engine.parking (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "G5300-G5399": "reserved for engine.tunnels (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")"
+      "G5300-G5399": "reserved for engine.tunnels (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "V800-V849": "reserved for FEAT-1972079916 (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 50-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -4979,6 +4980,54 @@
       "module": "engine.tunnels",
       "message": "cannot construct Hyperloop before M12 unlock gate",
       "remedy": "Hyperloop construction is gated at milestone M12 (engine.unlocks); defer the order until the gate opens."
+    },
+    "MET-V800": {
+      "severity": "error",
+      "module": "FEAT-1972079916",
+      "message": "useSim must be used inside SimProvider",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V801": {
+      "severity": "fatal",
+      "module": "FEAT-1972079916",
+      "message": "Render crash: {msg}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V802": {
+      "severity": "error",
+      "module": "FEAT-1972079916",
+      "message": "Window error: {msg}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V803": {
+      "severity": "error",
+      "module": "FEAT-1972079916",
+      "message": "Unhandled rejection: {msg}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V804": {
+      "severity": "error",
+      "module": "FEAT-1972079916",
+      "message": "Console error: {msg}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V805": {
+      "severity": "warn",
+      "module": "FEAT-1972079916",
+      "message": "Error log write failed: {msg}",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V806": {
+      "severity": "error",
+      "module": "FEAT-1972079916",
+      "message": "useBusy must be used inside BusyProvider",
+      "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-V807": {
+      "severity": "error",
+      "module": "FEAT-1972079916",
+      "message": "Pre-wipe archive is not an array",
+      "remedy": "See the module's documentation for remediation guidance."
     }
   }
 }

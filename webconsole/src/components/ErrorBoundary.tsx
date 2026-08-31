@@ -8,7 +8,8 @@
 // manual reload, and forwards the message to the error registry (recordError).
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
-import { recordError } from '../sim/backend';
+import { recordError, normalizeThrowable, withTapSuppressed } from '../sim/backend';
+import { versionRaw } from '../sim/version';
 
 interface Props {
   children: ReactNode;
@@ -22,11 +23,17 @@ interface State {
   // not a new incident. Surfaced in the details section below the primary message.
   cascadeCount: number;
   lastCascadeMessage: string | null;
+  // FEAT-1972079916: track the registry-coded error record so we can display
+  // code, correlationId, tick, version on the crash screen.
+  errorRecord?: { code?: string; correlationId?: number; tick?: number };
 }
 
 export class ErrorBoundary extends Component<Props, State> {
-  state: State = { error: null, cascadeCount: 0, lastCascadeMessage: null };
+  state: State = { error: null, cascadeCount: 0, lastCascadeMessage: null, errorRecord: undefined };
   private errorRecorded = false; // BUG-434: track if we've already recorded an error
+  // BAR-F5 (round-r1): the first error's correlation id, so a later cascade
+  // row can carry a link back to the root cause in the ring/debug.json.
+  private firstCorrelationId: number | undefined = undefined;
 
   // BUG-434 round-r1 BAR-3 FIX: getDerivedStateFromError(error) receives ONLY the
   // error — React does NOT pass the current/prior state to it (unlike
@@ -41,6 +48,9 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
+    // BUG-442: normalize the error in case it's not a real Error object
+    const normalized = normalizeThrowable(error);
+
     // BUG-434 round-r1 BAR-3 FIX: first-error-wins DISPLAY semantics. The functional
     // setState updater sees the CURRENT state, so it can tell a first error (state.error
     // still null) from a cascade (state.error already set) and only ever grows
@@ -48,36 +58,80 @@ export class ErrorBoundary extends Component<Props, State> {
     // exactly once, from the first crash, and never overwritten by a later one.
     this.setState((prev): State => {
       if (prev.error !== null) {
-        return { error: prev.error, cascadeCount: prev.cascadeCount + 1, lastCascadeMessage: error.message };
+        return {
+          error: prev.error,
+          cascadeCount: prev.cascadeCount + 1,
+          lastCascadeMessage: normalized.message,
+          errorRecord: prev.errorRecord,
+        };
       }
-      return { error, cascadeCount: prev.cascadeCount, lastCascadeMessage: prev.lastCascadeMessage };
+      return {
+        error: normalized,
+        cascadeCount: prev.cascadeCount,
+        lastCascadeMessage: prev.lastCascadeMessage,
+        errorRecord: prev.errorRecord,
+      };
     });
 
-    // BUG-434 FIX: capture-and-hold semantics. Only record and log the FIRST error.
-    // Subsequent errors (cascade errors from failed cleanup/sibling components) are
-    // still counted in state above (so the UI can show a cascade count), but only the
-    // first error is recorded to the backend and logged to console. This ensures we
-    // capture the ROOT CAUSE, not a masking error from a cascading failure.
+    // BUG-434 capture-and-hold semantics for the DISPLAY: only the first error is
+    // ever shown (see setState above). BAR-F5 (round-r1): the RING/debug.json is
+    // different — every error, including cascades, gets its own row so no crash
+    // is silently dropped from the record; a cascade row just carries
+    // cascade:true + a firstCorrelationId link back to the root cause instead of
+    // becoming the displayed error.
+    // BAR-F1: a NAMED code on the thrown value (codedError) wins over the
+    // generic MET-V801 RenderCrash fallback.
+    const code = (normalized as any).code ?? 'MET-V801';
+
     if (this.errorRecorded) {
-      return; // Already recorded the first error; ignore cascades
+      // A cascade: record it linked to the first error, but do not touch
+      // state.error/errorRecord (those stay pinned to the first crash).
+      recordError(normalized.message, {
+        type: 'render-crash',
+        stack: normalized.stack,
+        componentStack: info.componentStack ?? undefined,
+        code,
+        cascade: true,
+        firstCorrelationId: this.firstCorrelationId,
+      });
+      return;
     }
     this.errorRecorded = true;
 
-    // GR#1: surface the FULL context — the JS stack AND the React component tree
+    // GR#1/GR#7: surface the FULL context — the JS stack AND the React component tree
     // (info.componentStack = what triggered it, e.g. a useSim consumer rendered
-    // outside SimProvider) — not just the message. This is an INTERNAL change;
-    // ErrorBoundary's props are unchanged (App.tsx owns that).
-    recordError(error.message, {
+    // outside SimProvider) — not just the message. Record with a registry-sourced code.
+    // This is an INTERNAL change; ErrorBoundary's props are unchanged (App.tsx owns that).
+    const errorRecord = recordError(normalized.message, {
       type: 'render-crash',
-      stack: error.stack,
+      stack: normalized.stack,
       componentStack: info.componentStack ?? undefined,
+      code,
     });
-    // eslint-disable-next-line no-console
-    console.error('[Metropolis] render crash caught by ErrorBoundary', error, info);
+    this.firstCorrelationId = errorRecord.correlationId;
+
+    // FEAT-1972079916: capture the error record's code and correlationId so we
+    // can display them on the crash screen.
+    this.setState((prev): State => ({
+      ...prev,
+      errorRecord: {
+        code: errorRecord.code,
+        correlationId: errorRecord.correlationId,
+        tick: errorRecord.tick,
+      },
+    }));
+
+    // BAR-F6 (round-r1): suppress the tap for this diagnostic log — it is
+    // ABOUT the error already recorded above, not a new incident, and must not
+    // mint a second (generic MET-V804) ring row for the same crash.
+    withTapSuppressed(() => {
+      // eslint-disable-next-line no-console
+      console.error('[Metropolis] render crash caught by ErrorBoundary', error, info);
+    });
   }
 
   render() {
-    const { error, cascadeCount, lastCascadeMessage } = this.state;
+    const { error, cascadeCount, lastCascadeMessage, errorRecord } = this.state;
     if (!error) return this.props.children;
     return (
       <div
@@ -101,6 +155,43 @@ export class ErrorBoundary extends Component<Props, State> {
         <div style={{ fontSize: '15px', color: 'var(--danger, #e5534b)' }}>
           The console hit a render error and stopped.
         </div>
+
+        {/* FEAT-1972079916: error envelope with code, correlation id, tick, version */}
+        {errorRecord && (
+          <div
+            style={{
+              fontSize: '11px',
+              opacity: 0.8,
+              maxWidth: '80ch',
+              padding: '8px',
+              background: 'var(--panel, #1b1f27)',
+              border: '1px solid var(--border, #3d444d)',
+              borderRadius: '4px',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              textAlign: 'left',
+            }}
+          >
+            {errorRecord.code && (
+              <div>
+                <strong>Code:</strong> {errorRecord.code}
+              </div>
+            )}
+            {errorRecord.correlationId && (
+              <div>
+                <strong>CorrelationID:</strong> {errorRecord.correlationId}
+              </div>
+            )}
+            {errorRecord.tick !== undefined && (
+              <div>
+                <strong>Tick:</strong> {errorRecord.tick}
+              </div>
+            )}
+            <div>
+              <strong>Version:</strong> {versionRaw}
+            </div>
+          </div>
+        )}
+
         <pre
           style={{
             maxWidth: '80ch',
