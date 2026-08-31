@@ -229,6 +229,23 @@ jobs:
           git config --global user.email "ci@example.invalid"
           git config --global user.name "CI Runner"
 
+      # GR#23/FEAT-045 fixture: claude-committhook.test.js and
+      # claude-author-identity.test.js prove the REAL, INSTALLED
+      # .git/hooks/commit-msg copy (not just the tracked source) rejects a
+      # fabricated identity end-to-end. A fresh CI checkout never runs
+      # `npm install`'s postinstall or any manual install step, so
+      # .git/hooks/commit-msg is absent on the runner and every "the
+      # installed hook fires ..." / "the installed .git/hooks copy" test
+      # fails for real — not an app-code regression, just an infra gap
+      # this repo's own dev machines don't have (installed once, by hand).
+      # This step is inert for this job's own git operations: node-test
+      # never commits to this checkout (tests spin up throwaway temp repos
+      # via `git init` in os.tmpdir(), verified by grep across the test
+      # suite), so an author/codename-guarded commit-msg hook sitting in
+      # THIS repo's .git/hooks has nothing of this job's own to intercept.
+      - name: Install git hooks (commit-msg identity + codename guard)
+        run: node claude-committhook-install.js install
+
       - name: npm ci
         run: npm ci
 
@@ -252,6 +269,19 @@ jobs:
         run: |
           node claude-bow.js init
           node claude-sync.js init
+
+      # BUG-424 / version-stamp.test.mjs: the webconsole imports its
+      # generated version stamp (src/generated/version.ts) at test-import
+      # time, but that file is GITIGNORED and only ever created by running
+      # gen-version.mjs -- normally triggered by a dev's `npm run dev`/build
+      # or the post-commit hook, never by a bare CI checkout. Generate it
+      # here so the import resolves; the script is pure node stdlib
+      # (child_process + fs), no webconsole npm install required, and
+      # degrades to a safe placeholder if `git describe` ever fails (see
+      # the script's own header comment) so this step cannot itself go red.
+      - name: Generate webconsole version stamp
+        working-directory: webconsole
+        run: node scripts/gen-version.mjs
 
       - name: node --test
         run: node --test

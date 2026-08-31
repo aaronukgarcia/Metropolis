@@ -60,6 +60,14 @@ function copyHookSiblingModules(dir) {
     'claude-codename-content-scan.js',
     'claude-codename-patterns.js',
     'claude-codename-diff.js',
+    // BUG-416: claude-codename-content-scan.js now also requires
+    // claude-codename-guard.js, which in turn requires
+    // claude-git-commit-trigger.js, which requires claude-quote-mask.js —
+    // complete the transitive require graph (see the matching fix in
+    // claude-committhook.test.js's initRepo()).
+    'claude-codename-guard.js',
+    'claude-git-commit-trigger.js',
+    'claude-quote-mask.js',
   ]) {
     fs.copyFileSync(path.join(__dirname, name), path.join(dir, name));
   }
