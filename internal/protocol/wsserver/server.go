@@ -252,6 +252,18 @@ type Server struct {
 	// simultaneously serves via shim.go's shimRegistry. Defaults to
 	// protocol.DefaultVersionWindowDepth; override via WithVersionWindowDepth.
 	versionWindowDepth int
+	// onConnOpen / onConnClose are the OPTIONAL per-connection lifecycle hooks
+	// (FEAT-1972079942 AC-1), installed together via WithConnectionLifecycle.
+	// When set, ServeHTTP calls onConnOpen(tenant, city) exactly once right
+	// after a connection's handshake binds it to its city, and onConnClose with
+	// the SAME (tenant, city) exactly once when that connection ends — on EVERY
+	// disconnect path (normal close, read error, or server shutdown) via a
+	// defer, so it can never be missed. When nil (every pre-FEAT-1972079942
+	// caller), there is ZERO behaviour change: no call, no allocation, the
+	// no-hook path stays byte-for-byte as before (AC-6). cmd/metroserve wires
+	// these to CityHost.Acquire/Release for idle-city refcounting.
+	onConnOpen  func(tenantID, cityID string)
+	onConnClose func(tenantID, cityID string)
 }
 
 // Option configures a Server at construction time (New's variadic
@@ -296,6 +308,27 @@ func WithCapabilities(caps []string) Option {
 // dependency edge).
 func WithTransportResolver(r TransportResolver) Option {
 	return func(s *Server) { s.resolveTransport = r }
+}
+
+// WithConnectionLifecycle installs OPTIONAL per-connection open/close hooks
+// (FEAT-1972079942 AC-1). onOpen(tenant, city) fires exactly once right after a
+// connection's handshake binds it to its city; onClose fires exactly once, with
+// the SAME (tenant, city), when the connection ends — on ANY disconnect path
+// (normal close, read/write error, or server shutdown), guaranteed by a defer on
+// the connection's own goroutine. The two are exactly-once PAIRED: onClose is
+// armed only after onOpen has fired, so a handshake that never binds (refused,
+// or the accept-write fails) triggers neither. Both callbacks may run
+// concurrently across connections, so an implementation must be safe for
+// concurrent use (CityHost.Acquire/Release, the intended target, are mutex-
+// guarded). Without this option the Server is byte-for-byte unchanged (AC-6).
+// The (tenant, city) passed are the DEFAULT-APPLIED values (defaultTenantID /
+// defaultCityID when the handshake omits them) — the exact same key the
+// transport resolver was called with, so refcount keys line up with routing.
+func WithConnectionLifecycle(onOpen, onClose func(tenantID, cityID string)) Option {
+	return func(s *Server) {
+		s.onConnOpen = onOpen
+		s.onConnClose = onClose
+	}
 }
 
 // New constructs a Server wrapping transport. engineVersion is this
@@ -349,9 +382,21 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	negotiated, negotiatedCaps, connTransport, ok := s.handshake(conn)
+	negotiated, negotiatedCaps, connTransport, tenantID, cityID, ok := s.handshake(conn)
 	if !ok {
 		return
+	}
+	// FEAT-1972079942 AC-1: fire the connection-open hook exactly once now that
+	// the connection is bound, and DEFER the close hook so it fires exactly once
+	// on EVERY exit path below (pump returning on a normal close, a read error,
+	// or server shutdown). Arming onClose only AFTER onOpen has fired keeps the
+	// pair exactly-once (a refused handshake reaches neither — it returned above).
+	// This whole block is skipped when no lifecycle hook is installed (AC-6).
+	if s.onConnOpen != nil {
+		s.onConnOpen(tenantID, cityID)
+	}
+	if s.onConnClose != nil {
+		defer s.onConnClose(tenantID, cityID)
 	}
 	s.pump(conn, connTransport, negotiated, negotiatedCaps)
 }
@@ -446,7 +491,12 @@ func (s *Server) negotiateVersion(clientMax *protocol.WireVersion) protocol.Wire
 // per-city transport the resolver returned when one is. A resolver error
 // refuses the handshake cleanly (MET-P030) and returns ok=false, never a
 // fallback transport.
-func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string, protocol.Transport, bool) {
+//
+// FEAT-1972079942 AC-1: it also returns the DEFAULT-APPLIED (tenantID, cityID)
+// this connection bound to, so ServeHTTP can pass the same key to the optional
+// connection-lifecycle hooks. On any failure the two strings are empty and ok is
+// false (no bind → no hook).
+func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string, protocol.Transport, string, string, bool) {
 	_ = conn.SetReadDeadline(time.Now().Add(s.handshakeTimeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }() // no deadline for the steady-state pump
 
@@ -459,7 +509,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		// to), so this failure is only visible server-side; still
 		// registry-logged (GR#1) rather than swallowed.
 		_ = errs.Wrap(protocol.ErrHandshakeTimeout, s.newCorrelationID(), err, map[string]any{"timeoutMs": s.handshakeTimeout.Milliseconds()})
-		return protocol.WireVersion{}, nil, nil, false
+		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
 
 	var msg rpcMessage
@@ -472,7 +522,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		}
 		e := errs.New(protocol.ErrHandshakeInvalid, s.newCorrelationID(), map[string]any{"reason": reason})
 		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, nil, false
+		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
 
 	var params handshakeParams
@@ -483,7 +533,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		}
 		e := errs.New(protocol.ErrHandshakeInvalid, s.newCorrelationID(), map[string]any{"reason": reason})
 		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, nil, false
+		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
 
 	if normalizeVersion(params.ClientVersion) != normalizeVersion(s.engineVersion) {
@@ -492,7 +542,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 			"serverVersion": s.engineVersion,
 		})
 		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, nil, false
+		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
 
 	// FEAT-1972079936 Phase 0 inc3 (AC-4, the below-floor half): a client
@@ -517,7 +567,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 				"versionWindowDepth": s.versionWindowDepth,
 			})
 			s.writeRefusal(conn, msg.ID, e)
-			return protocol.WireVersion{}, nil, nil, false
+			return protocol.WireVersion{}, nil, nil, "", "", false
 		}
 	}
 
@@ -533,16 +583,22 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 	// handshake cleanly (MET-P030), never falling back to another city (AC-3).
 	// The bound city, like the negotiated version, is fixed for the
 	// connection's life (no mid-session rebind).
+	// Default-apply (tenant, city) ONCE, up front (FEAT-1972079942 AC-1): the
+	// same resolved key is used for both the transport resolver below and the
+	// connection-lifecycle hooks (returned to ServeHTTP), so routing and
+	// refcounting always agree. Computing these unconditionally is inert for the
+	// no-resolver / no-hook path — the values are simply returned and ignored.
+	tenantID := params.TenantID
+	if tenantID == "" {
+		tenantID = defaultTenantID
+	}
+	cityID := params.CityID
+	if cityID == "" {
+		cityID = defaultCityID
+	}
+
 	connTransport := s.transport
 	if s.resolveTransport != nil {
-		tenantID := params.TenantID
-		if tenantID == "" {
-			tenantID = defaultTenantID
-		}
-		cityID := params.CityID
-		if cityID == "" {
-			cityID = defaultCityID
-		}
 		resolved, err := s.resolveTransport(tenantID, cityID)
 		if err != nil {
 			e := errs.New(protocol.ErrHandshakeCityUnavailable, s.newCorrelationID(), map[string]any{
@@ -551,7 +607,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 				"reason":   err.Error(),
 			})
 			s.writeRefusal(conn, msg.ID, e)
-			return protocol.WireVersion{}, nil, nil, false
+			return protocol.WireVersion{}, nil, nil, "", "", false
 		}
 		connTransport = resolved
 	}
@@ -564,9 +620,12 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 	})
 	reply := rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: resultBytes}
 	if err := conn.WriteJSON(reply); err != nil {
-		return protocol.WireVersion{}, nil, nil, false
+		// Bound the transport but never told the client: treat as an unbound
+		// failure so NO lifecycle hook fires (the client will not proceed) —
+		// keeps onOpen/onClose exactly-once-paired (AC-1).
+		return protocol.WireVersion{}, nil, nil, "", "", false
 	}
-	return negotiated, negotiatedCaps, connTransport, true
+	return negotiated, negotiatedCaps, connTransport, tenantID, cityID, true
 }
 
 // writeRefusal sends a JSON-RPC error response carrying e's registry code

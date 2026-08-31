@@ -191,10 +191,25 @@ func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, stdo
 		return rc.Transport(), nil
 	}
 
+	// FEAT-1972079942 AC-2: refcount live connections per city so the host's
+	// idle evictor can unload a city once its last connection closes. onOpen
+	// pins the city (Acquire), onClose releases it (Release); the (tenant, city)
+	// the hooks receive are the SAME default-applied strings the resolver keyed
+	// on, so the refcount and the routing agree. The resolver's GetOrCreate runs
+	// before onOpen, so the city is always live by the time Acquire is called.
+	lifecycle := wsserver.WithConnectionLifecycle(
+		func(tenant, city string) {
+			host.Acquire(tenant, city)
+		},
+		func(tenant, city string) {
+			host.Release(tenant, city)
+		},
+	)
+
 	// transport is nil: with a resolver installed the Server never touches its
 	// single wrapped transport field (every connection binds to a resolved
 	// per-city transport instead).
-	wsHandler := wsserver.New(nil, buildinfo.Version, wsserver.DefaultHandshakeTimeout, wsserver.WithTransportResolver(resolver))
+	wsHandler := wsserver.New(nil, buildinfo.Version, wsserver.DefaultHandshakeTimeout, wsserver.WithTransportResolver(resolver), lifecycle)
 	mux := http.NewServeMux()
 	mux.Handle("/ws", wsHandler)
 	httpSrv := &http.Server{Addr: addr, Handler: mux}
