@@ -1,10 +1,13 @@
-// Package farming is the shared home of engine.farming (MOD-045) and
-// feat.farmtypes (FEAT-104): per-farm soil quality, the regional
+// Package farming currently holds ONLY the feat.farmtypes (FEAT-104)
+// farm-type catalogue — the five §31 facility categories as distinct
+// modelled facilities. It is NOT the engine.farming (MOD-045) farming &
+// biodiversity simulation engine (per-farm soil quality, the regional
 // Biodiversity Index, crop/livestock choices with stocking density, and the
-// §31 food chains. This file documents the farm-type catalogue half — the
-// five §31 facility categories as distinct modelled facilities — which lives
-// in this package as a file/type set alongside engine.farming's own eventual
-// FarmingAPI/BDI surface, NOT as a fork or a second package.
+// §31 food chains): MOD-045 remains UNBUILT. This package is reserved as the
+// eventual shared home of both — when MOD-045 lands it will share this
+// package with the catalogue and surface through its own eventual
+// FarmingAPI/BDI surface — but today the FEAT-104 catalogue is the only code
+// here, living as a file/type set, NOT as a fork or a second package.
 //
 // # Shared-package, no-separate-inbound-contract arrangement (GR#20)
 //

@@ -1,8 +1,11 @@
-// Package fdi is the shared home of engine.fdi (MOD-059, Multinational
-// Attraction & anchor employers) and feat.pharmacampus (FEAT-101, the
-// pharma/R&D campus — Groton-Pfizer-class). This file documents the
-// feat.pharmacampus half, which lives in this package as a file/type set
-// alongside MOD-059's eventual FdiAPI, NOT as a fork or a second package.
+// Package fdi currently holds ONLY the feat.pharmacampus (FEAT-101) pharma/
+// R&D campus catalogue (Groton-Pfizer-class), plus the bid-surface STUB in
+// anchor.go. It is NOT the engine.fdi (MOD-059, Multinational Attraction &
+// anchor employers) simulation engine: MOD-059 remains UNBUILT. This package
+// is reserved as the eventual shared home of both — when MOD-059 lands it
+// will share this package and own the real FdiAPI its bid stub stands in for
+// — but today feat.pharmacampus is the only feature code here, living as a
+// file/type set, NOT as a fork or a second package.
 //
 // # Shared-package, no-separate-inbound-contract arrangement (GR#20)
 //
