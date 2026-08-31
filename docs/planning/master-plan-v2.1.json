@@ -1736,7 +1736,8 @@
         "ui.widgets",
         "ui.screen.finance",
         "ui.screen.services",
-        "ui.screen.map"
+        "ui.screen.map",
+        "harness.replay"
       ],
       "sprint": 6
     },

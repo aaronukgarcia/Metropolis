@@ -3003,6 +3003,10 @@
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "ui.harness",
             "outboundGuid": "1185f757-2553-4d06-a8c2-c141bcf9b9d0"
           }
@@ -4850,6 +4854,11 @@
             "key": "ui.screen.map",
             "moduleGuid": "01272dbc-234b-47a1-a645-f61f538089e9",
             "inboundGuid": "5e7a8b05-fcff-4650-9cc8-4400a35c10dd"
+          },
+          {
+            "key": "harness.replay",
+            "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
+            "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
           }
         ]
       },
