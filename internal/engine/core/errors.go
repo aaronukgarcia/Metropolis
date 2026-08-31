@@ -159,4 +159,17 @@ const (
 	// parameter type; the finiteness check exists for that boundary too,
 	// per this bug's own wording ("+ finite").
 	ErrInvalidPacingConstant = "MET-E020"
+
+	// ErrJournalWriteFailed: journalAccepted's CommandJournaler.ObserveCommand
+	// call (commands.go's accept() path) returned an error while recording an
+	// already-accepted command into the replay journal (FEAT-1972079852 inc3,
+	// Aaron's engine-owns-journal DD, lead-default ruling #4). Constructed via
+	// errs.Wrap purely to surface the fault loudly (GR#17) through the
+	// registry's own log sink -- it is NEVER attached to that command's
+	// CommandResult (Accepted stays true; protocol.CommandResult.Validate
+	// requires Error nil whenever Accepted is true) and never aborts the
+	// tick. A failure here means the accepted command will be MISSING from
+	// a later replay's determinism comparison -- a replay-fidelity gap, not
+	// a gameplay rejection.
+	ErrJournalWriteFailed = "MET-E021"
 )

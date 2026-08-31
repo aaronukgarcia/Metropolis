@@ -134,6 +134,22 @@ func WithSpeed8xGate(gate Speed8xGate) Option {
 	return func(e *Engine) { e.speed8xGate = gate }
 }
 
+// WithCommandJournaler installs the seam accept() (commands.go) calls to
+// record every ACCEPTED command into the replay journal — Aaron's
+// engine-owns-journal DD (2026-08-31, FEAT-1972079852 inc3): "commands over
+// the protocol are journaled Go-side (harness.replay estate)", not by the TS
+// console. See CommandJournaler's doc comment (commands.go) for why
+// engine.core defines its own minimal interface rather than importing
+// internal/harness/replay's concrete Recorder type directly (mirrors
+// DeltaSink's decoupling shape). Unset (nil, the default — e.g. a bare
+// NewEngine() in most of this package's own tests) means no journaling:
+// accept() only calls into e.journaler when one is configured, matching
+// WithPhaseObserver's optional-hook shape (nil == no-op) rather than
+// gameplayHandler/speed8xGate's deny-by-default shape.
+func WithCommandJournaler(j CommandJournaler) Option {
+	return func(e *Engine) { e.journaler = j }
+}
+
 // WithRegistry installs a pre-constructed module registry instead of
 // the default empty one NewEngine creates. Mainly for tests that want
 // to register modules before wiring an Engine, or that want a shared
@@ -324,6 +340,17 @@ type Engine struct {
 	// command surfaces (GR#20 — engine.core neither owns nor imports the
 	// modules that adjudicate gameplay intent).
 	gameplayHandler GameplayCommandHandler
+
+	// journaler is the injected replay-journaling seam accept() consults
+	// (see CommandJournaler's doc comment in commands.go). nil until
+	// WithCommandJournaler/SetCommandJournaler wires one — nil is read as
+	// "no journaling configured, no-op" (mirrors observer's optional-hook
+	// shape), NOT as gameplayHandler/speed8xGate's deny-by-default shape:
+	// journaling absence is not a security gate, so there is nothing to
+	// deny. Aaron DD (2026-08-31, FEAT-1972079852 inc3): the ENGINE owns
+	// the journal — commands accepted over the protocol are recorded
+	// Go-side via harness.replay's Recorder, never by the TS console.
+	journaler CommandJournaler
 
 	registry *registry.Registry
 	hooks    map[PhaseKind][]PhaseHook

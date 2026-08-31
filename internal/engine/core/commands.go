@@ -59,6 +59,34 @@ type DeltaSink interface {
 	SendDelta(protocol.Delta) bool
 }
 
+// CommandJournaler is the minimal write surface accept() (below) needs to
+// record an accepted command into the replay journal. Aaron's
+// engine-owns-journal DD (2026-08-31, FEAT-1972079852 inc3, interview
+// transcript on the BOW item): "commands over the protocol are journaled
+// Go-side (harness.replay estate), the TS journal applies to mock/offline
+// mode only." The edge engine.core -> harness.replay is registered in
+// code.json (docs/planning/proposals/protocol-journal-edge-2026-08-31.md,
+// landed 7b68d10) so this call is GR#25-legal.
+//
+// *replay.Recorder (internal/harness/replay/record.go) satisfies this
+// interface exactly via its own ObserveCommand method (record.go:100) — no
+// adapter needed. engine.core still defines its own minimal interface
+// rather than importing harness/replay's concrete type directly, mirroring
+// DeltaSink's decoupling shape above (the same "define the seam you need,
+// let the concrete implementation satisfy it structurally" convention this
+// package already uses for DeltaSink/GameplayCommandHandler/Speed8xGate).
+//
+// DURABILITY GAP (flagged for follow-up, not faked here): ASM-470 already
+// noted harness.replay.Recorder buffers records in memory only and loses
+// them on crash — wiring this seam does not change that. A Recorder wired
+// via WithCommandJournaler/SetCommandJournaler records durably only as far
+// as whatever later calls Recorder.Records()/Save persists it; this seam's
+// job is only to ensure ObserveCommand is CALLED for every accepted
+// command, not to make the Recorder itself crash-durable.
+type CommandJournaler interface {
+	ObserveCommand(cmd protocol.Command) error
+}
+
 // GameplayCommandHandler is the injected seam HandleCommand consults for
 // the gameplay-intent commands (Buy, Zone, Build, Demolish — the build
 // screen's vocabulary; SetFunding — F4's funding-slider vocabulary, added
@@ -110,6 +138,30 @@ func (e *Engine) SetGameplayCommandHandler(h GameplayCommandHandler) error {
 		return errs.New(ErrEngineSealed, errs.NewCorrelationID(), map[string]any{"handler": "gameplay"})
 	}
 	e.gameplayHandler = h
+	return nil
+}
+
+// SetCommandJournaler installs the journaling seam on an already-constructed
+// Engine, mirroring SetGameplayCommandHandler exactly: the composition root
+// receives a *core.Engine (not an Option list) and wires a real
+// *replay.Recorder once it exists — which, like the gameplay handler,
+// cannot be built at NewEngine time. Same boot-time-only discipline as
+// SetGameplayCommandHandler/RegisterPhaseHook: must be called before the
+// first AdvanceTicks (before the engine seals), rejected with
+// ErrEngineSealed afterward, never silently ignored.
+func (e *Engine) SetCommandJournaler(j CommandJournaler) error {
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+		return err
+	}
+	if e.sealed {
+		return errs.New(ErrEngineSealed, errs.NewCorrelationID(), map[string]any{"handler": "journaler"})
+	}
+	e.journaler = j
 	return nil
 }
 
@@ -185,11 +237,72 @@ func (e *Engine) handleGameplay(cmd protocol.Command, correlationID string) prot
 	return e.accept(cmd)
 }
 
+// accept is the single choke point every accepted-command path in this
+// file shares (handleGameplay, handleAdvanceTicks, handleSetSpeed,
+// handlePause, handleResume, handleSubscribe, handleUnsubscribe,
+// handleInspectEntity, handleDebug) — journalAccepted is called from here,
+// not duplicated into each handler, so no handler can forget to journal
+// (lead-default ruling #1, FEAT-1972079852 inc3: "journal inside accept(),
+// not per-handler — simpler, ensures consistency").
 func (e *Engine) accept(cmd protocol.Command) protocol.CommandResult {
+	e.journalAccepted(cmd)
 	return protocol.CommandResult{
 		CorrelationID: cmd.CorrelationID,
 		Tick:          e.clockTickForResult(),
 		Accepted:      true,
+	}
+}
+
+// journalAccepted records cmd into the replay journal via the configured
+// CommandJournaler, if one is wired (WithCommandJournaler/
+// SetCommandJournaler). Aaron's engine-owns-journal DD, applied via four
+// lead-default rulings (FEAT-1972079852 inc3, Aaron not yet consulted on
+// these specific defaults — flagged here and in the dispatch report for
+// his confirm):
+//
+//  1. TIMING: called from accept() itself, i.e. AFTER the engine has
+//     decided to accept cmd. This is necessarily also after cmd's
+//     side-effects already ran for the gameplay path (handleGameplay calls
+//     e.gameplayHandler(cmd) — which applies the effect — BEFORE calling
+//     accept(); only a nil error from the handler reaches accept() at
+//     all), and after AdvanceTicks/setSpeed/etc.'s own state changes for
+//     the other kinds. There is no earlier point at which "this command
+//     was accepted" is yet known, since rejection is possible right up
+//     until the handler returns.
+//  2. SIDE-EFFECT ORDER (replay-side, not live-side): "journal-then-apply"
+//     describes how a REPLAY of this journal must behave (apply cmd's
+//     effects fresh from the recorded command, deterministically) — it
+//     does not mean the LIVE engine must journal before running the
+//     handler, which would require journaling a command before knowing it
+//     will be accepted at all.
+//  3. REJECTED COMMANDS are never journaled: reject() (below) has no
+//     equivalent call, by construction — only paths that reach accept()
+//     ever reach journalAccepted.
+//  4. ERROR POLICY: a journal WRITE failure is surfaced as a
+//     registry-coded error (MET-E021, GR#17 — errs.Wrap logs it through
+//     the registry's own log sink, which is what "surfaced" means here)
+//     rather than silently swallowed. It does NOT retroactively reject
+//     cmd: the command's side effects already ran by the time accept() is
+//     reached (see point 1), so there is no accept/reject decision left to
+//     revisit, and protocol.CommandResult.Validate requires Error to be
+//     nil whenever Accepted is true — there is no wire-level slot to carry
+//     this fault on the CommandResult even if we wanted to. The tick keeps
+//     running; this is a replay-fidelity fault, never a crash.
+//
+// nil e.journaler (the default for a bare NewEngine(), and for every
+// Engine in this package's own tests that does not call
+// WithCommandJournaler/SetCommandJournaler) is a documented no-op —
+// mirrors WithPhaseObserver's optional-hook shape, not
+// gameplayHandler/speed8xGate's deny-by-default shape: journaling absence
+// is not a security gate, so there is nothing to deny.
+func (e *Engine) journalAccepted(cmd protocol.Command) {
+	if e.journaler == nil {
+		return
+	}
+	if err := e.journaler.ObserveCommand(cmd); err != nil {
+		_ = errs.Wrap(ErrJournalWriteFailed, string(cmd.CorrelationID), err, map[string]any{
+			"kind": string(cmd.Kind),
+		})
 	}
 }
 
