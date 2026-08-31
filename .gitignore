@@ -72,3 +72,6 @@ opencode-*.bat
 # submissions and their processed/error sidecars — never committed (this
 # is player/dev-typed content landing on disk, not source or fixtures).
 data/devfeedback/
+
+# ASM-381: agent scratch/worktree directory — runtime-only, never source.
+.scratch/
