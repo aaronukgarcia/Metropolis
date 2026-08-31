@@ -982,7 +982,8 @@
         "foundation.buildinfo",
         "foundation.data",
         "foundation.errors",
-        "feat.debugmode"
+        "feat.debugmode",
+        "harness.replay"
       ],
       "sprint": 1
     },

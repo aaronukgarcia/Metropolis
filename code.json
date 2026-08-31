@@ -2567,6 +2567,11 @@
             "key": "feat.debugmode",
             "moduleGuid": "d46840c1-b7d1-480b-a46d-e93d58fd7aa4",
             "inboundGuid": "f1e42494-7f80-47c7-b4b4-5f7aab76880b"
+          },
+          {
+            "key": "harness.replay",
+            "moduleGuid": "8ce3b7c8-0f7a-4a5a-9ef7-581ee164ebe8",
+            "inboundGuid": "37a8ee7f-8d84-44f3-b52b-4aac310c688c"
           }
         ]
       },
@@ -2989,6 +2994,10 @@
         "format": null,
         "pattern": null,
         "consumers": [
+          {
+            "key": "engine.core",
+            "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
+          },
           {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
