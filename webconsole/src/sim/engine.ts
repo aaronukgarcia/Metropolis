@@ -45,9 +45,18 @@ import {
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
-import type { Building, RoadMonitor, BuildingMonitor, DemographicFlow, MonthlyDemographics } from './types.ts';
+import type {
+  Building,
+  RoadMonitor,
+  BuildingMonitor,
+  DemographicFlow,
+  MonthlyDemographics,
+  ArrivalsByMode,
+  MonthlyArrivalsByMode,
+  InsolvencyState,
+} from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -109,6 +118,121 @@ export const MOVE_OUT_BASE_RATE = 0.003;
 export const WELLBEING_MOVEOUT_FACTOR = 1.5;
 /** Months of demographicHistory retained (bounded ring, mirrors HISTORY_CAP). */
 export const DEMOGRAPHIC_HISTORY_CAP = 120;
+
+// ════════════════════════════════════════════════════════════════════════════
+// FEAT-1972079926 — ARRIVALS-BY-MODE: split each tick's moveIns (the SSOT
+// total established by FEAT-1972079925) across the transport modes that are
+// CONNECTED AND ONLINE in the city. Companion to the demographic flows above
+// — a conservation-preserving SPLIT of moveIns, never an independent count.
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * ⚠ BALANCE-NUMBER PLACEHOLDERS (Aaron's blanket rule): directional only,
+ * pending the row-by-row balance pass. Renormalised over only the AVAILABLE
+ * modes at split time (see splitArrivalsByMode) so an unavailable mode is
+ * EXACTLY zero rather than silently under-weighted.
+ */
+export const MODE_WEIGHT_ROAD = 0.55;
+export const MODE_WEIGHT_RAIL_LOW = 0.22;
+export const MODE_WEIGHT_RAIL_HS = 0.14;
+export const MODE_WEIGHT_SEA = 0.05;
+export const MODE_WEIGHT_PLANE = 0.04;
+
+/** Bounded-ring cap for arrivalsByModeHistory. Mirrors DEMOGRAPHIC_HISTORY_CAP. */
+export const ARRIVALS_HISTORY_CAP = DEMOGRAPHIC_HISTORY_CAP;
+
+export interface ModeAvailability {
+  road: boolean;
+  railLow: boolean;
+  railHs: boolean;
+  sea: boolean;
+  plane: boolean;
+}
+
+/**
+ * FEAT-1972079926 — which arrival modes are CONNECTED AND ONLINE in the city
+ * right now, derived from the ACTUAL building roster (registration in
+ * `s.buildings`, never catalogue existence — the built-not-wired lesson):
+ *   - road: always available (every city has roads).
+ *   - railLow: an online station (station_sanderling, kind 'station', NOT
+ *     the HS1 gateway) connected to the road network (stationLinks).
+ *   - railHs: the Ashford International gateway (station_ashford) online +
+ *     connected AND at least one hs1 line tile actually built (a station
+ *     with no line laid carries no HS traffic).
+ *   - sea: a built + online harbour (land_harbour) or ferry pier (ferry_pier).
+ *   - plane: a built + online international airport (land_airport).
+ * Pure + deterministic (GR#21): no Date/Math.random, single ordered pass
+ * over s.buildings.
+ */
+export function modeAvailability(s: SimState): ModeAvailability {
+  const links = stationLinks(s);
+  let railLow = false;
+  let railHsStation = false;
+  let hs1Built = false;
+  let sea = false;
+  let plane = false;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (!sp) continue;
+    if (sp.id === 'hs1') hs1Built = true;
+    if (sp.kind === 'station' && links.connectedIds.has(b.id) && isOnline(s, b)) {
+      if (sp.id === 'station_ashford') railHsStation = true;
+      else railLow = true;
+    }
+    if ((sp.id === 'land_harbour' || sp.id === 'ferry_pier') && isOnline(s, b)) sea = true;
+    if (sp.id === 'land_airport' && isOnline(s, b)) plane = true;
+  }
+  return { road: true, railLow, railHs: railHsStation && hs1Built, sea, plane };
+}
+
+const ARRIVAL_MODE_ORDER: (keyof ArrivalsByMode)[] = ['road', 'railLow', 'railHs', 'sea', 'plane'];
+
+/**
+ * FEAT-1972079926 — split one tick's moveIns across the AVAILABLE transport
+ * modes. The named PLACEHOLDER weights above are renormalised over only the
+ * modes `modeAvailability` reports available (an unavailable mode gets
+ * EXACTLY zero), then allocated as integers via floor + largest-remainder-in-
+ * fixed-order so the split always sums back to `moveIns` EXACTLY
+ * (conservation — mirrors the hs1/rail integer-exact usage split in
+ * data.ts's commuterFlowSplit). Deterministic: the remainder walk uses the
+ * FIXED ARRIVAL_MODE_ORDER array, never object-key iteration order.
+ */
+export function splitArrivalsByMode(s: SimState, moveIns: number): ArrivalsByMode {
+  const avail = modeAvailability(s);
+  const weights: Record<keyof ArrivalsByMode, number> = {
+    road: avail.road ? MODE_WEIGHT_ROAD : 0,
+    railLow: avail.railLow ? MODE_WEIGHT_RAIL_LOW : 0,
+    railHs: avail.railHs ? MODE_WEIGHT_RAIL_HS : 0,
+    sea: avail.sea ? MODE_WEIGHT_SEA : 0,
+    plane: avail.plane ? MODE_WEIGHT_PLANE : 0,
+  };
+  const out: ArrivalsByMode = { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 };
+  const totalWeight = ARRIVAL_MODE_ORDER.reduce((a, k) => a + weights[k], 0);
+  if (moveIns <= 0 || totalWeight <= 0) return out;
+
+  const floors: Record<keyof ArrivalsByMode, number> = { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 };
+  let allocated = 0;
+  for (const k of ARRIVAL_MODE_ORDER) {
+    const share = Math.floor((moveIns * weights[k]) / totalWeight);
+    floors[k] = share;
+    allocated += share;
+  }
+  let remainder = moveIns - allocated;
+  for (const k of ARRIVAL_MODE_ORDER) out[k] = floors[k];
+  // Distribute the remainder one-by-one, fixed order, skipping zero-weight
+  // (unavailable) modes. `road` always carries positive weight, so this
+  // always terminates well within one pass over the 5-entry order.
+  let i = 0;
+  while (remainder > 0 && i < ARRIVAL_MODE_ORDER.length * moveIns + 5) {
+    const k = ARRIVAL_MODE_ORDER[i % ARRIVAL_MODE_ORDER.length];
+    if (weights[k] > 0) {
+      out[k] += 1;
+      remainder -= 1;
+    }
+    i += 1;
+  }
+  return out;
+}
 
 const XP_LEVELS: number[] = (() => {
   const a = [0];
@@ -248,6 +372,12 @@ function rawState(): SimState {
     demographicAccum: { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
     demographicHistory: [],
     lastDemographics: { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
+    arrivalsByModeAccum: { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
+    arrivalsByModeHistory: [],
+    lastArrivalsByMode: { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
+    // FEAT-1972079923 inc1: opening treasury is well above both thresholds — solvent.
+    insolvencyState: 'solvent',
+    insolvencyPopup: null,
   };
 }
 
@@ -966,6 +1096,35 @@ function advance(s: SimState): SimState {
     nextDemographicAccum = { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
   }
 
+  // FEAT-1972079926 — arrivals-by-mode: split THIS tick's moveIns (the SSOT
+  // total computed above, unchanged) across the transport modes connected +
+  // online in the city right now. Accumulated into a bounded monthly ring in
+  // exact parallel to the demographic accumulator above.
+  const arrivalsByMode: ArrivalsByMode = splitArrivalsByMode(s, moveIns);
+  const arrivalsAccumSoFar: ArrivalsByMode = s.arrivalsByModeAccum ?? {
+    road: 0,
+    railLow: 0,
+    railHs: 0,
+    sea: 0,
+    plane: 0,
+  };
+  const arrivalsByModeAccum: ArrivalsByMode = {
+    road: arrivalsAccumSoFar.road + arrivalsByMode.road,
+    railLow: arrivalsAccumSoFar.railLow + arrivalsByMode.railLow,
+    railHs: arrivalsAccumSoFar.railHs + arrivalsByMode.railHs,
+    sea: arrivalsAccumSoFar.sea + arrivalsByMode.sea,
+    plane: arrivalsAccumSoFar.plane + arrivalsByMode.plane,
+  };
+  let arrivalsByModeHistory: MonthlyArrivalsByMode[] = s.arrivalsByModeHistory ?? [];
+  let nextArrivalsByModeAccum = arrivalsByModeAccum;
+  if (tick % TICKS_PER_MONTH === 0) {
+    arrivalsByModeHistory = [
+      ...arrivalsByModeHistory,
+      { tick, ...arrivalsByModeAccum },
+    ].slice(-ARRIVALS_HISTORY_CAP);
+    nextArrivalsByModeAccum = { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 };
+  }
+
   // Compute in-tick level rewards (if any) EXACTLY ONCE to add to flows for conservation tracking.
   // Increment XP first so computeLevelRewards can check the new level.
   // computeLevelRewards now returns array (one per level crossed, or empty).
@@ -991,6 +1150,19 @@ function advance(s: SimState): SimState {
   // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking.
   const fundsAtTickEnd = funds;
 
+  // FEAT-1972079923 inc1 (AC-1, AC-12): the insolvency band is PURELY derived from
+  // the end-of-tick funds — deterministic, no Date/random, so replay reproduces
+  // every band transition at the same tick. AC-8 scenario 1 (bailout-entry popup):
+  // stamp insolvencyPopup ONCE, only on the tick the band transitions INTO 'crisis'
+  // from a non-crisis band, so the popup states the conditions exactly once per
+  // entry rather than re-appearing every subsequent tick while still in crisis.
+  const prevInsolvencyState: InsolvencyState = s.insolvencyState ?? 'solvent';
+  const insolvencyState = insolvencyStateForFunds(funds);
+  const insolvencyPopup =
+    insolvencyState === 'crisis' && prevInsolvencyState !== 'crisis'
+      ? { state: insolvencyState, enteredAt: tick }
+      : (s.insolvencyPopup ?? null);
+
   return {
     ...s,
     tick,
@@ -1009,6 +1181,10 @@ function advance(s: SimState): SimState {
     lastDemographics: demographics,
     demographicAccum: nextDemographicAccum,
     demographicHistory,
+    // FEAT-1972079926: per-tick arrivals-by-mode split + the monthly aggregate ring.
+    lastArrivalsByMode: arrivalsByMode,
+    arrivalsByModeAccum: nextArrivalsByModeAccum,
+    arrivalsByModeHistory,
     ledger,
     nextLedgerId: nextLedger,
     // BUG-419: record the START-of-tick population that computeFlows() charged
@@ -1018,6 +1194,8 @@ function advance(s: SimState): SimState {
     lastFlows: { inflows, outflows, population: s.population },
     lastRewardedLevel,
     notice: nextNotice,
+    insolvencyState,
+    insolvencyPopup,
   };
 }
 
@@ -1401,6 +1579,8 @@ export type Action =
   | { type: 'debugFunds'; amount: number }
   | { type: 'debugXp'; amount: number }
   | { type: 'dismissNotice' }
+  | { type: 'dismissPlaceNotice' }
+  | { type: 'dismissInsolvencyPopup' }
   | { type: 'unlockAll' }
   | { type: 'reset' }
   | { type: 'hydrate'; state: SimState };
@@ -1959,6 +2139,21 @@ function reduceCore(state: SimState, action: Action): SimState {
 
     case 'dismissNotice':
       return state.notice == null ? state : { ...state, notice: null };
+
+    // FEAT-1972079923 inc1 (companion to BUG-396): UI-only dismiss for the
+    // cannot-afford placement notice — mirrors dismissNotice. Not journaled
+    // (see journal.ts isStateAffecting); a successful place() already clears
+    // placeNotice on its own (BUG-396), this just lets the player acknowledge
+    // it explicitly without waiting for a new action to supersede it.
+    case 'dismissPlaceNotice':
+      return state.placeNotice == null ? state : { ...state, placeNotice: null };
+
+    // FEAT-1972079923 inc1 (AC-8): UI-only dismiss for the one-shot bailout-entry
+    // popup — mirrors dismissNotice. Not journaled; the popup itself is only ever
+    // (re-)set inside advance() on a genuine band transition, so dismissing it here
+    // cannot resurrect a stale entry.
+    case 'dismissInsolvencyPopup':
+      return state.insolvencyPopup == null ? state : { ...state, insolvencyPopup: null };
 
     case 'unlockAll': {
       // God-mode "Unlock all" (FEAT-1972079899): flip the catalogue gate for a large

@@ -4,7 +4,7 @@
 // duplication and prevent checker drift. All coefficients are PLACEHOLDER
 // (balance-number regime) — Aaron's row-by-row approval pending.
 
-import type { FlowItem, PolicyId, ZoneKind } from './types.ts';
+import type { FlowItem, InsolvencyState, PolicyId, ZoneKind } from './types.ts';
 
 /**
  * Council tax per tick: population * rate.residential * 2 / 100
@@ -139,4 +139,35 @@ export function sanitizeFunds(n: number): number {
   if (!Number.isFinite(n)) return 0;
   const i = Math.trunc(n);
   return Number.isSafeInteger(i) ? i : 0;
+}
+
+/**
+ * FEAT-1972079923 inc1 (AC-1) — PLACEHOLDER (balance-number regime): funds at or
+ * below this trip the 'crisis' band, the future IMF bailout entry point. Value
+ * taken verbatim from the BA criteria's placeholder-constants table
+ * (docs/planning/acceptance/feat-1972079923-imf-insolvency.md); Aaron's
+ * row-by-row balance approval pending. Named DEBT_THRESHOLD_FOR_BAILOUT (not a
+ * generic "insolvency" name) to match the AC doc so the balance pass finds one
+ * SSOT constant, not a second table (GR#3).
+ */
+export const DEBT_THRESHOLD_FOR_BAILOUT = -10_000_000;
+
+/**
+ * FEAT-1972079923 inc1 (companion to AC-1, not in the BA doc's placeholder
+ * table) — PLACEHOLDER: funds at or below this (but still above
+ * DEBT_THRESHOLD_FOR_BAILOUT) trip the 'warning' band, giving the player
+ * advance notice before the crisis threshold is crossed so the eventual
+ * bailout is not a surprise (task point 3). Balance pass pending.
+ */
+export const INSOLVENCY_WARNING_THRESHOLD = -5_000_000;
+
+/**
+ * FEAT-1972079923 inc1 (AC-1, AC-12) — pure, state-derived insolvency band.
+ * No Date/random; deterministic given `funds` alone, so two identical runs
+ * produce byte-identical bands and a replay reproduces every band transition.
+ */
+export function insolvencyStateForFunds(funds: number): InsolvencyState {
+  if (funds <= DEBT_THRESHOLD_FOR_BAILOUT) return 'crisis';
+  if (funds <= INSOLVENCY_WARNING_THRESHOLD) return 'warning';
+  return 'solvent';
 }

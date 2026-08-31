@@ -949,6 +949,9 @@ export function MapView() {
         <span className="tier-fill-note">fill = % occupied</span>
       </div>
       <LevelUpBanner />
+      <PlaceNoticeBanner />
+      <InsolvencyBanner />
+      <InsolvencyPopup />
       <div
         className={`advisor${advisorContent.go ? ' clickable' : ''}`}
         onClick={advisorContent.go}
@@ -1088,6 +1091,78 @@ function LevelUpBanner() {
           ? `Unlocked: ${n.unlocked.join(', ')}`
           : 'No new structures at this level — keep building.'}
       </p>
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc1 (AC-9 companion to BUG-396): renders the cannot-afford
+// placement notice the reducer already stamps on state.placeNotice — the fix
+// for BUG-396's silent-no-op complaint was never visible because nothing
+// rendered this field. Auto-clears on the next successful place() (existing
+// reducer behaviour); Dismiss lets the player acknowledge it explicitly too.
+function PlaceNoticeBanner() {
+  const { state, dispatch } = useSim();
+  const msg = state.placeNotice;
+  if (!msg) return null;
+  return (
+    <div className="place-notice-banner" role="alert">
+      <span>{msg}</span>
+      <button className="btn tiny" onClick={() => dispatch({ type: 'dismissPlaceNotice' })}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc1 (AC-1): persistent status banner for the insolvency band.
+// Solvent renders nothing. 'warning' gives advance notice before the crisis
+// threshold is crossed (task point 3) so the eventual bailout is not a surprise;
+// 'crisis' is the AC-1 banner text (the IMF bailout EVENT itself — forced sales,
+// administration — is inc2/3, not built yet; this only surfaces the state).
+function InsolvencyBanner() {
+  const { state } = useSim();
+  const band = state.insolvencyState ?? 'solvent';
+  if (band === 'solvent') return null;
+  const crisis = band === 'crisis';
+  return (
+    <div className={`insolvency-banner ${crisis ? 'crisis' : 'warning'}`} role="status">
+      {crisis
+        ? 'BAILOUT: You have 1 year to restore solvency. Sell assets or enter Administration.'
+        : 'Treasury warning — funds are approaching the insolvency threshold. Raise revenue or cut spending before the IMF steps in.'}
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc1 (AC-8, scenario 1 only): the one-shot bailout-entry
+// popup. Reads insolvencyPopup, which the reducer stamps EXACTLY ONCE — on the
+// tick the band transitions into 'crisis' — so this never reappears on later
+// ticks while still in crisis. "I understand" dismisses it via the
+// dismissInsolvencyPopup action (UI-only, not journaled). The forced-sales
+// list and the Administration button are inc2/3 deliverables, not built yet.
+function InsolvencyPopup() {
+  const { state, dispatch } = useSim();
+  const popup = state.insolvencyPopup;
+  if (!popup) return null;
+  return (
+    <div className="insolvency-popup-overlay" role="alertdialog" aria-modal="true">
+      <div className="insolvency-popup">
+        <h3>BAILOUT: 1 Game-Year Intervention</h3>
+        <p>
+          The treasury has crossed the insolvency threshold at tick {popup.enteredAt}
+          {' '}(funds {fmtMoney(state.funds)}). Once in force you will need to:
+        </p>
+        <ul>
+          <li>Sell city assets to reduce debt, or</li>
+          <li>Enter Administration Mode — spending cut, one year to recover.</li>
+        </ul>
+        <p className="insolvency-popup-note">
+          (Forced asset sales and Administration Mode land in a later increment —
+          this notice exists so the bailout is never a surprise.)
+        </p>
+        <button className="btn" onClick={() => dispatch({ type: 'dismissInsolvencyPopup' })}>
+          I understand
+        </button>
+      </div>
     </div>
   );
 }

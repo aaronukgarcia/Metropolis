@@ -20,5 +20,16 @@ export function loadDevCity1(): SimState {
   if (!state.lastDemographics) {
     state.lastDemographics = { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 };
   }
+  // FEAT-1972079926: ensure arrivals-by-mode fields exist for backward
+  // compatibility (the dev-city fixture predates this feature).
+  if (!state.arrivalsByModeAccum) {
+    state.arrivalsByModeAccum = { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 };
+  }
+  if (!state.arrivalsByModeHistory) {
+    state.arrivalsByModeHistory = [];
+  }
+  if (!state.lastArrivalsByMode) {
+    state.lastArrivalsByMode = { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 };
+  }
   return state;
 }

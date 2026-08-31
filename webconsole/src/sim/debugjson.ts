@@ -22,13 +22,16 @@
 // debug.json.
 
 import type {
+  ArrivalsByMode,
   Building,
   BuildingMonitor,
   Clipboard,
   DemographicFlow,
   FlowItem,
+  InsolvencyState,
   LedgerEntry,
   LevelUpNotice,
+  MonthlyArrivalsByMode,
   MonthlyDemographics,
   RoadMonitor,
   SimState,
@@ -209,6 +212,10 @@ export interface DebugJson {
     roadNotice: string | null;
     railNotice: string | null;
     placeNotice: string | null;
+    /** FEAT-1972079923 inc1 (AC-1) — the derived insolvency band. */
+    insolvencyState: InsolvencyState;
+    /** FEAT-1972079923 inc1 (AC-8) — the one-shot bailout-entry popup, or null. */
+    insolvencyPopup: { state: InsolvencyState; enteredAt: number } | null;
     roadMonitors: RoadMonitor[];
     /** FEAT-1972079878 inc1 — building auto-scale demand monitors. */
     buildingMonitors: BuildingMonitor[];
@@ -233,6 +240,16 @@ export interface DebugJson {
     lastTick: DemographicFlow;
     accumThisMonth: DemographicFlow;
     monthlyHistory: MonthlyDemographics[];
+  };
+  /**
+   * FEAT-1972079926 — arrivals-by-mode: the LAST tick's split of moveIns
+   * across transport modes, the running this-month-so-far accumulator, and
+   * the bounded monthly history ring backing the arrivals-by-mode Sankey.
+   */
+  arrivalsByMode: {
+    lastTick: ArrivalsByMode;
+    accumThisMonth: ArrivalsByMode;
+    monthlyHistory: MonthlyArrivalsByMode[];
   };
   demand: {
     zones: { residential: number; commercial: number; industrial: number };
@@ -454,12 +471,17 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   roadNotice: 'sim.roadNotice',
   railNotice: 'sim.railNotice',
   placeNotice: 'sim.placeNotice',
+  insolvencyState: 'sim.insolvencyState',
+  insolvencyPopup: 'sim.insolvencyPopup',
   roadMonitors: 'sim.roadMonitors',
   buildingMonitors: 'sim.buildingMonitors',
   roadConnectivity: 'sim.roadConnectivity',
   lastDemographics: 'demographics.lastTick',
   demographicAccum: 'demographics.accumThisMonth',
   demographicHistory: 'demographics.monthlyHistory',
+  lastArrivalsByMode: 'arrivalsByMode.lastTick',
+  arrivalsByModeAccum: 'arrivalsByMode.accumThisMonth',
+  arrivalsByModeHistory: 'arrivalsByMode.monthlyHistory',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -665,6 +687,10 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       roadNotice: s.roadNotice,
       railNotice: s.railNotice,
       placeNotice: s.placeNotice,
+      // FEAT-1972079923 inc1: defaults for a legacy state predating this field
+      // (backward tolerance — mirrors roadConnectivity's `?? {...}` a few lines down).
+      insolvencyState: s.insolvencyState ?? 'solvent',
+      insolvencyPopup: s.insolvencyPopup ?? null,
       roadMonitors: s.roadMonitors,
       // FEAT-1972079878 inc1: building auto-scale demand monitors (parallel to
       // roadMonitors above) — must be serialized for save/load + replay parity
@@ -693,6 +719,13 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       lastTick: s.lastDemographics ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
       accumThisMonth: s.demographicAccum ?? { births: 0, deaths: 0, moveIns: 0, moveOuts: 0 },
       monthlyHistory: s.demographicHistory ?? [],
+    },
+    // FEAT-1972079926: arrivals-by-mode split — defaults cover a legacy/bespoke
+    // state predating this feature (backward tolerance, mirrors demographics above).
+    arrivalsByMode: {
+      lastTick: s.lastArrivalsByMode ?? { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
+      accumThisMonth: s.arrivalsByModeAccum ?? { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
+      monthlyHistory: s.arrivalsByModeHistory ?? [],
     },
     demand: {
       zones: zoneDemand,

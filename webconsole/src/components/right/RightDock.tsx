@@ -30,6 +30,7 @@ import { currentMapUi } from '../../sim/uistate';
 import { versionRaw } from '../../sim/version';
 import { nextRefreshDue } from '../../sim/throttle';
 import { PopulationSankey } from '../PopulationSankey';
+import { ArrivalsByModeSankey } from '../ArrivalsByModeSankey';
 
 const TABS = [
   { id: 'status', label: 'Status' },
@@ -218,6 +219,8 @@ function PopulationTab() {
       </div>
       <h4>Demographic flow</h4>
       <PopulationSankey history={state.demographicHistory} />
+      <h4>Arrivals by mode</h4>
+      <ArrivalsByModeSankey history={state.arrivalsByModeHistory} />
     </>
   );
 }

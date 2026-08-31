@@ -58,6 +58,11 @@ export function isStateAffecting(action: Action): boolean {
       return false;
     case 'dismissNotice':
       return false;
+    // FEAT-1972079923 inc1 — UI-only dismiss actions, mirror dismissNotice.
+    case 'dismissPlaceNotice':
+      return false;
+    case 'dismissInsolvencyPopup':
+      return false;
 
     // Placement and demolition — state-affecting.
     case 'place':

@@ -96,6 +96,31 @@ export interface MonthlyDemographics extends DemographicFlow {
   population: number;
 }
 
+/**
+ * FEAT-1972079926 — one tick's (or one month's, when aggregated) move-ins
+ * split across transport arrival modes. Sums back EXACTLY to that tick's/
+ * month's moveIns total (DemographicFlow.moveIns is the SSOT — this is a
+ * conservation-preserving SPLIT of it, never an independent count). All
+ * non-negative integers, state-derived and deterministic (GR#21).
+ */
+export interface ArrivalsByMode {
+  road: number;
+  railLow: number;
+  railHs: number;
+  sea: number;
+  plane: number;
+}
+
+/**
+ * FEAT-1972079926 — one closed month's aggregated arrivals-by-mode split,
+ * plus the tick at which the month closed. Recorded into
+ * SimState.arrivalsByModeHistory (a bounded ring), parallel to
+ * MonthlyDemographics, backing the arrivals-by-mode Sankey.
+ */
+export interface MonthlyArrivalsByMode extends ArrivalsByMode {
+  tick: number;
+}
+
 export interface LedgerEntry {
   id: number;
   tick: number;
@@ -270,7 +295,54 @@ export interface SimState {
    * close. Optional for backward tolerance.
    */
   lastDemographics?: DemographicFlow;
+  /**
+   * FEAT-1972079926 — running accumulator of this-month-so-far arrivals-by-
+   * mode split, flushed into `arrivalsByModeHistory` and reset to zero at
+   * every TICKS_PER_MONTH boundary (mirrors `demographicAccum`). Optional
+   * for backward tolerance: a legacy state without it starts accumulating
+   * from zero (see devcity.ts).
+   */
+  arrivalsByModeAccum?: ArrivalsByMode;
+  /**
+   * FEAT-1972079926 — bounded ring of closed-month arrivals-by-mode
+   * aggregates (mirrors `demographicHistory`). Backs the arrivals-by-mode
+   * Sankey. Optional for backward tolerance: a legacy state without it has
+   * an empty history (honest empty state, not a fabricated one — GR#15).
+   */
+  arrivalsByModeHistory?: MonthlyArrivalsByMode[];
+  /**
+   * FEAT-1972079926 — the arrivals-by-mode split computed by the LAST
+   * advance() (mirrors `lastDemographics`). Optional for backward tolerance.
+   */
+  lastArrivalsByMode?: ArrivalsByMode;
+  /**
+   * FEAT-1972079923 inc1 (AC-1) — the insolvency band derived from `funds` every
+   * tick via fiscal.insolvencyStateForFunds (pure, state-derived, no wall-clock).
+   * 'solvent' above the warning threshold, 'warning' between the warning and
+   * crisis thresholds (advance notice before the bailout flow), 'crisis' at or
+   * below DEBT_THRESHOLD_FOR_BAILOUT (the future IMF bailout entry point — the
+   * bailout EVENT itself, forced sales, administration and the decline screen
+   * are inc2-4; inc1 only detects and surfaces the band). Optional for backward
+   * tolerance: a legacy state without it is treated as 'solvent' until the next tick.
+   */
+  insolvencyState?: InsolvencyState;
+  /**
+   * FEAT-1972079923 inc1 (AC-8, scenario 1 only) — set ONCE, on the tick the
+   * band transitions into 'crisis' from a non-crisis band, so the MapView popup
+   * states the conditions exactly once per entry rather than every tick. Cleared
+   * by the `dismissInsolvencyPopup` action (UI-only, not journaled — mirrors
+   * `dismissNotice`). null when no popup is pending. Optional for backward tolerance.
+   */
+  insolvencyPopup?: { state: InsolvencyState; enteredAt: number } | null;
 }
+
+/**
+ * FEAT-1972079923 inc1 (AC-1) — the insolvency band. Placeholder two-band model
+ * for inc1 (detection + feedback only); inc2-4 build the actual bailout/
+ * administration/second-bailout/decline state machine on top of the 'crisis'
+ * band entry point ruled by Aaron (BOW FEAT-1972079923 comment, 2026-08-31).
+ */
+export type InsolvencyState = 'solvent' | 'warning' | 'crisis';
 
 /**
  * FEAT-1972079907 inc2 — a single monitored road segment (one road tile).
