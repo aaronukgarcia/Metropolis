@@ -167,6 +167,10 @@ const (
 		(monthlyWageGrossPerEmployedMicropounds * incomeNITaxRateBp / 10_000)
 )
 
+// referenced to preserve the real-world figure for BUG-452 scale-up (unused
+// until the ledger divisor is removed).
+var _ = baselineOneMonthlyRentPerHousehold
+
 // monthlyRentForHouseholds is FEAT-1972079927 Q2's rent figure — see
 // baselineOneMonthlyRentMicropounds's doc comment for why this is a flat
 // constant rather than an amount recomputed from income. Zero households

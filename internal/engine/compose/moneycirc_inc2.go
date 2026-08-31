@@ -125,6 +125,10 @@ const (
 	buildersMerchantPremises = "industrial"
 )
 
+// referenced to preserve the real-world figure for BUG-452 scale-up (unused
+// until the ledger divisor is removed).
+var _ = constructionMaterialPricePerTonneRealMicropounds
+
 // maybeAutoPlaceBuildersMerchant is FEAT-1972079927 inc2's deterministic,
 // state-derived auto-placement trigger: the first time engine.build
 // reports an Industry&Farms zone grouping present, register exactly one

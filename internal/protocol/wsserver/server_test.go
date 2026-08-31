@@ -62,7 +62,7 @@ func TestHandshake_MatchAccepts(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	resp := sendHandshake(t, conn, "v1.2.3")
 	if resp.Error != nil {
@@ -90,7 +90,7 @@ func TestHandshake_MismatchRefusesAndCloses(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	resp := sendHandshake(t, conn, "v9.9.9")
 	if resp.Error == nil {
@@ -130,7 +130,7 @@ func TestHandshake_DirtySuffixIgnored_Accepts(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	resp := sendHandshake(t, conn, "v0.3.0-153-gABCD-dirty")
 	if resp.Error != nil {
@@ -154,7 +154,7 @@ func TestHandshake_DifferentCommit_StillRefuses(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	resp := sendHandshake(t, conn, "v0.3.0-154-gEFGH")
 	if resp.Error == nil {
@@ -191,7 +191,7 @@ func TestHandshake_MalformedFirstFrame_Refuses(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	id := int64(1)
 	_ = conn.WriteJSON(rpcMessage{JSONRPC: rpcVersion, ID: &id, Method: methodCommand, Params: json.RawMessage(`{}`)})
@@ -212,7 +212,7 @@ func TestHandshake_MissingClientVersion_Refuses(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	id := int64(1)
 	_ = conn.WriteJSON(rpcMessage{JSONRPC: rpcVersion, ID: &id, Method: methodHandshake, Params: json.RawMessage(`{}`)})
@@ -233,7 +233,7 @@ func TestHandshake_Timeout_Refuses(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Deliberately silent -- no handshake frame sent.
 	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
@@ -253,7 +253,7 @@ func TestCommandRoundTrip_AfterAcceptedHandshake(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 		t.Fatalf("handshake failed: %+v", resp.Error)
@@ -300,7 +300,7 @@ func TestDeltaRelay_AfterAcceptedHandshake(t *testing.T) {
 	defer cleanup()
 
 	conn := dial(t, url)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 		t.Fatalf("handshake failed: %+v", resp.Error)
@@ -340,7 +340,7 @@ func TestCommandFailures_DistinctCodesAndCorrelationIDs(t *testing.T) {
 		url, _, cleanup := newTestServer(t, "v1.2.3", time.Second)
 		defer cleanup()
 		conn := dial(t, url)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 			t.Fatalf("handshake failed: %+v", resp.Error)
 		}
@@ -368,7 +368,7 @@ func TestCommandFailures_DistinctCodesAndCorrelationIDs(t *testing.T) {
 		url, _, cleanup := newTestServer(t, "v1.2.3", time.Second)
 		defer cleanup()
 		conn := dial(t, url)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 			t.Fatalf("handshake failed: %+v", resp.Error)
 		}
@@ -402,7 +402,7 @@ func TestCommandFailures_DistinctCodesAndCorrelationIDs(t *testing.T) {
 		url, transport, cleanup := newTestServer(t, "v1.2.3", time.Second)
 		defer cleanup()
 		conn := dial(t, url)
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 			t.Fatalf("handshake failed: %+v", resp.Error)
 		}
@@ -482,7 +482,7 @@ func TestRegression_PumpConcurrentClose_NoRace(t *testing.T) {
 			url, transport, cleanup := newTestServer(t, "v1.2.3", time.Second)
 			defer cleanup()
 			conn := dial(t, url)
-			defer conn.Close()
+			defer func() { _ = conn.Close() }()
 			if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 				t.Errorf("handshake failed: %+v", resp.Error)
 				return

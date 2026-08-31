@@ -208,7 +208,7 @@ func (r *RefuseAPI) SetFunding(level float64) error {
 		return err
 	}
 	if !num.IsFinite(level) || level < 0 || level > 1 {
-		return errs.New(ErrInvalidFunding, r.correlationID, map[string]any{"level": level})
+		return invalidFundingError(r.correlationID, level)
 	}
 	return r.snapshotDeps().services.SetFunding(RefuseServiceID, level)
 }

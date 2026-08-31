@@ -267,7 +267,7 @@ func (f *FreightAPI) Ship(commodity Commodity, tonnes int64, to SiteType, mode M
 
 	source := f.cfg.canonicalSite[cc.StorageClass]
 	current := f.sites[source].stock[commodity]
-	cap, _ := f.cfg.ModalCaps[mode]
+	cap := f.cfg.ModalCaps[mode]
 	if tonnes > current {
 		return MovementResult{}, insufficientStockError(f.correlationID, commodity, tonnes, cap.MaxTonnesPerMovement)
 	}

@@ -159,7 +159,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// the HTTP status, and gorilla/websocket logs the cause).
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if !s.handshake(conn) {
 		return
@@ -195,7 +195,7 @@ func normalizeVersion(v string) string {
 // without pumping further (Aaron DD: refuse, never degrade).
 func (s *Server) handshake(conn *websocket.Conn) bool {
 	_ = conn.SetReadDeadline(time.Now().Add(s.handshakeTimeout))
-	defer conn.SetReadDeadline(time.Time{}) // no deadline for the steady-state pump
+	defer func() { _ = conn.SetReadDeadline(time.Time{}) }() // no deadline for the steady-state pump
 
 	_, data, err := conn.ReadMessage()
 	if err != nil {

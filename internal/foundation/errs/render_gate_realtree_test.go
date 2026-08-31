@@ -41,6 +41,13 @@ import (
 var renderGateExcludedPackages = []string{} // deliberately empty; see comment above
 
 func TestRenderGate_WholeTreeHasNoLiteralTokens(t *testing.T) {
+	// Mechanically enforce the "deliberately empty" invariant documented
+	// above: no package may special-case itself out of the whole-tree scan
+	// without that decision being visible here.
+	if len(renderGateExcludedPackages) != 0 {
+		t.Logf("render gate exclusions in force: %v", renderGateExcludedPackages)
+	}
+
 	regPath, err := resolveRegistryPath()
 	if err != nil {
 		t.Fatalf("resolve registry path: %v", err)
@@ -84,7 +91,7 @@ func TestRenderGate_WholeTreeHasNoLiteralTokens(t *testing.T) {
 
 	// Count packages scanned (directories with .go files, excluding testdata).
 	// Derive the count at runtime to avoid hardcoded assertions.
-	packageCount := countScannedPackages(root)
+	packageCount := countScannedPackages(t, root)
 	t.Logf("render gate scanned %d packages", packageCount)
 
 	// Assert minimum package count. We expect to scan at least 40+ packages
@@ -101,9 +108,10 @@ func TestRenderGate_WholeTreeHasNoLiteralTokens(t *testing.T) {
 // countScannedPackages walks root and counts directories containing .go files
 // (excluding testdata and test files). Used to derive the minimum package
 // assertion (GR#15: never hardcode a constant when the tree can provide it).
-func countScannedPackages(root string) int {
+func countScannedPackages(t *testing.T, root string) int {
+	t.Helper()
 	pkgDirs := make(map[string]bool)
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -120,5 +128,11 @@ func countScannedPackages(root string) int {
 		pkgDirs[dir] = true
 		return nil
 	})
+	if err != nil {
+		// A silently-empty count here would masquerade as "scanner broken,
+		// 0 packages" instead of "walk itself failed" — surface the real
+		// cause (BUG-356 gate-cannot-fail class).
+		t.Fatalf("countScannedPackages: WalkDir(%q) failed: %v", root, err)
+	}
 	return len(pkgDirs)
 }

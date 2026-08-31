@@ -21,6 +21,7 @@ package errs
 // call) are reported as dynamic findings — they must be seen, not assumed.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -50,7 +51,7 @@ func scanTree(root string, entries map[string]registryEntry) []siteFinding {
 	// (the real code declares codeX = "MET-…" in errors.go and uses it in
 	// palette.go / marks.go — a per-file table would falsely flag every one).
 	dirs := map[string][]string{}
-	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
@@ -66,6 +67,13 @@ func scanTree(root string, entries map[string]registryEntry) []siteFinding {
 		dirs[filepath.Dir(path)] = append(dirs[filepath.Dir(path)], path)
 		return nil
 	})
+	if walkErr != nil {
+		// A gate that silently returns zero findings on a broken walk is a
+		// gate that cannot fail (BUG-356 class) — scanTree has no *testing.T
+		// to fail through, so surface the walk failure loudly rather than
+		// letting callers read "no findings" as "clean".
+		panic(fmt.Sprintf("scanTree: WalkDir(%q) failed: %v", root, walkErr))
+	}
 
 	var all []siteFinding
 	for _, files := range dirs {
@@ -374,7 +382,9 @@ func F() {
 	_ = errs.New("MET-G900", "c", map[string]any{"thing": 1})
 }
 `
-	os.WriteFile(filepath.Join(pkg, "gate.go"), []byte(complete), 0o644)
+	if err := os.WriteFile(filepath.Join(pkg, "gate.go"), []byte(complete), 0o644); err != nil {
+		t.Fatalf("rewrite gate.go: %v", err)
+	}
 	findings = scanTree(pkg, entries)
 	if len(findings) != 0 {
 		t.Fatalf("expected 0 findings once {thing} is supplied, got %+v", findings)

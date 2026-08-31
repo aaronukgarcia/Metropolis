@@ -65,7 +65,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 2
 	}
 	if *printVersion {
-		fmt.Fprintln(stdout, buildinfo.String())
+		_, _ = fmt.Fprintln(stdout, buildinfo.String())
 		return 0
 	}
 
@@ -73,7 +73,7 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	e := core.NewEngine(core.WithWorldSeed(*seed))
 	if _, err := compose.Wire(e, nil); err != nil {
-		fmt.Fprintf(stderr, "metroserve: compose.Wire failed: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "metroserve: compose.Wire failed: %v\n", err)
 		return 1
 	}
 
@@ -87,7 +87,7 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	pumpDone, err := e.StartSubscriptionPump(ctx, transport)
 	if err != nil {
-		fmt.Fprintf(stderr, "metroserve: StartSubscriptionPump failed: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "metroserve: StartSubscriptionPump failed: %v\n", err)
 		_ = transport.Close()
 		return 1
 	}
@@ -105,13 +105,13 @@ func run(args []string, stdout, stderr *os.File) int {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpSrv.ListenAndServe() }()
 
-	fmt.Fprintf(stdout, "metroserve %s listening on ws://%s/ws (engine version handshake required)\n", buildinfo.Version, *addr)
+	_, _ = fmt.Fprintf(stdout, "metroserve %s listening on ws://%s/ws (engine version handshake required)\n", buildinfo.Version, *addr)
 
 	select {
 	case <-ctx.Done():
 	case err := <-serveErr:
 		if err != nil && err != http.ErrServerClosed {
-			fmt.Fprintf(stderr, "metroserve: http server error: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "metroserve: http server error: %v\n", err)
 		}
 		stop()
 	}

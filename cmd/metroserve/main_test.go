@@ -16,12 +16,12 @@ func captureRun(t *testing.T, args []string) (stdout, stderr string, code int) {
 	if err != nil {
 		t.Fatalf("temp stdout: %v", err)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 	errFile, err := os.CreateTemp(t.TempDir(), "stderr")
 	if err != nil {
 		t.Fatalf("temp stderr: %v", err)
 	}
-	defer errFile.Close()
+	defer func() { _ = errFile.Close() }()
 
 	code = run(args, outFile, errFile)
 

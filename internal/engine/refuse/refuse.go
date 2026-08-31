@@ -350,9 +350,7 @@ func (r *RefuseAPI) Wire(l *logistics.LogisticsAPI, s *services.ServicesAPI, w W
 		return err
 	}
 	if l == nil || s == nil {
-		return errs.New(ErrDependencyNotWired, r.correlationID, map[string]any{
-			"method": "Wire",
-		})
+		return dependencyNotWiredError(r.correlationID, "Wire")
 	}
 	r.mu.Lock()
 	changed := r.logistics != l
@@ -383,7 +381,7 @@ func (r *RefuseAPI) Wire(l *logistics.LogisticsAPI, s *services.ServicesAPI, w W
 // before mu is ever touched.
 func (r *RefuseAPI) checkNotCopied(method string) error {
 	if r.self.Load() != r {
-		return errs.New(ErrCopiedValue, r.correlationID, map[string]any{"method": method})
+		return copiedValueError(r.correlationID, method)
 	}
 	return nil
 }
@@ -398,7 +396,7 @@ func (r *RefuseAPI) requireWired(method string) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.logistics == nil || r.services == nil {
-		return errs.New(ErrDependencyNotWired, r.correlationID, map[string]any{"method": method})
+		return dependencyNotWiredError(r.correlationID, method)
 	}
 	return nil
 }

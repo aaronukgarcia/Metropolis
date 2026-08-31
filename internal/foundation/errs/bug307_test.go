@@ -8,12 +8,6 @@ import (
 
 // --- Issue 1: Rotate Failure Bricks Logger ---
 
-// failingRenamer wraps an io.Writer and tracks whether rotation should fail.
-// Used to inject rotation failures to test graceful degradation.
-type failingRenamer struct {
-	failNextRotate bool
-}
-
 // TestFileLogger_RotateFailureDoesNotBrickLogger tests that when rotateLocked
 // encounters a failure (e.g., rename fails on Windows because file is open),
 // the logger does NOT panic but instead cleanly returns the error (BUG-307

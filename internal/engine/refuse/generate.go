@@ -186,7 +186,7 @@ func (r *RefuseAPI) SetContamination(level float64) error {
 		return err
 	}
 	if !num.IsFinite(level) || level < 0 || level > 1 {
-		return errs.New(ErrInvalidContamination, r.correlationID, map[string]any{"level": level})
+		return invalidContaminationError(r.correlationID, level)
 	}
 	r.mu.Lock()
 	r.contamination = level

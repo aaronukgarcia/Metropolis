@@ -69,7 +69,7 @@ func TestCommandRoundTrip_RealEngine_AcceptAndReject(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
 
 	conn := dial(t, wsURL)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	if resp := sendHandshake(t, conn, "v1.2.3"); resp.Error != nil {
 		t.Fatalf("handshake failed: %+v", resp.Error)
 	}

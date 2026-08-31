@@ -120,13 +120,11 @@ func TestViewportSnapshot_ShoreElevationZero(t *testing.T) {
 			continue
 		}
 
-		elev, ok := cellMap["elevation"]
-		if !ok {
+		if _, ok := cellMap["elevation"]; !ok {
 			// elevation key missing — if terrain is shore, this is a bug
 			shoreZeroInJSON++
-		} else if elvInt, ok := elev.(float64); ok && elvInt == 0 {
-			// elevation present and is 0 — expected
 		}
+		// elevation present (whatever its value) is the expected case; nothing to count.
 	}
 
 	if shoreZeroInJSON > 0 {
