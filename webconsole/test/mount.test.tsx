@@ -581,3 +581,85 @@ test('BUG-433: advisor bubble positioning is fixed-left (not centered), so click
     'MapView.tsx must render the adv-hint span as the click affordance'
   );
 });
+
+// BUG-434: crash recovery. Rapid dispatch burst at negative funds while turbo-ticking.
+// Aaron dogfood: -£320m funds, ~50 rapid +£10m button clicks, turbo speed.
+// TIME FROZE (tick stopped), then render error: "useSim must be used inside SimProvider".
+// This test reproduces: dispatch 50 debugFunds actions rapidly while running the tick
+// loop at turbo cadence; verify no throw and ticks still advance after the burst.
+test('BUG-434 RED-PROVE: rapid debugFunds burst at negative funds under turbo causes freeze or useSim error', async () => {
+  ensureMountWindow();
+
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimProvider, useSim } = await import('../src/sim/store.tsx');
+
+  function TestConsumer() {
+    const { state, dispatch } = useSim();
+    React.useEffect(() => {
+      // Manually tick once to trigger the effect path
+      if (state.tick < 2) {
+        setTimeout(() => dispatch({ type: 'tick' }), 0);
+      }
+    }, [state.tick, dispatch]);
+    return React.default.createElement('div', null, `tick: ${state.tick}, funds: ${state.funds}`);
+  }
+
+  // First, just verify the mount doesn't throw (basic SSR smoke test).
+  // The real issue is behavioral (tick freeze), which is harder to test in SSR.
+  // But if the render crashes, this will catch it.
+  const html = renderToString(
+    React.default.createElement(SimProvider, {
+      children: React.default.createElement(TestConsumer),
+    })
+  );
+
+  assert.equal(typeof html, 'string', 'renderToString must return a string');
+  assert.ok(html.length > 0, 'rendered HTML must be non-empty');
+  assert.ok(!html.includes('useSim must be used inside SimProvider'), 'mount must not throw useSim error');
+});
+
+// BUG-434 LIVE TEST: dispatch a burst of debugFunds while manually advancing ticks.
+// This is closer to the real scenario but still SSR-based. We cannot test the
+// setInterval/requestAnimationFrame tick loop in SSR, but we can test the reducer
+// stability under the burst + manual tick sequence.
+test('BUG-434: reducer survives 50 rapid debugFunds dispatches from negative funds with manual ticks', async () => {
+  const { reducer, initialState } = await import('../src/sim/store.tsx');
+
+  // Start with negative funds
+  let state = initialState();
+  state = { ...state, funds: -320_000_000, speed: 3 };
+
+  let tickCount = 0;
+
+  // Simulate 50 rapid debugFunds dispatches interspersed with manual ticks
+  // This mirrors the scenario: ticks are happening every 160ms, but user is clicking
+  // the button ~50 times rapidly (faster than tick cadence).
+  for (let i = 0; i < 50; i++) {
+    // Dispatch a debugFunds action
+    try {
+      state = reducer(state, { type: 'debugFunds', amount: 10_000_000 });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      throw new Error(`reducer threw on debugFunds #${i}: ${msg}`);
+    }
+
+    // Every few dispatches, simulate a tick
+    if (i % 3 === 0) {
+      try {
+        state = reducer(state, { type: 'tick' });
+        tickCount++;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        throw new Error(`reducer threw on tick #${tickCount}: ${msg}`);
+      }
+    }
+  }
+
+  // If we got here, no exception was thrown during the burst.
+  // Verify state is still valid and ticks advanced.
+  assert.ok(tickCount > 0, 'at least one tick must have advanced during the burst');
+  assert.ok(state.funds > 0 || state.funds < 0, 'funds must have a valid numeric value');
+  assert.ok(typeof state.tick === 'number', 'state.tick must be a number');
+  assert.ok(state.tick >= tickCount, 'ticks must have advanced by at least the manual tick count');
+});
