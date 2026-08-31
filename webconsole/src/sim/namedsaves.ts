@@ -1,6 +1,7 @@
 import type { GameSave } from './gamesave.ts';
 import { DEVCITY1_NAME } from './devcity.ts';
 import { safeSetItem } from './safeStorage.ts';
+import { encode, decode } from './saveCodec.ts';
 
 export const NAMED_SAVES_INDEX_KEY = 'metropolis.namedSaves';
 export const NAMED_SAVE_SLOT_PREFIX = 'metropolis.namedSave.';
@@ -86,7 +87,10 @@ export function writeNamedSave(storage: NamedSaveStorage, save: GameSave): boole
     // BUG-457: the big write (the whole save blob) — if this alone blows quota,
     // report failure BEFORE touching the index, so the index never points at a
     // slot that was never actually written.
-    const slotResult = safeSetItem(storage, slotKey(slug), JSON.stringify({ ...save, name }));
+    // FEAT-1972079935: this is the single biggest localStorage payload in the
+    // app (a full named city save) — compress it before it hits setItem. The
+    // small index/current-city-name keys stay plain JSON, not worth compressing.
+    const slotResult = safeSetItem(storage, slotKey(slug), encode(JSON.stringify({ ...save, name })));
     if (!slotResult.ok) return false;
     const index = readIndex(storage).filter((m) => m.slug !== slug);
     index.unshift(meta);
@@ -111,7 +115,8 @@ export function readNamedSave(storage: NamedSaveStorage, slug: string): GameSave
   try {
     const raw = storage.getItem(slotKey(slug));
     if (!raw) return null;
-    return JSON.parse(raw) as GameSave;
+    // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value.
+    return JSON.parse(decode(raw)) as GameSave;
   } catch {
     return null;
   }

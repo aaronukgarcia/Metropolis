@@ -11,6 +11,7 @@ import { QUEUE_KEY } from '../sim/commitqueue';
 import { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } from '../sim/namedsaves';
 import { SAVEPOINT_KEY_PREFIX } from '../sim/replay';
 import { JOURNAL_KEY } from '../sim/journal';
+import { encode, decode } from '../sim/saveCodec';
 
 /**
  * BUG-457: how many journal entries Reclaim keeps (rather than deleting the
@@ -56,14 +57,19 @@ function reclaimPrewipeArchive(storage: Storage): void {
   try {
     const raw = storage.getItem(PREWIPE_ARCHIVE_KEY);
     if (!raw) return;
-    const parsed = JSON.parse(raw) as unknown;
+    // FEAT-1972079935: the archive is stored compressed (encode/decode) — go
+    // through decode() here too, or a compressed value looks like corrupt JSON
+    // and this would wrongly nuke the whole archive instead of trimming it.
+    // decode() is a no-op on a legacy uncompressed value, so this still works
+    // for archives written before compression landed.
+    const parsed = JSON.parse(decode(raw)) as unknown;
     if (!Array.isArray(parsed)) {
       storage.removeItem(PREWIPE_ARCHIVE_KEY);
       return;
     }
     const cap = getPrewipeCap(storage);
     if (parsed.length > cap) {
-      storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify(parsed.slice(-cap)));
+      storage.setItem(PREWIPE_ARCHIVE_KEY, encode(JSON.stringify(parsed.slice(-cap))));
     }
   } catch {
     storage.removeItem(PREWIPE_ARCHIVE_KEY);

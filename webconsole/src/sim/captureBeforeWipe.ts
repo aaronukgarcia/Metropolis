@@ -11,6 +11,7 @@ import { recentErrors, codedError } from './backend.ts';
 import { reducer } from './engine.ts';
 import { getPrewipeCap } from './storageConfig.ts';
 import { safeSetItem } from './safeStorage.ts';
+import { encode, decode } from './saveCodec.ts';
 
 export { PREWIPE_CAP, getPrewipeCap, setPrewipeCap } from './storageConfig.ts';
 
@@ -32,7 +33,9 @@ export interface PreWipeArchiveEntry {
 export function readPreWipeArchive(storage: CaptureStorage): PreWipeArchiveEntry[] {
   const raw = storage.getItem(PREWIPE_ARCHIVE_KEY);
   if (!raw) return [];
-  const parsed = JSON.parse(raw);
+  // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value (no
+  // LZv1: prefix), so this reads both old and new archives unchanged.
+  const parsed = JSON.parse(decode(raw));
   if (!Array.isArray(parsed)) {
     // FEAT-1972079916/GR#7 (BAR-F1): real registry-sourced code MET-V807 via .code.
     throw codedError('MET-V807', 'pre-wipe archive is not an array');
@@ -44,7 +47,7 @@ function loadEntriesForAppend(storage: CaptureStorage): PreWipeArchiveEntry[] {
   const raw = storage.getItem(PREWIPE_ARCHIVE_KEY);
   if (!raw) return [];
   try {
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(decode(raw));
     return Array.isArray(parsed) ? (parsed as PreWipeArchiveEntry[]) : [];
   } catch {
     return [];
@@ -96,9 +99,15 @@ function persistCompactArchive(
   // classification lives in one place now) — the fail-closed CONTRACT is
   // unchanged: exhaust every fallback, then throw, so attemptWipe's caller
   // aborts the wipe (GR#27).
-  const first = safeSetItem(storage, PREWIPE_ARCHIVE_KEY, JSON.stringify(entries.slice(-cap)));
+  // FEAT-1972079935: encode() compresses each candidate payload before it hits
+  // setItem — this makes the capped/single tiers MORE likely to fit, but never
+  // changes the fail-closed contract: a compressed write can still legitimately
+  // exceed quota (a single huge debug snapshot, or quota already near-exhausted
+  // by other keys), and that failure must still fall through to the next tier
+  // and ultimately throw exactly as before.
+  const first = safeSetItem(storage, PREWIPE_ARCHIVE_KEY, encode(JSON.stringify(entries.slice(-cap))));
   if (first.ok) return;
-  const second = safeSetItem(storage, PREWIPE_ARCHIVE_KEY, JSON.stringify([entry]));
+  const second = safeSetItem(storage, PREWIPE_ARCHIVE_KEY, encode(JSON.stringify([entry])));
   if (second.ok) return;
   const failure = new Error(second.error ?? 'pre-wipe archive persist failed');
   if (typeof document === 'undefined') {

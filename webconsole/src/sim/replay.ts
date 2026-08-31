@@ -17,6 +17,7 @@ import { runConsistencyChecks } from './consistency.ts';
 import { SPECS } from './data.ts';
 import { emptyJournal } from './journal.ts';
 import { safeSetItem } from './safeStorage.ts';
+import { encode, decode } from './saveCodec.ts';
 
 /**
  * Complete savepoint persisted to localStorage. Includes snapshot, journal tail,
@@ -102,7 +103,9 @@ export function readAllSavepoints(storage: StorageLike): Savepoint[] {
     try {
       const raw = storage.getItem(savepointKey(slot));
       if (!raw) continue;
-      const parsed = JSON.parse(raw);
+      // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value
+      // (no LZv1: prefix), so this reads both old and new savepoints.
+      const parsed = JSON.parse(decode(raw));
       savepoints.push(parsed as Savepoint);
     } catch {
       // Corrupt JSON or parse error — skip this slot.
@@ -144,7 +147,9 @@ export function persistSavepoint(
     const nextSlot = existing.length % SAVEPOINT_CAP;
     // BUG-457: route through the shared quota-safe helper instead of a bare
     // setItem — the outer try/catch still covers readAllSavepoints/removeItem.
-    const result = safeSetItem(storage, savepointKey(nextSlot), JSON.stringify(savepoint));
+    // FEAT-1972079935: encode() compresses the (large) serialized savepoint
+    // before it hits localStorage — smaller payload, same quota-safe path.
+    const result = safeSetItem(storage, savepointKey(nextSlot), encode(JSON.stringify(savepoint)));
     return result.ok;
   } catch {
     return false;

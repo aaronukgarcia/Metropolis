@@ -37,6 +37,7 @@ import {
 } from '../src/sim/replay.ts';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { runConsistencyChecks } from '../src/sim/consistency.ts';
+import { decode } from '../src/sim/saveCodec.ts';
 
 // ===== ACTION CLASSIFICATION TESTS =====
 
@@ -292,7 +293,9 @@ describe('savepoint: persistence and restoration', () => {
     const key = `${SAVEPOINT_KEY_PREFIX}.0`;
     const raw = storage.getItem(key);
     assert.ok(raw, 'savepoint should be stored');
-    const loaded = JSON.parse(raw);
+    // FEAT-1972079935: the stored value is now compressed (LZv1: prefix) —
+    // decode() before parsing (a no-op on a legacy plain-JSON value).
+    const loaded = JSON.parse(decode(raw));
     assert.equal(loaded.snapshotTick, s.tick);
     // journalTail should contain the actions we passed.
     assert.equal(loaded.journalTail.length, 2);
