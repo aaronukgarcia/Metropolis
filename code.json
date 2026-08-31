@@ -778,6 +778,10 @@
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
           },
           {
+            "key": "engine.finance",
+            "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
+          },
+          {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
           },
@@ -4025,6 +4029,11 @@
             "key": "engine.citizens",
             "moduleGuid": "99e0d1f5-0214-4b06-bcde-caba0b1e44ad",
             "inboundGuid": "35078084-e4a5-4c34-b9ee-6b0352b76fe3"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

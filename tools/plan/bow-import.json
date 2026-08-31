@@ -761,7 +761,8 @@
       "guidOut": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6",
       "deps": [
         "engine.core",
-        "engine.market"
+        "engine.market",
+        "int.serializer"
       ]
     },
     {

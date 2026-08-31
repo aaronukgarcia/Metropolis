@@ -1442,7 +1442,8 @@
       },
       "deps": [
         "engine.core",
-        "engine.market"
+        "engine.market",
+        "int.serializer"
       ],
       "calls": [
         "engine.core",
@@ -1453,7 +1454,8 @@
         "engine.projections",
         "foundation.errors",
         "foundation.num",
-        "engine.citizens"
+        "engine.citizens",
+        "int.serializer"
       ],
       "sprint": 4,
       "collaborations": {
