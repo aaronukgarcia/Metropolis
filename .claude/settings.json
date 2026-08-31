@@ -206,6 +206,11 @@
             "type": "command",
             "command": "node claude-reflection.js",
             "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node claude-push-ci-check.js",
+            "timeout": 3
           }
         ]
       },
@@ -220,6 +225,11 @@
           {
             "type": "command",
             "command": "node claude-reflection.js",
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node claude-push-ci-check.js",
             "timeout": 3
           }
         ]
