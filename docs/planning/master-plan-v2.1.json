@@ -793,7 +793,8 @@
         "foundation.errors",
         "int.protocol",
         "feat.checkpoint",
-        "feat.saveux"
+        "feat.saveux",
+        "int.serializer"
       ],
       "sprint": 0
     },
@@ -835,7 +836,8 @@
       ],
       "calls": [
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "engine.core"
       ],
       "sprint": 1
     },
@@ -946,7 +948,8 @@
         "ui.core"
       ],
       "calls": [
-        "foundation.errors"
+        "foundation.errors",
+        "int.protocol"
       ],
       "sprint": 2
     },
@@ -978,7 +981,8 @@
         "int.serializer",
         "foundation.buildinfo",
         "foundation.data",
-        "foundation.errors"
+        "foundation.errors",
+        "feat.debugmode"
       ],
       "sprint": 1
     },
@@ -1000,7 +1004,8 @@
       "calls": [
         "engine.core",
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "feat.compositionroot"
       ],
       "sprint": 1
     },
@@ -1024,7 +1029,8 @@
         "engine.world",
         "engine.citizens",
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "harness.stub"
       ],
       "sprint": 1
     },
@@ -1086,7 +1092,8 @@
         "foundation.errors",
         "ui.widgets",
         "foundation.buildinfo",
-        "ui.core"
+        "ui.core",
+        "engine.core"
       ],
       "sprint": 1
     },
@@ -1104,7 +1111,8 @@
       "deps": [],
       "calls": [
         "int.serializer",
-        "foundation.errors"
+        "foundation.errors",
+        "engine.core"
       ],
       "sprint": 1
     },
@@ -1149,7 +1157,11 @@
         "harness.replay",
         "int.protocol",
         "foundation.errors",
-        "int.serializer"
+        "int.serializer",
+        "harness.stub",
+        "ui.keys",
+        "ui.screen.map",
+        "ui.widgets"
       ],
       "sprint": 2
     },
@@ -1648,7 +1660,12 @@
         "engine.households",
         "foundation.det",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "engine.build",
+        "engine.logistics",
+        "engine.market",
+        "engine.season",
+        "engine.world"
       ],
       "sprint": 6
     },
@@ -1712,7 +1729,12 @@
         "engine.dispatch",
         "foundation.errors",
         "foundation.num",
-        "int.protocol"
+        "int.protocol",
+        "ui.alerts",
+        "ui.widgets",
+        "ui.screen.finance",
+        "ui.screen.services",
+        "ui.screen.map"
       ],
       "sprint": 6
     },
@@ -2069,7 +2091,8 @@
       "calls": [
         "ui.widgets",
         "foundation.errors",
-        "ui.core"
+        "ui.core",
+        "int.protocol"
       ],
       "sprint": 8
     },
@@ -2146,7 +2169,9 @@
         "engine.fiscal",
         "int.protocol",
         "ui.dash",
-        "ui.diagrams"
+        "ui.diagrams",
+        "ui.core",
+        "ui.widgets"
       ],
       "sprint": 8
     },
@@ -2194,7 +2219,10 @@
         "engine.dispatch",
         "int.protocol",
         "ui.dash",
-        "ui.keys"
+        "ui.keys",
+        "ui.core",
+        "ui.widgets",
+        "ui.screen.map"
       ],
       "sprint": 8
     },
@@ -2246,7 +2274,8 @@
         "engine.leisure",
         "engine.extcommute",
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "ui.dash"
       ],
       "sprint": 8
     },
@@ -2319,7 +2348,8 @@
         "int.serializer",
         "ui.core",
         "ui.dash",
-        "ui.keys"
+        "ui.keys",
+        "ui.screen.map"
       ],
       "sprint": 8
     },
@@ -2341,7 +2371,10 @@
         "engine.policies",
         "engine.tax",
         "int.protocol",
-        "ui.dash"
+        "ui.dash",
+        "ui.core",
+        "ui.screen.finance",
+        "ui.widgets"
       ],
       "sprint": 9
     },
@@ -2965,7 +2998,8 @@
         "engine.market",
         "foundation.data",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "engine.citizens"
       ],
       "sprint": 10
     },
@@ -3398,7 +3432,8 @@
       "calls": [
         "engine.tourism",
         "engine.mining",
-        "engine.parking"
+        "engine.parking",
+        "engine.world"
       ],
       "sprint": 11
     },
@@ -3428,7 +3463,8 @@
         "engine.consumption",
         "engine.tax",
         "engine.logistics",
-        "engine.finance"
+        "engine.finance",
+        "engine.market"
       ],
       "sprint": 10
     },
@@ -3586,7 +3622,8 @@
         "foundation.data",
         "foundation.det",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "engine.season"
       ],
       "sprint": 11
     },
@@ -3834,7 +3871,10 @@
       ],
       "calls": [
         "feat.debugmode",
-        "foundation.errors"
+        "foundation.errors",
+        "int.serializer",
+        "engine.core",
+        "int.protocol"
       ],
       "sprint": 3
     },
@@ -3900,7 +3940,9 @@
         "feat.devmode",
         "foundation.errors",
         "feat.debugmode",
-        "harness.synth"
+        "harness.synth",
+        "engine.core",
+        "int.protocol"
       ],
       "sprint": 3
     },
@@ -4744,6 +4786,23 @@
         "foundation.num"
       ],
       "sprint": 11
+    },
+    {
+      "key": "ui.webconsole",
+      "type": "module",
+      "seq": 1002,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "ui",
+      "title": "Web console: React/TypeScript dogfood UI, engine protocol adapter",
+      "desc": "Standalone TypeScript/React front-end (webconsole/) driving the deterministic Go engine over int.protocol. Currently ships with a self-contained mock simulation store (webconsole/src/sim/) as an offline fallback; FEAT-1972079852 replaces the mock store boundary with a live adapter speaking the real command/event/delta protocol so fiscal, demographic and map state derive from the real engine. This is a cross-language runtime edge (HTTP/WS or equivalent transport, not a Go import) — int.protocol's dormant gRPC transport or an equivalent wire adapter is the carrier; in-process channels do not apply across the process/language boundary.",
+      "specRef": "FEAT-1972079852; int.protocol inbound.pattern (versioned command/event/delta envelope)",
+      "path": "webconsole/",
+      "deps": [],
+      "calls": [
+        "int.protocol"
+      ],
+      "sprint": 9
     }
   ]
 }

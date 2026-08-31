@@ -3156,6 +3156,22 @@
       "deps": [
         "tool.sync"
       ]
+    },
+    {
+      "mkey": "ui.webconsole",
+      "type": "module",
+      "title": "Web console: React/TypeScript dogfood UI, engine protocol adapter",
+      "desc": "Standalone TypeScript/React front-end (webconsole/) driving the deterministic Go engine over int.protocol. Currently ships with a self-contained mock simulation store (webconsole/src/sim/) as an offline fallback; FEAT-1972079852 replaces the mock store boundary with a live adapter speaking the real command/event/delta protocol so fiscal, demographic and map state derive from the real engine. This is a cross-language runtime edge (HTTP/WS or equivalent transport, not a Go import) — int.protocol's dormant gRPC transport or an equivalent wire adapter is the carrier; in-process channels do not apply across the process/language boundary. [spec: FEAT-1972079852; int.protocol inbound.pattern (versioned command/event/delta envelope)] [path: webconsole/]",
+      "seq": 1002,
+      "sprint": 9,
+      "priority": "P1",
+      "milestone": "M3",
+      "layer": "ui",
+      "specRef": "FEAT-1972079852; int.protocol inbound.pattern (versioned command/event/delta envelope)",
+      "guid": "f1837a0a-16b8-4738-997e-6eb8d544e870",
+      "guidIn": "7a41c257-0979-4fab-895a-651c7e73164d",
+      "guidOut": "f0636817-52bb-4caf-a428-662c69aed30d",
+      "deps": []
     }
   ]
 }
