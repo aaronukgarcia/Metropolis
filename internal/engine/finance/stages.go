@@ -286,6 +286,44 @@ func (f *FinanceAPI) SettleConstruction(cost Money) (Money, error) {
 	return cost, nil
 }
 
+// SettleConstructionSourced posts a construction outflow to whichever
+// materials source paid for it (FEAT-1972079927 inc2, Aaron's 2026-08-31
+// ruling): to AcctFirms (money stays IN-CITY, credited to the aggregate
+// firm-cash account — the same account PostHouseholdSpend already credits,
+// so a local builders'-merchant sale is indistinguishable in the ledger
+// from any other firm revenue) when local is true, because a local
+// builders' merchant supplied the tonnes; to AcctExternal (the pre-existing
+// [SettleConstruction] behaviour — an outright money LEAK to the outside
+// world, not part of [FinanceAPI.TotalMoneyInCirculation]) when local is
+// false, because the materials were imported. local is a plain
+// caller-supplied fact (the composition root's builders'-merchant
+// existence check) — this method does not re-derive or second-guess it.
+func (f *FinanceAPI) SettleConstructionSourced(cost Money, local bool) (Money, error) {
+	if err := f.checkNotCopied("SettleConstructionSourced"); err != nil {
+		return 0, err
+	}
+	if cost < 0 {
+		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "construction", "amount": int64(cost)})
+	}
+	if cost == 0 {
+		return 0, nil
+	}
+	account := AcctExternal
+	if local {
+		account = AcctFirms
+	}
+	if _, err := f.Post(Transaction{
+		Description: "construction spend (sourced)",
+		Entries: []Entry{
+			{Account: AcctTreasury, Side: SideDebit, Amount: cost, Category: CatConstruction},
+			{Account: account, Side: SideCredit, Amount: cost, Category: CatConstruction},
+		},
+	}); err != nil {
+		return 0, err
+	}
+	return cost, nil
+}
+
 // SettleImports posts an import-contract outflow. Stage (5) outflow.
 func (f *FinanceAPI) SettleImports(cost Money) (Money, error) {
 	if err := f.checkNotCopied("SettleImports"); err != nil {

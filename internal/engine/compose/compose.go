@@ -1074,6 +1074,35 @@ type simState struct {
 	// current tick before any deltas are recorded.
 	previousClosingPop   int64
 	previousClosingMoney int64
+
+	// --- FEAT-1972079927 inc2: firms-pay-construction (moneycirc_inc2.go) ---
+
+	// buildersMerchantFirmID is the auto-placed builders'-merchant firm's
+	// ID once the Industry&Farms trigger has fired, or 0 before it fires.
+	// Set exactly once (maybeAutoPlaceBuildersMerchant is idempotent) —
+	// there is at most one auto-placed merchant per city at Baseline One.
+	buildersMerchantFirmID firms.FirmID
+
+	// materialsDrawnCumulative is the running total (all orders, all time)
+	// of engine.build's own BuildOrder.MaterialsDrawn snapshot field, as of
+	// the last accrueConstruction call — the baseline this file diffs
+	// against to find THIS tick's newly-drawn tonnage (engine.build's Tick
+	// exposes no per-tick delta directly, only the cumulative snapshot).
+	materialsDrawnCumulative int64
+
+	// constructionAccrualLocal/constructionAccrualExternal are the NET-90
+	// (COMMERCIAL_PAYMENT_TERM_TICKS) accrued-but-not-yet-settled
+	// construction cost, split by source at the moment each tonne was
+	// drawn (local merchant vs imported) — settled and zeroed together at
+	// every 90-tick boundary by settleConstructionAccrual.
+	constructionAccrualLocal    int64
+	constructionAccrualExternal int64
+
+	// constructionSettledLocal/constructionSettledExternal are cumulative
+	// liveness evidence (test/UI observable) of every settlement this run
+	// has posted, split by source — never fed back into the accrual math.
+	constructionSettledLocal    int64
+	constructionSettledExternal int64
 }
 
 // closeLedgerForTick closes the ledger for the given tick at the START of
@@ -1558,6 +1587,26 @@ func (h *buildHook) ApplyEffect(eff core.Effect) {
 		return
 	}
 	h.st.registerLeisureVenues()
+
+	// FEAT-1972079927 inc2: accrue this tick's newly-drawn construction
+	// materials cost (split local-merchant vs imported) and settle the
+	// NET-90 accrual at every COMMERCIAL_PAYMENT_TERM_TICKS boundary. Runs
+	// after Tick (which just moved MaterialsDrawn) and after
+	// registerLeisureVenues, on the same daily cadence as the build queue
+	// itself (BUG-268's fixed one-day-per-call contract).
+	if clock, cErr := h.st.e.Clock(); cErr == nil {
+		// clock.Tick() is read INSIDE this same daily phase pass, before
+		// core.Engine.advanceOneDailyTick's post-phase clock.advanceOneDay()
+		// increments it (engine.go) — so it is still the PREVIOUS day's
+		// count here. +1 gives the day-tick that is actually completing
+		// right now, so the 90th call to this hook (not the 91st) is the
+		// one that reads exactly 90 and settles the net-90 boundary.
+		if err := h.st.accrueAndSettleConstruction(clock.Tick() + 1); err != nil {
+			_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "finance", "op": "accrueAndSettleConstruction", "cause": err.Error()})
+		}
+	} else {
+		_ = errs.New(ErrModuleFailed, h.st.cid, map[string]any{"module": "core", "op": "Clock", "cause": cErr.Error()})
+	}
 }
 
 // SingleShard implements core.SingleShardHook (BUG-269 — this is the
@@ -1896,7 +1945,18 @@ func (st *simState) handleGameplay(cmd protocol.Command) error {
 		if err != nil {
 			return err
 		}
-		return st.buildAPI.SubmitZoneCommand(build.ZoneCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Zone: build.ZoneType(p.ZoneType)})
+		if err := st.buildAPI.SubmitZoneCommand(build.ZoneCommand{Tile: tile, Local: local, OwnerID: playerOwnerID, Zone: build.ZoneType(p.ZoneType)}); err != nil {
+			return err
+		}
+		// FEAT-1972079927 inc2: check the Industry&Farms auto-placement
+		// trigger AFTER a successful zoning (never on a rejected command —
+		// zoneState is unchanged on rejection, so the trigger would read
+		// stale state for nothing). A failure here is logged loudly
+		// (GR#1) but never rejects the zone command that already landed.
+		if err := st.maybeAutoPlaceBuildersMerchant(); err != nil {
+			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "firms", "op": "maybeAutoPlaceBuildersMerchant", "cause": err.Error()})
+		}
+		return nil
 	case protocol.KindBuild:
 		p, ok := cmd.Payload.(protocol.BuildPayload)
 		if !ok {

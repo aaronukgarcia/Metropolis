@@ -205,6 +205,12 @@ func constructionMaterialsFor(bill map[string]int64) (int64, error) {
 	return qty, nil
 }
 
+// industryZoneTypes are the §34 zone types classified as "industry" for
+// FEAT-1972079927 inc2's builders'-merchant auto-placement trigger
+// (Aaron's 2026-08-31 ruling): manufacturing, heavy industry, and mining.
+// ZoneFarming is tracked separately by [BuildAPI.IndustryAndFarmsPresent].
+var industryZoneTypes = []ZoneType{ZoneManufacturing, ZoneHeavyIndustry, ZoneMining}
+
 // sortedZoneTypes returns the loaded zone types in ascending order — the
 // deterministic order every exported method that ranges over the catalogue
 // map uses (a Go map's iteration order is intentionally randomised, GR#21).

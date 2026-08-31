@@ -694,6 +694,39 @@ func (b *BuildAPI) ZoneState(tile world.TileCoord, local world.CellLocal) (ZoneT
 	return zt, ok
 }
 
+// IndustryAndFarmsPresent reports whether the city currently has at least
+// one cell zoned to an industry zone type (manufacturing/heavy_industry/
+// mining) AND at least one cell zoned ZoneFarming — the deterministic,
+// state-derived "Industry & Farms zone grouping" trigger FEAT-1972079927
+// inc2's builders'-merchant auto-placement fires on (Aaron's 2026-08-31
+// ruling). A pure query over the already-zoned cells (b.zoneState), never
+// a separately-maintained counter that could drift from it. Iteration
+// order over the map is irrelevant here — the result is an
+// order-independent OR of boolean membership tests (GR#21's concern is
+// order-dependent folds; this is not one), so no sort is needed.
+func (b *BuildAPI) IndustryAndFarmsPresent() (bool, error) {
+	if err := b.checkNotCopied("IndustryAndFarmsPresent"); err != nil {
+		return false, err
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	var hasIndustry, hasFarms bool
+	for _, zt := range b.zoneState {
+		if zt == ZoneFarming {
+			hasFarms = true
+		}
+		for _, it := range industryZoneTypes {
+			if zt == it {
+				hasIndustry = true
+			}
+		}
+		if hasIndustry && hasFarms {
+			break
+		}
+	}
+	return hasIndustry && hasFarms, nil
+}
+
 // Structure returns a cell's structure reference (the completing build
 // order's ID), and whether the cell carries a structure (US-6).
 func (b *BuildAPI) Structure(tile world.TileCoord, local world.CellLocal) (BuildOrderID, bool) {
