@@ -209,6 +209,28 @@ func (c *CitizensAPI) Household(id uint64, correlationID string) (Household, boo
 	return cloneHousehold(*h), true
 }
 
+// HouseholdIDs returns every currently-registered household id (ASM-247,
+// FEAT-1972079927 Q1/Q2), ascending-sorted (GR#21 — the underlying store is
+// a map, so callers must never range over it directly; this is the single
+// sorted-enumeration seam). Used by the composition root to build the
+// household-id set engine.households' HousingAffordability/DemandByType
+// query surface needs — CitizensAPI exposes per-id queries only, never a
+// map iterator, so this is the one place a caller can discover "every
+// household that exists right now".
+func (c *CitizensAPI) HouseholdIDs(correlationID string) []uint64 {
+	if err := c.checkNotCopied(correlationID, "HouseholdIDs"); err != nil {
+		return nil
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	ids := make([]uint64, 0, len(c.households))
+	for id := range c.households {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
+}
+
 // TotalPopulation returns the number of citizens in the cold store (the
 // single source of truth for every citizen, elevated or not).
 func (c *CitizensAPI) TotalPopulation(correlationID string) int {

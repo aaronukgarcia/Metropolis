@@ -338,9 +338,24 @@ func TestFEAT167_TermsDeterministicAcrossRuns(t *testing.T) {
 // baseline one's organic seed+growth (seedCitizenCount=64 plus a handful
 // of months of fertility) so the Safety divergence is unmistakable within
 // a short run, keeping the test's wall-clock cost bounded.
+//
+// feat167WorsenedRunMonths was 6 before FEAT-1972079927 (money circulation
+// inc1) wired real household formation + HousingAffordability into the
+// same monthly migration step this test exercises: by month 6 EITHER run
+// (worsened or not) had already formed enough households to cross
+// HousingAffordability's binary rent-burden threshold to 0 — baseline-one
+// forms every household at a fixed 2-members/2-rooms capacity, so there is
+// no per-household variance, only a citywide step function — and once
+// BOTH runs saturate to affordability=0, that term dominates NetMigration
+// identically in both branches and swamps the Safety differential this
+// test is actually about. 2 months keeps both runs inside the
+// affordability=100 "vacant/comfortable" window (proven by this file's own
+// development-time instrumentation) so Safety's divergence is what drives
+// the NetMigration difference, exactly as the test's own doc comment
+// intends.
 const (
 	feat167WorsenedPopulationExtra = 4000
-	feat167WorsenedRunMonths       = 6
+	feat167WorsenedRunMonths       = 2
 )
 
 // TestFEAT167_WorsenPopulation_LowersSafety_LowersNetMigration is the ICD

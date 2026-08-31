@@ -269,10 +269,23 @@ func TestHeadless_TwelveMonthsMoneyMoves(t *testing.T) {
 	if got := comp.MoneyFlows(); got <= 0 {
 		t.Fatalf("cumulative money flow after %d months = %d, want non-zero (money moved)", testMonths, got)
 	}
-	// The conserved total must be unchanged (the budget closes).
+	// FEAT-1972079927 inc1 (Q4 consumption spend): money now legitimately
+	// crosses OUT of the treasury+households pair into AcctFirms (and
+	// back again via commercial/industrial tax) — a real circulation the
+	// old wage/tax-only stub never had. Treasury+CitizenWealth alone is no
+	// longer the full conserved total; TotalMoneyInCirculation (which sums
+	// EVERY RoleMoney account, including firms) is the AC-10 conservation
+	// figure that must stay unchanged — the budget still closes, the money
+	// just now visibly passes through firms on its way around the loop.
 	wantTotal := int64(initialTreasury) + int64(initialCitizenWealth)
-	if got := comp.Treasury() + comp.CitizenWealth(); got != wantTotal {
-		t.Fatalf("total money = %d, want conserved %d", got, wantTotal)
+	if got := int64(comp.state.finance.TotalMoneyInCirculation()); got != wantTotal {
+		t.Fatalf("TotalMoneyInCirculation = %d, want conserved %d", got, wantTotal)
+	}
+	// Treasury+CitizenWealth must have CHANGED from the opening total —
+	// proof that money actually moved to firms (Q4) rather than staying a
+	// closed treasury<->households loop.
+	if got := comp.Treasury() + comp.CitizenWealth(); got == wantTotal {
+		t.Fatalf("Treasury+CitizenWealth = %d, unchanged from opening %d — consumption spend never left the treasury/households pair", got, wantTotal)
 	}
 }
 
@@ -366,11 +379,22 @@ func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 	if err := e.AdvanceTicks(errs.NewCorrelationID(), core.DailyTicksPerMonth); err != nil {
 		t.Fatalf("AdvanceTicks: %v", err)
 	}
-	wantHH := int64(monthlyWages - 1) // wage in, tax out, net zero over the thinnest pot
+	// FEAT-1972079927 inc1 adds two more household->elsewhere legs this
+	// same month (Q4 consumption spend + the flat council tax), both of
+	// which still fit comfortably in the wage/tax pair's thinnest-pot
+	// balance (monthlyWages-1) and so post successfully too — the pair's
+	// own all-or-nothing property (this test's real subject) is
+	// unaffected; only the arithmetic the new legs add needs updating.
+	wantHH := int64(monthlyWages - 1 - monthlyConsumptionSpendMicropounds - monthlyCouncilTaxMicropounds)
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctHouseholds), comp.CitizenWealth(); led != st || led != wantHH {
 		t.Fatalf("month end: FinanceAPI households = %d, Composition.CitizenWealth = %d, want both %d", led, st, wantHH)
 	}
-	wantTr := int64(initialTreasury)
+	// Treasury gains the commercial+industrial tax on the posted spend,
+	// plus the flat council tax (the old wage/tax pair nets zero on
+	// treasury, unchanged from before this increment).
+	commercial := monthlyConsumptionSpendMicropounds * commercialTaxRateBp / 10_000
+	industrial := monthlyConsumptionSpendMicropounds * industrialTaxRateBp / 10_000
+	wantTr := int64(initialTreasury + commercial + industrial + monthlyCouncilTaxMicropounds)
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st || led != wantTr {
 		t.Fatalf("month end: FinanceAPI treasury = %d, Composition.Treasury = %d, want both %d", led, st, wantTr)
 	}

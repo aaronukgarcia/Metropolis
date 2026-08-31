@@ -167,6 +167,37 @@ func (f *FinanceAPI) CollectTax(rates TaxRates, wages, spend, firmProfit Money) 
 	return TaxReceipts{Income: income, Sales: sales, Corp: corp}, nil
 }
 
+// PostCouncilTax posts a flat residential council-tax charge: households
+// pay the city treasury directly, a transfer distinct from CollectTax's
+// wage-rate-based income tax (FEAT-1972079927, Aaron's 2026-08-31
+// diversify-the-base steer following BUG-391 — the residential side of the
+// tax base is council tax + income tax together, not income tax alone).
+// total is a pre-computed money amount (the caller derives it from a
+// per-capita rate × population — council tax is levied per-dwelling/
+// resident, never as a rate on an amount, so there is no BasisPoints leg
+// here).
+func (f *FinanceAPI) PostCouncilTax(total Money) (Money, error) {
+	if err := f.checkNotCopied("PostCouncilTax"); err != nil {
+		return 0, err
+	}
+	if total < 0 {
+		return 0, errs.New(ErrNegativeAmount, f.correlationID, map[string]any{"field": "councilTax", "amount": int64(total)})
+	}
+	if total == 0 {
+		return 0, nil
+	}
+	if _, err := f.Post(Transaction{
+		Description: "residential council tax",
+		Entries: []Entry{
+			{Account: AcctHouseholds, Side: SideDebit, Amount: total, Category: CatTaxCouncil},
+			{Account: AcctTreasury, Side: SideCredit, Amount: total, Category: CatTaxCouncil},
+		},
+	}); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
 // SettleOpex posts the service-operating-expenditure outflow: money
 // leaves the treasury for the outside world. Stage (5) outflow.
 func (f *FinanceAPI) SettleOpex(opex Money) (Money, error) {

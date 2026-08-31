@@ -9,6 +9,57 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
+// Migrant wealth draw (FEAT-1972079927 Q5, Aaron's 2026-08-31 ruling): each
+// admitted migrant arrives with a VARIED wealth, drawn from a deterministic
+// (seeded) log-normal distribution — never all-zero, never a flat constant.
+// Real-world-grounded (docs/planning/money-numbers-real-world.md §3, ONS UK
+// household liquid-savings distribution, arriving-migrant proxy): median
+// £2,500, mean £6,000 (log-normal, right-skewed — wealth cannot go
+// negative and a long positive tail pulls the mean above the median).
+// wealthLogSigma is the log-scale shape parameter the doc derives from
+// that median/mean pair. This is a per-citizen data field (Citizen.Wealth),
+// never posted to engine.finance's ledger, so it is safe to use at full
+// real-world scale regardless of baseline-one's much smaller toy treasury
+// (see internal/engine/compose's ledgerScaleDivisor doc comment for why
+// the LEDGER-facing amounts are scaled down and this one is not).
+const (
+	// migrantWealthMedianMicropounds is the log-normal median (exp(ln-mean)
+	// when Z=0) — real-world-grounded, balance-pass adjustable.
+	migrantWealthMedianMicropounds = 2_500_000_000 // µ£, £2,500
+	// migrantWealthLogSigma is the log-scale standard deviation — real-
+	// world-grounded (derived from the £2,500 median / £6,000 mean pair),
+	// balance-pass adjustable.
+	migrantWealthLogSigma = 1.1
+)
+
+// migrantWealth draws one migrant's arriving wealth from the deterministic
+// log-normal distribution above: Wealth = median * exp(sigma * Z), where Z
+// is a standard-normal variate produced by a Box-Muller transform over two
+// uniform draws from the citizen's own counter-based RNG stream (seeded by
+// worldSeed, the migrant's own id, and month — never math/rand, never wall
+// clock, per FEAT-1972079927's determinism requirement). Two identical
+// runs draw the identical Z for the identical id/month, so the whole
+// simulation stays byte-reproducible. A non-positive result cannot occur
+// (exp() is always positive; median is a positive constant), but the
+// result is clamped at zero as defense-in-depth against a pathological Z.
+func migrantWealth(worldSeed uint64, citizenID uint64, month int64) int64 {
+	stream := det.NewStream(worldSeed, citizenID, month, "migrant-wealth")
+	u1 := stream.Float64()
+	u2 := stream.Float64()
+	// Box-Muller: guard u1 against exactly 0 (log(0) = -Inf) — Float64's
+	// range is [0,1), so 0 is reachable in principle; nudge to the
+	// smallest positive representable step instead of special-casing.
+	if u1 <= 0 {
+		u1 = 1.0 / (1 << 53)
+	}
+	z := math.Sqrt(-2*math.Log(u1)) * math.Cos(2*math.Pi*u2)
+	wealth := float64(migrantWealthMedianMicropounds) * math.Exp(migrantWealthLogSigma*z)
+	if !num.IsFinite(wealth) || wealth < 0 {
+		return 0
+	}
+	return num.ClampInt64FromFloat(wealth)
+}
+
 // migrantHouseholdSize is the v1 admitted-migrant household size. It is a
 // SCHEMA consequence, not a balance number: engine.citizens' only household-
 // formation primitive (LifeEventPartner) always forms a 2-member household,
@@ -295,6 +346,10 @@ func (a *AttractAPI) birthMigrant(cit *citizens.CitizensAPI, id uint64, month in
 			Sector: citizens.SectorNone,
 		},
 		Fidelity: citizens.FidelityCold,
+		// FEAT-1972079927 Q5: migrants arrive with varied wealth (a
+		// deterministic log-normal draw), not the old flat zero — see
+		// migrantWealth's doc comment.
+		Wealth: migrantWealth(a.seed, id, month),
 	}
 	return cit.ApplyLifeEventCommand(citizens.LifeEventCommand{
 		CorrelationID: a.correlationID,

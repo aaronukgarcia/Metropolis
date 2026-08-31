@@ -82,7 +82,9 @@ const (
 	// flat value after a warmed-up run).
 	baselineOneAWorld        = 40.0
 	baselineOneMigrationRate = 1.0
-	baselineOneMonthlyRent   = 0 // micropounds; vacant city rent placeholder
+	// baselineOneMonthlyRentPerHousehold (FEAT-1972079927 Q2) replaces the
+	// old always-vacant baselineOneMonthlyRent=0 placeholder — see
+	// moneycirc.go's doc comment for the real-world grounding.
 
 	// attract capacity constraints (people / dwelling units). Unbounded
 	// placeholders — the real housing-vacancy and junction-throughput
@@ -576,6 +578,26 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	if err := householdsAPI.SetCitizens(c); err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "households"})
 	}
+	// FEAT-1972079927 Q1/Q2: report a coarse, unbounded stock (mirroring
+	// the existing baselineOneHousingVacancy placeholder already used for
+	// immigration capacity below) against every loaded typology, ONCE at
+	// Wire time. Without this, every typology's built-stock reads its
+	// zero-value default forever (engine.build never calls ReportStock —
+	// no build->households completion bridge exists yet at baseline-one),
+	// so UnhousedByPreference (households/api.go) would report EVERY
+	// formed household as unhoused-by-preference unconditionally, which
+	// alone saturates HousingAffordability's stressed>=total branch to a
+	// permanent 0 the moment Q1 forms any households — not a housing
+	// shortage signal, just an unmodelled stock floor. This placeholder
+	// keeps the term real (driven by overcrowding/rent-burden, which DO
+	// vary) rather than pinned to a different constant (0 instead of
+	// 100). TODO(FEAT-1972079927 inc2+/build-households bridge): replace
+	// with engine.build reporting real completed-dwelling counts.
+	for _, typ := range householdsAPI.Typologies() {
+		if err := householdsAPI.ReportStock(households.StockCommand{TypologyID: typ.ID, Count: baselineOneHousingVacancy}); err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "households", "step": "ReportStock", "typology": typ.ID})
+		}
+	}
 	attractAPI, err := attract.New(baselineOneAttractConfig(), e.WorldSeed(), cid)
 	if err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "attract"})
@@ -1013,6 +1035,18 @@ type simState struct {
 	// cumulative gross money flow (AC-9)
 	moneyFlows int64
 
+	// housingAffordability is FEAT-1972079927 Q2's liveness evidence: the
+	// HousingAffordability figure captured DURING applyMigration, in the
+	// same instant SetTermInputs freshly snapshotted the current
+	// household-id set — never re-queried later. AttractAPI's own
+	// HousingAffordability() accessor re-reads against whatever
+	// household-id snapshot it was LAST given, which can go stale within
+	// the same month if that month's own emigration dissolves a household
+	// formed a moment earlier (its last member departs) — capturing the
+	// value here, right after SetTermInputs, avoids that race entirely,
+	// and gives F2/tests a stable "this month's affordability" reading.
+	housingAffordability float64
+
 	// cumulative consumption delivered (liveness evidence) and net
 	// migration applied (liveness evidence) — the "consumption draws" and
 	// "migration is attractiveness-driven" observables.
@@ -1282,6 +1316,19 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 	// opened here holds exactly this month's posts when NEXT month's
 	// population phase reads WagesPosted — always one month's wage bill.
 	var flowed int64
+	// preTreasury/preHouseholds snapshot the tracked money stock (see
+	// invariant.StockMoney / this hook's moneyDelta line below) BEFORE any
+	// of this month's legs post, so the actual delta can be measured
+	// directly from the ledger rather than hand-summed leg by leg — this
+	// is what FEAT-1972079927 inc1's new legs (Q4 consumption spend +
+	// commercial/industrial/council tax) need: unlike the original wage/
+	// tax pair (an internal treasury<->households transfer that always
+	// nets to zero on the tracked stock), spend crosses OUT of the tracked
+	// stock into AcctFirms (untracked by invariant.StockMoney by design —
+	// see syncMoneyFromLedger's doc comment) and the new tax legs bring
+	// money back IN from firms — a net non-zero delta that must be
+	// measured, not assumed.
+	preTreasury, preHouseholds := st.treasury, st.citizenWealth
 	if st.finance != nil {
 		clock, cErr := st.e.Clock()
 		if cErr != nil {
@@ -1302,6 +1349,24 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 				flowed += monthlyTax
 			}
 		}
+
+		// FEAT-1972079927 Q4 + Aaron's 2026-08-31 diversify-the-base steer
+		// (BUG-391): monthly consumption spend (households -> firms) plus
+		// the commercial/industrial tax legs that bring money back from
+		// firms to the treasury, and the flat residential council-tax leg
+		// — see moneycirc.go's postConsumptionAndTax doc comment.
+		flowed = num.SatAdd(flowed, st.postConsumptionAndTax())
+
+		// FEAT-1972079927 Q5: distribute this month's wage to every
+		// resident's own Wealth field (per-citizen, not the ledger — see
+		// moneycirc.go's distributeWagesToResidents doc comment). A
+		// failure here is logged loudly (GR#1) but never blocks the
+		// ledger legs above, which have already posted.
+		if st.citizens != nil {
+			if err := st.distributeWagesToResidents(); err != nil {
+				_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "op": "distributeWagesToResidents", "cause": err.Error()})
+			}
+		}
 	}
 	// Mirror the LEDGER unconditionally — on success and on rejection
 	// alike. A rejected Post leaves the ledger unchanged by contract
@@ -1314,13 +1379,16 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 	// moments earlier (rate <= 100% can never overdraft households).
 	st.syncMoneyFromLedger()
 
-	// gross flow (AC-9 "money moved") counts only what actually posted;
-	// net delta is zero by construction (both legs are internal transfers)
-	// but tracked so the invariant verifies it against the store.
+	// gross flow (AC-9 "money moved") counts only what actually posted.
 	if flowed > 0 {
 		st.moneyFlows = num.SatAdd(st.moneyFlows, flowed)
 	}
-	st.moneyDelta = num.SatAdd(st.moneyDelta, num.SatSub(monthlyTax, monthlyWages))
+	// The tracked stock's actual change this month, measured directly from
+	// the ledger (see preTreasury/preHouseholds's doc comment above) —
+	// correct whether this month's new legs succeeded, partially
+	// succeeded, or were rejected outright.
+	actualDelta := num.SatSub(num.SatAdd(st.treasury, st.citizenWealth), num.SatAdd(preTreasury, preHouseholds))
+	st.moneyDelta = num.SatAdd(st.moneyDelta, actualDelta)
 }
 
 // seedOpeningBalances posts the baseline-one opening grant into the
@@ -1639,16 +1707,38 @@ func (st *simState) applyMigration(month int64) (attract.MigrationResult, error)
 		return attract.MigrationResult{}, err
 	}
 
+	// FEAT-1972079927 Q1: form households monthly from resident citizens —
+	// real ASM-247 wiring (moneycirc.go's formResidentHouseholds), BEFORE
+	// gathering the household-id set Q2's SetTermInputs call needs.
+	if err := st.formResidentHouseholds(month); err != nil {
+		return attract.MigrationResult{}, err
+	}
+	householdIDs := st.citizens.HouseholdIDs(st.cid)
+
+	// FEAT-1972079927 Q2: engine.attract's own snapshotTerms already calls
+	// engine.households' real HousingAffordability (attract/api.go) — it
+	// only ever needed a non-nil household-id set and a non-zero rent,
+	// both supplied now that Q1 forms real households.
 	if err := st.attract.SetTermInputs(attract.TermInputs{
 		JobAvailability:        jobAvailability,
 		ServiceCoverage:        serviceCoverage,
 		Environment:            environment,
 		LeisureFit:             leisureFit,
 		Safety:                 safety,
-		HouseholdIDs:           nil, // vacant baseline-one city: no households formed yet
-		MonthlyRentMicroPounds: baselineOneMonthlyRent,
+		HouseholdIDs:           householdIDs,
+		MonthlyRentMicroPounds: st.monthlyRentForHouseholds(householdIDs),
 	}); err != nil {
 		return attract.MigrationResult{}, err
+	}
+	// Capture affordability RIGHT NOW, immediately after SetTermInputs —
+	// see housingAffordability's doc comment on simState for why this
+	// avoids the stale-snapshot race a later re-query of
+	// AttractAPI.HousingAffordability() could hit. Best-effort: a failure
+	// here (defensive only — SetTermInputs just succeeded with this exact
+	// household-id set) leaves the previous month's reading in place
+	// rather than blocking migration on an observability read.
+	if aff, err := st.attract.HousingAffordability(); err == nil {
+		st.housingAffordability = aff
 	}
 	return st.attract.ApplyMigration(attract.MigrationCommand{
 		Month:              month,

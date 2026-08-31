@@ -60,11 +60,18 @@ type Category string
 // The fiscal-flow categories (AC-3's chain plus the external flows §7
 // names).
 const (
-	CatWages           Category = "wages"
-	CatSpend           Category = "spend"
-	CatTaxIncome       Category = "tax.income"
-	CatTaxSales        Category = "tax.sales"
-	CatTaxCorp         Category = "tax.corp"
+	CatWages     Category = "wages"
+	CatSpend     Category = "spend"
+	CatTaxIncome Category = "tax.income"
+	CatTaxSales  Category = "tax.sales"
+	CatTaxCorp   Category = "tax.corp"
+	// CatTaxCouncil (FEAT-1972079927, Aaron's 2026-08-31 diversify-the-base
+	// steer following BUG-391): the residential council-tax leg, a flat
+	// per-capita household->treasury charge distinct from CatTaxIncome's
+	// wage-based income/NI tax — both are "residential side" legs, but
+	// council tax is levied per-dwelling/per-resident, not as a rate on
+	// wages, so it is its own category/posting method (PostCouncilTax).
+	CatTaxCouncil      Category = "tax.council"
 	CatOpex            Category = "opex"
 	CatDebtService     Category = "debt.service"
 	CatDebtPrincipal   Category = "debt.principal"
@@ -79,4 +86,4 @@ const (
 // taxCategories is the ordered set of categories that compose the tax
 // revenue aggregate. Ordered (a slice, not a map) so summation over it
 // is deterministic (GR#21).
-var taxCategories = []Category{CatTaxIncome, CatTaxSales, CatTaxCorp}
+var taxCategories = []Category{CatTaxIncome, CatTaxSales, CatTaxCorp, CatTaxCouncil}
