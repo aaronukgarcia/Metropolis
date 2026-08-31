@@ -392,11 +392,22 @@ func TestBUG322_RenderLoopAndDriverRunConcurrently(t *testing.T) {
 				draw(buf, &core.ViewModels{})
 				pressKey(w, ']')
 				pressKey(w, '[')
+				// Yield so the tick-driver goroutine is not starved on a
+				// limited-core CI runner under -race (BUG-464): these two
+				// busy-spinners would otherwise peg every P and the wall-clock
+				// tick driver would see zero ticks. The goroutines still hammer
+				// the draw/keybinding path concurrently — they just let the
+				// scheduler run the driver between iterations.
+				runtime.Gosched()
 			}
 		}()
 	}
 
-	waitForTicks(t, w, 5, 15*time.Second)
+	// Generous "time never moved" bound per waitForTicks's doc contract: only a
+	// genuine hang should fire this, never scheduling contention on a loaded
+	// -race runner. The spinners keep hammering until close(stop) below, so a
+	// longer wait means MORE concurrent race coverage, not less.
+	waitForTicks(t, w, 5, 120*time.Second)
 	close(stop)
 	wg.Wait()
 }
