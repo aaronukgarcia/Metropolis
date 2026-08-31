@@ -70,7 +70,7 @@ export interface RestoreResult {
 export const SAVEPOINT_KEY_PREFIX = 'metropolis.savepoint';
 
 /** Number of rolling savepoints kept (newest SAVEPOINT_CAP). PLACEHOLDER per spec. */
-export const SAVEPOINT_CAP = 3;
+export const SAVEPOINT_CAP = 1;
 
 /** Time in milliseconds between autosaves. PLACEHOLDER per spec; wall-clock timer in UI. */
 export const AUTOSAVE_INTERVAL_MS = 30000; // 30 seconds
@@ -132,14 +132,18 @@ export function persistSavepoint(
   savepoint: Savepoint
 ): boolean {
   try {
-    // Read existing savepoints to determine the next slot.
+    for (let slot = SAVEPOINT_CAP; slot < 8; slot++) {
+      try {
+        storage.removeItem(savepointKey(slot));
+      } catch {
+        /* leftover slots from older caps */
+      }
+    }
     const existing = readAllSavepoints(storage);
     const nextSlot = existing.length % SAVEPOINT_CAP;
-    // Overwrite the oldest slot (round-robin).
     storage.setItem(savepointKey(nextSlot), JSON.stringify(savepoint));
     return true;
   } catch {
-    // QuotaExceededError, SecurityError (private mode), or JSON.stringify error.
     return false;
   }
 }
