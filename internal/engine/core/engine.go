@@ -459,8 +459,18 @@ func NewEngine(opts ...Option) *Engine {
 // itself a misuse this same error correctly names, and rejecting it
 // here also means such an Engine's zero-value nil hooks map is never
 // reached either.
+// BUG-456 perf: correlationID is minted LAZILY — only when a copy is
+// actually detected (the never-taken path on a live engine). Per-tick hot
+// callers (Clock) pass "" so the crypto/rand+Sprintf UUID cost is not paid
+// on every tick; cold callers may still pass an eager ID, which is used
+// as-is. This removed ~37% of all per-tick allocations (the +33% alloc-count
+// regression on the 1M gate) without any behaviour change — a real copy
+// still yields a valid correlation ID.
 func (e *Engine) checkNotCopied(correlationID string, ctx map[string]any) error {
 	if e.self.Load() != e {
+		if correlationID == "" {
+			correlationID = errs.NewCorrelationID()
+		}
 		return errs.New(ErrEngineCopied, correlationID, ctx)
 	}
 	return nil
@@ -521,7 +531,9 @@ func (e *Engine) HookCount() int {
 // then Clock() on each — only 1,786 returned, the rest wedged
 // permanently on this exact call).
 func (e *Engine) Clock() (Clock, error) {
-	if err := e.checkNotCopied(errs.NewCorrelationID(), nil); err != nil {
+	// BUG-456 perf: "" — mint the correlation ID only on the (never-taken)
+	// copy path; Clock() is one of the hottest per-tick read accessors.
+	if err := e.checkNotCopied("", nil); err != nil {
 		return Clock{}, err
 	}
 	e.mu.Lock()

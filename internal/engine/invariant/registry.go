@@ -75,8 +75,17 @@ func NewRegistry() *Registry {
 // mirrors: a copy's mu can read as "currently locked" if it was copied
 // while the original's mu was held, and attempting Lock() on such a
 // copy before rejecting it can hang forever.
+// BUG-456 perf: correlationID minted LAZILY (only on the never-taken copy
+// path). Invariants() is called every tick by the invariant hook and used
+// to call checkNotCopied twice per call, eagerly minting two crypto/rand
+// UUIDs each tick that were thrown away on a live registry — a large share
+// of the +33% alloc-count regression. Hot callers pass ""; behaviour on a
+// real copy is unchanged (a valid ID is still minted).
 func (r *Registry) checkNotCopied(correlationID string, ctx map[string]any) error {
 	if r.self.Load() != r {
+		if correlationID == "" {
+			correlationID = errs.NewCorrelationID()
+		}
 		return errs.New(ErrRegistryCopied, correlationID, ctx)
 	}
 	return nil
@@ -116,12 +125,14 @@ func (r *Registry) Register(inv Invariant) error {
 // registration order — mutating the returned slice never affects the
 // Registry's own state (same pattern as foundation.registry.List()).
 func (r *Registry) Invariants() []Invariant {
-	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Invariants"}); err != nil {
+	// BUG-456 perf: "" — per-tick hot path; the correlation ID is minted
+	// only on the (never-taken) copy path, not twice on every tick.
+	if err := r.checkNotCopied("", map[string]any{"method": "Invariants"}); err != nil {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if err := r.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Invariants"}); err != nil {
+	if err := r.checkNotCopied("", map[string]any{"method": "Invariants"}); err != nil {
 		return nil
 	}
 	out := make([]Invariant, len(r.invariants))

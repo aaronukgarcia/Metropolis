@@ -147,11 +147,18 @@ func (h *Hook) ApplyEffect(eff core.Effect) {
 // trace back to one root cause investigation rather than N unrelated
 // ones.
 func (h *Hook) handleViolations(result SuiteResult) {
-	correlationID := errs.NewCorrelationID()
+	// BUG-456 perf: mint the correlation ID lazily on the first detected
+	// violation, not unconditionally on entry — still ONE ID per tick's
+	// batch (minted once, reused for every violation in this call), but no
+	// crypto/rand UUID is allocated on a clean run.
+	var correlationID string
 
 	for _, outcome := range result.Outcomes {
 		if !outcome.Violation.Detected {
 			continue
+		}
+		if correlationID == "" {
+			correlationID = errs.NewCorrelationID()
 		}
 
 		e := errs.New(ErrConservationViolation, correlationID, map[string]any{
