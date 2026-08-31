@@ -411,6 +411,7 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       flow.label !== 'Overdraft Interest' &&
       flow.label !== 'Transit Subsidy' &&
       flow.label !== 'Road Auto-Scale' &&
+      flow.label !== 'Road Auto-Connect' &&
       // FEAT-1972079906 inc1: 'Refuse Collection' is a tonnage-based operating cost
       // (collected tonnes × rate), NOT recurring per-building `upkeep` — exclude it
       // from the upkeep-total reconciliation exactly like Wages / Road Auto-Scale.

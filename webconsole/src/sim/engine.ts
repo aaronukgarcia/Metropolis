@@ -46,7 +46,7 @@ import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
 import type { Building, RoadMonitor } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -384,14 +384,6 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   if (s.loanBalance > 0)
     outflows.push({ label: 'Loan Interest', value: Math.round(s.loanBalance * 0.005) });
 
-  // BUG-402 FIX: overdraft interest when funds go negative.
-  // PLACEHOLDER (balance-number regime): overdraft rate on negative balance.
-  // At 50% annual rate = 0.4% per tick (50% / 125 ticks ≈ 0.4% per tick).
-  if (s.funds < 0) {
-    const overdraftInterest = Math.round(Math.abs(s.funds) * 0.004);
-    outflows.push({ label: 'Overdraft Interest', value: overdraftInterest });
-  }
-
   // FEAT-1972079906 inc1: refuse COLLECTION OPEX — the rounds cost ∝ tonnage
   // actually collected (collectionOpexOf, tonnes collected × rate). Only emitted
   // when > 0 (no depots / no waste ⇒ nothing collected ⇒ no line), so a city with
@@ -417,6 +409,12 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   if (compostRevenue > 0) inflows.push({ label: 'Compost Revenue', value: compostRevenue });
   const landfillTipping = landfillTippingOf(s);
   if (landfillTipping > 0) outflows.push({ label: 'Waste Disposal', value: landfillTipping });
+
+  if (s.funds < 0) {
+    const other = outflows.reduce((a, o) => a + o.value, 0);
+    const overdraftInterest = overdraftInterestPerTick(s.funds, other);
+    if (overdraftInterest > 0) outflows.push({ label: 'Overdraft Interest', value: overdraftInterest });
+  }
 
   // BUG-422 (GR#3): post-policy outflow multipliers now live in the shared
   // applyOutflowPolicies helper (fiscal.ts) so the consistency checker applies the
@@ -456,7 +454,7 @@ export function computeLevelRewards(s: SimState): LevelRewardResult[] {
   const results: LevelRewardResult[] = [];
   let funds = s.funds;
   for (let L = s.lastRewardedLevel + 1; L <= lv; L++) {
-    const cash = Math.round(funds * LEVEL_REWARD_RATE);
+    const cash = Math.max(0, Math.round(funds * LEVEL_REWARD_RATE));
     funds += cash;
     const notice = { level: L, cash, unlocked: unlockedAtLevel(L) };
     results.push({
@@ -639,8 +637,22 @@ function advance(s: SimState): SimState {
     roadMonitors = scale.monitors;
     autoScaleCost = scale.cost;
     autoScaleCount = scale.upgraded;
-    // Re-bind s to the post-upgrade buildings for the remainder of the tick.
-    if (scaledBuildings !== s.buildings) s = { ...s, buildings: scaledBuildings };
+    // Re-bind s to the post-upgrade buildings AND the filtered monitor list for the
+    // remainder of the tick. BUG-440: the monitors must ride along too — the sweep
+    // branch below re-reads s.roadMonitors, and without this rebind it clobbers the
+    // eval's expiry-dropped list, resurrecting expired monitors on 60-tick boundaries.
+    if (scaledBuildings !== s.buildings || roadMonitors !== s.roadMonitors)
+      s = { ...s, buildings: scaledBuildings, roadMonitors };
+  }
+
+  let orphanConnectCost = 0;
+  if (tick % (2 * TICKS_PER_MONTH) === 0) {
+    const beforeFunds = s.funds;
+    s = sweepOrphanConnects(s);
+    orphanConnectCost = beforeFunds - s.funds;
+    s = { ...s, funds: beforeFunds };
+    scaledBuildings = s.buildings;
+    roadMonitors = s.roadMonitors;
   }
 
   // FEAT-1972079891 inc1 (AC-1/AC-12): recompute the connected road network at the
@@ -658,6 +670,9 @@ function advance(s: SimState): SimState {
   // inc2: the auto-scale capital spend is an outflow so it counts for conservation.
   if (autoScaleCost > 0) {
     outflows = [...outflows, { label: 'Road Auto-Scale', value: autoScaleCost }];
+  }
+  if (orphanConnectCost > 0) {
+    outflows = [...outflows, { label: 'Road Auto-Connect', value: orphanConnectCost }];
   }
 
   // Drain pending rewards queue (from debugXp and place actions).
@@ -774,7 +789,7 @@ function advance(s: SimState): SimState {
  * Kinds that are themselves network infrastructure and never auto-connect (a road
  * does not wire itself to a road; rail/stations/pylons are not road-served here).
  */
-const CONNECT_EXEMPT_KINDS = new Set<Spec['kind']>([
+export const CONNECT_EXEMPT_KINDS = new Set<Spec['kind']>([
   'road',
   'motorway',
   'rail',
@@ -799,9 +814,15 @@ const CONNECT_EXEMPT_KINDS = new Set<Spec['kind']>([
  * Pure + deterministic (GR#21): all tie-breaking flows from the router; no Date/random.
  * Called with `s` = state AFTER the player's building was inserted.
  */
-function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
+function autoConnect(
+  s: SimState,
+  placed: Building,
+  sp: Spec,
+  opts?: { notice?: boolean; onUnaffordable?: () => void },
+): SimState {
+  const notice = opts?.notice !== false;
   if (CONNECT_EXEMPT_KINDS.has(sp.kind) || isRoadSpec(sp)) {
-    return { ...s, roadNotice: null };
+    return notice ? { ...s, roadNotice: null } : s;
   }
 
   // Board sets from the CURRENT buildings (includes the just-placed building).
@@ -830,14 +851,14 @@ function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
     mapH: MAP_H,
   });
 
-  if (plan.connected) return { ...s, roadNotice: null };
-  if (plan.blocked) return { ...s, roadNotice: 'no road access' };
+  if (plan.connected) return notice ? { ...s, roadNotice: null } : s;
+  if (plan.blocked) return notice ? { ...s, roadNotice: 'no road access' } : s;
 
   const tier = fittingTier(sp);
   const connSpecId = ROAD_TIER_SPECS[tier];
   const connSpec = SPECS[connSpecId];
   // Connectors honour the SSOT insertion guard exactly like a manual place.
-  if (!canEnterSim(connSpec)) return { ...s, roadNotice: 'no road access' };
+  if (!canEnterSim(connSpec)) return notice ? { ...s, roadNotice: 'no road access' } : s;
 
   const tileCost = placementCost(connSpec);
   const connectorCost = tileCost * plan.path.length;
@@ -862,7 +883,10 @@ function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
   const totalCost = connectorCost + upgradeCost;
   // Never fail the placement (inc1): if the connector is unaffordable, keep the
   // building and surface the notice instead of laying a partial network.
-  if (s.funds < totalCost) return { ...s, roadNotice: 'no road access' };
+  if (s.funds < totalCost) {
+    opts?.onUnaffordable?.();
+    return notice ? { ...s, roadNotice: 'no road access' } : s;
+  }
 
   // Lay connector tiles as real road buildings.
   let nextId = s.nextId;
@@ -929,6 +953,26 @@ function autoConnect(s: SimState, placed: Building, sp: Spec): SimState {
     roadNotice: null,
     roadMonitors,
   };
+}
+
+function sweepOrphanConnects(s: SimState): SimState {
+  const ids = s.buildings.map((b) => b.id).sort((a, b) => a - b);
+  for (const id of ids) {
+    const placed = s.buildings.find((b) => b.id === id);
+    if (!placed) continue;
+    const sp = SPECS[placed.spec];
+    if (!sp) continue;
+    let unaffordable = false;
+    const next = autoConnect(s, placed, sp, {
+      notice: false,
+      onUnaffordable: () => {
+        unaffordable = true;
+      },
+    });
+    if (unaffordable) break;
+    s = next;
+  }
+  return s;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1122,7 +1166,8 @@ export type Action =
   | { type: 'debugXp'; amount: number }
   | { type: 'dismissNotice' }
   | { type: 'unlockAll' }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  | { type: 'hydrate'; state: SimState };
 
 // FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
 // to keep roadConnectivity consistent with buildings after every action.
@@ -1684,6 +1729,9 @@ function reduceCore(state: SimState, action: Action): SimState {
       s.speed = state.speed;
       return advance(s);
     }
+
+    case 'hydrate':
+      return sanitizeTreasury(action.state);
   }
 }
 
@@ -1696,9 +1744,21 @@ function reduceCore(state: SimState, action: Action): SimState {
  * deterministic function of buildings (no Date/random). A plain `tick` already set
  * the graph in advance() with the same buildings ref, so it is not recomputed.
  */
+export function sanitizeTreasury(s: SimState): SimState {
+  const funds = sanitizeFunds(s.funds);
+  const loanBalance = sanitizeFunds(s.loanBalance);
+  let notice = s.notice;
+  if (notice && (notice.cash < 0 || !Number.isSafeInteger(notice.cash))) {
+    notice = { ...notice, cash: 0 };
+  }
+  if (funds === s.funds && loanBalance === s.loanBalance && notice === s.notice) return s;
+  return { ...s, funds, loanBalance, notice };
+}
+
 export function reducer(state: SimState, action: Action): SimState {
-  const next = reduceCore(state, action);
-  if (next.buildings !== state.buildings || !next.roadConnectivity) {
+  const s = sanitizeTreasury(state);
+  const next = reduceCore(s, action);
+  if (next.buildings !== s.buildings || !next.roadConnectivity) {
     return { ...next, roadConnectivity: computeRoadConnectivity(next) };
   }
   return next;

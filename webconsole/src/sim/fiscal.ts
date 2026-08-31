@@ -123,3 +123,20 @@ export const FISCAL_COEFFICIENTS = {
   /** Wages: cost per citizen per tick. */
   wagesPerCitizen: 0.5,
 } as const;
+
+/** PLACEHOLDER (balance-number regime). BUG-438: never apply this to |funds| uncapped. */
+export const OVERDRAFT_PER_TICK = 0.004;
+
+export function overdraftInterestPerTick(funds: number, otherOutflowSum: number): number {
+  if (!(funds < 0) || !Number.isFinite(funds)) return 0;
+  const raw = Math.round(Math.abs(funds) * OVERDRAFT_PER_TICK);
+  const cap = Math.max(otherOutflowSum, 1);
+  if (!Number.isFinite(raw)) return cap;
+  return Math.min(raw, cap);
+}
+
+export function sanitizeFunds(n: number): number {
+  if (!Number.isFinite(n)) return 0;
+  const i = Math.trunc(n);
+  return Number.isSafeInteger(i) ? i : 0;
+}

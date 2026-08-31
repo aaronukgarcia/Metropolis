@@ -8,7 +8,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeFlows, LOAN_PRINCIPAL, reducer, initialState } from '../src/sim/engine.ts';
+import {
+  computeFlows,
+  computeLevelRewards,
+  LOAN_PRINCIPAL,
+  reducer,
+  initialState,
+  xpForLevel,
+} from '../src/sim/engine.ts';
+import { OVERDRAFT_PER_TICK, sanitizeFunds, overdraftInterestPerTick } from '../src/sim/fiscal.ts';
 import { SPECS } from '../src/sim/data.ts';
 
 // Minimal SimState with no loans, no policies, default tax rates.
@@ -221,4 +229,49 @@ test('regression: computeFlows stream labels are unique (no duplicates by label)
     uniqueOutflowLabels.size,
     `Outflow labels must be unique. Duplicates: ${outflowLabels.filter((l, i) => outflowLabels.indexOf(l) !== i).join(', ')}`
   );
+});
+
+test('BUG-438 AC-1: level-up grant is never a debit', () => {
+  const s = { ...initialState(), funds: -1_000_000, lastRewardedLevel: 1, xp: xpForLevel(3) };
+  const rewards = computeLevelRewards(s);
+  assert.ok(rewards.length > 0, 'should queue rewards for crossed levels');
+  for (const r of rewards) {
+    assert.equal(r.totalReward, 0);
+    assert.equal(r.notice.cash, 0);
+  }
+});
+
+test('BUG-438 AC-3: overdraft cannot explode over 1000 ticks', () => {
+  let s = { ...initialState(), funds: -1_000_000, loanBalance: 0 };
+  for (let i = 0; i < 1000; i++) s = reducer(s, { type: 'tick' });
+  assert.ok(Number.isSafeInteger(s.funds), `funds left integer domain: ${s.funds}`);
+  const od = s.lastFlows.outflows.find((o) => o.label === 'Overdraft Interest');
+  const other = s.lastFlows.outflows
+    .filter((o) => o.label !== 'Overdraft Interest')
+    .reduce((a, o) => a + o.value, 0);
+  if (od) assert.ok(od.value <= Math.max(other, 1), `overdraft ${od.value} > cap ${other}`);
+});
+
+test('BUG-438 AC-4: dump-scale funds do not produce e25 overdraft', () => {
+  const exploded = -2.9067324168216207e35;
+  const s0 = { ...initialState(), funds: exploded };
+  const { outflows } = computeFlows(s0);
+  const od = outflows.find((o) => o.label === 'Overdraft Interest');
+  const other = outflows.filter((o) => o.label !== 'Overdraft Interest').reduce((a, o) => a + o.value, 0);
+  assert.ok(od, 'overdraft line still present while insolvent');
+  assert.ok(od.value <= Math.max(other, 1), `overdraft ${od.value} vs other ${other}`);
+  assert.ok(od.value < 1e12, `overdraft still dump-scale: ${od.value}`);
+  const s1 = reducer(s0, { type: 'tick' });
+  assert.ok(Number.isSafeInteger(s1.funds), `post-tick funds ${s1.funds}`);
+});
+
+test('BUG-438 AC-5: sanitizeFunds fail-closed on non-integer money', () => {
+  assert.equal(sanitizeFunds(-2.9067324168216207e35), 0);
+  assert.equal(sanitizeFunds(Number.POSITIVE_INFINITY), 0);
+  assert.equal(sanitizeFunds(Number.NaN), 0);
+  assert.equal(sanitizeFunds(1000), 1000);
+  assert.equal(sanitizeFunds(-1_000_000), -1_000_000);
+  assert.ok(OVERDRAFT_PER_TICK > 0);
+  assert.equal(overdraftInterestPerTick(-1_000_000, 80_000), Math.round(1_000_000 * OVERDRAFT_PER_TICK));
+  assert.equal(overdraftInterestPerTick(-1e28, 80_000), 80_000);
 });

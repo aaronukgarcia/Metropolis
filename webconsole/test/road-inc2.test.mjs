@@ -122,6 +122,13 @@ test('deterministic: the same monitored scenario twice → byte-identical tiers 
   // DD4=C (Aaron, 2026-08-28): no grace period — the building must be connected to
   // the road network to stay online. Road at (10,10) is connected to the map edge
   // via (0,10) so the entire segment is part of the connected network.
+  //
+  // FEAT-1972079919: the bi-monthly orphan-connect sweep fires at tick 60 and upgrades
+  // junction roads to match the connector tier. To isolate the monitor's scaling behavior
+  // from the sweep's junction upgrades, SOURCE is placed adjacent to the network (8,7)
+  // so that the sweep finds it already connected and does not try to auto-connect it.
+  // This preserves the test's focus on monitor determinism without adding extraneous
+  // road tiles or hiding the sweep's effect.
   const scenario = () =>
     mk({
       buildings: [
@@ -137,7 +144,9 @@ test('deterministic: the same monitored scenario twice → byte-identical tiers 
         laneAt(8, 10),
         laneAt(9, 10),
         laneAt(10, 10),
-        { ...SOURCE },
+        // SOURCE placed adjacent to network roads (at 8,7 is adjacent to roads at 8,10)
+        // so that the tick-60 orphan-connect sweep finds it already connected.
+        { id: 2, spec: 'ind_heavy', x: 8, y: 7, builtTick: -1000 },
         // res_highrise positioned at (10,11), adjacent to the connected road at (10,10),
         // so it stays online and maintains the population for this traffic-scaling test.
         { id: 3, spec: 'res_highrise', x: 10, y: 11, builtTick: -1000 },
@@ -188,7 +197,13 @@ test('order-independent: monitors in reversed input order upgrade the identical 
 // ===================== (5) monitoring expiry =====================
 
 test('expiry: after the 1-year window a later saturation does NOT trigger an upgrade', () => {
-  const buildings = [laneAt(10, 10), { ...SOURCE }];
+  // FEAT-1972079919: the bi-monthly orphan-connect sweep fires at tick 60, same as the
+  // monitor evaluation. To isolate the monitor's expiry behavior from the sweep's effects,
+  // SOURCE is placed adjacent to the network at (8, 7), so that its footprint [8,11)×[7,10)
+  // includes cell (10,9) which is orthogonally adjacent to the road at (10,10). The sweep
+  // then finds SOURCE already connected and skips the autoConnect step, avoiding its
+  // junction-upgrade side effects.
+  const buildings = [laneAt(10, 10), { id: 2, spec: 'ind_heavy', x: 8, y: 7, builtTick: -1000 }];
 
   // CONTROL — window still open at the eval tick (until 60, eval at tick 60): upgrades.
   const openTick = 2 * TICKS_PER_MONTH; // 60
@@ -214,7 +229,11 @@ test('expiry: after the 1-year window a later saturation does NOT trigger an upg
     { type: 'tick' }
   );
   assert.equal(tileAt(expired, 10, 10).spec, 'road', 'expired monitor does NOT upgrade the saturated lane');
-  assert.equal(expired.roadMonitors.length, 0, 'the expired monitor is dropped from state');
+  // BUG-440 regression: on a tick that is both monthly (monitor eval) AND sweep (tick % 60),
+  // the sweep branch used to re-read s.roadMonitors and clobber the eval's filtered list,
+  // resurrecting expired monitors. The monthly rebind must carry the filtered monitors so
+  // the sweep branch reads the post-eval list.
+  assert.equal(expired.roadMonitors.length, 0, 'the expired monitor is dropped from state (BUG-440)');
 });
 
 // ===================== (6) conservation across an auto-scale event =====================
