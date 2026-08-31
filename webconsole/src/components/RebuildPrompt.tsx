@@ -10,9 +10,9 @@
 // component is presentational: every decision is driven by the props/callbacks
 // the store passes in, so the store owns the state machine and this stays trivial.
 
-import type { RebuildReport, SkippedAction } from '../sim/genesisReplay';
+import type { RebuildReport, SkippedAction, ReplayProgress } from '../sim/genesisReplay';
 
-export type RebuildPhase = 'prompt' | 'running' | 'report';
+export type RebuildPhase = 'prompt' | 'running' | 'report' | 'stalled';
 
 export interface RebuildPromptProps {
   phase: RebuildPhase;
@@ -22,6 +22,16 @@ export interface RebuildPromptProps {
   currentVersion: string;
   /** The rebuild report, present only in the 'report' phase. */
   report: RebuildReport | null;
+  /** Live progress updates during replay (present during 'running' phase). */
+  progress: ReplayProgress | null;
+  /**
+   * BAR-2: a "~Xm Ys remaining" label derived from the LIVE observed
+   * actions/sec (never a canned animation). Null until enough samples have
+   * been collected to trust a rate, or when not applicable.
+   */
+  eta?: string | null;
+  /** Stall information (present during 'stalled' phase). */
+  stallInfo: { actionsDone: number; actionsTotal: number; phaseLabel: string } | null;
   /** Run genesis replay on the new engine. */
   onRebuild: () => void;
   /** Keep the old snapshot as-is (pre-inc2 behaviour). */
@@ -30,6 +40,10 @@ export interface RebuildPromptProps {
   onFresh: () => void;
   /** Acknowledge the report and resume live on the new engine. */
   onResume: () => void;
+  /** Retry a stalled rebuild. */
+  onRetry?: () => void;
+  /** Running-phase heading. Defaults to rebuild copy; Load Game passes a load label. */
+  busyLabel?: string;
 }
 
 const overlayStyle: React.CSSProperties = {
@@ -98,6 +112,60 @@ function MetricRow({ label, before, after, delta }: { label: string; before: num
   );
 }
 
+function Spinner() {
+  return (
+    <div style={{
+      display: 'inline-block',
+      width: '16px',
+      height: '16px',
+      borderRadius: '50%',
+      border: '2px solid rgba(76, 139, 245, 0.3)',
+      borderTopColor: 'var(--accent, #4c8bf5)',
+      animation: 'spin 0.8s linear infinite',
+      marginRight: '8px',
+      verticalAlign: 'middle',
+    }} />
+  );
+}
+
+function ProgressBar({ percent }: { percent: number }) {
+  const bounded = Math.min(100, Math.max(0, percent));
+  return (
+    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', margin: '10px 0' }}>
+      <div style={{
+        flex: 1,
+        height: '24px',
+        background: 'rgba(76, 139, 245, 0.1)',
+        border: '1px solid var(--accent, #4c8bf5)',
+        borderRadius: '4px',
+        overflow: 'hidden',
+        position: 'relative',
+      }}>
+        <div style={{
+          position: 'absolute',
+          height: '100%',
+          width: `${bounded}%`,
+          background: 'var(--accent, #4c8bf5)',
+          transition: 'width 0.15s ease-out',
+        }} />
+        <div style={{
+          position: 'absolute',
+          width: '100%',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          fontSize: '11px',
+          fontWeight: 'bold',
+          color: bounded > 50 ? '#1b1f27' : 'var(--text, #e6e6e6)',
+        }}>
+          {bounded.toFixed(0)}%
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function SkippedList({ skipped }: { skipped: SkippedAction[] }) {
   if (skipped.length === 0) {
     return <p style={{ margin: '10px 0 0', opacity: 0.75 }}>No actions were rejected by the new rules.</p>;
@@ -120,7 +188,8 @@ function SkippedList({ skipped }: { skipped: SkippedAction[] }) {
 }
 
 export function RebuildPrompt(props: RebuildPromptProps) {
-  const { phase, savedVersion, currentVersion, report } = props;
+  const { phase, savedVersion, currentVersion, report, progress, stallInfo, eta } = props;
+  const busyLabel = props.busyLabel ?? 'Rebuilding your city…';
 
   return (
     <div style={overlayStyle} role="dialog" aria-modal="true" aria-label="Rebuild city on new build">
@@ -152,11 +221,54 @@ export function RebuildPrompt(props: RebuildPromptProps) {
 
         {phase === 'running' && (
           <>
-            <h2 style={{ margin: '0 0 8px', fontSize: '15px' }}>Rebuilding your city…</h2>
-            <p style={{ margin: 0, opacity: 0.85 }}>
-              Replaying your recorded actions from genesis on <strong>{currentVersion}</strong>. This is headless and usually
-              takes under a second.
+            <h2 style={{ margin: '0 0 8px', fontSize: '15px' }}>
+              <Spinner />
+              {busyLabel}
+            </h2>
+            {progress && (
+              <>
+                <p style={{ margin: '0 0 4px', opacity: 0.85, fontSize: '12px' }}>
+                  {progress.phaseLabel}
+                </p>
+                <ProgressBar percent={(progress.actionsDone / progress.actionsTotal) * 100} />
+                <p style={{ margin: '4px 0 0', opacity: 0.7, fontSize: '11px' }}>
+                  {eta ? eta : 'estimating…'}
+                </p>
+              </>
+            )}
+            {!progress && (
+              <p style={{ margin: 0, opacity: 0.85 }}>
+                Replaying your recorded actions from genesis on <strong>{currentVersion}</strong>. This is headless and usually
+                takes under a second.
+              </p>
+            )}
+          </>
+        )}
+
+        {phase === 'stalled' && stallInfo && (
+          <>
+            <h2 style={{ margin: '0 0 8px', fontSize: '15px', color: '#ff6b6b' }}>Rebuild stalled</h2>
+            <p style={{ margin: '0 0 8px', opacity: 0.85 }}>
+              The rebuild stopped advancing at action <strong>{stallInfo.actionsDone.toLocaleString()}</strong> of{' '}
+              <strong>{stallInfo.actionsTotal.toLocaleString()}</strong>.
             </p>
+            <p style={{ margin: '0 0 8px', fontSize: '12px', opacity: 0.75 }}>
+              {stallInfo.phaseLabel}
+            </p>
+            <p style={{ margin: 0, opacity: 0.75 }}>
+              No progress was detected for several seconds. You can retry the rebuild or choose another option.
+            </p>
+            <div style={btnRow}>
+              <button style={button(true)} onClick={props.onRetry}>
+                Retry rebuild
+              </button>
+              <button style={button(false)} onClick={props.onKeep}>
+                Keep old snapshot
+              </button>
+              <button style={button(false)} onClick={props.onFresh}>
+                Start fresh
+              </button>
+            </div>
           </>
         )}
 

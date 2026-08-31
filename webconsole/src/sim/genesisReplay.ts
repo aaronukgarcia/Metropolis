@@ -214,6 +214,155 @@ function errMsg(e: unknown): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// FEAT-1972079917 — Chunked replay with progress callback (inc2-plus).
+//
+// Enables the UI to show live progress during a long genesis replay without
+// blocking the event loop. Instead of replaying all actions in a single loop,
+// we yield progress after every N actions, allowing requestAnimationFrame to
+// run and render updates between chunks.
+// ---------------------------------------------------------------------------
+
+/** Progress update from a chunked replay. */
+export interface ReplayProgress {
+  /** Number of actions applied so far. */
+  actionsDone: number;
+  /** Total actions in the journal. */
+  actionsTotal: number;
+  /** Human-readable phase label (e.g. "Replaying roads... 1,240/3,900 actions"). */
+  phaseLabel: string;
+}
+
+/**
+ * Actions per chunk: a UI frame typically runs ~60fps = ~16ms. We process this
+ * many actions per frame before yielding to allow renders. Tunable per performance.
+ */
+const ACTIONS_PER_CHUNK = 50;
+
+/**
+ * Chunked defensive genesis replay: yields progress after each chunk of actions
+ * so the UI can display live progress without blocking. The replay loop runs
+ * via a generator — calling onProgress(result) lets the UI render updates
+ * between chunks.
+ *
+ * Like replayFromGenesisDefensive, this is PURE: no clock, no random.
+ * The chunking does NOT change the final state — the same actions are applied
+ * in the same order, just yielded in smaller pieces.
+ *
+ * Usage:
+ *   const gen = replayFromGenesisDefensiveChunked(journal);
+ *   for (const progress of gen) {
+ *     onProgress(progress);  // update UI
+ *   }
+ *   const result = gen.return(value);  // final DefensiveReplayResult
+ *
+ * Because generators are stateful, each call to this function creates a fresh
+ * generator with its own replay state — safe to use concurrently (if needed).
+ */
+export function* replayFromGenesisDefensiveChunked(
+  journal: Journal,
+  engine: ReplayEngine = REAL_ENGINE
+): Generator<ReplayProgress, DefensiveReplayResult, void> {
+  const skipped: SkippedAction[] = [];
+  let state: SimState;
+  try {
+    state = engine.init();
+  } catch (e) {
+    // Genesis itself could not be constructed — nothing to salvage.
+    return {
+      state: REAL_ENGINE === engine ? initialState() : (undefined as unknown as SimState),
+      skipped,
+      crashed: true,
+      crashError: errMsg(e),
+    };
+  }
+
+  const entries = journal.entries;
+  const total = entries.length;
+
+  // Yield progress after each chunk of ACTIONS_PER_CHUNK actions.
+  for (let i = 0; i < total; i += ACTIONS_PER_CHUNK) {
+    const chunkEnd = Math.min(i + ACTIONS_PER_CHUNK, total);
+    for (let j = i; j < chunkEnd; j++) {
+      const entry = entries[j];
+      try {
+        state = engine.reduce(state, entry.action);
+      } catch (e) {
+        // Invalid under the new rules — skip-and-log, keep the prior state, carry on.
+        skipped.push({
+          index: j,
+          tick: entry.tick,
+          type: (entry.action as { type?: string }).type ?? 'unknown',
+          error: errMsg(e),
+        });
+      }
+    }
+
+    // After each chunk, derive a human-readable phase label from the action
+    // type of the action we just applied (if any in this chunk).
+    let phaseLabel = 'Replaying actions';
+    if (chunkEnd > 0) {
+      const lastAction = entries[chunkEnd - 1].action as { type?: string };
+      const actionType = lastAction.type ?? 'unknown';
+      // Capitalize and pluralize common action types.
+      const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+      const plural = {
+        place: 'Placing buildings',
+        bulldoze: 'Bulldozing',
+        tax: 'Adjusting taxes',
+        tick: 'Advancing ticks',
+        policy: 'Adjusting policies',
+        road: 'Building roads',
+        rail: 'Building rail',
+        water: 'Building water',
+        reset: 'Resetting',
+      }[actionType] || `Replaying ${capitalize(actionType)}s`;
+      phaseLabel = `${plural}... ${chunkEnd.toLocaleString()}/${total.toLocaleString()} actions`;
+    }
+
+    yield {
+      actionsDone: chunkEnd,
+      actionsTotal: total,
+      phaseLabel,
+    };
+  }
+
+  return { state, skipped, crashed: false, crashError: '' };
+}
+
+/**
+ * Module-level flag: true while a rebuild is actively running. Used by liveVersion.tsx
+ * to suppress hot-swap during a rebuild (BUG-435).
+ */
+export let rebuildInProgress = false;
+
+/**
+ * Subscribers notified when rebuildInProgress changes. Used for reactive updates.
+ */
+const rebuildInProgressListeners: Set<(inProgress: boolean) => void> = new Set();
+
+/**
+ * Subscribe to changes in rebuildInProgress. Callback is called immediately with
+ * the current value, then again whenever the flag changes.
+ */
+export function subscribeToRebuildProgress(callback: (inProgress: boolean) => void): () => void {
+  callback(rebuildInProgress);
+  rebuildInProgressListeners.add(callback);
+  return () => {
+    rebuildInProgressListeners.delete(callback);
+  };
+}
+
+/**
+ * Set the rebuild flag and notify listeners. Called by store.tsx to indicate
+ * when a rebuild is starting and finishing.
+ */
+export function setRebuildInProgress(inProgress: boolean): void {
+  if (rebuildInProgress === inProgress) return;
+  rebuildInProgress = inProgress;
+  rebuildInProgressListeners.forEach((cb) => cb(inProgress));
+}
+
 /** The headline before/after numbers a rebuild report compares. */
 export interface RebuildMetrics {
   tick: number;
@@ -280,4 +429,69 @@ export function rebuildReport(
     deltas.funds === 0 &&
     deltas.buildings === 0;
   return { before, after, deltas, skipped, identical };
+}
+
+// ---------------------------------------------------------------------------
+// FEAT-1972079917 bounce-fix / BUG-435 estate (round r1 REJECT follow-up).
+// Pure helpers extracted so the store's state machine decisions (generation
+// guard, live ETA) are unit-testable without mounting React.
+// ---------------------------------------------------------------------------
+
+/** One progress observation: how many actions were done, and when (ms clock,
+ * e.g. performance.now()). Caller supplies the clock — this module stays pure. */
+export interface ProgressSample {
+  actionsDone: number;
+  timestamp: number;
+}
+
+/** Never show an ETA off less than this much observed wall-clock — a single
+ * chunk's timing is noisy; require a real, held sample window (BAR-2: derive
+ * from LIVE actions/sec, never a canned animation). */
+const MIN_ETA_SAMPLE_WINDOW_MS = 1000;
+
+/** Format a millisecond duration as a short "1m 10s" / "45s" label. */
+function formatDurationShort(ms: number): string {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+}
+
+/**
+ * Derive a human "~Xm Ys remaining" label from a history of progress samples,
+ * using the observed actions/sec between the earliest and latest sample as the
+ * rate. Returns null when there isn't yet enough signal to trust (fewer than 2
+ * samples, no time elapsed, an under-window sample set, or no forward
+ * progress) — callers should render "estimating…" or nothing in that case.
+ *
+ * Pure: takes timestamps in, never reads a clock itself.
+ */
+export function estimateRemainingLabel(
+  samples: ProgressSample[],
+  actionsTotal: number
+): string | null {
+  if (samples.length < 2 || actionsTotal <= 0) return null;
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const elapsedMs = last.timestamp - first.timestamp;
+  const doneDelta = last.actionsDone - first.actionsDone;
+  if (elapsedMs < MIN_ETA_SAMPLE_WINDOW_MS || doneDelta <= 0) return null;
+  const rate = doneDelta / elapsedMs; // actions per ms
+  const remaining = actionsTotal - last.actionsDone;
+  if (remaining <= 0) return '~0s remaining';
+  const remainingMs = remaining / rate;
+  return `~${formatDurationShort(remainingMs)} remaining`;
+}
+
+/**
+ * Generation guard (the concurrent-replay race, r1 attacker finding): decide
+ * whether an in-flight chunked-replay chain has been superseded by a newer one
+ * (a fresh onRebuild/onRetry dispatch, or a watchdog-fired stall) and must
+ * abort without any further setState/persist. `chainGen` is the generation the
+ * chain captured when it started; `currentGen` is the live counter's value at
+ * the moment of the check. Pure integer compare, extracted so a test can drive
+ * gen-mismatch without mounting the store's React state machine.
+ */
+export function isStaleRebuildChain(chainGen: number, currentGen: number): boolean {
+  return chainGen !== currentGen;
 }
