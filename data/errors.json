@@ -115,7 +115,7 @@
       "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5200-G5299": "reserved for engine.parking (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
       "G5300-G5399": "reserved for engine.tunnels (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "V800-V849": "reserved for FEAT-1972079916 (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 50-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V800-V849": "reserved for ui.webconsole (error framework FEAT-1972079916; auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 50-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."

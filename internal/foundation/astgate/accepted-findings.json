@@ -1794,5 +1794,13 @@
   {
     "finding": "internal/ui/screens/services/screen.go|*Screen|receiver method|evictOldestPendingFundingLocked|s|*Screen",
     "reason": "FEAT-208 increment 3 destructive round r2 fix: unexported *Locked-suffixed helper, called only from SetFunding, which holds s.mu at the call site (checkNotCopied is called before SetFunding ever takes s.mu) and whose own doc comment states this method's precondition is 'caller must hold s.mu'. Never reachable independently -- same precedent as fundingHasOtherOutstandingLocked above."
+  },
+  {
+    "finding": "internal/ui/screens/map/render.go|*MapScreen|receiver method|noteUnrecognisedTerrainInGridLocked|m|*MapScreen",
+    "reason": "BUG-334 terrain-dedup helper, per-finding triage (approved by Bev/Architect, 2026-08-31, clearing the trunk-red astgate gate found during the BUG-362 lane): unexported *Locked-suffixed helper on MapScreen, reachable ONLY via Render -> snapshotLocked (render.go:300, called with m.mu held; Render calls checkNotCopied TWICE at render.go:206/213 before ever taking the lock) -> noteUnrecognisedTerrainInGridLocked (render.go:326). Never reachable independently -- package-private, no other call sites (grep-verified single chain). Mirrors this file/registry's clampOffsetLocked/clampCursorLocked and the services fundingRevertToLastConfirmedLocked *Locked-behind-guarded-caller precedent exactly."
+  },
+  {
+    "finding": "internal/ui/screens/map/screen.go|*MapScreen|receiver method|noteUnrecognisedTerrainLocked|m|*MapScreen",
+    "reason": "BUG-334 terrain-dedup helper, per-finding triage (approved by Bev/Architect, 2026-08-31, clearing the trunk-red astgate gate found during the BUG-362 lane): unexported *Locked-suffixed helper on MapScreen, reachable ONLY via Render -> snapshotLocked (render.go:300, called with m.mu held; Render calls checkNotCopied TWICE at render.go:206/213 before ever taking the lock) -> noteUnrecognisedTerrainInGridLocked (render.go:326) -> noteUnrecognisedTerrainLocked (render.go:371); doc comments on both state the m.mu precondition. Never reachable independently -- package-private, no other call sites (grep-verified single chain). Mirrors this file/registry's clampOffsetLocked/clampCursorLocked and the services fundingRevertToLastConfirmedLocked *Locked-behind-guarded-caller precedent exactly."
   }
 ]
