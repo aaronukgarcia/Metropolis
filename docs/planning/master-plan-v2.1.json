@@ -1571,7 +1571,8 @@
         "engine.season",
         "foundation.errors",
         "foundation.num",
-        "engine.staffing"
+        "engine.staffing",
+        "engine.firms"
       ],
       "sprint": 6,
       "collaborations": {

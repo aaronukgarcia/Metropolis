@@ -4415,6 +4415,11 @@
             "key": "engine.staffing",
             "moduleGuid": "13eff6db-c51c-4307-b84e-3cfd2ce671af",
             "inboundGuid": "8de22d17-1d58-4ca8-995f-89f2c98d4fb5"
+          },
+          {
+            "key": "engine.firms",
+            "moduleGuid": "df06bec1-ea6c-456d-9d06-690cb18fa2a0",
+            "inboundGuid": "f6c47094-fae7-4d93-8267-653b15cc1a2a"
           }
         ]
       },
@@ -8196,6 +8201,10 @@
         "format": "Go package API + deltas",
         "pattern": "firm lifecycle events; credit conditions from rate cycle in external_world.json",
         "consumers": [
+          {
+            "key": "engine.build",
+            "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
+          },
           {
             "key": "engine.comms",
             "outboundGuid": "1d50fe0a-ed87-4db8-b0f4-9bcda783d308"
