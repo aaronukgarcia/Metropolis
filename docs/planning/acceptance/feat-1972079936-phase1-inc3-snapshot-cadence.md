@@ -1,5 +1,14 @@
 # FEAT-1972079936 Phase 1 inc3 — snapshot cadence + snapshot-aware restore
 
+> **⛔ BLOCKED (2026-08-31) on FEAT-1972079941** (per-module state+RNG serialization).
+> The `save` subsystem has ZERO registered participants (`save.DefaultParticipants = []`),
+> so a snapshot can't capture real engine state and **AC-4 (snapshot+tail == genesis,
+> byte-identical) is unachievable** — the inc3 builder correctly stopped rather than ship a
+> hollow snapshot. Snapshots are only a restore-*speed* optimization; Phase 1's data-loss
+> cure does not need them (inc2 genesis restore is already lossless). **The march proceeds to
+> inc4 (metroserve genesis-restore wiring) instead**; inc3 resumes if/when FEAT-1972079941
+> lands. Criteria below are retained for that resumption.
+
 **Epic:** FEAT-1972079936 (Compute offload, Path A). **Phase 1** = durable persistence.
 inc1 = the `internal/persist` Store (`4e266eb`). inc2 = write-through command journaler +
 genesis restore (`15918de`). **inc3** (this) = periodic full-state snapshots so restore is
