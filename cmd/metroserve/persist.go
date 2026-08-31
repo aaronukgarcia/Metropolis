@@ -111,38 +111,62 @@ func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Write
 	}
 	city := persist.CityKey{TenantID: persistTenantID, CityID: cityID}
 
+	comp, err := wireAndRehydrate(context.Background(), e, disk, city, stdout)
+	if err != nil {
+		return nil, nil, err
+	}
+	return comp, disk, nil
+}
+
+// wireAndRehydrate is the shared, single-source guarded-rehydrate seam
+// (GR#3). It wires the engine to a durable Store with inc2's write-through
+// journaler interposed behind a rehydrateGuardStore, then — if a journal
+// already exists for city — replays it back through the engine's normal
+// command path with re-append suppressed, so a restart resumes losslessly
+// and a restart-twice never double-appends. Both metroserve's single-city
+// setUpPersistence and Phase 2's CityHost (cityhost.go), which drives N
+// cities over ONE shared Store, call exactly this so neither re-implements
+// restore nor re-opens the double-append hole.
+//
+// A store-existence probe error, a restore/decode error (a corrupt journal),
+// or a rejected replayed command are all returned as errors — the caller
+// treats them as fatal for that city, exactly as inc4 requires: silently
+// starting a fresh city over a persisted one is the data loss this epic
+// exists to prevent. On any error the engine is left partly wired but the
+// caller discards it (CityHost registers nothing; run() exits non-zero), so
+// no half-live city escapes.
+func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, city persist.CityKey, stdout io.Writer) (*compose.Composition, error) {
 	// Wire with the guard interposed so replayed commands are NOT re-appended.
-	guard := &rehydrateGuardStore{Store: disk}
+	guard := &rehydrateGuardStore{Store: store}
 	guard.replaying.Store(true)
 	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city})
 	if err != nil {
-		return nil, nil, fmt.Errorf("compose.Wire failed: %w", err)
+		return nil, fmt.Errorf("compose.Wire failed: %w", err)
 	}
 
-	ctx := context.Background()
-	exists, err := disk.Exists(ctx, city)
+	exists, err := store.Exists(ctx, city)
 	if err != nil {
-		return nil, nil, fmt.Errorf("persist existence check for city %q: %w", cityID, err)
+		return nil, fmt.Errorf("persist existence check for city %q: %w", city.CityID, err)
 	}
 	if !exists {
 		guard.replaying.Store(false)
-		_, _ = fmt.Fprintf(stdout, "metroserve: no persisted journal for city %s — starting fresh\n", cityID)
-		return comp, disk, nil
+		_, _ = fmt.Fprintf(stdout, "metroserve: no persisted journal for city %s — starting fresh\n", city.CityID)
+		return comp, nil
 	}
 
 	// Rehydrate: read from the REAL store, replay through the engine's normal
 	// command path (the same path inc2's restore test uses). A decode error
 	// (corrupt journal) surfaces from RestoreCommands and is fatal here.
-	cmds, err := compose.RestoreCommands(ctx, disk, city)
+	cmds, err := compose.RestoreCommands(ctx, store, city)
 	if err != nil {
-		return nil, nil, fmt.Errorf("rehydrate city %s (corrupt journal?): %w", cityID, err)
+		return nil, fmt.Errorf("rehydrate city %s (corrupt journal?): %w", city.CityID, err)
 	}
 	for i, cmd := range cmds {
 		if res := e.HandleCommand(cmd); !res.Accepted {
-			return nil, nil, fmt.Errorf("rehydrate city %s: restored command %d (%s) rejected: %+v", cityID, i, cmd.Kind, res.Error)
+			return nil, fmt.Errorf("rehydrate city %s: restored command %d (%s) rejected: %+v", city.CityID, i, cmd.Kind, res.Error)
 		}
 	}
 	guard.replaying.Store(false)
-	_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated %d commands for city %s\n", len(cmds), cityID)
-	return comp, disk, nil
+	_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated %d commands for city %s\n", len(cmds), city.CityID)
+	return comp, nil
 }
