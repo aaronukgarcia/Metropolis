@@ -249,6 +249,15 @@ jobs:
       - name: npm ci
         run: npm ci
 
+      # FEAT-1972079935: the webconsole test glob now imports lz-string (a real
+      # runtime dependency in webconsole/package.json), so webconsole's OWN
+      # node_modules must exist before `node --test` discovers those tests --
+      # the root `npm ci` above does not install webconsole's deps. Runs from
+      # webconsole/package-lock.json.
+      - name: npm ci (webconsole)
+        working-directory: webconsole
+        run: npm ci
+
       # claude-bow.js/claude-sync.js connect with `database: metro` set
       # (or METRO_DB_NAME's override) already selected — mysql2 does NOT
       # auto-create a missing database, it errors (ER_BAD_DB_ERROR). The
