@@ -150,3 +150,21 @@ const (
 	// feature.
 	ErrCapabilityRequired = "MET-P021"
 )
+
+// Registry error codes for FEAT-1972079936 Phase 2 increment 2
+// (connection->city routing). Range: P030-P034, claimed via
+// tools/plan/add-error.js claim-range for mkey "protocol" (the P020-P029
+// block above was occupied by inc3's two codes plus reservations, so this
+// is a fresh 5-wide block, not a reuse).
+const (
+	// ErrHandshakeCityUnavailable: a connection's handshake named a city
+	// (handshakeParams.CityID/TenantID, defaults applied) that the installed
+	// transport resolver could NOT open -- e.g. a corrupt-journal city
+	// (FATAL per inc4) or any other city-build failure. Per AC-3 the
+	// handshake is REFUSED cleanly with this dedicated code, never served
+	// against a fallback city. Distinct from ErrHandshakeVersionMismatch/
+	// ErrHandshakeBelowWindowFloor (those are version/window refusals): here
+	// the version negotiation SUCCEEDED and only the city routing failed.
+	// Carries cityId/tenantId/reason context so the refusal is actionable.
+	ErrHandshakeCityUnavailable = "MET-P030"
+)

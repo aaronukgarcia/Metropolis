@@ -160,6 +160,20 @@ type handshakeParams struct {
 	// has no new feature gated behind one), so this is exercised today
 	// only via the empty-set case (AC-2's mutation test).
 	Capabilities []string `json:"capabilities,omitempty"`
+
+	// CityID/TenantID (FEAT-1972079936 Phase 2 inc2, AC-1): the city this
+	// connection wants to be routed to. Both OPTIONAL and additive: an
+	// absent/empty CityID defaults to defaultCityID ("default") and an
+	// absent/empty TenantID to defaultTenantID ("local", matching
+	// inc1/inc4's placeholder). An OLD client that never sends either field
+	// is therefore indistinguishable from one explicitly asking for the
+	// "default" city and is routed there -- preserving today's single-city
+	// behaviour exactly. These fields are consulted ONLY when a transport
+	// resolver is installed (WithTransportResolver); with no resolver the
+	// server serves its single wrapped transport regardless of what a client
+	// names here (backward-compat, AC-6).
+	CityID   string `json:"cityId,omitempty"`
+	TenantID string `json:"tenantId,omitempty"`
 }
 
 // handshakeResult is methodHandshake's successful response payload.
@@ -191,6 +205,27 @@ type handshakeResult struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
+// TransportResolver maps a connection's handshake-declared (tenantID,
+// cityID) -- defaults already applied -- to the protocol.Transport that
+// connection should be bound to for its whole life (FEAT-1972079936 Phase 2
+// inc2, AC-2). It takes two plain strings, NOT a persist.CityKey, ON PURPOSE:
+// wsserver lives in internal/protocol (the interface layer) and MUST NOT gain
+// an edge to internal/persist (nor, by import direction, to cmd/metroserve
+// where CityHost lives). cmd/metroserve supplies a closure that builds its
+// own persist.CityKey from these two strings and calls host.GetOrCreate --
+// keeping wsserver's dependency surface unchanged (no new GR#25 edge). A
+// non-nil error REFUSES the handshake cleanly (MET-P030), never a fallback.
+type TransportResolver func(tenantID, cityID string) (protocol.Transport, error)
+
+// defaultCityID / defaultTenantID are the placeholders applied when a
+// handshake omits (or empties) the corresponding field (AC-1). "default"
+// city + "local" tenant match cmd/metroserve's inc1/inc4 defaults, so an old
+// client sending neither is routed to exactly the city metroserve pre-creates.
+const (
+	defaultCityID   = "default"
+	defaultTenantID = "local"
+)
+
 // Server bridges HTTP WebSocket connections to a wrapped protocol.Transport.
 type Server struct {
 	transport        protocol.Transport
@@ -198,6 +233,13 @@ type Server struct {
 	handshakeTimeout time.Duration
 	upgrader         websocket.Upgrader
 	newCorrelationID func() string
+	// resolveTransport, when non-nil (installed via WithTransportResolver,
+	// FEAT-1972079936 Phase 2 inc2 AC-2), routes each connection to a
+	// per-city transport resolved during the handshake. When nil (the
+	// default -- every pre-inc2 caller), the single `transport` field above
+	// serves every connection EXACTLY as today: no resolver call, no
+	// behaviour change, every existing test unaffected byte-for-byte (AC-6).
+	resolveTransport TransportResolver
 	// capabilities is this server's own declared capability set (AC-5).
 	// Defaults to defaultServerCapabilities (increment 3: this build
 	// speaks protocol.CapDebugCommands, Phase 0's one illustrative gated
@@ -241,6 +283,19 @@ var defaultServerCapabilities = []string{protocol.CapDebugCommands}
 // client's request).
 func WithCapabilities(caps []string) Option {
 	return func(s *Server) { s.capabilities = caps }
+}
+
+// WithTransportResolver installs a per-connection transport resolver
+// (FEAT-1972079936 Phase 2 inc2, AC-2). With it, each connection's transport
+// is resolved during the handshake from the handshake's (tenant, city) --
+// binding that connection to its own city's engine for the connection's life.
+// Without it, the Server behaves EXACTLY as today (its single wrapped
+// transport serves every connection). cmd/metroserve supplies a closure over
+// its CityHost here; see TransportResolver's doc comment for why the signature
+// is two strings rather than a persist.CityKey (import-direction / no new
+// dependency edge).
+func WithTransportResolver(r TransportResolver) Option {
+	return func(s *Server) { s.resolveTransport = r }
 }
 
 // New constructs a Server wrapping transport. engineVersion is this
@@ -294,11 +349,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	negotiated, negotiatedCaps, ok := s.handshake(conn)
+	negotiated, negotiatedCaps, connTransport, ok := s.handshake(conn)
 	if !ok {
 		return
 	}
-	s.pump(conn, negotiated, negotiatedCaps)
+	s.pump(conn, connTransport, negotiated, negotiatedCaps)
 }
 
 // normalizeVersion strips the volatile "-dirty" suffix `git describe`
@@ -385,7 +440,13 @@ func (s *Server) negotiateVersion(clientMax *protocol.WireVersion) protocol.Wire
 // check and the below-window-floor check are both still hard refusals;
 // graceful downgrade only applies WITHIN the window -- see this file's
 // package doc for the current, post-increment-3 framing of this rule).
-func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string, bool) {
+// The returned protocol.Transport is the transport THIS connection is bound
+// to for the rest of its life (FEAT-1972079936 Phase 2 inc2, AC-3): the
+// server's single wrapped transport when no resolver is installed, or the
+// per-city transport the resolver returned when one is. A resolver error
+// refuses the handshake cleanly (MET-P030) and returns ok=false, never a
+// fallback transport.
+func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string, protocol.Transport, bool) {
 	_ = conn.SetReadDeadline(time.Now().Add(s.handshakeTimeout))
 	defer func() { _ = conn.SetReadDeadline(time.Time{}) }() // no deadline for the steady-state pump
 
@@ -398,7 +459,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		// to), so this failure is only visible server-side; still
 		// registry-logged (GR#1) rather than swallowed.
 		_ = errs.Wrap(protocol.ErrHandshakeTimeout, s.newCorrelationID(), err, map[string]any{"timeoutMs": s.handshakeTimeout.Milliseconds()})
-		return protocol.WireVersion{}, nil, false
+		return protocol.WireVersion{}, nil, nil, false
 	}
 
 	var msg rpcMessage
@@ -411,7 +472,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		}
 		e := errs.New(protocol.ErrHandshakeInvalid, s.newCorrelationID(), map[string]any{"reason": reason})
 		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, false
+		return protocol.WireVersion{}, nil, nil, false
 	}
 
 	var params handshakeParams
@@ -422,7 +483,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 		}
 		e := errs.New(protocol.ErrHandshakeInvalid, s.newCorrelationID(), map[string]any{"reason": reason})
 		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, false
+		return protocol.WireVersion{}, nil, nil, false
 	}
 
 	if normalizeVersion(params.ClientVersion) != normalizeVersion(s.engineVersion) {
@@ -431,7 +492,7 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 			"serverVersion": s.engineVersion,
 		})
 		s.writeRefusal(conn, msg.ID, e)
-		return protocol.WireVersion{}, nil, false
+		return protocol.WireVersion{}, nil, nil, false
 	}
 
 	// FEAT-1972079936 Phase 0 inc3 (AC-4, the below-floor half): a client
@@ -456,12 +517,45 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 				"versionWindowDepth": s.versionWindowDepth,
 			})
 			s.writeRefusal(conn, msg.ID, e)
-			return protocol.WireVersion{}, nil, false
+			return protocol.WireVersion{}, nil, nil, false
 		}
 	}
 
 	negotiated := s.negotiateVersion(params.ClientMaxVersion)
 	negotiatedCaps := protocol.IntersectCapabilities(s.capabilities, params.Capabilities)
+
+	// FEAT-1972079936 Phase 2 inc2 (AC-2/AC-3): resolve the connection's
+	// transport AFTER version/capability negotiation succeeds. With no
+	// resolver installed the connection is bound to the server's single
+	// wrapped transport -- today's behaviour, byte-for-byte (AC-6). With a
+	// resolver installed, the handshake's (tenant, city) -- defaults applied
+	// (AC-1) -- selects the per-city transport; a resolver error REFUSES the
+	// handshake cleanly (MET-P030), never falling back to another city (AC-3).
+	// The bound city, like the negotiated version, is fixed for the
+	// connection's life (no mid-session rebind).
+	connTransport := s.transport
+	if s.resolveTransport != nil {
+		tenantID := params.TenantID
+		if tenantID == "" {
+			tenantID = defaultTenantID
+		}
+		cityID := params.CityID
+		if cityID == "" {
+			cityID = defaultCityID
+		}
+		resolved, err := s.resolveTransport(tenantID, cityID)
+		if err != nil {
+			e := errs.New(protocol.ErrHandshakeCityUnavailable, s.newCorrelationID(), map[string]any{
+				"tenantId": tenantID,
+				"cityId":   cityID,
+				"reason":   err.Error(),
+			})
+			s.writeRefusal(conn, msg.ID, e)
+			return protocol.WireVersion{}, nil, nil, false
+		}
+		connTransport = resolved
+	}
+
 	resultBytes, _ := json.Marshal(handshakeResult{
 		Accepted:          true,
 		ServerVersion:     s.engineVersion,
@@ -470,9 +564,9 @@ func (s *Server) handshake(conn *websocket.Conn) (protocol.WireVersion, []string
 	})
 	reply := rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: resultBytes}
 	if err := conn.WriteJSON(reply); err != nil {
-		return protocol.WireVersion{}, nil, false
+		return protocol.WireVersion{}, nil, nil, false
 	}
-	return negotiated, negotiatedCaps, true
+	return negotiated, negotiatedCaps, connTransport, true
 }
 
 // writeRefusal sends a JSON-RPC error response carrying e's registry code
@@ -569,7 +663,14 @@ func (c *safeConn) writeJSON(v any) error {
 // drains the transport's three outbound channels. Both goroutines write
 // to the connection only through the shared safeConn (sc, below) — see
 // its doc comment for why a second writer existed and raced it.
-func (s *Server) pump(conn *websocket.Conn, negotiated protocol.WireVersion, negotiatedCaps []string) {
+//
+// transport is THIS connection's bound transport (FEAT-1972079936 Phase 2
+// inc2): the server's single wrapped transport when no resolver is installed,
+// or the per-city transport the handshake resolved when one is. Every
+// inbound-command send and every outbound Results/Events/Deltas drain in this
+// function goes through this per-connection transport, so a connection bound
+// to city A can never move city B's engine or observe B's deltas (AC-4).
+func (s *Server) pump(conn *websocket.Conn, transport protocol.Transport, negotiated protocol.WireVersion, negotiatedCaps []string) {
 	sc := newSafeConn(conn)
 	// FEAT-1972079936 Phase 0 inc2 (AC-3): the shim (if any) this
 	// connection's negotiated major requires, resolved ONCE per
@@ -598,9 +699,9 @@ func (s *Server) pump(conn *websocket.Conn, negotiated protocol.WireVersion, neg
 	// (WriteJSON is not safe for concurrent use across goroutines).
 	go func() {
 		defer closeDone()
-		results := s.transport.Results()
-		events := s.transport.Events()
-		deltas := s.transport.Deltas()
+		results := transport.Results()
+		events := transport.Events()
+		deltas := transport.Deltas()
 		for {
 			select {
 			case <-done:
@@ -649,7 +750,7 @@ func (s *Server) pump(conn *websocket.Conn, negotiated protocol.WireVersion, neg
 		}
 		switch msg.Method {
 		case methodCommand:
-			s.handleCommand(sc, msg, shim, hasShim, negotiatedCaps)
+			s.handleCommand(sc, transport, msg, shim, hasShim, negotiatedCaps)
 		default:
 			// Unknown method post-handshake: ignored. v1 scope is
 			// command-forwarding only (subscribe/unsubscribe travel as
@@ -660,12 +761,14 @@ func (s *Server) pump(conn *websocket.Conn, negotiated protocol.WireVersion, neg
 }
 
 // handleCommand decodes msg.Params as a protocol.Command and forwards it
-// to s.transport.SendCommand. Any decode or send failure is reported back
+// to this connection's bound transport (FEAT-1972079936 Phase 2 inc2: the
+// per-city transport when a resolver is installed, else the server's single
+// wrapped transport). Any decode or send failure is reported back
 // to the caller as a JSON-RPC error response correlated by msg.ID -- the
 // actual CommandResult (accepted/rejected, per the engine's own
 // processing) arrives later, asynchronously, as a "result" notification
 // via pump's outbound goroutine, exactly like every other CommandResult.
-func (s *Server) handleCommand(sc *safeConn, msg rpcMessage, shim versionShim, hasShim bool, negotiatedCaps []string) {
+func (s *Server) handleCommand(sc *safeConn, transport protocol.Transport, msg rpcMessage, shim versionShim, hasShim bool, negotiatedCaps []string) {
 	// Defence in depth (astgate's copyguard convention): sc.writeJSON
 	// itself checks this before ever touching sc.mu/sc.conn, but this
 	// package's other reachable-type entry points (handleCommand,
@@ -747,7 +850,7 @@ func (s *Server) handleCommand(sc *safeConn, msg rpcMessage, shim versionShim, h
 		s.replyErrorE(sc, msg.ID, e)
 		return
 	}
-	if err := s.transport.SendCommand(cmd); err != nil {
+	if err := transport.SendCommand(cmd); err != nil {
 		e := errs.New(protocol.ErrCommandSendFailed, s.newCorrelationID(), map[string]any{
 			"reason":        err.Error(),
 			"correlationId": string(cmd.CorrelationID),
