@@ -120,3 +120,33 @@ const (
 	// subpackage.
 	ErrSafeConnCopied = "MET-P018"
 )
+
+// Registry error codes for FEAT-1972079936 Phase 0 increment 3 (capability
+// gating + the dedicated below-floor refusal). Range: P020-P029, claimed
+// via tools/plan/add-error.js claim-range for mkey "protocol" (the P010-
+// P019 block above was already fully occupied — 9 codes plus MET-P013's
+// TS-only reservation — so this is a fresh 10-wide block, not a reuse).
+const (
+	// ErrHandshakeBelowWindowFloor: the client's declared wire-version
+	// ceiling (handshakeParams.ClientMaxVersion) is strictly older than the
+	// server's supported window floor (protocol.WindowFloorMajor). This is
+	// a DEDICATED code, deliberately distinct from ErrHandshakeVersionMismatch
+	// (MET-P010, whose registered meaning is the separate build-string
+	// equality check) -- inc2 reused MET-P010 for this refusal as a
+	// documented TODO; inc3 retires that reuse (server.go's handshake) and
+	// carries clientMaxVersion/serverVersion/windowFloorMajor/
+	// versionWindowDepth context so the message is actionable ("upgrade
+	// required, minimum supported version is X"), per AC-4.
+	ErrHandshakeBelowWindowFloor = "MET-P020"
+
+	// ErrCapabilityRequired: a post-handshake command was refused because
+	// it requires a fine-grained capability (AC-5, Aaron ruling 3: one flag
+	// per individual feature, not a coarse per-area flag) that was not in
+	// this connection's NEGOTIATED capability set (the intersection of
+	// client-declared and server-declared capabilities, protocol.
+	// IntersectCapabilities). Distinct from ErrCommandValidationFailed
+	// (MET-P015): the envelope/payload are perfectly well-formed here, the
+	// connection simply never negotiated support for this specific
+	// feature.
+	ErrCapabilityRequired = "MET-P021"
+)

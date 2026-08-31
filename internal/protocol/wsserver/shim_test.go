@@ -91,12 +91,27 @@ func TestShimForOffset(t *testing.T) {
 // TestShim_DecodesIdenticallyToUnshimmedCommand is AC-6's exact proof at
 // the smallest possible scope: the SAME logical command, sent once in the
 // current major's wire shape and once in the legacy (offset-1) shape,
-// must decode to a byte-identical protocol.Command once the offset-1
-// shim's adaptCommandIn has rewritten the legacy shape — proving the
-// shim adapts WIRE bytes only, never the decoded value the engine sees.
+// must decode to a byte-identical protocol.Command (protocolVersion
+// included) once the offset-1 shim's adaptCommandIn AND the BUG-471
+// protocolVersion-normalize step have rewritten the legacy shape — proving
+// the shim adapts WIRE bytes only, never the decoded value the engine
+// sees.
+//
+// BUG-471 fix (this test was REWRITTEN, not just extended): the ORIGINAL
+// version of this test stamped BOTH the "current-shape" fixture AND the
+// "legacy-shape" fixture with the SAME literal protocolVersion ("2.0"),
+// which made it structurally incapable of catching BUG-471 -- a real
+// offset-1 (legacy-major) client declares its OWN older version ("1.0"),
+// not the current build's. A test that never constructs that divergence
+// cannot distinguish "the shim leaves protocolVersion alone" (the bug)
+// from "the shim normalizes it" (the fix): both pass when the inputs
+// already agree. This version declares the legacy client's real, OLDER
+// version and asserts the decoded result is normalized to CURRENT's
+// canonical string despite that -- the case that actually discriminates
+// the two implementations.
 func TestShim_DecodesIdenticallyToUnshimmedCommand(t *testing.T) {
 	current := protocol.Command{
-		ProtocolVersion: "2.0",
+		ProtocolVersion: protocol.CurrentWireVersion.String(),
 		CorrelationID:   "det-corr-1",
 		IssuedAtTick:    7,
 		Kind:            protocol.KindPause,
@@ -108,8 +123,14 @@ func TestShim_DecodesIdenticallyToUnshimmedCommand(t *testing.T) {
 	}
 
 	// The legacy (offset-1) client sends the SAME logical command, but
-	// with its correlation id under the old snake_case key.
-	legacyBytes := json.RawMessage(`{"protocolVersion":"2.0","correlation_id":"det-corr-1","issuedAtTick":7,"kind":"Pause","payload":{}}`)
+	// declares ITS OWN (older, offset-1) protocolVersion "1.0" -- NOT
+	// current's -- and carries its correlation id under the old
+	// snake_case key. A real offset-1 client's major is
+	// CurrentWireVersion.Major-1; Phase 0 pins an older major's minor to 0
+	// (negotiateVersion's own doc comment), so "1.0" is what an actual
+	// offset-1 connection declares when current is "2.0".
+	legacyVersion := (protocol.WireVersion{Major: protocol.CurrentWireVersion.Major - 1, Minor: 0}).String()
+	legacyBytes := json.RawMessage(`{"protocolVersion":"` + legacyVersion + `","correlation_id":"det-corr-1","issuedAtTick":7,"kind":"Pause","payload":{}}`)
 
 	shim, ok := shimForOffset(1)
 	if !ok {
@@ -118,6 +139,16 @@ func TestShim_DecodesIdenticallyToUnshimmedCommand(t *testing.T) {
 	adapted, err := shim.adaptCommandIn(legacyBytes)
 	if err != nil {
 		t.Fatalf("adaptCommandIn: %v", err)
+	}
+	// BUG-471: adaptCommandIn alone only renames the correlation-id key --
+	// the protocolVersion normalize step handleCommand applies (server.go)
+	// is exercised here explicitly, since this test asserts the boundary
+	// AC-6 requires (decoded Command byte-identical, version tag
+	// included), not just the correlation-id half shim_test.go's other
+	// cases already cover.
+	adapted, err = normalizeProtocolVersionField(adapted, protocol.CurrentWireVersion.String())
+	if err != nil {
+		t.Fatalf("normalizeProtocolVersionField: %v", err)
 	}
 
 	gotFromCurrent, err := protocol.DecodeCommand(currentBytes)
@@ -135,6 +166,9 @@ func TestShim_DecodesIdenticallyToUnshimmedCommand(t *testing.T) {
 		gotFromCurrent.Kind != gotFromLegacy.Kind {
 		t.Fatalf("decoded Command differs after shimming: from-current=%+v from-legacy(shimmed)=%+v", gotFromCurrent, gotFromLegacy)
 	}
+	if gotFromLegacy.ProtocolVersion != protocol.CurrentWireVersion.String() {
+		t.Fatalf("expected the shimmed legacy Command's ProtocolVersion normalized to canonical %q, got %q", protocol.CurrentWireVersion.String(), gotFromLegacy.ProtocolVersion)
+	}
 	if _, ok := gotFromCurrent.Payload.(protocol.PausePayload); !ok {
 		t.Fatalf("expected protocol.PausePayload, got %T", gotFromCurrent.Payload)
 	}
@@ -142,16 +176,35 @@ func TestShim_DecodesIdenticallyToUnshimmedCommand(t *testing.T) {
 		t.Fatalf("expected protocol.PausePayload, got %T", gotFromLegacy.Payload)
 	}
 
-	// MUTATION-PROVE: without the shim, decoding the legacy bytes directly
-	// would produce a DIFFERENT CorrelationID (empty, since "correlationId"
-	// is absent) -- proving this test actually exercises the shim, not a
-	// vacuously-true comparison.
+	// MUTATION-PROVE (correlation id): without the shim, decoding the
+	// legacy bytes directly would produce a DIFFERENT CorrelationID
+	// (empty, since "correlationId" is absent) -- proving this test
+	// actually exercises the rename shim, not a vacuously-true comparison.
 	gotUnshimmed, err := protocol.DecodeCommand(legacyBytes)
 	if err != nil {
 		t.Fatalf("decode raw legacy bytes (unshimmed): %v", err)
 	}
 	if gotUnshimmed.CorrelationID == gotFromCurrent.CorrelationID {
 		t.Fatal("test invalid: decoding the UNSHIMMED legacy bytes must NOT already match (else the shim proves nothing)")
+	}
+
+	// MUTATION-PROVE (BUG-471, the case the original test could not
+	// catch): without the protocolVersion-normalize step, the shim's own
+	// output (adaptCommandIn's result, BEFORE normalizeProtocolVersionField)
+	// still carries the legacy client's OWN "1.0"-style version, which
+	// DIFFERS from current's canonical string -- proving this test would
+	// fail if the normalize step were skipped, i.e. it actually pins the
+	// fix rather than passing vacuously.
+	renamedOnly, err := shim.adaptCommandIn(legacyBytes)
+	if err != nil {
+		t.Fatalf("adaptCommandIn (re-run for the mutation check): %v", err)
+	}
+	gotRenamedOnly, err := protocol.DecodeCommand(renamedOnly)
+	if err != nil {
+		t.Fatalf("decode rename-only (not yet version-normalized) bytes: %v", err)
+	}
+	if gotRenamedOnly.ProtocolVersion == protocol.CurrentWireVersion.String() {
+		t.Fatal("test invalid: the rename-only (pre-normalize) decode must NOT already be canonical (else BUG-471 could never have been observed)")
 	}
 }
 
@@ -222,11 +275,15 @@ func TestWindowNegotiation_CurrentAndOneBack_NegotiateOwnMajor_TwoBack_Refused(t
 		t.Fatalf("(c) expected a below-window-floor refusal, got acceptance %+v", resp.Result)
 	}
 	// Specific code check (not just "some refusal happened somewhere",
-	// per AC-4's false-pass guard) -- inc2 reuses ErrHandshakeVersionMismatch
-	// (see handshake's own TODO for inc3's dedicated code) but it must
-	// still be THAT code and not some other unrelated failure class.
-	if resp.Error.Code != protocol.ErrHandshakeVersionMismatch {
-		t.Fatalf("(c) expected code %s, got %s", protocol.ErrHandshakeVersionMismatch, resp.Error.Code)
+	// per AC-4's false-pass guard). Inc3 retires inc2's temporary reuse of
+	// ErrHandshakeVersionMismatch for this case -- the below-floor refusal
+	// now carries its OWN dedicated code, ErrHandshakeBelowWindowFloor
+	// (MET-P020), distinct from the build-string mismatch code (MET-P010).
+	if resp.Error.Code != protocol.ErrHandshakeBelowWindowFloor {
+		t.Fatalf("(c) expected code %s, got %s", protocol.ErrHandshakeBelowWindowFloor, resp.Error.Code)
+	}
+	if resp.Error.Code == protocol.ErrHandshakeVersionMismatch {
+		t.Fatal("below-floor refusal must NOT reuse ErrHandshakeVersionMismatch (that code's registered meaning is the separate build-string check)")
 	}
 	if resp.Error.Data["windowFloorMajor"] != float64(2) {
 		t.Fatalf("(c) expected windowFloorMajor=2 in error context, got %+v", resp.Error.Data)

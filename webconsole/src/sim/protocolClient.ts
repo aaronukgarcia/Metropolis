@@ -67,6 +67,24 @@ export const ERR_ENGINE_UNREACHABLE = 'MET-P013';
  * see handleMessage's delta branch. Claimed alongside the other P01x
  * codes under the same FEAT-1972079852 reservation. */
 export const ERR_SCHEMA_MISMATCH = 'MET-P017';
+/** FEAT-1972079936 Phase 0 increment 3 (AC-4): the DEDICATED below-window-
+ * floor handshake refusal — a client whose declared wire-version ceiling
+ * is older than the server's supported window floor. Distinct from
+ * ERR_HANDSHAKE_VERSION_MISMATCH (MET-P010, the separate build-string
+ * equality check) — increment 2 temporarily reused that code for this
+ * case; increment 3 retires the reuse server-side (wsserver/server.go)
+ * and mirrors the new code here, same convention as every other MET-P0xx
+ * literal in this block (never a Go import, per this file's own
+ * doc-comment rule). */
+export const ERR_HANDSHAKE_BELOW_WINDOW_FLOOR = 'MET-P020';
+/** FEAT-1972079936 Phase 0 increment 3 (AC-5): a post-handshake command
+ * was refused because it requires a fine-grained capability this
+ * connection never negotiated (protocol/capability.go's
+ * RequiredCapability). Never constructed client-side today (this client
+ * has no gated command to send yet, per hasCapability's own doc comment)
+ * — mirrored here purely so the registration is visible alongside every
+ * other MET-P0xx code this file already tracks. */
+export const ERR_CAPABILITY_REQUIRED = 'MET-P021';
 
 /** The minimal WebSocket surface this module needs — satisfied by the
  * real browser `WebSocket`, and by test/protocol-client fakes. Kept

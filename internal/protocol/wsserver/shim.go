@@ -89,6 +89,29 @@ func shimForOffset(offset int) (versionShim, bool) {
 	return s, ok
 }
 
+// normalizeProtocolVersionField overwrites raw's top-level "protocolVersion"
+// key with canonical, leaving every other key untouched (BUG-471, FEAT-
+// 1972079936 Phase 0 inc3): a shimmed (in-window older-major) connection's
+// wire bytes still carry the CLIENT's own declared protocolVersion (e.g.
+// "1.0"), which adaptCommandIn's field-rename alone does not touch. If the
+// field is absent, canonical is added -- a well-formed envelope always
+// carries protocolVersion (envelope.go's Command.Validate requires it), so
+// an absent field here means an already-malformed payload that decode will
+// reject on its own merits; this function's job is only to canonicalize
+// the tag when present, never to validate the rest of the envelope.
+func normalizeProtocolVersionField(raw json.RawMessage, canonical string) (json.RawMessage, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	canonicalBytes, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, err
+	}
+	m["protocolVersion"] = canonicalBytes
+	return json.Marshal(m)
+}
+
 // renameJSONField renames a top-level key of a JSON object from `from` to
 // `to`, leaving every other key untouched and preserving each value's
 // exact raw bytes (no re-marshal/re-typing of the value itself, so a
