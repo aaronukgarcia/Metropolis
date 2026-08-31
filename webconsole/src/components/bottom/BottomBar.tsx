@@ -85,7 +85,6 @@ function BuildTab() {
                 disabled={isPh || (!locked && state.funds < placementCost(sp))}
                 aria-disabled={isPh || undefined}
                 aria-label={!isPh && locked ? `Locked — unlocks at city level ${sp.unlock}` : undefined}
-                style={isPh ? { opacity: 0.45, filter: 'grayscale(1)', cursor: 'default' } : undefined}
                 title={
                   isPh
                     ? `${sp.name} — coming soon (planned): ${sp.blurb}`
@@ -113,13 +112,15 @@ function BuildTab() {
                   <span className="pal-cap">{sp.blurb}</span>
                 </span>
                 <span className="pal-cost">
-                  {isPh
-                    ? 'Soon'
-                    : locked
-                      ? `Lv ${sp.unlock}`
-                      : isFreeZone(sp)
-                        ? `Free · ${constructionTicks(sp)}t · ${sp.w}×${sp.h}`
-                        : `${fmtMoney(sp.cost)} · ${sp.w}×${sp.h}`}
+                  {isPh ? (
+                    <span className="chip amber">Soon</span>
+                  ) : locked ? (
+                    `Lv ${sp.unlock}`
+                  ) : isFreeZone(sp) ? (
+                    `Free · ${constructionTicks(sp)}t · ${sp.w}×${sp.h}`
+                  ) : (
+                    `${fmtMoney(sp.cost)} · ${sp.w}×${sp.h}`
+                  )}
                 </span>
               </button>
             );

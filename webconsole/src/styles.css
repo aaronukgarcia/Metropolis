@@ -179,6 +179,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .chip.done { background: rgba(63, 185, 80, 0.18); color: var(--done); }
 .chip.open { background: transparent; color: var(--muted); border: 1px solid var(--border-strong); }
 .chip.blocked { background: rgba(255, 123, 114, 0.15); color: var(--danger); }
+.chip.amber { background: rgba(227, 179, 65, 0.18); color: var(--warn); }
 
 .xp-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
 .xp-head p { margin: 2px 0 0; font-size: 11.5px; }
@@ -220,6 +221,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .pal-item:hover:not(:disabled) { border-color: var(--accent); }
 .pal-item.active { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
 .pal-item.locked { opacity: 0.5; cursor: not-allowed; }
+.pal-item.placeholder { border-color: var(--warn); color: var(--warn); }
 .pal-item:disabled { opacity: 0.55; cursor: not-allowed; }
 .pal-name { font-weight: 600; white-space: nowrap; }
 .pal-cost { font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--muted); }

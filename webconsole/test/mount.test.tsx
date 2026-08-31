@@ -281,7 +281,16 @@ test('FEAT-1972079860 AC-4: locked-spec buttons NOT disabled (clickable), placeh
     'placeholder buttons (with pal-item placeholder class) must have disabled attribute'
   );
 
-  // Assertion 5: The HTML should contain Build tab labels (smoke test)
+  // Assertion 5: Placeholder "Soon" text must render as an amber chip (FEAT-1972079921)
+  // Aaron's ruling: placeholders render AMBER (coming soon), not grey.
+  const amberChipRegex = /class="[^"]*chip[^"]*amber[^"]*"[^>]*>Soon</;
+  const amberChip = amberChipRegex.test(html);
+  assert.ok(
+    amberChip,
+    'placeholder cost must render as an amber chip with "Soon" text (FEAT-1972079921 amber ruling)'
+  );
+
+  // Assertion 6: The HTML should contain Build tab labels (smoke test)
   assert.ok(
     html.includes('Build'),
     'BottomBar must render successfully and contain Build tab'
