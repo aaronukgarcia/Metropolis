@@ -35,6 +35,7 @@
 import { codedError, recordError } from './backend.ts';
 import { PROTOCOL_ENGINE_KEY, queueDepthTracker, type QueueDepthTracker } from './queueDepth.ts';
 import {
+  CURRENT_WIRE_VERSION,
   FINANCE_SCHEMA_VERSION,
   PROTOCOL_VERSION,
   type Command,
@@ -43,6 +44,7 @@ import {
   type Delta,
   type HandshakeResult,
   type RpcMessage,
+  type WireVersion,
   type SubscriptionID,
 } from './wire.ts';
 
@@ -91,8 +93,13 @@ export interface ProtocolClientOptions {
   /** Socket factory — defaults to the global WebSocket; tests inject a fake. */
   createSocket?: (url: string) => WireSocket;
   onStateChange?: (state: ProtocolClientState) => void;
-  /** Called once per accepted handshake with the engine's own version. */
-  onLive?: (serverVersion: string) => void;
+  /** Called once per accepted handshake with the engine's own build
+   * string (unchanged meaning, Aaron ruling 5), the NEGOTIATED wire
+   * version, and the negotiated (intersected, AC-5) capability set
+   * (FEAT-1972079936 Phase 0 inc1, AC-2). Existing callers that only
+   * read the first argument are unaffected — the two new ones are
+   * additive. */
+  onLive?: (serverVersion: string, negotiatedVersion?: WireVersion, capabilities?: string[]) => void;
   /** Called on every refusal/failure, AFTER recordError has already run —
    * purely a UI hook (e.g. show a banner), never the only place the
    * failure is trapped. */
@@ -172,6 +179,13 @@ export class ProtocolClient {
   private socket: WireSocket | null = null;
   private state: ProtocolClientState = 'connecting';
   private handshakeDone = false;
+  /** Set once an accepted handshake response arrives (FEAT-1972079936
+   * Phase 0 inc1). null until then. */
+  private negotiatedVersion: WireVersion | null = null;
+  /** Negotiated (intersected) capability set from the accepted handshake
+   * response — see getCapabilities/hasCapability below. Empty (never
+   * null) so callers never need a null-check to iterate/query it. */
+  private capabilities: string[] = [];
   private readonly seqTracker = new SeqTracker();
   private readonly newCorrelationId: () => string;
   /** inc2: JSON-RPC request id -> the pending sendCommand() Promise's
@@ -200,6 +214,29 @@ export class ProtocolClient {
     return this.state;
   }
 
+  /** The negotiated wire version from the last accepted handshake, or
+   * null before a handshake has completed (FEAT-1972079936 Phase 0 inc1,
+   * AC-1/AC-2). */
+  getNegotiatedVersion(): WireVersion | null {
+    return this.negotiatedVersion;
+  }
+
+  /** The negotiated (intersected, AC-5) capability set — empty before a
+   * handshake completes or when neither side declared anything. */
+  getCapabilities(): readonly string[] {
+    return this.capabilities;
+  }
+
+  /** Whether `name` is in the negotiated capability set (AC-5's gate: a
+   * caller checks this BEFORE using a feature gated behind a capability,
+   * rather than sending the command and relying on the server to reject
+   * it after the fact). Phase 0 declares no real capability tokens yet,
+   * so this always returns false today — the mechanism is what this
+   * increment introduces. */
+  hasCapability(name: string): boolean {
+    return this.capabilities.includes(name);
+  }
+
   connect(): void {
     const factory = this.opts.createSocket ?? ((url: string) => new WebSocket(url) as unknown as WireSocket);
     const socket = factory(this.opts.url);
@@ -212,7 +249,20 @@ export class ProtocolClient {
         jsonrpc: '2.0',
         id: 1,
         method: 'handshake',
-        params: { clientVersion: this.opts.clientVersion },
+        params: {
+          clientVersion: this.opts.clientVersion,
+          // FEAT-1972079936 Phase 0 inc1 (AC-1/AC-2): this client only
+          // ever declares the single version it currently speaks — the
+          // min/max SHAPE exists now so increment 2 can widen the range
+          // without a message restructure, see wire.ts's HandshakeParams
+          // doc comment.
+          clientMinVersion: CURRENT_WIRE_VERSION,
+          clientMaxVersion: CURRENT_WIRE_VERSION,
+          // No real capability tokens exist yet (Phase 0 has no feature
+          // gated behind one) — the empty array exercises AC-2's
+          // empty-intersection case end-to-end.
+          capabilities: [],
+        },
       };
       socket.send(JSON.stringify(req));
     });
@@ -526,8 +576,16 @@ export class ProtocolClient {
       return;
     }
     this.handshakeDone = true;
+    // FEAT-1972079936 Phase 0 inc1 (AC-1/AC-2): an OLD-shape server that
+    // predates this increment simply won't send these two fields — they
+    // are genuinely optional on the wire (wire.ts's HandshakeResult
+    // doc), so falling back to this client's own current/empty values
+    // here means a same-commit dev loopback with a not-yet-upgraded
+    // server still behaves exactly as it did before this change.
+    this.negotiatedVersion = result.negotiatedVersion ?? CURRENT_WIRE_VERSION;
+    this.capabilities = result.capabilities ?? [];
     this.setState('live');
-    this.opts.onLive?.(result.serverVersion);
+    this.opts.onLive?.(result.serverVersion, this.negotiatedVersion, this.capabilities);
   }
 
   private reportUnreachable(reason: string): void {

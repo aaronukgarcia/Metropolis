@@ -580,7 +580,7 @@
       "milestone": "M0",
       "layer": "interface",
       "title": "Engine<->UI protocol v1: commands, events, deltas, view subscriptions",
-      "desc": "Versioned message schema (BuyLand, SetBudget, AdvanceTicks...; state deltas + events out), correlation IDs on every command, view-subscription contract (named projections, deltas only for live subscriptions — also the remote-play seam). In-process channels v1, gRPC transport implemented but dormant behind a config flag.",
+      "desc": "Versioned message schema (BuyLand, SetBudget, AdvanceTicks...; state deltas + events out), correlation IDs on every command, view-subscription contract (named projections, deltas only for live subscriptions — also the remote-play seam). In-process channels v1, gRPC transport implemented but dormant behind a config flag. FEAT-1972079936 Phase 0 (compute-offload epic, Aaron 2026-08-31): the connect-time handshake (wsserver package) carries a semver'd WireVersion (major.minor, protocol/version.go) decoupled from the engine build string, a client-declared version range + capability set, and a server-negotiated version + intersected capability set — replacing the old exact-build-string refuse-on-mismatch rule with graceful, in-window negotiation (a version window + compat shims land in a later increment; refusal is reserved for a client below the window floor). See docs/planning/acceptance/feat-1972079936-phase0-protocol-versioning.md.",
       "specRef": "§15; UI-SPEC §1, §6; M0-ENG §1.1; V.2.1",
       "path": "internal/protocol/",
       "inbound": {

@@ -6,14 +6,15 @@ import (
 	"fmt"
 )
 
-// ProtocolVersion is the wire version of this envelope schema. Every
-// Command carries it verbatim; DecodeCommand and Command.Validate reject
-// any other value. Bumping the protocol to a new incompatible version
-// means defining a new constant (e.g. ProtocolVersion2 = "2.0") and a
-// parallel decode path — see docs/design/protocol.md "Versioning &
-// extension rules" for how v1.1 (additive) differs from a v2 (breaking)
-// bump.
-const ProtocolVersion = "1.0"
+// ProtocolVersion is the wire version of this envelope schema, now
+// DERIVED from the semver'd CurrentWireVersion (version.go, FEAT-1972079936
+// Phase 0 inc1) rather than an independently hand-maintained string — see
+// version.go's package doc for why a real major/minor pair replaced the
+// old opaque string. Every Command still carries it verbatim; Validate
+// below now accepts any minor at-or-below CurrentWireVersion's, for the
+// same major, rather than exact string equality — see docs/design/
+// protocol.md "Versioning & extension rules" for how v1.1 (additive)
+// differs from a v2 (breaking) bump, now formalized by WireVersion.Major.
 
 // Tick is simulation time: the monotonically increasing logistics
 // day-tick / monthly-tick counter the engine's phase pipeline advances
@@ -110,8 +111,20 @@ type Command struct {
 // registry-sourced errors (GR#7); this package only guards the envelope
 // contract itself.
 func (cmd Command) Validate() error {
-	if cmd.ProtocolVersion != ProtocolVersion {
-		return fmt.Errorf("%w: got %q, want %q", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, ProtocolVersion)
+	got, err := ParseWireVersion(cmd.ProtocolVersion)
+	if err != nil {
+		return fmt.Errorf("%w: got %q: %v", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, err)
+	}
+	current := CurrentWireVersion
+	// Major must match exactly (a breaking change — WireVersion's own doc
+	// comment) with no window/shim to bridge it in this increment (that
+	// is increments 2-3's job, AC-3/AC-4). Minor is additive-tolerant: an
+	// OLDER minor than this build's current is fine (an older client just
+	// never sent/reads the newer fields); a NEWER minor than this build
+	// knows about is refused, since this build genuinely does not
+	// understand what that minor may have added.
+	if got.Major != current.Major || got.Minor > current.Minor {
+		return fmt.Errorf("%w: got %q, want %q (major must match; minor must be <= current)", ErrUnsupportedProtocolVersion, cmd.ProtocolVersion, current.String())
 	}
 	if err := cmd.CorrelationID.Validate(); err != nil {
 		return err

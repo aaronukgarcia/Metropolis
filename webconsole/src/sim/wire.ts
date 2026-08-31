@@ -49,6 +49,76 @@ export function normalizeProtocolVersion(v: string): string {
   return v.endsWith('-dirty') ? v.slice(0, -'-dirty'.length) : v;
 }
 
+// ---------------------------------------------------------------------
+// Semver'd wire version + negotiation shape (FEAT-1972079936 Phase 0
+// increment 1) — mirrors internal/protocol/version.go's WireVersion and
+// wsserver/server.go's extended handshakeParams/handshakeResult, per this
+// file's own no-shared-import convention (each side keeps its own copy).
+// See version.go's doc comment for the full major/minor rationale; the
+// short version: MAJOR is a breaking change (a client whose major
+// differs cannot be served at all without a shim, increments 2-3), MINOR
+// is additive (an older-minor client keeps working unmodified).
+// ---------------------------------------------------------------------
+
+/** Mirrors version.go's WireVersion: a parsed major.minor pair, distinct
+ * from the git-describe build string (PROTOCOL_VERSION/clientVersion
+ * above stays a separate, purely diagnostic concept per Aaron ruling 5,
+ * FEAT-1972079936). */
+export interface WireVersion {
+  major: number;
+  minor: number;
+}
+
+/** The wire protocol version this build speaks, parsed from
+ * PROTOCOL_VERSION. Mirrors version.go's CurrentWireVersion. Increment 1
+ * only ever declares/expects this single value (window/shim serving is
+ * increment 2) — this constant exists now so the handshake shape below
+ * never has to change when that increment widens it. */
+export const CURRENT_WIRE_VERSION: WireVersion = parseWireVersionOrThrow(PROTOCOL_VERSION);
+
+/** Mirrors version.go's ParseWireVersion: parses a "major.minor" string
+ * into a WireVersion, or returns null for anything malformed (no
+ * exception — callers decide how a malformed wire version is surfaced,
+ * consistent with this file's other decode helpers). */
+export function parseWireVersion(v: string): WireVersion | null {
+  const parts = v.split('.');
+  // A wire version is exactly two dot-separated parts: major.minor.
+  const WIRE_VERSION_PART_COUNT = 2;
+  if (parts.length !== WIRE_VERSION_PART_COUNT) return null;
+  const major = Number(parts[0]);
+  const minor = Number(parts[1]);
+  if (!Number.isInteger(major) || major < 0) return null;
+  if (!Number.isInteger(minor) || minor < 0) return null;
+  return { major, minor };
+}
+
+function parseWireVersionOrThrow(v: string): WireVersion {
+  const parsed = parseWireVersion(v);
+  if (!parsed) {
+    // PROTOCOL_VERSION is this file's own literal constant, above — a
+    // malformed value here is a bug in THIS file, not a runtime/network
+    // condition, so throwing at module-load time (loudly, immediately)
+    // is correct rather than silently falling back to some default.
+    throw new Error(`wire.ts: PROTOCOL_VERSION ${JSON.stringify(v)} is not a valid "major.minor" wire version`);
+  }
+  return parsed;
+}
+
+/** Mirrors version.go's IntersectCapabilities: the set intersection of a
+ * and b, de-duplicated, never their union and never either side's raw
+ * set alone (AC-5). A nil/empty a or b correctly yields an empty array. */
+export function intersectCapabilities(a: string[], b: string[]): string[] {
+  const inA = new Set(a);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const c of b) {
+    if (seen.has(c)) continue;
+    seen.add(c);
+    if (inA.has(c)) out.push(c);
+  }
+  return out;
+}
+
 /** Mirrors envelope.go's Tick (a plain integer wire type; the "int64" width
  * only matters Go-side — JS numbers are safe for tick counts well past any
  * realistic session length). */
@@ -136,15 +206,35 @@ export interface RpcMessage {
   error?: RpcError;
 }
 
-/** Mirrors wsserver's handshakeParams. */
+/** Mirrors wsserver's handshakeParams. clientVersion remains the build
+ * string (diagnostic-only, and still this increment's actual accept/
+ * refuse gate per server.go's doc comment). clientMinVersion/
+ * clientMaxVersion + capabilities are new (FEAT-1972079936 Phase 0 inc1,
+ * AC-1/AC-2): the wire-version RANGE and capability set this client
+ * declares. Increment 1 always sets min===max===CURRENT_WIRE_VERSION
+ * (window/range serving is increment 2) and an empty capabilities array
+ * (Phase 0 has no real capability tokens yet) — shaped this way now so a
+ * later increment only has to widen what's sent, never restructure the
+ * message. */
 export interface HandshakeParams {
   clientVersion: string;
+  clientMinVersion?: WireVersion;
+  clientMaxVersion?: WireVersion;
+  capabilities?: string[];
 }
 
-/** Mirrors wsserver's handshakeResult. */
+/** Mirrors wsserver's handshakeResult. serverVersion remains the build
+ * string (Aaron ruling 5: stays client-visible for diagnostics even
+ * though it no longer gates accept/refuse once increment 3 lands).
+ * negotiatedVersion + capabilities are new: the wire version and
+ * capability set this connection actually negotiated (AC-1/AC-2/AC-5) —
+ * see protocolClient.ts's handleHandshakeResponse and getCapabilities/
+ * hasCapability for how a caller consumes them. */
 export interface HandshakeResult {
   accepted: boolean;
   serverVersion: string;
+  negotiatedVersion?: WireVersion;
+  capabilities?: string[];
 }
 
 // ---------------------------------------------------------------------

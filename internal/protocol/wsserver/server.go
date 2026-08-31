@@ -23,6 +23,27 @@
 // one that never arrives within HandshakeTimeout (MET-P012) is refused
 // the same way.
 //
+// # Graceful negotiation is arriving (FEAT-1972079936 Phase 0)
+//
+// The paragraph above documents this package's CURRENT behaviour and
+// remains accurate for this increment — engineVersion-string equality is
+// still the accept/refuse gate. Aaron's superseding DD (2026-08-31, the
+// compute-offload epic, docs/planning/acceptance/
+// feat-1972079936-phase0-protocol-versioning.md) is that this refuse-on-
+// any-mismatch rule is too strict for the Azure-hosted target topology,
+// where a long-lived server outlives many client-tab refresh cycles: an
+// in-window older client should connect and work, not be kicked off by
+// every deploy. Phase 0 replaces this with a semver'd WireVersion
+// (protocol.WireVersion, version.go), a real connect-time negotiation
+// (this file's handshakeParams/handshakeResult, extended below), a
+// configurable version window with compat shims, and refusal reserved
+// for a client strictly below the window floor. Increment 1 (this
+// change) adds ONLY the new fields and a single-version echo — the
+// engineVersion-string gate above is untouched until increment 3, which
+// is also where this doc comment's "REFUSAL, never a silent degrade"
+// framing gets corrected to describe the window/negotiation behaviour in
+// full.
+//
 // # v1 scope (increment 1)
 //
 // One WebSocket connection is treated as one UI client of the wrapped
@@ -99,13 +120,66 @@ type rpcError struct {
 
 // handshakeParams is methodHandshake's request payload.
 type handshakeParams struct {
+	// ClientVersion is the connecting build's own version string
+	// (buildinfo.Version / git-describe, GR#2). Kept for diagnostics and
+	// as this increment's ACTUAL accept/refuse gate (see this file's
+	// package doc, "Graceful negotiation is arriving") — Aaron ruling 5
+	// (FEAT-1972079936 Phase 0) keeps the engine build string
+	// client-visible even once the wire version below is what governs
+	// negotiation.
 	ClientVersion string `json:"clientVersion"`
+
+	// ClientMinVersion/ClientMaxVersion (FEAT-1972079936 Phase 0 inc1,
+	// AC-1/AC-2): the wire protocol version RANGE this client speaks,
+	// decoupled from ClientVersion above. Increment 1 always sets both
+	// to the same single concrete value it supports (window/range
+	// serving is increment 2 — see version.go's WireVersion doc comment,
+	// "Window design note"); shaping the field as a min/max pair NOW,
+	// rather than a single value, means increment 2 only has to widen
+	// what ClientMinVersion can legitimately be, never restructure this
+	// message. Optional (a *WireVersion, not a plain value) so an older
+	// client that predates this field entirely is distinguishable from
+	// one explicitly declaring version 0.0 — see WireVersion.IsZero's
+	// doc comment for why that distinction matters at this boundary.
+	ClientMinVersion *protocol.WireVersion `json:"clientMinVersion,omitempty"`
+	ClientMaxVersion *protocol.WireVersion `json:"clientMaxVersion,omitempty"`
+
+	// Capabilities this client understands (AC-5's mechanism). Increment
+	// 1 introduces the field and the intersection helper
+	// (protocol.IntersectCapabilities) it is run through; no real
+	// capability tokens exist yet for either side to declare (Phase 0
+	// has no new feature gated behind one), so this is exercised today
+	// only via the empty-set case (AC-2's mutation test).
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // handshakeResult is methodHandshake's successful response payload.
 type handshakeResult struct {
-	Accepted      bool   `json:"accepted"`
+	Accepted bool `json:"accepted"`
+	// ServerVersion is this build's own version string — informational
+	// only (Aaron ruling 5: the engine build string stays client-visible
+	// for diagnostics/support even though it no longer gates accept vs.
+	// refuse once increment 3 lands). Unchanged meaning from before this
+	// phase.
 	ServerVersion string `json:"serverVersion"`
+
+	// NegotiatedVersion (AC-1/AC-2): the wire protocol version this
+	// connection will actually speak — the highest version both the
+	// client's declared range and this server's currently-served window
+	// support. Increment 1's window has depth 0/1 (this server only ever
+	// serves protocol.CurrentWireVersion), so "negotiation" today means:
+	// echo the client's own ceiling when it is at or below current (AC-2's
+	// mutation proves this is NOT simply always the server's own latest),
+	// clipped down to current when the client asks for something newer
+	// than this build knows. A nil ClientMaxVersion in the request (an
+	// old/increment-0 client) always gets protocol.CurrentWireVersion
+	// here, preserving today's single-version behaviour exactly.
+	NegotiatedVersion protocol.WireVersion `json:"negotiatedVersion"`
+
+	// Capabilities is the negotiated (intersected, AC-5) capability set —
+	// see handshakeParams.Capabilities's doc comment for why this is
+	// exercised today only via the empty-set case.
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // Server bridges HTTP WebSocket connections to a wrapped protocol.Transport.
@@ -115,6 +189,14 @@ type Server struct {
 	handshakeTimeout time.Duration
 	upgrader         websocket.Upgrader
 	newCorrelationID func() string
+	// capabilities is this server's own declared capability set (AC-5).
+	// nil in increment 1 — Phase 0 introduces no new feature gated behind
+	// one yet, so there is nothing real to declare; the negotiation
+	// mechanism (protocol.IntersectCapabilities, handshakeResult.
+	// Capabilities) is exercised today purely via the empty-intersection
+	// case. A future increment can populate this via a constructor
+	// option once a real capability token exists.
+	capabilities []string
 }
 
 // New constructs a Server wrapping transport. engineVersion is this
@@ -187,6 +269,40 @@ func normalizeVersion(v string) string {
 	return strings.TrimSuffix(v, "-dirty")
 }
 
+// negotiateVersion computes the wire version this connection will speak
+// (FEAT-1972079936 Phase 0 inc1, AC-1/AC-2). clientMax is the client's
+// declared ceiling (handshakeParams.ClientMaxVersion); nil means an old
+// client that predates this field entirely.
+//
+// Increment 1's window has depth 0/1 — this server only ever actually
+// SERVES protocol.CurrentWireVersion (the real window/shim registry is
+// increment 2, AC-3) — so this is a single-version ECHO, not full
+// negotiation: it proves the response reflects the CLIENT's declared
+// ceiling when that ceiling is the lower of the two (AC-2's mutation:
+// a client one minor behind current must get ITS version back, not
+// silently the server's own latest), and otherwise falls back to the
+// server's current version (a nil/newer-than-current client, or one from
+// a different major — increment 3's AC-4 is where a genuine below-floor
+// case gets its own typed refusal instead of this permissive fallback).
+func negotiateVersion(clientMax *protocol.WireVersion) protocol.WireVersion {
+	current := protocol.CurrentWireVersion
+	if clientMax == nil {
+		return current
+	}
+	if clientMax.Major == current.Major && clientMax.Minor < current.Minor {
+		return protocol.WireVersion{Major: current.Major, Minor: clientMax.Minor}
+	}
+	return current
+}
+
+// negotiateVersion is a method purely so call sites read naturally
+// alongside s.transport/s.capabilities; it has no receiver-dependent
+// state today (increment 2's window config will live on Server and this
+// will start reading it instead of the package-level current constant).
+func (s *Server) negotiateVersion(clientMax *protocol.WireVersion) protocol.WireVersion {
+	return negotiateVersion(clientMax)
+}
+
 // handshake reads the connection's first frame, validates it is a
 // well-formed handshake naming a matching ClientVersion, and responds
 // accordingly. Returns true iff the handshake succeeded and the
@@ -242,7 +358,12 @@ func (s *Server) handshake(conn *websocket.Conn) bool {
 		return false
 	}
 
-	resultBytes, _ := json.Marshal(handshakeResult{Accepted: true, ServerVersion: s.engineVersion})
+	resultBytes, _ := json.Marshal(handshakeResult{
+		Accepted:          true,
+		ServerVersion:     s.engineVersion,
+		NegotiatedVersion: s.negotiateVersion(params.ClientMaxVersion),
+		Capabilities:      protocol.IntersectCapabilities(s.capabilities, params.Capabilities),
+	})
 	reply := rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: resultBytes}
 	if err := conn.WriteJSON(reply); err != nil {
 		return false
