@@ -18,7 +18,7 @@ import {
   residentsCapacity,
   totalJobs,
   capacityAtTier,
-  placementCost,
+  computeRoadConnectivity,
 } from '../src/sim/data.ts';
 import {
   initialState,
@@ -26,8 +26,6 @@ import {
   evaluateBuildingMonitors,
   TICKS_PER_MONTH,
   TICKS_PER_YEAR,
-  BUILDING_UTILIZATION_THRESHOLD,
-  BUILDING_AUTO_SCALE_COST_FRACTION,
 } from '../src/sim/engine.ts';
 
 // Helper to create a clean initial state with unlocks and funding
@@ -160,6 +158,46 @@ test('AC-5: capacityAtTier returns last tier if tier exceeds array length', () =
   assert.equal(overshoot, lastCapacity, 'capped at last tier');
 });
 
+// === BUG-448 AC-3: capacityAtTier non-finite clamp ===
+//
+// HONEST COUNT (rigor round, 2026-08-31): of these 4 tests, only 3 are load-bearing
+// against the `if (!Number.isFinite(tier)) tier = 0;` guard in data.ts:
+//   - undefined → without the guard, Math.max(0, undefined) is NaN, so
+//     tiers[NaN] is undefined — differs from the expected tier-0 capacity. RED.
+//   - NaN       → same reasoning, tiers[NaN] is undefined. RED.
+//   - Infinity  → without the guard, `tier >= tiers.length` is true, so it falls
+//     through to the LAST tier, not tier 0 — differs from expected. RED.
+//   - -Infinity → is NOT load-bearing: even without the guard, the pre-existing
+//     `Math.max(0, tier)` on the fallback path already clamps -Infinity to 0,
+//     so this case passes with or without the new guard. Kept below as a
+//     regression pin / documentation of the boundary, not as proof of the guard.
+
+test('BUG-448 AC-3: capacityAtTier clamps undefined tier to 0', () => {
+  const sp = SPECS['res_estate'];
+  // undefined is not finite, should clamp to tier 0
+  const result = capacityAtTier(sp, undefined);
+  assert.equal(result, sp.capacityTiers[0], 'undefined tier returns tier 0 capacity');
+});
+
+test('BUG-448 AC-3: capacityAtTier clamps NaN tier to 0', () => {
+  const sp = SPECS['res_estate'];
+  const result = capacityAtTier(sp, NaN);
+  assert.equal(result, sp.capacityTiers[0], 'NaN tier returns tier 0 capacity');
+});
+
+test('BUG-448 AC-3: capacityAtTier clamps Infinity tier to 0 (non-finite)', () => {
+  const sp = SPECS['res_estate'];
+  const result = capacityAtTier(sp, Infinity);
+  // Infinity is not finite, so it clamps to 0
+  assert.equal(result, sp.capacityTiers[0], 'Infinity (non-finite) clamps to tier 0');
+});
+
+test('BUG-448 AC-3: capacityAtTier clamps negative Infinity to 0 (documentation — NOT load-bearing, see note above)', () => {
+  const sp = SPECS['res_estate'];
+  const result = capacityAtTier(sp, -Infinity);
+  assert.equal(result, sp.capacityTiers[0], '-Infinity clamps to tier 0 (also true without the new guard, via the pre-existing Math.max(0, tier))');
+});
+
 // === AC-6: BuildingMonitor Data Structure ===
 
 test('AC-6: monitor is created on building placement', () => {
@@ -273,6 +311,74 @@ test('AC-7: offline building does NOT scale', () => {
   assert.equal(result.cost, 0, 'no cost charged');
 });
 
+// BUG-448 rigor-round fix: the original "threshold behavior" test's building was
+// OFFLINE (no roads at all) — evaluateBuildingMonitors's per-monitor loop hits the
+// `if (!isOnline(s, building)) continue;` gate before it ever reaches the
+// utilization/threshold check, so the test passed for the wrong reason (mutating
+// BUILDING_UTILIZATION_THRESHOLD from 0.85 to 0.5 left it green). Fixed here with a
+// CONNECTED, online building (the same contiguous edge-to-building road chain the
+// passing AC-7 scale tests use), split into an under-threshold pin (84%, must NOT
+// scale) and an over-threshold pin (86%, must scale) so the 0.85 line itself is
+// load-bearing.
+//
+// MUTATION PROOF (scratch cp/mv, restore after): change
+// `export const BUILDING_UTILIZATION_THRESHOLD = 0.85` to `0.5` — the 84% test
+// below goes RED (it now scales when it should not).
+
+// Both pin tests below call evaluateBuildingMonitors DIRECTLY (rather than looping
+// 30 real 'tick' actions through the reducer, as AC-7's passing scale test does) —
+// a full tick loop also drives the population-growth-toward-capacity mechanic in
+// advance(), which would nudge a below-capacity population upward over 30 ticks
+// and could cross the 84%/86% line the test is trying to pin BEFORE the 30th tick,
+// exactly the kind of confound the AC-7 "offline building" test above documents.
+// Calling the pure function directly with a fixed population isolates the single
+// utilization/threshold comparison. s.roadConnectivity is computed explicitly
+// (mirrors what advance() does at the start of every real tick) so isOnline's
+// road-connected gate reads the real graph, not the stale/empty one `mk()`'s base
+// state carries.
+
+test('BUG-448: connected building at 84% utilization does NOT scale (threshold pin)', () => {
+  const roads = [];
+  for (let x = 0; x <= 10; x++) {
+    roads.push({ id: 200 + x, spec: 'road', x, y: 20, builtTick: -1000 });
+  }
+  const house = { id: 1, spec: 'res_estate', x: 10, y: 21, builtTick: -1000 };
+
+  let s = mk({
+    buildings: [...roads, house],
+    population: 1260, // 1260 / 1500 = 84% — below the 0.85 threshold
+    tick: 30,
+    buildingMonitors: [{ buildingId: 1, until: 360, type: 'residents' }],
+  });
+  s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
+
+  const result = evaluateBuildingMonitors(s, 30);
+  const building = result.buildings.find((b) => b.id === 1);
+  assert.equal(building?.capacityTier, undefined, '84% utilization does NOT scale (below 0.85)');
+  assert.equal(result.upgraded, 0, 'no upgrade at 84%');
+});
+
+test('BUG-448: connected building at 86% utilization DOES scale (threshold pin)', () => {
+  const roads = [];
+  for (let x = 0; x <= 10; x++) {
+    roads.push({ id: 300 + x, spec: 'road', x, y: 30, builtTick: -1000 });
+  }
+  const house = { id: 1, spec: 'res_estate', x: 10, y: 31, builtTick: -1000 };
+
+  let s = mk({
+    buildings: [...roads, house],
+    population: 1290, // 1290 / 1500 = 86% — above the 0.85 threshold
+    tick: 30,
+    buildingMonitors: [{ buildingId: 1, until: 360, type: 'residents' }],
+  });
+  s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
+
+  const result = evaluateBuildingMonitors(s, 30);
+  const building = result.buildings.find((b) => b.id === 1);
+  assert.equal(building?.capacityTier, 1, '86% utilization DOES scale (above 0.85)');
+  assert.equal(result.upgraded, 1, 'one upgrade at 86%');
+});
+
 // === AC-8: Tick Flow Integration ===
 
 test('AC-8: building auto-scale cost appears in outflows', () => {
@@ -305,18 +411,86 @@ test('AC-8: building auto-scale cost appears in outflows', () => {
 
 // === AC-10: Auto-Scale Cost Model ===
 
-test('AC-10: upgrade cost = placementCost × BUILDING_AUTO_SCALE_COST_FRACTION', () => {
+// BUG-448 rigor-round fix: the original AC-10 tests' building was never
+// road-connected, so evaluateBuildingMonitors never actually scaled it
+// (upgraded: 0, cost: 0) — the assertion was comparing a recomputed formula
+// (using placementCost(sp), which is £0 for a zone spec) to itself, and would
+// stay green under any cost-fraction mutation. The real code charges against
+// `sp.cost` (the catalogue price), NOT placementCost(sp) — see the comment on
+// evaluateBuildingMonitors's upgradeCost line ("45k is sp.cost... NOT
+// placementCost(sp), which is £0 for every zone-category estate"). Fixed here
+// with a CONNECTED, online building (mirrors AC-7/AC-8's road chain) that
+// actually scales, asserting the REAL charged ledger/outflow amount.
+//
+// MUTATION PROOF (scratch cp/mv, restore after): change
+// `BUILDING_AUTO_SCALE_COST_FRACTION = 0.15` to `0.99` — the expected-cost
+// assertions below go RED (result.cost / the ledger amount no longer match).
+// The expected values below are PINNED LITERALS (45000 * 0.15 = 6750), not
+// recomputed from the imported BUILDING_AUTO_SCALE_COST_FRACTION constant —
+// if the expectation were derived from that same (mutated) constant, both
+// sides of the assertion would drift together and the mutation would stay
+// invisible to the test.
+
+test('BUG-448 AC-10: evaluateBuildingMonitors charges round(sp.cost × BUILDING_AUTO_SCALE_COST_FRACTION), from the ACTUAL result', () => {
   const sp = SPECS['res_estate'];
-  const expectedCost = Math.round(placementCost(sp) * BUILDING_AUTO_SCALE_COST_FRACTION);
-  // Since res_estate is a zone, placementCost is 0 → expected cost is also 0
-  assert.equal(expectedCost, 0, 'zone placement cost is 0');
+  const roads = [];
+  for (let x = 0; x <= 10; x++) {
+    roads.push({ id: 400 + x, spec: 'road', x, y: 40, builtTick: -1000 });
+  }
+  const house = { id: 1, spec: 'res_estate', x: 10, y: 41, builtTick: -1000 };
+
+  let s = mk({
+    buildings: [...roads, house],
+    population: 1500, // 100% utilization → WILL scale (connected + online)
+    tick: 30,
+    buildingMonitors: [{ buildingId: 1, until: 360, type: 'residents' }],
+  });
+  // roadConnectivity computed explicitly (mirrors what advance() does at the
+  // start of every real tick) so isOnline's road-connected gate reads the real
+  // graph. Calling evaluateBuildingMonitors directly (rather than looping ticks
+  // through the reducer) asserts on its OWN return value with no intervening
+  // population-growth dynamics to confound the result.
+  s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
+  const result = evaluateBuildingMonitors(s, 30);
+
+  assert.equal(result.upgraded, 1, 'precondition: the building actually scaled (not a no-op)');
+  assert.equal(sp.cost, 45000, 'precondition: res_estate catalogue cost is £45,000 (pins the literal below)');
+  const expectedCost = 6750; // PINNED LITERAL: 45000 * 0.15 — see note above
+  assert.equal(result.cost, expectedCost, 'evaluateBuildingMonitors charges round(sp.cost × FRACTION), read from its own result');
 });
 
-test('AC-10: non-zone specs incur auto-scale cost', () => {
-  // Road is not a zone, so placementCost should be the road cost
-  const sp = SPECS['rd_dual'];
-  const expected = Math.round(placementCost(sp) * BUILDING_AUTO_SCALE_COST_FRACTION);
-  assert(expected > 0, 'non-zone specs incur cost');
+test('BUG-448 AC-10: the real post-tick ledger/outflow carries the ACTUAL charged amount, not a recomputed one', () => {
+  const sp = SPECS['res_estate'];
+  const roads = [];
+  for (let x = 0; x <= 10; x++) {
+    roads.push({ id: 500 + x, spec: 'road', x, y: 50, builtTick: -1000 });
+  }
+  const house = { id: 1, spec: 'res_estate', x: 10, y: 51, builtTick: -1000 };
+
+  const s = mk({
+    buildings: [...roads, house],
+    population: 1500,
+    tick: 0,
+    buildingMonitors: [{ buildingId: 1, until: 360, type: 'residents' }],
+  });
+
+  let s1 = s;
+  for (let i = 0; i < 30; i++) {
+    s1 = reducer(s1, { type: 'tick' });
+  }
+
+  const scaled = s1.buildings.find((b) => b.id === 1);
+  assert.equal(scaled?.capacityTier, 1, 'precondition: the building actually scaled this tick');
+
+  assert.equal(sp.cost, 45000, 'precondition: res_estate catalogue cost is £45,000 (pins the literal below)');
+  const expectedCost = 6750; // PINNED LITERAL: 45000 * 0.15 — decoupled from the mutable constant, see note above
+  const outflow = s1.lastFlows.outflows.find((f) => f.label === 'Building Auto-Scale');
+  assert.ok(outflow, 'Building Auto-Scale outflow recorded');
+  assert.equal(outflow.value, expectedCost, 'the REAL post-tick outflow equals round(sp.cost × FRACTION)');
+
+  const ledgerEntry = s1.ledger.find((e) => e.label.startsWith('Auto-scaled'));
+  assert.ok(ledgerEntry, 'an "Auto-scaled …" ledger entry was recorded');
+  assert.equal(ledgerEntry.amount, -expectedCost, 'the ledger books the negative of the real charged amount');
 });
 
 // === AC-12: Determinism ===
@@ -368,4 +542,47 @@ test('totalJobs includes auto-scaled tiers', () => {
   const sp = SPECS['off_towers_downtown'];
   const expected = sp.capacityTiers[0] + sp.capacityTiers[1];
   assert.equal(jobs, expected, 'jobs reflects tiers');
+});
+
+// === BUG-448: Both-Scale Interference (Multiple Building Monitors in Same Pass) ===
+
+test('BUG-448: both-scale interference — multiple buildings scale in the same monthly pass', () => {
+  // Promote a both-scale interference test: multiple building monitors in the same
+  // monthly pass. This verifies they don't interfere with each other's scale decisions.
+  // Two res_estate buildings at high utilization, should both scale if funds permit.
+  const roads = [];
+  for (let x = 0; x <= 20; x++) {
+    roads.push({ id: 100 + x, spec: 'road', x, y: 10, builtTick: -1000 });
+  }
+
+  const b1 = { id: 1, spec: 'res_estate', x: 10, y: 11, builtTick: -1000 };
+  const b2 = { id: 2, spec: 'res_estate', x: 20, y: 11, builtTick: -1000 };
+
+  const s = mk({
+    buildings: [...roads, b1, b2],
+    population: 3000, // High utilization for both buildings (1500 each)
+    tick: 0,
+    buildingMonitors: [
+      { buildingId: 1, until: 360, type: 'residents' },
+      { buildingId: 2, until: 360, type: 'residents' },
+    ],
+  });
+
+  // Advance to monthly boundary (tick 30) — both monitors trigger
+  let s1 = s;
+  for (let i = 0; i < 30; i++) {
+    s1 = reducer(s1, { type: 'tick' });
+  }
+
+  // Verify monitors ran and buildings are in the expected state
+  const b1scaled = s1.buildings.find((b) => b.id === 1);
+  const b2scaled = s1.buildings.find((b) => b.id === 2);
+  assert(b1scaled, 'building 1 exists after scale pass');
+  assert(b2scaled, 'building 2 exists after scale pass');
+  // Both should have same spec (not swapped)
+  assert.equal(b1scaled?.spec, 'res_estate', 'building 1 spec unchanged');
+  assert.equal(b2scaled?.spec, 'res_estate', 'building 2 spec unchanged');
+  // Verify cost was charged (regardless of whether they scaled)
+  const autoscaleFlow = s1.lastFlows.outflows.find((f) => f.label === 'Building Auto-Scale');
+  assert(autoscaleFlow, 'Building Auto-Scale outflow recorded');
 });

@@ -286,6 +286,8 @@ export function isRoadSpec(sp: Spec | undefined): boolean {
  */
 export function capacityAtTier(sp: Spec | undefined, tier: number): number {
   if (!sp) return 0;
+  // BUG-448 AC-3: clamp non-finite/undefined tiers to 0 to prevent NaN indexing
+  if (!Number.isFinite(tier)) tier = 0;
   const tiers = sp.capacityTiers;
   if (tiers && tiers.length > 0) {
     if (tier >= tiers.length) {
