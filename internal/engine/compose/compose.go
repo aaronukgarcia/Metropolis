@@ -25,6 +25,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
+	"github.com/aaronukgarcia/Metropolis/internal/harness/replay"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
 
@@ -141,6 +142,16 @@ type Deps struct {
 	// failing loader and asserts Wire returns ErrModuleFailed naming
 	// "market" with zero hooks left behind.
 	LoadMarket func(correlationID string) (*market.MarketAPI, error)
+
+	// CommandJournaler installs the engine-owns-journal seam (Aaron's DD,
+	// FEAT-1972079852 inc3/inc4; edge feat.compositionroot -> harness.replay
+	// registered 61e41e9). A nil field (the common boot case) defaults to a
+	// freshly constructed *replay.NewRecorder() so every composed engine
+	// journals its accepted commands in-memory from boot — never a silent
+	// no-op journaler in the real, running composed engine. Tests that need
+	// to observe or fail journaling inject their own core.CommandJournaler
+	// here (mirrors LoadMarket's override shape above).
+	CommandJournaler core.CommandJournaler
 
 	// Logistics overrides construction of the engine.logistics dependency
 	// build's Tick draws construction materials against (defaults to
@@ -431,6 +442,17 @@ func (c *Composition) ExtCommute() *extcommute.ExtCommuteAPI {
 // composed instance through — mirrors ExtCommute() above.
 func (c *Composition) Traffic() *traffic.TrafficAPI {
 	return c.state.traffic
+}
+
+// Journaler returns the composed engine's engine-owns-journal seam
+// (FEAT-1972079852 inc4, Deps.CommandJournaler) — the same
+// core.CommandJournaler instance e.SetCommandJournaler wired into the
+// composed engine's accept() path. Read-only accessor for the
+// wired-not-built proof: a test asserts Records() on the concrete
+// *replay.Recorder this returns captured an accepted command and did not
+// capture a rejected one.
+func (c *Composition) Journaler() core.CommandJournaler {
+	return c.state.journaler
 }
 
 // Wire registers the full baseline-one hook set against e in the fixed,
@@ -823,6 +845,24 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, wrapSeal(cid, err, "build")
 	}
 
+	// Wire the engine-owns-journal seam (Aaron's DD, FEAT-1972079852 inc4;
+	// edge feat.compositionroot -> harness.replay registered 61e41e9): a
+	// nil Deps.CommandJournaler defaults to a freshly constructed
+	// *replay.NewRecorder() so the composed engine journals every accepted
+	// command from boot — no runnable top (cmd/metropolis,
+	// internal/harness/headless) is left with the documented nil-journaler
+	// no-op. Deps.CommandJournaler lets tests inject their own
+	// core.CommandJournaler (a spy, or one that fails) the same way
+	// LoadMarket overrides market construction above.
+	journaler := deps.CommandJournaler
+	if journaler == nil {
+		journaler = replay.NewRecorder()
+	}
+	st.journaler = journaler
+	if err := e.SetCommandJournaler(journaler); err != nil {
+		return nil, wrapSeal(cid, err, "journaler")
+	}
+
 	// Register in the fixed, documented order (AC-2). The slice order IS
 	// the contract — nothing here ranges over a map.
 	for _, reg := range registrationOrder {
@@ -946,6 +986,13 @@ type simState struct {
 	e    *core.Engine
 	cid  string
 	seed uint64
+
+	// journaler is the composed engine's engine-owns-journal seam
+	// (Deps.CommandJournaler, injected into e via e.SetCommandJournaler
+	// below). Stored here too, mirroring finance/traffic's own doc
+	// comments, so Composition.Journaler() can hand tests the same
+	// instance the composed engine actually records into.
+	journaler core.CommandJournaler
 
 	citizens *citizens.CitizensAPI
 	world    *world.WorldAPI
