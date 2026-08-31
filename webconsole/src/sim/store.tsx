@@ -20,6 +20,7 @@ import {
   restoreFromSavepoint,
   readAllSavepoints,
   mostRecentSavepoint,
+  restampSavepointsBuildVersion,
 } from './replay';
 import {
   needsRebuild,
@@ -53,7 +54,6 @@ import {
   cityNameToSlug,
 } from './namedsaves';
 import { versionRaw, versionBadgeLabel } from './version';
-import { getLiveVersion } from './liveVersionRef';
 import { currentMapUi, type MapViewState } from './uistate';
 import { persistStashedCamera } from './cameraStash';
 import { listRecentOpened, recordRecentOpened } from './recentfiles';
@@ -61,14 +61,22 @@ import { RebuildPrompt, type RebuildPhase } from '../components/RebuildPrompt';
 import { recordError, updateLastKnownState } from './backend';
 
 /**
- * FEAT-1972079897 inc2: the build the RUNNING engine represents. Prefer the
- * freshest live/badge version (BUG-424's liveVersionRef, set by useLiveVersion on
- * each poll); before any poll it is null, so fall back to the build-time badge
- * label baked into version.ts. Used both to STAMP a save and to COMPARE at boot,
- * so the two sides are always measured the same way.
+ * FEAT-1972079897 inc2: the build the RUNNING engine represents. Used both to
+ * STAMP a save and to COMPARE at boot, so the two sides are always measured the
+ * same way.
+ *
+ * BUG-468: this MUST be the stable build-time badge (versionBadgeLabel, baked into
+ * version.ts by the actual bundle you are running) and NOT the hot live/badge
+ * version (liveVersionRef). The hot value is a display overlay that the /version.json
+ * poll can move AHEAD of the running engine (a newer commit's number shown while the
+ * OLD bundle is still executing — the dogfood hot-upgrade case). It is also null on a
+ * fresh boot (before the first poll), so the boot COMPARE would read the badge while a
+ * resolution-time STAMP read the hot value — an asymmetry that could never converge,
+ * producing the infinite "New build detected" loop. Reading the same build-time badge
+ * on both sides makes stamp == compare, so a mismatch clears after ONE resolution.
  */
 function currentBuildVersion(): string {
-  return getLiveVersion() ?? versionBadgeLabel();
+  return versionBadgeLabel();
 }
 
 /** The camera the player is currently looking at, or null before the map mounts. */
@@ -605,8 +613,19 @@ export function SimProvider({ children }: { children: ReactNode }) {
   };
 
   const onKeep = () => {
-    // Keep the old snapshot already restored at boot (pre-inc2 behaviour). The next
-    // autosave re-stamps it with the current build, so it stops prompting.
+    // Keep the old snapshot already restored at boot (pre-inc2 behaviour).
+    // BUG-468: re-stamp the persisted savepoint to the running build NOW — do not
+    // wait for the next autosave. If the player reloads (or a wipe fires) before an
+    // autosave lands, the stale buildVersion would re-trigger the prompt on every
+    // subsequent load — the infinite "New build detected" loop. Re-stamping here
+    // clears the mismatch after this ONE resolution. Flush the journal so any
+    // pending write is on disk before a possible reload.
+    try {
+      restampSavepointsBuildVersion(window.localStorage, currentBuildVersion());
+    } catch {
+      /* storage error — the prompt may recur, but never crash the resolution */
+    }
+    journalPersisterRef.current?.flush(journalRef.current);
     setRebuildDecision(null);
   };
 
@@ -619,6 +638,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
   const onResume = () => {
     // The rebuilt city is already persisted + stamped current; reload boots into it
     // on the new engine with matching versions (no re-prompt).
+    // BUG-468: belt-and-braces — re-stamp the persisted savepoint to the running
+    // build before the reload so this resume path can NEVER leave a stale
+    // buildVersion behind (covers any dismiss-that-continues route as well as the
+    // rebuild-report resume). Idempotent when the stamp already matches.
+    try {
+      restampSavepointsBuildVersion(window.localStorage, currentBuildVersion());
+    } catch {
+      /* storage error — never block the resume */
+    }
     setRebuildDecision(null);
     window.location.reload();
   };

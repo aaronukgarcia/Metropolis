@@ -132,6 +132,54 @@ export function needsRebuild(
   return savedVersion !== currentVersion;
 }
 
+/**
+ * BUG-468: which DIRECTION a cross-build change goes, so the prompt can be honest
+ * and the store can avoid forcing an endless rebuild on a REGRESSION.
+ *
+ * Parses the "v0.3.0.193" badge form (leading "v" optional) into its numeric
+ * segments and compares them positionally:
+ *   - 'same'       — identical (no prompt needed)
+ *   - 'upgrade'    — the saved city is OLDER than the running build (the normal
+ *                    forward case: replaying on the newer engine makes sense)
+ *   - 'regression' — the saved city is NEWER than the running build (the dogfood
+ *                    case Aaron hit: an older bundle is running behind a save
+ *                    stamped by a newer live badge — DON'T force a rebuild)
+ *   - 'unknown'    — a side is missing or non-numeric; caller falls back to the
+ *                    plain "differs" copy.
+ * Pure: no I/O, no clock, no randomness.
+ */
+export function classifyVersionChange(
+  savedVersion: string | null | undefined,
+  currentVersion: string | null | undefined
+): 'same' | 'upgrade' | 'regression' | 'unknown' {
+  if (!savedVersion || !currentVersion) return 'unknown';
+  if (savedVersion === currentVersion) return 'same';
+  const a = parseVersionSegments(savedVersion);
+  const b = parseVersionSegments(currentVersion);
+  if (!a || !b) return 'unknown';
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x < y) return 'upgrade';
+    if (x > y) return 'regression';
+  }
+  return 'same';
+}
+
+/** Parse "v0.3.0.193" / "0.3.0.193" into [0,3,0,193]. Non-numeric → null. */
+function parseVersionSegments(v: string): number[] | null {
+  const trimmed = v.trim().replace(/^v/i, '');
+  if (trimmed.length === 0) return null;
+  const parts = trimmed.split('.');
+  const nums: number[] = [];
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    nums.push(Number(p));
+  }
+  return nums.length > 0 ? nums : null;
+}
+
 /** One journalled action skipped during a defensive rebuild because it threw. */
 export interface SkippedAction {
   /** Position in journal.entries of the skipped action. */

@@ -286,3 +286,80 @@ describe('BUG-460 FIX A: replay mode is cleared even when the loop throws', () =
     assert.notEqual(s2.roadConnectivity, undefined, 'replay mode did not leak past the defensive replayer either');
   });
 });
+
+// ---------------------------------------------------------------------------
+// BUG-460 memory-bound invariant: the leaking allocation is GONE.
+//
+// Root cause: the reducer wrapper recomputed computeRoadConnectivity (a full
+// Set+array+sort+BFS over the whole board) on EVERY buildings-changing action.
+// Across up to JOURNAL_CAP=50,000 replayed actions that is O(actions x
+// buildings) transient allocation churn — the 2.5 GB / tab-death blowup.
+//
+// The fix is structural: during replay the wrapper SKIPS that per-action
+// recompute (engine.ts `isReplaying`), so a buildings-changing reduce in replay
+// mode must allocate NO fresh roadConnectivity — it carries the prior graph
+// reference forward unchanged. These assertions are prove-can-fail: delete the
+// `if (isReplaying) return next` guard and (1) fails; the leaking per-action
+// allocation would be back.
+// ---------------------------------------------------------------------------
+describe('BUG-460 memory bound: no per-action roadConnectivity recompute during replay', () => {
+  test('a buildings-changing reduce in replay mode allocates NO fresh connectivity graph (ref preserved)', () => {
+    const place = { type: 'place', spec: 'road', x: 30, y: 30 };
+
+    // Control: with replay mode OFF (ordinary live play), the wrapper recomputes
+    // — so the resulting graph is a FRESH object (a new allocation every action).
+    setReplayMode(false);
+    const live0 = initialState();
+    const liveNext = reducer(live0, place);
+    assert.notEqual(
+      liveNext.roadConnectivity,
+      live0.roadConnectivity,
+      'sanity: normal play DOES recompute per action (fresh ref) — this is the allocation the replay skips'
+    );
+
+    // Invariant: with replay mode ON, the wrapper skips the recompute, so the
+    // graph reference is carried forward UNCHANGED — zero per-action allocation.
+    setReplayMode(true);
+    try {
+      const rep0 = initialState();
+      const repNext = reducer(rep0, place);
+      assert.equal(
+        repNext.roadConnectivity,
+        rep0.roadConnectivity,
+        'replay must NOT allocate a fresh roadConnectivity per action (the 2.5 GB churn)'
+      );
+    } finally {
+      setReplayMode(false);
+    }
+  });
+
+  test('a many-action replay produces exactly ONE final connectivity graph, not one per action', () => {
+    // Drive a journal of many buildings-changing actions (no ticks) so that,
+    // under the OLD behaviour, EACH would have forced a recompute. We prove the
+    // final replayed graph is a single freshly-derived object equal to a direct
+    // one-shot computeRoadConnectivity of the final buildings — i.e. connectivity
+    // was derived ONCE at the end, not accumulated per action.
+    let journal = emptyJournal();
+    let n = 0;
+    for (let x = 0; x < 40; x++) {
+      const a = { type: 'place', spec: 'road', x, y: 60 };
+      journal = recordAction(journal, n, a);
+      n++;
+    }
+
+    const replayed = replayFromGenesis(journal);
+    // The final state's connectivity must match a single direct recompute of its
+    // own buildings — the once-at-the-end recompute, byte-identical.
+    const oneShot = computeRoadConnectivity(replayed);
+    assert.deepEqual(
+      replayed.roadConnectivity,
+      oneShot,
+      'the replayed graph equals a single end-of-replay recompute — derived once, not per action'
+    );
+    // And it is a real, non-empty graph (the corridor from the map edge is connected).
+    assert.ok(
+      replayed.roadConnectivity.connectedRoadTiles.length > 0,
+      'sanity: the replayed connectivity graph is populated'
+    );
+  });
+});

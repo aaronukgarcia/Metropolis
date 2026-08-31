@@ -11,6 +11,7 @@
 // the store passes in, so the store owns the state machine and this stays trivial.
 
 import type { RebuildReport, SkippedAction, ReplayProgress } from '../sim/genesisReplay';
+import { classifyVersionChange } from '../sim/genesisReplay';
 
 export type RebuildPhase = 'prompt' | 'running' | 'report' | 'stalled';
 
@@ -194,30 +195,67 @@ export function RebuildPrompt(props: RebuildPromptProps) {
   return (
     <div style={overlayStyle} role="dialog" aria-modal="true" aria-label="Rebuild city on new build">
       <div style={panelStyle}>
-        {phase === 'prompt' && (
+        {phase === 'prompt' && (() => {
+          // BUG-468: a saved version NEWER than the running build is a REGRESSION
+          // (e.g. an older bundle running behind a save stamped by a newer live
+          // badge — the dogfood case). Rebuilding your city on an OLDER engine is
+          // the odd choice there, so we flip the copy and make "Keep" the primary
+          // action instead of forcing a rebuild. Either choice re-stamps the
+          // savepoint (store.tsx), so the prompt resolves in one step and never loops.
+          const regression = classifyVersionChange(savedVersion, currentVersion) === 'regression';
+          return (
           <>
-            <h2 style={{ margin: '0 0 8px', fontSize: '15px' }}>New build detected</h2>
-            <p style={{ margin: '0 0 8px' }}>
-              Your saved city was built on <strong>{savedVersion ?? 'an earlier build'}</strong>. You are now running{' '}
-              <strong>{currentVersion}</strong>.
-            </p>
-            <p style={{ margin: 0, opacity: 0.85 }}>
-              <strong>Rebuild</strong> replays your recorded actions on the new engine — the corrected city your moves would
-              produce under the new rules. It will not be pixel-identical to the old save, and that is expected.
-            </p>
+            <h2 style={{ margin: '0 0 8px', fontSize: '15px' }}>
+              {regression ? 'Save from a newer build' : 'New build detected'}
+            </h2>
+            {regression ? (
+              <p style={{ margin: '0 0 8px' }}>
+                Your saved city was built on <strong>{savedVersion ?? 'a later build'}</strong>, which is <strong>newer</strong>{' '}
+                than the build you are now running (<strong>{currentVersion}</strong>). Keeping the snapshot resumes your city
+                as-is. Rebuilding would replay your actions on this OLDER engine — usually not what you want.
+              </p>
+            ) : (
+              <>
+                <p style={{ margin: '0 0 8px' }}>
+                  Your saved city was built on <strong>{savedVersion ?? 'an earlier build'}</strong>. You are now running{' '}
+                  <strong>{currentVersion}</strong>.
+                </p>
+                <p style={{ margin: 0, opacity: 0.85 }}>
+                  <strong>Rebuild</strong> replays your recorded actions on the new engine — the corrected city your moves would
+                  produce under the new rules. It will not be pixel-identical to the old save, and that is expected.
+                </p>
+              </>
+            )}
             <div style={btnRow}>
-              <button style={button(true)} onClick={props.onRebuild}>
-                Rebuild on {currentVersion}
-              </button>
-              <button style={button(false)} onClick={props.onKeep}>
-                Keep old snapshot
-              </button>
-              <button style={button(false)} onClick={props.onFresh}>
-                Start fresh
-              </button>
+              {regression ? (
+                <>
+                  <button style={button(true)} onClick={props.onKeep}>
+                    Keep my city
+                  </button>
+                  <button style={button(false)} onClick={props.onRebuild}>
+                    Rebuild on {currentVersion} anyway
+                  </button>
+                  <button style={button(false)} onClick={props.onFresh}>
+                    Start fresh
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button style={button(true)} onClick={props.onRebuild}>
+                    Rebuild on {currentVersion}
+                  </button>
+                  <button style={button(false)} onClick={props.onKeep}>
+                    Keep old snapshot
+                  </button>
+                  <button style={button(false)} onClick={props.onFresh}>
+                    Start fresh
+                  </button>
+                </>
+              )}
             </div>
           </>
-        )}
+          );
+        })()}
 
         {phase === 'running' && (
           <>

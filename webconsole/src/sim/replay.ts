@@ -157,6 +157,46 @@ export function persistSavepoint(
 }
 
 /**
+ * BUG-468: re-stamp every persisted savepoint's `buildVersion` to the running app
+ * version, so a cross-build mismatch clears after ONE rebuild-prompt resolution and
+ * the "New build detected" prompt does NOT recur on the next load.
+ *
+ * The infinite-loop root cause: the prompt fires when the persisted savepoint's
+ * buildVersion differs from the running build. If a resolution path (Keep, or a
+ * rebuild+resume) leaves the OLD buildVersion in storage, the very next boot
+ * re-detects saved≠running and re-prompts forever. This rewrites the stamp in place
+ * so the mismatch is gone after a single resolution.
+ *
+ * Fail-safe: any storage error degrades to `false` (nothing written) rather than
+ * throwing. Returns true if at least one savepoint slot was re-stamped.
+ */
+export function restampSavepointsBuildVersion(
+  storage: StorageLike,
+  runningVersion: string
+): boolean {
+  if (!runningVersion) return false;
+  let wrote = false;
+  // Cover the live slots boot actually reads (0..SAVEPOINT_CAP), which includes
+  // the rolling autosave savepoint.
+  for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
+    try {
+      const raw = storage.getItem(savepointKey(slot));
+      if (!raw) continue;
+      const sp = JSON.parse(decode(raw)) as Savepoint;
+      if (!sp || typeof sp !== 'object') continue;
+      if (sp.buildVersion === runningVersion) continue; // already current
+      sp.buildVersion = runningVersion;
+      const result = safeSetItem(storage, savepointKey(slot), encode(JSON.stringify(sp)));
+      wrote = wrote || result.ok;
+    } catch {
+      // Corrupt slot / quota — skip; never throw out of a resolution handler.
+      continue;
+    }
+  }
+  return wrote;
+}
+
+/**
  * Restore from the most recent savepoint. Replays the journal tail to reconstruct
  * the end state, verifies consistency, and returns the restored state. Always fail-safe:
  * any error (missing savepoint, corrupt JSON, consistency check failure) returns

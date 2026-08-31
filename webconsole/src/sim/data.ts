@@ -9,6 +9,8 @@ import { specUnlocked } from './engine.ts';
 // traffic weight + city activity ramp (GR#3 SSOT) — call-time (cyclic-safe) imports,
 // same pattern as specUnlocked above. Neither is used at module-eval time.
 import { feederTrafficWeight, trafficActivity } from './engine.ts';
+// FEAT-159: DEBUG-ONLY per-class fast-build override (off by default).
+import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -187,7 +189,13 @@ export const POWER_LINES: PowerLineClass[] = [
 ];
 
 export function constructionTicks(sp: Spec): number {
-  return Math.max(3, Math.round(sp.cost / 1500));
+  const base = Math.max(3, Math.round(sp.cost / 1500));
+  // FEAT-159: DEBUG-ONLY per-class fast-build override. When the debug flag is
+  // OFF (the default) scaleConstructionTicks returns `base` byte-for-byte, so
+  // normal play and replay are unchanged. When ON it scales the lead-time down
+  // by the building's ZoneKind factor (floored at 1 tick) so a developer can
+  // watch the city evolve fast. See debugBuildSpeed.ts.
+  return scaleConstructionTicks(base, sp.kind);
 }
 
 /**
