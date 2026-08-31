@@ -40,11 +40,12 @@ import {
   compostRevenueOf,
   RAIL_BRIDGE_COST_MULTIPLIER,
   MOTORWAY_JUNCTION_COST,
+  residentsCapacity,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
 import { planRailBranch, RAIL_BRANCH_BUDGET } from './railConnect.ts';
-import type { Building, RoadMonitor } from './types.ts';
+import type { Building, RoadMonitor, BuildingMonitor } from './types.ts';
 import { fmtMoney } from './utils.ts';
 import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds } from './fiscal.ts';
 import type {
@@ -220,6 +221,7 @@ function rawState(): SimState {
     railNotice: null,
     placeNotice: null,
     roadMonitors: [],
+    buildingMonitors: [],
   };
 }
 
@@ -504,6 +506,19 @@ export const TICKS_PER_YEAR = TICKS_PER_MONTH * 12; // 360
 export const ROAD_SATURATION_THRESHOLD = 0.85;
 
 /**
+ * FEAT-1972079878 inc1 — Building auto-scale utilization threshold. A monitored
+ * building scales when utilization (residents/capacity or jobs/capacity) reaches
+ * this fraction. ⚠ PLACEHOLDER-balance — directional only, Aaron's pass.
+ */
+export const BUILDING_UTILIZATION_THRESHOLD = 0.85;
+
+/**
+ * FEAT-1972079878 inc1 — Cost multiplier for building capacity tier upgrade.
+ * Delta-cost per tier = originalPlacementCost × this fraction. ⚠ PLACEHOLDER-balance.
+ */
+export const BUILDING_AUTO_SCALE_COST_FRACTION = 0.15;
+
+/**
  * Coarse per-segment traffic-load weights (⚠ PLACEHOLDER-balance). A monitored
  * segment's demand is the FEEDING building's population + jobs + freight, each
  * weighted, then ramped by city activity (population vs ROAD_TRAFFIC_ACTIVITY_REF).
@@ -614,6 +629,94 @@ export function evaluateRoadMonitors(s: SimState, tick: number): RoadScaleResult
   return { buildings, monitors: active, cost, upgraded };
 }
 
+interface BuildingScaleResult {
+  /** buildings with upgraded capacityTiers */
+  buildings: Building[];
+  /** monitors still inside their window (expired ones dropped) */
+  monitors: BuildingMonitor[];
+  /** total upgrade cost charged this pass */
+  cost: number;
+  /** number of buildings scaled this pass */
+  upgraded: number;
+}
+
+/**
+ * FEAT-1972079878 inc1 (AC-7): Evaluate building monitors at a monthly boundary (pure + deterministic).
+ * 1. Drop monitors whose window has closed (tick past `until`).
+ * 2. Process survivors in strict buildingId order (NEVER map-iteration order).
+ * 3. For each: if building is online AND utilization ≥ 0.85 threshold, upgrade
+ *    capacityTier by 1, booking delta-cost (BUILDING_AUTO_SCALE_COST_FRACTION × base cost).
+ * Mirrors evaluateRoadMonitors pattern; each building scales at most once per pass.
+ */
+export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingScaleResult {
+  // (1) expire — keep only monitors still inside their 1-year window
+  const active = (s.buildingMonitors ?? []).filter((m) => tick <= m.until);
+  // (2) strict buildingId order — deterministic, order-independent upgrades
+  active.sort((a, b) => a.buildingId - b.buildingId);
+
+  const byId = new Map<number, Building>();
+  for (const b of s.buildings) {
+    byId.set(b.id, b);
+  }
+
+  const tierUpgradeById = new Map<number, number>();
+  let cost = 0;
+  let upgraded = 0;
+
+  for (const m of active) {
+    const building = byId.get(m.buildingId);
+    if (!building) continue; // building bulldozed — skip
+
+    // Skip offline buildings (AC-11). Uses the SAME (pre-increment) `s` that every
+    // other isOnline() call site in advance() uses this tick (computeFlows, the
+    // population-growth capacity target below) — keeping the online view
+    // consistent within one tick, matching the road-monitor pattern.
+    if (!isOnline(s, building)) continue;
+
+    if (tierUpgradeById.has(building.id)) continue; // already scaled this pass
+
+    const sp = SPECS[building.spec];
+    if (!sp || !sp.capacityTiers) continue; // spec missing or not scalable
+
+    const currentTier = building.capacityTier ?? 0;
+    if (currentTier >= sp.capacityTiers.length - 1) continue; // already at max tier
+
+    // Compute utilization based on monitor type (residents or jobs)
+    let utilization = 0;
+    if (m.type === 'residents') {
+      const totalCap = residentsCapacity(s);
+      utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0;
+    } else {
+      // jobs type
+      const totalCap = totalJobs(s);
+      utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0; // jobs utilization ~ population-based proxy
+    }
+
+    if (utilization < BUILDING_UTILIZATION_THRESHOLD) continue; // below threshold
+
+    // Upgrade tier
+    tierUpgradeById.set(building.id, currentTier + 1);
+    // AC-10 (acceptance doc worked example): "Place res_estate (placement cost
+    // ~45k); trigger auto-scale -> cost ~6.75k charged" — 45k is sp.cost, the
+    // catalogue cost, NOT placementCost(sp) (which is £0 for every zone-category
+    // estate). Upgrading a capacity tier is genuine construction spend even
+    // though the ORIGINAL zoning was free, so the upgrade fraction is charged
+    // against the raw catalogue cost, not the zoning-discounted placement cost.
+    const upgradeCost = Math.round(sp.cost * BUILDING_AUTO_SCALE_COST_FRACTION);
+    cost += upgradeCost;
+    upgraded++;
+  }
+
+  const buildings =
+    tierUpgradeById.size === 0
+      ? s.buildings
+      : s.buildings.map((b) =>
+          tierUpgradeById.has(b.id) ? { ...b, capacityTier: tierUpgradeById.get(b.id)! } : b
+        );
+
+  return { buildings, monitors: active, cost, upgraded };
+}
+
 function advance(s: SimState): SimState {
   // TICK-BOUNDARY INVARIANT (Round-6): Record funds at tick start for conservation checking.
   const fundsAtTickStart = s.funds;
@@ -629,20 +732,38 @@ function advance(s: SimState): SimState {
   // so conservation holds and genesis-replay reproduces the whole thing.
   let scaledBuildings = s.buildings;
   let roadMonitors = s.roadMonitors;
+  let buildingMonitors = s.buildingMonitors;
   let autoScaleCost = 0;
   let autoScaleCount = 0;
+  let buildingAutoScaleCost = 0;
+  let buildingAutoScaleCount = 0;
   if (tick % TICKS_PER_MONTH === 0) {
-    const scale = evaluateRoadMonitors(s, tick);
-    scaledBuildings = scale.buildings;
-    roadMonitors = scale.monitors;
-    autoScaleCost = scale.cost;
-    autoScaleCount = scale.upgraded;
+    const roadScale = evaluateRoadMonitors(s, tick);
+    scaledBuildings = roadScale.buildings;
+    roadMonitors = roadScale.monitors;
+    autoScaleCost = roadScale.cost;
+    autoScaleCount = roadScale.upgraded;
+
+    // FEAT-1972079878 inc1: MONTHLY building demand monitoring + auto-scale.
+    // Run AFTER road scale so buildings read upgraded road network. BUG: this
+    // MUST evaluate against `scaledBuildings` (the road-scale RESULT), not the
+    // original `s` — evaluateBuildingMonitors returns `s.buildings` UNCHANGED
+    // whenever no building itself scales that pass, and blindly assigning that
+    // back into `scaledBuildings` silently REVERTED every road auto-scale tier
+    // upgrade on any tick where no building happened to scale (the road-inc2
+    // regression: 'road' never became 'rd_avenue').
+    const buildingScale = evaluateBuildingMonitors({ ...s, buildings: scaledBuildings }, tick);
+    scaledBuildings = buildingScale.buildings;
+    buildingMonitors = buildingScale.monitors;
+    buildingAutoScaleCost = buildingScale.cost;
+    buildingAutoScaleCount = buildingScale.upgraded;
+
     // Re-bind s to the post-upgrade buildings AND the filtered monitor list for the
     // remainder of the tick. BUG-440: the monitors must ride along too — the sweep
     // branch below re-reads s.roadMonitors, and without this rebind it clobbers the
     // eval's expiry-dropped list, resurrecting expired monitors on 60-tick boundaries.
-    if (scaledBuildings !== s.buildings || roadMonitors !== s.roadMonitors)
-      s = { ...s, buildings: scaledBuildings, roadMonitors };
+    if (scaledBuildings !== s.buildings || roadMonitors !== s.roadMonitors || buildingMonitors !== s.buildingMonitors)
+      s = { ...s, buildings: scaledBuildings, roadMonitors, buildingMonitors };
   }
 
   let orphanConnectCost = 0;
@@ -671,6 +792,9 @@ function advance(s: SimState): SimState {
   if (autoScaleCost > 0) {
     outflows = [...outflows, { label: 'Road Auto-Scale', value: autoScaleCost }];
   }
+  if (buildingAutoScaleCost > 0) {
+    outflows = [...outflows, { label: 'Building Auto-Scale', value: buildingAutoScaleCost }];
+  }
   if (orphanConnectCost > 0) {
     outflows = [...outflows, { label: 'Road Auto-Connect', value: orphanConnectCost }];
   }
@@ -698,6 +822,13 @@ function advance(s: SimState): SimState {
   if (autoScaleCost > 0) {
     ledger = [
       { id: nextLedger++, tick, label: `Auto-scaled ${autoScaleCount} road segment(s)`, amount: -autoScaleCost },
+      ...ledger,
+    ].slice(0, LEDGER_CAP);
+  }
+  // FEAT-1972079878 inc1: Ledger entry for building auto-scale spend.
+  if (buildingAutoScaleCost > 0) {
+    ledger = [
+      { id: nextLedger++, tick, label: `Auto-scaled ${buildingAutoScaleCount} building(s)`, amount: -buildingAutoScaleCost },
       ...ledger,
     ].slice(0, LEDGER_CAP);
   }
@@ -1234,7 +1365,24 @@ function reduceCore(state: SimState, action: Action): SimState {
       // slow-rail line AND the nearest HS1 line (routing around buildings), or
       // surface a "no rail route" notice. Deterministic; branch tiles journal via
       // the gateway `place` action through replay. Non-gateways just clear railNotice.
-      const updated = autoBranchRail(connected, placedBuilding, sp);
+      let updated = autoBranchRail(connected, placedBuilding, sp);
+
+      // FEAT-1972079878 inc1 (AC-6): Create a building monitor for scalable specs.
+      // Monitor expires after 1 year (TICKS_PER_YEAR). Type is 'residents' or 'jobs'
+      // based on the building's primary capacity type.
+      if (sp.capacityTiers) {
+        const monitorType: 'residents' | 'jobs' = sp.residents ? 'residents' : 'jobs';
+        const newMonitor: BuildingMonitor = {
+          buildingId: placedBuilding.id,
+          until: state.tick + TICKS_PER_YEAR,
+          type: monitorType,
+        };
+        updated = {
+          ...updated,
+          buildingMonitors: [...updated.buildingMonitors, newMonitor],
+        };
+      }
+
       const rewards = computeLevelRewards(updated);
       if (rewards.length === 0) return updated;
       // Push rewards to pending queue instead of applying immediately.

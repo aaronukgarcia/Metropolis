@@ -71,6 +71,15 @@ export interface Spec {
    */
   processCapacity?: number;
   /**
+   * FEAT-1972079878 inc1 — auto-scale capacity tiers. Array of capacity values
+   * for each tier (0-indexed), e.g. [1500, 1650, 1815, ...] for ~10% per tier.
+   * Present ONLY on specs with scalable residents or jobs (estates, offices, farms).
+   * If a building reaches tier N, its effective capacity = capacityTiers[N] (or
+   * original if tier > array length — capped). Supports tier-based delta-cost model.
+   * ⚠ PLACEHOLDER-balance — values are directional pending Aaron's pass.
+   */
+  capacityTiers?: number[];
+  /**
    * FEAT-1972079877 placeholder catalogue: true marks a planned-but-unbuilt type
    * shown GREYED-OUT / "coming soon" in the build catalogue as a roadmap preview.
    * A placeholder is NEVER placeable (see isPlaceable) and carries zero sim stats
@@ -267,6 +276,25 @@ export function roadTierOf(sp: Spec | undefined): number {
 /** True when this spec is a drivable road tile (participates in the network). */
 export function isRoadSpec(sp: Spec | undefined): boolean {
   return roadTierOf(sp) > 0;
+}
+
+/**
+ * FEAT-1972079878 inc1 (AC-5): get the capacity at a given tier for a spec.
+ * If the spec has capacityTiers and tier < array length, returns capacityTiers[tier].
+ * If tier >= array length, caps at the last tier. Supports auto-scale tier progression:
+ * tier 0 = original placement, tier N = after N scale events.
+ */
+export function capacityAtTier(sp: Spec | undefined, tier: number): number {
+  if (!sp) return 0;
+  const tiers = sp.capacityTiers;
+  if (tiers && tiers.length > 0) {
+    if (tier >= tiers.length) {
+      return tiers[tiers.length - 1]; // Cap at last tier
+    }
+    return tiers[Math.max(0, tier)]; // Clamp to 0 if negative
+  }
+  // No capacityTiers defined, fallback to base capacity (residents or jobs)
+  return sp.residents ?? sp.jobs ?? 0;
 }
 
 /**
@@ -1196,9 +1224,15 @@ export const SPECS: Record<string, Spec> = {
   //   • Render-coarsening (auto-merge at zoom) + up-density variants are inc2 — NOT built here.
   // ⚠ every footprint / job / resident / cost / upkeep figure is PLACEHOLDER-balance
   // — directional only, anchored to the constituent specs, pending Aaron's row-by-row pass.
-  res_estate: P('res_estate', 'residential', 'Housing Estate', 'Master-planned housing estate · ≈ 12 low-rise blocks', 5, 5, 45000, 130, '#4c9aff', 'zones', 10, { residents: 1500 }),
-  off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000, 420, '#43aa8b', 'zones', 12, { jobs: 1200 }),
-  ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000 }),
+  // FEAT-1972079878 inc1: housing estates now have three density tiers (compact/medium/sprawl)
+  // with auto-scale support via capacityTiers arrays. Capacity progression ~10%/tier.
+  res_estate_compact: P('res_estate_compact', 'residential', 'Compact Housing', 'Apartment blocks in dense urban cores · 4×4', 4, 4, 32000, 90, '#4c9aff', 'zones', 8, { residents: 900, capacityTiers: [900, 990, 1089, 1197, 1317, 1449, 1594, 1753, 1929, 2121] }),
+  res_estate: P('res_estate', 'residential', 'Housing Estate', 'Master-planned housing estate · ≈ 12 low-rise blocks', 5, 5, 45000, 130, '#4c9aff', 'zones', 10, { residents: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
+  res_estate_sprawl: P('res_estate_sprawl', 'residential', 'Sprawl Housing', 'Low-rise suburban sprawl · 6×6', 6, 6, 70000, 200, '#4c9aff', 'zones', 15, { residents: 2500, capacityTiers: [2500, 2750, 3025, 3327, 3660, 4026, 4429, 4872, 5359, 5894] }),
+  off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000, 420, '#43aa8b', 'zones', 12, { jobs: 1200, capacityTiers: [1200, 1320, 1452, 1597, 1757, 1933, 2126, 2339, 2573, 2830] }),
+  off_towers_downtown: P('off_towers_downtown', 'office', 'Downtown Towers', 'Dense downtown office towers', 5, 5, 128000, 630, '#43aa8b', 'zones', 14, { jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
+  ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
+  farm_estate: P('farm_estate', 'industrial', 'Farm Estate', 'Large integrated farm · mixed crop + livestock', 6, 6, 2400, 15, '#7da24f', 'zones', 12, { jobs: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
 
   // ---- Retail ----
   // FEAT-1972079900 inc1 — the RETAIL estate (out-of-town shopping / retail park).
@@ -1346,10 +1380,10 @@ for (const [id, d] of Object.entries(DIMS)) {
 export const PALETTE: { title: string; items: string[] }[] = [
   { title: 'Network', items: ['road', 'rd_avenue', 'rd_aroad', 'rd_dual', 'rail_branch'] },
   { title: 'Transport', items: ['bus_stop', 'bus_depot', 'car_park', 'station_ashford', 'bus_station', 'tram_depot', 'ferry_pier', 'metro_station', 'grand_terminus', 'ev_charging_hub', 'trans_parkride', 'rail_freightyard', 'trans_interchange'] },
-  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse', 'res_estate'] },
+  { title: 'Housing', items: ['res_hut', 'res_block', 'res_terrace', 'res_lowrise', 'res_midrise', 'res_highrise', 'res_penthouse', 'res_estate_compact', 'res_estate', 'res_estate_sprawl'] },
   { title: 'Retail', items: ['com_shop', 'com_retail', 'com_market', 'com_super', 'com_mall', 'com_discounter', 'com_hypermarket', 'com_darkstore'] },
-  { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics', 'farm_dairy', 'farm_abattoir', 'ind_estate', 'harbour_fishing', 'ind_parcelhub', 'ind_chemworks', 'ind_fulfilment', 'ind_refinery'] },
-  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data', 'off_businesspark'] },
+  { title: 'Industry & Farms', items: ['farm_wheat', 'farm_cattle', 'farm_orchard', 'ind_factory', 'ind_light', 'ind_warehouse', 'ind_heavy', 'ind_cement', 'ind_logistics', 'farm_dairy', 'farm_abattoir', 'farm_estate', 'ind_estate', 'harbour_fishing', 'ind_parcelhub', 'ind_chemworks', 'ind_fulfilment', 'ind_refinery'] },
+  { title: 'Offices', items: ['off_suite', 'off_tower', 'off_data', 'off_businesspark', 'off_towers_downtown'] },
   { title: 'Mining', items: ['mine_quarry', 'mine_deep', 'mine_chalk', 'mine_clay', 'mine_coal'] },
   { title: 'Parks', items: ['park', 'park_playground', 'park_town', 'park_botanical', 'park_nature'] },
   { title: 'Leisure', items: ['lei_leisure', 'lei_cinema', 'lei_theatre', 'lei_museum', 'lei_arena', 'lei_themepark', 'lei_gym', 'lei_sportsground', 'lei_stables'] },
@@ -1421,21 +1455,30 @@ export function countByKind(buildings: SimState['buildings']): Record<ZoneKind, 
   return c;
 }
 
+/**
+ * FEAT-1972079878 inc1 (AC-5): total residents capacity, including auto-scaled tiers.
+ * For each residential building, capacity = capacityAtTier(sp, building.capacityTier ?? 0).
+ * Respects ongoing capacity upgrades triggered by auto-scale.
+ */
 export function residentsCapacity(s: SimState): number {
   let cap = 0;
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
-    if (sp?.kind === 'residential') cap += sp.residents ?? 8;
+    if (sp?.kind === 'residential') cap += capacityAtTier(sp, b.capacityTier ?? 0);
   }
   return cap;
 }
 
+/**
+ * FEAT-1972079878 inc1 (AC-5): online residents capacity, including auto-scaled tiers.
+ * Same as residentsCapacity, but excludes offline buildings (per isOnline gate).
+ */
 export function onlineResidentsCapacity(s: SimState): number {
   let cap = 0;
   for (const b of s.buildings) {
     if (!isOnline(s, b)) continue;
     const sp = SPECS[b.spec];
-    if (sp?.kind === 'residential') cap += sp.residents ?? 8;
+    if (sp?.kind === 'residential') cap += capacityAtTier(sp, b.capacityTier ?? 0);
   }
   return cap;
 }
@@ -1822,12 +1865,17 @@ export function brownoutOf(s: SimState): Brownout {
   };
 }
 
+/**
+ * FEAT-1972079878 inc1: total jobs capacity, including auto-scaled tiers.
+ * For buildings with capacityTiers, uses capacityAtTier(sp, building.capacityTier ?? 0).
+ * For others, uses sp.jobs or default commercial/industrial job counts.
+ */
 export function totalJobs(s: SimState): number {
   let jobs = 0;
   for (const b of s.buildings) {
     const sp = SPECS[b.spec];
     if (!sp) continue;
-    if (sp.jobs) jobs += sp.jobs;
+    if (sp.jobs) jobs += capacityAtTier(sp, b.capacityTier ?? 0);
     else if (sp.kind === 'commercial') jobs += 12;
     else if (sp.kind === 'industrial') jobs += 18;
   }

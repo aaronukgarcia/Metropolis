@@ -37,6 +37,13 @@ export interface Building {
    * preserved through serialization and replay.
    */
   bridgeOver?: string;
+  /**
+   * FEAT-1972079878 inc1 (AC-4): auto-scale tier for building capacity growth.
+   * 0-indexed, starting at 0 = original placement capacity.
+   * Incremented by auto-scale at monthly boundaries; persists across saves/loads.
+   * Absent on buildings placed before this feature; treated as tier 0.
+   */
+  capacityTier?: number;
 }
 
 export type ToolMode = 'select' | 'move' | 'bulldoze' | 'build' | 'clone';
@@ -207,6 +214,16 @@ export interface SimState {
    * `connectedRoadTileSet(s)` (data.ts) to read it as a Set at use sites.
    */
   roadConnectivity?: { connectedRoadTiles: string[] };
+  /**
+   * FEAT-1972079878 inc1 (AC-6) — one-year building capacity monitors. When a
+   * building with scalable capacity is placed, a monitor is created and tracked
+   * for one in-game year (TICKS_PER_YEAR). On each monthly boundary the engine
+   * evaluates each monitor's building for auto-scale eligibility (online + utilization
+   * ≥ 0.85), and if eligible, increments its capacityTier, charging the delta-cost
+   * through flows. Fully serialisable (plain numbers) so it round-trips through save
+   * and genesis-replay; deterministic, tick-driven — NO wall-clock.
+   */
+  buildingMonitors: BuildingMonitor[];
 }
 
 /**
@@ -220,4 +237,16 @@ export interface RoadMonitor {
   y: number;
   source: number;
   until: number;
+}
+
+/**
+ * FEAT-1972079878 inc1 (AC-6): a single monitored building tracked for auto-scale.
+ * All-number, JSON-round-trippable. `buildingId` identifies the building being monitored.
+ * `until` is the tick the monitoring window closes (builtTick + TICKS_PER_YEAR).
+ * `type` indicates whether to scale residents or jobs capacity.
+ */
+export interface BuildingMonitor {
+  buildingId: number;
+  until: number;
+  type: 'residents' | 'jobs';
 }

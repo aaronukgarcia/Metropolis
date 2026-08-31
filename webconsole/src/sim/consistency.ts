@@ -411,6 +411,12 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       flow.label !== 'Overdraft Interest' &&
       flow.label !== 'Transit Subsidy' &&
       flow.label !== 'Road Auto-Scale' &&
+      // FEAT-1972079878 inc1: 'Building Auto-Scale' is likewise a monthly one-off
+      // capital spend (building capacity-tier upgrades), NOT recurring per-building
+      // `upkeep` — exclude it from the upkeep-total reconciliation exactly like
+      // Road Auto-Scale, or every scaled building double-counts its upgrade spend
+      // as phantom recurring upkeep and the reconciliation goes red.
+      flow.label !== 'Building Auto-Scale' &&
       flow.label !== 'Road Auto-Connect' &&
       // FEAT-1972079906 inc1: 'Refuse Collection' is a tonnage-based operating cost
       // (collected tonnes × rate), NOT recurring per-building `upkeep` — exclude it

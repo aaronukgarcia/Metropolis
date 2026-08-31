@@ -23,6 +23,7 @@
 
 import type {
   Building,
+  BuildingMonitor,
   Clipboard,
   FlowItem,
   LedgerEntry,
@@ -207,6 +208,8 @@ export interface DebugJson {
     railNotice: string | null;
     placeNotice: string | null;
     roadMonitors: RoadMonitor[];
+    /** FEAT-1972079878 inc1 — building auto-scale demand monitors. */
+    buildingMonitors: BuildingMonitor[];
     /** FEAT-1972079891 inc1 — connected road network (sorted "x,y" tiles). */
     roadConnectivity: { connectedRoadTiles: string[] };
     conservation: { tickStart: number; tickEnd: number };
@@ -440,6 +443,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   railNotice: 'sim.railNotice',
   placeNotice: 'sim.placeNotice',
   roadMonitors: 'sim.roadMonitors',
+  buildingMonitors: 'sim.buildingMonitors',
   roadConnectivity: 'sim.roadConnectivity',
 };
 
@@ -647,6 +651,10 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       railNotice: s.railNotice,
       placeNotice: s.placeNotice,
       roadMonitors: s.roadMonitors,
+      // FEAT-1972079878 inc1: building auto-scale demand monitors (parallel to
+      // roadMonitors above) — must be serialized for save/load + replay parity
+      // and to satisfy the SIMSTATE_COVERAGE completeness guarantee.
+      buildingMonitors: s.buildingMonitors,
       // FEAT-1972079891 inc1: connected road network (defaults to empty when a
       // legacy/bespoke state predates the graph — see SimState.roadConnectivity).
       roadConnectivity: s.roadConnectivity ?? { connectedRoadTiles: [] },
