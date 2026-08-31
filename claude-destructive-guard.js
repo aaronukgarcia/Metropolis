@@ -60,6 +60,35 @@
  * prefix check, so settings.json being broken cannot deny an unrelated
  * docs-only commit; see AC-12 and the code below.)
  *
+ * BUG-216 (2026-08-31, lead ruling): the settings.json-derived set alone had
+ * TWO holes, both proven to let a GUARD/HOOK script reach history un-attacked:
+ *   (A) a NEWLY-ADDED root guard/hook script that is NOT YET wired into
+ *       .claude/settings.json (commit the script first, wire it later — or
+ *       wire it in the SAME commit but the derivation reads what is on disk,
+ *       which can lag the staged intent) is absent from the derived set, so it
+ *       classified NON-code-bearing and slipped through with no verdict; and
+ *   (B) a hook/config file NESTED under `.claude/` (a `.claude/hooks/*.js`
+ *       script, or `.claude/settings.json` itself — the wiring in the
+ *       enforcement path) is never root-level, so the derived-name check
+ *       (which only ever compares against root-level basenames) could not see
+ *       it AT ALL — it too classified non-code-bearing.
+ * FIX (additive, never subtractive — the data-derivation stays as the
+ * mechanism for arbitrarily-NAMED wired scripts, which the two shapes below do
+ * not cover): two STRUCTURAL path shapes are ALSO always full-tier
+ * code-bearing — a root-level `claude-*.js` file (this repo's universal
+ * guard/hook naming convention), and any path under `.claude/`. This is a
+ * clear path-shape allowlist, not a fuzzy heuristic ("a regex is not a shell
+ * parser") — exact and checkable. It does NOT read settings.json (so it never
+ * throws and cannot affect AC-12's "broken settings.json can't deny an
+ * unrelated docs commit" property). This deliberately supersedes ASM-192's
+ * rejection of a name pattern FOR THE `claude-*.js` SHAPE specifically: the
+ * accepted cost is that an unwired scratch `claude-*.js` now over-blocks (a
+ * false-positive costing seconds to split/bypass), which is the correct
+ * fail-closed side — a wired guard reaching a public repo un-attacked is the
+ * exact GR#23 harm. The docs/test exemption tier (isExemptCommit) still runs
+ * FIRST, so a guard's own `.test.js`, or a `.claude/` skill markdown doc, stays
+ * Tester-tier exempt exactly as before.
+ *
  * FAIL-CLOSED — DELIBERATELY THE OPPOSITE OF tool.bow's POSTURE. Unlike
  * claude-bow-ref-check.js (a traceability HYGIENE gate, fail-open by
  * design — a DB outage or an unparseable message never brick an unrelated
@@ -664,6 +693,44 @@ function isEnforcedDirPath(filePath) {
  * — the only shape that can ever need the settings.json-derived set). */
 function isRootLevel(filePath) {
   return !filePath.replace(/\\/g, '/').includes('/');
+}
+
+// BUG-216: STRUCTURAL guard/hook-script shapes that are ALWAYS full-tier
+// code-bearing, additive to the settings.json-derived set (see the header's
+// BUG-216 section for why the derived set alone had two holes). Deliberately a
+// plain path-shape allowlist, never a settings.json read (so it cannot throw
+// and cannot affect AC-12).
+//   ROOT_GUARD_SCRIPT_RE — a root-level `claude-*.js` file (the repo-wide
+//     guard/hook naming convention: every claude-*-guard.js / claude-*-check.js
+//     / claude-startup.js / claude-ping-check.js etc.). Matched only when the
+//     path is root-level (no directory component), so a coincidental
+//     `vendor/claude-x.js` is not swept in by this shape (it would be caught by
+//     the DOT_CLAUDE / enforced-dir / derived-set checks if it belonged to
+//     one).
+//   DOT_CLAUDE_DIR_RE — any path under `.claude/` (a `.claude/hooks/` hook
+//     script, or `.claude/settings.json` itself — the hook wiring in the
+//     enforcement path). `.claude/` skill markdown docs are NOT reached here:
+//     the docs/test exemption (isExemptCommit) runs first and exempts an
+//     all-docs commit before codeBearing is ever computed.
+// Both regexes carry the `i` flag — the SAME case-insensitive posture as
+// ENFORCED_DIR_RE — because this repo's `core.ignorecase` Windows filesystem
+// STAGES case-variant paths (`Claude-newguard.js`, `CLAUDE-newguard.js`,
+// `claude-newguard.JS`, `.CLAUDE/…`) while node runs the hook against them; a
+// case-sensitive allowlist would let a one-character rename reopen BUG-216
+// hole A (the BUG-224/BUG-332 case-sensitivity bypass class). ROOT_GUARD_SCRIPT_RE
+// also covers `.cjs`/`.mjs` guard/hook scripts, not just `.js`.
+const ROOT_GUARD_SCRIPT_RE = /^claude-[A-Za-z0-9._-]*\.(?:c|m)?js$/i;
+const DOT_CLAUDE_DIR_RE = /^\.claude\//i;
+
+/** True when `filePath` (as reported by `git diff --cached --name-only`,
+ * forward or back slashes) is a root-level `claude-*.js` guard/hook script OR
+ * lives under `.claude/`. Full-tier code-bearing by BUG-216, independent of
+ * whether the script is currently wired into settings.json. */
+function isGuardOrHookPath(filePath) {
+  const p = filePath.replace(/\\/g, '/');
+  if (DOT_CLAUDE_DIR_RE.test(p)) return true;
+  if (!p.includes('/') && ROOT_GUARD_SCRIPT_RE.test(p)) return true;
+  return false;
 }
 
 // FEAT-077: GR#23 proportionality tier — docs-only / test-only exemption
@@ -2187,7 +2254,16 @@ async function main() {
     return;
   }
 
-  let codeBearing = classificationFiles.some(isEnforcedDirPath);
+  // BUG-216: a root-level `claude-*.js` guard/hook script, or any file under
+  // `.claude/` (hook scripts + the settings.json wiring), is full-tier
+  // code-bearing by its path shape ALONE — additive to the enforced-dir prefix
+  // check and the settings.json-derived set below. This closes the two holes
+  // (a newly-added-but-not-yet-wired root guard; a `.claude/`-nested hook the
+  // root-level-only derived check never saw). isGuardOrHookPath never reads
+  // settings.json, so it cannot throw and does not affect AC-12.
+  let codeBearing =
+    classificationFiles.some(isEnforcedDirPath) ||
+    classificationFiles.some(isGuardOrHookPath);
   if (!codeBearing) {
     const rootLevelFiles = classificationFiles.filter(isRootLevel);
     if (rootLevelFiles.length) {
@@ -2321,6 +2397,9 @@ if (require.main === module) {
     isEnforcedDirPath,
     normalizeGitPath,
     isRootLevel,
+    isGuardOrHookPath,
+    ROOT_GUARD_SCRIPT_RE,
+    DOT_CLAUDE_DIR_RE,
     noTagDenyMessage,
     verdictDenyMessage,
     postAttackDenyMessage,

@@ -400,6 +400,142 @@ test('AC-10/AC-11: a staged internal/ file activates the gate (deny with no verd
 });
 
 // ---------------------------------------------------------------------------
+// BUG-216: root guard/hook scripts are full-tier code-bearing by PATH SHAPE
+// (additive to the settings.json-derived set). Two holes it closes:
+//   (A) a NEWLY-ADDED root `claude-*.js` guard NOT YET wired into settings.json
+//       — absent from the derived set, so pre-fix it classified non-code-bearing
+//       and slipped through with no verdict.
+//   (B) a hook/config file nested under `.claude/` (a `.claude/hooks/*.js`
+//       script, or `.claude/settings.json` itself) — never root-level, so the
+//       root-level-only derived-name check never saw it AT ALL.
+// The docs/test exemption tier still runs FIRST, so a guard's own `*.test.js`
+// and `.claude/` markdown docs stay Tester-tier exempt.
+// ---------------------------------------------------------------------------
+
+const {
+  isGuardOrHookPath,
+  ROOT_GUARD_SCRIPT_RE,
+  DOT_CLAUDE_DIR_RE,
+} = guard;
+
+test('BUG-216 unit: isGuardOrHookPath flags root claude-*.js and any .claude/ path, not ordinary files', () => {
+  // Root-level claude-*.js guard/hook scripts (any spelling of the convention).
+  assert.ok(isGuardOrHookPath('claude-newguard.js'));
+  assert.ok(isGuardOrHookPath('claude-destructive-guard.js'));
+  assert.ok(isGuardOrHookPath('claude-ping-check.js'));
+  assert.ok(isGuardOrHookPath('claude-startup.js'));
+  // Anything under .claude/ — hook scripts and the settings.json wiring.
+  assert.ok(isGuardOrHookPath('.claude/hooks/newhook.js'));
+  assert.ok(isGuardOrHookPath('.claude/settings.json'));
+  assert.ok(isGuardOrHookPath('.claude/commands/foo.md')); // reached only when NOT an all-docs commit
+  assert.ok(isGuardOrHookPath('.claude\\hooks\\newhook.js')); // backslash spelling
+  // NOT flagged by this shape: ordinary root files, non-claude root .js, and a
+  // coincidental claude-*.js NOT at root level (would only matter via another check).
+  assert.ok(!isGuardOrHookPath('unwired-scratch.js'));
+  assert.ok(!isGuardOrHookPath('package.json'));
+  assert.ok(!isGuardOrHookPath('README.md'));
+  assert.ok(!isGuardOrHookPath('internal/engine/world/foo.go'));
+  assert.ok(!isGuardOrHookPath('vendor/claude-x.js')); // not root-level, not under .claude/
+  assert.ok(ROOT_GUARD_SCRIPT_RE.test('claude-x.js'));
+  assert.ok(!ROOT_GUARD_SCRIPT_RE.test('claudex.js')); // must have the `claude-` prefix
+  assert.ok(DOT_CLAUDE_DIR_RE.test('.claude/anything'));
+});
+
+test('BUG-216 hole A end-to-end: a NEWLY-ADDED root claude-*.js guard NOT wired into settings.json is code-bearing and DENIED with zero tag (pre-fix: silently allowed)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'claude-newguard.js', '// a brand-new guard, not yet wired into settings.json\n');
+    const r = runGuard(dir, 'git commit -m "wire up a new guard, no BOW tag"');
+    assert.equal(r.denied, true, 'an unwired root claude-*.js guard must activate the gate (BUG-216 hole A)');
+  });
+});
+
+test('BUG-216 hole B end-to-end: a .claude/ hook script is code-bearing and DENIED with zero tag (pre-fix: silently allowed — never root-level, invisible to the derived-name check)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, '.claude/hooks/newhook.js', '// a nested hook script\n');
+    const r = runGuard(dir, 'git commit -m "add a .claude hook, no BOW tag"');
+    assert.equal(r.denied, true, 'a .claude/ hook script must activate the gate (BUG-216 hole B)');
+  });
+});
+
+test('BUG-216 hole B end-to-end: modifying .claude/settings.json (the hook wiring) is code-bearing and DENIED with zero tag', () => {
+  withTempRepo((dir) => {
+    // Restage settings.json with a new wired hook — the enforcement-path wiring itself.
+    fs.writeFileSync(
+      path.join(dir, '.claude', 'settings.json'),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [
+        { type: 'command', command: 'node fixture-wired-guard.js' },
+        { type: 'command', command: 'node claude-newguard.js' },
+      ] }] } }),
+      'utf8'
+    );
+    stageFile(dir, '.claude/settings.json');
+    const r = runGuard(dir, 'git commit -m "wire a new hook into settings.json, no BOW tag"');
+    assert.equal(r.denied, true, 'a settings.json hook-wiring change must activate the gate');
+  });
+});
+
+test('BUG-216/BUG-332 case-insensitive-FS: capitalised claude-*.js variants are code-bearing and DENIED (pre-fix, case-sensitive regex: silently allowed via one-char rename)', () => {
+  // core.ignorecase Windows FS stages case-variant paths; node runs the hook
+  // against them. A case-sensitive allowlist let `Claude-newguard.js` etc. slip
+  // past classification with zero verdict — the BUG-224/BUG-332 bypass class.
+  for (const name of ['Claude-newguard.js', 'CLAUDE-newguard.js', 'claude-newguard.JS']) {
+    withTempRepo((dir) => {
+      stageFile(dir, name, '// a case-variant unwired guard, not yet wired into settings.json\n');
+      const r = runGuard(dir, 'git commit -m "wire up a new guard, no BOW tag"');
+      assert.equal(r.denied, true, `a case-variant root claude-*.js guard (${name}) must activate the gate`);
+    });
+  }
+  // Unit-level: the shape regexes themselves must fold case.
+  assert.ok(ROOT_GUARD_SCRIPT_RE.test('Claude-newguard.js'));
+  assert.ok(ROOT_GUARD_SCRIPT_RE.test('CLAUDE-newguard.js'));
+  assert.ok(ROOT_GUARD_SCRIPT_RE.test('claude-newguard.JS'));
+  assert.ok(DOT_CLAUDE_DIR_RE.test('.CLAUDE/hooks/x.js'));
+});
+
+test('BUG-216 extension widening: .cjs/.mjs guard and hook scripts are code-bearing and DENIED (pre-fix, .js-only regex: silently allowed)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'claude-newhook.cjs', '// a CommonJS guard/hook script, not yet wired\n');
+    const r = runGuard(dir, 'git commit -m "add a .cjs guard, no BOW tag"');
+    assert.equal(r.denied, true, 'a root claude-*.cjs guard must activate the gate');
+  });
+  withTempRepo((dir) => {
+    stageFile(dir, '.claude/hooks/x.mjs', '// an ESM hook script under .claude/\n');
+    const r = runGuard(dir, 'git commit -m "add a .mjs hook, no BOW tag"');
+    assert.equal(r.denied, true, 'a .claude/ .mjs hook script must activate the gate');
+  });
+  // Unit-level: the root-guard shape regex covers .cjs/.mjs.
+  assert.ok(ROOT_GUARD_SCRIPT_RE.test('claude-newhook.cjs'));
+  assert.ok(ROOT_GUARD_SCRIPT_RE.test('claude-newhook.mjs'));
+});
+
+test('BUG-216 CONTROL: a guard\'s OWN *.test.js, committed alone, stays Tester-tier EXEMPT (docs/test tier runs first)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'claude-newguard.test.js', '// only the guard\'s tests\n');
+    const r = runGuard(dir, 'git commit -m "tests only, no BOW tag needed"');
+    assert.equal(r.denied, false, 'a test-only commit must stay exempt even for a guard script name shape');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-216 CONTROL: a .claude/ markdown skill doc, committed alone, stays EXEMPT (docs tier)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, '.claude/commands/newskill.md', '# a skill doc\n');
+    const r = runGuard(dir, 'git commit -m "docs-only skill, no BOW tag needed"');
+    assert.equal(r.denied, false, 'a .claude/ markdown-only commit must stay docs-exempt');
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('BUG-216 CONTROL: an unwired NON-claude root .js scratch file is still silently ALLOWED (name pattern is narrowed to claude-*.js, ASM-192 unwired-scratch case preserved)', () => {
+  withTempRepo((dir) => {
+    stageFile(dir, 'unwired-scratch.js', '// not a guard, not wired, not claude-prefixed\n');
+    const r = runGuard(dir, 'git commit -m "no tag at all"');
+    assert.equal(r.denied, false, 'a non-claude unwired root .js must not activate the gate purely by name');
+    assert.equal(r.stdout, '');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // End-to-end: AC-16 — the bypass trap
 // ---------------------------------------------------------------------------
 
