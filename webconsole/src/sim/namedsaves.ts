@@ -1,5 +1,6 @@
 import type { GameSave } from './gamesave.ts';
 import { DEVCITY1_NAME } from './devcity.ts';
+import { safeSetItem } from './safeStorage.ts';
 
 export const NAMED_SAVES_INDEX_KEY = 'metropolis.namedSaves';
 export const NAMED_SAVE_SLOT_PREFIX = 'metropolis.namedSave.';
@@ -48,8 +49,8 @@ function readIndex(storage: NamedSaveStorage): NamedSaveMeta[] {
   }
 }
 
-function writeIndex(storage: NamedSaveStorage, index: NamedSaveMeta[]): void {
-  storage.setItem(NAMED_SAVES_INDEX_KEY, JSON.stringify(index));
+function writeIndex(storage: NamedSaveStorage, index: NamedSaveMeta[]): boolean {
+  return safeSetItem(storage, NAMED_SAVES_INDEX_KEY, JSON.stringify(index)).ok;
 }
 
 export function listNamedSaves(storage: NamedSaveStorage): NamedSaveMeta[] {
@@ -65,7 +66,9 @@ export function getCurrentCityName(storage: NamedSaveStorage): string {
 }
 
 export function setCurrentCityName(storage: NamedSaveStorage, name: string): void {
-  storage.setItem(CURRENT_CITY_NAME_KEY, displayCityName(name));
+  // BUG-457: routed through the quota-safe helper — never throws even under
+  // quota; callers already treat this as best-effort.
+  safeSetItem(storage, CURRENT_CITY_NAME_KEY, displayCityName(name));
 }
 
 export function writeNamedSave(storage: NamedSaveStorage, save: GameSave): boolean {
@@ -80,7 +83,11 @@ export function writeNamedSave(storage: NamedSaveStorage, save: GameSave): boole
       population: save.savepoint.snapshot.population,
       funds: save.savepoint.snapshot.funds,
     };
-    storage.setItem(slotKey(slug), JSON.stringify({ ...save, name }));
+    // BUG-457: the big write (the whole save blob) — if this alone blows quota,
+    // report failure BEFORE touching the index, so the index never points at a
+    // slot that was never actually written.
+    const slotResult = safeSetItem(storage, slotKey(slug), JSON.stringify({ ...save, name }));
+    if (!slotResult.ok) return false;
     const index = readIndex(storage).filter((m) => m.slug !== slug);
     index.unshift(meta);
     const dropped = index.slice(NAMED_SAVE_BLOB_CAP);
@@ -92,7 +99,7 @@ export function writeNamedSave(storage: NamedSaveStorage, save: GameSave): boole
         /* ignore */
       }
     }
-    writeIndex(storage, kept);
+    if (!writeIndex(storage, kept)) return false;
     setCurrentCityName(storage, name);
     return true;
   } catch {

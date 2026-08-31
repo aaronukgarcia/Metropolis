@@ -16,6 +16,7 @@ import { reducer, initialState as getInitialState, nextSafeBuildingId } from './
 import { runConsistencyChecks } from './consistency.ts';
 import { SPECS } from './data.ts';
 import { emptyJournal } from './journal.ts';
+import { safeSetItem } from './safeStorage.ts';
 
 /**
  * Complete savepoint persisted to localStorage. Includes snapshot, journal tail,
@@ -141,8 +142,10 @@ export function persistSavepoint(
     }
     const existing = readAllSavepoints(storage);
     const nextSlot = existing.length % SAVEPOINT_CAP;
-    storage.setItem(savepointKey(nextSlot), JSON.stringify(savepoint));
-    return true;
+    // BUG-457: route through the shared quota-safe helper instead of a bare
+    // setItem — the outer try/catch still covers readAllSavepoints/removeItem.
+    const result = safeSetItem(storage, savepointKey(nextSlot), JSON.stringify(savepoint));
+    return result.ok;
   } catch {
     return false;
   }

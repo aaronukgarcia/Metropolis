@@ -4,7 +4,15 @@ import { reducer, initialState, SPEED_MS, sanitizeTreasury } from './engine';
 import type { Action } from './engine';
 import { getGlobalTickTracker, recordTickDuration } from './perfhud';
 import type { TickTrackerState } from './perfhud';
-import { recordAction, emptyJournal, persistJournal, loadJournal, journalTail, type Journal } from './journal';
+import {
+  recordAction,
+  emptyJournal,
+  loadJournal,
+  journalTail,
+  createJournalPersister,
+  type Journal,
+  type JournalPersister,
+} from './journal';
 import {
   AUTOSAVE_INTERVAL_MS,
   persistSavepoint,
@@ -220,6 +228,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     journalRef.current = journal;
   }, [journal]);
+  // BUG-458: the coalescing journal persister — created once (lazy ref init,
+  // no useEffect indirection so it exists on the very first render). `schedule`
+  // is called on every dispatch (cheap: debounced/coalesced); `flush` is called
+  // at every boundary where an unpersisted tail would be unacceptable to lose
+  // (before a save, before a wipe/capture, on unload/hide).
+  const journalPersisterRef = useRef<JournalPersister | null>(null);
+  if (journalPersisterRef.current === null) {
+    journalPersisterRef.current = createJournalPersister(window.localStorage);
+  }
   const [lastSaveIndex, setLastSaveIndex] = useState<number>(boot.saveIndex);
   const lastSaveIndexRef = useRef(lastSaveIndex);
   useEffect(() => {
@@ -290,8 +307,11 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // Record action in journal if state-affecting.
       setJournal((j) => {
         const updated = recordAction(j, stateRefForDispatch.current.tick, action);
-        // Persist journal to localStorage immediately after recording.
-        persistJournal(window.localStorage, updated);
+        // BUG-458: coalesce — schedule a debounced write instead of a full
+        // stringify+setItem on EVERY action (O(n) per action, worse as the
+        // journal grows). Boundaries that must not lose the tail call
+        // journalPersisterRef.current.flush(...) directly, bypassing this.
+        journalPersisterRef.current?.schedule(updated);
         return updated;
       });
 
@@ -316,6 +336,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // (no journal record, no dispatch — state untouched) and surface an error.
       if (action.type === 'reset') {
         try {
+          // BUG-458: flush any debounced journal write BEFORE the pre-wipe
+          // capture/wipe boundary — never let a wipe proceed with a stale
+          // on-disk journal tail sitting behind a pending debounce timer.
+          journalPersisterRef.current?.flush(journalRef.current);
           attemptWipe(stateRefForDispatch.current, versionRaw, window.localStorage, () => recordAndDispatch(action));
           setCaptureError(null);
         } catch (e) {
@@ -381,11 +405,35 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // swallows every error so the unload is never obstructed. A near-immediate unload
   // right after a reset capturing again is harmless (the ring buffer dedups by cap).
   useEffect(() => {
+    // BUG-458: flush the debounced journal write at the unload boundary too —
+    // a reload/close must not lose journal entries sitting behind a pending
+    // debounce timer (best-effort, same synchronous-only constraint as the
+    // state capture below).
+    const flushJournalNow = () => {
+      journalPersisterRef.current?.flush(journalRef.current);
+    };
     const onBeforeUnload = () => {
+      flushJournalNow();
       captureOnUnload(() => stateRef.current, versionRaw, window.localStorage);
     };
+    // Mobile/backgrounded-tab browsers often never fire beforeunload; the
+    // visibilitychange:hidden transition is the reliable "about to be killed"
+    // signal there, so flush on it too.
+    const onVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        flushJournalNow();
+      }
+    };
     window.addEventListener('beforeunload', onBeforeUnload);
-    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -473,7 +521,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
             const rebuiltSave = createSavepoint(result.state, [], new Date(), running, decision.camera ?? currentCamera());
             persistSavepoint(window.localStorage, rebuiltSave);
             persistStashedCamera(window.localStorage, decision.camera ?? currentCamera());
-            if (hotJournalRef.current) persistJournal(window.localStorage, hotJournalRef.current);
+            // BUG-458: flush (not schedule) — a rebuild is a wipe/replace boundary.
+            if (hotJournalRef.current) journalPersisterRef.current?.flush(hotJournalRef.current);
 
             setRebuildPhase('report');
             return;
@@ -572,6 +621,10 @@ export function SimProvider({ children }: { children: ReactNode }) {
   };
 
   const captureOutgoingOrDownload = (): boolean => {
+    // BUG-458: flush before this capture/wipe boundary (loading a save replaces
+    // the current city, i.e. wipes it) — the on-disk journal for the OUTGOING
+    // city must be current, not stuck behind a pending debounce.
+    journalPersisterRef.current?.flush(journalRef.current);
     try {
       captureBeforeWipe(stateRefForDispatch.current, versionRaw, window.localStorage);
       return true;
@@ -598,20 +651,40 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
   const rememberOpened = (save: GameSave) => {
     const snap = save.savepoint.snapshot;
+    // BUG-457: neither of these is allowed to swallow a quota failure silently
+    // (GR#1/#17) — both now return a success boolean (routed through the
+    // shared safe-setItem helper) instead of throwing, so report honestly
+    // through the same error-registry path the rest of the save flow uses.
+    // The actual city/save is unaffected either way; only the convenience
+    // lists (Recent / named-city slot) may be stale.
+    let recentOk = false;
     try {
-      recordRecentOpened(window.localStorage, {
+      recentOk = recordRecentOpened(window.localStorage, {
         name: save.name,
         tick: snap.tick,
         population: snap.population,
         funds: snap.funds,
       });
     } catch {
-      /* recents list is best-effort */
+      recentOk = false;
     }
+    if (!recentOk) {
+      recordError('Recent-cities list not updated (storage quota). The saved city itself is unaffected.', {
+        type: 'app',
+        action: 'save',
+      });
+    }
+    let namedOk = false;
     try {
-      writeNamedSave(window.localStorage, save);
+      namedOk = writeNamedSave(window.localStorage, save);
     } catch {
-      /* quota — recent still lists; Load may need From file */
+      namedOk = false;
+    }
+    if (!namedOk) {
+      recordError(
+        'Named-city slot not updated (storage quota). Use Config → Reclaim storage, then Save As again.',
+        { type: 'app', action: 'save' },
+      );
     }
   };
 
@@ -674,7 +747,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
           journalTail: [],
           buildVersion: running,
         });
-        persistJournal(window.localStorage, emptyJournal());
+        // BUG-458: flush (not schedule) — loading a save resets the journal boundary.
+        journalPersisterRef.current?.flush(emptyJournal());
         persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
         setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
         setCityName(displayCityName(save.name));
@@ -706,7 +780,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
     try {
       const save = buildCurrentSave(cityName);
       const ok = persistSavepoint(window.localStorage, save.savepoint);
-      persistJournal(window.localStorage, emptyJournal());
+      // BUG-458: flush — a save is exactly the boundary where losing the
+      // journal tail would be unacceptable (it's now folded into the savepoint).
+      journalPersisterRef.current?.flush(emptyJournal());
       setLastSaveIndex(journalRef.current.entries.length);
       if (!ok) {
         recordError('Save failed (storage quota). Clear journal in Config, then try again or use Save As.', {
@@ -731,7 +807,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
       const label = displayCityName(name ?? cityName);
       const save = buildCurrentSave(label);
       persistSavepoint(window.localStorage, save.savepoint);
-      persistJournal(window.localStorage, emptyJournal());
+      // BUG-458: flush — Save As is a save boundary, same as saveGame.
+      journalPersisterRef.current?.flush(emptyJournal());
       setLastSaveIndex(journalRef.current.entries.length);
       setCityName(label);
       try {

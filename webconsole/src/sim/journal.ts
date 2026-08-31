@@ -10,6 +10,7 @@
 // (the tail-since-snapshot is the recovery journal).
 
 import type { Action } from './engine.ts';
+import { safeSetItem } from './safeStorage.ts';
 
 /** Max actions kept in the journal ring-buffer. PLACEHOLDER per spec. */
 export const JOURNAL_CAP = 50000;
@@ -18,6 +19,20 @@ export const JOURNAL_KEY = 'metropolis.journal';
 
 /** Max JSON characters written to localStorage (UTF-16 ≈ 2× this in quota). */
 export const JOURNAL_PERSIST_MAX_CHARS = 400_000;
+
+/**
+ * BUG-458: default idle debounce before a scheduled journal write actually
+ * hits localStorage. Multiple actions dispatched within this window coalesce
+ * into a single setItem instead of one full-journal stringify+write PER action.
+ */
+export const JOURNAL_PERSIST_DEBOUNCE_MS = 1_000;
+
+/**
+ * BUG-458: even under a debounce, a sustained burst (e.g. turbo-speed ticking)
+ * must not go unbounded-long without hitting disk — force a write every this
+ * many scheduled actions regardless of the idle timer.
+ */
+export const JOURNAL_PERSIST_ACTION_INTERVAL = 200;
 
 /** One recorded action with its tick position. */
 export interface JournalEntry {
@@ -181,21 +196,102 @@ export function persistJournal(storage: Storage | null | undefined, journal: Jou
       entries = entries.slice(-Math.max(200, Math.floor(entries.length / 2)));
       continue;
     }
-    try {
-      storage.setItem(JOURNAL_KEY, payload);
-      return true;
-    } catch {
-      if (entries.length <= 200) {
-        try {
-          storage.removeItem(JOURNAL_KEY);
-        } catch {
-          /* ignore */
-        }
-        return false;
+    const result = safeSetItem(storage, JOURNAL_KEY, payload);
+    if (result.ok) return true;
+    if (entries.length <= 200) {
+      try {
+        storage.removeItem(JOURNAL_KEY);
+      } catch {
+        /* ignore */
       }
-      entries = entries.slice(-Math.max(200, Math.floor(entries.length / 2)));
+      return false;
     }
+    entries = entries.slice(-Math.max(200, Math.floor(entries.length / 2)));
   }
+}
+
+/**
+ * BUG-458: coalescing persister. Recording a journal entry on EVERY dispatched
+ * action used to synchronously JSON.stringify + setItem the WHOLE journal —
+ * O(n) work per action, worse as the city ages (750KB+ journals meant every
+ * single click/tick paid a full stringify+write). This debounces: `schedule`
+ * coalesces bursts into one write after `debounceMs` of idle (or after
+ * `actionInterval` scheduled calls, whichever comes first, so a sustained
+ * high-rate burst — e.g. turbo speed — still flushes regularly instead of
+ * starving forever). `flush` forces an immediate synchronous write and cancels
+ * any pending timer — callers MUST flush at every boundary where losing
+ * unpersisted entries would be unacceptable: before a save, before a wipe/
+ * capture, and on page unload/hide. A crash between flushes loses at most the
+ * debounce window of actions (acceptable, per GR#27's line: an unsaved SAVE or
+ * pre-wipe capture is not acceptable, a few seconds of journal tail is).
+ */
+export interface JournalPersister {
+  /** Coalesce a write: cheap to call on every dispatch. */
+  schedule(journal: Journal): void;
+  /** Force an immediate synchronous persist, bypassing/cancelling any pending debounce. */
+  flush(journal: Journal): boolean;
+  /** Cancel any pending scheduled write without persisting (teardown). */
+  cancel(): void;
+}
+
+export interface JournalPersisterOptions {
+  debounceMs?: number;
+  actionInterval?: number;
+  /** Injectable timer functions — tests can pass a fake scheduler for determinism. */
+  setTimeoutFn?: (fn: () => void, ms: number) => unknown;
+  clearTimeoutFn?: (id: unknown) => void;
+}
+
+export function createJournalPersister(
+  storage: Storage | null | undefined,
+  opts: JournalPersisterOptions = {},
+): JournalPersister {
+  const debounceMs = opts.debounceMs ?? JOURNAL_PERSIST_DEBOUNCE_MS;
+  const actionInterval = opts.actionInterval ?? JOURNAL_PERSIST_ACTION_INTERVAL;
+  const scheduleTimer = opts.setTimeoutFn ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  const cancelTimer = opts.clearTimeoutFn ?? ((id: unknown) => clearTimeout(id as ReturnType<typeof setTimeout>));
+
+  let timerId: unknown = null;
+  let pendingJournal: Journal | null = null;
+  let actionsSincePersist = 0;
+
+  const clearPendingTimer = () => {
+    if (timerId !== null) {
+      cancelTimer(timerId);
+      timerId = null;
+    }
+  };
+
+  const doFlush = (journal: Journal): boolean => {
+    clearPendingTimer();
+    pendingJournal = null;
+    actionsSincePersist = 0;
+    return persistJournal(storage, journal);
+  };
+
+  return {
+    schedule(journal: Journal) {
+      pendingJournal = journal;
+      actionsSincePersist += 1;
+      if (actionsSincePersist >= actionInterval) {
+        doFlush(journal);
+        return;
+      }
+      if (timerId !== null) return; // already scheduled — will pick up the latest pendingJournal
+      timerId = scheduleTimer(() => {
+        timerId = null;
+        if (pendingJournal) doFlush(pendingJournal);
+      }, debounceMs);
+    },
+    flush(journal: Journal): boolean {
+      return doFlush(journal);
+    },
+    cancel() {
+      clearPendingTimer();
+      pendingJournal = null;
+      actionsSincePersist = 0;
+    },
+  };
 }
 
 /**

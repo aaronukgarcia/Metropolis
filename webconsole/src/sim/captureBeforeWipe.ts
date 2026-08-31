@@ -10,6 +10,7 @@ import { currentMapUi } from './uistate.ts';
 import { recentErrors, codedError } from './backend.ts';
 import { reducer } from './engine.ts';
 import { getPrewipeCap } from './storageConfig.ts';
+import { safeSetItem } from './safeStorage.ts';
 
 export { PREWIPE_CAP, getPrewipeCap, setPrewipeCap } from './storageConfig.ts';
 
@@ -91,24 +92,23 @@ function persistCompactArchive(
   entry: PreWipeArchiveEntry,
   cap: number,
 ): void {
+  // BUG-457: routed through the shared quota-safe helper (isQuotaError
+  // classification lives in one place now) — the fail-closed CONTRACT is
+  // unchanged: exhaust every fallback, then throw, so attemptWipe's caller
+  // aborts the wipe (GR#27).
+  const first = safeSetItem(storage, PREWIPE_ARCHIVE_KEY, JSON.stringify(entries.slice(-cap)));
+  if (first.ok) return;
+  const second = safeSetItem(storage, PREWIPE_ARCHIVE_KEY, JSON.stringify([entry]));
+  if (second.ok) return;
+  const failure = new Error(second.error ?? 'pre-wipe archive persist failed');
+  if (typeof document === 'undefined') {
+    throw failure;
+  }
   try {
-    storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify(entries.slice(-cap)));
+    downloadPreWipeEntry(entry);
     return;
   } catch {
-    try {
-      storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify([entry]));
-      return;
-    } catch (second) {
-      if (typeof document === 'undefined') {
-        throw second;
-      }
-      try {
-        downloadPreWipeEntry(entry);
-        return;
-      } catch {
-        throw second;
-      }
-    }
+    throw failure;
   }
 }
 

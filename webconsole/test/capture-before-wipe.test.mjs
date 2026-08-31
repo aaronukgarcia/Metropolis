@@ -238,6 +238,34 @@ test('compact archive has no ok:true consistency checks', () => {
   assert.equal(archive[0].debug.perfHud, null);
 });
 
+// ---------- BUG-457 attack: fail-closed on a NON-quota write failure ----------
+//
+// The GR#27 fail-closed contract is about ANY setItem failure, not only quota:
+// safeSetItem returns {ok:false, quota:false} for a non-quota throw (e.g. a
+// SecurityError in private-browsing / storage-disabled mode), and
+// persistCompactArchive must STILL exhaust its fallbacks and throw so the wipe
+// aborts. Prior tests only rigged a quota-shaped throw; this proves a non-quota
+// throw is not accidentally treated as a benign skip that lets the wipe proceed.
+test('attemptWipe: a NON-quota setItem failure (SecurityError) also blocks the wipe (fail-closed on any write error)', () => {
+  const state = dirtyCity();
+  const securityStorage = {
+    getItem() {
+      return null;
+    },
+    setItem() {
+      const e = new Error('SecurityError: storage disabled');
+      e.name = 'SecurityError';
+      throw e;
+    },
+  };
+  let applyWipeCalls = 0;
+  assert.throws(
+    () => attemptWipe(state, APP_VERSION, securityStorage, () => { applyWipeCalls += 1; }),
+    /SecurityError/,
+  );
+  assert.equal(applyWipeCalls, 0, 'a non-quota write failure must also abort the wipe (fail-closed)');
+});
+
 // ---------- FEAT-1972079916 BAR-F1: readPreWipeArchive throws a NAMED code ----------
 
 test('readPreWipeArchive on a non-array archive throws with .code MET-V807 (not a bare Error)', () => {

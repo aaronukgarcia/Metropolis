@@ -1,4 +1,5 @@
 import { cityNameToSlug, displayCityName } from './namedsaves.ts';
+import { safeSetItem } from './safeStorage.ts';
 
 export const RECENT_OPENED_KEY = 'metropolis.recentOpened';
 export const RECENT_OPENED_CAP = 10;
@@ -32,10 +33,11 @@ export function listRecentOpened(storage: RecentStorage): RecentOpened[] {
   return readList(storage).slice(0, RECENT_OPENED_CAP);
 }
 
+/** Returns true if the updated recents list was actually persisted (BUG-457). */
 export function recordRecentOpened(
   storage: RecentStorage,
   entry: { name: string; tick: number; population: number; funds: number; slug?: string; openedAt?: string },
-): void {
+): boolean {
   const name = displayCityName(entry.name);
   const slug = entry.slug ?? cityNameToSlug(name);
   const row: RecentOpened = {
@@ -47,5 +49,5 @@ export function recordRecentOpened(
     openedAt: entry.openedAt ?? new Date().toISOString(),
   };
   const next = [row, ...readList(storage).filter((r) => r.slug !== slug)].slice(0, RECENT_OPENED_CAP);
-  storage.setItem(RECENT_OPENED_KEY, JSON.stringify(next));
+  return safeSetItem(storage, RECENT_OPENED_KEY, JSON.stringify(next)).ok;
 }

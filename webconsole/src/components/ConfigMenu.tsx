@@ -12,6 +12,95 @@ import { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } from '../sim/namedsaves
 import { SAVEPOINT_KEY_PREFIX } from '../sim/replay';
 import { JOURNAL_KEY } from '../sim/journal';
 
+/**
+ * BUG-457: how many journal entries Reclaim keeps (rather than deleting the
+ * key outright) — enough to still have SOME crash-recovery tail, small enough
+ * to free most of the bytes. The old "Clear journal" button still nukes it
+ * entirely if the player wants that.
+ */
+const RECLAIM_JOURNAL_KEEP_ENTRIES = 200;
+
+function keyByteLength(storage: Storage, key: string): number {
+  const v = storage.getItem(key);
+  return v == null ? 0 : (key.length + v.length) * 2;
+}
+
+/**
+ * Trim (not delete) the persisted journal down to its newest
+ * RECLAIM_JOURNAL_KEEP_ENTRIES entries. A corrupt/unparseable journal is
+ * dropped outright (same as before) since it cannot be trimmed safely.
+ */
+function reclaimJournal(storage: Storage): void {
+  try {
+    const raw = storage.getItem(JOURNAL_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { entries?: unknown };
+    if (Array.isArray(parsed.entries) && parsed.entries.length > RECLAIM_JOURNAL_KEEP_ENTRIES) {
+      storage.setItem(
+        JOURNAL_KEY,
+        JSON.stringify({ entries: parsed.entries.slice(-RECLAIM_JOURNAL_KEEP_ENTRIES) }),
+      );
+    }
+  } catch {
+    storage.removeItem(JOURNAL_KEY);
+  }
+}
+
+/**
+ * Trim (not delete) the pre-wipe archive down to the CURRENT prewipe cap.
+ * Writes are already capped going forward (captureBeforeWipe.ts slices on
+ * every write); this only matters when the cap was lowered after entries were
+ * already archived under a higher one, or the entry format is stale/oversized.
+ */
+function reclaimPrewipeArchive(storage: Storage): void {
+  try {
+    const raw = storage.getItem(PREWIPE_ARCHIVE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      storage.removeItem(PREWIPE_ARCHIVE_KEY);
+      return;
+    }
+    const cap = getPrewipeCap(storage);
+    if (parsed.length > cap) {
+      storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify(parsed.slice(-cap)));
+    }
+  } catch {
+    storage.removeItem(PREWIPE_ARCHIVE_KEY);
+  }
+}
+
+/**
+ * BUG-457: evict superseded autosave slots ONLY (any slot beyond the current
+ * rotation, i.e. never `.0`, which holds the CURRENT city's active state).
+ * persistSavepoint already prunes these on every save; this is a defensive
+ * sweep for leftovers from an older, larger SAVEPOINT_CAP.
+ */
+function reclaimSuperseededSavepoints(storage: Storage): void {
+  for (let slot = 1; slot < 8; slot++) {
+    try {
+      storage.removeItem(`${SAVEPOINT_KEY_PREFIX}.${slot}`);
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/** Runs every Reclaim step and returns the bytes actually freed (measured, not assumed). */
+function runReclaim(storage: Storage): number {
+  const keysTouched = [
+    JOURNAL_KEY,
+    PREWIPE_ARCHIVE_KEY,
+    ...Array.from({ length: 7 }, (_, i) => `${SAVEPOINT_KEY_PREFIX}.${i + 1}`),
+  ];
+  const before = keysTouched.reduce((n, k) => n + keyByteLength(storage, k), 0);
+  reclaimJournal(storage);
+  reclaimPrewipeArchive(storage);
+  reclaimSuperseededSavepoints(storage);
+  const after = keysTouched.reduce((n, k) => n + keyByteLength(storage, k), 0);
+  return Math.max(0, before - after);
+}
+
 export function ConfigMenu() {
   const [open, setOpen] = useState(false);
   const [cap, setCap] = useState(() => {
@@ -22,6 +111,8 @@ export function ConfigMenu() {
     }
   });
   const [tick, setTick] = useState(0);
+  // BUG-457: measured (not assumed) bytes freed by the last Reclaim run.
+  const [reclaimMsg, setReclaimMsg] = useState<string | null>(null);
 
   const usage = useMemo(() => {
     try {
@@ -108,20 +199,27 @@ export function ConfigMenu() {
                   }}
                 />
               </label>
+              {reclaimMsg && <div className="mono muted">{reclaimMsg}</div>}
               <div className="brand-menu-form">
                 <button
                   className="btn tiny accent"
+                  title="Trims the journal and pre-wipe archive and evicts superseded autosave slots. Never touches the current city, named cities, or the active autosave."
                   onClick={() => {
-                    window.localStorage.removeItem(PREWIPE_ARCHIVE_KEY);
-                    window.localStorage.removeItem(`${SAVEPOINT_KEY_PREFIX}.1`);
-                    window.localStorage.removeItem(`${SAVEPOINT_KEY_PREFIX}.2`);
-                    window.localStorage.removeItem(JOURNAL_KEY);
+                    const freed = runReclaim(window.localStorage);
+                    const nowUsage = (() => {
+                      try {
+                        return localStorageUsage(window.localStorage).bytes;
+                      } catch {
+                        return 0;
+                      }
+                    })();
+                    setReclaimMsg(`Reclaimed ${fmtStorageBytes(freed)} — now ${fmtStorageBytes(nowUsage)} used.`);
                     setTick((n) => n + 1);
                   }}
                 >
                   Reclaim storage
                 </button>
-                <button className="btn tiny" onClick={() => { window.localStorage.removeItem(JOURNAL_KEY); setTick((n) => n + 1); }}>
+                <button className="btn tiny" onClick={() => { window.localStorage.removeItem(JOURNAL_KEY); setReclaimMsg(null); setTick((n) => n + 1); }}>
                   Clear journal
                 </button>
                 <button className="btn tiny" onClick={() => { window.localStorage.removeItem(PREWIPE_ARCHIVE_KEY); setTick((n) => n + 1); }}>
