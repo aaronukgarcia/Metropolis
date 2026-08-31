@@ -805,3 +805,35 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
     transform: rotate(360deg);
   }
 }
+
+/* FEAT-1972079938: Queue Depth HUD — small, always-visible, corner-anchored
+   on the far right (mirrors .perf-hud's fixed/corner idiom, but bottom-right
+   rather than top-right so it never collides with the dev-only,
+   toggle-shown PerfHud). Diagnostic tone (Aaron: "10 waiting = fine, 100 =
+   cool") — no danger/warn colours, just the mono readout. */
+.queue-depth-hud {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  min-width: 150px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink);
+  z-index: 900;
+  padding: 6px 8px;
+}
+.qd-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.qd-title { font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; font-size: 10px; color: var(--muted); }
+.qd-reset { font: inherit; font-size: 10px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 6px; cursor: pointer; }
+.qd-reset:hover { color: var(--ink); }
+.qd-rows { display: flex; flex-direction: column; gap: 1px; }
+.qd-row { display: flex; align-items: center; gap: 6px; }
+.qd-engine { flex: 1; }
+.qd-depth { font-weight: 700; min-width: 1.5em; text-align: right; }
+.qd-hwm { font-size: 10px; }
+.qd-total { display: flex; align-items: center; gap: 6px; margin-top: 3px; padding-top: 3px; border-top: 1px solid var(--border); }
+.qd-total b { color: var(--ink); }

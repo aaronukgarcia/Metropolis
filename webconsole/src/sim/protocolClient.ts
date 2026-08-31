@@ -33,6 +33,7 @@
 // React wiring (the LIVE ENGINE badge) living in its own small component.
 
 import { codedError, recordError } from './backend.ts';
+import { PROTOCOL_ENGINE_KEY, queueDepthTracker, type QueueDepthTracker } from './queueDepth.ts';
 import {
   FINANCE_SCHEMA_VERSION,
   PROTOCOL_VERSION,
@@ -111,6 +112,15 @@ export interface ProtocolClientOptions {
   onSchemaMismatch?: (subscriptionId: SubscriptionID, expected: number, got: number) => void;
   /** Correlation id generator override, for deterministic tests. */
   newCorrelationId?: () => string;
+  /** Queue Depth HUD instrumentation (FEAT-1972079938): the tracker
+   * sendCommand() reports in-flight asks to. Defaults to the module-level
+   * singleton so production wiring needs no changes; tests inject an
+   * isolated QueueDepthTracker to assert depth without touching global
+   * state other suites might also be observing. */
+  queueTracker?: QueueDepthTracker;
+  /** Engine/target key to report under. Defaults to PROTOCOL_ENGINE_KEY —
+   * override only for a test that wants a distinguishable key. */
+  queueEngineKey?: string;
 }
 
 /** Rejection shape for a sendCommand() Promise: always a registry-coded
@@ -299,9 +309,37 @@ export class ProtocolClient {
    * method's only side effects are wire I/O and the pending-map
    * bookkeeping above; it deliberately does not call recordAction or any
    * other journal.ts function.
+   *
+   * # Queue Depth HUD instrumentation (FEAT-1972079938)
+   *
+   * queueDepthTracker.increment(engine) is reported for every ask that
+   * actually reaches the wire, and decrement(engine) fires exactly once
+   * per ask on whichever settle path gets there first: an ack-level
+   * error, an engine "result" notification (accepted or rejected), or
+   * rejectAllPending (socket drop mid-flight) — see resolve/reject being
+   * wrapped below before either pending map is populated, so every path
+   * that later calls one of those wrapped functions decrements exactly
+   * once (both maps are always populated/cleared together, and each is
+   * deleted before its resolve/reject fires — see handleMessage/
+   * rejectAllPending — so a wrapped function can never run twice for the
+   * same ask).
+   *
+   * THE LEAK FIX: increment() is called only AFTER `socket.send()`
+   * returns successfully, never before. A real WebSocket's send() can
+   * throw SYNCHRONOUSLY (InvalidStateError when the socket is CONNECTING/
+   * CLOSING/CLOSED) — that throw means the ask never reached the wire and
+   * this Promise settles (via the catch below) without ever having
+   * incremented, so there is no increment left stranded and nothing to
+   * decrement for it. Ordering increment after a successful send is what
+   * guarantees "counted" and "will settle" can never diverge; the earlier
+   * version incremented before send() with no try/catch, so a synchronous
+   * throw settled the caller's Promise while leaving the tracker's count
+   * elevated forever (the leak an independent round caught and REJECTed).
    */
   sendCommand(kind: string, payload: unknown): Promise<CommandResult> {
     const correlationId = this.newCorrelationId();
+    const tracker = this.opts.queueTracker ?? queueDepthTracker;
+    const engineKey = this.opts.queueEngineKey ?? PROTOCOL_ENGINE_KEY;
     return new Promise<CommandResult>((resolve, reject) => {
       if (!this.handshakeDone || !this.socket) {
         const err = codedError(ERR_ENGINE_UNREACHABLE, 'sendCommand: not connected to a live engine') as CommandRejection;
@@ -310,11 +348,43 @@ export class ProtocolClient {
         return;
       }
       const id = this.nextId();
-      this.pendingAcks.set(id, { correlationId, reject });
-      this.pendingResults.set(correlationId, { resolve, reject });
+      // Wrapped so every settle path below (ack error, result
+      // accept/reject, rejectAllPending) decrements exactly once — these
+      // are the only functions ever stored in pendingAcks/pendingResults
+      // for this ask, and both maps are always deleted before the stored
+      // function is invoked (see handleMessage/rejectAllPending), so
+      // double-decrement cannot happen.
+      const wrappedResolve = (r: CommandResult) => {
+        tracker.decrement(engineKey);
+        resolve(r);
+      };
+      const wrappedReject = (e: CommandRejection) => {
+        tracker.decrement(engineKey);
+        reject(e);
+      };
+      this.pendingAcks.set(id, { correlationId, reject: wrappedReject });
+      this.pendingResults.set(correlationId, { resolve: wrappedResolve, reject: wrappedReject });
       const cmd: Command = { protocolVersion: PROTOCOL_VERSION, correlationId, issuedAtTick: 0, kind, payload };
       const req: RpcMessage = { jsonrpc: '2.0', id, method: 'command', params: cmd };
-      this.socket.send(JSON.stringify(req));
+      try {
+        this.socket.send(JSON.stringify(req));
+      } catch (sendErr) {
+        // THE LEAK FIX: send() threw synchronously — this ask never
+        // reached the wire, so there will be no ack and no "result"
+        // notification for it. Clean up both pending maps directly (NOT
+        // via the wrapped reject — no increment ever happened for this
+        // ask, so there is nothing to decrement) and reject the caller's
+        // Promise with the plain `reject`, so the settle count and the
+        // increment count both stay at zero for this ask.
+        this.pendingAcks.delete(id);
+        this.pendingResults.delete(correlationId);
+        const message = sendErr instanceof Error ? sendErr.message : String(sendErr);
+        const err = codedError(ERR_ENGINE_UNREACHABLE, `sendCommand: socket.send failed: ${message}`) as CommandRejection;
+        recordError(err.message, { type: 'app', code: err.code });
+        reject(err);
+        return;
+      }
+      tracker.increment(engineKey);
     });
   }
 

@@ -7,6 +7,7 @@ import { RightDock } from './components/right/RightDock';
 import { BottomBar } from './components/bottom/BottomBar';
 import { MapView } from './components/MapView';
 import { PerfHud } from './components/PerfHud';
+import { QueueDepthHud } from './components/right/QueueDepthHud';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { VersionUpgradeToast } from './sim/liveVersion';
 
@@ -35,6 +36,7 @@ export default function App() {
                 <RightDock />
               </div>
               <PerfHud />
+              <QueueDepthHud />
             </div>
             <BusyIndicator />
           </ErrorBoundary>
