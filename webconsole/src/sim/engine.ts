@@ -1657,6 +1657,108 @@ export const REPLAN_HIERARCHY_WEIGHT = 3;
 /** Aaron ruling (4): upgrade cost fraction of the full new-tier build cost. */
 export const REPLAN_UPGRADE_COST_FRACTION = 0.9;
 
+// ────────────────────────────────────────────────────────────────────────────
+// FEAT-1972079928 inc2 (AC-5): motorway junction scarcity — minimum spacing.
+//
+// Aaron's ruling (BOW comment, 2026-08-31 — AUTHORITATIVE over the BA draft's
+// softer "spacing OR count" wording): scarcity = MINIMUM SPACING. A new
+// motorway junction may only be placed when it is `>= MOTORWAY_JUNCTION_
+// MIN_SPACING_TILES` from the NEAREST existing motorway junction. A nearer
+// crossing routes via a SLIP to a parallel A-road instead of cutting a direct
+// motorway junction (option (a) from the AC-5 doc), or — if no parallel A-road
+// is within reach — the crossing is simply suppressed (the connecting road
+// does not cross the motorway at that tile at all; no partial state, no cost).
+// MOTORWAY_JUNCTION_MAX_PER_SEGMENT is enforced too (belt-and-braces per the
+// constants table) but spacing is the ruling's actual mechanism.
+// ────────────────────────────────────────────────────────────────────────────
+
+/** AC-5 PLACEHOLDER-balance: min tiles between any two motorway junctions. */
+export const MOTORWAY_JUNCTION_MIN_SPACING_TILES = 6;
+
+/** AC-5 PLACEHOLDER-balance: max motorway junctions network-wide (Q5 in the
+ * doc asks per-segment vs per-network; the simplest, deterministic, always-
+ * computable reading is per-network — see the report's open-question note). */
+export const MOTORWAY_JUNCTION_MAX_PER_SEGMENT = 4;
+
+/** AC-5 PLACEHOLDER-balance: how far to search for a parallel A-road (or
+ * higher, non-motorway) tile to slip-connect to instead of crossing directly. */
+export const MOTORWAY_SLIP_SEARCH_RADIUS_TILES = 4;
+
+/**
+ * AC-5: Manhattan-tile distance from (x,y) to the NEAREST existing
+ * `rd_mwyjunction` tile in `state.buildings`. Pure function of map state
+ * (building positions only) — deterministic, no Date/Math.random, no
+ * insertion-order dependence (a min-reduce is order-independent). Returns
+ * Infinity when no motorway junction exists yet (nothing to be too close to).
+ */
+export function nearestMotorwayJunctionDistance(state: SimState, x: number, y: number): number {
+  let best = Infinity;
+  for (const b of state.buildings) {
+    if (b.spec !== 'rd_mwyjunction') continue;
+    const d = Math.abs(b.x - x) + Math.abs(b.y - y);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/** AC-5: total count of existing motorway junctions network-wide. */
+export function countMotorwayJunctions(state: SimState): number {
+  let n = 0;
+  for (const b of state.buildings) if (b.spec === 'rd_mwyjunction') n++;
+  return n;
+}
+
+/**
+ * AC-5: true when a NEW motorway junction at (x,y) would satisfy both the
+ * minimum-spacing and max-per-segment(network) rules. Takes the thresholds as
+ * PARAMETERS (rather than reading the module consts directly) so a Mutation
+ * proof can call this exact function with `minSpacing: 0` / `maxCount:
+ * Infinity` — the functional equivalent of zeroing the real consts — without
+ * needing to reach into the live ES module bindings (which are read-only from
+ * outside the module, same pattern as replanSearch's `radius` parameter).
+ */
+export function motorwayJunctionSpacingOk(
+  state: SimState,
+  x: number,
+  y: number,
+  minSpacing: number,
+  maxCount: number
+): boolean {
+  return nearestMotorwayJunctionDistance(state, x, y) >= minSpacing && countMotorwayJunctions(state) < maxCount;
+}
+
+/**
+ * AC-5 option (a): search a deterministic raster window (ascending y, then x —
+ * never insertion order) around (x,y) for an existing PARALLEL A-road-or-above
+ * (roadTier >= 3), non-motorway-class road tile the crossing could slip-
+ * connect to instead of cutting a new motorway junction. `roadByTile` is the
+ * plain (non-motorway, non-rail) existing-road lookup already built by the
+ * `placeRoadPath` case; `excludeTiles` is the tile-set of the path just placed
+ * (never slip-target a cell that's part of THIS SAME placement). Returns the
+ * FIRST match in raster order, or null when nothing viable is in reach.
+ */
+export function findMotorwaySlipTarget(
+  roadByTile: Map<string, { building: { x: number; y: number }; spec: Spec }>,
+  x: number,
+  y: number,
+  searchRadius: number,
+  excludeTiles: Set<string>
+): { x: number; y: number } | null {
+  for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+    for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+      if (dx === 0 && dy === 0) continue;
+      const cx = x + dx;
+      const cy = y + dy;
+      const k = `${cx},${cy}`;
+      if (excludeTiles.has(k)) continue;
+      const found = roadByTile.get(k);
+      if (!found) continue;
+      if (roadTierOf(found.spec) >= 3) return { x: cx, y: cy };
+    }
+  }
+  return null;
+}
+
 /**
  * Auto-placed junction/bridge specs from FEAT-1972079910 inc2/3. The re-plan
  * cascade treats these as ordinary passable road tiles (their roadTier is
@@ -2313,9 +2415,46 @@ function reduceCore(state: SimState, action: Action): SimState {
           // Below-dual: no placement, no cost (unchanged behaviour — level crossing not implemented).
         } else if (existingMotorway) {
           // FEAT-1972079910 inc3 (AC-8): crossing an existing motorway-class road.
-          // Any road crossing motorway → convert to rd_mwyjunction at flat cost.
-          conversions.set(k, { buildingId: existingMotorway.building.id, newSpec: 'rd_mwyjunction' });
-          tilesToPlace.push({ x: tile.x, y: tile.y, spec: 'rd_mwyjunction', isConversion: true, cost: MOTORWAY_JUNCTION_COST });
+          // FEAT-1972079928 AC-5: motorway junction scarcity — minimum spacing.
+          if (existingMotorway.spec.id === 'rd_mwyjunction') {
+            // Already a junction: this crossing merges into it (AC-5 option
+            // (b) + AC-8 no-double-conversion) — no new junction, no extra cost.
+            tilesToPlace.push({ x: tile.x, y: tile.y, spec: 'rd_mwyjunction', isConversion: false, cost: 0 });
+          } else if (
+            !motorwayJunctionSpacingOk(
+              state,
+              tile.x,
+              tile.y,
+              MOTORWAY_JUNCTION_MIN_SPACING_TILES,
+              MOTORWAY_JUNCTION_MAX_PER_SEGMENT
+            )
+          ) {
+            // AC-5: too close to (or too many) existing motorway junctions.
+            // Do NOT place a new direct junction. Option (a): slip-connect to
+            // a nearby parallel A-road-or-above instead of crossing directly.
+            const slip = findMotorwaySlipTarget(
+              existingRoadByTile,
+              tile.x,
+              tile.y,
+              MOTORWAY_SLIP_SEARCH_RADIUS_TILES,
+              pathSet
+            );
+            if (slip) {
+              // The parallel road is already on the map and already reachable
+              // by the wider re-plan cascade below (AC-2/AC-3 route it in) —
+              // nothing to place here; this tile is simply NOT converted, so
+              // the crossing is rerouted away from the motorway rather than
+              // cutting a scarce new junction.
+            }
+            // Either way (slip found or not): suppress the crossing — no
+            // placement, no conversion, no cost at this tile (mirrors the
+            // below-dual/rail rejection elsewhere in this same reducer case).
+          } else {
+            // Spacing/count OK: any road crossing motorway → convert to
+            // rd_mwyjunction at flat cost (FEAT-1972079910 inc3, AC-8).
+            conversions.set(k, { buildingId: existingMotorway.building.id, newSpec: 'rd_mwyjunction' });
+            tilesToPlace.push({ x: tile.x, y: tile.y, spec: 'rd_mwyjunction', isConversion: true, cost: MOTORWAY_JUNCTION_COST });
+          }
         } else {
           // No existing road/rail/motorway: place a new road tile
           tilesToPlace.push({ x: tile.x, y: tile.y, spec: action.spec, isConversion: false, cost: placementCost(sp) });
