@@ -65,6 +65,17 @@ const PLACEHOLDER_IDS = [
   'air_police_helibase',
   // Landmarks
   'land_containerport', 'land_ferryterminal', 'land_cern', 'land_gigafactory', 'land_semifab',
+  'tour_greatwall', 'tour_colosseum', 'tour_tajmahal', 'tour_machupicchu', 'tour_petra',
+  'tour_giza', 'tour_eiffel', 'tour_liberty', 'tour_grandcanyon', 'tour_niagara',
+  'tour_angkor', 'tour_stonehenge', 'tour_acropolis', 'tour_redeemer', 'tour_sagrada',
+  'tour_forbidden', 'tour_stpeters', 'tour_alhambra', 'tour_chichenitza', 'tour_fuji',
+  'tour_opera', 'tour_goldengate', 'tour_louvre', 'tour_santorini', 'tour_venice',
+  'tour_neuschwanstein', 'tour_burj', 'tour_iguazu', 'tour_banff', 'tour_aurora',
+  'tour_reef', 'tour_yellowstone', 'tour_serengeti', 'tour_fushimi', 'tour_prague',
+  'tour_dubrovnik', 'tour_cappadocia', 'tour_moai', 'tour_uluru', 'tour_tablemountain',
+  'tour_hallstatt', 'tour_antelope', 'tour_halong', 'tour_zhangjiajie', 'tour_matterhorn',
+  'tour_towerlondon', 'tour_versailles', 'tour_montstmichel', 'tour_giantscauseway', 'tour_edinburgh',
+  'stay_bb', 'stay_hotel', 'stay_luxury', 'stay_resort', 'stay_caravan',
 ];
 
 test('every planned placeholder exists in SPECS with placeholder===true', () => {
@@ -102,7 +113,7 @@ test('placeholders carry ZERO / safe sim stats (no cost, upkeep, or capacity)', 
 test('the ~45 placeholders are exactly the new placeholder specs (no stray flags)', () => {
   const flagged = Object.values(SPECS).filter((sp) => sp.placeholder === true).map((sp) => sp.id).sort();
   assert.deepEqual(flagged, [...PLACEHOLDER_IDS].sort(), 'the set of placeholder-flagged specs must match the roadmap list');
-  assert.equal(flagged.length, 32, 'expected 32 roadmap placeholders (3 roads graduated in FEAT-1972079907 inc1; waste_depot graduated in FEAT-1972079906 inc1; the 4 waste PROCESSING specs graduated in FEAT-1972079906 inc2; the 4 estates res_estate/off_businesspark/ind_estate/com_hypermarket graduated in FEAT-1972079900 inc1; pow_hydro/Five Gorges Dam graduated in FEAT-1972079901)');
+  assert.equal(flagged.length, PLACEHOLDER_IDS.length, 'placeholder count must match PLACEHOLDER_IDS');
 });
 
 test('every placeholder appears in exactly ONE palette family (roadmap is visible)', () => {
