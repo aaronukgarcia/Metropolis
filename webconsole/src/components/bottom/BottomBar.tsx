@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable, sortPaletteItems } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
-import { useSim, specUnlocked } from '../../sim/store';
+import { useSim } from '../../sim/simContext';
+import { specUnlocked } from '../../sim/engine';
 import { fmtMoney } from '../../sim/utils';
 import { Panel } from '../Tabs';
 import { SpecCard } from '../SpecCard';

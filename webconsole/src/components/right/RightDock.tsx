@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useSim, levelOf, xpForLevel, wellbeingOf, approvalOf } from '../../sim/store';
+import { useSim } from '../../sim/simContext';
+import { levelOf, xpForLevel, wellbeingOf, approvalOf } from '../../sim/engine';
 import {
   MILESTONES,
   POLICIES,

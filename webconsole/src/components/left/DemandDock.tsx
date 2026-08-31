@@ -1,5 +1,6 @@
 import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, brownoutOf } from '../../sim/data';
-import { useSim, demandOf, levelOf } from '../../sim/store';
+import { useSim } from '../../sim/simContext';
+import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
 import { Panel } from '../Tabs';
 

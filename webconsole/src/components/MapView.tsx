@@ -30,7 +30,8 @@ import {
 } from '../sim/data';
 import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
-import { useSim, demandOf, specUnlocked, SPEED_MS } from '../sim/store';
+import { useSim } from '../sim/simContext';
+import { demandOf, specUnlocked, SPEED_MS } from '../sim/engine';
 import { publishMapUi } from '../sim/uistate';
 import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
 import { applyStashedCameraToView } from '../sim/cameraApply';
@@ -1075,9 +1076,13 @@ function LevelUpBanner() {
           Dismiss
         </button>
       </div>
-      <p className="levelup-cash">
-        Cash injection <b>{fmtMoney(n.cash)}</b> granted.
-      </p>
+      {n.cash > 0 ? (
+        <p className="levelup-cash">
+          Cash injection <b>{fmtMoney(n.cash)}</b> granted.
+        </p>
+      ) : (
+        <p className="levelup-cash">No cash injection this level.</p>
+      )}
       <p className="levelup-unlocks">
         {n.unlocked.length > 0
           ? `Unlocked: ${n.unlocked.join(', ')}`

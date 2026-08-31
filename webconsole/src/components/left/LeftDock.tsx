@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Histogram } from './Histogram';
 import { Sankey } from './Sankey';
-import { LOAN_PRINCIPAL, useSim } from '../../sim/store';
+import { useSim } from '../../sim/simContext';
+import { LOAN_PRINCIPAL } from '../../sim/engine';
 import { Panel } from '../Tabs';
 import { fmtMoney, fmtPct, fmtSigned } from '../../sim/utils';
 

@@ -1,7 +1,6 @@
-import { createContext, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import type { Dispatch, ReactNode } from 'react';
-import type { SimState } from './types';
-import { reducer, initialState, SPEED_MS } from './engine';
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { reducer, initialState, SPEED_MS, sanitizeTreasury } from './engine';
 import type { Action } from './engine';
 import { getGlobalTickTracker, recordTickDuration } from './perfhud';
 import type { TickTrackerState } from './perfhud';
@@ -16,15 +15,40 @@ import {
 } from './replay';
 import {
   needsRebuild,
-  replayFromGenesisDefensive,
+  replayFromGenesisDefensiveChunked,
   rebuildReport,
+  setRebuildInProgress,
+  rebuildInProgress,
+  estimateRemainingLabel,
+  isStaleRebuildChain,
   type RebuildReport,
+  type ReplayProgress,
+  type ProgressSample,
 } from './genesisReplay';
-import { attemptWipe, captureOnUnload } from './captureBeforeWipe';
+import { attemptWipe, captureOnUnload, captureBeforeWipe } from './captureBeforeWipe';
+import {
+  buildGameSave,
+  parseGameSave,
+  suggestedSaveName,
+  gameSaveText,
+  type GameSave,
+} from './gamesave';
+import { loadDevCity1, DEVCITY1_NAME } from './devcity';
+import {
+  listNamedSaves,
+  writeNamedSave,
+  readNamedSave,
+  renameNamedSave,
+  getCurrentCityName,
+  setCurrentCityName,
+  displayCityName,
+  cityNameToSlug,
+} from './namedsaves';
 import { versionRaw, versionBadgeLabel } from './version';
 import { getLiveVersion } from './liveVersionRef';
 import { currentMapUi, type MapViewState } from './uistate';
 import { persistStashedCamera } from './cameraStash';
+import { listRecentOpened, recordRecentOpened } from './recentfiles';
 import { RebuildPrompt, type RebuildPhase } from '../components/RebuildPrompt';
 import { recordError, updateLastKnownState } from './backend';
 
@@ -67,13 +91,83 @@ export {
   LEDGER_CAP,
 } from './engine';
 export type { Action, ZoneDemand } from './engine';
+export { useSim } from './simContext';
+export type { SimContextValue } from './simContext';
+import { SimContext } from './simContext';
 
-interface SimContextValue {
-  state: SimState;
-  dispatch: Dispatch<Action>;
+type StandbyKind = 'rebuild' | 'load';
+
+function triggerJsonDownload(filename: string, text: string): void {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-const SimContext = createContext<SimContextValue | null>(null);
+async function pickSaveFile(suggestedName: string, text: string): Promise<void> {
+  const w = window as Window & {
+    showSaveFilePicker?: (opts: {
+      suggestedName: string;
+      types: { description: string; accept: Record<string, string[]> }[];
+    }) => Promise<{ createWritable: () => Promise<{ write: (d: string) => Promise<void>; close: () => Promise<void> }> }>;
+  };
+  if (typeof w.showSaveFilePicker === 'function') {
+    try {
+      const handle = await w.showSaveFilePicker({
+        suggestedName,
+        types: [{ description: 'Metropolis save', accept: { 'application/json': ['.json'] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      return;
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return;
+    }
+  }
+  triggerJsonDownload(suggestedName, text);
+}
+
+function pickOpenFile(): Promise<string | null> {
+  const w = window as Window & {
+    showOpenFilePicker?: (opts: {
+      types: { description: string; accept: Record<string, string[]> }[];
+      multiple?: boolean;
+    }) => Promise<Array<{ getFile: () => Promise<File> }>>;
+  };
+  if (typeof w.showOpenFilePicker === 'function') {
+    return w
+      .showOpenFilePicker({
+        types: [{ description: 'Metropolis save', accept: { 'application/json': ['.json'] } }],
+        multiple: false,
+      })
+      .then(async ([handle]) => {
+        const file = await handle.getFile();
+        return file.text();
+      })
+      .catch((e: unknown) => {
+        if (e instanceof DOMException && e.name === 'AbortError') return null;
+        throw e;
+      });
+  }
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      void file.text().then(resolve);
+    };
+    input.click();
+  });
+}
 
 export function SimProvider({ children }: { children: ReactNode }) {
   // FEAT-1972079854: boot-time recovery from a persisted savepoint + journal,
@@ -98,20 +192,40 @@ export function SimProvider({ children }: { children: ReactNode }) {
     if (restoreResult.success && restoreResult.state) {
       const loadedJournal = loadJournal(window.localStorage);
       return {
-        state: restoreResult.state,
+        state: sanitizeTreasury(restoreResult.state),
         journal: loadedJournal,
         saveIndex: loadedJournal.entries.length,
         pendingRebuild: crossBuild
-          ? { savedVersion: most?.buildVersion ?? null, currentVersion: running, camera: most?.camera ?? null }
+          ? { savedVersion: most?.buildVersion ?? null, currentVersion: running, camera: most?.camera ?? null, kind: 'rebuild' as StandbyKind }
           : null,
       };
     }
-    return { state: initialState(), journal: emptyJournal(), saveIndex: 0, pendingRebuild: null };
+    const fresh =
+      typeof process !== 'undefined' && process.env.NODE_TEST_CONTEXT
+        ? initialState()
+        : loadDevCity1();
+    return { state: sanitizeTreasury(fresh), journal: emptyJournal(), saveIndex: 0, pendingRebuild: null };
   });
 
   const [state, dispatch] = useReducer(reducer, boot.state);
+  const [cityName, setCityName] = useState(() => {
+    try {
+      return getCurrentCityName(window.localStorage);
+    } catch {
+      return DEVCITY1_NAME;
+    }
+  });
   const [journal, setJournal] = useState<Journal>(boot.journal);
+  const journalRef = useRef(journal);
+  useEffect(() => {
+    journalRef.current = journal;
+  }, [journal]);
   const [lastSaveIndex, setLastSaveIndex] = useState<number>(boot.saveIndex);
+  const lastSaveIndexRef = useRef(lastSaveIndex);
+  useEffect(() => {
+    lastSaveIndexRef.current = lastSaveIndex;
+  }, [lastSaveIndex]);
+  const hotJournalRef = useRef<Journal | null>(null);
   const [autoSaveError, setAutoSaveError] = useState<boolean>(false);
   // GR#27 (BUG-420): surfaced when a Start Over / reset was ABORTED because the
   // mandatory pre-wipe debug capture failed. The wipe did not happen; state is intact.
@@ -121,8 +235,32 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // drives the modal (prompt → running → report); `rebuildReportState` carries
   // the before/after metrics once a rebuild has run.
   const [rebuildDecision, setRebuildDecision] = useState(boot.pendingRebuild);
+  const rebuildDecisionRef = useRef(rebuildDecision);
+  useEffect(() => {
+    rebuildDecisionRef.current = rebuildDecision;
+  }, [rebuildDecision]);
   const [rebuildPhase, setRebuildPhase] = useState<RebuildPhase>('prompt');
   const [rebuildReportState, setRebuildReportState] = useState<RebuildReport | null>(null);
+
+  // FEAT-1972079917: progress updates during chunked replay (running phase).
+  const [rebuildProgress, setRebuildProgress] = useState<ReplayProgress | null>(null);
+
+  // BUG-435: stall watchdog — if progress doesn't advance for WATCHDOG_MS, we move to stalled phase.
+  const [stallInfo, setStallInfo] = useState<{ actionsDone: number; actionsTotal: number; phaseLabel: string } | null>(null);
+  const watchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // r1 REJECT follow-up BAR-3: generation counter. Bumped on every fresh
+  // onRebuild/onRetry dispatch AND on a watchdog-fired stall, so an old chunked
+  // chain (its rAF resuming after the watchdog already declared it stalled)
+  // recognizes it has been superseded and aborts with no setState/persist.
+  const rebuildGenRef = useRef(0);
+
+  // BAR-2: live ETA — samples of (actionsDone, timestamp) collected during the
+  // current running chain, used to derive a "~Xm Ys remaining" label from the
+  // REAL observed replay rate (never a canned animation).
+  const progressSamplesRef = useRef<ProgressSample[]>([]);
+  const [etaLabel, setEtaLabel] = useState<string | null>(null);
+  const lastProgressRef = useRef<{ actionsDone: number; timestamp: number } | null>(null);
 
   // Wrap dispatch to:
   // 1. Record state-affecting actions in the journal (FEAT-1972079854: journal recording)
@@ -133,13 +271,25 @@ export function SimProvider({ children }: { children: ReactNode }) {
   // to undefined (→ no tick tracker) there instead of throwing, so the real render
   // path runs under test — without it the mount test could only skip (BUG-412 round).
   const tickTracker: TickTrackerState | null = import.meta.env?.DEV ? getGlobalTickTracker() : null;
+
+  // BUG-434 FIX: stateRef pattern. wrappedDispatch must NOT depend on `state` in its
+  // dependency list (which changes on EVERY dispatch, causing wrappedDispatch to be
+  // recreated on EVERY render). This causes the tick loop effect to re-run constantly,
+  // clearing and recreating the interval, which freezes the game under rapid dispatches
+  // at turbo speed. Instead, use stateRef.current to access the current state. This is
+  // the same pattern used for stateRef below (lines 217-220) for the beforeunload handler.
+  const stateRefForDispatch = useRef(state);
+  useEffect(() => {
+    stateRefForDispatch.current = state;
+  }, [state]);
+
   const wrappedDispatch = useMemo(() => {
     // Journal-record + dispatch the action (shared by the normal path and the
     // guarded reset path below).
     const recordAndDispatch = (action: Action) => {
       // Record action in journal if state-affecting.
       setJournal((j) => {
-        const updated = recordAction(j, state.tick, action);
+        const updated = recordAction(j, stateRefForDispatch.current.tick, action);
         // Persist journal to localStorage immediately after recording.
         persistJournal(window.localStorage, updated);
         return updated;
@@ -166,7 +316,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // (no journal record, no dispatch — state untouched) and surface an error.
       if (action.type === 'reset') {
         try {
-          attemptWipe(state, versionRaw, window.localStorage, () => recordAndDispatch(action));
+          attemptWipe(stateRefForDispatch.current, versionRaw, window.localStorage, () => recordAndDispatch(action));
           setCaptureError(null);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -178,7 +328,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
       recordAndDispatch(action);
     };
-  }, [tickTracker, state]);
+  }, [tickTracker]);
 
   // Autosave timer: every AUTOSAVE_INTERVAL_MS, persist a savepoint.
   // FEAT-1972079854: rolling autosave with fail-safe error handling.
@@ -240,41 +390,156 @@ export function SimProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (state.speed === 0) return;
-    const id = setInterval(() => wrappedDispatch({ type: 'tick' }), SPEED_MS[state.speed]);
+    const id = setInterval(() => {
+      if (rebuildInProgress) return;
+      wrappedDispatch({ type: 'tick' });
+    }, SPEED_MS[state.speed]);
     return () => clearInterval(id);
   }, [state.speed, wrappedDispatch]);
 
-  // inc2 rebuild handlers (brief §4.4). The genesis replay is a pure, synchronous
-  // headless loop (sub-second), so it runs inline; the whole thing is wrapped so a
-  // hard crash is caught and recorded (GR#1) and never bricks the boot.
+  // FEAT-1972079917 / BUG-435: watchdog timeout (ms) — if chunked replay progress
+  // doesn't advance for this long, we treat it as stalled and show a retry UI.
+  const WATCHDOG_MS = 10_000;
+
+  // Clean up the stall watchdog timer.
+  const clearWatchdog = () => {
+    if (watchdogTimerRef.current) {
+      clearTimeout(watchdogTimerRef.current);
+      watchdogTimerRef.current = null;
+    }
+  };
+
+  // inc2 rebuild handlers (brief §4.4). FEAT-1972079917: uses chunked replay
+  // with progress callback and BUG-435 stall watchdog.
+  //
+  // r1 REJECT follow-up (BAR-3): every fresh dispatch bumps rebuildGenRef and
+  // the chain captures that generation (myGen) at start. processChunk checks
+  // isStaleRebuildChain(myGen, rebuildGenRef.current) BEFORE doing anything —
+  // a superseded chain (an old rAF resuming after a watchdog stall, or after
+  // Retry started a new chain) aborts silently: no setState, no persist.
   const onRebuild = () => {
-    if (!rebuildDecision) return;
+    const decision = rebuildDecisionRef.current;
+    if (!decision) return;
+    rebuildGenRef.current += 1;
+    const myGen = rebuildGenRef.current;
     setRebuildPhase('running');
+    setRebuildProgress(null);
+    setStallInfo(null);
+    setEtaLabel(null);
+    clearWatchdog();
+    lastProgressRef.current = null;
+    progressSamplesRef.current = [];
+    setRebuildInProgress(true);
+
     try {
-      const result = replayFromGenesisDefensive(journal);
-      if (result.crashed) {
-        recordError(`Rebuild crashed during replay: ${result.crashError}. Kept the old snapshot.`, {
-          type: 'app',
-          action: 'rebuild',
-        });
-        setRebuildDecision(null); // fall back to the already-restored old snapshot
-        return;
-      }
-      // Report compares the OLD restored snapshot (current `state`) to the replay.
-      const report = rebuildReport(state, result.state, result.skipped);
-      setRebuildReportState(report);
-      // Persist the rebuilt city as a fresh savepoint stamped with the CURRENT
-      // build, and carry the camera across the reload, so resuming boots straight
-      // into the new-engine city with no re-prompt and no view jump.
-      const running = currentBuildVersion();
-      const rebuiltSave = createSavepoint(result.state, [], new Date(), running, rebuildDecision.camera ?? currentCamera());
-      persistSavepoint(window.localStorage, rebuiltSave);
-      persistStashedCamera(window.localStorage, rebuildDecision.camera ?? currentCamera());
-      setRebuildPhase('report');
+      const gen = replayFromGenesisDefensiveChunked(hotJournalRef.current ?? journal);
+      let result: ReturnType<typeof replayFromGenesisDefensiveChunked.prototype.return>;
+
+      const processChunk = () => {
+        // BAR-3: a newer chain (Retry, or a watchdog stall) has taken over —
+        // this chain is stale. Abort with no setState/persist and drop the
+        // watchdog it might still be holding.
+        if (isStaleRebuildChain(myGen, rebuildGenRef.current)) {
+          clearWatchdog();
+          return;
+        }
+        try {
+          const chunk = gen.next();
+          if (chunk.done) {
+            // Replay complete — finalize.
+            clearWatchdog();
+            result = chunk.value as ReturnType<typeof replayFromGenesisDefensiveChunked.prototype.return>;
+
+            setRebuildInProgress(false);
+
+            if (result.crashed) {
+              recordError(`Rebuild crashed during replay: ${result.crashError}. Kept the old snapshot.`, {
+                type: 'app',
+                action: 'rebuild',
+              });
+              setRebuildDecision(null);
+              setRebuildPhase('prompt');
+              return;
+            }
+
+            // Report compares the OLD restored snapshot (current `state`) to the replay.
+            const report = rebuildReport(state, result.state, result.skipped);
+            setRebuildReportState(report);
+
+            // Persist the rebuilt city as a fresh savepoint stamped with the CURRENT
+            // build, and carry the camera across the reload, so resuming boots straight
+            // into the new-engine city with no re-prompt and no view jump.
+            const running = currentBuildVersion();
+            const rebuiltSave = createSavepoint(result.state, [], new Date(), running, decision.camera ?? currentCamera());
+            persistSavepoint(window.localStorage, rebuiltSave);
+            persistStashedCamera(window.localStorage, decision.camera ?? currentCamera());
+            if (hotJournalRef.current) persistJournal(window.localStorage, hotJournalRef.current);
+
+            setRebuildPhase('report');
+            return;
+          }
+
+          // Progress update.
+          const progress = chunk.value as ReplayProgress;
+          setRebuildProgress(progress);
+
+          // BAR-2: record this sample and derive a live ETA from the observed
+          // actions/sec — never a canned animation. Kept even across repeated
+          // actionsDone values below; estimateRemainingLabel tolerates that.
+          const now = performance.now();
+          progressSamplesRef.current.push({ actionsDone: progress.actionsDone, timestamp: now });
+          setEtaLabel(estimateRemainingLabel(progressSamplesRef.current, progress.actionsTotal));
+
+          // BUG-435: stall watchdog. If this progress update is on a different action
+          // count than the last one, reset the watchdog timer.
+          if (lastProgressRef.current?.actionsDone !== progress.actionsDone) {
+            clearWatchdog();
+            lastProgressRef.current = { actionsDone: progress.actionsDone, timestamp: now };
+            watchdogTimerRef.current = setTimeout(function fireWatchdog() {
+              // BAR-5: a backgrounded tab throttles requestAnimationFrame (the
+              // replay's own driver) but NOT setTimeout, so a merely-hidden tab
+              // looks identical to a genuine stall. Re-arm instead of declaring
+              // one when the tab is hidden — rAF will resume and make real
+              // progress once it's foregrounded again.
+              if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+                watchdogTimerRef.current = setTimeout(fireWatchdog, WATCHDOG_MS);
+                return;
+              }
+              // No progress for WATCHDOG_MS while visible — genuine stall.
+              clearWatchdog();
+              setRebuildInProgress(false);
+              setStallInfo({
+                actionsDone: progress.actionsDone,
+                actionsTotal: progress.actionsTotal,
+                phaseLabel: progress.phaseLabel,
+              });
+              setRebuildPhase('stalled');
+              // BAR-3: bump the generation so this now-dead chain's already-
+              // scheduled rAF resume (if any) sees itself as stale and exits.
+              rebuildGenRef.current += 1;
+            }, WATCHDOG_MS);
+          }
+
+          // Schedule the next chunk on the next frame.
+          requestAnimationFrame(processChunk);
+        } catch (e) {
+          clearWatchdog();
+          setRebuildInProgress(false);
+          const msg = e instanceof Error ? e.message : String(e);
+          recordError(`Rebuild failed: ${msg}. Kept the old snapshot.`, { type: 'app', action: 'rebuild' });
+          setRebuildDecision(null);
+          setRebuildPhase('prompt');
+        }
+      };
+
+      processChunk();
     } catch (e) {
+      clearWatchdog();
+      setRebuildInProgress(false);
       const msg = e instanceof Error ? e.message : String(e);
-      recordError(`Rebuild failed: ${msg}. Kept the old snapshot.`, { type: 'app', action: 'rebuild' });
+      recordError(`Rebuild setup failed: ${msg}. Kept the old snapshot.`, { type: 'app', action: 'rebuild' });
       setRebuildDecision(null);
+      setRebuildPhase('prompt');
     }
   };
 
@@ -297,7 +562,279 @@ export function SimProvider({ children }: { children: ReactNode }) {
     window.location.reload();
   };
 
-  const value = useMemo(() => ({ state, dispatch: wrappedDispatch }), [state, wrappedDispatch]);
+  const onRetry = () => {
+    // BUG-435: retry after a stall. Clear the stall state and go back to running.
+    setRebuildProgress(null);
+    setStallInfo(null);
+    clearWatchdog();
+    lastProgressRef.current = null;
+    onRebuild();
+  };
+
+  const captureOutgoingOrDownload = (): boolean => {
+    try {
+      captureBeforeWipe(stateRefForDispatch.current, versionRaw, window.localStorage);
+      return true;
+    } catch {
+      try {
+        const outgoing = buildGameSave({
+          state: stateRefForDispatch.current,
+          journal: journalRef.current,
+          journalTail: journalTail(journalRef.current, lastSaveIndexRef.current),
+          name: 'pre-wipe',
+          buildVersion: currentBuildVersion(),
+          camera: currentCamera(),
+        });
+        triggerJsonDownload(`pre-wipe-${suggestedSaveName(stateRefForDispatch.current.tick)}`, gameSaveText(outgoing));
+        return true;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        recordError(`Load aborted — pre-wipe capture failed: ${msg}. State left intact.`, { type: 'reset-abort' });
+        setCaptureError(msg);
+        return false;
+      }
+    }
+  };
+
+  const rememberOpened = (save: GameSave) => {
+    const snap = save.savepoint.snapshot;
+    try {
+      recordRecentOpened(window.localStorage, {
+        name: save.name,
+        tick: snap.tick,
+        population: snap.population,
+        funds: snap.funds,
+      });
+    } catch {
+      /* recents list is best-effort */
+    }
+    try {
+      writeNamedSave(window.localStorage, save);
+    } catch {
+      /* quota — recent still lists; Load may need From file */
+    }
+  };
+
+  const buildCurrentSave = (name: string) => {
+    const s = stateRefForDispatch.current;
+    return buildGameSave({
+      state: s,
+      journal: emptyJournal(),
+      journalTail: [],
+      name: displayCityName(name),
+      buildVersion: currentBuildVersion(),
+      camera: currentCamera(),
+    });
+  };
+
+  const finishLoadOverlay = (ok: boolean, msg?: string) => {
+    setRebuildInProgress(false);
+    if (!ok) {
+      if (msg) {
+        recordError(msg, { type: 'app', action: 'load' });
+        setCaptureError(msg);
+      }
+      setRebuildDecision(null);
+      setRebuildPhase('prompt');
+      setRebuildProgress(null);
+      hotJournalRef.current = null;
+      return;
+    }
+    setRebuildDecision(null);
+    setRebuildPhase('prompt');
+    setRebuildProgress(null);
+  };
+
+  const applyLoadedSave = (save: GameSave) => {
+    const running = currentBuildVersion();
+    const decision = {
+      savedVersion: save.buildVersion,
+      currentVersion: running,
+      camera: save.savepoint.camera ?? null,
+      kind: 'load' as StandbyKind,
+    };
+    rebuildDecisionRef.current = decision;
+    setRebuildDecision(decision);
+    setRebuildPhase('running');
+    setRebuildProgress({ actionsDone: 0, actionsTotal: 4, phaseLabel: 'Loading city…' });
+    setRebuildInProgress(true);
+
+    window.setTimeout(() => {
+      try {
+        setRebuildProgress({ actionsDone: 1, actionsTotal: 4, phaseLabel: 'Archiving current city…' });
+        if (!captureOutgoingOrDownload()) {
+          finishLoadOverlay(false, 'Load aborted — could not archive the current city.');
+          return;
+        }
+        const snapshot = sanitizeTreasury(save.savepoint.snapshot);
+        setRebuildProgress({ actionsDone: 2, actionsTotal: 4, phaseLabel: 'Writing session save…' });
+        const persisted = persistSavepoint(window.localStorage, {
+          ...save.savepoint,
+          snapshot,
+          journalTail: [],
+          buildVersion: running,
+        });
+        persistJournal(window.localStorage, emptyJournal());
+        persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
+        setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
+        setCityName(displayCityName(save.name));
+        try {
+          setCurrentCityName(window.localStorage, save.name);
+        } catch {
+          /* ignore */
+        }
+        setJournal(emptyJournal());
+        setLastSaveIndex(0);
+        dispatch({ type: 'hydrate', state: snapshot });
+        if (!persisted) {
+          recordError('City loaded in memory; session persist failed (quota). Use Config → Clear journal, then Save.', {
+            type: 'app',
+            action: 'load',
+          });
+        }
+        rememberOpened(save);
+        setRebuildProgress({ actionsDone: 4, actionsTotal: 4, phaseLabel: 'Loaded' });
+        finishLoadOverlay(true);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        finishLoadOverlay(false, `Load failed: ${msg}. Current city left intact.`);
+      }
+    }, 50);
+  };
+
+  const saveGame = async (): Promise<boolean> => {
+    try {
+      const save = buildCurrentSave(cityName);
+      const ok = persistSavepoint(window.localStorage, save.savepoint);
+      persistJournal(window.localStorage, emptyJournal());
+      setLastSaveIndex(journalRef.current.entries.length);
+      if (!ok) {
+        recordError('Save failed (storage quota). Clear journal in Config, then try again or use Save As.', {
+          type: 'app',
+          action: 'save',
+        });
+        setAutoSaveError(true);
+        return false;
+      }
+      setAutoSaveError(false);
+      rememberOpened(save);
+      return true;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Save failed: ${msg}`, { type: 'app', action: 'save' });
+      return false;
+    }
+  };
+
+  const saveGameAs = async (name?: string) => {
+    try {
+      const label = displayCityName(name ?? cityName);
+      const save = buildCurrentSave(label);
+      persistSavepoint(window.localStorage, save.savepoint);
+      persistJournal(window.localStorage, emptyJournal());
+      setLastSaveIndex(journalRef.current.entries.length);
+      setCityName(label);
+      try {
+        setCurrentCityName(window.localStorage, label);
+      } catch {
+        /* ignore */
+      }
+      rememberOpened(save);
+      await pickSaveFile(suggestedSaveName(save.savepoint.snapshot.tick, label), gameSaveText(save));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Save As failed: ${msg}`, { type: 'app', action: 'save' });
+    }
+  };
+
+  const loadGame = async () => {
+    let text: string | null;
+    try {
+      text = await pickOpenFile();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Load failed: ${msg}`, { type: 'app', action: 'load' });
+      setCaptureError(msg);
+      return;
+    }
+    if (text == null) return;
+    if (text.length > 15_000_000) {
+      const msg = 'Load refused: file is larger than 15 MB.';
+      recordError(msg, { type: 'app', action: 'load' });
+      setCaptureError(msg);
+      return;
+    }
+    let parsed;
+    try {
+      parsed = parseGameSave(text);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      recordError(`Load refused: ${msg}`, { type: 'app', action: 'load' });
+      setCaptureError(msg);
+      return;
+    }
+    if (!parsed.ok || !parsed.save) {
+      recordError(`Load refused: ${parsed.reason ?? 'invalid save'}`, { type: 'app', action: 'load' });
+      setCaptureError(parsed.reason ?? 'invalid save');
+      return;
+    }
+    applyLoadedSave(parsed.save);
+  };
+
+  const loadNamed = async (slug: string) => {
+    const save = readNamedSave(window.localStorage, slug);
+    if (!save) {
+      recordError(`Load refused: no city named ${slug}`, { type: 'app', action: 'load' });
+      return;
+    }
+    applyLoadedSave(save);
+  };
+
+  const listSaves = () => {
+    try {
+      return listNamedSaves(window.localStorage);
+    } catch {
+      return [];
+    }
+  };
+
+  const listRecent = () => {
+    try {
+      return listRecentOpened(window.localStorage);
+    } catch {
+      return [];
+    }
+  };
+
+  const renameCity = (name: string): boolean => {
+    const next = displayCityName(name);
+    const oldSlug = cityNameToSlug(cityName);
+    try {
+      if (!renameNamedSave(window.localStorage, oldSlug, next)) {
+        setCurrentCityName(window.localStorage, next);
+      }
+    } catch {
+      return false;
+    }
+    setCityName(next);
+    return true;
+  };
+
+  const value = useMemo(
+    () => ({
+      state,
+      dispatch: wrappedDispatch,
+      cityName,
+      listSaves,
+      listRecent,
+      saveGame,
+      saveGameAs,
+      loadGame,
+      loadNamed,
+      renameCity,
+    }),
+    [state, wrappedDispatch, cityName],
+  );
   // Use autoSaveError for quiet indicator (available for UI to display if desired).
   return (
     <SimContext.Provider value={value}>
@@ -346,19 +883,18 @@ export function SimProvider({ children }: { children: ReactNode }) {
           savedVersion={rebuildDecision.savedVersion}
           currentVersion={rebuildDecision.currentVersion}
           report={rebuildReportState}
+          progress={rebuildProgress}
+          eta={etaLabel}
+          stallInfo={stallInfo}
           onRebuild={onRebuild}
           onKeep={onKeep}
           onFresh={onFresh}
           onResume={onResume}
+          onRetry={onRetry}
+          busyLabel={rebuildDecision.kind === 'load' ? 'Loading your city…' : undefined}
         />
       )}
       {children}
     </SimContext.Provider>
   );
-}
-
-export function useSim(): SimContextValue {
-  const v = useContext(SimContext);
-  if (!v) throw new Error('useSim must be used inside SimProvider');
-  return v;
 }

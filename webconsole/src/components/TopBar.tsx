@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { useSim, levelOf, xpForLevel, wellbeingOf, UNLOCK_ALL_COST } from '../sim/store';
+import { useSim } from '../sim/simContext';
+import { levelOf, xpForLevel, wellbeingOf, UNLOCK_ALL_COST } from '../sim/engine';
 import { fmtMoney, fmtNum, gameDate } from '../sim/utils';
 import { useLiveVersion } from '../sim/liveVersion';
 import { TrendArrows } from './Trend';
 import { useBusy } from './Busy';
 import { AboutModal } from './About';
+import { FileMenu } from './FileMenu';
+import { ConfigMenu } from './ConfigMenu';
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 0, label: 'Pause' },
@@ -29,6 +32,8 @@ export function TopBar() {
         <span className="brand-mark" />
         Metropolis
         <span className="muted">Command Console</span>
+        <FileMenu />
+        <ConfigMenu />
         <button
           className="version-badge mono"
           title={`Version ${version.raw} — updates hot on each commit; click for About & changelog`}
