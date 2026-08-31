@@ -1605,14 +1605,15 @@ function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'l
 // softer AC-3/AC-7 wording:
 //   (1) DEMOLITION = fully autonomous reroute — Aaron ruled re-plan MAY freely
 //       demolish/reroute EXISTING (incl player-placed) ROADS for the optimal
-//       layout, no confirmation. INC1 DOES NOT YET IMPLEMENT THIS: it only
-//       reuses a road tile, upgrades it in place, or lays a new tile on empty
-//       ground — it never removes/relocates an existing road segment to a
-//       different alignment. So Aaron's ruling (1) is only PARTIALLY met here.
-//       Full demolish-and-reroute-of-existing-roads is DEFERRED (BOW P2
-//       finding on FEAT-1972079928, awaiting Aaron's confirm on inc2 vs
-//       pull-forward). A blocked non-road cell is simply impassable and the
-//       search routes around it or skips the candidate — that part is inc1-safe.
+//       layout, no confirmation. IMPLEMENTED (2026-08-31 11:02 pull-forward):
+//       beyond reuse/upgrade-in-place, the cascade also identifies existing
+//       SUBOPTIMAL through-tiles that this SAME transaction's improvements
+//       make provably redundant (bypassed by a surviving alternate path) and
+//       demolishes them — see the "demolish/reroute" section of
+//       planRoadReplanCascade's doc comment for the full eligibility proof
+//       (lower tier, plain through-tile only, no graph fragmentation, no
+//       stranded building). A blocked non-road cell is still simply
+//       impassable — this pass NEVER demolishes a non-road building.
 //   (2) RADIUS = medium trigger zone, but the CASCADE across that zone is
 //       computed to completion as ONE atomic transaction before any tile is
 //       redrawn/committed — see the "atomic cascade" note on planRoadReplanCascade.
@@ -1624,17 +1625,21 @@ function logEvent(s: SimState, label: string, amount: number): Pick<SimState, 'l
 //   (4) UPGRADE COST = REPLAN_UPGRADE_COST_FRACTION (90%) of the full new-tier
 //       build cost, charged atomically with the rest of the cascade.
 //
-// Inc1 scope (BA increment split, Aaron-approved): radius detection (AC-1),
-// deterministic cost function (AC-2), strong hierarchy preference (AC-3,
-// strong-variant), atomic all-or-nothing funds (AC-6), non-destructive default
-// for the RECONNECTED road itself (AC-7 — the stranded candidate's own tile is
-// never touched, only the connecting cells between it and the new path), and
-// clean coexistence with the landed auto-junction convert-in-place (AC-8 — the
-// cascade only ever touches EMPTY cells or plain non-auto-junction road tiers,
-// never an already-converted rd_junction/rd_roundabout/rd_mwyjunction/
-// rd_railbridge tile). Anti-sprawl minor-into-major limiting (AC-4) and
-// motorway junction min-spacing/max-per-segment (AC-5) are explicitly deferred
-// to inc2/inc3 (BA's own increment split) — this pass does not enforce either.
+// Inc1 scope (BA increment split, Aaron-approved, extended by the pull-forward
+// ruling above): radius detection (AC-1), deterministic cost function (AC-2),
+// strong hierarchy preference (AC-3, strong-variant), atomic all-or-nothing
+// funds net of demolition refunds (AC-6), fully autonomous demolish/reroute of
+// provably-redundant existing road segments (AC-7 superseded by Aaron's
+// 2026-08-31 ruling — the non-destructive default no longer applies; a
+// reachable search candidate's own tile is still left alone because it is
+// never a plain degree-2 through-tile in this scan, not because of a
+// standing non-destructive rule), and clean coexistence with the landed
+// auto-junction convert-in-place (AC-8 — the cascade never touches an
+// already-converted rd_junction/rd_roundabout/rd_mwyjunction/rd_railbridge
+// tile, for upgrades OR demolition). Anti-sprawl minor-into-major limiting
+// (AC-4) and motorway junction min-spacing/max-per-segment (AC-5) are
+// explicitly deferred to inc2/inc3 (BA's own increment split) — this pass
+// does not enforce either.
 
 /** AC-1 placeholder-balance: search radius (tiles) around the new path's bbox. */
 export const REPLAN_RADIUS_TILES = 4;
@@ -1737,6 +1742,18 @@ interface ReplanCascade {
   conversions: Map<string, { buildingId: number; newSpec: string; cost: number }>;
   /** Brand-new connector tiles placed on empty cells discovered by the search. */
   newTilePlacements: Array<{ x: number; y: number; spec: string; cost: number }>;
+  /**
+   * FEAT-1972079928 inc1 EXTENSION (Aaron ruling 2026-08-31 11:02 — "pull
+   * demolish-reroute into inc1"): existing SUBOPTIMAL road tiles torn down
+   * because this SAME cascade proved them redundant — bypassed by a surviving
+   * alternate path, so keeping them is pure sprawl. See the demolish/reroute
+   * section of planRoadReplanCascade's doc comment for the full eligibility
+   * proof (through-tile only, lower tier, no network fragmentation, no
+   * stranded building). Refund only (25%, the `bulldoze` convention) — the
+   * tile is proven redundant, not rebuilt, so nothing new is laid at its cell.
+   */
+  demolitions: Map<string, { buildingId: number; refund: number }>;
+  /** Net cost: conversions + new tiles, MINUS demolition refunds (Aaron: "net of any demolition refund/cost"). */
   totalCost: number;
 }
 
@@ -1796,7 +1813,7 @@ function planRoadReplanCascade(
   const newSet = new Set(newTiles.map((t) => `${t.x},${t.y}`));
 
   type Cell =
-    | { kind: 'road'; tier: number; auto: boolean; buildingId: number }
+    | { kind: 'road'; tier: number; auto: boolean; buildingId: number; spec: string }
     | { kind: 'blocked' };
   const grid = new Map<string, Cell>();
   for (const b of state.buildings) {
@@ -1809,7 +1826,7 @@ function planRoadReplanCascade(
         if (x < lo.x || x > hi.x || y < lo.y || y > hi.y) continue;
         const k = `${x},${y}`;
         if (isRoadSpec(sp)) {
-          grid.set(k, { kind: 'road', tier: roadTierOf(sp), auto: REPLAN_AUTO_JUNCTION_SPECS.has(b.spec), buildingId: b.id });
+          grid.set(k, { kind: 'road', tier: roadTierOf(sp), auto: REPLAN_AUTO_JUNCTION_SPECS.has(b.spec), buildingId: b.id, spec: b.spec });
         } else {
           grid.set(k, { kind: 'blocked' });
         }
@@ -1914,13 +1931,150 @@ function planRoadReplanCascade(
     }
   }
 
-  if (conversions.size === 0 && newTilePlacements.length === 0) return null;
+  // ──────────────────────────────────────────────────────────────────────────
+  // FEAT-1972079928 inc1 EXTENSION (Aaron ruling 2026-08-31 11:02): demolish
+  // /reroute of EXISTING suboptimal road tiles, still inside this SAME pure,
+  // atomic, compute-before-redraw cascade — nothing above has been applied to
+  // `state` yet, so this is just a second deterministic pass over the SAME
+  // fully-computed plan, not a second transaction.
+  //
+  // A tile R is eligible for demolition ONLY if ALL of the following hold
+  // (every check is a pure function of map state — no Date/Math.random):
+  //   1. R is a plain road tile (not `rd_junction`/`rd_roundabout`/
+  //      `rd_mwyjunction`/`rd_railbridge` — AC-8 safety: the landed
+  //      convert-in-place outputs are never touched by this pass).
+  //   2. R is strictly LOWER tier than the road just placed/upgraded here —
+  //      "suboptimal" is always relative to what this placement just built.
+  //   3. R is a plain THROUGH tile: EXACTLY 2 road-adjacent neighbours in the
+  //      POST-cascade grid (this transaction's own upgrades/new tiles already
+  //      folded in). A dead-end (0-1 neighbours, e.g. the AC-7 "stranded
+  //      candidate" this same function reconnects elsewhere) or a junction/
+  //      branch (3+ neighbours) is NEVER a demolition candidate — only a
+  //      plain relay segment can ever be "bypassed".
+  //   4. REDUNDANCY — the actual "a better alignment exists" proof: with R
+  //      excluded, R's two road-neighbours must still reach EACH OTHER via
+  //      some OTHER surviving path (a local BFS over the post-cascade grid).
+  //      If they can't, R is a bridge in the graph — load-bearing, never
+  //      demolished, no exception.
+  //   5. NO-STRANDING (safety-critical, mechanically checked, not assumed):
+  //      every non-road building whose footprint touches R must keep AT
+  //      LEAST ONE OTHER road-adjacent tile once R is gone. If any building
+  //      would lose its last adjacent road tile, R is skipped — never
+  //      demolished. This is the direct proxy for `isOnline`'s G2 road-
+  //      adjacency gate (data.ts) — a demolition this function allows can
+  //      never itself flip a building's online gate to false.
+  //
+  // Candidates are walked in the SAME deterministic `cellsInBox` raster order
+  // used by the Dijkstra pass above (ascending "x,y"), and each accepted
+  // demolition is removed from the working grid BEFORE the next candidate is
+  // evaluated — so a chain of several redundant tiles is proven safe
+  // incrementally (never a stale, pre-demolition view that could let two
+  // simultaneous removals jointly strand something neither would alone).
+  // This bounds the pass to one linear scan — no fixed-point loop, no re-
+  // triggering, so a single placement can never thrash.
+  const demolitions = new Map<string, { buildingId: number; refund: number }>();
+
+  const postGrid = new Map<string, Cell>(grid);
+  for (const [k, conv] of conversions) {
+    const existing = postGrid.get(k);
+    if (existing && existing.kind === 'road') {
+      postGrid.set(k, { kind: 'road', tier: newRoadTier, auto: existing.auto, buildingId: existing.buildingId, spec: conv.newSpec });
+    }
+  }
+  for (const p of newTilePlacements) {
+    postGrid.set(`${p.x},${p.y}`, { kind: 'road', tier: newRoadTier, auto: false, buildingId: -1, spec: p.spec });
+  }
+
+  const roadNeighbors = (k: string, g: Map<string, Cell>): string[] => {
+    const [x, y] = k.split(',').map(Number);
+    const around = [`${x + 1},${y}`, `${x - 1},${y}`, `${x},${y + 1}`, `${x},${y - 1}`];
+    return around.filter((nk) => {
+      const c = g.get(nk);
+      return c !== undefined && c.kind === 'road';
+    });
+  };
+
+  for (const k of cellsInBox) {
+    if (newSet.has(k) || plannedCells.has(k) || conversions.has(k)) continue;
+    const original = grid.get(k);
+    if (!original || original.kind !== 'road' || original.auto) continue; // check 1
+    if (original.tier >= newRoadTier) continue; // check 2
+
+    const neighborKeys = roadNeighbors(k, postGrid);
+    if (neighborKeys.length !== 2) continue; // check 3
+
+    // Check 4: redundancy — BFS from one neighbour to the other, R walled off.
+    const [na, nb] = neighborKeys;
+    const seen = new Set<string>([k]);
+    seen.add(na);
+    const queue = [na];
+    let reachable = false;
+    while (queue.length > 0) {
+      const cur = queue.shift() as string;
+      if (cur === nb) { reachable = true; break; }
+      for (const nk of roadNeighbors(cur, postGrid)) {
+        if (seen.has(nk)) continue;
+        seen.add(nk);
+        queue.push(nk);
+      }
+    }
+    if (!reachable) continue; // R is load-bearing — never demolish
+
+    // Check 5: no-stranding — every REAL (road-access-requiring) building
+    // touching R must keep at least one OTHER road-adjacent tile once R is
+    // removed. CONNECT_EXEMPT_KINDS (road/motorway/rail/station/pylon) are
+    // infrastructure THEMSELVES — they never need road adjacency (mirrors
+    // `isOnline`'s own G2 gate, data.ts), so they never block a demolition.
+    const [rx, ry] = k.split(',').map(Number);
+    let strandsSomething = false;
+    for (const b of state.buildings) {
+      const sp = SPECS[b.spec];
+      if (!sp || isRoadSpec(sp) || CONNECT_EXEMPT_KINDS.has(sp.kind)) continue;
+      let touchesR = false;
+      for (let dx = 0; dx < sp.w && !touchesR; dx++) {
+        for (let dy = 0; dy < sp.h && !touchesR; dy++) {
+          const bx = b.x + dx, by = b.y + dy;
+          // Orthogonal adjacency to R — NOT footprint overlap (a non-road
+          // building can never occupy R's own cell, since grid cells are
+          // exclusively road-or-blocked; the stranding risk is a building
+          // sitting NEXT TO R that relies on R as its road access).
+          if ((bx === rx && Math.abs(by - ry) === 1) || (by === ry && Math.abs(bx - rx) === 1)) touchesR = true;
+        }
+      }
+      if (!touchesR) continue;
+      let keepsAccess = false;
+      for (let dx = 0; dx < sp.w && !keepsAccess; dx++) {
+        for (let dy = 0; dy < sp.h && !keepsAccess; dy++) {
+          const bx = b.x + dx, by = b.y + dy;
+          const around: [number, number][] = [[bx + 1, by], [bx - 1, by], [bx, by + 1], [bx, by - 1]];
+          for (const [ax, ay] of around) {
+            if (ax === rx && ay === ry) continue; // R itself no longer counts
+            const c = postGrid.get(`${ax},${ay}`);
+            if (c && c.kind === 'road') { keepsAccess = true; break; }
+          }
+        }
+      }
+      if (!keepsAccess) { strandsSomething = true; break; }
+    }
+    if (strandsSomething) continue;
+
+    // Eligible: demolish R (25% refund, the `bulldoze` convention elsewhere
+    // in this reducer), then remove it from the WORKING grid so later
+    // candidates in this same deterministic scan see the up-to-date graph.
+    const refundSpec = SPECS[original.spec];
+    const refund = refundSpec ? Math.round(placementCost(refundSpec) * 0.25) : 0;
+    demolitions.set(k, { buildingId: original.buildingId, refund });
+    postGrid.delete(k);
+  }
+
+  if (conversions.size === 0 && newTilePlacements.length === 0 && demolitions.size === 0) return null;
 
   let totalCost = 0;
   for (const c of conversions.values()) totalCost += c.cost;
   for (const p of newTilePlacements) totalCost += p.cost;
+  for (const d of demolitions.values()) totalCost -= d.refund;
 
-  return { conversions, newTilePlacements, totalCost };
+  return { conversions, newTilePlacements, demolitions, totalCost };
 }
 
 export type Action =
@@ -2247,14 +2401,17 @@ function reduceCore(state: SimState, action: Action): SimState {
       const replanNewTiles = tilesToPlace.map((t) => ({ x: t.x, y: t.y }));
       const replanPlan = planRoadReplanCascade(placedState, replanNewTiles, newRoadTier);
       if (replanPlan && replanPlan.totalCost <= placedState.funds) {
+        const demolishedIds = new Set(Array.from(replanPlan.demolitions.values()).map((d) => d.buildingId));
         let repState: SimState = {
           ...placedState,
           funds: placedState.funds - replanPlan.totalCost,
-          buildings: placedState.buildings.map((b) => {
-            const conv = replanPlan.conversions.get(`${b.x},${b.y}`);
-            if (!conv || conv.buildingId !== b.id) return b;
-            return { ...b, spec: conv.newSpec };
-          }),
+          buildings: placedState.buildings
+            .filter((b) => !demolishedIds.has(b.id))
+            .map((b) => {
+              const conv = replanPlan.conversions.get(`${b.x},${b.y}`);
+              if (!conv || conv.buildingId !== b.id) return b;
+              return { ...b, spec: conv.newSpec };
+            }),
         };
         for (const nt of replanPlan.newTilePlacements) {
           repState = {
@@ -2263,7 +2420,9 @@ function reduceCore(state: SimState, action: Action): SimState {
             buildings: [...repState.buildings, { id: repState.nextId, spec: nt.spec, x: nt.x, y: nt.y, builtTick: state.tick }],
           };
         }
-        const replanLabel = `Re-planned roads (${replanPlan.newTilePlacements.length} new, ${replanPlan.conversions.size} upgraded)`;
+        const replanLabel = replanPlan.demolitions.size > 0
+          ? `Re-planned roads (${replanPlan.newTilePlacements.length} new, ${replanPlan.conversions.size} upgraded, ${replanPlan.demolitions.size} demolished)`
+          : `Re-planned roads (${replanPlan.newTilePlacements.length} new, ${replanPlan.conversions.size} upgraded)`;
         placedState = { ...repState, ...logEvent(repState, replanLabel, -replanPlan.totalCost) };
       }
       // replanPlan exists but is unaffordable: skip entirely, no partial spend,
