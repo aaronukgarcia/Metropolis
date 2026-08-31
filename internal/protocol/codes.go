@@ -42,3 +42,69 @@ const (
 	// (subscription.go).
 	ErrSubscriptionAllocatorCopied = "MET-P002"
 )
+
+// Registry error codes for the WebSocket JSON-RPC transport
+// (FEAT-1972079852 increment 1, mkey FEAT-1972079852). Range: P010-P019,
+// claimed via tools/plan/add-error.js claim-range (BUG-273) rather than
+// hand-edited into data/errors.json. See wstransport.go for the version
+// handshake this package implements: Aaron's 2026-08-31 DD ruled a
+// version mismatch at connect is a REFUSAL, never a degrade — these three
+// codes are the typed reasons a connection is refused.
+const (
+	// ErrHandshakeVersionMismatch: the client's first frame (the
+	// handshake) declared a build/protocol version that does not match
+	// what this server build speaks. The server writes a refusal frame
+	// carrying this code and closes the connection immediately — it does
+	// NOT attempt to serve a possibly-incompatible session.
+	ErrHandshakeVersionMismatch = "MET-P010"
+
+	// ErrHandshakeInvalid: the first frame received on a new connection
+	// was not a well-formed handshake message (bad JSON, wrong Kind,
+	// missing ClientVersion). Distinct from a version mismatch: this is a
+	// malformed client, not simply an older/newer build.
+	ErrHandshakeInvalid = "MET-P011"
+
+	// ErrHandshakeTimeout: no handshake frame arrived within the server's
+	// configured handshake deadline. A connection that never completes
+	// its handshake would otherwise hang a server-side goroutine forever;
+	// this bounds that wait and reports it as a typed, registry-sourced
+	// refusal rather than a silent timeout.
+	ErrHandshakeTimeout = "MET-P012"
+
+	// MET-P013 is reserved for the webconsole (TS) protocol client's own
+	// "engine connection lost/unreachable" code -- see
+	// webconsole/src/sim/protocolClient.ts's ERR_ENGINE_UNREACHABLE. It is
+	// never constructed Go-side (nothing here sends it over the wire), so
+	// there is deliberately no Go constant for it; data/errors.json still
+	// carries its registration under this package's mkey.
+
+	// ErrCommandDecodeFailed: a post-handshake "command" request's Params
+	// could not be decoded as a protocol.Command (BAR-2, round-r1 REJECT:
+	// this used to hand-build an rpcError carrying ErrHandshakeInvalid,
+	// which conflated "malformed handshake frame" with "malformed command
+	// frame" -- two different failure classes needing their own codes and
+	// their own correlation IDs, GR#1/GR#7). Distinct from
+	// ErrHandshakeInvalid: this can only happen AFTER a successful
+	// handshake, on a per-command basis, and never closes the connection.
+	ErrCommandDecodeFailed = "MET-P014"
+
+	// ErrCommandValidationFailed: a successfully-decoded Command failed
+	// its own Validate() (commands.go). Distinct from ErrCommandDecodeFailed
+	// (the frame parsed fine; the command's own rules rejected it).
+	ErrCommandValidationFailed = "MET-P015"
+
+	// ErrCommandSendFailed: a valid Command could not be forwarded to the
+	// wrapped protocol.Transport (e.g. SendCommand returned an error --
+	// closed/full transport). Distinct from the two codes above: decoding
+	// and validation both succeeded, the failure is in the transport hop.
+	ErrCommandSendFailed = "MET-P016"
+
+	// ErrDeltaSchemaMismatch: the webconsole (TS) protocol client received
+	// a Delta whose patch carries a schemaVersion the client does not
+	// recognise for that view (AC-7/DD2, Aaron 2026-08-31: refuse to
+	// apply, never silently skip). Never constructed Go-side -- see
+	// webconsole/src/sim/protocolClient.ts's ERR_SCHEMA_MISMATCH; kept
+	// here purely so the registration lives under this package's mkey
+	// alongside every other MET-P01x code in this reservation.
+	ErrDeltaSchemaMismatch = "MET-P017"
+)

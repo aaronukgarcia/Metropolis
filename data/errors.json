@@ -115,7 +115,8 @@
       "V700-V799": "reserved for ui.screen.census (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-19 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"V\")",
       "G5200-G5299": "reserved for engine.parking (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
       "G5300-G5399": "reserved for engine.tunnels (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-25 by Aaron Garcia -- BUG-273: lowest free 100-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "V800-V849": "reserved for ui.webconsole (error framework FEAT-1972079916; auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 50-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V800-V849": "reserved for ui.webconsole (error framework FEAT-1972079916; auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 50-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "P010-P019": "reserved for protocol (auto-claimed via tools/plan/add-error.js claim-range for FEAT-1972079852 on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\"; the WebSocket transport lives under internal/protocol/wsserver, part of the protocol seam)"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5028,6 +5029,54 @@
       "module": "FEAT-1972079916",
       "message": "Pre-wipe archive is not an array",
       "remedy": "See the module's documentation for remediation guidance."
+    },
+    "MET-P010": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "WebSocket handshake rejected: client protocol/build version {clientVersion} does not match engine version {serverVersion}",
+      "remedy": "Rebuild/redeploy the webconsole against the same engine build, or vice versa. The server refuses the connection rather than degrading to a possibly-incompatible session (Aaron DD, 2026-08-31: version mismatch = refuse to connect)."
+    },
+    "MET-P011": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "WebSocket handshake rejected: malformed or missing handshake message ({reason})",
+      "remedy": "The first frame on a new connection must be a well-formed handshake JSON-RPC message carrying clientVersion; check the client implementation."
+    },
+    "MET-P012": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "WebSocket handshake rejected: no handshake message received within {timeoutMs}ms of connect",
+      "remedy": "The client must send its handshake as the first frame immediately after the socket opens; check for network stalls or a client that never sends one."
+    },
+    "MET-P013": {
+      "severity": "warn",
+      "module": "protocol",
+      "message": "webconsole protocol client: engine connection lost or unreachable ({reason})",
+      "remedy": "Check that metroserve is running and reachable at the configured URL; the webconsole falls back to the offline mock sim automatically and retries the connection."
+    },
+    "MET-P014": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "WebSocket command rejected: could not decode command frame ({reason})",
+      "remedy": "Check the client's Command encoding matches internal/protocol/codec.go's DecodeCommand expectations; this does not close the connection, only rejects the one malformed command."
+    },
+    "MET-P015": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "WebSocket command rejected: command failed validation ({reason})",
+      "remedy": "Check the command payload against internal/protocol/commands.go's Validate rules for its Kind; this does not close the connection, only rejects the one invalid command."
+    },
+    "MET-P016": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "WebSocket command rejected: engine transport could not accept the command ({reason})",
+      "remedy": "The wrapped protocol.Transport refused SendCommand (e.g. closed/full) -- check the running engine/transport health; this does not close the connection, only rejects the one command."
+    },
+    "MET-P017": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "webconsole protocol client: delta schemaVersion mismatch for subscription {subscriptionId} (expected {expected}, got {got}) -- patch not applied",
+      "remedy": "The engine and webconsole builds disagree on this view's wire schema; rebuild/redeploy them from the same commit. The client refuses to apply the mismatched delta and keeps the view frozen at its last-known-good state (Aaron DD2, 2026-08-31)."
     }
   }
 }

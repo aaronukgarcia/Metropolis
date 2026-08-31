@@ -8,6 +8,7 @@ import { useBusy } from './Busy';
 import { AboutModal } from './About';
 import { FileMenu } from './FileMenu';
 import { ConfigMenu } from './ConfigMenu';
+import { LiveEngineBadge } from './LiveEngineBadge';
 
 const SPEEDS: { v: 0 | 1 | 2 | 3; label: string }[] = [
   { v: 0, label: 'Pause' },
@@ -41,6 +42,11 @@ export function TopBar() {
         >
           {version.label}
         </button>
+        {/* FEAT-1972079852 inc1: dev-only, feature-flagged (off by default via
+            localStorage 'metropolis.liveEngine') live Go engine indicator.
+            Renders null unless explicitly enabled -- never affects the mock
+            sim's own funds/tick display above/below. */}
+        <LiveEngineBadge />
       </div>
       <div className="top-stats">
         <span className="stat acc">
