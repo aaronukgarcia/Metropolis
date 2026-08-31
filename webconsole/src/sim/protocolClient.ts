@@ -37,6 +37,7 @@ import {
   FINANCE_SCHEMA_VERSION,
   PROTOCOL_VERSION,
   type Command,
+  type CommandResult,
   type CorrelationID,
   type Delta,
   type HandshakeResult,
@@ -112,6 +113,12 @@ export interface ProtocolClientOptions {
   newCorrelationId?: () => string;
 }
 
+/** Rejection shape for a sendCommand() Promise: always a registry-coded
+ * Error (GR#7), whether it came from an ack-level failure (decode/
+ * validate/send, MET-P01x — see wsserver's replyErrorE) or from the
+ * engine's own CommandResult.Error on a later reject. */
+export type CommandRejection = Error & { code: string };
+
 /** Per-subscription Seq gap tracker — mirrors internal/protocol/
  * subscription.go's SeqTracker.Observe contract exactly (AC-15): ok=true
  * with gap=N (N>=0) for an in-order arrival (possibly with N skipped in
@@ -157,6 +164,22 @@ export class ProtocolClient {
   private handshakeDone = false;
   private readonly seqTracker = new SeqTracker();
   private readonly newCorrelationId: () => string;
+  /** inc2: JSON-RPC request id -> the pending sendCommand() Promise's
+   * reject, so an ack-level error response (decode/validate/send
+   * failure, MET-P01x) surfaces immediately rather than leaving the
+   * caller waiting forever for a "result" notification that will never
+   * arrive (the command never reached the engine at all). Entries are
+   * removed once either the ack error fires, or (on a successful ack)
+   * once the matching "result" notification resolves/rejects the same
+   * Promise via pendingResults below — see sendCommand's doc comment. */
+  private readonly pendingAcks = new Map<number, { correlationId: CorrelationID; reject: (e: CommandRejection) => void }>();
+  /** inc2: correlationId -> the pending sendCommand() Promise's
+   * resolve/reject, settled when the matching "result" notification
+   * arrives (protocol.CommandResult.Accepted decides which). */
+  private readonly pendingResults = new Map<
+    CorrelationID,
+    { resolve: (r: CommandResult) => void; reject: (e: CommandRejection) => void }
+  >();
 
   constructor(opts: ProtocolClientOptions) {
     this.opts = opts;
@@ -202,6 +225,20 @@ export class ProtocolClient {
   close(): void {
     this.socket?.close();
     this.setState('closed');
+    this.rejectAllPending('connection closed');
+  }
+
+  /** Rejects every sendCommand() Promise still awaiting an ack or a
+   * result — called when the socket goes away for any reason (an
+   * explicit close() or reportUnreachable's error/close paths) so a
+   * caller's `.then/.catch` always settles instead of hanging forever on
+   * a command whose fate the engine can now never report. */
+  private rejectAllPending(reason: string): void {
+    if (this.pendingAcks.size === 0 && this.pendingResults.size === 0) return;
+    const err = codedError(ERR_ENGINE_UNREACHABLE, `sendCommand: ${reason}`) as CommandRejection;
+    for (const { reject } of this.pendingResults.values()) reject(err);
+    this.pendingResults.clear();
+    this.pendingAcks.clear();
   }
 
   /** Sends a Subscribe command for viewName (AC-3 step 1). Returns the
@@ -211,7 +248,7 @@ export class ProtocolClient {
    * ordinary Delta/CommandResult the caller observes via onDelta. */
   subscribe(viewName: string, params?: Record<string, string>): CorrelationID {
     const correlationId = this.newCorrelationId();
-    this.sendCommand({
+    this.postCommand({
       protocolVersion: PROTOCOL_VERSION,
       correlationId,
       issuedAtTick: 0,
@@ -224,7 +261,7 @@ export class ProtocolClient {
   unsubscribe(subscriptionId: SubscriptionID): CorrelationID {
     const correlationId = this.newCorrelationId();
     this.seqTracker.reset(subscriptionId);
-    this.sendCommand({
+    this.postCommand({
       protocolVersion: PROTOCOL_VERSION,
       correlationId,
       issuedAtTick: 0,
@@ -234,7 +271,54 @@ export class ProtocolClient {
     return correlationId;
   }
 
-  private sendCommand(cmd: Command): void {
+  /**
+   * inc2 (FEAT-1972079852): mints a Command envelope for `kind`/`payload`
+   * with a fresh CorrelationID, sends it over the wire as a JSON-RPC
+   * "command" request, and returns a Promise that settles from the
+   * engine's own eventual CommandResult — NOT from the JSON-RPC ack (the
+   * ack only means "queued," per wsserver's handleCommand doc comment).
+   *
+   * The Promise rejects in exactly two situations, both carrying a
+   * registry-coded CommandRejection (GR#7):
+   *   1. An ack-level JSON-RPC error (decode/validate/send failed
+   *      server-side, MET-P01x) — the command never reached the engine
+   *      at all, so there will never be a "result" notification to wait
+   *      for; rejecting immediately is what stops the caller hanging
+   *      forever (see pendingAcks' doc comment).
+   *   2. A "result" notification arrives with Accepted:false — the
+   *      engine itself refused the command; CommandResult.Error carries
+   *      its registry code.
+   *
+   * It resolves with the full CommandResult when a "result" notification
+   * arrives with Accepted:true.
+   *
+   * Never touches the TS journal (journal.ts) — per Aaron's
+   * engine-owns-journal DD (2026-08-31), a command sent over this path is
+   * journaled Go-side (when that seam lands — see the inc2 build report),
+   * and the TS journal must apply to mock/offline commands only. This
+   * method's only side effects are wire I/O and the pending-map
+   * bookkeeping above; it deliberately does not call recordAction or any
+   * other journal.ts function.
+   */
+  sendCommand(kind: string, payload: unknown): Promise<CommandResult> {
+    const correlationId = this.newCorrelationId();
+    return new Promise<CommandResult>((resolve, reject) => {
+      if (!this.handshakeDone || !this.socket) {
+        const err = codedError(ERR_ENGINE_UNREACHABLE, 'sendCommand: not connected to a live engine') as CommandRejection;
+        recordError(err.message, { type: 'app', code: err.code });
+        reject(err);
+        return;
+      }
+      const id = this.nextId();
+      this.pendingAcks.set(id, { correlationId, reject });
+      this.pendingResults.set(correlationId, { resolve, reject });
+      const cmd: Command = { protocolVersion: PROTOCOL_VERSION, correlationId, issuedAtTick: 0, kind, payload };
+      const req: RpcMessage = { jsonrpc: '2.0', id, method: 'command', params: cmd };
+      this.socket.send(JSON.stringify(req));
+    });
+  }
+
+  private postCommand(cmd: Command): void {
     if (!this.handshakeDone || !this.socket) return; // AC-4 fallback: silently a no-op pre-handshake; caller stays on mock
     const req: RpcMessage = { jsonrpc: '2.0', id: this.nextId(), method: 'command', params: cmd };
     this.socket.send(JSON.stringify(req));
@@ -260,6 +344,47 @@ export class ProtocolClient {
 
     if (!this.handshakeDone) {
       this.handleHandshakeResponse(msg);
+      return;
+    }
+
+    // inc2: a response keyed by `id` with no `method` is an ack (success
+    // or error) for a request THIS client sent — today only sendCommand's
+    // "command" requests are tracked this way (subscribe/unsubscribe's
+    // postCommand is fire-and-forget, per increment 1's scope). An ack
+    // ERROR means the command never reached the engine (decode/validate/
+    // send failed server-side), so the pending Promise is rejected right
+    // here — there will be no later "result" notification for it.  An ack
+    // SUCCESS (`{queued: true}`) is not itself a resolution; the Promise
+    // stays pending until the matching "result" notification below.
+    if (msg.id !== undefined && !msg.method) {
+      const pendingAck = this.pendingAcks.get(msg.id);
+      if (pendingAck) {
+        this.pendingAcks.delete(msg.id);
+        if (msg.error) {
+          this.pendingResults.delete(pendingAck.correlationId);
+          const err = codedError(msg.error.code, msg.error.message) as CommandRejection;
+          recordError(err.message, { type: 'app', code: err.code });
+          pendingAck.reject(err);
+        }
+      }
+      return;
+    }
+
+    if (msg.method === 'result' && msg.params) {
+      const result = msg.params as CommandResult;
+      const pending = this.pendingResults.get(result.correlationId);
+      if (pending) {
+        this.pendingResults.delete(result.correlationId);
+        if (result.accepted) {
+          pending.resolve(result);
+        } else {
+          const code = result.error?.code ?? ERR_ENGINE_UNREACHABLE;
+          const message = result.error?.display ?? `command ${result.correlationId} rejected by engine`;
+          const err = codedError(code, message) as CommandRejection;
+          recordError(err.message, { type: 'app', code: err.code });
+          pending.reject(err);
+        }
+      }
       return;
     }
 
@@ -341,6 +466,7 @@ export class ProtocolClient {
     recordError(err.message, { type: 'app', code: err.code });
     this.opts.onRefused?.(err.code, err.message);
     this.setState('error');
+    this.rejectAllPending(reason);
   }
 
   private setState(s: ProtocolClientState): void {

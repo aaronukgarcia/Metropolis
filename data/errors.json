@@ -5077,6 +5077,12 @@
       "module": "protocol",
       "message": "webconsole protocol client: delta schemaVersion mismatch for subscription {subscriptionId} (expected {expected}, got {got}) -- patch not applied",
       "remedy": "The engine and webconsole builds disagree on this view's wire schema; rebuild/redeploy them from the same commit. The client refuses to apply the mismatched delta and keeps the view frozen at its last-known-good state (Aaron DD2, 2026-08-31)."
+    },
+    "MET-P018": {
+      "severity": "error",
+      "module": "protocol",
+      "message": "the wsserver connection writer was called on a copied safeConn value (correlation: {correlationId})",
+      "remedy": "construct safeConn via its own literal in pump(), never copy an existing instance by value"
     }
   }
 }

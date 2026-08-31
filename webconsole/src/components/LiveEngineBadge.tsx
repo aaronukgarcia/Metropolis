@@ -26,6 +26,15 @@ interface LiveEngineSnapshot {
   netWorthMicropounds: number | null;
 }
 
+/** inc2 (FEAT-1972079852): the two speeds the dev-only toggle button
+ * cycles between. SetSpeed is deliberately the FIRST command this UI
+ * ever drives end-to-end — it needs no gameplayHandler/build-module
+ * wiring (engine.core's handleSetSpeed is self-contained), so the round
+ * can prove "a UI action reaches the engine and the engine's
+ * accept/reject comes back" without touching engine.ts or any
+ * demographic/build code other live lanes own. */
+const SPEED_TOGGLE_STATES = [1, 2] as const;
+
 /**
  * LiveEngineBadge: renders nothing when the feature flag is off (the
  * default). When on, it opens a ProtocolClient connection, subscribes to
@@ -40,6 +49,11 @@ export function LiveEngineBadge() {
   const [snapshot, setSnapshot] = useState<LiveEngineSnapshot | null>(null);
   const [refusal, setRefusal] = useState<{ code: string; msg: string } | null>(null);
   const clientRef = useRef<ProtocolClient | null>(null);
+  // inc2: last SetSpeed the toggle button asked for (optimistic — the
+  // engine's own CommandResult, not this, is the source of truth; a
+  // rejection is surfaced via commandNote below without touching this).
+  const [speedIndex, setSpeedIndex] = useState(0);
+  const [commandNote, setCommandNote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!enabled) return;
@@ -64,6 +78,29 @@ export function LiveEngineBadge() {
     return () => client.close();
   }, [enabled]);
 
+  // inc2: drives the FIRST real UI-issued command over the wire. Only
+  // usable once 'live' (the client itself no-ops sendCommand before
+  // handshake, but the button is hidden regardless — a dev affordance
+  // has no reason to invite a click that can only fail). Never touches
+  // the TS journal (protocolClient.ts's sendCommand doc comment) — this
+  // is a protocol-driven command, and Aaron's engine-owns-journal DD
+  // means only mock/offline commands ever go through journal.ts.
+  const sendSpeedToggle = () => {
+    const client = clientRef.current;
+    if (!client) return;
+    const nextIndex = (speedIndex + 1) % SPEED_TOGGLE_STATES.length;
+    const nextSpeed = SPEED_TOGGLE_STATES[nextIndex];
+    client
+      .sendCommand('SetSpeed', { speed: nextSpeed })
+      .then(() => {
+        setSpeedIndex(nextIndex);
+        setCommandNote(`SetSpeed(${nextSpeed}) accepted`);
+      })
+      .catch((err: Error & { code?: string }) => {
+        setCommandNote(`SetSpeed(${nextSpeed}) rejected: ${err.code ?? ''} ${err.message}`.trim());
+      });
+  };
+
   if (!enabled) return null;
 
   const label =
@@ -84,6 +121,18 @@ export function LiveEngineBadge() {
       data-conn-state={connState}
     >
       {label}
+      {connState === 'live' && (
+        <button
+          type="button"
+          className="live-engine-speed-toggle"
+          data-testid="live-engine-speed-toggle"
+          title="Dev-only: send a SetSpeed command over the wire (FEAT-1972079852 inc2)"
+          onClick={sendSpeedToggle}
+        >
+          speed→{SPEED_TOGGLE_STATES[(speedIndex + 1) % SPEED_TOGGLE_STATES.length]}x
+        </button>
+      )}
+      {commandNote && <span className="live-engine-command-note">{commandNote}</span>}
     </span>
   );
 }

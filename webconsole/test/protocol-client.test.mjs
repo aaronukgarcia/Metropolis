@@ -244,6 +244,144 @@ describe('ProtocolClient delta relay + Seq gap tracking (AC-3/AC-15)', () => {
   });
 });
 
+describe('ProtocolClient.sendCommand (FEAT-1972079852 inc2: UI-driven command path)', () => {
+  function liveClient() {
+    const ctx = makeClient();
+    ctx.socket.emit('open', {});
+    ctx.socket.serverSends({ jsonrpc: '2.0', id: 1, result: { accepted: true, serverVersion: 'v1.2.3' } });
+    return ctx;
+  }
+
+  test('mints a Command envelope with a correlationId and sends it as a "command" request', () => {
+    const { client, socket } = liveClient();
+    client.sendCommand('SetSpeed', { speed: 2 });
+    const req = JSON.parse(socket.sent.at(-1));
+    assert.equal(req.method, 'command');
+    assert.equal(req.params.kind, 'SetSpeed');
+    assert.deepEqual(req.params.payload, { speed: 2 });
+    assert.ok(req.params.correlationId, 'expected a minted correlationId');
+    assert.equal(req.params.protocolVersion, '1.0');
+  });
+
+  test('resolves when a matching "result" notification arrives with accepted:true', async () => {
+    const { client, socket } = liveClient();
+    const promise = client.sendCommand('SetSpeed', { speed: 2 });
+    const req = JSON.parse(socket.sent.at(-1));
+    // ack first (queued), as the real server does
+    socket.serverSends({ jsonrpc: '2.0', id: req.id, result: { queued: true } });
+    socket.serverSends({
+      jsonrpc: '2.0',
+      method: 'result',
+      params: { correlationId: req.params.correlationId, tick: 5, accepted: true },
+    });
+    const result = await promise;
+    assert.equal(result.accepted, true);
+    assert.equal(result.tick, 5);
+  });
+
+  test('rejects with a registry-coded error when the "result" notification carries accepted:false', async () => {
+    const { client, socket } = liveClient();
+    const promise = client.sendCommand('SetSpeed', { speed: 99 });
+    const req = JSON.parse(socket.sent.at(-1));
+    socket.serverSends({ jsonrpc: '2.0', id: req.id, result: { queued: true } });
+    socket.serverSends({
+      jsonrpc: '2.0',
+      method: 'result',
+      params: {
+        correlationId: req.params.correlationId,
+        tick: 5,
+        accepted: false,
+        error: { code: 'MET-E099', display: 'invalid speed' },
+      },
+    });
+    await assert.rejects(promise, (err) => {
+      assert.equal(err.code, 'MET-E099');
+      return true;
+    });
+  });
+
+  test('rejects immediately on an ack-level JSON-RPC error (MET-P01x) without waiting for a "result"', async () => {
+    const { client, socket } = liveClient();
+    const promise = client.sendCommand('SetSpeed', { speed: 2 });
+    const req = JSON.parse(socket.sent.at(-1));
+    socket.serverSends({
+      jsonrpc: '2.0',
+      id: req.id,
+      error: { code: ERR_ENGINE_UNREACHABLE, message: 'command decode failed' },
+    });
+    await assert.rejects(promise, (err) => {
+      assert.equal(err.code, ERR_ENGINE_UNREACHABLE);
+      return true;
+    });
+  });
+
+  test('a duplicate "result" for an already-settled correlationId is ignored, not a double-settle crash', async () => {
+    const { client, socket } = liveClient();
+    const promise = client.sendCommand('SetSpeed', { speed: 2 });
+    const req = JSON.parse(socket.sent.at(-1));
+    socket.serverSends({ jsonrpc: '2.0', id: req.id, result: { queued: true } });
+    socket.serverSends({
+      jsonrpc: '2.0',
+      method: 'result',
+      params: { correlationId: req.params.correlationId, tick: 1, accepted: true },
+    });
+    await promise;
+    // A second "result" for the same correlationId (e.g. a duplicate
+    // delivery) must not throw — Promise settlement is idempotent, but
+    // this proves the pending-map bookkeeping doesn't error either.
+    assert.doesNotThrow(() => {
+      socket.serverSends({
+        jsonrpc: '2.0',
+        method: 'result',
+        params: { correlationId: req.params.correlationId, tick: 2, accepted: true },
+      });
+    });
+  });
+
+  test('closing the connection rejects any command still awaiting a result', async () => {
+    const { client, socket } = liveClient();
+    const promise = client.sendCommand('SetSpeed', { speed: 2 });
+    client.close();
+    await assert.rejects(promise, (err) => {
+      assert.equal(err.code, ERR_ENGINE_UNREACHABLE);
+      return true;
+    });
+  });
+
+  test('sendCommand before the handshake completes rejects rather than sending', async () => {
+    const { client, socket } = makeClient(); // no 'open'/handshake fired
+    const promise = client.sendCommand('SetSpeed', { speed: 2 });
+    await assert.rejects(promise, (err) => {
+      assert.equal(err.code, ERR_ENGINE_UNREACHABLE);
+      return true;
+    });
+    assert.equal(socket.sent.length, 0, 'no command frame should be sent before the handshake completes');
+  });
+
+  // MUTATION-PROOF: a client that resolved sendCommand() straight off the
+  // ack (instead of waiting for the "result" notification) would resolve
+  // this Promise the instant `{queued:true}` arrives — proven by a scratch
+  // mutation (moving the resolve call into the ack branch) which turns
+  // this test RED, since no "result" notification is ever sent here.
+  test('MUTATION-PROOF: an ack alone (no "result" notification) never resolves or rejects the Promise', async () => {
+    const { client, socket } = liveClient();
+    const promise = client.sendCommand('SetSpeed', { speed: 2 });
+    const req = JSON.parse(socket.sent.at(-1));
+    socket.serverSends({ jsonrpc: '2.0', id: req.id, result: { queued: true } });
+    let settled = false;
+    promise.then(() => (settled = true), () => (settled = true));
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(settled, false, 'the Promise must stay pending until a "result" notification arrives');
+    // settle it so the test doesn't leave a dangling unhandled rejection
+    socket.serverSends({
+      jsonrpc: '2.0',
+      method: 'result',
+      params: { correlationId: req.params.correlationId, tick: 1, accepted: true },
+    });
+    await promise;
+  });
+});
+
 describe('SeqTracker (mirrors internal/protocol/subscription.go SeqTracker.Observe)', () => {
   test('first observation for a subscription is always ok, gap 0', () => {
     const t = new SeqTracker();

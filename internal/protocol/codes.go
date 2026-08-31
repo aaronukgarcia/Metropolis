@@ -107,4 +107,16 @@ const (
 	// here purely so the registration lives under this package's mkey
 	// alongside every other MET-P01x code in this reservation.
 	ErrDeltaSchemaMismatch = "MET-P017"
+
+	// ErrSafeConnCopied: wsserver's per-connection safeConn.writeJSON (or
+	// its checkNotCopied guard) was called on a struct copy rather than
+	// the *safeConn newSafeConn constructed -- see
+	// internal/protocol/wsserver/server.go's safeConn.self doc comment
+	// for the exact hazard (a copy would alias the original's
+	// *websocket.Conn while getting its own, independently-locked mu,
+	// defeating the single-writer serialization safeConn exists to
+	// provide). Registered under this package's mkey per this file's own
+	// convention, even though the type itself lives in the wsserver
+	// subpackage.
+	ErrSafeConnCopied = "MET-P018"
 )

@@ -41,6 +41,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -270,13 +271,81 @@ func (s *Server) writeRefusal(conn *websocket.Conn, id *int64, e *errs.E) {
 		time.Now().Add(time.Second))
 }
 
+// safeConn serializes every WriteJSON call made against one WebSocket
+// connection behind a single mutex. gorilla/websocket requires "one
+// writer at a time" (pump's own doc comment already says so) — but
+// increment 1 only actually satisfied that for the THREE outbound
+// notification writers (results/events/deltas), which all funnel
+// through writeNotification on pump's one outbound goroutine. It missed
+// a FOURTH writer: handleCommand's own ack/error responses, written
+// directly from the INBOUND goroutine (pump's caller-side read loop).
+// Those two goroutines racing conn.WriteJSON is a real, -race-provable
+// data race (found by TestCommandRoundTrip_RealEngine_AcceptAndReject,
+// FEAT-1972079852 increment 2 — inc1's own tests never drove a real
+// engine's asynchronous CommandResult arriving concurrently with a
+// command ack, so the race never fired under go test -race before).
+// safeConn is the minimal fix: every writer (handleCommand's ack,
+// replyErrorE, and writeNotification) now goes through the same
+// instance's writeJSON, so at most one goroutine ever calls
+// conn.WriteJSON at a time, matching the invariant pump's doc comment
+// already claimed but did not fully enforce.
+type safeConn struct {
+	mu   sync.Mutex
+	conn *websocket.Conn
+
+	// self mirrors InProcTransport.self/Recorder.self/Engine.self exactly
+	// (SEC-020 wave 1's copy-guard convention this codebase uses for
+	// every mutex-guarded type reachable from more than one goroutine):
+	// 'c2 := *c' is legal, unsafe-free Go, and would give c2 its OWN mu
+	// while ALIASING the original's conn — two independently-locked
+	// writers racing the same *websocket.Conn is exactly the hazard this
+	// type exists to prevent. atomic.Pointer so the check is race-safe
+	// and callable BEFORE mu is ever touched (a copy taken while the
+	// original's mu was held would otherwise look permanently "locked").
+	self atomic.Pointer[safeConn]
+}
+
+// newSafeConn constructs a safeConn ready for concurrent writeJSON calls.
+// Always use this — never a bare safeConn{} literal or a copy of an
+// existing instance (checkNotCopied rejects both).
+func newSafeConn(conn *websocket.Conn) *safeConn {
+	c := &safeConn{conn: conn}
+	c.self.Store(c)
+	return c
+}
+
+// checkNotCopied reports whether the receiver is a struct copy of some
+// other safeConn value. See the self field's doc comment for why this
+// exists and why it must run before mu is ever touched.
+func (c *safeConn) checkNotCopied() error {
+	if c.self.Load() != c {
+		return errs.New(protocol.ErrSafeConnCopied, string(errs.NewCorrelationID()), nil)
+	}
+	return nil
+}
+
+func (c *safeConn) writeJSON(v any) error {
+	if err := c.checkNotCopied(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkNotCopied(); err != nil {
+		return err
+	}
+	return c.conn.WriteJSON(v)
+}
+
 // pump relays commands inbound from the socket to s.transport and
 // relays results/events/deltas outbound from s.transport to the socket,
 // until either side closes. Two goroutines: the caller's own goroutine
 // reads inbound frames (ServeHTTP's goroutine, one per HTTP connection,
 // already the natural place for a blocking read loop); a second goroutine
-// drains the transport's three outbound channels.
+// drains the transport's three outbound channels. Both goroutines write
+// to the connection only through the shared safeConn (sc, below) — see
+// its doc comment for why a second writer existed and raced it.
 func (s *Server) pump(conn *websocket.Conn) {
+	sc := newSafeConn(conn)
 	done := make(chan struct{})
 	// closeOnce guards `done` being closed exactly once. Both the inbound
 	// (ServeHTTP's own goroutine, below) and outbound (the goroutine
@@ -306,21 +375,21 @@ func (s *Server) pump(conn *websocket.Conn) {
 				if !ok {
 					return
 				}
-				if !s.writeNotification(conn, methodResult, r) {
+				if !s.writeNotification(sc, methodResult, r) {
 					return
 				}
 			case e, ok := <-events:
 				if !ok {
 					return
 				}
-				if !s.writeNotification(conn, methodEvent, e) {
+				if !s.writeNotification(sc, methodEvent, e) {
 					return
 				}
 			case d, ok := <-deltas:
 				if !ok {
 					return
 				}
-				if !s.writeNotification(conn, methodDelta, d) {
+				if !s.writeNotification(sc, methodDelta, d) {
 					return
 				}
 			}
@@ -340,7 +409,7 @@ func (s *Server) pump(conn *websocket.Conn) {
 		}
 		switch msg.Method {
 		case methodCommand:
-			s.handleCommand(conn, msg)
+			s.handleCommand(sc, msg)
 		default:
 			// Unknown method post-handshake: ignored. v1 scope is
 			// command-forwarding only (subscribe/unsubscribe travel as
@@ -356,11 +425,25 @@ func (s *Server) pump(conn *websocket.Conn) {
 // actual CommandResult (accepted/rejected, per the engine's own
 // processing) arrives later, asynchronously, as a "result" notification
 // via pump's outbound goroutine, exactly like every other CommandResult.
-func (s *Server) handleCommand(conn *websocket.Conn, msg rpcMessage) {
+func (s *Server) handleCommand(sc *safeConn, msg rpcMessage) {
+	// Defence in depth (astgate's copyguard convention): sc.writeJSON
+	// itself checks this before ever touching sc.mu/sc.conn, but this
+	// package's other reachable-type entry points (handleCommand,
+	// replyErrorE, writeNotification below) each check directly too,
+	// exactly like every other checkNotCopied call site in this codebase
+	// checks at its own entry rather than relying on a callee's check
+	// being visible to astgate's syntactic, no-call-graph analysis
+	// (doc.go's documented blind spot).
+	if err := sc.checkNotCopied(); err != nil {
+		// A copied safeConn cannot safely write anything (that's the
+		// whole point of the guard) -- nothing to reply with here, same
+		// as writeJSON's own silent-fail-safe on this condition.
+		return
+	}
 	cmd, err := protocol.DecodeCommand(msg.Params)
 	if err != nil {
 		e := errs.New(protocol.ErrCommandDecodeFailed, s.newCorrelationID(), map[string]any{"reason": err.Error()})
-		s.replyErrorE(conn, msg.ID, e)
+		s.replyErrorE(sc, msg.ID, e)
 		return
 	}
 	if err := cmd.Validate(); err != nil {
@@ -368,7 +451,7 @@ func (s *Server) handleCommand(conn *websocket.Conn, msg rpcMessage) {
 			"reason":        err.Error(),
 			"correlationId": string(cmd.CorrelationID),
 		})
-		s.replyErrorE(conn, msg.ID, e)
+		s.replyErrorE(sc, msg.ID, e)
 		return
 	}
 	if err := s.transport.SendCommand(cmd); err != nil {
@@ -376,11 +459,11 @@ func (s *Server) handleCommand(conn *websocket.Conn, msg rpcMessage) {
 			"reason":        err.Error(),
 			"correlationId": string(cmd.CorrelationID),
 		})
-		s.replyErrorE(conn, msg.ID, e)
+		s.replyErrorE(sc, msg.ID, e)
 		return
 	}
 	ackBytes, _ := json.Marshal(map[string]any{"queued": true})
-	_ = conn.WriteJSON(rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: ackBytes})
+	_ = sc.writeJSON(rpcMessage{JSONRPC: rpcVersion, ID: msg.ID, Result: ackBytes})
 }
 
 // replyErrorE writes a JSON-RPC error response carrying e's real,
@@ -390,8 +473,11 @@ func (s *Server) handleCommand(conn *websocket.Conn, msg rpcMessage) {
 // sites here used to hand-build an ad hoc rpcError{Code: "MET-P011", ...}
 // literal instead of going through errs.New, losing both a distinct code
 // per failure class and a fresh correlation ID per GR#1/GR#7).
-func (s *Server) replyErrorE(conn *websocket.Conn, id *int64, e *errs.E) {
-	_ = conn.WriteJSON(rpcMessage{
+func (s *Server) replyErrorE(sc *safeConn, id *int64, e *errs.E) {
+	if err := sc.checkNotCopied(); err != nil {
+		return // see handleCommand's identical guard for why this is a silent no-op
+	}
+	_ = sc.writeJSON(rpcMessage{
 		JSONRPC: rpcVersion,
 		ID:      id,
 		Error:   &rpcError{Code: e.Code, Message: e.Display(), Data: e.Ctx},
@@ -402,11 +488,14 @@ func (s *Server) replyErrorE(conn *websocket.Conn, id *int64, e *errs.E) {
 // one-way (no id) JSON-RPC notification. Returns false on any write
 // failure (the caller's outbound goroutine treats that as "connection
 // gone" and stops).
-func (s *Server) writeNotification(conn *websocket.Conn, method string, payload any) bool {
+func (s *Server) writeNotification(sc *safeConn, method string, payload any) bool {
+	if err := sc.checkNotCopied(); err != nil {
+		return false // see handleCommand's identical guard for why this is a silent no-op
+	}
 	paramsBytes, err := json.Marshal(payload)
 	if err != nil {
 		return true // should never happen for these concrete wire types; skip this one frame rather than killing the connection
 	}
 	msg := rpcMessage{JSONRPC: rpcVersion, Method: method, Params: paramsBytes}
-	return conn.WriteJSON(msg) == nil
+	return sc.writeJSON(msg) == nil
 }
