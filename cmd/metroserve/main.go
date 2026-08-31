@@ -43,7 +43,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
@@ -60,6 +59,11 @@ func run(args []string, stdout, stderr *os.File) int {
 	addr := fs.String("addr", "localhost:9999", "address to listen on (DD1 placeholder address, per the acceptance doc's Implementation Notes)")
 	seed := fs.Uint64("seed", 1, "world seed")
 	tickInterval := fs.Duration("tick-interval", 250*time.Millisecond, "wall-clock interval between single-tick AdvanceTicks commands (v1 fixed-step driver; see the doc comment on tickLoop for why this is simpler than cmd/metropolis's own BUG-322 tick driver)")
+	// FEAT-1972079936 Phase 1 inc4: durable persistence + rehydrate-on-restart.
+	// persist-dir default "" keeps persistence OFF (behaviour byte-for-byte
+	// unchanged); see setUpPersistence (persist.go) for the wiring/rehydrate.
+	persistDir := fs.String("persist-dir", "", "directory for durable city persistence (empty = OFF; a persisted city rehydrates from its journal on restart)")
+	city := fs.String("city", "default", "city identity to persist/rehydrate under (FEAT-1972079936 Phase 1; tenant is the placeholder \"local\")")
 	printVersion := fs.Bool("version", false, "print build identity and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -72,8 +76,8 @@ func run(args []string, stdout, stderr *os.File) int {
 	correlationID := string(protocol.NewCorrelationID())
 
 	e := core.NewEngine(core.WithWorldSeed(*seed))
-	if _, err := compose.Wire(e, nil); err != nil {
-		_, _ = fmt.Fprintf(stderr, "metroserve: compose.Wire failed: %v\n", err)
+	if _, _, err := setUpPersistence(e, *persistDir, *city, stdout); err != nil {
+		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1
 	}
 
