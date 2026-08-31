@@ -12,7 +12,7 @@ import (
 
 // BaselineComparison is CompareToBaseline's verdict (AC-6, AC-8, AC-10).
 //
-// # BUG-272: allocation metrics are the PRIMARY signal, wall-clock is ADVISORY
+// # BUG-272/BUG-473: allocation metrics are the ONLY gate, wall-clock is ADVISORY
 //
 // Every field below whose name mentions "Alloc" is part of the gate's
 // PRIMARY, threshold-enforcing check (RegressionThreshold/
@@ -21,11 +21,23 @@ import (
 // clock as the quantity those thresholds are judged against. The
 // PerMonth/wall-clock fields remain, but are now purely ADVISORY: they
 // feed only WallClockGrossRegressed, a much wider, catastrophic-only
-// check (WallClockGrossRegressionThreshold) that Regressed also honours
-// as a safety net for a slowdown that does not show up in allocation
-// counts (e.g. a busy-wait or lock-contention regression), but which
-// never fires on ordinary CI jitter the way a 10%-threshold wall-clock
-// check did.
+// check (WallClockGrossRegressionThreshold).
+//
+// # BUG-473: wall-clock is advisory-ONLY and NEVER gates CI
+//
+// BUG-272 demoted wall-clock for the PRIMARY threshold but LEFT
+// WallClockGrossRegressed contributing to the merge-blocking Regressed
+// verdict as a "safety net". BUG-473 found that even the gross (>2x)
+// check flaps at perf-SMOKE scale: the per-month wall-clock there is
+// sub-millisecond (e.g. baseline 491µs), so ordinary ~2x shared-runner
+// jitter (→1.156ms) trips the 100% gross threshold and reddens CI on a
+// comment-only doc commit — the exact "never assert wall-clock upper
+// bounds in CI" (BUG-031) trap this file's own CompareToBaseline doc
+// comment warns against. So WallClockGrossRegressed is now advisory
+// ONLY: it is still computed, still reported in Message, and surfaced by
+// cmd/perfci as a non-blocking GitHub ::warning::, but it is NOT part of
+// the Regressed verdict and can NEVER fail CI. The alloc-based signal
+// (runner-independent, BUG-272/BUG-034) is the sole merge gate.
 type BaselineComparison struct {
 	HasBaseline bool
 
@@ -122,15 +134,22 @@ type BaselineComparison struct {
 	// WallClockGrossRegressed is BUG-272's demoted wall-clock check: true
 	// only when DeltaFraction exceeds WallClockGrossRegressionThreshold
 	// (a catastrophic, e.g. >2x, slowdown) — see that constant's doc
-	// comment (limits.go) for why this threshold is wide enough to never
-	// fire on ordinary CI jitter (40-45% observed) while still catching a
-	// slowdown allocation counts alone would not (a busy-wait, lock
-	// contention, …). Contributes to the overall Regressed verdict as a
-	// safety net, but is not itself gated at RegressionThreshold.
+	// comment (limits.go). ADVISORY ONLY (BUG-473): it is computed and
+	// carried in Message (and surfaced by cmd/perfci as a non-blocking
+	// GitHub ::warning::) so a genuinely catastrophic slowdown allocation
+	// counts alone would not catch (a busy-wait, lock contention, …) is
+	// still visible, but it is DELIBERATELY NOT part of the Regressed
+	// verdict and can NEVER fail CI — at perf-smoke's sub-millisecond
+	// per-month scale even this gross threshold flaps on shared-runner
+	// jitter (BUG-473), which is exactly the wall-clock-upper-bound-in-CI
+	// trap (BUG-031) this gate exists to avoid.
 	WallClockGrossRegressed bool
 
-	// Regressed is the overall verdict cmd/perfci gates on: StepRegressed
-	// || CumulativeRegressed || WallClockGrossRegressed.
+	// Regressed is the overall merge-blocking verdict cmd/perfci gates on:
+	// StepRegressed || CumulativeRegressed. Both are the runner-independent
+	// allocation-based signal (BUG-272). WallClockGrossRegressed is
+	// DELIBERATELY excluded (BUG-473): wall-clock is advisory only and
+	// never gates CI.
 	Regressed bool
 
 	Message string // human-readable summary, printed verbatim by cmd/perfci
@@ -194,10 +213,11 @@ type BaselineComparison struct {
 //     original brief, taken to its conclusion once wall-clock proved too
 //     noisy to gate on at this engine speed.
 //  5. WALL-CLOCK survives as a DEMOTED, ADVISORY, gross-only check
-//     (WallClockGrossRegressionThreshold, limits.go) — see
-//     BaselineComparison's doc comment for what it still catches and why
-//     it can no longer flap on CI jitter the way the pre-BUG-272 primary
-//     check could.
+//     (WallClockGrossRegressionThreshold, limits.go) that NEVER gates CI
+//     (BUG-473) — see BaselineComparison's doc comment for what it still
+//     surfaces as a non-blocking warning and why leaving it in the
+//     merge-blocking verdict (as BUG-272 originally did) still flapped at
+//     perf-smoke's sub-millisecond scale.
 //
 // # BUG-083: a second, independent check against a fixed anchor
 //
@@ -207,9 +227,10 @@ type BaselineComparison struct {
 // record rather than the last-appended one); anchor is a FIXED point
 // (the earliest-recorded, or most recently explicitly human-accepted,
 // measurement for this preset) that never moves on an ordinary passing
-// commit. Both checks run independently; Regressed is true if any of the
-// three fires (StepRegressed || CumulativeRegressed ||
-// WallClockGrossRegressed) — see CumulativeRegressionThreshold's doc
+// commit. Both checks run independently; Regressed is true if either
+// allocation-based check fires (StepRegressed || CumulativeRegressed —
+// wall-clock is advisory only and never gates, BUG-473) — see
+// CumulativeRegressionThreshold's doc
 // comment (limits.go) for the full live-verified rationale: a relative
 // gate compared only against a moving reference point cannot see
 // sustained drift, by construction, no matter how conservatively that
@@ -325,12 +346,15 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 	// --- PRIMARY allocation-based check (BUG-272) ---
 	if baseline.AllocCount < MinMeasurableAllocs || current.AllocCount < MinMeasurableAllocs {
 		cmp.BelowNoiseFloor = true
-		cmp.Regressed = cmp.WallClockGrossRegressed
+		// BUG-473: wall-clock is advisory only and never gates CI, so it
+		// cannot turn a could-not-evaluate (below-noise-floor) primary
+		// signal into a Regressed verdict either — Regressed stays false.
+		cmp.Regressed = false
 		var wallNote string
 		if cmp.WallClockBelowNoiseFloor {
 			wallNote = "; advisory wall-clock check also skipped (below its own noise floor)"
 		} else if cmp.WallClockGrossRegressed {
-			wallNote = fmt.Sprintf("; advisory wall-clock check still fired a GROSS regression (baseline=%s current=%s delta=%.1f%%, gross threshold %.0f%%) — reported as Regressed even though the primary allocation signal could not be judged",
+			wallNote = fmt.Sprintf("; ADVISORY WARNING: wall-clock fired a GROSS regression (baseline=%s current=%s delta=%.1f%%, gross threshold %.0f%%) — advisory ONLY, does NOT fail the gate (BUG-473); the primary allocation signal could not be judged either",
 				baseline.PerMonthTick, current.PerMonthTick, cmp.DeltaFraction*100, WallClockGrossRegressionThreshold*100)
 		} else {
 			wallNote = fmt.Sprintf("; advisory wall-clock delta=%.1f%% (informational, gross threshold %.0f%%)", cmp.DeltaFraction*100, WallClockGrossRegressionThreshold*100)
@@ -367,7 +391,11 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 		cmp.CumulativeRegressed = cumAllocBytesDelta > CumulativeRegressionThreshold || cumAllocCountDelta > CumulativeRegressionThreshold
 	}
 
-	cmp.Regressed = cmp.StepRegressed || cmp.CumulativeRegressed || cmp.WallClockGrossRegressed
+	// BUG-473: only the runner-independent allocation-based checks gate the
+	// merge verdict. WallClockGrossRegressed is advisory only (carried in
+	// Message below, surfaced by cmd/perfci as a non-blocking warning) and
+	// is DELIBERATELY excluded here so wall-clock noise can never fail CI.
+	cmp.Regressed = cmp.StepRegressed || cmp.CumulativeRegressed
 
 	var parts []string
 	if cmp.StepRegressed {
@@ -384,24 +412,28 @@ func CompareToBaseline(baseline, anchor *PerfResult, current PerfResult) Baselin
 			cmp.CumulativeAllocBytesDeltaFraction*100, cmp.CumulativeAllocCountDeltaFraction*100, CumulativeRegressionThreshold*100,
 		))
 	}
-	if cmp.WallClockGrossRegressed {
-		parts = append(parts, fmt.Sprintf(
-			"WALL-CLOCK GROSS REGRESSION (advisory catastrophic check, BUG-272): baseline=%s current=%s delta=%.1f%% (gross threshold %.0f%%)",
-			baseline.PerMonthTick, current.PerMonthTick, cmp.DeltaFraction*100, WallClockGrossRegressionThreshold*100,
-		))
+
+	// The advisory wall-clock note is appended to whichever message shape
+	// is built below, never folded into the "REGRESSED:" parts — a
+	// wall-clock gross regression is a WARNING, not a failure (BUG-473).
+	var wallNote string
+	if cmp.WallClockBelowNoiseFloor {
+		wallNote = " (advisory wall-clock check skipped: below noise floor)"
+	} else if cmp.WallClockGrossRegressed {
+		wallNote = fmt.Sprintf("; ADVISORY WARNING: wall-clock GROSS regression baseline=%s current=%s delta=%.1f%% (gross threshold %.0f%%) — advisory ONLY, does NOT fail the gate (BUG-473)",
+			baseline.PerMonthTick, current.PerMonthTick, cmp.DeltaFraction*100, WallClockGrossRegressionThreshold*100)
+	} else {
+		wallNote = fmt.Sprintf("; advisory wall-clock delta=%.1f%% (informational, gross threshold %.0f%%)", cmp.DeltaFraction*100, WallClockGrossRegressionThreshold*100)
 	}
+
 	if len(parts) > 0 {
-		cmp.Message = "REGRESSED: " + strings.Join(parts, "; ")
+		cmp.Message = "REGRESSED: " + strings.Join(parts, "; ") + wallNote
 	} else {
 		msg := fmt.Sprintf("alloc bytes delta=%.1f%% count delta=%.1f%% (threshold %.0f%%)", allocBytesDelta*100, allocCountDelta*100, RegressionThreshold*100)
 		if cmp.CumulativeChecked {
 			msg += fmt.Sprintf("; cumulative alloc bytes delta=%.1f%% count delta=%.1f%% (threshold %.0f%%)", cmp.CumulativeAllocBytesDeltaFraction*100, cmp.CumulativeAllocCountDeltaFraction*100, CumulativeRegressionThreshold*100)
 		}
-		if cmp.WallClockBelowNoiseFloor {
-			msg += " (advisory wall-clock check skipped: below noise floor)"
-		} else {
-			msg += fmt.Sprintf("; advisory wall-clock delta=%.1f%% (informational, gross threshold %.0f%%)", cmp.DeltaFraction*100, WallClockGrossRegressionThreshold*100)
-		}
+		msg += wallNote
 		cmp.Message = msg
 	}
 

@@ -446,6 +446,45 @@ func TestFinishGate_PassingRunIsRecorded(t *testing.T) {
 	}
 }
 
+// TestFinishGate_WallClockOnlyGrossRegressionIsAPass is BUG-473's
+// exit-code check at the gate boundary: a comparison whose ONLY signal is
+// a wall-clock gross regression (WallClockGrossRegressed true, but
+// Regressed false because wall-clock is advisory only) must exit 0 (a
+// PASS) and be recorded as the new baseline — it must NEVER exit 1. The
+// advisory signal is surfaced separately as a non-blocking ::warning:: in
+// run(); it does not reach finishGate's failing path.
+func TestFinishGate_WallClockOnlyGrossRegressionIsAPass(t *testing.T) {
+	results := filepath.Join(t.TempDir(), "perf-results.ndjson")
+	var stderr bytes.Buffer
+
+	rec := synth.PerfRecord{
+		CommitHash: "wallclock-only-commit",
+		Preset:     "1M",
+		Result:     synth.PerfResult{CitizenCount: 50, Months: 1, PerMonthTick: 1156 * time.Microsecond, PhaseHookCount: synth.PhaseHookCountInHeadlessPath(), Measured: true},
+	}
+	// The exact BUG-473 shape: wall-clock grossly regressed, allocations
+	// flat — so CompareToBaseline sets WallClockGrossRegressed but leaves
+	// Regressed false.
+	cmp := synth.BaselineComparison{
+		HasBaseline:             true,
+		WallClockGrossRegressed: true,
+		Regressed:               false,
+		Message:                 "alloc bytes delta=0.0% count delta=0.0% (threshold 10%); ADVISORY WARNING: wall-clock GROSS regression baseline=491µs current=1.156ms delta=135.4% (gross threshold 100%) — advisory ONLY, does NOT fail the gate (BUG-473)",
+	}
+
+	code := finishGate(results, rec, cmp, "test-correlation", &stderr)
+	if code != 0 {
+		t.Fatalf("finishGate() = %d, want 0 — BUG-473: a wall-clock-only gross regression is advisory and must PASS the gate, never exit 1; stderr=%s", code, stderr.String())
+	}
+	data, err := os.ReadFile(results)
+	if err != nil {
+		t.Fatalf("reading recorded results: %v", err)
+	}
+	if !bytes.Contains(data, []byte("wallclock-only-commit")) {
+		t.Fatalf("results file = %s, want the passing (advisory-only) run recorded as the new baseline", data)
+	}
+}
+
 // TestRun_AcceptPathUsesDefaultRegistryPathWhenFlagOmitted proves the
 // accept path works through cmd/perfci's DEFAULT -accepted-regressions
 // path (perf-accepted-regressions.json, resolved relative to the working

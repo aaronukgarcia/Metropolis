@@ -2,6 +2,7 @@ package synth
 
 import (
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,13 +147,23 @@ func TestCompareToBaseline_WallClockNoiseAloneDoesNotRegress(t *testing.T) {
 	}
 }
 
-// TestCompareToBaseline_WallClockGrossRegressionStillCatchesCatastrophicSlowdown
-// is the safety-net half of BUG-272's design: a slowdown that does NOT
-// show up in allocation counts at all (e.g. a busy-wait, a lock
-// contention regression) must still be caught if it is gross enough
-// (>WallClockGrossRegressionThreshold, i.e. more than doubling) — the
-// advisory check is demoted, not deleted.
-func TestCompareToBaseline_WallClockGrossRegressionStillCatchesCatastrophicSlowdown(t *testing.T) {
+// TestCompareToBaseline_WallClockGrossRegressionIsAdvisoryOnly is
+// BUG-473's headline regression test. A gross (>2x) wall-clock slowdown
+// with UNCHANGED allocation counts must STILL be detected
+// (WallClockGrossRegressed true) and reported in the Message, but it must
+// NOT set Regressed — wall-clock is advisory only and never gates CI.
+//
+// This test is RED against the pre-fix code: the old line was
+// `Regressed = StepRegressed || CumulativeRegressed ||
+// WallClockGrossRegressed`, which set Regressed true here. Re-adding
+// `|| cmp.WallClockGrossRegressed` to CompareToBaseline reddens the
+// `if cmp.Regressed` assertion below (prove-can-fail).
+//
+// The failure mode BUG-473 closes: at perf-SMOKE scale the per-month
+// figure is sub-millisecond, so a routine ~2x jitter spike trips this
+// 100% gross threshold and used to FAIL the job on a comment-only doc
+// commit. Now it only warns.
+func TestCompareToBaseline_WallClockGrossRegressionIsAdvisoryOnly(t *testing.T) {
 	baseline := PerfResult{
 		CitizenCount: OneMillionCitizens, Months: 500,
 		PerMonthTick: 172825 * time.Nanosecond,
@@ -166,13 +177,47 @@ func TestCompareToBaseline_WallClockGrossRegressionStillCatchesCatastrophicSlowd
 
 	cmp := CompareToBaseline(&baseline, nil, current)
 	if !cmp.WallClockGrossRegressed {
-		t.Fatalf("a 3x wall-clock slowdown must trip the advisory GROSS check even with unchanged allocations: %s", cmp.Message)
+		t.Fatalf("a 3x wall-clock slowdown must still be DETECTED as a gross regression (the signal is preserved, just non-blocking): %s", cmp.Message)
 	}
-	if !cmp.Regressed {
-		t.Fatal("WallClockGrossRegressed must still contribute to the overall Regressed verdict — it is a safety net, not a no-op")
+	if cmp.Regressed {
+		t.Fatalf("BUG-473: a wall-clock-only gross regression must NOT set the merge-blocking Regressed verdict — wall-clock is advisory only and can never fail CI: %s", cmp.Message)
 	}
 	if cmp.StepRegressed {
-		t.Fatal("the primary allocation-based check must not have fired (allocations were unchanged) — only the advisory gross check should have")
+		t.Fatal("the primary allocation-based check must not have fired (allocations were unchanged)")
+	}
+	if cmp.CumulativeRegressed {
+		t.Fatal("the cumulative allocation check must not have fired (allocations were unchanged)")
+	}
+	// The advisory signal must remain visible in the Message so cmd/perfci
+	// can surface it as a ::warning::.
+	if !strings.Contains(cmp.Message, "ADVISORY WARNING") || !strings.Contains(cmp.Message, "wall-clock") {
+		t.Fatalf("Message must still carry the advisory wall-clock GROSS warning so it stays visible, got: %s", cmp.Message)
+	}
+}
+
+// TestCompareToBaseline_AllocRegressionStillGatesRegardlessOfWallClock is
+// BUG-473's companion "the real gate still fires" check: an allocation
+// regression past the threshold must set Regressed whether or not the
+// advisory wall-clock check also fires. Demoting wall-clock must not
+// weaken the allocation gate.
+func TestCompareToBaseline_AllocRegressionStillGatesRegardlessOfWallClock(t *testing.T) {
+	baseline := PerfResult{
+		CitizenCount: OneMillionCitizens, Months: 500,
+		PerMonthTick: 172825 * time.Nanosecond,
+		AllocBytes:   1_000_000, AllocCount: 100_000,
+	}
+	current := PerfResult{
+		CitizenCount: OneMillionCitizens, Months: 500,
+		PerMonthTick: 172825 * time.Nanosecond,       // wall-clock flat
+		AllocBytes:   1_250_000, AllocCount: 125_000, // +25% allocations — a real regression
+	}
+
+	cmp := CompareToBaseline(&baseline, nil, current)
+	if !cmp.StepRegressed {
+		t.Fatalf("a +25%% allocation regression must trip the primary step check: %s", cmp.Message)
+	}
+	if !cmp.Regressed {
+		t.Fatalf("BUG-473 must NOT weaken the allocation gate — an alloc regression must still set Regressed: %s", cmp.Message)
 	}
 }
 

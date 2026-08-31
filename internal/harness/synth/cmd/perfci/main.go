@@ -255,6 +255,17 @@ func runWith(args []string, stdout, stderr io.Writer, loadAccepted acceptedLoade
 	cmp := synth.CompareToBaseline(baseline, anchor, result)
 	_, _ = fmt.Fprintln(stdout, cmp.Message)
 
+	// BUG-473: a wall-clock GROSS regression is ADVISORY ONLY — it never
+	// contributes to cmp.Regressed and never fails this gate. Surface it as
+	// a non-blocking GitHub Actions ::warning:: annotation so the signal
+	// stays visible (a genuinely catastrophic slowdown allocation counts
+	// alone would not catch — a busy-wait, lock contention) without
+	// reddening CI on ordinary shared-runner jitter (the BUG-031 /
+	// wall-clock-upper-bound-in-CI trap this demotion closes).
+	if cmp.WallClockGrossRegressed {
+		_, _ = fmt.Fprintf(stdout, "::warning::perfci: advisory wall-clock GROSS regression (%s) — ADVISORY ONLY, does not fail the gate (BUG-473); the allocation-based signal is the sole merge-blocking check.\n", cmp.Message)
+	}
+
 	rec := synth.PerfRecord{CommitHash: commitHash, Preset: *preset, Result: result}
 
 	// BUG-095/BUG-094: a registry-corroborated acceptance for THIS EXACT
