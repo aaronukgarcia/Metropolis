@@ -821,6 +821,16 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
   let cost = 0;
   let upgraded = 0;
 
+  // BUG-467 perf: residentsCapacity(s) and totalJobs(s) are each O(buildings)
+  // (they sum over every building). Computing them INSIDE the per-monitor loop
+  // below made the pass O(buildings^2) — ~36s of scripting per placement at
+  // ~9,886 buildings (the residentsCapacity self-time bomb in the profile).
+  // They do not change during this pass (tier upgrades are collected in
+  // tierUpgradeById and applied only AFTER the loop, so `s` is constant here),
+  // so hoist them to a single O(n) computation each.
+  const residentsCapForPass = residentsCapacity(s);
+  const jobsCapForPass = totalJobs(s);
+
   for (const m of active) {
     const building = byId.get(m.buildingId);
     if (!building) continue; // building bulldozed — skip
@@ -842,11 +852,11 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
     // Compute utilization based on monitor type (residents or jobs)
     let utilization = 0;
     if (m.type === 'residents') {
-      const totalCap = residentsCapacity(s);
+      const totalCap = residentsCapForPass; // BUG-467: hoisted (was residentsCapacity(s) per-iteration = O(n^2))
       utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0;
     } else {
       // jobs type
-      const totalCap = totalJobs(s);
+      const totalCap = jobsCapForPass; // BUG-467: hoisted (was totalJobs(s) per-iteration = O(n^2))
       utilization = totalCap > 0 ? Math.min(1, s.population / totalCap) : 0; // jobs utilization ~ population-based proxy
     }
 
@@ -1267,11 +1277,12 @@ export const CONNECT_EXEMPT_KINDS = new Set<Spec['kind']>([
  * Pure + deterministic (GR#21): all tie-breaking flows from the router; no Date/random.
  * Called with `s` = state AFTER the player's building was inserted.
  */
-function autoConnect(
+export function autoConnect(
   s: SimState,
   placed: Building,
   sp: Spec,
   opts?: { notice?: boolean; onUnaffordable?: () => void },
+  prebuiltBoard?: { occupied: Set<string>; roads: Set<string> },
 ): SimState {
   const notice = opts?.notice !== false;
   if (CONNECT_EXEMPT_KINDS.has(sp.kind) || isRoadSpec(sp)) {
@@ -1279,18 +1290,31 @@ function autoConnect(
   }
 
   // Board sets from the CURRENT buildings (includes the just-placed building).
-  const occupied = new Set<string>();
-  const roads = new Set<string>();
-  for (const b of s.buildings) {
-    const bs = SPECS[b.spec];
-    if (!bs) continue;
-    const road = isRoadSpec(bs);
-    for (let dx = 0; dx < bs.w; dx++)
-      for (let dy = 0; dy < bs.h; dy++) {
-        const k = `${b.x + dx},${b.y + dy}`;
-        occupied.add(k);
-        if (road) roads.add(k);
-      }
+  // BUG-467 part B: a caller that already maintains a board incrementally in sync
+  // with `s` (the orphan-connect sweep) may pass one in via `prebuiltBoard`,
+  // skipping this O(n) rebuild-from-ALL-buildings — the per-call cost that made
+  // the sweep O(n²) at scale. Single-placement callers (unchanged) still rebuild
+  // fresh each time; output is identical either way since the sets' CONTENTS are
+  // the same, only how they're assembled differs.
+  let occupied: Set<string>;
+  let roads: Set<string>;
+  if (prebuiltBoard) {
+    occupied = prebuiltBoard.occupied;
+    roads = prebuiltBoard.roads;
+  } else {
+    occupied = new Set<string>();
+    roads = new Set<string>();
+    for (const b of s.buildings) {
+      const bs = SPECS[b.spec];
+      if (!bs) continue;
+      const road = isRoadSpec(bs);
+      for (let dx = 0; dx < bs.w; dx++)
+        for (let dy = 0; dy < bs.h; dy++) {
+          const k = `${b.x + dx},${b.y + dy}`;
+          occupied.add(k);
+          if (road) roads.add(k);
+        }
+    }
   }
 
   const plan = planConnector({
@@ -1408,21 +1432,90 @@ function autoConnect(
   };
 }
 
-function sweepOrphanConnects(s: SimState): SimState {
+/**
+ * BUG-467 part B: this sweep was O(n²)+ at scale (measured ~110s at ~9,886
+ * buildings) from two stacked costs, both eliminated here WITHOUT changing the
+ * resulting `SimState` byte-for-byte vs. the prior implementation:
+ *
+ *  1. `s.buildings.find(b => b.id === id)` per id → O(n) linear scan per
+ *     iteration. Fixed with a `Map<id, Building>` built ONCE up front. Safe to
+ *     snapshot: the sweep only ever iterates the ids present BEFORE the sweep
+ *     started (matching the original `ids` snapshot), and a non-road building's
+ *     record (x, y, spec) never mutates mid-sweep — `autoConnect` only ever
+ *     mutates ROAD-kind buildings in place (tier upgrade-on-connect), and those
+ *     are always skipped early by `autoConnect` itself regardless of the id
+ *     order, so the snapshotted `placed` object passed in is always identical
+ *     to what a fresh `find` would have returned.
+ *
+ *  2. `autoConnect` rebuilding the full `occupied`/`roads` tile-string Sets from
+ *     ALL buildings on EVERY call. Fixed by building those Sets ONCE before the
+ *     loop and threading them through via `autoConnect`'s new optional
+ *     `prebuiltBoard` param, kept in sync incrementally as the sweep runs:
+ *     tier-upgrades of existing road tiles never change Set membership (a road
+ *     tile is a road tile before and after its tier changes), so the ONLY drift
+ *     to track is newly laid connector tiles — `autoConnect` always appends
+ *     those to the tail of `buildings` (via `.concat(newTiles)`) and bumps
+ *     `nextId` by exactly their count, so the tail slice of `next.buildings`
+ *     sized `next.nextId - prevNextId` is exactly the new tiles; their footprint
+ *     cells are added to both Sets before the next iteration sees them — the
+ *     same content a from-scratch rebuild would have produced.
+ */
+export function sweepOrphanConnects(s: SimState): SimState {
   const ids = s.buildings.map((b) => b.id).sort((a, b) => a - b);
+  const byId = new Map<number, Building>();
+  for (const b of s.buildings) byId.set(b.id, b);
+
+  const occupied = new Set<string>();
+  const roads = new Set<string>();
+  for (const b of s.buildings) {
+    const bs = SPECS[b.spec];
+    if (!bs) continue;
+    const road = isRoadSpec(bs);
+    for (let dx = 0; dx < bs.w; dx++)
+      for (let dy = 0; dy < bs.h; dy++) {
+        const k = `${b.x + dx},${b.y + dy}`;
+        occupied.add(k);
+        if (road) roads.add(k);
+      }
+  }
+
   for (const id of ids) {
-    const placed = s.buildings.find((b) => b.id === id);
+    const placed = byId.get(id);
     if (!placed) continue;
     const sp = SPECS[placed.spec];
     if (!sp) continue;
     let unaffordable = false;
-    const next = autoConnect(s, placed, sp, {
-      notice: false,
-      onUnaffordable: () => {
-        unaffordable = true;
+    const prevNextId = s.nextId;
+    const next = autoConnect(
+      s,
+      placed,
+      sp,
+      {
+        notice: false,
+        onUnaffordable: () => {
+          unaffordable = true;
+        },
       },
-    });
+      { occupied, roads },
+    );
     if (unaffordable) break;
+    if (next.nextId > prevNextId) {
+      // New connector tiles were appended at the tail of `buildings` — mirror
+      // them into the running board Sets so the NEXT iteration sees exactly
+      // what a from-scratch rebuild-from-all-buildings would have seen.
+      const added = next.nextId - prevNextId;
+      const newTiles = next.buildings.slice(next.buildings.length - added);
+      for (const t of newTiles) {
+        const ts = SPECS[t.spec];
+        if (!ts) continue;
+        for (let dx = 0; dx < ts.w; dx++)
+          for (let dy = 0; dy < ts.h; dy++) {
+            const k = `${t.x + dx},${t.y + dy}`;
+            occupied.add(k);
+            roads.add(k);
+          }
+      }
+    }
     s = next;
   }
   return s;
