@@ -17,6 +17,7 @@ import {
   serviceCoverageOf,
   earlyGameFactor,
   brownoutOf,
+  isBrownoutActive,
   BROWNOUT_WELLBEING_K,
   stationLinks,
   totalJobs,
@@ -57,7 +58,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, gridImportCostPerTick, GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT, GRID_IMPORT_OUTFLOW_LABEL, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -351,6 +352,9 @@ function rawState(): SimState {
     xp: 30,
     taxRates: { residential: 9, commercial: 11, industrial: 13 },
     policies: { recycling: false, transitSubsidy: false, tourismDrive: false, austerity: false },
+    // FEAT-2326609711 inc1 (AC-1): new cities default to external power cover
+    // ON (GRID_IMPORT_ENABLED_DEFAULT, fiscal.ts — Aaron's Design Ruling).
+    gridImportEnabled: GRID_IMPORT_ENABLED_DEFAULT,
     buildings,
     nextId: nextSafeBuildingId(buildings),
     movingId: null,
@@ -512,6 +516,20 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     inflows.push({ label: 'Grid Export', value: gridExportRevenue });
   }
 
+  // FEAT-2326609711 inc1: Grid Import (external power cover). importedMW =
+  // max(0, need - cap); import cost = importedMW * tariff. Only booked when
+  // the toggle is ON (default GRID_IMPORT_ENABLED_DEFAULT — `?? ` fallback so
+  // a legacy state predating this field reads as ON, AC-1) AND a real
+  // shortage exists (mirrors Grid Export's "only when > 0" idiom, AC-2) — a
+  // covered shortage is NOT a brownout (see the brownout-gating just below,
+  // AC-1/AC-3): buying the shortfall in is the entire point of the toggle, so
+  // the legacy income penalty is skipped while import covers it. Pushed to
+  // `outflows` further down, once that array exists (AC-6: exactly once).
+  const gridImportOn = s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT;
+  const gridImportCost = gridImportOn
+    ? gridImportCostPerTick(pw.cap, pw.need, GRID_IMPORT_TARIFF_PER_MW)
+    : 0;
+
   const harbourBoost = s.buildings.some((b) => b.spec === 'land_harbour') ? 1.4 : 1;
 
   const buckets: Record<string, number> = {};
@@ -526,6 +544,11 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     .filter(([, v]) => v > 0)
     .map(([label, value]) => ({ label, value }));
   outflows.push({ label: 'Wages', value: wagesPerTick(s.population) });
+  // FEAT-2326609711 inc1 (AC-2/AC-6): the Grid Import outflow, computed above
+  // — pushed exactly once, here, never a second side-channel debit.
+  if (gridImportOn && gridImportCost > 0) {
+    outflows.push({ label: GRID_IMPORT_OUTFLOW_LABEL, value: gridImportCost });
+  }
 
   const c3 = countByKind(s.buildings);
   const freightIdx = inflows.findIndex((f) => f.label === 'Freight Tax');
@@ -542,8 +565,20 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
   // scales down by brownout.incomeFactor. Applied AFTER the harbour-boosted
   // Freight Tax overwrite above so the penalty cannot be clobbered.
   // Deterministic; weight BROWNOUT_INCOME_K is PLACEHOLDER (balance regime).
+  //
+  // FEAT-2326609711 inc1 (AC-1/AC-3, Design Ruling): while Grid Import is
+  // ENABLED, a power shortfall is bought in from the regional grid instead of
+  // browning out — the two penalty mechanisms are mutually exclusive so they
+  // can never double-charge the same shortage (AC-3's false-pass warning).
+  // Toggle OFF restores the legacy behaviour byte-for-byte (AC-3/AC-12): the
+  // brownout branch below is untouched, gated only by the new toggle check.
+  //
+  // r2 fix (SSOT): gated on data.ts's isBrownoutActive(s) — the ONE place
+  // the physical deficit and the toggle are combined — instead of a local
+  // `brownout.active && !gridImportOn` recompute, so this can never drift
+  // from the wellbeing/UI consumers of the same predicate (GR#3).
   const brownout = brownoutOf(s);
-  if (brownout.active) {
+  if (isBrownoutActive(s)) {
     const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);
     for (const fl of inflows) {
       if (poweredIncome.has(fl.label)) fl.value = Math.round(fl.value * brownout.incomeFactor);
@@ -2500,6 +2535,7 @@ export type Action =
   | { type: 'pipeUpgrade'; id: number }
   | { type: 'tax'; which: keyof TaxRates; rate: number }
   | { type: 'policy'; id: PolicyId }
+  | { type: 'toggleGridImport' }
   | { type: 'loan' }
   | { type: 'repay' }
   | { type: 'setClipboard'; clipboard: SimState['clipboard'] }
@@ -3195,6 +3231,16 @@ function reduceCore(state: SimState, action: Action): SimState {
       return { ...state, policies: { ...state.policies, [action.id]: turningOn } };
     }
 
+    // FEAT-2326609711 inc1 (AC-9/AC-10): toggle external power cover. Plain
+    // sim-state mutation (not React local state, AC-10's false-pass) — it
+    // journals/replays/serialises exactly like every other reducer action, so
+    // it survives panel close/reopen and genesis replay (AC-5) for free.
+    case 'toggleGridImport':
+      return {
+        ...state,
+        gridImportEnabled: !(state.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT),
+      };
+
     case 'loan': {
       if (state.loanBalance > 0) return state;
       return {
@@ -3420,8 +3466,15 @@ export function wellbeingOf(s: SimState): {
   // The multiplier applies AFTER blend, so a brownout can drag the part below
   // the early-game 55 baseline — a brownout bites however small the town.
   // Deterministic; BROWNOUT_WELLBEING_K is PLACEHOLDER (balance regime).
+  //
+  // FEAT-2326609711 inc1 fix (r2, closing the r1 HALF-WIRED DEFECT): gated
+  // on data.ts's isBrownoutActive(s) — the SAME SSOT predicate the income
+  // penalty (computeFlows) and the DemandDock banner now read — instead of
+  // brownout.active alone. A covered shortfall (Grid Import cover ON) no
+  // longer collapses Utilities wellbeing: the price premium is the entire
+  // penalty, per Aaron's ruling (no brownout of any kind while covered).
   const brownout = brownoutOf(s);
-  const utilitiesValue = brownout.active
+  const utilitiesValue = isBrownoutActive(s)
     ? Math.max(0, Math.round(part(utilities) * (1 - brownout.deficitRatio * BROWNOUT_WELLBEING_K)))
     : part(utilities);
 

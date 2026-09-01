@@ -169,6 +169,20 @@ export interface SimState {
   xp: number;
   taxRates: TaxRates;
   policies: Record<PolicyId, boolean>;
+  /**
+   * FEAT-2326609711 inc1 (AC-1, AC-5, AC-9/AC-10) — external power cover
+   * toggle. When true, a power shortfall (powerStats.need > .cap) is bought
+   * in from the regional grid at GRID_IMPORT_TARIFF_PER_MW (fiscal.ts) —
+   * booked as a "Grid Import" outflow (computeFlows) instead of the legacy
+   * BUG-393 brownout income penalty. When false, the legacy brownout path
+   * applies unchanged. Defaults to GRID_IMPORT_ENABLED_DEFAULT (true) for a
+   * new city. Plain sim-state boolean (not React-local, not policies-keyed)
+   * so it serialises/journals/replays exactly like every other field.
+   * Optional for backward tolerance (mirrors roadNotice/demographicAccum etc.):
+   * a legacy state predating this field is treated as GRID_IMPORT_ENABLED_DEFAULT
+   * by every read site (never a silent `false`/off fallback).
+   */
+  gridImportEnabled?: boolean;
   buildings: Building[];
   nextId: number;
   movingId: number | null;

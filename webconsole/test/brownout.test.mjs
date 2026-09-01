@@ -55,7 +55,18 @@ function city(power = {}) {
   for (let i = 0; i < 10; i++) put('com_shop');
   put('wat_clean');
   for (const [spec, n] of Object.entries(power)) for (let i = 0; i < n; i++) put(spec);
-  return { ...initialState(), population: 16667, buildings };
+  // FEAT-2326609711 inc1 (AC-12 regression pin): initialState() now defaults
+  // gridImportEnabled to TRUE (Design Ruling — new cities start on external
+  // cover), which would otherwise SKIP the legacy brownout income penalty
+  // these fixtures exist to prove (engine.ts computeFlows gates it on
+  // `!gridImportEnabled`). Explicitly disable the toggle here so this
+  // pre-existing suite keeps testing the LEGACY shortage path unchanged
+  // (byte-identical results) — exactly per AC-12's own text: "The test
+  // fixture explicitly sets gridImportEnabled = false ... before verifying
+  // brownout." RED proof: with this line removed, every income/wellbeing
+  // deficit assertion below turns red because Grid Import silently covers
+  // the shortfall instead of browning out.
+  return { ...initialState(), population: 16667, buildings, gridImportEnabled: false };
 }
 
 // Fleet capacities derive from the spec catalogue at runtime, never inline.

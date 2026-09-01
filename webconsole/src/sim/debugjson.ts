@@ -87,7 +87,7 @@ import {
 import { SNAPSHOT_REFRESH_MS } from './throttle.ts';
 import type { MapUiState } from './uistate.ts';
 import { runConsistencyChecks } from './consistency.ts';
-import { businessTaxPerTick, councilTaxPerTick } from './fiscal.ts';
+import { businessTaxPerTick, councilTaxPerTick, GRID_IMPORT_ENABLED_DEFAULT } from './fiscal.ts';
 import { getPerformanceSnapshot } from './perfhud.ts';
 import { getLiveVersion } from './liveVersionRef.ts';
 
@@ -239,6 +239,8 @@ export interface DebugJson {
     roadConnectivity: { connectedRoadTiles: string[] };
     conservation: { tickStart: number; tickEnd: number };
     pendingRewards: Array<{ totalReward: number; newLevel: number; notice: LevelUpNotice }>;
+    /** FEAT-2326609711 inc1 (AC-1) — external power cover toggle. */
+    gridImportEnabled: boolean;
   };
   flows: {
     inflows: FlowItem[];
@@ -505,6 +507,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   lastArrivalsByMode: 'arrivalsByMode.lastTick',
   arrivalsByModeAccum: 'arrivalsByMode.accumThisMonth',
   arrivalsByModeHistory: 'arrivalsByMode.monthlyHistory',
+  // FEAT-2326609711 inc1 (AC-1).
+  gridImportEnabled: 'sim.gridImportEnabled',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -738,6 +742,9 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
         tickEnd: s.fundsAtTickEnd,
       },
       pendingRewards: s.pendingRewards,
+      // FEAT-2326609711 inc1 (AC-1): backward tolerance for a legacy state
+      // predating this field, mirrors insolvencyState/bailoutState above.
+      gridImportEnabled: s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT,
     },
     flows: {
       inflows: s.lastFlows.inflows,

@@ -103,6 +103,126 @@ export function gridExportRevenuePerTick(capMW: number, needMW: number, tariff: 
 }
 
 /**
+ * FEAT-2326609711 inc1 (Design Ruling, Aaron 2026-09-01) — external grid import
+ * tariff per MW bought from the regional grid when local capacity falls short
+ * of demand. ⚠ PLACEHOLDER-balance (Aaron's row-by-row pass pending).
+ * Must stay STRICTLY GREATER than GRID_EXPORT_TARIFF_PER_MW (AC-4 invariant) —
+ * opex-only external cover is dearer per unit than local generation's own
+ * sell-back rate, so local investment can pay back over a horizon.
+ */
+export const GRID_IMPORT_TARIFF_PER_MW = 2.5;
+
+/**
+ * FEAT-2326609711 inc1 — new cities default to external power cover ON
+ * (Aaron's ruling: "a hamlet starts on external contracts for everything").
+ * Mechanical only (affects rawState()/genesis + new-game flow), not a
+ * player-felt £ number.
+ */
+export const GRID_IMPORT_ENABLED_DEFAULT = true;
+
+/**
+ * FEAT-2326609711 inc1 — SSOT label for the Grid Import outflow line
+ * (lastFlows.outflows entry + RightDock finance row), so the engine and the
+ * UI can never disagree on the exact string (GR#3, mirrors
+ * BAILOUT_INJECTION_LABEL / ASSET_SALE_LABEL). The generic sum-based
+ * conservation checker (consistency.ts) needs no per-label recompute — it
+ * sums lastFlows.outflows regardless of label.
+ */
+export const GRID_IMPORT_OUTFLOW_LABEL = 'Grid Import';
+
+/**
+ * Calculate Grid Import cost per tick: the shortfall (need - cap, floored at
+ * 0) times the external tariff. Mirrors gridExportRevenuePerTick exactly
+ * (same shape, opposite side of the meter). Pure, deterministic (GR#21).
+ */
+export function gridImportCostPerTick(capMW: number, needMW: number, tariff: number): number {
+  const importMW = Math.max(0, needMW - capMW);
+  return Math.round(importMW * tariff);
+}
+
+/**
+ * FEAT-2326609711 inc1 (AC-4) — tariff invariant verification, loaded and
+ * called ONLY at test time (never during gameplay). Derives the CHEAPEST
+ * local power plant's amortised cost — capex spread over
+ * POWER_PLANT_AMORTISATION_TICKS plus its own per-tick upkeep, per MW — from
+ * the LIVE catalogue (data.ts SPECS), never a hardcoded number (GR#15).
+ *
+ * Takes the catalogue as a parameter (callers pass data.ts's live SPECS)
+ * rather than importing data.ts at module scope, which would complete a
+ * fiscal.ts -> data.ts -> engine.ts -> fiscal.ts cycle (engine.ts already
+ * imports from fiscal.ts, and data.ts already imports specUnlocked/
+ * feederTrafficWeight from engine.ts). Keeping this function a pure,
+ * injectable derivation sidesteps the cycle entirely.
+ *
+ * BUG-477 (filed 2026-09-01, discovered building this AC): with TODAY's
+ * catalogue, the cheapest plant's amortised cost is roughly an order of
+ * magnitude above BOTH tariffs (a pre-existing scale mismatch between
+ * BUG-452's realistic small-city tariffs and the FEAT-1972079901 real-capex
+ * power catalogue — it already made the EXISTING Grid Export tariff
+ * economically incoherent; this just surfaces it). So
+ * `exportExceedsLocal`/`importExceedsLocal` read false today;
+ * `importExceedsExport` (the inc1 design promise) holds. This function
+ * reports the truth either way — it must NEVER be hardcoded to report `true`.
+ */
+export interface GridTariffInvariantResult {
+  cheapestPlantId: string | null;
+  cheapestAmortisedPerMwTick: number;
+  importExceedsExport: boolean;
+  exportExceedsLocal: boolean;
+  importExceedsLocal: boolean;
+  allHold: boolean;
+}
+
+/** ⚠ PLACEHOLDER-balance: physical power-plant capex amortisation horizon
+ * (25 years), used ONLY by verifyGridTariffInvariant()'s test-time
+ * derivation — never during gameplay. Aaron's balance pass may retune. */
+export const POWER_PLANT_AMORTISATION_TICKS = 25 * 360;
+
+/** Minimal shape verifyGridTariffInvariant() needs from a catalogue Spec —
+ * kept local (not importing the full data.ts Spec type) to avoid a
+ * fiscal.ts -> data.ts -> engine.ts -> fiscal.ts module-eval-time cycle.
+ * The caller (tests, never gameplay) passes data.ts's live SPECS in
+ * explicitly — this function stays a pure, injectable derivation. */
+export interface GridImportPlantLike {
+  id: string;
+  kind: string;
+  placeholder?: boolean;
+  mw?: number;
+  cost: number;
+  upkeep: number;
+}
+
+export function verifyGridTariffInvariant(
+  specs: Record<string, GridImportPlantLike>,
+): GridTariffInvariantResult {
+  let cheapestPlantId: string | null = null;
+  let cheapestAmortisedPerMwTick = Infinity;
+  for (const sp of Object.values(specs)) {
+    if (sp.kind !== 'power' || sp.placeholder) continue;
+    if (!sp.mw || sp.mw <= 0 || !sp.cost || sp.cost <= 0) continue;
+    const capexPerMwTick = sp.cost / (sp.mw * POWER_PLANT_AMORTISATION_TICKS);
+    const upkeepPerMwTick = (sp.upkeep ?? 0) / sp.mw;
+    const amortised = capexPerMwTick + upkeepPerMwTick;
+    if (amortised < cheapestAmortisedPerMwTick) {
+      cheapestAmortisedPerMwTick = amortised;
+      cheapestPlantId = sp.id;
+    }
+  }
+  if (cheapestPlantId === null) cheapestAmortisedPerMwTick = 0;
+  const importExceedsExport = GRID_IMPORT_TARIFF_PER_MW > GRID_EXPORT_TARIFF_PER_MW;
+  const exportExceedsLocal = GRID_EXPORT_TARIFF_PER_MW > cheapestAmortisedPerMwTick;
+  const importExceedsLocal = GRID_IMPORT_TARIFF_PER_MW > cheapestAmortisedPerMwTick;
+  return {
+    cheapestPlantId,
+    cheapestAmortisedPerMwTick,
+    importExceedsExport,
+    exportExceedsLocal,
+    importExceedsLocal,
+    allHold: importExceedsExport && exportExceedsLocal && importExceedsLocal,
+  };
+}
+
+/**
  * SINGLE SOURCE OF TRUTH (BUG-422 / GR#3): the ONLY place the engine's post-policy
  * outflow multipliers live, shared by engine.computeFlows and the consistency checker
  * so the checker's recompute matches what the engine actually recorded.

@@ -39,6 +39,14 @@ import { initialState, wellbeingOf } from '../src/sim/engine.ts';
 function city(pop, specCounts = {}) {
   const s = initialState();
   s.population = pop;
+  // FEAT-2326609711 inc1 (AC-12 regression pin, r2 fix follow-on): initialState()
+  // defaults gridImportEnabled to TRUE (Design Ruling — new cities start on
+  // external cover), and a COVERED deficit no longer raises the brownout alert
+  // (isBrownoutActive() reads false while cover is on, data.ts SSOT). This
+  // file's BUG-398 test below asserts the LEGACY deficit->alert boundary —
+  // explicitly disable the toggle here, exactly like brownout.test.mjs's
+  // city() fixture, so it keeps testing the toggle-off (legacy) path.
+  s.gridImportEnabled = false;
   let id = 60000;
   let slot = 0;
   for (const [spec, n] of Object.entries(specCounts)) {

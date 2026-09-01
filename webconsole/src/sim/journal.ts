@@ -114,6 +114,10 @@ export function isStateAffecting(action: Action): boolean {
       return true;
     case 'repay':
       return true;
+    // FEAT-2326609711 inc1 (AC-5): grid-import toggle mutates gridImportEnabled —
+    // state-affecting, must journal + replay like every other toggle (tax/policy).
+    case 'toggleGridImport':
+      return true;
 
     // Clone-stamp — state-affecting (places/flattens buildings, deducts cost).
     case 'stampRegion':

@@ -108,6 +108,58 @@ test('WasteTab smoke: renders inside SimProvider without throwing and leaks no N
   assert.ok(!/NaN|Infinity/.test(html), 'no NaN/Infinity in the rendered panel');
 });
 
+// FEAT-2326609711 inc1 (AC-8/AC-9) — Grid Import UI smoke tests. The REAL
+// numeric logic (formula, presence/absence rules, toggle persistence) is
+// unit-tested against computeFlows()/reducer() in test/grid-import.test.mjs —
+// exactly the same split waste-panel-inc3.test.mjs uses. This just proves the
+// two panels render inside the real SimProvider without throwing and without
+// leaking NaN/Infinity, and that the toggle control + its default state are
+// actually present in the markup.
+test('PowerTab smoke: renders inside SimProvider, shows the external-cover toggle defaulted ON, no NaN', async () => {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimProvider } = await import('../src/sim/store.tsx');
+  const { PowerTab } = await import('../src/components/right/RightDock.tsx');
+
+  const html = renderToString(
+    React.default.createElement(SimProvider, {
+      children: React.default.createElement(PowerTab),
+    })
+  );
+  assert.ok(html.length > 0, 'rendered HTML must be non-empty');
+  assert.ok(
+    !html.includes('useSim must be used inside SimProvider'),
+    'PowerTab must render inside the provider without a context error'
+  );
+  assert.ok(/Use external power cover/.test(html), 'the toggle control must be present');
+  assert.ok(/Imported MW/.test(html), 'the imported-MW readout must be present');
+  // A brand-new game defaults to GRID_IMPORT_ENABLED_DEFAULT (true) — button reads "On".
+  assert.ok(/>On</.test(html), 'a new city must render the toggle defaulted ON');
+  assert.ok(!/NaN|Infinity/.test(html), 'no NaN/Infinity in the rendered panel');
+});
+
+test('EarningsTab smoke: renders inside SimProvider without throwing, no NaN (Grid Import row is conditional)', async () => {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimProvider } = await import('../src/sim/store.tsx');
+  const { EarningsTab } = await import('../src/components/right/RightDock.tsx');
+
+  const html = renderToString(
+    React.default.createElement(SimProvider, {
+      children: React.default.createElement(EarningsTab),
+    })
+  );
+  assert.ok(html.length > 0, 'rendered HTML must be non-empty');
+  assert.ok(
+    !html.includes('useSim must be used inside SimProvider'),
+    'EarningsTab must render inside the provider without a context error'
+  );
+  assert.ok(/Total out/.test(html), 'the earnings table rendered');
+  assert.ok(!/NaN|Infinity/.test(html), 'no NaN/Infinity in the rendered panel');
+});
+
 test('BUG-421 RED-prove: useSim in the VersionUpgradeToast slot (outside SimProvider) throws', async () => {
   ensureMountWindow();
   const React = await import('react');
@@ -671,4 +723,81 @@ test('BUG-434: reducer survives 50 rapid debugFunds dispatches from negative fun
   assert.ok(state.funds > 0 || state.funds < 0, 'funds must have a valid numeric value');
   assert.ok(typeof state.tick === 'number', 'state.tick must be a number');
   assert.ok(state.tick >= tickCount, 'ticks must have advanced by at least the manual tick count');
+});
+
+// ---------------------------------------------------------------------------
+// FEAT-2326609711 inc1 — DESTRUCTIVE ROUND r2 (Opus, independent) regressions.
+//
+// GAP FOUND IN r2: the r1 REJECT called out DemandDock's BROWNOUT banner as an
+// ungated brownout CONSEQUENCE. r2 correctly routed it through data.ts's
+// isBrownoutActive() SSOT — but NOTHING tested it. Proven by mutation: changing
+// DemandDock.tsx's `const brownoutActive = isBrownoutActive(state);` to
+// `isBrownoutActive(state) || state.population > 0` (a compiling mutation that
+// makes the BROWNOUT banner show on every populated city, covered or not) left
+// `npx tsc --noEmit` clean AND all 50 grid-import/brownout/engine/meter tests
+// GREEN. Aaron's inc1 ruling names the banner explicitly ("no banner" while
+// cover is on), so it gets a real guard here.
+//
+// DemandDock is driven through SimContext directly (not SimProvider, which
+// builds its own fresh no-shortage city and cannot be given a covered-shortage
+// fixture).
+async function renderDemandDock(gridImportEnabled: boolean) {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimContext } = await import('../src/sim/simContext.ts');
+  const { BusyProvider } = await import('../src/components/Busy.tsx');
+  const { DemandDock } = await import('../src/components/left/DemandDock.tsx');
+  const { initialState } = await import('../src/sim/engine.ts');
+  const { powerStats, brownoutOf, isBrownoutActive } = await import('../src/sim/data.ts');
+
+  // A city with a REAL physical power deficit (need 200 MW, cap 192 MW).
+  const state: any = { ...initialState(), buildings: [], population: 16667, gridImportEnabled };
+  let id = 900001;
+  for (let i = 0; i < 10; i++) state.buildings.push({ id: id++, spec: 'com_shop', x: (id % 900) + 5, y: 5 });
+  for (let i = 0; i < 24; i++) state.buildings.push({ id: id++, spec: 'pow_wind', x: (id % 900) + 5, y: 9 });
+
+  const pw = powerStats(state);
+  assert.ok(pw.need > pw.cap, `fixture precondition: real deficit, need ${pw.need} > cap ${pw.cap}`);
+  assert.equal(brownoutOf(state).active, true, 'fixture precondition: the PHYSICAL deficit is real either way');
+  assert.equal(isBrownoutActive(state), !gridImportEnabled, 'fixture precondition: the SSOT tracks the toggle');
+
+  const ctx: any = {
+    state,
+    dispatch: () => {},
+    cityName: 'Attackville',
+    listSaves: () => [],
+    listRecent: () => [],
+    saveGame: async () => true,
+    saveGameAs: async () => {},
+    loadGame: async () => {},
+    loadNamed: async () => {},
+    renameCity: () => true,
+  };
+  return renderToString(
+    React.default.createElement(
+      SimContext.Provider,
+      { value: ctx },
+      React.default.createElement(BusyProvider, {
+        children: React.default.createElement(DemandDock),
+      })
+    )
+  );
+}
+
+test('r2 ATTACK: DemandDock shows NO brownout banner while Grid Import cover is ON, despite a real deficit', async () => {
+  const html = await renderDemandDock(true);
+  assert.ok(html.length > 0, 'DemandDock must actually render');
+  assert.ok(!/brownout-banner/.test(html), 'the brownout-banner element must be absent while cover buys the shortfall in');
+  assert.ok(
+    !/BROWNOUT: demand exceeds supply/.test(html),
+    "Aaron's inc1 ruling: a covered shortfall raises NO brownout banner of any kind"
+  );
+  assert.ok(!/NaN|Infinity/.test(html), 'no NaN/Infinity leaked into the panel');
+});
+
+test('r2 ATTACK: DemandDock DOES show the brownout banner for the identical deficit with cover OFF (a real gate, not dead code)', async () => {
+  const html = await renderDemandDock(false);
+  assert.ok(/brownout-banner/.test(html), 'the legacy brownout banner must still fire when cover is off');
+  assert.ok(/BROWNOUT: demand exceeds supply/.test(html), 'the legacy banner text must still render');
 });

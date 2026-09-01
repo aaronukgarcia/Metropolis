@@ -1,4 +1,4 @@
-import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, brownoutOf } from '../../sim/data';
+import { SPECS, serviceDemandOf, findSpot, pickAutoSpec, isBrownoutActive } from '../../sim/data';
 import { useSim } from '../../sim/simContext';
 import { demandOf, levelOf } from '../../sim/engine';
 import { useBusy } from '../Busy';
@@ -11,9 +11,11 @@ export function DemandDock() {
   const services = serviceDemandOf(state);
   const auto = pickAutoSpec(state);
   // BUG-393: visible brownout signal — banner + power-row highlight while
-  // power need exceeds capacity. Derived from the same brownoutOf SSOT as
-  // the income/wellbeing penalties, so the warning can never disagree.
-  const brownout = brownoutOf(state);
+  // power need exceeds capacity. FEAT-2326609711 inc1 fix: derived from
+  // isBrownoutActive(), the SAME SSOT the income/wellbeing penalties read,
+  // so the banner is suppressed exactly when Grid Import cover buys the
+  // shortfall in — it can never disagree with the other two consumers.
+  const brownoutActive = isBrownoutActive(state);
 
   function runAuto() {
     if (!auto) return;
@@ -27,7 +29,7 @@ export function DemandDock() {
   return (
     <Panel title="Demand">
       <div className="demand-strip vertical">
-        {brownout.active && (
+        {brownoutActive && (
           <div className="brownout-banner" role="alert">
             BROWNOUT: demand exceeds supply
           </div>

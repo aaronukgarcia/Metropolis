@@ -17,7 +17,9 @@ import {
   lineUsageOf,
   onlineResidentsCapacity,
   offlineResidentsByReason,
+  powerStats,
 } from '../../sim/data';
+import { GRID_IMPORT_TARIFF_PER_MW, GRID_IMPORT_ENABLED_DEFAULT } from '../../sim/fiscal';
 import type { PolicyId, TaxRates } from '../../sim/types';
 import { Panel } from '../Tabs';
 import { fmtMoney, fmtMoneyEach, fmtNum, fmtPct, formatPower } from '../../sim/utils';
@@ -37,6 +39,7 @@ const TABS = [
   { id: 'population', label: 'Population' },
   { id: 'rates', label: 'Rates' },
   { id: 'units', label: 'Units' },
+  { id: 'power', label: 'Power' },
   { id: 'water', label: 'Water' },
   { id: 'waste', label: 'Waste' },
   { id: 'lines', label: 'Lines' },
@@ -62,6 +65,7 @@ export function RightDock() {
       {tab === 'population' && <PopulationTab />}
       {tab === 'rates' && <RatesTab />}
       {tab === 'units' && <UnitsTab />}
+      {tab === 'power' && <PowerTab />}
       {tab === 'water' && <WaterTab />}
       {tab === 'waste' && <WasteTab />}
       {tab === 'lines' && <LinesTab />}
@@ -302,6 +306,67 @@ function UnitsTab() {
           ))}
         </tbody>
       </table>
+    </>
+  );
+}
+
+// FEAT-2326609711 inc1 (AC-9/AC-10) — Power panel: capacity/need readout,
+// imported MW, and the "Use external power cover" toggle. gridImportEnabled
+// falls back to the same GRID_IMPORT_ENABLED_DEFAULT the engine uses for a
+// legacy state predating this field (mirrors engine.ts's `?? ` read sites).
+export function PowerTab() {
+  const { state, dispatch } = useSim();
+  const pw = powerStats(state);
+  const importOn = state.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT;
+  const importedMw = importOn ? Math.max(0, pw.need - pw.cap) : 0;
+  const shortfallMw = Math.max(0, pw.need - pw.cap);
+  const importCostPerTick = Math.round(importedMw * GRID_IMPORT_TARIFF_PER_MW);
+  return (
+    <>
+      <div className="tiles">
+        <div className={`tile ${pw.cap >= pw.need ? 'pos' : 'neg'}`}>
+          <div className="n">{formatPower(pw.cap)}</div>
+          <div className="l">Capacity</div>
+        </div>
+        <div className="tile">
+          <div className="n">{formatPower(pw.need)}</div>
+          <div className="l">Need</div>
+        </div>
+        <div className={`tile ${importedMw > 0 ? 'neg' : ''}`}>
+          <div className="n">{formatPower(importedMw)}</div>
+          <div className="l">Imported MW</div>
+        </div>
+      </div>
+      <div className="wb-row">
+        <div>
+          <b>Use external power cover</b>
+          <p className="muted">
+            Buys in any shortfall from the regional grid at {fmtMoneyEach(GRID_IMPORT_TARIFF_PER_MW)}/MW/tick
+            instead of a brownout. Off forces local self-sufficiency (legacy shortage penalty applies).
+          </p>
+        </div>
+        <button
+          className={`btn toggle ${importOn ? 'on' : ''}`}
+          onClick={() => dispatch({ type: 'toggleGridImport' })}
+        >
+          {importOn ? 'On' : 'Off'}
+        </button>
+      </div>
+      {shortfallMw > 0 && importOn && (
+        <p className="hint">
+          Importing {formatPower(importedMw)} this tick — {fmtMoney(importCostPerTick)}/tick (Grid Import,
+          shown in the Earnings tab).
+        </p>
+      )}
+      {shortfallMw > 0 && !importOn && (
+        <p className="hint warn-text">
+          Shortfall not covered — brownout active, powered business income is reduced. Toggle external
+          cover back on, or build more local capacity.
+        </p>
+      )}
+      {shortfallMw === 0 && (
+        <p className="hint">No shortfall — capacity meets or exceeds demand.</p>
+      )}
     </>
   );
 }
@@ -563,7 +628,7 @@ function LinesTab() {
   );
 }
 
-function EarningsTab() {
+export function EarningsTab() {
   const { state } = useSim();
   const c = countByKind(state.buildings);
   const rows = [
@@ -603,6 +668,11 @@ function EarningsTab() {
   ];
   const totalOut = state.lastFlows.outflows.reduce((a, b) => a + b.value, 0);
   const totalIn = rows.reduce((a, r) => a + r.gross, 0);
+  // FEAT-2326609711 inc1 (AC-8) — Grid Import outflow row: rendered ONLY
+  // when it is actually occurring this tick (present in lastFlows.outflows,
+  // mirroring the "absent, not zero" rule Grid Export follows). Reads the
+  // CURRENT tick's recorded flow, never a stale/previous value.
+  const gridImportFlow = state.lastFlows.outflows.find((f) => f.label === 'Grid Import');
   return (
     <table className="table">
       <thead>
@@ -617,6 +687,14 @@ function EarningsTab() {
             <td>{r.count > 0 ? fmtMoneyEach(r.gross / r.count) : '—'}</td>
           </tr>
         ))}
+        {gridImportFlow && (
+          <tr>
+            <td>Grid Import</td>
+            <td className="muted">external power cover</td>
+            <td className="out">{fmtMoney(-gridImportFlow.value)}</td>
+            <td />
+          </tr>
+        )}
         <tr>
           <td><b>Total in</b></td><td /><td className="in"><b>{fmtMoney(totalIn)}</b></td><td />
         </tr>

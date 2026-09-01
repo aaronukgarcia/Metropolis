@@ -12,6 +12,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeFlows } from '../src/sim/engine.ts';
 import { SPECS } from '../src/sim/data.ts';
+import { GRID_IMPORT_OUTFLOW_LABEL } from '../src/sim/fiscal.ts';
 
 // Minimal SimState with no loans, no policies, default tax rates.
 function baseState() {
@@ -81,6 +82,12 @@ test('computeFlows: all kinds with upkeep are bucketed to outflow streams', () =
       'Wages',
       'Transit Subsidy',
       'Loan Interest',
+      // FEAT-2326609711 inc1: this fixture's single power-kind building (8 MW)
+      // is below its pop-1000 demand (12 MW), so Grid Import legitimately
+      // fires (gridImportEnabled defaults ON) — a shortfall-priced outflow,
+      // NOT a per-building `upkeep` bucket. Exclude it exactly like the
+      // consistency.ts upkeep-total-matches reconciliation does.
+      GRID_IMPORT_OUTFLOW_LABEL,
     ].includes(o.label);
   });
 
@@ -124,7 +131,10 @@ test('computeFlows: landmark, residential, station upkeep are captured', () => {
 
   // Extract upkeep-only outflows.
   const upkeepOutflows = outflows.filter((o) => {
-    return !['Wages', 'Transit Subsidy', 'Loan Interest'].includes(o.label);
+    // FEAT-2326609711 inc1: no power plant is placed here, so pop-1000 demand
+    // (12 MW) is a total shortfall and Grid Import legitimately fires — not a
+    // per-building `upkeep` bucket, exclude it (see the test above).
+    return !['Wages', 'Transit Subsidy', 'Loan Interest', GRID_IMPORT_OUTFLOW_LABEL].includes(o.label);
   });
 
   const totalUpkeepOutflow = upkeepOutflows.reduce((sum, o) => sum + o.value, 0);

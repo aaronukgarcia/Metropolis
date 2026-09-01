@@ -21,6 +21,7 @@ import {
   wagesPerTick,
   applyOutflowPolicies,
   UPKEEP_BUCKET,
+  GRID_IMPORT_OUTFLOW_LABEL,
 } from './fiscal.ts';
 
 export interface ConsistencyCheck {
@@ -427,7 +428,14 @@ export function runConsistencyChecks(s: SimState): ConsistencyReport {
       // rate) — a tonnage-based operating cost, NOT recurring per-building `upkeep` —
       // exclude it from the upkeep-total reconciliation exactly like Refuse Collection.
       // (The processors' FIXED upkeep IS a normal Water & Waste bucket and stays in.)
-      flow.label !== 'Waste Disposal'
+      flow.label !== 'Waste Disposal' &&
+      // FEAT-2326609711 inc1: 'Grid Import' is an external-tariff outflow keyed off
+      // the power SHORTFALL (importedMW * tariff) — not a per-building `upkeep`
+      // bucket — exclude it from the upkeep-total reconciliation exactly like
+      // Refuse Collection / Waste Disposal (both other tonnage/shortfall-based
+      // operating costs). Without this, any tick with an active Grid Import
+      // outflow would falsely diverge this check (upkeepBuckets never includes it).
+      flow.label !== GRID_IMPORT_OUTFLOW_LABEL
     ) {
       actualUpkeep += flow.value;
     }

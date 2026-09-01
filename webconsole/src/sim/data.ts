@@ -11,6 +11,9 @@ import { specUnlocked } from './engine.ts';
 import { feederTrafficWeight, trafficActivity } from './engine.ts';
 // FEAT-159: DEBUG-ONLY per-class fast-build override (off by default).
 import { scaleConstructionTicks } from './debugBuildSpeed.ts';
+// FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
+// so importing GRID_IMPORT_ENABLED_DEFAULT here creates no cycle.
+import { GRID_IMPORT_ENABLED_DEFAULT } from './fiscal.ts';
 
 export const MAP_W = 440;
 export const MAP_H = 260;
@@ -1933,6 +1936,31 @@ export function brownoutOf(s: SimState): Brownout {
 }
 
 /**
+ * FEAT-2326609711 inc1 fix (r2, closing the r1 HALF-WIRED DEFECT) — SINGLE
+ * SOURCE OF TRUTH for whether a power deficit's CONSEQUENCES (income
+ * penalty, wellbeing Utilities collapse, the DemandDock brownout banner +
+ * power-row alert escalation) should apply THIS tick.
+ *
+ * brownoutOf() reports the raw PHYSICAL fact — local capacity < demand —
+ * and stays deliberately toggle-BLIND: several callers (incl. the
+ * destructive-round attack suite, attack-grid-import.test.mjs) rely on it
+ * reflecting powerStats alone, e.g. to sanity-check that a real deficit
+ * exists before asserting the toggle suppresses its consequences. Aaron's
+ * ruling (2026-09-01, inc1 is price-premium-only): while Grid Import cover
+ * is ON, a shortfall is bought in from the regional grid and is NOT a
+ * brownout of any kind — no income penalty, no wellbeing/utilities
+ * collapse, no BROWNOUT banner. This function is the ONE place that
+ * combines the physical fact with the toggle to answer "does the brownout
+ * bite this tick" — every consumer of a brownout CONSEQUENCE must read it,
+ * never recompute `!(s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT)`
+ * locally (GR#3 single source of truth).
+ */
+export function isBrownoutActive(s: SimState): boolean {
+  const gridImportOn = s.gridImportEnabled ?? GRID_IMPORT_ENABLED_DEFAULT;
+  return brownoutOf(s).active && !gridImportOn;
+}
+
+/**
  * FEAT-1972079878 inc1: total jobs capacity, including auto-scaled tiers.
  * For buildings with capacityTiers, uses capacityAtTier(sp, building.capacityTier ?? 0).
  * For others, uses sp.jobs or default commercial/industrial job counts.
@@ -2060,7 +2088,13 @@ export function serviceDemandOf(
     // deficit branch deliberately skips the population ramp `f`: a brownout
     // is a brownout however small the town. `alert` drives the DemandDock
     // banner + row highlight. Curve constants are PLACEHOLDER (balance regime).
-    const deficit = c.need > 0 && c.coverage < 1;
+    //
+    // FEAT-2326609711 inc1 fix: routed through isBrownoutActive() (this
+    // file's SSOT, GR#3) instead of recomputing the raw coverage<1 test
+    // locally — while Grid Import cover is ON a covered shortfall is bought
+    // in, not a brownout, so this row must not escalate or raise `alert`
+    // ("— BROWNOUT" tooltip) either.
+    const deficit = c.need > 0 && c.coverage < 1 && isBrownoutActive(s);
     const value = deficit
       ? Math.round(Math.min(100, BROWNOUT_INDEX_FLOOR + (1 - c.coverage) * BROWNOUT_INDEX_SLOPE))
       : Math.round(demandIndexOf(c.coverage) * f);
