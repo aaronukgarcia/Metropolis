@@ -790,10 +790,6 @@
             "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
           },
           {
-            "key": "engine.market",
-            "outboundGuid": "cef595b0-f597-46b7-9143-2154175859c4"
-          },
-          {
             "key": "engine.refuse",
             "outboundGuid": "f4f37400-9913-4c53-b2eb-675921b8dc99"
           },
@@ -3898,11 +3894,6 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
-          },
-          {
-            "key": "int.serializer",
-            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
-            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

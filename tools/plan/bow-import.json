@@ -722,8 +722,7 @@
       "guidOut": "cef595b0-f597-46b7-9143-2154175859c4",
       "deps": [
         "engine.core",
-        "foundation.data",
-        "int.serializer"
+        "foundation.data"
       ]
     },
     {

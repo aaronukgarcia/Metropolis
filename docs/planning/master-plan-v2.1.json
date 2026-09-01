@@ -1381,14 +1381,12 @@
       },
       "deps": [
         "engine.core",
-        "foundation.data",
-        "int.serializer"
+        "foundation.data"
       ],
       "calls": [
         "engine.core",
         "foundation.data",
-        "foundation.errors",
-        "int.serializer"
+        "foundation.errors"
       ],
       "sprint": 4
     },
