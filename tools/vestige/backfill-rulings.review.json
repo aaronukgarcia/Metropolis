@@ -1,0 +1,1363 @@
+{
+  "generatedAt": "2026-09-01T18:49:55.820Z",
+  "sourceRowCount": 82,
+  "entryCount": 82,
+  "flaggedCount": 32,
+  "note": "Reviewable proposal only -- nothing here has been ingested into Vestige. Confirm/clear each possible_supersedes entry and set approved:true per row before the lead runs the ingest pass via tools/vestige/ruling-ingest.js.",
+  "entries": [
+    {
+      "itemCode": "MOD-001",
+      "date": "2026-08-08",
+      "text": "BLOCKED pending Aaron's decision: this item predates the master document. M0-ENG §5 specifies a Go monorepo (cmd/metropolis, internal/..., no app/ directory) and M0-ENG §3 mandates version/build info injected via -ldflags, never hand-maintained files. The app/package.json + app/src/lib/version.ts layout is the Prix Six pattern and appears superseded by foundation.repo (MOD-002). Options: (a) cancel this and adapt the version guard to the Go layout, or (b) keep a minimal version file for hook compatibility. Recommendation: (a).",
+      "topic_guess": "blocked pending predates",
+      "low_confidence": true,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "MOD-069",
+      "date": "2026-08-09",
+      "text": "Azure CONFIRMED as the cloud platform until otherwise agreed — this closes the docs/cloud.md open decision (was: 'keep Azure, low confidence, revisit at M2'). Existing garcia.ltd Azure estate is reusable: storage account garcialtdstorage (RG 'garcia', region uksouth, Pay-As-You-Go sub 8e1afaa3-1ce8-4269-9f57-71fdd88c70c3), already serving Prix Six's WhatsApp worker via blob container 'whatsapp-session'; ACR prixsixacr; Container Apps env prixsix-env with scale-to-zero. LEAD NOTE for whoever builds this: Metropolis Blob saves take their OWN container in garcialtdstorage — never reuse whatsapp-session (different lifecycle, different owner, Prix Six ops would be able to delete our saves). Scale-to-zero Container Apps is the proven cost pattern here (~USD4-10/mo vs 32 always-on). Prix Six's hard-won lesson applies to any Metropolis worker: exactly ONE instance per stateful session or you get connectionReplaced ping-pong.",
+      "topic_guess": "azure cloud platform",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "SEC-020",
+      "date": "2026-08-09",
+      "text": "ALL NINE, FULL PIPELINE. Every vulnerable type gets a runtime atomic self-check, each through junior -> Tester -> Destructive re-attack. Rejected the tiered option I recommended (guard only the severe, externally-constructible ones and document the rest) and the vet-only option. LEAD NOTE ON WHY THIS IS DEFENSIBLE despite being the expensive choice: go vet copylocks covers our own literal copies today, but this session has TWICE demonstrated copy forms vet does not catch, and the consequences already observed are a fatal concurrent map write, a permanent silent deadlock, and a send-on-closed-channel panic. A documented convention would have been the fifth consecutive round of relying on prose where the code could enforce (Weakness pattern #1). SEQUENCING, to avoid collisions with in-flight work: (1) finish and commit the engine.core chain (SEC-003/005/014/016/018/019) which is uncommitted and interdependent; (2) then waves by package, one agent per package, never two in the same package concurrently. Order by consequence: InProcTransport first (it reopens BUG-007 send-on-closed-channel panic), then engine/stub StubEngine and engine/debug State (State backs Speed8xGate wired into Engine), then foundation registry/solver Registry and errs Logger and protocol SeqTracker, then the two UI screens. RenderLoop broken-CAS ownership is a DIFFERENT mechanism and gets its own item, not folded in.",
+      "topic_guess": "pipeline vulnerable runtime",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "SEC-020",
+      "date": "2026-08-10",
+      "text": "are done and the HAND-SWEEP STOPS — BUG-024 replaces it with a mechanical AST-derived gate, per the QA audit finding that the sweep ran past its useful point with no declared exit criterion.",
+      "topic_guess": "hand-sweep stops replaces",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "SEC-020",
+          "date": "2026-08-09",
+          "sharedKeywords": [],
+          "sameItem": true,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-061",
+      "date": "2026-08-11",
+      "text": "AARON'S DECISION (2026-08-11, relayed via Bob): BUILD THE REDACT COMMAND. The one-off raw-SQL sanction is DECLINED — it would fix two rows while leaving the store permanently uncorrectable, and this is the second defect this week blocked by a missing mechanism (the item's own analysis). MOD-032 proves nobody has to be looking for this to happen again. BINDING DESIGN CONSTRAINTS for the build: (1) The forbidden text never transits the command line or the audit trail — no --match argument carrying a real name (shell history and session transcripts exist). The redact command reuses the codename guard's fragment-assembled pattern set to DETECT occurrences itself: 'node claude-bow.js redact <CODE>' scans title/desc, replaces every hit with [REDACTED-GR22], reports only counts and field names. (2) Auditable, never silent: auto-comment on the item recording pattern-class + count + field — NEVER the text; the comment lives in the same DB, quoting the redacted text would recreate the bug one table over. (3) Original text stored nowhere — no backup column, no log line with the pre-image. (4) Also accept --comment <id>: bow_comments is prose-bearing and the obvious next place this leak class lands. AFTER BUILD: run on ASM-150 and MOD-032, then Tester verifies the way Tester-2 verified the guard — payloads through the real contract, not assumed coverage, including a negative control that must pass through untouched (prove the detector can fail). PIPELINE NOTE: root tooling, version-guard-exempt, but GR#22-adjacent — the junior's brief must include the fragment-assembly technique so they never type a real name while writing tests.",
+      "topic_guess": "relayed build redact",
+      "low_confidence": true,
+      "possible_supersedes": [
+        {
+          "itemCode": "SEC-020",
+          "date": "2026-08-09",
+          "sharedKeywords": [
+            "mechanism",
+            "silent",
+            "tester",
+            "pipeline",
+            "junior"
+          ],
+          "sameItem": false,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-214",
+      "date": "2026-08-11",
+      "text": "[lead, partial] Bill, 2026-08-11: the working tree now carries a vendored data/terrain50/ (uncommitted, arrived with the recovered agent work), which may resolve the data half of this. Remaining for Aaron regardless: provenance/licence confirmation for that vendored data (OS Terrain 50 is OGL-licensed -- the licence FILE and attribution text are what AC-13 needs) and the AC-22 georef.json edit sanction. In Aaron's decision batch today.",
+      "topic_guess": "partial working carries",
+      "low_confidence": true,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-206",
+      "date": "2026-08-11",
+      "text": "[lead ruling] ACCEPT. Procedural placeholder terrain outside the start tile is the only buildable choice without bulk tile data, it is honestly documented at both code sites, and the replace-tile-by-tile importer path is the right forward shape. Standing caveat rides with it: no QA/balance pass may treat expansion-extent elevations as survey-accurate. NOTE: a vendored data/terrain50/ arrived in the working tree -- its provenance/licence is in Aaron's decision batch (ASM-214); if it contains real tiles beyond the start tile, the importer work becomes dispatchable.",
+      "topic_guess": "accept procedural placeholder",
+      "low_confidence": true,
+      "possible_supersedes": [
+        {
+          "itemCode": "ASM-214",
+          "date": "2026-08-11",
+          "sharedKeywords": [
+            "terrain",
+            "vendored",
+            "arrived",
+            "working",
+            "provenance",
+            "licence"
+          ],
+          "sameItem": false,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-084",
+      "date": "2026-08-14",
+      "text": "Phase-1 deliverable (asm-disposition.md, committed fa32ec4-adjacent) reviewed by head dev with FEAT-085: APPROVED WITH AMENDMENTS — see the full verdict on FEAT-085. Key amendments touching this item: A1 re-bucket ASM-353/355/374/375 to fold-into-C6 (not confirm-and-close); A2 close the ~55 balance-number AD items citing Aaron's standing balance-number-regime blanket ruling, leaving ~13 genuine Aaron decisions; A3 ASM-150 (GR#22 gap) pulled forward for immediate scrub; A4 disposition routing wins where FEAT-085 C3's fold list over-claims. Phase 2 may start now (agents confirmed alive + Aaron's get-on-with-it directive) with the mandated snapshot re-pull first.",
+      "topic_guess": "phase- deliverable asm-disposition",
+      "low_confidence": true,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-041",
+      "date": "2026-08-15",
+      "text": "traffic flow accounting uses CANONICAL-ORDER FLOAT (determinism via ordered accumulation), not fixed-point. Unblocks MOD-023's numeric-type question; MOD-023 still carries its own remaining dependency.",
+      "topic_guess": "traffic accounting canonical-order",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "MOD-045",
+      "date": "2026-08-16",
+      "text": "): code in internal/engine/farming/ is the FEAT-104 farm-types catalogue, not this farming-engine module. This module (BDI/pollinator/aquifer) remains UNBUILT. Finding SEC-120 belongs to FEAT-104.",
+      "topic_guess": "internal engine farming",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "MOD-059",
+      "date": "2026-08-16",
+      "text": "): code in internal/engine/fdi/ is the FEAT-101 pharma-campus catalogue, not this FDI-engine module. This module (multinational attraction) remains UNBUILT. Findings SEC-121..124 belong to FEAT-101.",
+      "topic_guess": "internal engine feat-",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "MOD-045",
+          "date": "2026-08-16",
+          "sharedKeywords": [
+            "catalogue",
+            "module",
+            "remains",
+            "unbuilt"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "MOD-060",
+      "date": "2026-08-16",
+      "text": "): code is a compile-stub (STUB-FOR-BASELINE) exposing only IntermodalTransfer/IntermodalAccount, to unblock engine.freight per GR#20 stub-forever. Full scope (AC-1/AC-2 fleet accounting, routes, scheduling) remains open. Finding SEC-125 (minTonnesPerMovement) still to fix.",
+      "topic_guess": "compile-stub stub-for-baseline exposing",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-077",
+      "date": "2026-08-18",
+      "text": "FEAT-084 SF re-classified AD: reject-vs-sanitize policy ruling (pattern #4 scope at render boundaries) is a Bill/Aaron decision, not a spec fold. Leave open.",
+      "topic_guess": "feat- re-classified reject-vs-sanitize",
+      "low_confidence": true,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-078",
+      "date": "2026-08-18",
+      "text": "FEAT-084 SF re-classified AD: reject-vs-warn policy ruling (shell-output-looking text in BOW descriptions) is a Bill/Aaron decision, not a spec fold. Leave open.",
+      "topic_guess": "feat- re-classified reject-vs-warn",
+      "low_confidence": true,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-202",
+      "date": "2026-08-18",
+      "text": ". ACs: (1) crown model + per-ID tenure (bottom-out to Crown), (2) designed-in bidirectional consistency audit once/game-year — can genuinely fail (3 mismatch classes + unqueryable-input FAILURE, GR#17), (3) findings surface to HMRC/fiscal (not a private log), (4) compulsory purchase flips tenure + posts finance + audit still passes, (5) maturity tracked deterministically from maintenance/build inputs (GR#21), (6) all magnitudes data placeholders. NEW MODULE — nothing registered (foundation.registry is the ERROR registry, naming collision flagged). 4 escalation clusters: Bev edge registrations (world/build/finance/households/policies/attract/maintenance/fiscal + findings sink), Aaron rulings (CP mechanics, who fires ownership transfers, maturity boundary, land value source = FEAT-201), module split, and DEPS: engine.policies registered but ABSENT from origin/main — housing-association gate blocked until it lands. [FEAT-202]",
+      "topic_guess": "crown model per-id",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-486",
+      "date": "2026-08-19",
+      "text": "; not auto-closable.",
+      "topic_guess": "auto-closable",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-1232",
+      "date": "2026-08-20",
+      "text": "adopt S as canonical, amend master doc s12 to document it. Closes on the docs amendment - queued as a docs task.",
+      "topic_guess": "adopt canonical amend",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-1233",
+      "date": "2026-08-20",
+      "text": "the NON-spiral ErrGhostCity renames (mechanical rename + registry note); engine.spiral keeps the canonical name. Queued as a small fix task.",
+      "topic_guess": "non-spiral errghostcity renames",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-211",
+      "date": "2026-08-20",
+      "text": "on the three open questions: F9 ticker = GLOBAL CHROME (band under every screen; F9 toggles visibility, not a ScreenID); HUD = CONTEXT-SENSITIVE (reads ActiveGrammar's registration tree + globals - follow-up increment); F10 menu = MODAL OVERLAY (floats above the active screen, input captured, Escape returns exactly - the registry gains one modal slot). Increment 2+ scope.",
+      "topic_guess": "three questions ticker",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-208",
+      "date": "2026-08-20",
+      "text": "closing the design questions: view taxonomy = WHOLE-VIEW patches with omitempty (sub-views only when a patch demonstrably outgrows the transport); Delta size ceiling = DEFERRED until a real patch approaches the wire caps; publish cadence stays per-wake coalesced. All five design questions now closed (boot swap + BUG-294 sequencing were ruled during inc2).",
+      "topic_guess": "closing design questions",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-142",
+      "date": "2026-08-20",
+      "text": "criteria-first with a HARD GATE - Bill authors the acceptance criteria; they go to Aaron for balance-regime + design review BEFORE any code; magnitudes land as data placeholders per the regime.",
+      "topic_guess": "criteria-first authors acceptance",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "ASM-1233",
+      "date": "2026-08-20",
+      "text": "FIX (lane/asm1233, worktree metropolis-asm1233): Investigated the ErrGhostCity name collision. FINDING: the mechanical rename Aaron ruled (2026-08-20) ALREADY LANDED on main in commit e2bfcb6 (recorded on this item) -- the non-spiral error engine.projections/errors.go:94 was renamed ErrGhostCityProviderShape -> ErrCurveProviderMissingPeak (still MET-G108, code identity stable), and MET-G108's message no longer pattern-collides with ghost-city. The two sites are now distinct: (1) engine.projections ErrCurveProviderMissingPeak = MET-G108 (provider-registration shape mismatch), used at deathwarnings.go:163; (2) engine.spiral ErrGhostCityNoWarning = MET-G1102 (canonical ghost-city death path, kept per ruling), used at death.go:102, plus DeathGhostCity enum. No bare ErrGhostCity constant exists anywhere; registry has no duplicate name or code. ADDED a regression test pinning the fix so the collision cannot silently reappear: TestASM1233ProviderShapeCodeDistinctFromSpiralGhostCity (internal/engine/projections/errors_render_test.go) asserts the projections site raises MET-G108 at runtime and that MET-G108 != the spiral MET-G1102 death code. GATES (worktree, all green): gofmt -l clean; go vet clean; go test -race -count=2 on engine.projections + engine.spiral OK; errs source-scan OK; full go test ./... exit 0, zero failures; node tools/plan/add-error.js check = OK 792 codes 100 reservations no violations. No verdict recorded (I am the author). Ready for lead audit + independent destructive round; the only working-tree change is the added test.",
+      "topic_guess": "worktree metropolis-asm investigated",
+      "low_confidence": true,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-202",
+          "date": "2026-08-18",
+          "sharedKeywords": [
+            "collision",
+            "error",
+            "mismatch",
+            "audit"
+          ],
+          "sameItem": false,
+          "explicitMarker": true
+        },
+        {
+          "itemCode": "ASM-1233",
+          "date": "2026-08-20",
+          "sharedKeywords": [
+            "errghostcity",
+            "mechanical",
+            "rename",
+            "non-spiral",
+            "spiral",
+            "canonical"
+          ],
+          "sameItem": true,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-146",
+      "date": "2026-08-21",
+      "text": "before any code dispatch.",
+      "topic_guess": "dispatch",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-204",
+      "date": "2026-08-21",
+      "text": "on transaction-tax-only scope vs gating on FEAT-202 (recommended (a) transaction-only). AC-1..5: PAYE+NI per-netizen withholding (distinct lines), corp on profits not revenue, stamp/council/import-duty with explicit negative cases, data-file rates extending tax_instruments.json (ni+stampDuty NEW), collections post through engine.finance ledger. Balance regime: structure-only assertions, rate placeholders + delegated proposal. Awaiting Bev GR#25 + Aaron ruling.",
+      "topic_guess": "transaction-tax-only scope gating",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-353",
+      "date": "2026-08-22",
+      "text": "STOP THE BLEEDING ONLY. Switch to local-merge-and-push so GitHub never rewrites the committer again; leave the 223 historic commits as they are. Rationale accepted: the address is already public, and rewriting 223 commits on a public repo changes every hash - breaking clones, forks, open PRs, and any BOW git_ref pointing at an old hash - for no recovery of privacy already lost. This item is therefore NOT a history-rewrite task. Remaining scope: (1) the merge policy change (done - CLAUDE.md updated, see below), (2) the %ae%n%ce verification fix (done, commit 7cdbacd), (3) confirm no future commit leaks. Do not re-raise the rewrite option unless Aaron reopens it.",
+      "topic_guess": "bleeding switch local-merge-and-push",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-352",
+      "date": "2026-08-22",
+      "text": "on the FEAT-146 tier-ladder conflict (raised by Bill, related to this item's roster/authority drift class): THE CODE WINS. internal/engine/unlocks/ladder.go's 13-tier ladder (100/500/5k/20k/250k...) is authoritative; the concept doc's 500/2000/10000 is stale prose and gets CORRECTED to match. No code change, no re-tune. Rationale: GR#3 - one source of truth, and the shipped ladder is the one other work is already balanced against. Action for Bill: correct the concept doc + FEAT-146 criteria to cite ladder.go, then FEAT-146 and FEAT-142 are unblocked on that axis.",
+      "topic_guess": "feat- tier-ladder conflict",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-332",
+      "date": "2026-08-23",
+      "text": "go STRUCTURAL — fail-closed deny-by-default, stop enumerating bypass spellings. The r15 REJECT's 8 new spellings (base64 -di, openssl enc -a, env-prefix, gzip/xz -d, xargs sh -c, command-substitution, backslash-newline, PowerShell FromBase64String|iex) prove the denylist is asymptotically incomplete ('a regex is not a shell parser'). Flip the commit-recognition layer to an ALLOWLIST: proceed only on a plain benign git-commit form (git commit, -m/-F/-a/--amend) with zero shell indirection (no pipes/redirection//backticks/env-prefix/wrappers/heredoc/backslash-newline/iex). Anything with an unattributable shell metacharacter -> DENY fail-closed. False-positive deny is recoverable; false-negative allow is the hole.",
+      "topic_guess": "structural fail-closed deny-by-default",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-231",
+      "date": "2026-08-23",
+      "text": "now requires plain git commit with zero structural indirection. The -c flag is classified as 'indirect' and denied fail-closed (structuralIndirectionDenyMessage). Inline aliases are now blocked as a side effect of rejecting all -c usage, which is stricter than the original resolveAlias fix. Recommend lead verify + close.",
+      "topic_guess": "requires plain commit",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-332",
+          "date": "2026-08-23",
+          "sharedKeywords": [
+            "plain",
+            "structural",
+            "indirection",
+            "fail-closed"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-362",
+      "date": "2026-08-25",
+      "text": "(1) keyboard build path - stub auto-seed vs real Z-key grammar; (3) money circulation - PostHouseholdSpend lands in AcctFirms untracked by composition, SettleConstruction breaks budget closure; (4) per-citizen wealth crediting; (5) households inert. Lead to review + dispatch round on the SetStructure increment, then decide the money-circulation design before blockers 3/4 build.",
+      "topic_guess": "keyboard build auto-seed",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-362",
+      "date": "2026-08-26",
+      "text": "SettleConstruction breaks budget closure, PostHouseholdSpend untracked account), #4 per-citizen wealth, #5 households inert. compose.go money-circ code reverted to trunk and parked.",
+      "topic_guess": "settleconstruction breaks budget",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-362",
+          "date": "2026-08-25",
+          "sharedKeywords": [
+            "settleconstruction",
+            "breaks",
+            "budget",
+            "closure",
+            "posthouseholdspend",
+            "untracked",
+            "per-citizen",
+            "wealth",
+            "households",
+            "inert"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079891",
+      "date": "2026-08-26",
+      "text": "DD1 (connectivity anchor: rec Option A map-edge+trunk+civic), DD2 (flash visual spec), DD3 (zero-upkeep offline), DD4 (legacy-save migration). Added to Aaron decision list.",
+      "topic_guess": "connectivity anchor option",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079881",
+      "date": "2026-08-26",
+      "text": "DD1-DD8 (road hierarchy/costs, snap radius, curve model, MK grid spacing, roundabout-as-building, legacy re-key). Compatible with FEAT-1972079891 connectivity ACs. Added to Aaron decision list.",
+      "topic_guess": "hierarchy costs radius",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079850",
+      "date": "2026-08-27",
+      "text": "], DD3: capacity contributions, DD4: rendering, DD5: coastal constraint, DD6: super-grid integration). Key fiscal seam: import/export flows route through lastFlows for Sankey conservation.",
+      "topic_guess": "capacity contributions rendering",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-394",
+      "date": "2026-08-27",
+      "text": "on household-formation timing, not a quick patch.",
+      "topic_guess": "household-formation timing quick",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079891",
+      "date": "2026-08-28",
+      "text": "DD1 = Option A (connected = reachable from map edges + motorway/rail trunk + civic anchor). DD4 = Option C (all buildings re-evaluate immediately on load; orphans go offline - consistent, fits hard-reset-replay direction). DD2 flash cadence/colour = placeholder values as specced (balance-number regime, tune later). DD3 zero-upkeep offline = already approved. BUILD UNBLOCKED. Dispatching dev (Haiku lane per Aaron 2026-08-28 directive).",
+      "topic_guess": "option connected reachable",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079891",
+          "date": "2026-08-26",
+          "sharedKeywords": [
+            "trunk",
+            "civic",
+            "anchor",
+            "offline",
+            "flash",
+            "zero-upkeep"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079849",
+      "date": "2026-08-28",
+      "text": "DD1 = direct super_pylon variant (no substation intermediary - simpler, ships fastest). DD2 capacity/cost/upkeep numbers remain placeholders under balance-number regime. DD3 rendering, DD5 fiscal bucket kind='power': lead defaults apply unless Aaron objects. DD4 legacy saves: mirror FEAT-1972079891 DD4=C (no grid data = no extra capacity, immediate evaluation). BUILD UNBLOCKED - queued behind the activation-prereqs webconsole code lane (shared-file constraint).",
+      "topic_guess": "direct super pylon",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079864",
+      "date": "2026-08-28",
+      "text": "DD1 = probabilistic per-tick incident generation (rates tied to density/age/coverage, deterministic from seed, placeholder rates). Remaining DDs lead-defaulted per Aaron blanket approval: ETA-in-ticks, nearest-station assignment, return-to-base, waste rota per criteria recommendation. BUILD UNBLOCKED - queues behind the webconsole code lane.",
+      "topic_guess": "probabilistic per-tick incident",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079878",
+      "date": "2026-08-28",
+      "text": "DD4 = demand-based auto-scale (utilization >85% placeholder AND online; mirrors road-monitor pattern). DD5 = delta-cost per tier (~15% base, placeholder, posts through the ledger). DD1/2/3/6 lead-defaulted per blanket approval: 3 housing tiers, hi-density office variant, mixed farm estate, offline buildings NEVER auto-scale. BUILD UNBLOCKED - queues behind webconsole code lane.",
+      "topic_guess": "demand-based auto-scale utilization",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079864",
+          "date": "2026-08-28",
+          "sharedKeywords": [
+            "lead-defaulted",
+            "blanket",
+            "approval",
+            "unblocked",
+            "queues",
+            "behind"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-439",
+      "date": "2026-08-31",
+      "text": "HYDRATE-AS-GENESIS. Save writes the snapshot as a new genesis baseline; subsequent actions journal on top; cross-build Rebuild replays snapshot+delta under new rules. Preserves replay-as-the-upgrade-path for every saved city. Buildable now - webconsole funnel queues behind the protocol adapter.",
+      "topic_guess": "hydrate-as-genesis writes snapshot",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-396",
+      "date": "2026-08-31",
+      "text": "GAME-OVER INSOLVENCY MODEL via IMF flow. Design verbatim: debt threshold (placeholder constant) trips an IMF bailout event lasting 1 game-year; assets LISTED IN CAPEX ORDER and the player is FORCED to sell, or enter administration mode; administration lasts 1 year max; a POPUP calls out the conditions when the mode is entered. Endgame ruling ('2 then 1'): a SECOND bailout on worse terms is available, then ONE final screen showing the stats of decline (hard game-over) - lead's reading, confirm in the AC review. Also: explicit can-not-afford feedback replaces silent no-ops. Epic filed separately with BA criteria first.",
+      "topic_guess": "game-over insolvency model",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-397",
+      "date": "2026-08-31",
+      "text": "ALL THREE shapes approved - (1) transit earns FARE REVENUE unless the Free Transit policy is on (policy becomes a real trade-off); (2) service costs scale SUB-LINEARLY with population (economies of scale, exponent placeholder); (3) policy costs CAPPED as a % of tax income (self-limiting drains). Directional numbers placeholder; exact values in the balance pass.",
+      "topic_guess": "three shapes transit",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-391",
+      "date": "2026-08-31",
+      "text": "DIVERSIFY THE BASE - residential/commercial/industrial each contribute meaningfully, offices strong but not dominant. Rebalance yields directionally now; exact rates in the balance pass row-by-row.",
+      "topic_guess": "diversify residential commercial",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079921",
+      "date": "2026-08-31",
+      "text": "placeholders denote AMBER (coming soon), not grey; unlock stays 20 for graduated attractions. Small UI tweak queues behind the adapter in the webconsole funnel.",
+      "topic_guess": "placeholders denote amber",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-439",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "queues",
+            "behind",
+            "adapter",
+            "funnel"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079923",
+      "date": "2026-08-31",
+      "text": "round 2 (2026-08-31 interview) - resolves the criteria doc's open questions: (1) CAPEX ORDER = BIGGEST CAPITAL VALUE FIRST (the BA's construction-age reading is WRONG - fix AC wording at build pickup); (2) endgame CONFIRMED: bailout -> still broke at year-end -> second bailout on WORSE TERMS, AUTO-TRIGGERED -> still broke -> final decline-stats screen, hard stop; (3) administration constrains DISCRETIONARY spending only (no building, no new policies, hiring frozen) - overdraft interest and existing upkeep accrue in full; (4) decline screen offers START OVER + LOAD, GR#27 capture before either wipe. Remaining open question from the doc: none blocking - the doc's Q3 (Load required) answered by (4). Doc addendum owed at build dispatch: correct the CAPEX-order AC + fold these four rulings into the ACs, then build inc1.",
+      "topic_guess": "round interview resolves",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-396",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "criteria",
+            "capex",
+            "order",
+            "reading",
+            "endgame",
+            "bailout",
+            "second",
+            "worse",
+            "terms",
+            "final",
+            "screen",
+            "administration",
+            "decline"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079927",
+      "date": "2026-08-31",
+      "text": "inc2 Q1 material sourcing (2026-08-31): construction materials come from a LOCAL BUILDERS' MERCHANT (B&Q/Jewsons/builders-merchant firm) if one exists in the city - money stays in-city, merchant profits + is taxed; if NO merchant available, materials are IMPORTED FROM OUTSIDE (external - money leaks out, expect pricier). Builders' merchants AUTO-PLACE when the relevant zone grouping is laid down (reuse the deterministic auto-placement pattern from auto-junctions / orphan road-connect sweep - a merchant is a firm/commercial sub-type that appears on the trigger, deterministic). Flow: build needs materials -> local merchant supply (in-city, taxed) else external import (leak) -> SettleConstruction retargets treasury->firm(merchant) or treasury->external accordingly, conserving. This makes the firms->build edge (proposal 2260ba1) concrete. STILL OPEN for inc2: merchant auto-place TRIGGER (which zone grouping), material granularity (tonnes vs commodity chain), settlement timing - interviewing now.",
+      "topic_guess": "material sourcing construction",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079927",
+      "date": "2026-08-31",
+      "text": "inc2 (2026-08-31 cont'd): material granularity = GENERIC TONNES (not a commodity chain - simple tonnes of construction material). Settlement timing = TREASURY PAYS ON A BILLING CYCLE (accrue construction costs, settle periodically e.g. monthly, not immediate per-build). Remaining open: merchant auto-place trigger (which zone grouping) - interviewing.",
+      "topic_guess": "material granularity generic",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "material",
+            "granularity",
+            "tonnes",
+            "commodity",
+            "chain",
+            "construction",
+            "settlement",
+            "timing",
+            "merchant",
+            "auto-place",
+            "trigger",
+            "grouping",
+            "interviewing"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079927",
+      "date": "2026-08-31",
+      "text": "ALL COMMERCIAL PAYMENTS run on a 90-DAY billing cycle (net-90). 1 tick = 1 day so COMMERCIAL_PAYMENT_TERM_TICKS = 90 (named const). This is a finance-wide B2B convention - construction settlement (treasury->builders-merchant) and inter-firm trade settle net-90, accrued then paid at the 90-tick mark. LEAD SCOPE INTERPRETATION (confirming with Aaron): commercial = business-to-business trade (construction->merchant, firm->firm supply); consumer/personal flows (wages to citizens, household consumption spend, council + business TAX collection) stay on their monthly cadence per the money brief - net-90 is trade credit, not payroll/consumer/tax. Applies to inc2 (construction) + any future B2B; inc1's monthly wages/consumption/tax cadence unchanged pending Aaron's confirm.",
+      "topic_guess": "commercial payments billing",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "commercial",
+            "construction",
+            "settlement",
+            "treasury-",
+            "builders-merchant",
+            "merchant",
+            "supply"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "billing",
+            "cycle",
+            "construction",
+            "settlement",
+            "settle",
+            "merchant",
+            "monthly"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079927",
+      "date": "2026-08-31",
+      "text": "inc2 merchant trigger (2026-08-31) - inc2 FULLY SPECIFIED: builders' merchants (B&Q/Jewsons-type supplier firms) AUTO-PLACE when an INDUSTRY & FARMS zone grouping is laid down (deterministic auto-placement, reuse the auto-junction/orphan-connect pattern; a merchant is an industrial/trade supplier firm). Build sources GENERIC TONNES of material from a local merchant if one exists (in-city: merchant firm profits + taxed) ELSE imports from outside (external money leak, pricier). Settlement: treasury -> merchant on NET-90 (COMMERCIAL_PAYMENT_TERM_TICKS=90), accrued + settled at the 90-tick mark. Requires the engine.build->engine.firms edge (proposal 2260ba1, registering now). inc2 build gated on: (a) the edge landing, (b) inc1 landing first (shared compose.go). Full inc2 = merchant spec + auto-place + material-source-local-vs-import + net-90 settlement.",
+      "topic_guess": "merchant trigger fully",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "merchant",
+            "trigger",
+            "builders",
+            "merchants",
+            "auto-place",
+            "grouping",
+            "auto-placement",
+            "reuse",
+            "tonnes",
+            "material",
+            "exists",
+            "in-city",
+            "profits",
+            "taxed",
+            "outside",
+            "external",
+            "pricier",
+            "settlement",
+            "commercial",
+            "proposal"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "merchant",
+            "trigger",
+            "auto-place",
+            "grouping",
+            "generic",
+            "tonnes",
+            "material",
+            "settlement"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "merchant",
+            "trade",
+            "settlement",
+            "commercial",
+            "payment",
+            "ticks",
+            "accrued"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079928",
+      "date": "2026-08-31",
+      "text": "(1) DEMOLITION = FULLY AUTONOMOUS REROUTE - re-plan may freely demolish/reroute EXISTING roads (incl player-placed) for the optimal layout, no confirmation. (2) RADIUS = medium trigger zone BUT expect CASCADE: in a super-dense area the FULL road recalculation must be computed PRIOR to redrawing anything - Aaron flags a RACE CONDITION risk. CRITICAL AC: the entire re-plan cascade (full recompute in dense areas) is ONE ATOMIC TRANSACTION computed to completion BEFORE any tile is redrawn/committed - NEVER interleave compute and redraw (that's the race). All-or-nothing like the landed placeRoadPath, deterministic, journaled. (3) HIERARCHY = STRONG preference - favour higher tiers even at extra distance (arterial routing, roads funnel to majors). (4) UPGRADE COST = 90% of the full new-tier build cost, through the ledger, atomic with the placement. These resolve the BA's open questions 1-4; remaining open (motorway junction-spacing scope, roundabout interaction) lead-defaultable. inc1 build gated on the engine.ts road estates landing first (shared file).",
+      "topic_guess": "demolition fully autonomous",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "fully",
+            "trigger",
+            "gated",
+            "landing",
+            "shared"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-452",
+      "date": "2026-08-31",
+      "text": "SCALE UP THE STARTING CONDITIONS. Fix = (1) set a realistic opening treasury (a real city's opening budget in micro-pounds - lead/research to derive a defensible figure, not the toy 10 pounds); (2) derive seed population from the ACTUAL OS Terrain tile dwelling count (wire the real map dwelling count, not a guess - the money-numbers doc sec6 flagged both as low-confidence); (3) THEN remove ledgerScaleDivisor=1000 and post the full real-world figures (55 pounds utility, 1000 pounds rent, etc) directly. Determinism + conservation must hold. Queues after money-circ inc1 commits (shared compose.go); needs the tile-dwelling-count seam investigated first. Not a game-scale divisor convention - Aaron wants real magnitudes against a real treasury.",
+      "topic_guess": "scale starting conditions",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079927",
+      "date": "2026-08-31",
+      "text": "inc3 (2026-08-31): (1) IMPORT PREMIUM = slightly pricier ~10-15% over local supply (tune the inc2 placeholder to this). (2) TENURE/OWNERSHIP/INHERITANCE = a large new system, filed as its own feature (bell-curve wealth, ownership individual/LLP/state, tenure by wealth incl household/family/single, inheritance 100%-to-children up to 350K then CGT split-equally, treasury escheat if no heirs). (3) EMPLOYMENT = a detailed ONS-grounded jobs model, filed as its own feature (job families, desirability-by-pay, essential-jobs-must-fill, config-adjustable YoY inflation). money inc3 = wire these two new systems + the net-90 insufficient-funds debt gap (BUG-454). Also BUG-452 scale-up (Aaron ruled: a round STARTING GRANT for opening treasury).",
+      "topic_guess": "import premium slightly",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079928",
+      "date": "2026-08-31",
+      "text": "PULL DEMOLISH-REROUTE INTO INC1 NOW. Reopen inc1 to add full autonomous demolish/reroute of EXISTING roads (incl player-placed) to a better alignment - not just connect+upgrade. The re-plan may remove/relocate an existing road segment for the optimal layout, atomic + deterministic + journaled like the connect+upgrade path, all within the same compute-before-redraw cascade. This completes Aaron's fully-autonomous-reroute ruling. Dispatching the inc1 extension.",
+      "topic_guess": "demolish-reroute reopen autonomous",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079928",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "autonomous",
+            "demolish",
+            "reroute",
+            "roads",
+            "player-placed",
+            "upgrade",
+            "re-plan",
+            "optimal",
+            "layout",
+            "atomic",
+            "journaled",
+            "cascade"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079930",
+      "date": "2026-08-31",
+      "text": "batch1 (2026-08-31 interview): CGT on inheritance above 350k = REAL UK ~20% (placeholder, balance-pass adjustable). TENURE bands = PERCENTILE-BASED of the live wealth distribution (top 20% own multiple, next 40% own, next 30% rent, bottom 10% share - placeholder percentiles; self-scales, no re-tune after BUG-452). OWNERSHIP TYPE = BY BUILDING TYPE (per-spec ownership field: infra nuke/hospital/school/water=state, small shops/starter homes=individual, large commercial/industrial=LLP). Still open: LLP profit/tax mechanics, minor inheritance (batch2).",
+      "topic_guess": "batch interview inheritance",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079927",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "inheritance",
+            "tenure",
+            "wealth",
+            "ownership",
+            "individual",
+            "large"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079929",
+      "date": "2026-08-31",
+      "text": "batch1 (2026-08-31 interview): ESSENTIAL-JOBS = SOFT SIGNAL FIRST - unfilled essential roles (sanitation/transport/nursing) raise decay/refuse/health-stress + an unfilled-jobs alert; the player responds by raising their wage on the config page. NO forced assignment (keeps agency, avoids forced-labour feel). Hard constraint can come later. Still open: commute metric, workplace capacity source (batch2).",
+      "topic_guess": "batch interview essential-jobs",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079929",
+      "date": "2026-08-31",
+      "text": "batch2 (2026-08-31): JOB MATCHING = CITYWIDE ABSTRACT POOL - a citizen takes ANY free job slot anywhere in the city, no road/distance gate. Commute distance becomes a WELLBEING PENALTY only, NEVER a gate on getting the job (keeps it deterministic + cheap, no pathfinding; roads affect happiness not employment). JOB CAPACITY = PER BUILDING-TYPE DENSITY: a jobsPerTile map per building type (office~50, shop~8, warehouse~4, factory~20 - all PLACEHOLDER, config-page editable like wages); capacity = tiles * density. INC1 can match against total citywide free slots.",
+      "topic_guess": "batch matching citywide",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079930",
+      "date": "2026-08-31",
+      "text": "batch2 (2026-08-31): MINOR HEIRS - when a citizen dies and heirs are minors (below working age), the estate passes to a SURVIVING PARENT or nearest adult kin's wallet; if NO adult relative exists, TREASURY ESCHEAT (reuses the existing escheat path). No locked-trust field needed for INC1. (Note: this couples to FEAT-1972079931 benefits - an orphan minor with no kin is a benefits/child dependent.)",
+      "topic_guess": "batch minor heirs",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079928",
+      "date": "2026-08-31",
+      "text": "batch2 (2026-08-31): MOTORWAY JUNCTION SCARCITY (inc2) = MINIMUM SPACING - the auto-replanner may only add a motorway junction if it is >= N tiles from the nearest existing motorway junction; a nearer connection routes via a SLIP to a parallel A-road instead. N is config/PLACEHOLDER, balance-pass tunable. This realises Aaron's 'we don't want lots of junctions on the motorway.'",
+      "topic_guess": "batch motorway junction",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079931",
+      "date": "2026-08-31",
+      "text": "batch3 (2026-08-31): (1) DISABILITY = DEFER TO INC2 - INC1 ships benefits for unemployed + pensioner + student + child only (existing EmploymentState 1/3/4 + child), disability/sick + the new WorkCapability/Sick engine.citizens fields come in INC2 (avoids blocking INC1 on an engine change). (2) TAPER = UK Universal-Credit-like: benefit = max(0, floor - wage*taperRate); a low-wage worker tops up to the subsistence floor, a well-paid one gets zero, NO cliff-edge. taperRate PLACEHOLDER/config. (3) NO MEANS-TEST against inherited wealth - the state pension (and benefits generally) pay a flat amount to all eligible regardless of FEAT-1972079930 wealth (matches the real non-means-tested UK state pension); benefit is a function of citizen STATE, not wealth. Child-benefit recipient (parent vs child wallet) still open - defaulting to PARENT wallet unless Aaron rules otherwise.",
+      "topic_guess": "batch disability defer",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079930",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "benefits",
+            "child",
+            "citizen",
+            "parent",
+            "wallet"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-452",
+      "date": "2026-08-31",
+      "text": "starting treasury = a ROUND STARTING GRANT, figure is TBD/trial - 'maybe start with 10m and see how that goes.' So treasury0 = 10,000,000 GBP = 10,000,000,000,000 micropounds as the trial figure, explicitly balance-pass tunable (watch how fast it depletes vs the money-circ outflows + welfare once FEAT-1972079931 lands). Pair the grant with the tile-derived seed population already ruled.",
+      "topic_guess": "starting treasury round",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-452",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "starting",
+            "figure",
+            "money-circ",
+            "population"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079944",
+      "date": "2026-09-01",
+      "text": "APPROVED option A - add a narrow restore-only Composition.LoadAt(root,tick) that seeds the clock, keeping the live sealed-clock invariant intact everywhere else. Unblocks standalone save-resume + FEAT-1972079936 inc3 snapshot-restore. Now buildable - engine-convergence primary lane.",
+      "topic_guess": "option narrow restore-only",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079946",
+      "date": "2026-09-01",
+      "text": "fix the 28 VOID-MUTATING swallowers engine-wide (surface the guard error - a silent no-op mutation corrupts); ACCEPT the ~73 read-only nil/zero query sentinels as intentional fail-closed (copylocks already guards a static copy) - close those SEC-136 read-query findings as won't-fix/accepted convention. Framework-tier campaign, capped below game work per proportionality.",
+      "topic_guess": "void-mutating swallowers engine-wide",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-340",
+      "date": "2026-09-01",
+      "text": "build ALL THREE git-hook guard upgrades. (1) Git-side verdict guard: port claude-destructive-guard.js's BOW verdict check into githooks (commit-msg or sibling) so EVERY tool (opencode/Gemini/raw git) hits the GR#23 gate - closes BUG-336's biggest gap. (2) MECHANICAL verdict independence (this bug): stamp the recording session identity on bow_destructive_verdicts and refuse when verdict-recorder == committer session - attacker!=author becomes mechanical (the Phase-3 builder self-verdict of today could not recur). (3) Pre-push CI-baseline check: githooks pre-push running fast CI-equivalent gates before any push to main - a GR#28 floor for every tool. Dispatched as one tooling lane (worktree); full-tier GR#23 round required (commit-path guards).",
+      "topic_guess": "build three git-hook",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "ASM-1233",
+          "date": "2026-08-20",
+          "sharedKeywords": [
+            "check",
+            "mechanical",
+            "identity",
+            "destructive",
+            "author",
+            "gates",
+            "worktree"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-336",
+      "date": "2026-09-01",
+      "text": "approved the git-side (tool-agnostic) guard build - see BUG-340 comment for the 3-part scope. The GR#23 verdict gate + a pre-push CI floor move into githooks/ so non-Claude lanes and raw git are covered.",
+      "topic_guess": "git-side tool-agnostic guard",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-340",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "git-side",
+            "pre-push",
+            "floor",
+            "githooks"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079936",
+      "date": "2026-09-01",
+      "text": "REBOOT-RESUME (2026-09-01): landed CI-green - Phase 0 complete, Phase 1 complete INCL inc3 snapshot cadence + LoadAt tail-restore (9dd1872), Phase 2 complete, Phase 3 inc1 A/B parity harness internal/converge (d7bdff3, finance domain, converge->finance layering fixed). NEXT on resume: (a) Phase-3 inc2 = capture a REAL webconsole finance trajectory fixture (the TS side emits JSON) + run the A/B gate TS-vs-Go for the finance domain; (b) wire metroserve to MaybeSnapshot/RestoreLatestSnapshotOrGenesis (the durable host using inc3); (c) FEAT-1972079947 attract-momentum participant for cross-month resume. Aaron decisions all captured on this item.",
+      "topic_guess": "reboot-resume landed ci-green",
+      "low_confidence": true,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-084",
+          "date": "2026-08-14",
+          "sharedKeywords": [
+            "phase",
+            "snapshot",
+            "phase-",
+            "decisions"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079945",
+      "date": "2026-09-01",
+      "text": "REBOOT-RESUME (2026-09-01): Aaron ruled COMMIT the scaffolds. The 4 scaffold files (market/consumption participant+test, untracked) + the lead's wiring (save_wire.go: 2 imports + market/consumption in Participants(); save_roundtrip_test.go: count 9->11) are UNCOMMITTED IN THE MAIN TREE at reboot; an independent Opus round was IN FLIGHT (main-tree, scoped to those 6 files; verdict not yet returned). ON RESUME: if no verdict recorded, re-dispatch the round (scaffolds inert / drift-test teeth / 11-kind round-trip byte-identical / fail-loud); on ACCEPT record verdict + commit exact paths [FEAT-1972079945] + push. Local gates were green pre-round (build, compose+market+consumption suites, gofmt).",
+      "topic_guess": "reboot-resume ruled commit",
+      "low_confidence": true,
+      "possible_supersedes": [
+        {
+          "itemCode": "ASM-1233",
+          "date": "2026-08-20",
+          "sharedKeywords": [
+            "count",
+            "independent",
+            "recorded",
+            "gates",
+            "green",
+            "gofmt"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079936",
+      "date": "2026-09-01",
+      "text": ") from the tick driver goroutine after the journal append, and rehydrates via RestoreLatestSnapshotOrGenesis under the double-append guard. Phase 1 now COMPLETE incl. inc3 restore-speed. Follow-ups BUG-480 (swallowed append bricks newest-snapshot restore; pairs with BUG-472) + BUG-481 (client-visible correlation ID trigger). NEXT: Phase-3 inc2 (real webconsole finance trajectory fixture through the A/B harness) - collaboration point with Aaron.",
+      "topic_guess": "driver goroutine journal",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079936",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "restorelatestsnapshotorgenesis",
+            "phase",
+            "complete",
+            "phase-",
+            "finance",
+            "trajectory",
+            "fixture",
+            "harness"
+          ],
+          "sameItem": true,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-472",
+      "date": "2026-09-01",
+      "text": "HALT + SURFACE. When a durable-persist journal append fails mid-session the engine must PAUSE the sim, refuse further commands, and tell the client 'persistence failed' until the store recovers - no silent divergence ever. Supersedes the MET-E021 swallow-and-continue. Implementation: a wire slot for accepted-but-not-durable is NOT wanted; instead the failing command is REJECTED (not accepted) and the engine enters a persist-halted state cleared only by a successful append/health probe; BUG-480's dirty gate stays as defence in depth. Sequence after BUG-480 lands (touches persistjournal.go).",
+      "topic_guess": "surface durable-persist journal",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-061",
+          "date": "2026-08-11",
+          "sharedKeywords": [
+            "store",
+            "silent",
+            "command",
+            "lands"
+          ],
+          "sameItem": false,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-289",
+      "date": "2026-09-01",
+      "text": "OPTION B APPROVED - whole-month rollback. Snapshot module state at month start; on ANY monthly-phase failure restore it and mark the month failed (fail-closed, deterministic). Option A (deferred-apply) rejected as infeasible given dependent phases. Build note: the per-module save.Participant estate (FEAT-1972079941, 12 modules, byte-exact round-trip) is the natural month-start snapshot mechanism - use Composition.Save/Load-shaped in-memory capture, do NOT invent a second serializer.",
+      "topic_guess": "option whole-month rollback",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-2326609711",
+      "date": "2026-09-01",
+      "text": "on the open questions - ALL FOUR selected: (1) inc1/inc2 ship as PRICE PREMIUM ONLY (the money trade-off is the baseline mechanic); (2) a CAPACITY CEILING that scales with city size is wanted as a follow-on increment (a hamlet can import 5 MW, a metropolis cannot import 500 MW - forces local investment as you grow); (3) a QUALITY/SENTIMENT PENALTY for bought-in services (slower response / lower satisfaction) is wanted as a follow-on increment; (4) EDUCATION (out-of-area school places) IS in scope as a buy-in category. Increment plan: inc1 power, inc2 water/waste/refuse, inc3 fire/police/health, inc3b education, inc4 turbine sizing (BUG-477 rescale), inc5 capacity ceiling, inc6 quality penalty, inc7 Go mirror. All numbers placeholders under the balance regime.",
+      "topic_guess": "questions selected price",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-1972079849",
+          "date": "2026-08-28",
+          "sharedKeywords": [
+            "power",
+            "mirror",
+            "numbers",
+            "regime"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-477",
+      "date": "2026-09-01",
+      "text": "RESCALE THE CATALOGUE CAPEX DOWN, not the tariffs. Bring every power plant to realistic UK GBP/MW (his 08-31 anchor: ~GBP 0.75-1.5M/MW; nuke/fusion keep a prestige premium above that band), and ADD a single ~2-3 MW onshore turbine at ~GBP 2M as the hamlet's first affordable local unit (FEAT-2326609711 inc4). Then verifyGridTariffInvariant (import dearer than the cheapest amortised local GBP/MW) must genuinely hold and its test flips from honest-red-report to hard gate. Upkeep scales with capex by the existing ratio. Placeholder numbers, balance pass later.",
+      "topic_guess": "rescale catalogue capex",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-2326609711",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "rescale",
+            "power",
+            "premium",
+            "turbine",
+            "hamlet",
+            "import",
+            "scales",
+            "numbers"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-480",
+      "date": "2026-09-01",
+      "text": "FULL-STOP RESUME (2026-09-01 ~17:15): BUILT in worktree .claude/worktrees/agent-afa9777520b51e37e (base a990ec9; UNCOMMITTED, 6 files): walk-back restore (tryRestoreCandidate on a THROWAWAY engine because core.Engine seals on first AdvanceTicks; MET-G812 skip log; corruption still fail-closed), journal-dirty latch on persistCommandJournaler (never clears for process lifetime) + MaybeSnapshotEvery refusal with MET-G813 once; attack_inc3b documentation test flipped positive; all gates green. Opus r1 round KILLED at start - NO verdict. ON RESUME: re-dispatch round (bar incl: throwaway vs real engine same Deps/seed digest equality; restart makes dirty flag process-local -> repeated bricking loop? durable marker needed?; corruption never walked past). NOTE Aaron ruled BUG-472 = HALT+SURFACE today; BUG-480 stays defence-in-depth and must hold under both policies.",
+      "topic_guess": "full-stop resume built",
+      "low_confidence": true,
+      "possible_supersedes": [
+        {
+          "itemCode": "ASM-1233",
+          "date": "2026-08-20",
+          "sharedKeywords": [
+            "worktree",
+            "met-g",
+            "gates",
+            "green"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "FEAT-1972079945",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "resume",
+            "uncommitted",
+            "files",
+            "gates",
+            "green",
+            "re-dispatch"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-087",
+      "date": "2026-09-01",
+      "text": "). REMAINING for FEAT-087: DeathQueue-pending serialization (save/reload mid-queue) - item stays OPEN. Worktree removable.",
+      "topic_guess": "remaining feat- deathqueue-pending",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-1972079936",
+      "date": "2026-09-01",
+      "text": "Baseline One's goal 1 target is a REAL Azure deployment (Phase 4), not an interim local demo - \"think big, go direct for the goal we are going for\". Sequencing is still Phase 3 (engine convergence) before Phase 4 (Azure deploy + gateway/NLB + auth/TLS) since Phase 4 needs a real backend to deploy, but Phase 4 is now the explicit target milestone for goal 1, not a stretch goal. Also Q100015: timeline is ASAP (no hard date, but treat as urgency, not \"whenever\").",
+      "topic_guess": "baseline target azure",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-083",
+      "date": "2026-09-01",
+      "text": "bug bar for Baseline One = P1 must be zero (show-stoppers only); P2 and below are lived-with in dogfood and re-prioritised from real play, not pre-cleared. Split session effort between bug-down and feature-up, not all one or the other.",
+      "topic_guess": "baseline show-stoppers lived-with",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-083",
+      "date": "2026-09-01",
+      "text": "\"major features\" = the FEAT-083 spine (finance->build->consumption->attract->households) AND it working end-to-end out of a real Azure backend (ties to Q100001/FEAT-1972079936). Death/emergency services (MOD-083 etc.) are explicitly AFTER that, not part of the baseline bar.",
+      "topic_guess": "major features feat-",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-083",
+      "date": "2026-09-01",
+      "text": "goal \"interact with the city and all menu items\" becomes a standing testing requirement - every menu/screen must be proven to actually do something (the \"built but not wired\" class). Known-broken right now, named directly by Aaron: the workload/construction BUILD QUEUE UI does not work. Filed separately as a new bug (see BUG tracking this comment).",
+      "topic_guess": "interact items becomes",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-484",
+      "date": "2026-09-01",
+      "text": "REFINES BUG-484, more detailed than a simple throttle-vs-bypass choice. The real chain Aaron wants: sick citizens who cannot reach a doctor/hospital (capacity shortfall) DIE; their bodies then QUEUE for collection; if the queue is not cleared (hearse/graveyard capacity), UNCOLLECTED bodies cause citizens to MOVE AWAY (emigration pressure), not just a wellbeing penalty. This is richer than \"does the emergency bypass the drain throttle\" - it describes a full causal chain: health-shortfall-caused death -> death queue -> collection drain -> uncollected backlog -> emigration signal. Re-scope BUG-484/FEAT-087's remaining work against this chain before building: (1) confirm health-service shortfall is already a hazard-rate input to Gompertz-Makeham (check engine.citizens<->engine.health/services edge), (2) the DeathQueue -> handoff -> drain chain already built in FEAT-087 inc1-3 IS the \"bodies queue for collection\" mechanism, (3) NEW: an uncollected-backlog -> emigration-pressure signal does not exist yet and needs its own AC/BOW item once MOD-083 (death services: graveyards/cremation/hearses) starts. File a follow-up feature under MOD-083 for the emigration-pressure signal; keep BUG-484 scoped to the throttle-vs-bypass question with Aaron's answer noted as leaning toward realism (bodies queue) over blanket bypass.",
+      "topic_guess": "refines detailed simple",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-2326609711",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "cannot",
+            "penalty",
+            "health",
+            "services"
+          ],
+          "sameItem": false,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-057",
+      "date": "2026-09-01",
+      "text": "power catalogue rescale bands confirmed as proposed (capex ~£0.75-1.5M/MW standard, ~2-3MW hamlet turbine at ~£2M, nuke/fusion keep prestige premium) - proceed with the build. NEW REQUIREMENT surfaced in the same answer: the ability to BORROW for capex investment (power plants and by extension other capital projects) must exist, secured against FUTURE INCOME (the plant's own future revenue/tariff stream), not general-purpose debt. This is a capex-specific secured-loan product, distinct from FEAT-057's general borrowing instruments (IMF/govt loans, PFI-style facility funding) - FEAT-057 already covers \"revenue-share terms\" which may be the right vehicle; confirm before building whether this is a new instrument type under FEAT-057 or its own feature. Links: FEAT-057 (Borrowing instruments), FEAT-014 (Finance master view), BUG-477 (power catalogue rescale, P1).",
+      "topic_guess": "power catalogue rescale",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-204",
+          "date": "2026-08-21",
+          "sharedKeywords": [
+            "revenue",
+            "distinct",
+            "instruments",
+            "finance"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "FEAT-1972079923",
+          "date": "2026-08-31",
+          "sharedKeywords": [
+            "capex",
+            "capital",
+            "terms",
+            "building"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "FEAT-2326609711",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "power",
+            "rescale",
+            "hamlet",
+            "turbine",
+            "premium",
+            "investment"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "BUG-477",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "power",
+            "catalogue",
+            "rescale",
+            "capex",
+            "hamlet",
+            "turbine",
+            "fusion",
+            "prestige",
+            "premium",
+            "plant"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        },
+        {
+          "itemCode": "BUG-484",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "answer",
+            "exist",
+            "confirm",
+            "building",
+            "feature"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-477",
+      "date": "2026-09-01",
+      "text": "catalogue bands confirmed, proceed. Also requires capex-secured borrowing (see FEAT-057 comment) before/alongside this landing so a rescaled expensive plant is actually buildable without pre-existing capital.",
+      "topic_guess": "catalogue bands requires",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "FEAT-057",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "catalogue",
+            "bands",
+            "borrowing",
+            "plant",
+            "capital"
+          ],
+          "sameItem": false,
+          "explicitMarker": false
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "BUG-472",
+      "date": "2026-09-01",
+      "text": "CHANGES BUG-472's client-visible design: on a halt+surface pause, the PLAYER sees the actual registry error code AND correlation ID, with a copy-paste-able display, so Aaron can report it. This replaces the earlier proposal (generic message to player, code only in the debug panel) - show the code to the player directly. Update BUG-472's build brief before dispatch: the pause banner/dialog must render \"<MET-code> (correlation: <id>)\" in a selectable/copyable text element, not just a friendly sentence.",
+      "topic_guess": "changes client-visible design",
+      "low_confidence": false,
+      "possible_supersedes": [
+        {
+          "itemCode": "BUG-472",
+          "date": "2026-09-01",
+          "sharedKeywords": [
+            "surface",
+            "pause"
+          ],
+          "sameItem": true,
+          "explicitMarker": true
+        }
+      ],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-2326609712",
+      "date": "2026-09-01",
+      "text": "build now, not deferred. Dispatch as a normal-priority lane.",
+      "topic_guess": "build deferred dispatch",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    },
+    {
+      "itemCode": "FEAT-2326609713",
+      "date": "2026-09-01",
+      "text": "build now, not deferred. Dispatch as a normal-priority lane.",
+      "topic_guess": "build deferred dispatch",
+      "low_confidence": false,
+      "possible_supersedes": [],
+      "approved": false
+    }
+  ]
+}
