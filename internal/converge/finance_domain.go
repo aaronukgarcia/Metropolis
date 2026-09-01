@@ -1,72 +1,81 @@
-package finance
+package converge
 
 import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/aaronukgarcia/Metropolis/internal/converge"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
-// Registry error codes MET-H500-H503 (harness.converge, data/errors.json)
-// are the ones a converge.Domain.Run implementation is documented to
-// surface via errs — this file wraps them with the finance-specific
-// context (tick/op/reason) a caller of the harness needs, rather than
-// inventing a parallel finance-owned error code range for what is
-// purely a test/tooling adapter, not a gameplay-facing surface.
-const codeFinanceConvergeJournalOpFailed = "MET-H503"
-
-// FinanceDomain is FEAT-1972079936 Phase 3 inc1's [converge.Domain]
-// adapter for engine.finance — the first, and hardest, domain named in
+// FinanceDomain is FEAT-1972079936 Phase 3 inc1's [Domain] adapter for
+// engine.finance — the first, and hardest, domain named in
 // docs/planning/phase3-convergence-plan.md §5 (finance is a ledger vs
 // the TS sim's scalar, flow-tax vs count-tax, micropound vs
 // placeholder). This adapter does NOT change finance's own logic or its
 // money base unit (Money stays int64 micropounds, AC-2) — it only
-// drives an ordinary *FinanceAPI through its already-public surface
-// (BeginMonth/PostWages/PostHouseholdSpend/SettleOpex/
+// drives an ordinary *finance.FinanceAPI through its already-PUBLIC
+// surface (BeginMonth/Post/PostWages/PostHouseholdSpend/SettleOpex/
 // SettleConstruction/ServiceDebt/AccountBalance/OutstandingDebt) and
-// reports a [converge.Trajectory] of the aggregate figures
+// reports a [Trajectory] of the aggregate figures
 // docs/planning/phase3-convergence-plan.md's investigation named as
 // finance's read surface: Treasury, Reserves, Debt(outstanding),
 // NetWorth (Treasury+Reserves-Debt).
 //
+// # Layering (GR#20)
+//
+// This file lives in harness.converge, NOT in engine.finance, and
+// imports finance's already-public API — the correct direction for a
+// high-level harness consuming a low-level engine module's contract.
+// engine.finance itself carries NO import of internal/converge
+// (grep -rn "internal/converge" internal/engine/finance/ matches
+// nothing outside _test.go) — a converge<-finance edge would invert
+// the layer graph (a foundational engine module depending on a
+// harness/tooling package) and is exactly the shape GR#20's
+// contract-first rule exists to prevent. This adapter therefore never
+// touches finance's unexported copy-guard (checkNotCopied is
+// package-private to engine.finance) — it relies entirely on the
+// guard every one of the exported methods below already runs
+// internally, which is sufficient: nothing here holds a *FinanceAPI
+// across goroutines or struct-copies it.
+//
 // The zero value is ready to use — FinanceDomain holds no state of its
-// own; Run constructs a fresh *FinanceAPI for every call so successive
-// Run calls never share ledger state (the determinism proof in
-// converge_finance_test.go depends on this: two Run calls over the same
-// Journal must be running against two INDEPENDENT FinanceAPI instances,
-// not the same one twice).
+// own; Run constructs a fresh *finance.FinanceAPI for every call so
+// successive Run calls never share ledger state (the determinism proof
+// in finance_domain_test.go depends on this: two Run calls over the
+// same Journal must be running against two INDEPENDENT FinanceAPI
+// instances, not the same one twice).
 type FinanceDomain struct{}
 
-// Name implements converge.Domain.
+// Name implements Domain.
 func (FinanceDomain) Name() string { return "finance" }
 
-// Contract implements converge.Domain: engine.finance's own money model
-// is integer, deterministic and non-stochastic (doc.go, AC-2), so every
-// field here starts life at converge.TierExact — the strongest bar
+// Contract implements Domain: engine.finance's own money model is
+// integer, deterministic and non-stochastic (its doc.go, AC-2), so
+// every field here starts life at TierExact — the strongest bar
 // (docs/planning/phase3-convergence-plan.md §2's Tier A). A units/
 // rounding convention decision (BUG-355) may later relax "treasury" to
 // TierBounded once a TS-pounds<->Go-micropounds mapping is agreed for
 // the real cross-model flip (inc3.2); this harness ships Tier A as the
 // honest default for a Go-vs-Go reference/candidate comparison, which
 // is exactly what this increment's own tests exercise.
-func (FinanceDomain) Contract() converge.Contract {
-	return converge.Contract{
-		"treasury": {Tier: converge.TierExact},
-		"reserves": {Tier: converge.TierExact},
-		"debt":     {Tier: converge.TierExact},
-		"netWorth": {Tier: converge.TierExact},
+func (FinanceDomain) Contract() Contract {
+	return Contract{
+		"treasury": {Tier: TierExact},
+		"reserves": {Tier: TierExact},
+		"debt":     {Tier: TierExact},
+		"netWorth": {Tier: TierExact},
 	}
 }
 
-// Run implements converge.Domain: it constructs a fresh *FinanceAPI,
+// Run implements Domain: it constructs a fresh *finance.FinanceAPI,
 // applies j's entries in order via the small op vocabulary below, and
-// returns the resulting converge.Trajectory. Every op either mutates
-// the ledger or (for "sample") appends a converge.Sample snapshotting
-// the four Contract fields at the entry's Tick — snapshot cadence is
-// therefore explicit in the journal, not implied by BeginMonth or any
-// other bookkeeping call, so a candidate/fixture trajectory can be
-// aligned to exactly the ticks the Go reference chose to sample.
+// returns the resulting Trajectory. Every op either mutates the ledger
+// or (for "sample") appends a Sample snapshotting the four Contract
+// fields at the entry's Tick — snapshot cadence is therefore explicit
+// in the journal, not implied by BeginMonth or any other bookkeeping
+// call, so a candidate/fixture trajectory can be aligned to exactly
+// the ticks the Go reference chose to sample.
 //
 // Op vocabulary (applyFinanceJournalOp):
 //   - "begin_month" {month}: FinanceAPI.BeginMonth.
@@ -87,49 +96,36 @@ func (FinanceDomain) Contract() converge.Contract {
 //     treasury/reserves/debt/netWorth at entry.Tick.
 //
 // Run is deterministic (GR#21): it never reads the wall clock, and
-// FinanceAPI's own operations are themselves deterministic (doc.go) —
-// converge_finance_test.go's TestFinanceDomain_DeterministicTrajectory
+// FinanceAPI's own operations are themselves deterministic (its doc.go)
+// — finance_domain_test.go's TestFinanceDomain_DeterministicTrajectory
 // proves the same Journal run twice produces a reflect.DeepEqual
 // Trajectory.
-func (FinanceDomain) Run(j converge.Journal) (converge.Trajectory, error) {
-	f := NewFinanceAPI("")
-	var traj converge.Trajectory
+func (FinanceDomain) Run(j Journal) (Trajectory, error) {
+	f := finance.NewFinanceAPI("")
+	var traj Trajectory
 
 	for _, entry := range j.Entries {
 		if err := applyFinanceJournalOp(f, entry); err != nil {
 			return nil, err
 		}
 		if entry.Op == "sample" {
-			s, err := snapshotFinance(f, entry.Tick)
-			if err != nil {
-				return nil, err
-			}
-			traj = append(traj, s)
+			traj = append(traj, snapshotFinance(f, entry.Tick))
 		}
 	}
 	return traj, nil
 }
 
 // applyFinanceJournalOp dispatches one JournalEntry to the matching
-// FinanceAPI call. Unknown op names, malformed Args, or an underlying
-// FinanceAPI error all surface as codeFinanceConvergeJournalOpFailed
+// finance.FinanceAPI call. Unknown op names, malformed Args, or an
+// underlying FinanceAPI error all surface as codeJournalOpFailed
 // (MET-H503) — a journal entry this adapter cannot apply is a fixture
 // defect, never silently skipped (mirroring GR#17's "no silent
 // failure" spirit for what is, here, test/tooling infrastructure).
-func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
+func applyFinanceJournalOp(f *finance.FinanceAPI, entry JournalEntry) error {
 	fail := func(reason string) error {
-		return errs.New(codeFinanceConvergeJournalOpFailed, errs.NewCorrelationID(), map[string]any{
+		return errs.New(codeJournalOpFailed, errs.NewCorrelationID(), map[string]any{
 			"tick": entry.Tick, "op": entry.Op, "domain": "finance", "reason": reason,
 		})
-	}
-
-	// SEC-020-style copy guard (astgate): this function accepts a
-	// *FinanceAPI directly rather than only calling its already-guarded
-	// public methods, so it carries its own checkNotCopied check up
-	// front — a struct-copied FinanceAPI is rejected here before any of
-	// the op-specific calls below ever run.
-	if err := f.checkNotCopied("applyFinanceJournalOp"); err != nil {
-		return err
 	}
 
 	switch entry.Op {
@@ -149,22 +145,22 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 		if err := json.Unmarshal(entry.Args, &args); err != nil {
 			return fail(fmt.Sprintf("malformed args: %v", err))
 		}
-		tx := Transaction{Description: args.Description}
+		tx := finance.Transaction{Description: args.Description}
 		for _, e := range args.Entries {
-			var side Side
+			var side finance.Side
 			switch e.Side {
 			case "debit":
-				side = SideDebit
+				side = finance.SideDebit
 			case "credit":
-				side = SideCredit
+				side = finance.SideCredit
 			default:
 				return fail(fmt.Sprintf("entry.side must be \"debit\" or \"credit\", got %q", e.Side))
 			}
-			tx.Entries = append(tx.Entries, Entry{
-				Account:  AccountID(e.Account),
+			tx.Entries = append(tx.Entries, finance.Entry{
+				Account:  finance.AccountID(e.Account),
 				Side:     side,
-				Amount:   Money(e.Amount),
-				Category: Category(e.Category),
+				Amount:   finance.Money(e.Amount),
+				Category: finance.Category(e.Category),
 			})
 		}
 		if _, err := f.Post(tx); err != nil {
@@ -191,7 +187,7 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 		if err := json.Unmarshal(entry.Args, &args); err != nil {
 			return fail(fmt.Sprintf("malformed args: %v", err))
 		}
-		if _, err := f.PostWages(Money(args.Total)); err != nil {
+		if _, err := f.PostWages(finance.Money(args.Total)); err != nil {
 			return fail(err.Error())
 		}
 		return nil
@@ -204,7 +200,7 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 		if err := json.Unmarshal(entry.Args, &args); err != nil {
 			return fail(fmt.Sprintf("malformed args: %v", err))
 		}
-		if _, err := f.PostHouseholdSpend(args.Quantity, Money(args.Price)); err != nil {
+		if _, err := f.PostHouseholdSpend(args.Quantity, finance.Money(args.Price)); err != nil {
 			return fail(err.Error())
 		}
 		return nil
@@ -216,7 +212,7 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 		if err := json.Unmarshal(entry.Args, &args); err != nil {
 			return fail(fmt.Sprintf("malformed args: %v", err))
 		}
-		if _, err := f.SettleOpex(Money(args.Opex)); err != nil {
+		if _, err := f.SettleOpex(finance.Money(args.Opex)); err != nil {
 			return fail(err.Error())
 		}
 		return nil
@@ -228,7 +224,7 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 		if err := json.Unmarshal(entry.Args, &args); err != nil {
 			return fail(fmt.Sprintf("malformed args: %v", err))
 		}
-		if _, err := f.SettleConstruction(Money(args.Cost)); err != nil {
+		if _, err := f.SettleConstruction(finance.Money(args.Cost)); err != nil {
 			return fail(err.Error())
 		}
 		return nil
@@ -241,7 +237,7 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 		if err := json.Unmarshal(entry.Args, &args); err != nil {
 			return fail(fmt.Sprintf("malformed args: %v", err))
 		}
-		if err := f.ServiceDebt(Money(args.Interest), Money(args.Principal)); err != nil {
+		if err := f.ServiceDebt(finance.Money(args.Interest), finance.Money(args.Principal)); err != nil {
 			return fail(err.Error())
 		}
 		return nil
@@ -251,23 +247,17 @@ func applyFinanceJournalOp(f *FinanceAPI, entry converge.JournalEntry) error {
 	}
 }
 
-// snapshotFinance reads the four Contract fields off f at their current
-// value and returns them as a converge.Sample at tick.
-func snapshotFinance(f *FinanceAPI, tick int64) (converge.Sample, error) {
-	// SEC-020-style copy guard (astgate): like applyFinanceJournalOp,
-	// this function accepts a *FinanceAPI directly, so it checks its
-	// own identity up front rather than relying solely on the guards
-	// inside AccountBalance/OutstandingDebt.
-	if err := f.checkNotCopied("snapshotFinance"); err != nil {
-		return converge.Sample{}, err
-	}
-
-	treasury, _ := f.AccountBalance(AcctTreasury)
-	reserves, _ := f.AccountBalance(AcctReserves)
+// snapshotFinance reads the four Contract fields off f at their
+// current value (via its exported accessors — see the layering note on
+// FinanceDomain above for why this file never touches finance's own
+// unexported copy guard) and returns them as a Sample at tick.
+func snapshotFinance(f *finance.FinanceAPI, tick int64) Sample {
+	treasury, _ := f.AccountBalance(finance.AcctTreasury)
+	reserves, _ := f.AccountBalance(finance.AcctReserves)
 	debt := f.OutstandingDebt()
 	netWorth := treasury + reserves - debt
 
-	return converge.Sample{
+	return Sample{
 		Tick: tick,
 		Values: map[string]int64{
 			"treasury": int64(treasury),
@@ -275,5 +265,5 @@ func snapshotFinance(f *FinanceAPI, tick int64) (converge.Sample, error) {
 			"debt":     int64(debt),
 			"netWorth": int64(netWorth),
 		},
-	}, nil
+	}
 }

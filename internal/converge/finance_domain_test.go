@@ -1,4 +1,4 @@
-package finance
+package converge
 
 import (
 	"encoding/json"
@@ -6,13 +6,13 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/aaronukgarcia/Metropolis/internal/converge"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 )
 
 // sampleFinanceJournal returns a small, deterministic journal exercising
 // several finance stages across two simulated months, sampling the
 // trajectory at the end of each month.
-func sampleFinanceJournal(t *testing.T) converge.Journal {
+func sampleFinanceJournal(t *testing.T) Journal {
 	t.Helper()
 	arg := func(v any) json.RawMessage {
 		b, err := json.Marshal(v)
@@ -24,11 +24,11 @@ func sampleFinanceJournal(t *testing.T) converge.Journal {
 	seedTreasury := arg(map[string]any{
 		"description": "opening treasury balance (test seed)",
 		"entries": []map[string]any{
-			{"account": string(AcctTreasury), "side": "credit", "amount": 50_000_000, "category": "imports"},
-			{"account": string(AcctExternal), "side": "debit", "amount": 50_000_000, "category": "imports"},
+			{"account": string(finance.AcctTreasury), "side": "credit", "amount": 50_000_000, "category": "imports"},
+			{"account": string(finance.AcctExternal), "side": "debit", "amount": 50_000_000, "category": "imports"},
 		},
 	})
-	return converge.Journal{Entries: []converge.JournalEntry{
+	return Journal{Entries: []JournalEntry{
 		{Tick: 1, Op: "begin_month", Args: arg(map[string]int64{"month": 1})},
 		{Tick: 1, Op: "post", Args: seedTreasury},
 		{Tick: 1, Op: "post_wages", Args: arg(map[string]int64{"total": 10_000_000})},
@@ -85,10 +85,10 @@ func TestFinanceDomain_MatchingFixture_Passes(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "finance-fixture.json")
-	if err := converge.SaveFixture(path, domain.Name(), ref); err != nil {
+	if err := SaveFixture(path, domain.Name(), ref); err != nil {
 		t.Fatalf("SaveFixture: %v", err)
 	}
-	fixtureDomain, candidate, err := converge.LoadFixture(path)
+	fixtureDomain, candidate, err := LoadFixture(path)
 	if err != nil {
 		t.Fatalf("LoadFixture: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestFinanceDomain_MatchingFixture_Passes(t *testing.T) {
 		t.Fatalf("expected fixture domain %q, got %q", domain.Name(), fixtureDomain)
 	}
 
-	report := converge.Compare(domain.Name(), ref, candidate, domain.Contract())
+	report := Compare(domain.Name(), ref, candidate, domain.Contract())
 	if !report.Pass {
 		t.Fatalf("expected matching fixture to pass parity, got diffs: %v", report.Diffs)
 	}
@@ -119,7 +119,7 @@ func TestFinanceDomain_DivergentFixture_Fails(t *testing.T) {
 		t.Fatalf("expected at least 2 samples, got %d", len(ref))
 	}
 
-	divergent := make(converge.Trajectory, len(ref))
+	divergent := make(Trajectory, len(ref))
 	copy(divergent, ref)
 	// Deep-copy the mutated sample's Values map so we don't also mutate ref.
 	mutatedValues := make(map[string]int64, len(ref[1].Values))
@@ -127,19 +127,19 @@ func TestFinanceDomain_DivergentFixture_Fails(t *testing.T) {
 		mutatedValues[k] = v
 	}
 	mutatedValues["netWorth"] = mutatedValues["netWorth"] + 1 // one micropound off
-	divergent[1] = converge.Sample{Tick: ref[1].Tick, Values: mutatedValues}
+	divergent[1] = Sample{Tick: ref[1].Tick, Values: mutatedValues}
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "finance-fixture-divergent.json")
-	if err := converge.SaveFixture(path, domain.Name(), divergent); err != nil {
+	if err := SaveFixture(path, domain.Name(), divergent); err != nil {
 		t.Fatalf("SaveFixture: %v", err)
 	}
-	_, candidate, err := converge.LoadFixture(path)
+	_, candidate, err := LoadFixture(path)
 	if err != nil {
 		t.Fatalf("LoadFixture: %v", err)
 	}
 
-	report := converge.Compare(domain.Name(), ref, candidate, domain.Contract())
+	report := Compare(domain.Name(), ref, candidate, domain.Contract())
 	if report.Pass {
 		t.Fatalf("expected the divergent fixture to fail parity, got Pass=true")
 	}
@@ -159,7 +159,7 @@ func TestFinanceDomain_DivergentFixture_Fails(t *testing.T) {
 // skipped.
 func TestFinanceDomain_UnknownOp_FailsClosed(t *testing.T) {
 	domain := FinanceDomain{}
-	journal := converge.Journal{Entries: []converge.JournalEntry{
+	journal := Journal{Entries: []JournalEntry{
 		{Tick: 1, Op: "not_a_real_op"},
 	}}
 	_, err := domain.Run(journal)
@@ -172,7 +172,7 @@ func TestFinanceDomain_UnknownOp_FailsClosed(t *testing.T) {
 // (wrong JSON shape) fail loudly too, distinct from an unknown op name.
 func TestFinanceDomain_MalformedArgs_FailsClosed(t *testing.T) {
 	domain := FinanceDomain{}
-	journal := converge.Journal{Entries: []converge.JournalEntry{
+	journal := Journal{Entries: []JournalEntry{
 		{Tick: 1, Op: "post_wages", Args: json.RawMessage(`{"total": "not-a-number"}`)},
 	}}
 	_, err := domain.Run(journal)

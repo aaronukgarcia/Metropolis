@@ -22,16 +22,14 @@ const (
 	// never silently treated as passing — Compare fails closed instead.
 	codeUnknownTolerance = "MET-H502"
 
-	// MET-H503 ("a Domain adapter could not apply one JournalEntry —
-	// unknown op name, malformed args, or the underlying engine call
-	// returned an error; never silently skipped") is reserved here but
-	// declared and USED as its own Go const in each Domain adapter's own
-	// package instead of here — only the adapter (e.g.
-	// internal/engine/finance's codeFinanceConvergeJournalOpFailed)
-	// knows its op vocabulary and engine-call context well enough to
-	// build a useful error map, and this package has no journal-
-	// executing code of its own to raise it from (Domain.Run is the
-	// adapter's method, not this package's). Still registered in
-	// data/errors.json under harness.converge (GR#7) since it is this
-	// module's error surface, just not this .go file's constant.
+	// codeJournalOpFailed: a Domain adapter could not apply one
+	// JournalEntry (unknown op name, malformed args, or the underlying
+	// engine call returned an error). Never silently skipped. Used by
+	// every in-package Domain adapter (finance_domain.go's
+	// applyFinanceJournalOp today) — the adapters live in THIS package
+	// (harness.converge), not in the engine module they wrap, so the
+	// code is declared and used here rather than duplicated per adapter
+	// file (see finance_domain.go's layering note for why the adapter
+	// itself lives here and not in internal/engine/finance).
+	codeJournalOpFailed = "MET-H503"
 )
