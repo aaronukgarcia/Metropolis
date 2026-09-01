@@ -216,6 +216,8 @@ export interface DebugJson {
     placeNotice: string | null;
     /** FEAT-1972079923 inc1 (AC-1) — the derived insolvency band. */
     insolvencyState: InsolvencyState;
+    /** BUG-496 — the RAW funds band (unoverlaid), driving one-shot popup-entry detection. */
+    insolvencyRawBand: InsolvencyState;
     /** FEAT-1972079923 inc1 (AC-8) — the one-shot bailout-entry popup, or null. */
     insolvencyPopup: { state: InsolvencyState; enteredAt: number } | null;
     /** FEAT-1972079923 inc2 (AC-2) — the IMF bailout event state machine, or null. */
@@ -718,6 +720,9 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       // FEAT-1972079923 inc1: defaults for a legacy state predating this field
       // (backward tolerance — mirrors roadConnectivity's `?? {...}` a few lines down).
       insolvencyState: s.insolvencyState ?? 'solvent',
+      // BUG-496: the raw funds band must survive into debug.json (SIMSTATE_COVERAGE
+      // maps it to sim.insolvencyRawBand); legacy states predating it default solvent.
+      insolvencyRawBand: s.insolvencyRawBand ?? 'solvent',
       insolvencyPopup: s.insolvencyPopup ?? null,
       // FEAT-1972079923 inc2: backward tolerance for a legacy state predating bailoutState.
       bailoutState: s.bailoutState ?? null,
