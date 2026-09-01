@@ -22,6 +22,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/unlocks"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
@@ -811,6 +812,19 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "extcommute"})
 	}
 
+	// FEAT-1972079941 AC-6: construct the engine.unlocks instance this
+	// composition owns so its save.Participant can be assembled
+	// (Participants(), save_wire.go). Resolved BEFORE the first hook
+	// registers, like every other module above (AC-4 — no partially-wired
+	// engine on a construction failure). unlocks has no baseline-one phase
+	// hook (its state is driven by milestone/DP commands that are a later
+	// item), so it is constructed purely so a composed save/load covers its
+	// state — it never ticks.
+	unlocksAPI, err := unlocks.LoadDefault(cid)
+	if err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "unlocks"})
+	}
+
 	invReg := invariant.NewRegistry()
 	for _, inv := range []invariant.Invariant{
 		invariant.NewPeopleInvariant(),
@@ -844,6 +858,7 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 		firms:                   firmsAPI,
 		traffic:                 trafficAPI,
 		extCommute:              extCommuteAPI,
+		unlocks:                 unlocksAPI,
 		attractTerms:            attractTerms,
 		leisureVenuesRegistered: make(map[uint64]bool),
 		treasury:                ledgerBalance(financeAPI, finance.AcctTreasury),
@@ -1096,6 +1111,16 @@ type simState struct {
 	// out of this ICD's scope); this field exists so a future gameplay
 	// seam, and today's tests, can reach it.
 	extCommute *extcommute.ExtCommuteAPI
+
+	// FEAT-1972079941 AC-6 (save live-wiring): the engine.unlocks module
+	// instance this composition owns SO its save.Participant can be
+	// assembled in Participants() (save_wire.go). Baseline one routes no
+	// phase hook or gameplay command to unlocks yet (its state is driven by
+	// milestone/DP commands that are a later item), so it is constructed
+	// purely so the composed engine's save covers unlocks' state too — the
+	// same "own the instance so it can be saved" reason every other module
+	// above is reachable here.
+	unlocks *unlocks.UnlocksAPI
 
 	// leisureVenuesRegistered tracks which completed engine.build
 	// ZoneEntertainment order IDs are CURRENTLY bridged into an open

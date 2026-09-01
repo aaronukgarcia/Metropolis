@@ -5030,6 +5030,16 @@
             "key": "foundation.data",
             "moduleGuid": "58dbb120-caed-4e55-99f7-b90894e97794",
             "inboundGuid": "8c6bb3b0-a8a9-444b-9c93-86250b3d0a41"
+          },
+          {
+            "key": "feat.saveux",
+            "moduleGuid": "d50904e1-5eda-42b6-bdc7-e075d4648e20",
+            "inboundGuid": "20c48d83-347b-434c-902f-b61aeef16711"
+          },
+          {
+            "key": "engine.unlocks",
+            "moduleGuid": "50d7fc81-4770-4361-854c-8675fce10299",
+            "inboundGuid": "865f4351-b2c5-48fd-aa71-261c24e1ac3c"
           }
         ]
       },
@@ -5220,6 +5230,10 @@
         "format": "Go package API + deltas",
         "pattern": "gate checks data-driven from unlock_trees.json (GR#15)",
         "consumers": [
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
           {
             "key": "ui.screen.build",
             "outboundGuid": "8106cea4-feaf-4c51-8397-24f8ff9daecd"
@@ -5719,6 +5733,10 @@
           {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
+          },
+          {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
           },
           {
             "key": "foundation.integration",

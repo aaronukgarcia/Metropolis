@@ -939,7 +939,9 @@
         "engine.extcommute",
         "engine.services",
         "engine.firms",
-        "int.persist"
+        "int.persist",
+        "feat.saveux",
+        "engine.unlocks"
       ]
     },
     {

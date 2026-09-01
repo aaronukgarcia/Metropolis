@@ -1740,7 +1740,9 @@
         "engine.extcommute",
         "engine.services",
         "engine.firms",
-        "int.persist"
+        "int.persist",
+        "feat.saveux",
+        "engine.unlocks"
       ],
       "calls": [
         "engine.core",
@@ -1773,7 +1775,9 @@
         "ui.screen.map",
         "harness.replay",
         "int.persist",
-        "foundation.data"
+        "foundation.data",
+        "feat.saveux",
+        "engine.unlocks"
       ],
       "sprint": 6
     },
