@@ -1507,7 +1507,8 @@
       "deps": [
         "engine.citizens",
         "engine.services",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "int.serializer"
       ]
     },
     {

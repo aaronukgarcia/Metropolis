@@ -2616,7 +2616,8 @@
       "deps": [
         "engine.citizens",
         "engine.services",
-        "engine.wellbeing"
+        "engine.wellbeing",
+        "int.serializer"
       ],
       "calls": [
         "engine.citizens",
@@ -2625,7 +2626,8 @@
         "engine.spiral",
         "foundation.det",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 11
     },
