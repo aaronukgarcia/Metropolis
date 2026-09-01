@@ -1409,8 +1409,7 @@
       "deps": [
         "engine.world",
         "foundation.data",
-        "engine.market",
-        "int.serializer"
+        "engine.market"
       ],
       "calls": [
         "engine.world",
@@ -1419,8 +1418,7 @@
         "engine.season",
         "engine.finance",
         "foundation.errors",
-        "foundation.num",
-        "int.serializer"
+        "foundation.num"
       ],
       "sprint": 4,
       "collaborations": {

@@ -742,8 +742,7 @@
       "deps": [
         "engine.world",
         "foundation.data",
-        "engine.market",
-        "int.serializer"
+        "engine.market"
       ]
     },
     {

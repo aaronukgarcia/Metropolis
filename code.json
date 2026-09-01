@@ -778,10 +778,6 @@
             "outboundGuid": "c128a4e1-80d2-46f8-ae99-aa902f806983"
           },
           {
-            "key": "engine.consumption",
-            "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
-          },
-          {
             "key": "engine.core",
             "outboundGuid": "a7240eb2-186d-4744-b750-0af74f52eb4b"
           },
@@ -3992,11 +3988,6 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
-          },
-          {
-            "key": "int.serializer",
-            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
-            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },
