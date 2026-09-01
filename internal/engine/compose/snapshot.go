@@ -77,8 +77,26 @@ const MaxRetainedSnapshots = 5
 // meaningful to snapshot before the first tick, and a tick-0 snapshot would
 // be indistinguishable from "no snapshot yet" for splitJournalAtTick's
 // snapshotTick<=0 fast path below.
+//
+// A thin wrapper over ShouldSnapshotEvery at the package default cadence
+// (SnapshotCadenceTicks) — kept as its own exported name because every
+// existing caller/test spells it this way; ShouldSnapshotEvery is the
+// cadence-parameterized primitive underneath (FEAT-1972079936 Phase 1
+// inc3b, metroserve's `--snapshot-every` flag).
 func ShouldSnapshot(tick int64) bool {
-	return tick > 0 && tick%SnapshotCadenceTicks == 0
+	return ShouldSnapshotEvery(tick, SnapshotCadenceTicks)
+}
+
+// ShouldSnapshotEvery is ShouldSnapshot generalized to an explicit cadence
+// (inc3b): a strictly positive multiple of cadence, tick 0 always excluded
+// (see ShouldSnapshot's doc comment for why). cadence<=0 means "snapshotting
+// is off" (the metroserve `--snapshot-every 0` case) and always reports
+// false — never a divide-by-zero panic.
+func ShouldSnapshotEvery(tick, cadence int64) bool {
+	if cadence <= 0 {
+		return false
+	}
+	return tick > 0 && tick%cadence == 0
 }
 
 // MaybeSnapshot writes a durable snapshot for city via store IF the
@@ -88,13 +106,29 @@ func ShouldSnapshot(tick int64) bool {
 // tick loop once inc4 wires it) calls after every AdvanceTicks: cheap to
 // call unconditionally every tick, since the common case is just one
 // int64 modulo.
+//
+// A thin wrapper over MaybeSnapshotEvery at the package default cadence —
+// see MaybeSnapshotEvery's doc comment (inc3b) for the cadence-configurable
+// primitive metroserve's `--snapshot-every` flag calls instead.
 func (c *Composition) MaybeSnapshot(ctx context.Context, store persist.Store, city persist.CityKey) (id persist.SnapshotID, ok bool, err error) {
+	return c.MaybeSnapshotEvery(ctx, store, city, SnapshotCadenceTicks)
+}
+
+// MaybeSnapshotEvery is MaybeSnapshot generalized to an explicit cadence in
+// ticks (FEAT-1972079936 Phase 1 inc3b): writes a durable snapshot IFF the
+// composition's current engine tick is a cadence boundary
+// (ShouldSnapshotEvery(tick, cadence)); otherwise a fast no-op (ok=false,
+// no error). cadence<=0 disables snapshotting entirely (metroserve's
+// `--snapshot-every 0` off switch) — always a no-op, never an error, since
+// "snapshotting turned off" is a valid, intentional operating mode, not a
+// fault.
+func (c *Composition) MaybeSnapshotEvery(ctx context.Context, store persist.Store, city persist.CityKey, cadence int64) (id persist.SnapshotID, ok bool, err error) {
 	clock, err := c.state.e.Clock()
 	if err != nil {
 		return "", false, errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "snapshot", "step": "clock"})
 	}
 	tick := clock.Tick()
-	if !ShouldSnapshot(tick) {
+	if !ShouldSnapshotEvery(tick, cadence) {
 		return "", false, nil
 	}
 	data, err := c.buildSnapshotBytes()

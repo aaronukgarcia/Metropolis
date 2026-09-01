@@ -43,6 +43,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/buildinfo"
 	"github.com/aaronukgarcia/Metropolis/internal/persist"
@@ -65,6 +66,15 @@ func run(args []string, stdout, stderr *os.File) int {
 	// unchanged); see setUpPersistence (persist.go) for the wiring/rehydrate.
 	persistDir := fs.String("persist-dir", "", "directory for durable city persistence (empty = OFF; a persisted city rehydrates from its journal on restart)")
 	city := fs.String("city", "default", "city identity to persist/rehydrate under (FEAT-1972079936 Phase 1; tenant is the placeholder \"local\")")
+	// FEAT-1972079936 Phase 1 inc3b: durable snapshot cadence, wired into the
+	// live tick driver (snapshotdriver.go). Default matches
+	// compose.SnapshotCadenceTicks (Aaron's 2026-08-31 ruling, N=360 == one
+	// simulated year) — a single flag default sourced from the same named
+	// constant snapshot.go itself uses, never a re-typed magic literal
+	// (GR#3). 0 disables snapshotting entirely (journal-only restore,
+	// byte-for-byte the pre-inc3b behaviour). Ignored when persist-dir is
+	// empty (no store to snapshot into).
+	snapshotEvery := fs.Int64("snapshot-every", compose.SnapshotCadenceTicks, "durable snapshot cadence in ticks (0 = off; ignored without -persist-dir)")
 	printVersion := fs.Bool("version", false, "print build identity and exit")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -80,13 +90,14 @@ func run(args []string, stdout, stderr *os.File) int {
 	// the legacy single-city host, byte-for-byte unchanged (AC-6). Gating on
 	// persist-dir keeps a default `metroserve` invocation identical to today.
 	if *persistDir != "" {
-		return runHosted(*addr, *persistDir, *city, *tickInterval, stdout, stderr)
+		return runHosted(*addr, *persistDir, *city, *tickInterval, *snapshotEvery, stdout, stderr)
 	}
 
 	correlationID := string(protocol.NewCorrelationID())
 
 	e := core.NewEngine(core.WithWorldSeed(*seed))
-	if _, _, err := setUpPersistence(e, *persistDir, *city, stdout); err != nil {
+	comp, store, err := setUpPersistence(e, *persistDir, *city, stdout)
+	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1
 	}
@@ -106,8 +117,13 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 
-	loopDone := make(chan error, 1)
-	go func() { loopDone <- e.RunCommandLoop(ctx, transport) }()
+	// FEAT-1972079936 Phase 1 inc3b: cityKey is the same CityKey
+	// setUpPersistence wired the durable journaler under (persistTenantID,
+	// *city) — see persist.go. When *persistDir is "" store is nil and
+	// startCommandLoop's own nil-check disables the snapshot wrapper, so
+	// this path is byte-for-byte the pre-inc3b bare-transport driver.
+	cityKey := persist.CityKey{TenantID: persistTenantID, CityID: *city}
+	loopDone := startCommandLoop(ctx, e, transport, comp, store, cityKey, *snapshotEvery, correlationID, stdout)
 
 	tickDone := tickLoop(ctx, transport, *tickInterval, correlationID)
 
@@ -159,8 +175,8 @@ func run(args []string, stdout, stderr *os.File) int {
 // resolver two plain strings; metroserve builds the persist.CityKey here,
 // inside its own package, and calls its own host — no new dependency edge is
 // forced on internal/protocol.
-func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, stdout, stderr *os.File) int {
-	host, err := NewCityHost(persistDir, tickInterval)
+func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snapshotEvery int64, stdout, stderr *os.File) int {
+	host, err := NewCityHost(persistDir, tickInterval, WithSnapshotEvery(snapshotEvery))
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "metroserve: %v\n", err)
 		return 1

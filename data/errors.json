@@ -120,7 +120,8 @@
       "P020-P029": "reserved for protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "P030-P034": "reserved for protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"P\")",
       "G5400-G5409": "reserved for feat.deathwave (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
-      "H500-H509": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")"
+      "H500-H509": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
+      "P035-P039": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"P\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5201,6 +5202,12 @@
       "module": "harness.converge",
       "message": "journal entry (tick {tick}, op {op}) failed against the {domain} domain: {reason}",
       "remedy": "The domain adapter could not apply this journal entry to the live engine (unknown op name, malformed args, or the engine call itself returned an error). Fix the journal or the adapter; a failed op is a fixture-defect, never silently skipped."
+    },
+    "MET-P035": {
+      "severity": "error",
+      "module": "int.protocol",
+      "message": "metroserve: durable snapshot write for city {city} at tick {tick} failed: {cause}",
+      "remedy": "Check the persist.Store backing this host (disk space, permissions, corruption) -- compose.MaybeSnapshot's own PutSnapshot/prune error is surfaced here unwrapped. The AdvanceTicks command that triggered this cadence boundary was already accepted and journaled before the snapshot attempt ran, so the sim's live state and its command journal are BOTH intact regardless of this failure -- only the restore-speed optimization (a durable snapshot blob) is missing for this boundary. The NEXT cadence boundary will retry; a full genesis-replay restore (RestoreLatestSnapshotOrGenesis's no-snapshot fallback, or a snapshot-tail replay from an older successful snapshot) remains correct and lossless in the meantime. Mirrors engine.core's MET-E021 journal-write-failure policy: fail loud, never stop the sim."
     }
   }
 }

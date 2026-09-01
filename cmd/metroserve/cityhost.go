@@ -169,6 +169,16 @@ type CityHost struct {
 
 	tickInterval time.Duration
 
+	// snapshotEvery is the durable snapshot cadence (ticks) every city built
+	// by this host drives its command loop with (FEAT-1972079936 Phase 1
+	// inc3b, snapshotdriver.go's startCommandLoop) — 0 disables snapshotting.
+	// Fixed at construction (WithSnapshotEvery / defaults to
+	// compose.SnapshotCadenceTicks), read only by buildCity, itself only
+	// ever called from GetOrCreate's single first-claimant path per key, so
+	// no lock is needed to read it (same "read-only after construction"
+	// shape as engineOpts/tickInterval above).
+	snapshotEvery int64
+
 	// engineOpts are EXTRA core.Options appended after the per-city seed when
 	// each engine is built. Empty for production (default pool sizing); tests
 	// set core.WithPoolSize(1) here to match inc4's deterministic/fast engine.
@@ -212,14 +222,40 @@ type CityHost struct {
 	evictorDone chan struct{}
 }
 
+// CityHostOption configures optional CityHost construction knobs
+// (FEAT-1972079936 Phase 1 inc3b). Variadic and appended at the END of
+// NewCityHost/newCityHost's parameter lists deliberately — every pre-inc3b
+// call site (attack_cityhost_test.go, cityhost_test.go, eviction_test.go,
+// the old 2-arg NewCityHost) keeps compiling and behaving identically with
+// zero options passed.
+type CityHostOption func(*CityHost)
+
+// WithSnapshotEvery sets the durable snapshot cadence (in ticks) every city
+// this host builds drives its command loop with (snapshotdriver.go). 0
+// disables snapshotting. Meaningless (silently ignored by
+// startCommandLoop's own nil-store check) when persistDir is "" — a
+// no-persist host has no Store to snapshot into.
+func WithSnapshotEvery(ticks int64) CityHostOption {
+	return func(h *CityHost) {
+		// SEC-020: every function taking a *CityHost parameter guards against
+		// a copied value before touching its fields (astgate-enforced) — see
+		// newCityHost's doc comment on why self is stamped before options run,
+		// which is what makes this check real rather than vacuous.
+		if err := h.checkNotCopied(); err != nil {
+			return
+		}
+		h.snapshotEvery = ticks
+	}
+}
+
 // NewCityHost constructs a CityHost. persistDir "" runs every city in
 // no-persist mode (in-memory journaler only, allowed for tests, matching
 // inc4's default-off); a non-empty persistDir opens ONE shared DiskStore
 // under which each city rehydrates from its own CityKey journal on
 // (re)creation. tickInterval is the per-city wall-clock tick cadence (reused
 // verbatim from main.go's tickLoop).
-func NewCityHost(persistDir string, tickInterval time.Duration) (*CityHost, error) {
-	return newCityHost(persistDir, tickInterval, IdleEvictTimeout, evictSweepInterval)
+func NewCityHost(persistDir string, tickInterval time.Duration, opts ...CityHostOption) (*CityHost, error) {
+	return newCityHost(persistDir, tickInterval, IdleEvictTimeout, evictSweepInterval, opts...)
 }
 
 // newCityHost is NewCityHost with the two eviction tunables made explicit
@@ -229,7 +265,7 @@ func NewCityHost(persistDir string, tickInterval time.Duration) (*CityHost, erro
 // are fixed at construction and read only by the evictor goroutine started
 // below — the `go` establishes happens-before, so they are read race-free
 // without a lock (they never change after construction).
-func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval time.Duration) (*CityHost, error) {
+func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval time.Duration, opts ...CityHostOption) (*CityHost, error) {
 	var store persist.Store
 	if persistDir != "" {
 		disk, err := persist.NewDiskStore(persistDir)
@@ -242,6 +278,7 @@ func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval tim
 	h := &CityHost{
 		store:         store,
 		tickInterval:  tickInterval,
+		snapshotEvery: compose.SnapshotCadenceTicks,
 		logw:          os.Stdout,
 		rootCtx:       ctx,
 		rootCancel:    cancel,
@@ -250,7 +287,17 @@ func newCityHost(persistDir string, tickInterval, idleTimeout, sweepInterval tim
 		sweepInterval: sweepInterval,
 		evictorDone:   make(chan struct{}),
 	}
+	// self is stamped BEFORE options run (not after, as a pre-inc3b draft of
+	// this function had it) so every CityHostOption closure can call the
+	// SAME checkNotCopied guard every other function taking a *CityHost
+	// parameter must (SEC-020, astgate-enforced) — h is freshly constructed
+	// and not yet reachable from anywhere else, so self.Load()==h holds
+	// trivially true here; this is what makes the check in WithSnapshotEvery
+	// below a real guard rather than a check that could never fail.
 	h.self.Store(h)
+	for _, opt := range opts {
+		opt(h)
+	}
 	// Start the single idle evictor (FEAT-1972079942 AC-3). It runs under the
 	// host root context and is joined by Close via evictorDone (AC-5).
 	go h.runEvictor()
@@ -341,7 +388,7 @@ func (h *CityHost) GetOrCreate(ctx context.Context, cityKey persist.CityKey) (*r
 		h.onBuildStart()
 	}
 
-	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.engineOpts, h.logw)
+	city, err := buildCity(h.rootCtx, ctx, h.store, cityKey, h.tickInterval, h.snapshotEvery, h.engineOpts, h.logw)
 	if err != nil {
 		// Register NOTHING on failure: remove the claim before signalling, so
 		// no half-built city is ever observable in the map, and a later
@@ -565,7 +612,7 @@ func (h *CityHost) evictIdle() {
 // nothing. It is a free function (not a *CityHost method) deliberately: it
 // takes no candidate-typed value, so it carries no SEC-020 copy-guard
 // obligation.
-func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, engineOpts []core.Option, logw io.Writer) (*runningCity, error) {
+func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persist.CityKey, tickInterval time.Duration, snapshotEvery int64, engineOpts []core.Option, logw io.Writer) (*runningCity, error) {
 	opts := make([]core.Option, 0, 1+len(engineOpts))
 	opts = append(opts, core.WithWorldSeed(seedForCity(key)))
 	opts = append(opts, engineOpts...)
@@ -605,10 +652,12 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 		return nil, fmt.Errorf("city %s: StartSubscriptionPump failed: %w", key.CityID, err)
 	}
 
-	loopDone := make(chan error, 1)
-	go func() { loopDone <- e.RunCommandLoop(ctx, transport) }()
-
+	// FEAT-1972079936 Phase 1 inc3b: correlationID must be minted BEFORE
+	// startCommandLoop (it needs the tick driver's own correlation ID to
+	// recognise tick-cadence CommandResults — see snapshotdriver.go), then
+	// reused unchanged by tickLoop below exactly as pre-inc3b.
 	correlationID := string(protocol.NewCorrelationID())
+	loopDone := startCommandLoop(ctx, e, transport, comp, store, key, snapshotEvery, correlationID, logw)
 	tickDone := tickLoop(ctx, transport, tickInterval, correlationID)
 
 	return &runningCity{

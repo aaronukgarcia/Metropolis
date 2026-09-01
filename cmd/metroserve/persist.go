@@ -120,23 +120,37 @@ func setUpPersistence(e *core.Engine, persistDir, cityID string, stdout io.Write
 
 // wireAndRehydrate is the shared, single-source guarded-rehydrate seam
 // (GR#3). It wires the engine to a durable Store with inc2's write-through
-// journaler interposed behind a rehydrateGuardStore, then — if a journal
-// already exists for city — replays it back through the engine's normal
-// command path with re-append suppressed, so a restart resumes losslessly
-// and a restart-twice never double-appends. Both metroserve's single-city
+// journaler interposed behind a rehydrateGuardStore, then — if any durable
+// record exists for city — restores it via inc3's snapshot-aware path
+// (compose.RestoreLatestSnapshotOrGenesis: latest snapshot + LoadAt + only
+// the journal TAIL replayed, falling back to a full genesis replay when no
+// snapshot has been taken yet) back through the engine's normal command
+// path with re-append suppressed, so a restart resumes losslessly and a
+// restart-twice never double-appends. Both metroserve's single-city
 // setUpPersistence and Phase 2's CityHost (cityhost.go), which drives N
 // cities over ONE shared Store, call exactly this so neither re-implements
 // restore nor re-opens the double-append hole.
 //
-// A store-existence probe error, a restore/decode error (a corrupt journal),
-// or a rejected replayed command are all returned as errors — the caller
-// treats them as fatal for that city, exactly as inc4 requires: silently
-// starting a fresh city over a persisted one is the data loss this epic
-// exists to prevent. On any error the engine is left partly wired but the
-// caller discards it (CityHost registers nothing; run() exits non-zero), so
-// no half-live city escapes.
+// The guard is interposed ONLY around the engine's write path
+// (rehydrateGuardStore.AppendJournal) — every read RestoreLatestSnapshotOrGenesis
+// issues (ListSnapshots/GetSnapshot/ReadJournal) goes to the store PARAMETER
+// directly, the real underlying Store, never through guard, so a snapshot
+// restore always sees the true durable state (inc3b AC-1: "GetSnapshot
+// passes through unsuppressed").
+//
+// A store-existence probe error, a restore/decode error (a corrupt journal
+// or snapshot), or a rejected replayed command are all returned as errors —
+// the caller treats them as fatal for that city, exactly as inc4 requires:
+// silently starting a fresh city over a persisted one is the data loss this
+// epic exists to prevent. On any error the engine is left partly wired but
+// the caller discards it (CityHost registers nothing; run() exits non-zero),
+// so no half-live city escapes.
 func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, city persist.CityKey, stdout io.Writer) (*compose.Composition, error) {
 	// Wire with the guard interposed so replayed commands are NOT re-appended.
+	// The guard flag is flipped back to false ONLY after restore fully
+	// completes below, before any loop/pump goroutine is started by the
+	// caller (setUpPersistence/buildCity) — the same ordering the pre-inc3b
+	// code observed, unchanged by this increment.
 	guard := &rehydrateGuardStore{Store: store}
 	guard.replaying.Store(true)
 	comp, err := compose.Wire(e, &compose.Deps{PersistStore: guard, PersistCity: city})
@@ -144,29 +158,36 @@ func wireAndRehydrate(ctx context.Context, e *core.Engine, store persist.Store, 
 		return nil, fmt.Errorf("compose.Wire failed: %w", err)
 	}
 
+	// exists is read purely to choose the informative log line below (a
+	// fresh city vs. a rehydrated one) — RestoreLatestSnapshotOrGenesis
+	// itself handles "nothing durable yet" correctly on its own (an empty
+	// journal + no snapshots restores to tick 0, a no-op), so this probe is
+	// not load-bearing for correctness, only for the message.
 	exists, err := store.Exists(ctx, city)
 	if err != nil {
 		return nil, fmt.Errorf("persist existence check for city %q: %w", city.CityID, err)
 	}
-	if !exists {
-		guard.replaying.Store(false)
-		_, _ = fmt.Fprintf(stdout, "metroserve: no persisted journal for city %s — starting fresh\n", city.CityID)
-		return comp, nil
-	}
 
-	// Rehydrate: read from the REAL store, replay through the engine's normal
-	// command path (the same path inc2's restore test uses). A decode error
-	// (corrupt journal) surfaces from RestoreCommands and is fatal here.
-	cmds, err := compose.RestoreCommands(ctx, store, city)
+	// Rehydrate: latest snapshot (if any) + LoadAt + journal-TAIL replay,
+	// falling back to full genesis replay when no snapshot exists yet — both
+	// paths replay through e.HandleCommand, the engine's normal command path
+	// (the same path inc2's restore test used), with the guard suppressing
+	// re-append throughout. A decode/restore error (corrupt journal or
+	// snapshot) or a rejected replayed command surfaces from
+	// RestoreLatestSnapshotOrGenesis and is fatal here.
+	usedSnapshot, tick, err := compose.RestoreLatestSnapshotOrGenesis(ctx, e, comp, store, city)
 	if err != nil {
-		return nil, fmt.Errorf("rehydrate city %s (corrupt journal?): %w", city.CityID, err)
-	}
-	for i, cmd := range cmds {
-		if res := e.HandleCommand(cmd); !res.Accepted {
-			return nil, fmt.Errorf("rehydrate city %s: restored command %d (%s) rejected: %+v", city.CityID, i, cmd.Kind, res.Error)
-		}
+		return nil, fmt.Errorf("rehydrate city %s (corrupt journal or snapshot?): %w", city.CityID, err)
 	}
 	guard.replaying.Store(false)
-	_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated %d commands for city %s\n", len(cmds), city.CityID)
+
+	switch {
+	case !exists:
+		_, _ = fmt.Fprintf(stdout, "metroserve: no persisted journal for city %s — starting fresh\n", city.CityID)
+	case usedSnapshot:
+		_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated city %s from latest snapshot + journal tail (tick %d)\n", city.CityID, tick)
+	default:
+		_, _ = fmt.Fprintf(stdout, "metroserve: rehydrated city %s via full genesis replay (tick %d)\n", city.CityID, tick)
+	}
 	return comp, nil
 }
