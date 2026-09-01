@@ -122,7 +122,6 @@
       "G5400-G5409": "reserved for feat.deathwave (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
       "H500-H509": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
       "P035-P039": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"P\")"
-    
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
   },
@@ -1218,6 +1217,12 @@
       "module": "feat.saveux",
       "message": "Manager method called on a struct-copied value, not the one NewManager constructed",
       "remedy": "Always use the *Manager pointer NewManager returned. Do not dereference-and-reassign it ('m2 := *m') or pass it by value -- that produces a second Manager value with its own independent mu but an ALIASED participants slice, defeating this package's single-save-in-flight guard (SEC-020-class, mirroring Engine.checkNotCopied/Registry.checkNotCopied/Store.checkNotCopied). If you need a second independent Manager, call NewManager again."
+    },
+    "MET-E819": {
+      "severity": "error",
+      "module": "feat.saveux",
+      "message": "save bundle world seed {bundleSeed} does not match loading composition seed {compositionSeed}: refusing load (pass AllowSeedMismatch to override for a deliberate reseed)",
+      "remedy": "confirm the bundle belongs to this composition's seed, or pass save.AllowSeedMismatch() to Load/LoadAt for a deliberate rules-change reseed (FEAT-1972079897)"
     },
     "MET-E900": {
       "severity": "fatal",

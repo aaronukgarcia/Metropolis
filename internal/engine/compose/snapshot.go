@@ -336,7 +336,7 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 			// — never walked past (see doc comment above).
 			return false, 0, getErr
 		}
-		_, tail, ok, valErr := tryRestoreCandidate(data, cmds, city, c.state.cid)
+		_, tail, ok, valErr := tryRestoreCandidate(data, cmds, city, c.state.cid, e.WorldSeed())
 		if valErr != nil {
 			// Corrupt/undecodable snapshot payload — fail closed, no
 			// further walk-back (BUG-480: never widen the fallback to hide
@@ -386,13 +386,18 @@ func restoreGenesis(e *core.Engine, c *Composition, cmds []protocol.Command) (us
 
 // tryRestoreCandidate validates whether a snapshot payload's tail
 // reconciles with cmds WITHOUT ever touching the caller's real
-// engine/composition: it restores into a brand-new throwaway engine (a bare
-// core.NewEngine wired with Wire(e, nil) — persistence is irrelevant to
-// validation, since Load/LoadAt fully overwrite whatever the throwaway
-// engine's default construction left in place, so its seed/pool options
-// never affect the result). This is what lets BUG-480's walk-back retry
-// cheaply: a candidate that fails here never seals or partially mutates the
-// REAL engine RestoreLatestSnapshotOrGenesis was handed.
+// engine/composition: it restores into a brand-new throwaway engine wired
+// with Wire(e, nil) — persistence is irrelevant to validation, since
+// Load/LoadAt fully overwrite whatever the throwaway engine's default
+// construction left in place. The throwaway MUST still carry the caller's
+// real world seed (worldSeed, below): BUG-479's Load-time seed check
+// compares the snapshot's bundle seed against the loading engine's seed,
+// so a probe built with a mismatched (e.g. default-zero) seed would refuse
+// every real candidate with MET-E819 before the tail-consistency logic
+// this function exists to test ever runs. This is what lets BUG-480's
+// walk-back retry cheaply: a candidate that fails here never seals or
+// partially mutates the REAL engine RestoreLatestSnapshotOrGenesis was
+// handed.
 //
 // Returns ok=true with the resolved snapshot tick + tail commands when the
 // candidate reconciles — the caller then replays this SAME data
@@ -402,8 +407,8 @@ func restoreGenesis(e *core.Engine, c *Composition, cmds []protocol.Command) (us
 // ErrSnapshotSkipped and safe to walk back past. A non-nil err is a
 // corrupt-frame failure (ErrSnapshotUnpackFailed) — BUG-480 requires this
 // to fail the whole restore closed immediately, never walked past.
-func tryRestoreCandidate(data []byte, cmds []protocol.Command, city persist.CityKey, correlationID string) (snapTick int64, tail []protocol.Command, ok bool, err error) {
-	valE := core.NewEngine()
+func tryRestoreCandidate(data []byte, cmds []protocol.Command, city persist.CityKey, correlationID string, worldSeed uint64) (snapTick int64, tail []protocol.Command, ok bool, err error) {
+	valE := core.NewEngine(core.WithWorldSeed(worldSeed))
 	valC, wireErr := Wire(valE, nil)
 	if wireErr != nil {
 		return 0, nil, false, errs.Wrap(ErrModuleFailed, correlationID, wireErr, map[string]any{"module": "snapshot", "step": "validate-wire"})

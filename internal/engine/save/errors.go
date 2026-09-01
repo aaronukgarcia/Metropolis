@@ -161,4 +161,25 @@ const (
 	// mirroring Engine.checkNotCopied/Registry.checkNotCopied/
 	// Store.checkNotCopied/Screen.checkNotCopied exactly (GR#3).
 	ErrManagerCopied = "MET-E818"
+
+	// ErrSaveSeedMismatch: Load/LoadAt found the bundle's Header.WorldSeed
+	// does not match the loading composition's own world seed (BUG-479).
+	// save.Context.WorldSeed is written into every bundle's header
+	// (writeBundleLocked, save.go), and every module Participant's saved
+	// shard omits its own `seed` field on the claim "reproduced from
+	// save.Context.WorldSeed" — but until this code existed, nothing
+	// actually enforced that the loading composition's seed was the one
+	// the bundle was written from. Loading a bundle into a differently-
+	// seeded composition therefore silently diverged every seed-derived
+	// stateless draw (attract hash draws, det.Stream per-draw RNG) from
+	// the saved trajectory, with no error at all.
+	//
+	// Raised by Load BEFORE any participant Handler is invoked (the
+	// header is fully decoded by serialize.ValidateBundle ahead of the
+	// per-shard loop — see load.go), so a refused load leaves every
+	// Participant, and therefore the whole composition, byte-for-byte
+	// untouched. Never raised when the caller passes AllowSeedMismatch()
+	// (LoadOption, options.go) — the explicit opt-in for a deliberate
+	// reseed, e.g. the FEAT-1972079897 rules-change replay case.
+	ErrSaveSeedMismatch = "MET-E819"
 )

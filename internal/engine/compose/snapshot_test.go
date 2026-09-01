@@ -767,7 +767,9 @@ func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
 
 	// Restart: a FRESH journaler (dirty=false again) restores from the
 	// still-only snapshot plus its consistent tail -- no walk-back needed.
-	eR := core.NewEngine()
+	// Same world seed as e1/comp1 (roundTripSeed, via buildPersistedComposition)
+	// -- BUG-479's Load-time seed check refuses a mismatched restore engine.
+	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
 	compR, err := Wire(eR, nil)
 	if err != nil {
 		t.Fatalf("Wire (restore target): %v", err)

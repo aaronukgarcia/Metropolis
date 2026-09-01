@@ -141,7 +141,26 @@ func (c *Composition) Save(root string) error {
 // composition is NOT equivalent to continuing the original. Clock restoration
 // is FEAT-1972079944; the journal-tail replay (FEAT-1972079936 inc3) supplies
 // the clock/continuation on top of this state snapshot.
-func (c *Composition) Load(root string) error {
+// BUG-479: the bundle's header WorldSeed is compared against this
+// composition's own seed (c.state.seed) BEFORE any participant state is
+// applied, refusing with save.ErrSaveSeedMismatch on a mismatch — every
+// module Participant's saved shard omits its own `seed` field on the
+// claim "reproduced from save.Context.WorldSeed" (see Participants' doc
+// comment), and until this check existed nothing enforced that claim.
+// opts forwards to save.Manager.Load; pass save.AllowSeedMismatch() for
+// a deliberate reseed (e.g. the FEAT-1972079897 rules-change replay
+// case). The seed check can never be skipped by OMISSION: Load always
+// PREPENDS save.WithExpectedWorldSeed(c.state.seed), so a caller that
+// passes no opts (every in-tree caller today, incl. snapshot.go's
+// RestoreLatestSnapshotOrGenesis) always gets the check. It CAN be
+// overridden deliberately, because opts are applied after the prepended
+// one and resolveLoadOptions is last-write-wins: a caller passing its
+// own save.WithExpectedWorldSeed(...) replaces the composition seed as
+// the expected value, exactly as save.AllowSeedMismatch() waives the
+// refusal. Both are explicit Go-API opt-outs, neither is reachable
+// without the caller naming an option (BUG-479 r1/r2 rounds; pinned by
+// attack_bug479_optsoverride_test.go).
+func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	summaries, _, err := save.List(root)
 	if err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "list"})
@@ -162,8 +181,9 @@ func (c *Composition) Load(root string) error {
 			"cause":  "no composition save named " + compositionSaveName + " found under root",
 		})
 	}
+	loadOpts := append([]save.LoadOption{save.WithExpectedWorldSeed(int64(c.state.seed))}, opts...)
 	mgr := save.NewManager(root, c.Participants(), c.state.cid)
-	if _, _, err := mgr.Load(dir); err != nil {
+	if _, _, err := mgr.Load(dir, loadOpts...); err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "load", "dir": dir})
 	}
 	// FEAT-1972079943 — recompute the DERIVED compose-owned ledgers from the
@@ -222,8 +242,14 @@ func (c *Composition) Load(root string) error {
 // (see Save's save.Context construction above) -- callers restoring from a
 // snapshot+journal-tail bundle (FEAT-1972079936 inc3) pass that snapshot's
 // tick here before replaying the tail.
-func (c *Composition) LoadAt(root string, tick int64) error {
-	if err := c.Load(root); err != nil {
+//
+// BUG-479: LoadAt delegates straight to Load for the state restore, so it
+// inherits Load's WorldSeed-vs-composition-seed check unconditionally
+// (refusing, before the clock is ever seeded, on a mismatch) — opts
+// forwards to that Load call exactly as Load's own opts parameter does;
+// pass save.AllowSeedMismatch() here for a deliberate reseed.
+func (c *Composition) LoadAt(root string, tick int64, opts ...save.LoadOption) error {
+	if err := c.Load(root, opts...); err != nil {
 		return err
 	}
 	if err := c.state.e.SeedClockForRestore(c.state.cid, tick); err != nil {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/compose"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/persist"
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 )
@@ -662,7 +663,11 @@ func TestAttackInc3b_CityHostThreeCitiesSnapshotAndShutdown(t *testing.T) {
 	// Every city must still restore exactly after the abrupt shutdown.
 	for _, k := range keys {
 		var log bytes.Buffer
-		e := newEngine()
+		// BUG-479: the restore engine must carry the SAME world seed the city
+		// was created with (seedForCity, as buildCity does) — the fixed
+		// inc4Seed helper was a differently-seeded restore that only passed
+		// because nothing validated the bundle seed before BUG-479.
+		e := core.NewEngine(core.WithWorldSeed(seedForCity(k)), core.WithPoolSize(1))
 		if _, err := wireAndRehydrate(context.Background(), e, disk, k, &log); err != nil {
 			t.Fatalf("restore %s after mid-snapshot Close: %v — log=%q", k.CityID, err, log.String())
 		}

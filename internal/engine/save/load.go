@@ -30,7 +30,15 @@ import (
 // ErrBundleValidationFailed, wrapping ValidateBundle's own error —
 // always a registry-sourced *errs.E (GR#7), never the bare underlying
 // error.
-func (m *Manager) Load(dir string) (serialize.Header, Meta, error) {
+//
+// opts customises this call (BUG-479): pass WithExpectedWorldSeed(seed)
+// to refuse the bundle with ErrSaveSeedMismatch unless its header's
+// WorldSeed equals seed, and AllowSeedMismatch() alongside it to permit
+// a deliberate reseed instead of refusing. With no opts at all, Load's
+// behaviour is byte-for-byte the pre-BUG-479 one: no seed check.
+func (m *Manager) Load(dir string, opts ...LoadOption) (serialize.Header, Meta, error) {
+	lo := resolveLoadOptions(opts)
+
 	// SEC-020-class: identity check before touching any field — see
 	// checkNotCopied's doc comment (manager.go).
 	if err := m.checkNotCopied(map[string]any{"method": "Load", "dir": dir}); err != nil {
@@ -46,6 +54,23 @@ func (m *Manager) Load(dir string) (serialize.Header, Meta, error) {
 			return serialize.Header{}, Meta{}, errs.Wrap(ErrFormatVersionMismatch, m.correlationID, fvErr, map[string]any{"dir": dir, "cause": fvErr.Error()})
 		}
 		return serialize.Header{}, Meta{}, errs.Wrap(ErrBundleValidationFailed, m.correlationID, err, map[string]any{"dir": dir, "cause": err.Error()})
+	}
+
+	// BUG-479: refuse a bundle whose WorldSeed does not match the
+	// loading composition's own seed, BEFORE any participant Handler
+	// runs (the shard-load loop below is the earliest point any
+	// participant state changes, and it starts strictly after this
+	// check) — so a refused load leaves every Participant, and
+	// therefore the whole composition, untouched. Skipped entirely
+	// unless the caller opted in via WithExpectedWorldSeed; never
+	// skipped silently once opted in, unless AllowSeedMismatch was also
+	// passed (the deliberate-reseed escape hatch).
+	if lo.checkWorldSeed && header.WorldSeed != lo.expectedWorldSeed && !lo.allowMismatch {
+		return serialize.Header{}, Meta{}, errs.New(ErrSaveSeedMismatch, m.correlationID, map[string]any{
+			"dir":             dir,
+			"bundleSeed":      header.WorldSeed,
+			"compositionSeed": lo.expectedWorldSeed,
+		})
 	}
 
 	meta, err := ReadMeta(dir)
