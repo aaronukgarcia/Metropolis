@@ -90,6 +90,10 @@ export function isStateAffecting(action: Action): boolean {
     // credits the treasury, exactly like bulldoze — state-affecting.
     case 'sellAsset':
       return true;
+    // FEAT-1972079923 inc3 (AC-5): administration entry mutates administrationState/
+    // bailoutState/insolvencyState — state-affecting, must replay identically.
+    case 'enterAdministration':
+      return true;
 
     // Moving buildings — state-affecting only for the actual move, not UI pickup/cancel.
     case 'pickup':

@@ -32,7 +32,7 @@ import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
 import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets } from '../sim/engine';
-import { BAILOUT_DURATION_TICKS } from '../sim/fiscal';
+import { BAILOUT_DURATION_TICKS, ADMINISTRATION_DURATION_TICKS } from '../sim/fiscal';
 import { publishMapUi } from '../sim/uistate';
 import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
 import { applyStashedCameraToView } from '../sim/cameraApply';
@@ -952,6 +952,7 @@ export function MapView() {
       <LevelUpBanner />
       <PlaceNoticeBanner />
       <InsolvencyBanner />
+      <AdministrationBanner />
       <InsolvencyPopup />
       <ForcedAssetSalesPanel />
       <div
@@ -1124,13 +1125,35 @@ function PlaceNoticeBanner() {
 function InsolvencyBanner() {
   const { state } = useSim();
   const band = state.insolvencyState ?? 'solvent';
-  if (band === 'solvent') return null;
+  // FEAT-1972079923 inc3 (AC-5): 'administration' has its own dedicated
+  // AdministrationBanner below — this banner only covers the pure
+  // solvent/warning/crisis bands, never renders the stale crisis-style copy
+  // over an active administration.
+  if (band === 'solvent' || band === 'administration') return null;
   const crisis = band === 'crisis';
   return (
     <div className={`insolvency-banner ${crisis ? 'crisis' : 'warning'}`} role="status">
       {crisis
         ? 'BAILOUT: You have 1 year to restore solvency. Sell assets or enter Administration.'
         : 'Treasury warning — funds are approaching the insolvency threshold. Raise revenue or cut spending before the IMF steps in.'}
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc3 (AC-5, AC-7): the ADMINISTRATION MODE banner. Visible
+// for the whole active administration window; shows the entry tick and ticks
+// remaining until the AC-7 year-end re-evaluation (pure tick arithmetic, no
+// wall-clock). The city REMAINS PLAYABLE while this is shown — nothing here
+// stops the clock.
+function AdministrationBanner() {
+  const { state } = useSim();
+  const admin = state.administrationState;
+  if (!admin) return null;
+  const ticksLeft = Math.max(0, admin.enteredAt + ADMINISTRATION_DURATION_TICKS - state.tick);
+  return (
+    <div className="insolvency-banner administration" role="status">
+      ADMINISTRATION MODE — spending frozen to mandatory obligations since tick {admin.enteredAt}
+      {' '}({ticksLeft} ticks until re-evaluation).
     </div>
   );
 }
@@ -1191,6 +1214,15 @@ function ForcedAssetSalesPanel() {
         IMF bailout active since tick {bailout.enteredAt} ({ticksLeft} ticks remaining this
         year). Sell assets, biggest capital value first, to restore solvency.
       </p>
+      {/* FEAT-1972079923 inc3 (AC-5): the alternative to forced asset sales —
+          enter Administration Mode instead. Closes this panel + starts the
+          360-tick discretionary-spend freeze (AC-6/AC-7). */}
+      <button
+        className="btn tiny forced-asset-sales-admin-btn"
+        onClick={() => dispatch({ type: 'enterAdministration' })}
+      >
+        Enter Administration
+      </button>
       {assets.length === 0 ? (
         <p className="forced-asset-sales-empty">No sellable assets remain.</p>
       ) : (

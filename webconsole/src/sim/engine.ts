@@ -56,7 +56,7 @@ import type {
   InsolvencyState,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -380,6 +380,8 @@ function rawState(): SimState {
     insolvencyPopup: null,
     // FEAT-1972079923 inc2: no bailout active at game start.
     bailoutState: null,
+    // FEAT-1972079923 inc3: no administration active at game start.
+    administrationState: null,
   };
 }
 
@@ -1227,7 +1229,17 @@ function advance(s: SimState): SimState {
   // the exact entry AND exit ticks.
   const prevBailoutState = s.bailoutState ?? null;
   let bailoutState = prevBailoutState;
-  if (insolvencyState === 'crisis' && prevInsolvencyState !== 'crisis' && prevBailoutState === null) {
+  // FEAT-1972079923 inc3 (AC-7): a crisis-band re-read caused by ADMINISTRATION
+  // ENDING still-broke must NOT re-fire a fresh bailout (no auto-transition to a
+  // second bailout — that is inc4 scope). Guarded by `prevInsolvencyState !==
+  // 'administration'` — a genuine NEW crossing into crisis always arrives from
+  // 'solvent'/'warning', never from 'administration'.
+  if (
+    insolvencyState === 'crisis' &&
+    prevInsolvencyState !== 'crisis' &&
+    prevInsolvencyState !== 'administration' &&
+    prevBailoutState === null
+  ) {
     bailoutState = { enteredAt: tick };
     funds += BAILOUT_INCOME_INJECTION;
     inflows = [...inflows, { label: BAILOUT_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION }];
@@ -1238,8 +1250,25 @@ function advance(s: SimState): SimState {
   ) {
     // Solvency restored by the year-end checkpoint — bailout ends. Still
     // insolvent: bailoutState is left unchanged (no transition), per AC-2 —
-    // Administration Mode / second bailout are inc3/4 scope.
+    // second bailout is inc4 scope.
     bailoutState = null;
+  }
+
+  // FEAT-1972079923 inc3 (AC-5, AC-6, AC-7): ADMINISTRATION MODE overlay.
+  // Entry is USER-INITIATED (the `enterAdministration` action, below in
+  // reduceCore) — advance() never enters administration on its own; it only
+  // handles the AC-7 year-end re-evaluation: exactly ADMINISTRATION_DURATION_TICKS
+  // after entry, administration ALWAYS ends (whether or not funds recovered) —
+  // deterministic tick arithmetic only (GR#21), never Date.now(). Recovery is
+  // reported via the funds band below (solvent/warning); still-broke reverts to
+  // 'crisis' with NO auto-transition to a second bailout (inc4 scope, AC-7).
+  const prevAdministrationState = s.administrationState ?? null;
+  let administrationState = prevAdministrationState;
+  if (
+    prevAdministrationState !== null &&
+    tick >= prevAdministrationState.enteredAt + ADMINISTRATION_DURATION_TICKS
+  ) {
+    administrationState = null;
   }
 
   // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking
@@ -1254,6 +1283,15 @@ function advance(s: SimState): SimState {
     insolvencyState === 'crisis' && prevInsolvencyState !== 'crisis'
       ? { state: insolvencyState, enteredAt: tick }
       : (s.insolvencyPopup ?? null);
+
+  // FEAT-1972079923 inc3 (AC-5, AC-7): the EXPOSED insolvencyState overlays the
+  // pure funds band with 'administration' while administrationState is active —
+  // this is the field AC-5/AC-7 assert on. `insolvencyState` (the local var
+  // above) stays the pure funds-derived band throughout, used only internally
+  // for the bailout trigger/popup logic; this is the ONLY place the overlay is
+  // applied, so a replay reproduces the exact same exposed value at every tick.
+  const exposedInsolvencyState: InsolvencyState =
+    administrationState !== null ? 'administration' : insolvencyState;
 
   return {
     ...s,
@@ -1286,9 +1324,10 @@ function advance(s: SimState): SimState {
     lastFlows: { inflows, outflows, population: s.population },
     lastRewardedLevel,
     notice: nextNotice,
-    insolvencyState,
+    insolvencyState: exposedInsolvencyState,
     insolvencyPopup,
     bailoutState,
+    administrationState,
   };
 }
 
@@ -2324,6 +2363,7 @@ export type Action =
   | { type: 'placeRoadPath'; spec: string; tiles: { x: number; y: number }[] }
   | { type: 'bulldoze'; x: number; y: number }
   | { type: 'sellAsset'; id: number }
+  | { type: 'enterAdministration' }
   | { type: 'pickup'; id: number }
   | { type: 'relocate'; x: number; y: number }
   | { type: 'cancelMove' }
@@ -2368,6 +2408,18 @@ function reduceCore(state: SimState, action: Action): SimState {
       // Zoning is free (FEAT-1972079882): a zone charges £0, so the funds check
       // and deduction use placementCost, not the catalogue cost.
       const cost = placementCost(sp);
+      // FEAT-1972079923 inc3 (AC-6, Aaron's ruling): Administration Mode is a HARD
+      // BLOCK on DISCRETIONARY spend — any PAID placement — checked BEFORE the
+      // ordinary affordability gate below so a player with enough cash on hand is
+      // still refused (this is a spending freeze, not an affordability check). A
+      // £0 placement (free zone/road) is NOT discretionary spend and always
+      // proceeds, admin or not — mirrors the cost>0 guard immediately below.
+      // (Aaron's ruling also freezes "hiring": this engine has no discrete hire
+      // action — jobs only arrive via placing job-bearing buildings, which are
+      // paid, so this same block covers it; nothing further to gate.)
+      if (cost > 0 && state.administrationState) {
+        return { ...state, placeNotice: ADMINISTRATION_PLACE_BLOCKED_MESSAGE };
+      }
       // BUG-396 FIX (free-place + silent-fail): only an ACTUAL spend the player
       // cannot cover blocks a placement. A cost-0 placement (a free zone) is always
       // affordable and MUST proceed regardless of funds — even while the treasury is
@@ -2604,6 +2656,12 @@ function reduceCore(state: SimState, action: Action): SimState {
         totalCost += tile.cost;
       }
 
+      // FEAT-1972079923 inc3 (AC-6): same discretionary-spend freeze as `place`
+      // above — a PAID road/junction/bridge path is blocked outright in
+      // Administration Mode; a £0 (deduped/free-tier) path always proceeds.
+      if (totalCost > 0 && state.administrationState) {
+        return { ...state, placeNotice: ADMINISTRATION_PLACE_BLOCKED_MESSAGE };
+      }
       // All-or-nothing: check affordability before placing anything.
       if (totalCost > 0 && state.funds < totalCost) {
         return { ...state, placeNotice: `Insufficient funds — ${fmtMoney(totalCost)} needed for road path` };
@@ -2783,6 +2841,27 @@ function reduceCore(state: SimState, action: Action): SimState {
       };
     }
 
+    // FEAT-1972079923 inc3 (AC-5) — ADMINISTRATION MODE ENTRY: the player's
+    // alternative to forced asset sales. Only available while a bailout is
+    // ACTIVE (mirrors the FORCED ASSET SALES panel's own visibility guard) and
+    // idempotent if administration is already active (no re-stamp, no double
+    // entry). Sets `administrationState` immediately (a between-tick action,
+    // like sellAsset) AND the exposed `insolvencyState` to 'administration' in
+    // the SAME transition — the next tick's advance() recomputes an IDENTICAL
+    // overlay from `administrationState`, so this is not a second code path,
+    // just an immediate reflection of what advance() would compute anyway.
+    // Clears `bailoutState` so the FORCED ASSET SALES panel closes at once.
+    // The city REMAINS PLAYABLE — nothing here freezes the clock/tick.
+    case 'enterAdministration': {
+      if (!state.bailoutState || state.administrationState) return state;
+      return {
+        ...state,
+        administrationState: { enteredAt: state.tick },
+        bailoutState: null,
+        insolvencyState: 'administration',
+      };
+    }
+
     case 'pickup':
       return { ...state, movingId: action.id };
 
@@ -2957,8 +3036,16 @@ function reduceCore(state: SimState, action: Action): SimState {
     case 'tax':
       return { ...state, taxRates: { ...state.taxRates, [action.which]: action.rate } };
 
-    case 'policy':
-      return { ...state, policies: { ...state.policies, [action.id]: !state.policies[action.id] } };
+    case 'policy': {
+      const turningOn = !state.policies[action.id];
+      // FEAT-1972079923 inc3 (AC-6): enacting a NEW policy is discretionary
+      // spend — blocked in Administration Mode. Turning an ALREADY-ON policy
+      // back OFF is not a new spend and stays allowed even under admin.
+      if (turningOn && state.administrationState) {
+        return { ...state, placeNotice: ADMINISTRATION_POLICY_BLOCKED_MESSAGE };
+      }
+      return { ...state, policies: { ...state.policies, [action.id]: turningOn } };
+    }
 
     case 'loan': {
       if (state.loanBalance > 0) return state;

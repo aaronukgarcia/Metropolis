@@ -218,6 +218,8 @@ export interface DebugJson {
     insolvencyPopup: { state: InsolvencyState; enteredAt: number } | null;
     /** FEAT-1972079923 inc2 (AC-2) — the IMF bailout event state machine, or null. */
     bailoutState: { enteredAt: number } | null;
+    /** FEAT-1972079923 inc3 (AC-5, AC-7) — the Administration Mode state machine, or null. */
+    administrationState: { enteredAt: number } | null;
     roadMonitors: RoadMonitor[];
     /** FEAT-1972079878 inc1 — building auto-scale demand monitors. */
     buildingMonitors: BuildingMonitor[];
@@ -476,6 +478,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   insolvencyState: 'sim.insolvencyState',
   insolvencyPopup: 'sim.insolvencyPopup',
   bailoutState: 'sim.bailoutState',
+  administrationState: 'sim.administrationState',
   roadMonitors: 'sim.roadMonitors',
   buildingMonitors: 'sim.buildingMonitors',
   roadConnectivity: 'sim.roadConnectivity',
@@ -696,6 +699,8 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       insolvencyPopup: s.insolvencyPopup ?? null,
       // FEAT-1972079923 inc2: backward tolerance for a legacy state predating bailoutState.
       bailoutState: s.bailoutState ?? null,
+      // FEAT-1972079923 inc3: backward tolerance for a legacy state predating administrationState.
+      administrationState: s.administrationState ?? null,
       roadMonitors: s.roadMonitors,
       // FEAT-1972079878 inc1: building auto-scale demand monitors (parallel to
       // roadMonitors above) — must be serialized for save/load + replay parity

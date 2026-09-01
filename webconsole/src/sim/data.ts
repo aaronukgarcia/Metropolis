@@ -2432,7 +2432,14 @@ export function pickAutoSpec(
   for (const m of meters) {
     if (m.value <= 25) break; // sorted desc — everything after is below the trigger.
     const sp = SPECS[m.spec];
-    if (sp && placementCost(sp) <= s.funds) {
+    if (!sp) continue;
+    const cost = placementCost(sp);
+    // FEAT-1972079923 inc3 (AC-6): the advisor must not offer paid buildings
+    // while Administration Mode is active — a paid suggestion would just
+    // bounce off the `place()` discretionary-spend block, silently confusing
+    // the player. A £0 (free zone/road) suggestion is still fine under admin.
+    if (s.administrationState && cost > 0) continue;
+    if (cost <= s.funds) {
       return { spec: m.spec, label: m.label };
     }
   }

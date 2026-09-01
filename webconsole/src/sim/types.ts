@@ -356,6 +356,20 @@ export interface SimState {
    * no-bailout-active.
    */
   bailoutState?: { enteredAt: number } | null;
+  /**
+   * FEAT-1972079923 inc3 (AC-5, AC-6, AC-7) — ADMINISTRATION MODE state machine.
+   * Set ONCE, by the user-initiated `enterAdministration` action (available only
+   * while `bailoutState` is active — the alternative to forced asset sales), and
+   * cleared exactly ADMINISTRATION_DURATION_TICKS later at the year-end
+   * re-evaluation (AC-7), regardless of whether solvency was restored (recovery
+   * reverts `insolvencyState` to the funds band; still-broke reverts it to
+   * 'crisis' with no auto-transition to a second bailout — inc4 scope).
+   * Entering administration also clears `bailoutState` (closes the FORCED ASSET
+   * SALES panel, per AC-5). `enteredAt` is a tick number, never Date.now()
+   * (GR#21 determinism). Optional for backward tolerance: a legacy state
+   * without it is treated as no-administration-active.
+   */
+  administrationState?: { enteredAt: number } | null;
 }
 
 /**
@@ -363,8 +377,15 @@ export interface SimState {
  * for inc1 (detection + feedback only); inc2-4 build the actual bailout/
  * administration/second-bailout/decline state machine on top of the 'crisis'
  * band entry point ruled by Aaron (BOW FEAT-1972079923 comment, 2026-08-31).
+ * 'administration' (inc3, AC-5/AC-6/AC-7) is an OVERLAY on top of the pure
+ * funds-derived band: while `administrationState` is active, the exposed
+ * `insolvencyState` reads 'administration' regardless of the underlying funds
+ * band, reverting to the true funds band (solvent/warning/crisis) the tick
+ * administration ends (AC-7). insolvencyStateForFunds() itself never returns
+ * 'administration' — it is a pure funds→band classifier; the overlay is
+ * applied in engine.advance().
  */
-export type InsolvencyState = 'solvent' | 'warning' | 'crisis';
+export type InsolvencyState = 'solvent' | 'warning' | 'crisis' | 'administration';
 
 /**
  * FEAT-1972079907 inc2 — a single monitored road segment (one road tile).

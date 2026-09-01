@@ -213,3 +213,38 @@ export const BAILOUT_INJECTION_LABEL = 'IMF Bailout Injection';
  * lastFlows inflow entry (see BAILOUT_INJECTION_LABEL for the rationale).
  */
 export const ASSET_SALE_LABEL = 'Forced Asset Sale';
+
+/**
+ * FEAT-1972079923 inc3 (AC-7) — PLACEHOLDER (balance-number regime):
+ * Administration Mode lasts exactly one game-year, mirroring
+ * BAILOUT_DURATION_TICKS. Deliberately a SEPARATE named constant (not a reuse
+ * of BAILOUT_DURATION_TICKS) so the balance pass can retune the two durations
+ * independently later — a test asserts they are currently equal (both must
+ * equal TICKS_PER_YEAR today) so a drift is caught, not silently allowed.
+ */
+export const ADMINISTRATION_DURATION_TICKS = 360;
+
+/**
+ * FEAT-1972079923 inc3 (AC-6) — Aaron's round-2 ruling (2026-08-31, recorded on
+ * the BOW item) OVERRIDES the BA criteria doc's stale "multiply ALL outflows by
+ * a spending multiplier" text. Administration Mode is a HARD BLOCK on
+ * DISCRETIONARY spend only:
+ *   - BLOCKED: placing/paying for new buildings, enacting new policies, hiring.
+ *   - ACCRUES IN FULL (never reduced): overdraft interest + existing upkeep of
+ *     already-built infrastructure (mandatory obligations) — computeFlows()/
+ *     applyOutflowPolicies() are UNTOUCHED by administration, deliberately.
+ * No ADMINISTRATION_SPENDING_MULTIPLIER constant exists (the inc1/inc2 build
+ * never declared one) — this SSOT message constant is the discretionary-block
+ * feedback text instead, reusing the inc1 placeNotice feedback path (BUG-396).
+ */
+export const ADMINISTRATION_PLACE_BLOCKED_MESSAGE =
+  'Cannot place under Administration Mode — spending is frozen to mandatory obligations only';
+
+/**
+ * FEAT-1972079923 inc3 (AC-6) — companion message for a blocked NEW policy
+ * enactment while in Administration Mode (see ADMINISTRATION_PLACE_BLOCKED_MESSAGE).
+ * Turning an ALREADY-ON policy back OFF is not a new discretionary spend, so
+ * that direction is left unblocked.
+ */
+export const ADMINISTRATION_POLICY_BLOCKED_MESSAGE =
+  'Cannot enact new policy under Administration Mode — spending is frozen to mandatory obligations only';
