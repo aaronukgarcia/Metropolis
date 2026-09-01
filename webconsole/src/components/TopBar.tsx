@@ -122,12 +122,17 @@ export function StartOverButton() {
         {state.unlockedAll ? 'All Unlocked' : 'Unlock All'}
       </button>
       <DevFundsButton />
+      <DevFundsLargeButton />
     </div>
   );
 }
 
 /** Amount granted by the dev funds button (FEAT-1972079883). */
 export const DEV_FUNDS_GRANT = 10_000_000;
+
+/** Amount granted by the large dev funds button (FEAT-2326609716, Aaron
+ *  2026-09-01: "+1B next to the +10m" for start-over testing). */
+export const DEV_FUNDS_GRANT_LARGE = 1_000_000_000;
 
 // DevFundsButton — DEV-ONLY debug helper (FEAT-1972079883) sitting next to
 // Start Over. Renders only when import.meta.env.DEV is true, so a production
@@ -142,6 +147,25 @@ export function DevFundsButton() {
       onClick={() => dispatch({ type: 'debugFunds', amount: DEV_FUNDS_GRANT })}
     >
       +£10m
+    </button>
+  );
+}
+
+// DevFundsLargeButton — DEV-ONLY sibling of DevFundsButton
+// (FEAT-2326609716): identical gating (import.meta.env.DEV, omitted from
+// production builds) and identical debugFunds path, granting +£1B for
+// start-over/big-capex testing. Rendered immediately next to the +£10m
+// button wherever DevFundsButton is mounted.
+export function DevFundsLargeButton() {
+  const { dispatch } = useSim();
+  if (!import.meta.env.DEV) return null;
+  return (
+    <button
+      className="btn accent dev-funds"
+      title={`Dev only: grant ${fmtMoney(DEV_FUNDS_GRANT_LARGE)}`}
+      onClick={() => dispatch({ type: 'debugFunds', amount: DEV_FUNDS_GRANT_LARGE })}
+    >
+      +£1B
     </button>
   );
 }

@@ -344,9 +344,17 @@ When a service's external cover is enabled, its corresponding wellbeing part REM
 
 2. **Fire integration into wellbeingOf:** Should fire shortfall apply a wellbeing penalty symmetrically to police/health, or remain display-only for now (since fire is NEW to the coverage system)? (Interim: add fire part to wellbeing array, following the same coverage→penalty formula as police/health.)
 
-3. **Per-service defaults on old saves:** When loading a pre-existing save without fire/police/health `externalCover` fields, should all three default to on (matching new-game expectations, safest for player progression), or should they default to off (preserving original legacy-shortage behaviour)? (Interim: all on; document as a replay-divergence exception, matching inc2's water/waste/refuse precedent.)
+3. **Per-service defaults on old saves:** When loading a pre-existing save without fire/police/health `externalCover` fields, should all three default to on (matching new-game expectations, safest for player progression), or should they default to off (preserving original legacy-shortage behaviour)? **(ANSWERED 2026-09-01: all on; document as a replay-divergence exception, matching inc2's water/waste/refuse precedent.)**
 
-4. **Tariff formula:** Should the cover tariff be a fixed constant per person/tick (current design, AC-2/AC-3/AC-4), or should it scale with city wealth / population / demand (more complex, deferred to balance pass)? (Interim: fixed constant, matching inc1/inc2 design.)
+4. **Tariff formula:** Should the cover tariff be a fixed constant per person/tick (current design, AC-2/AC-3/AC-4), or should it scale with city wealth / population / demand (more complex, deferred to balance pass)? **(ANSWERED 2026-09-01: fixed constant per-person from the catalogue, matching inc1/inc2 design.)**
+
+### Post-inc3 Future Increments (Sequenced After FEAT-083 Baseline One)
+
+The following Q100035 sub-questions define future health and emergency-response system increments, registered as BOW items and sequenced after the Baseline One spine per the northstar:
+
+- **Q100035-1 Health-Chain System** (MOD-034 + new FEAT): Full health-chain spanning doctor access (local GP), ambulance services, hospital facilities, medical-stock warehousing, buildings-online dependency (people, power, water), health decline without attention → death or move-away, and air-ambulance sentiment bonus. Defined in BOW item as future P2 feature, sequenced post-FEAT-083.
+
+- **Q100035-2 Emergency-Response SLA Mechanics** (MOD-040 + new FEAT): Per-service response time vs national-benchmark SLA (England fire ~7–10 min primary, police ~15 min urban, ambulance Category 1 ~7 min mean / Category 2 ~18 min mean per NHS England — PLACEHOLDER, needs verification against real UK standards before balance pass), traffic-dependent travel time computation, and SLA-miss consequences (unhappiness, buildings burn down, sickness/death). Defined in BOW item as future P2 feature, sequenced post-FEAT-083.
 
 ---
 
