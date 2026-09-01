@@ -119,7 +119,8 @@
       "P010-P019": "reserved for protocol (auto-claimed via tools/plan/add-error.js claim-range for FEAT-1972079852 on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\"; the WebSocket transport lives under internal/protocol/wsserver, part of the protocol seam)",
       "P020-P029": "reserved for protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"P\")",
       "P030-P034": "reserved for protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-08-31 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"P\")",
-      "G5400-G5409": "reserved for feat.deathwave (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")"
+      "G5400-G5409": "reserved for feat.deathwave (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"G\")",
+      "H500-H509": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5152,6 +5153,30 @@
       "module": "feat.deathwave",
       "message": "DeathQueue method {method} called on a struct copy, not the *DeathQueue NewDeathQueue returned",
       "remedy": "DeathQueue's mutex and maps are reference/value types a struct copy would alias or duplicate unsafely (SEC-020 family, mirroring engine.citizens' ErrAPICopied). Always pass/store a *DeathQueue pointer, never dereference and copy the value."
+    },
+    "MET-H500": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "failed to read parity fixture file {path}: {reason}",
+      "remedy": "Check the fixture path exists and is readable. This is an I/O failure (missing file, permission denied), distinct from a decode failure on bytes that WERE read."
+    },
+    "MET-H501": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "parity fixture {path} failed to decode: {reason}",
+      "remedy": "The fixture's JSON is malformed or missing a required field (domain/samples/tick/values). Regenerate the fixture from a known-good capture rather than hand-patching it."
+    },
+    "MET-H502": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "parity contract has no tolerance entry for field {field}",
+      "remedy": "Every field a Domain adapter reports in a Trajectory sample that the comparator is asked to check must have a Tolerance entry in its Contract (Tier + parameters) -- add one rather than letting an unconstrained field silently pass."
+    },
+    "MET-H503": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "journal entry (tick {tick}, op {op}) failed against the {domain} domain: {reason}",
+      "remedy": "The domain adapter could not apply this journal entry to the live engine (unknown op name, malformed args, or the engine call itself returned an error). Fix the journal or the adapter; a failed op is a fixture-defect, never silently skipped."
     }
   }
 }
