@@ -23,9 +23,11 @@
 
 import type {
   ArrivalsByMode,
+  BailoutOrigin,
   Building,
   BuildingMonitor,
   Clipboard,
+  DeclineState,
   DemographicFlow,
   FlowItem,
   InsolvencyState,
@@ -219,7 +221,17 @@ export interface DebugJson {
     /** FEAT-1972079923 inc2 (AC-2) — the IMF bailout event state machine, or null. */
     bailoutState: { enteredAt: number } | null;
     /** FEAT-1972079923 inc3 (AC-5, AC-7) — the Administration Mode state machine, or null. */
-    administrationState: { enteredAt: number } | null;
+    administrationState: { enteredAt: number; origin?: BailoutOrigin } | null;
+    /** FEAT-1972079923 inc4 (AC-10) — the SECOND IMF bailout event state machine, or null. */
+    bailoutSecondState: { enteredAt: number } | null;
+    /** FEAT-1972079923 inc4 (AC-11) — the FINAL decline (hard game-over) state, or null. */
+    declineState: DeclineState | null;
+    /** FEAT-1972079923 inc4 (AC-11) — running peak population ever observed. */
+    peakPopulation: number;
+    /** FEAT-1972079923 inc4 (AC-11) — running minimum funds ever observed. */
+    minFundsEver: number;
+    /** FEAT-1972079923 inc4 (AC-11) — running total of all outflows since game start. */
+    totalSpending: number;
     roadMonitors: RoadMonitor[];
     /** FEAT-1972079878 inc1 — building auto-scale demand monitors. */
     buildingMonitors: BuildingMonitor[];
@@ -479,6 +491,11 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   insolvencyPopup: 'sim.insolvencyPopup',
   bailoutState: 'sim.bailoutState',
   administrationState: 'sim.administrationState',
+  bailoutSecondState: 'sim.bailoutSecondState',
+  declineState: 'sim.declineState',
+  peakPopulation: 'sim.peakPopulation',
+  minFundsEver: 'sim.minFundsEver',
+  totalSpending: 'sim.totalSpending',
   roadMonitors: 'sim.roadMonitors',
   buildingMonitors: 'sim.buildingMonitors',
   roadConnectivity: 'sim.roadConnectivity',
@@ -701,6 +718,12 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       bailoutState: s.bailoutState ?? null,
       // FEAT-1972079923 inc3: backward tolerance for a legacy state predating administrationState.
       administrationState: s.administrationState ?? null,
+      // FEAT-1972079923 inc4: backward tolerance for a legacy state predating these fields.
+      bailoutSecondState: s.bailoutSecondState ?? null,
+      declineState: s.declineState ?? null,
+      peakPopulation: s.peakPopulation ?? s.population,
+      minFundsEver: s.minFundsEver ?? s.funds,
+      totalSpending: s.totalSpending ?? 0,
       roadMonitors: s.roadMonitors,
       // FEAT-1972079878 inc1: building auto-scale demand monitors (parallel to
       // roadMonitors above) — must be serialized for save/load + replay parity

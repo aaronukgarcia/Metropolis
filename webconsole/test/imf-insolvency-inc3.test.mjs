@@ -261,7 +261,14 @@ test('AC-7: administration ENDS at exactly N+ADMINISTRATION_DURATION_TICKS when 
   assert.equal(solventAtYearEnd.insolvencyState, 'solvent', 'recovered funds → solvent');
 });
 
-test('AC-7 MUTATION-PROVE target: administration ENDS at year-end even while STILL BROKE (no indefinite freeze)', () => {
+// FEAT-1972079923 inc4 (AC-10) SUPERSESSION NOTE: this test originally
+// asserted "still-broke reverts to the crisis band, not a fresh
+// administration" per the inc3-era AC-7 text (inc4 was explicitly out of
+// scope then). Aaron's round-2 ruling (2026-08-31) OVERRIDES that: still
+// broke at the year-end of an administration session that covered the FIRST
+// bailout year now AUTO-TRIGGERS the second bailout (AC-10) — see
+// imf-insolvency-inc4.test.mjs for full second-bailout/decline coverage.
+test('AC-7/AC-10: administration ENDS at year-end even while STILL BROKE, auto-triggering the second bailout (inc4)', () => {
   const crisis = enterBailout();
   const admin = reducer(crisis, { type: 'enterAdministration' });
   const enteredAt = admin.administrationState.enteredAt;
@@ -272,10 +279,11 @@ test('AC-7 MUTATION-PROVE target: administration ENDS at year-end even while STI
   }
   assert.equal(s.tick, enteredAt + ADMINISTRATION_DURATION_TICKS);
   assert.equal(s.administrationState, null, 'administration must end at the year-end tick regardless of funds (AC-7 "then re-evaluate")');
-  assert.equal(s.insolvencyState, 'crisis', 'still-broke reverts to the crisis band, not a fresh administration');
+  assert.ok(s.bailoutSecondState, 'still-broke at the FIRST bailout year-end (via administration) must auto-trigger the second bailout (AC-10)');
+  assert.equal(s.insolvencyState, 'bailout_second', 'exposed state reads the new bailout_second overlay, not a stale crisis band');
 });
 
-test('AC-7 MUTATION-PROVE target: still-broke re-evaluation must NOT auto-re-trigger a fresh bailout injection (inc4 scope)', () => {
+test('AC-7 MUTATION-PROVE target: still-broke re-evaluation must NOT re-trigger a fresh FIRST bailout (only the second, per AC-10)', () => {
   const crisis = enterBailout();
   const admin = reducer(crisis, { type: 'enterAdministration' });
 
@@ -283,7 +291,7 @@ test('AC-7 MUTATION-PROVE target: still-broke re-evaluation must NOT auto-re-tri
   for (let i = 0; i < ADMINISTRATION_DURATION_TICKS; i++) {
     s = tickAtFunds(s, DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000);
   }
-  assert.equal(s.bailoutState, null, 'no auto-transition to a fresh/second bailout at admin year-end — inc4 scope, not inc3');
+  assert.equal(s.bailoutState, null, 'no auto-transition to a FRESH first bailout at admin year-end — only the second bailout (AC-10) fires');
 });
 
 // ========== Determinism (GR#21 / AC-12 companion): no Date/random, byte-identical replays ==========

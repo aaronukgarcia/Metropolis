@@ -113,7 +113,15 @@ test('AC-2: bailout duration is exactly BAILOUT_DURATION_TICKS — ends only at 
   assert.equal(solventAtYearEnd.bailoutState, null, 'bailout must end when solvent AT the year-end tick');
 });
 
-test('AC-2 MUTATION-PROVE target: still-insolvent at year-end leaves bailoutState ACTIVE (no auto-transition)', () => {
+// FEAT-1972079923 inc4 (AC-10) SUPERSESSION NOTE: this test originally
+// asserted "still-insolvent at year-end leaves bailoutState ACTIVE (no
+// auto-transition)" per the inc2-era AC-2 text. Aaron's round-2 ruling
+// (2026-08-31, recorded on the BOW item) OVERRIDES that: still broke at the
+// first bailout year-end now AUTO-TRIGGERS the second bailout (AC-10) — see
+// imf-insolvency-inc4.test.mjs for the full second-bailout/decline coverage.
+// Updated here (not deleted) so this file still documents the FIRST bailout's
+// own year-end behaviour accurately post-inc4.
+test('AC-2/AC-10: still-insolvent at year-end ends the FIRST bailout and auto-triggers the SECOND (inc4)', () => {
   const s0 = initialState();
   const entered = tickAtFunds(s0, DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000);
   const enteredAt = entered.bailoutState.enteredAt;
@@ -123,8 +131,9 @@ test('AC-2 MUTATION-PROVE target: still-insolvent at year-end leaves bailoutStat
     s = tickAtFunds(s, DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000);
   }
   assert.equal(s.tick, enteredAt + BAILOUT_DURATION_TICKS);
-  assert.ok(s.bailoutState, 'still-insolvent city must remain in an active bailout at year-end (AC-2 "no transition")');
-  assert.equal(s.bailoutState.enteredAt, enteredAt, 'the SAME bailout, not a fresh one');
+  assert.equal(s.bailoutState, null, 'the FIRST bailout must end at year-end (never persists past its own duration)');
+  assert.ok(s.bailoutSecondState, 'still-insolvent at year-end must auto-trigger the SECOND bailout (AC-10)');
+  assert.equal(s.bailoutSecondState.enteredAt, enteredAt + BAILOUT_DURATION_TICKS, 'second bailout enters AT the first year-end tick');
 });
 
 // ========== AC-3: forced sale list sorted by CAPITAL VALUE DESCENDING ==========

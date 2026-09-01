@@ -248,3 +248,41 @@ export const ADMINISTRATION_PLACE_BLOCKED_MESSAGE =
  */
 export const ADMINISTRATION_POLICY_BLOCKED_MESSAGE =
   'Cannot enact new policy under Administration Mode — spending is frozen to mandatory obligations only';
+
+/**
+ * FEAT-1972079923 inc4 (AC-10) — PLACEHOLDER (balance-number regime): the
+ * SECOND IMF bailout event lasts exactly one game-year, mirroring
+ * BAILOUT_DURATION_TICKS/ADMINISTRATION_DURATION_TICKS. A separate named
+ * constant (not a reuse) so the balance pass can retune independently later —
+ * a test asserts all three currently equal TICKS_PER_YEAR.
+ */
+export const SECOND_BAILOUT_DURATION_TICKS = 360;
+
+/**
+ * FEAT-1972079923 inc4 (AC-10) — PLACEHOLDER (balance-number regime): the
+ * SECOND bailout's one-time cash injection, credited the SAME tick the second
+ * bailout auto-triggers. Aaron's round-2 ruling (2026-08-31): the second
+ * bailout is on WORSE TERMS than the first — this value is deliberately LOWER
+ * than BAILOUT_INCOME_INJECTION so the balance pass finds one obvious knob per
+ * bailout, not a duplicated literal (GR#3).
+ */
+export const BAILOUT_INCOME_INJECTION_SECOND = 1_000_000;
+
+/**
+ * FEAT-1972079923 inc4 (AC-10) — SSOT label for the second bailout's one-time
+ * cash injection inflow, mirroring BAILOUT_INJECTION_LABEL (see its rationale).
+ * A distinct label (not a reuse of BAILOUT_INJECTION_LABEL) so a consistency
+ * check / debug read can tell which bailout year actually injected the funds.
+ */
+export const BAILOUT_SECOND_INJECTION_LABEL = 'IMF Second Bailout Injection (Worse Terms)';
+
+/**
+ * FEAT-1972079923 inc4 (AC-11) — Aaron's round-2 ruling (2026-08-31, recorded
+ * on the BOW item): the FINAL decline screen (hard game-over, no third
+ * bailout) fires at the second bailout's year-end re-evaluation if funds are
+ * still below this threshold. Named as its own SSOT constant (not a reuse of
+ * DEBT_THRESHOLD_FOR_BAILOUT, which is a much deeper -10,000,000 floor) per
+ * the AC-11 text ("funds < 0 still") so the balance pass can retune the
+ * decline bar independently of the bailout-entry bar.
+ */
+export const FINAL_DECLINE_FUNDS_THRESHOLD = 0;

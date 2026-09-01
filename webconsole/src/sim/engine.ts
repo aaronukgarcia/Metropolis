@@ -54,9 +54,10 @@ import type {
   ArrivalsByMode,
   MonthlyArrivalsByMode,
   InsolvencyState,
+  BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -382,6 +383,13 @@ function rawState(): SimState {
     bailoutState: null,
     // FEAT-1972079923 inc3: no administration active at game start.
     administrationState: null,
+    // FEAT-1972079923 inc4: no second bailout / decline at game start.
+    bailoutSecondState: null,
+    declineState: null,
+    // FEAT-1972079923 inc4 (AC-11): decline trackers start from the opening state.
+    peakPopulation: 0,
+    minFundsEver: 10_000_000,
+    totalSpending: 0,
   };
 }
 
@@ -932,6 +940,12 @@ export function evaluateBuildingMonitors(s: SimState, tick: number): BuildingSca
 }
 
 function advance(s: SimState): SimState {
+  // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP —
+  // once declineState is set, the clock never advances again (no further
+  // tick changes ANY field, including tick itself). Same-reference return
+  // (not a shallow copy) so callers can cheaply detect "nothing changed".
+  if (s.declineState) return s;
+
   // TICK-BOUNDARY INVARIANT (Round-6): Record funds at tick start for conservation checking.
   const fundsAtTickStart = s.funds;
   const tick = s.tick + 1;
@@ -1229,29 +1243,50 @@ function advance(s: SimState): SimState {
   // the exact entry AND exit ticks.
   const prevBailoutState = s.bailoutState ?? null;
   let bailoutState = prevBailoutState;
+  // FEAT-1972079923 inc4 (AC-10): the SECOND bailout state, read/mutated
+  // alongside the first bailout's below — declared here (not lower down)
+  // because the plain-bailout year-end branch below may auto-trigger it.
+  const prevBailoutSecondState = s.bailoutSecondState ?? null;
+  let bailoutSecondState = prevBailoutSecondState;
   // FEAT-1972079923 inc3 (AC-7): a crisis-band re-read caused by ADMINISTRATION
-  // ENDING still-broke must NOT re-fire a fresh bailout (no auto-transition to a
-  // second bailout — that is inc4 scope). Guarded by `prevInsolvencyState !==
-  // 'administration'` — a genuine NEW crossing into crisis always arrives from
-  // 'solvent'/'warning', never from 'administration'.
+  // ENDING still-broke must NOT re-fire a fresh bailout (a still-broke
+  // administration ending auto-triggers the SECOND bailout instead — inc4,
+  // handled in the administration block below — never a fresh FIRST bailout).
+  // Guarded by `prevInsolvencyState !== 'administration'` — a genuine NEW
+  // crossing into crisis always arrives from 'solvent'/'warning', never from
+  // 'administration'.
   if (
     insolvencyState === 'crisis' &&
     prevInsolvencyState !== 'crisis' &&
     prevInsolvencyState !== 'administration' &&
-    prevBailoutState === null
+    prevBailoutState === null &&
+    prevBailoutSecondState === null
   ) {
     bailoutState = { enteredAt: tick };
     funds += BAILOUT_INCOME_INJECTION;
     inflows = [...inflows, { label: BAILOUT_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION }];
   } else if (
     prevBailoutState !== null &&
-    tick >= prevBailoutState.enteredAt + BAILOUT_DURATION_TICKS &&
-    funds >= DEBT_THRESHOLD_FOR_BAILOUT
+    tick >= prevBailoutState.enteredAt + BAILOUT_DURATION_TICKS
   ) {
-    // Solvency restored by the year-end checkpoint — bailout ends. Still
-    // insolvent: bailoutState is left unchanged (no transition), per AC-2 —
-    // second bailout is inc4 scope.
-    bailoutState = null;
+    if (funds >= DEBT_THRESHOLD_FOR_BAILOUT) {
+      // Solvency restored by the year-end checkpoint — bailout ends cleanly.
+      bailoutState = null;
+    } else {
+      // FEAT-1972079923 inc4 (AC-10) — Aaron's round-2 ruling OVERRIDES the BA
+      // criteria doc's stale "user-initiated" text: still broke at the FIRST
+      // bailout year-end AUTO-TRIGGERS the second bailout, no button, no
+      // player action required. Worse terms: a SMALLER one-time injection
+      // (BAILOUT_INCOME_INJECTION_SECOND < BAILOUT_INCOME_INJECTION), booked
+      // as its own labelled inflow so conservation still traces it exactly.
+      bailoutState = null;
+      bailoutSecondState = { enteredAt: tick };
+      funds += BAILOUT_INCOME_INJECTION_SECOND;
+      inflows = [
+        ...inflows,
+        { label: BAILOUT_SECOND_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION_SECOND },
+      ];
+    }
   }
 
   // FEAT-1972079923 inc3 (AC-5, AC-6, AC-7): ADMINISTRATION MODE overlay.
@@ -1260,16 +1295,86 @@ function advance(s: SimState): SimState {
   // handles the AC-7 year-end re-evaluation: exactly ADMINISTRATION_DURATION_TICKS
   // after entry, administration ALWAYS ends (whether or not funds recovered) —
   // deterministic tick arithmetic only (GR#21), never Date.now(). Recovery is
-  // reported via the funds band below (solvent/warning); still-broke reverts to
-  // 'crisis' with NO auto-transition to a second bailout (inc4 scope, AC-7).
+  // reported via the funds band below (solvent/warning). Still-broke reverts
+  // to the funds band too, but FEAT-1972079923 inc4 (AC-10/AC-11) ALSO fires
+  // the next stage of the endgame depending which bailout year this
+  // administration session covered (`origin`, stamped by `enterAdministration`):
+  // 'bailout' (first year) → auto-trigger the second bailout; 'bailout_second'
+  // (second year) → transition to the final decline screen (AC-11).
   const prevAdministrationState = s.administrationState ?? null;
   let administrationState = prevAdministrationState;
+  // FEAT-1972079923 inc4 (AC-11): declineState is read/mutated here (the
+  // administration-origin-'bailout_second' branch below may set it) and in the
+  // plain bailoutSecondState year-end branch further down.
+  const prevDeclineState = s.declineState ?? null;
+  let declineState = prevDeclineState;
   if (
     prevAdministrationState !== null &&
     tick >= prevAdministrationState.enteredAt + ADMINISTRATION_DURATION_TICKS
   ) {
+    const origin: BailoutOrigin = prevAdministrationState.origin ?? 'bailout';
     administrationState = null;
+    if (origin === 'bailout' && funds < DEBT_THRESHOLD_FOR_BAILOUT) {
+      // Still broke after an administration-covered FIRST bailout year — auto
+      // second bailout (same trigger as the plain-bailout branch above).
+      bailoutSecondState = { enteredAt: tick };
+      funds += BAILOUT_INCOME_INJECTION_SECOND;
+      inflows = [
+        ...inflows,
+        { label: BAILOUT_SECOND_INJECTION_LABEL, value: BAILOUT_INCOME_INJECTION_SECOND },
+      ];
+    } else if (origin === 'bailout_second' && funds < FINAL_DECLINE_FUNDS_THRESHOLD) {
+      // Still broke after an administration-covered SECOND bailout year — hard
+      // game-over. Stats captured NOW from the trackers below (computed just
+      // before this return), never fabricated defaults (GR#15).
+      declineState = {
+        enteredAt: tick,
+        peakPopulation: Math.max(s.peakPopulation ?? s.population, population),
+        finalPopulation: population,
+        minFundsEver: Math.min(s.minFundsEver ?? s.funds, funds),
+        totalSpending: (s.totalSpending ?? 0) + expense,
+      };
+    }
+    // origin === 'bailout' with funds recovered, or origin === 'bailout_second'
+    // with funds >= FINAL_DECLINE_FUNDS_THRESHOLD: no further transition — the
+    // exposed band below reads the recovered funds band directly.
   }
+
+  // FEAT-1972079923 inc4 (AC-10, AC-11): the plain (non-administration) SECOND
+  // bailout's OWN year-end re-evaluation — mirrors the first bailout's plain
+  // branch above. Guarded so this never fires the same tick bailoutSecondState
+  // was just entered (prevBailoutSecondState, not the local var, which may have
+  // just been set above).
+  if (
+    declineState === null &&
+    prevBailoutSecondState !== null &&
+    tick >= prevBailoutSecondState.enteredAt + SECOND_BAILOUT_DURATION_TICKS
+  ) {
+    if (funds < FINAL_DECLINE_FUNDS_THRESHOLD) {
+      bailoutSecondState = null;
+      declineState = {
+        enteredAt: tick,
+        peakPopulation: Math.max(s.peakPopulation ?? s.population, population),
+        finalPopulation: population,
+        minFundsEver: Math.min(s.minFundsEver ?? s.funds, funds),
+        totalSpending: (s.totalSpending ?? 0) + expense,
+      };
+    } else {
+      // Recovered (funds >= FINAL_DECLINE_FUNDS_THRESHOLD) — second bailout
+      // ends cleanly, no decline, no third bailout ever offered.
+      bailoutSecondState = null;
+    }
+  }
+
+  // FEAT-1972079923 inc4 (AC-11): running decline-stat trackers, updated EVERY
+  // tick regardless of insolvency state, so the eventual decline screen's
+  // stats are real computed values (GR#15), not defaults captured only at the
+  // moment of decline. Frozen automatically once declineState is set, because
+  // advance() short-circuits before this point on the next call (see the
+  // early return at the top of this function).
+  const peakPopulation = Math.max(s.peakPopulation ?? s.population, population);
+  const minFundsEver = Math.min(s.minFundsEver ?? s.funds, funds);
+  const totalSpending = (s.totalSpending ?? 0) + expense;
 
   // TICK-BOUNDARY INVARIANT: Record funds at tick end for conservation checking
   // (captured AFTER any bailout injection this tick, so it's a real inflow).
@@ -1284,14 +1389,23 @@ function advance(s: SimState): SimState {
       ? { state: insolvencyState, enteredAt: tick }
       : (s.insolvencyPopup ?? null);
 
-  // FEAT-1972079923 inc3 (AC-5, AC-7): the EXPOSED insolvencyState overlays the
-  // pure funds band with 'administration' while administrationState is active —
-  // this is the field AC-5/AC-7 assert on. `insolvencyState` (the local var
-  // above) stays the pure funds-derived band throughout, used only internally
-  // for the bailout trigger/popup logic; this is the ONLY place the overlay is
-  // applied, so a replay reproduces the exact same exposed value at every tick.
+  // FEAT-1972079923 inc3/inc4 (AC-5, AC-7, AC-10, AC-11): the EXPOSED
+  // insolvencyState overlays the pure funds band, highest-precedence overlay
+  // first: 'decline' (permanent, AC-11) > 'administration' (AC-5/AC-7) >
+  // 'bailout_second' (AC-10, auto-triggered) > the pure funds band itself
+  // (which reads 'crisis' while a plain bailoutState is active). `insolvencyState`
+  // (the local var above) stays the pure funds-derived band throughout, used
+  // only internally for the bailout trigger/popup logic; this is the ONLY
+  // place the overlay is applied, so a replay reproduces the exact same
+  // exposed value at every tick.
   const exposedInsolvencyState: InsolvencyState =
-    administrationState !== null ? 'administration' : insolvencyState;
+    declineState !== null
+      ? 'decline'
+      : administrationState !== null
+        ? 'administration'
+        : bailoutSecondState !== null
+          ? 'bailout_second'
+          : insolvencyState;
 
   return {
     ...s,
@@ -1328,6 +1442,11 @@ function advance(s: SimState): SimState {
     insolvencyPopup,
     bailoutState,
     administrationState,
+    bailoutSecondState,
+    declineState,
+    peakPopulation,
+    minFundsEver,
+    totalSpending,
   };
 }
 
@@ -2386,6 +2505,17 @@ export type Action =
 // FEAT-1972079891 inc1 (AC-12): the internal reducer. `reducer` (below) wraps it
 // to keep roadConnectivity consistent with buildings after every action.
 function reduceCore(state: SimState, action: Action): SimState {
+  // FEAT-1972079923 inc4 (AC-11): the FINAL DECLINE screen is a HARD STOP on
+  // the whole game, not just the tick clock — once declineState is set, EVERY
+  // gameplay-mutating action (place, sellAsset, enterAdministration, policy,
+  // relocate, …) is a no-op. Only 'reset' (Start Over, GR#27 capture-before-
+  // wipe path) and 'hydrate' (Load Save, same GR#27 path) can move the game
+  // past decline — both replace the ENTIRE state, so they are exempted here
+  // rather than trying to enumerate every action decline should still allow.
+  if (state.declineState && action.type !== 'reset' && action.type !== 'hydrate') {
+    return state;
+  }
+
   switch (action.type) {
     case 'tick':
       return advance(state);
@@ -2841,23 +2971,30 @@ function reduceCore(state: SimState, action: Action): SimState {
       };
     }
 
-    // FEAT-1972079923 inc3 (AC-5) — ADMINISTRATION MODE ENTRY: the player's
-    // alternative to forced asset sales. Only available while a bailout is
-    // ACTIVE (mirrors the FORCED ASSET SALES panel's own visibility guard) and
+    // FEAT-1972079923 inc3/inc4 (AC-5, AC-10) — ADMINISTRATION MODE ENTRY: the
+    // player's alternative to forced asset sales. Available while EITHER
+    // bailout is ACTIVE (inc4: `bailoutSecondState` reuses this same entry
+    // point — mirrors the FORCED ASSET SALES panel's own visibility guard) and
     // idempotent if administration is already active (no re-stamp, no double
     // entry). Sets `administrationState` immediately (a between-tick action,
     // like sellAsset) AND the exposed `insolvencyState` to 'administration' in
     // the SAME transition — the next tick's advance() recomputes an IDENTICAL
     // overlay from `administrationState`, so this is not a second code path,
     // just an immediate reflection of what advance() would compute anyway.
-    // Clears `bailoutState` so the FORCED ASSET SALES panel closes at once.
-    // The city REMAINS PLAYABLE — nothing here freezes the clock/tick.
+    // Clears BOTH `bailoutState` and `bailoutSecondState` so the FORCED ASSET
+    // SALES panel closes at once. Stamps `origin` (AC-10) so the year-end
+    // re-evaluation in advance() knows whether "still broke" should
+    // auto-trigger the second bailout ('bailout') or the final decline screen
+    // ('bailout_second') — see advance()'s administration block. The city
+    // REMAINS PLAYABLE — nothing here freezes the clock/tick.
     case 'enterAdministration': {
-      if (!state.bailoutState || state.administrationState) return state;
+      if ((!state.bailoutState && !state.bailoutSecondState) || state.administrationState) return state;
+      const origin: BailoutOrigin = state.bailoutSecondState ? 'bailout_second' : 'bailout';
       return {
         ...state,
-        administrationState: { enteredAt: state.tick },
+        administrationState: { enteredAt: state.tick, origin },
         bailoutState: null,
+        bailoutSecondState: null,
         insolvencyState: 'administration',
       };
     }

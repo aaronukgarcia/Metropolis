@@ -369,7 +369,91 @@ export interface SimState {
    * (GR#21 determinism). Optional for backward tolerance: a legacy state
    * without it is treated as no-administration-active.
    */
-  administrationState?: { enteredAt: number } | null;
+  administrationState?: { enteredAt: number; origin?: BailoutOrigin } | null;
+  /**
+   * FEAT-1972079923 inc4 (AC-10) — the SECOND IMF BAILOUT EVENT state machine.
+   * AUTO-TRIGGERED (Aaron's round-2 ruling, 2026-08-31, OVERRIDES the BA
+   * criteria doc's stale "user-initiated" text) at the year-end re-evaluation
+   * of the FIRST bailout year — whether that year was spent under the plain
+   * bailoutState or under administrationState — if the treasury is still at
+   * or below DEBT_THRESHOLD_FOR_BAILOUT. Cleared at its OWN year-end
+   * re-evaluation (tick >= enteredAt + SECOND_BAILOUT_DURATION_TICKS):
+   * recovered (funds >= FINAL_DECLINE_FUNDS_THRESHOLD) reverts to the funds
+   * band; still broke transitions to `declineState` (AC-11, hard game-over) —
+   * no third bailout is ever offered. `enteredAt` is a tick number, never
+   * Date.now() (GR#21 determinism). Optional for backward tolerance: a legacy
+   * state without it is treated as no-second-bailout-active.
+   */
+  bailoutSecondState?: { enteredAt: number } | null;
+  /**
+   * FEAT-1972079923 inc4 (AC-11) — the FINAL DECLINE state: hard game-over.
+   * Set ONCE, at the second bailout's year-end re-evaluation if funds are
+   * still below FINAL_DECLINE_FUNDS_THRESHOLD. Once set, `advance()` short-
+   * circuits to a no-op (the clock STOPS — no further ticks change state)
+   * until an action is taken (Start Over / Load Save, both routed through the
+   * GR#27 capture-before-wipe path). The stats below are captured AT the
+   * decline tick from trackers maintained every tick since game start
+   * (peakPopulation/minFundsEver/totalSpending), never fabricated defaults
+   * (GR#15) and never recomputed after the freeze. Optional for backward
+   * tolerance: a legacy state without it is treated as not-in-decline.
+   */
+  declineState?: DeclineState | null;
+  /**
+   * FEAT-1972079923 inc4 (AC-11) — running maximum of `population` ever
+   * observed, updated every tick regardless of insolvency state, so the
+   * decline screen's "Peak population" stat is a real computed value, not a
+   * default (GR#15). Optional for backward tolerance: a legacy state without
+   * it starts tracking from the current population.
+   */
+  peakPopulation?: number;
+  /**
+   * FEAT-1972079923 inc4 (AC-11) — running minimum of `fundsAtTickEnd` ever
+   * observed, updated every tick, backing the decline screen's "Min funds
+   * reached" stat. Optional for backward tolerance: a legacy state without it
+   * starts tracking from the current funds.
+   */
+  minFundsEver?: number;
+  /**
+   * FEAT-1972079923 inc4 (AC-11) — running sum of every tick's outflows
+   * (`expense`) since game start, backing the decline screen's "Total
+   * spending" stat. Deliberately excludes inflows (bailout injections, asset
+   * sales, taxes) — this is spend only. Optional for backward tolerance: a
+   * legacy state without it starts accumulating from zero.
+   */
+  totalSpending?: number;
+}
+
+/**
+ * FEAT-1972079923 inc4 (AC-10) — which bailout year an active
+ * `administrationState` was entered FROM. Needed because entering
+ * Administration clears BOTH `bailoutState` and `bailoutSecondState`
+ * immediately (AC-5's "closes the FORCED ASSET SALES panel" behaviour,
+ * extended to the second bailout in inc4) — without recording the origin,
+ * the year-end re-evaluation could not tell whether "still broke" should
+ * auto-trigger the second bailout (origin 'bailout') or the final decline
+ * screen (origin 'bailout_second'). Optional on the state object itself for
+ * backward tolerance: a legacy administrationState predating inc4 has no
+ * `origin` and is treated as 'bailout' (the only origin that existed then).
+ */
+export type BailoutOrigin = 'bailout' | 'bailout_second';
+
+/**
+ * FEAT-1972079923 inc4 (AC-11) — decline statistics, computed ONCE at the
+ * tick declineState is set, from trackers maintained every tick since game
+ * start. Never zero/placeholder unless the game genuinely never had
+ * population or spending (GR#15: honest, not fabricated).
+ */
+export interface DeclineState {
+  /** Tick the decline screen was triggered (hard game-over). */
+  enteredAt: number;
+  /** Highest population ever reached during play. */
+  peakPopulation: number;
+  /** Population at the moment of decline. */
+  finalPopulation: number;
+  /** Lowest (most negative) funds value ever reached during play. */
+  minFundsEver: number;
+  /** Sum of every tick's outflows since game start. */
+  totalSpending: number;
 }
 
 /**
@@ -384,8 +468,17 @@ export interface SimState {
  * administration ends (AC-7). insolvencyStateForFunds() itself never returns
  * 'administration' — it is a pure funds→band classifier; the overlay is
  * applied in engine.advance().
+ *
+ * 'bailout_second' (inc4, AC-10) and 'decline' (inc4, AC-11) are further
+ * overlays, same pattern: 'bailout_second' while `bailoutSecondState` is
+ * active (auto-triggered — no user click — at the first bailout year's
+ * still-broke re-evaluation), 'decline' once `declineState` is set (hard
+ * game-over, permanent — advance() freezes the clock the instant it is set,
+ * so no state ever transitions OUT of 'decline'). Overlay precedence, highest
+ * first: decline > administration > bailout_second > the pure funds band
+ * (which itself reads 'crisis' while a plain `bailoutState` is active).
  */
-export type InsolvencyState = 'solvent' | 'warning' | 'crisis' | 'administration';
+export type InsolvencyState = 'solvent' | 'warning' | 'crisis' | 'administration' | 'bailout_second' | 'decline';
 
 /**
  * FEAT-1972079907 inc2 — a single monitored road segment (one road tile).

@@ -31,8 +31,12 @@ import {
 import { computePath, type Tile } from '../sim/roadTracker';
 import { buildRailGeometry, trainPositions, type RailTile, type StationTile } from '../sim/trains';
 import { useSim } from '../sim/simContext';
-import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets } from '../sim/engine';
-import { BAILOUT_DURATION_TICKS, ADMINISTRATION_DURATION_TICKS } from '../sim/fiscal';
+import { demandOf, specUnlocked, SPEED_MS, forcedSaleAssets, TICKS_PER_YEAR } from '../sim/engine';
+import {
+  BAILOUT_DURATION_TICKS,
+  ADMINISTRATION_DURATION_TICKS,
+  SECOND_BAILOUT_DURATION_TICKS,
+} from '../sim/fiscal';
 import { publishMapUi } from '../sim/uistate';
 import { consumePersistedCamera, type StorageLike } from '../sim/cameraStash';
 import { applyStashedCameraToView } from '../sim/cameraApply';
@@ -953,8 +957,10 @@ export function MapView() {
       <PlaceNoticeBanner />
       <InsolvencyBanner />
       <AdministrationBanner />
+      <SecondBailoutBanner />
       <InsolvencyPopup />
       <ForcedAssetSalesPanel />
+      <DeclineScreen />
       <div
         className={`advisor${advisorContent.go ? ' clickable' : ''}`}
         onClick={advisorContent.go}
@@ -1192,27 +1198,34 @@ function InsolvencyPopup() {
   );
 }
 
-// FEAT-1972079923 inc2 (AC-2, AC-3, AC-4): the FORCED ASSET SALES panel.
-// Visible for the full duration of an active bailout (state.bailoutState !=
-// null), regardless of whether the InsolvencyPopup has been dismissed — the
-// player needs the panel available throughout the bailout year, not just on
-// entry. Lists sellable assets sorted by CAPITAL VALUE DESCENDING (Aaron's
-// ruling: biggest first, "the stadium goes before the corner shop" — NOT
-// construction order). Selling dispatches 'sellAsset', which atomically
-// removes the building and credits the treasury the placeholder sale value
-// (journaled through replay like any other action).
+// FEAT-1972079923 inc2/inc4 (AC-2, AC-3, AC-4, AC-10): the FORCED ASSET SALES
+// panel. Visible for the full duration of EITHER active bailout
+// (state.bailoutState OR state.bailoutSecondState != null — inc4 reuses this
+// panel for the auto-triggered second bailout, per the brief's "the forced-
+// sales list + administration option reappear for the second bailout"),
+// regardless of whether the InsolvencyPopup has been dismissed — the player
+// needs the panel available throughout the bailout year, not just on entry.
+// Lists sellable assets sorted by CAPITAL VALUE DESCENDING (Aaron's ruling:
+// biggest first, "the stadium goes before the corner shop" — NOT construction
+// order). Selling dispatches 'sellAsset', which atomically removes the
+// building and credits the treasury the placeholder sale value (journaled
+// through replay like any other action).
 function ForcedAssetSalesPanel() {
   const { state, dispatch } = useSim();
   const bailout = state.bailoutState;
-  if (!bailout) return null;
+  const bailoutSecond = state.bailoutSecondState;
+  const active = bailout ?? bailoutSecond;
+  if (!active) return null;
+  const isSecond = bailout === null && bailoutSecond !== null;
+  const duration = isSecond ? SECOND_BAILOUT_DURATION_TICKS : BAILOUT_DURATION_TICKS;
   const assets = forcedSaleAssets(state);
-  const ticksLeft = Math.max(0, bailout.enteredAt + BAILOUT_DURATION_TICKS - state.tick);
+  const ticksLeft = Math.max(0, active.enteredAt + duration - state.tick);
   return (
     <div className="forced-asset-sales-panel" role="region" aria-label="Forced Asset Sales">
-      <h4>FORCED ASSET SALES</h4>
+      <h4>FORCED ASSET SALES{isSecond ? ' — SECOND BAILOUT (WORSE TERMS)' : ''}</h4>
       <p className="forced-asset-sales-note">
-        IMF bailout active since tick {bailout.enteredAt} ({ticksLeft} ticks remaining this
-        year). Sell assets, biggest capital value first, to restore solvency.
+        IMF {isSecond ? 'second ' : ''}bailout active since tick {active.enteredAt} ({ticksLeft} ticks
+        remaining this year). Sell assets, biggest capital value first, to restore solvency.
       </p>
       {/* FEAT-1972079923 inc3 (AC-5): the alternative to forced asset sales —
           enter Administration Mode instead. Closes this panel + starts the
@@ -1239,6 +1252,69 @@ function ForcedAssetSalesPanel() {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc4 (AC-10): the SECOND bailout banner — mirrors
+// InsolvencyBanner's 'crisis' copy but names the worse-terms second event and
+// makes clear it was AUTO-TRIGGERED (no button, no player choice to decline
+// it — Aaron's round-2 ruling overrides the BA doc's stale "user-initiated"
+// text). Visible for the whole active second-bailout window, whether the
+// player is selling from the FORCED ASSET SALES panel or has entered
+// Administration again (AdministrationBanner takes over display in that case
+// via the exposed 'administration' overlay, same as the first bailout).
+function SecondBailoutBanner() {
+  const { state } = useSim();
+  if (state.insolvencyState !== 'bailout_second' || !state.bailoutSecondState) return null;
+  const ticksLeft = Math.max(
+    0,
+    state.bailoutSecondState.enteredAt + SECOND_BAILOUT_DURATION_TICKS - state.tick,
+  );
+  return (
+    <div className="insolvency-banner crisis second-bailout" role="status">
+      SECOND IMF BAILOUT (worse terms) — auto-triggered, still insolvent after the first bailout
+      year. {ticksLeft} ticks left this year. Sell assets or enter Administration — no third
+      bailout will follow.
+    </div>
+  );
+}
+
+// FEAT-1972079923 inc4 (AC-11) — the FINAL DECLINE screen: hard game-over.
+// Rendered once state.declineState is set (permanent — advance() freezes the
+// clock the instant it is set, see engine.ts). Shows the stats CAPTURED at the
+// decline tick (real computed values from trackers maintained every tick since
+// game start, never fabricated defaults — GR#15). "Start Over" routes through
+// the wrapped dispatch's GR#27 capture-before-wipe path (attemptWipe in
+// store.tsx); "Load Save" reuses the SAME captureOutgoingOrDownload-guarded
+// loadGame() flow every other load path uses — neither button bypasses the
+// fail-closed pre-wipe archive.
+function DeclineScreen() {
+  const { state, dispatch, loadGame } = useSim();
+  const decline = state.declineState;
+  if (!decline) return null;
+  const yearsPlayed = Math.round(decline.enteredAt / TICKS_PER_YEAR);
+  return (
+    <div className="decline-screen-overlay" role="alertdialog" aria-modal="true">
+      <div className="decline-screen">
+        <h2>City in Decline: Insolvency Unresolved</h2>
+        <p className="decline-cause">Persistent insolvency after 2 bailout years.</p>
+        <ul className="decline-stats">
+          <li>Peak population: {fmtNum(decline.peakPopulation)}</li>
+          <li>Final population: {fmtNum(decline.finalPopulation)}</li>
+          <li>Years played: {yearsPlayed}</li>
+          <li>Min funds reached: {fmtMoney(decline.minFundsEver)}</li>
+          <li>Total spending: {fmtMoney(decline.totalSpending)}</li>
+        </ul>
+        <div className="decline-screen-actions">
+          <button className="btn" onClick={() => dispatch({ type: 'reset' })}>
+            Start Over
+          </button>
+          <button className="btn" onClick={() => void loadGame()}>
+            Load Save
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
