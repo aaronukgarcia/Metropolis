@@ -3,8 +3,10 @@ package compose
 import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
@@ -84,6 +86,13 @@ func (c *Composition) Participants() []save.Participant {
 		traffic.NewSaveParticipant(st.traffic),
 		unlocks.NewSaveParticipant(st.unlocks),
 		crime.NewSaveParticipant(st.crime),
+		// FEAT-1972079945 (Aaron 2026-09-01): market + consumption are STATELESS
+		// today, but each ships an empty-but-conformant participant so the
+		// save-bundle shape is uniform across every composed module and any
+		// future mutable field is forced through the field-parity drift test
+		// at birth rather than silently unserialized.
+		market.NewSaveParticipant(st.market),
+		consumption.NewSaveParticipant(st.consumption),
 		newComposeLedgerParticipant(st),
 	}
 }
