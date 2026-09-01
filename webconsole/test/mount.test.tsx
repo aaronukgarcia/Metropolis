@@ -801,3 +801,138 @@ test('r2 ATTACK: DemandDock DOES show the brownout banner for the identical defi
   assert.ok(/brownout-banner/.test(html), 'the legacy brownout banner must still fire when cover is off');
   assert.ok(/BROWNOUT: demand exceeds supply/.test(html), 'the legacy banner text must still render');
 });
+
+// ---------------------------------------------------------------------------
+// BUG-497 (2)/(3) — the DECLINE hard-stop must present unmistakably as a
+// designed game-over, not a hang: DeclineScreen renders and the InsolvencyPopup
+// does NOT, once declineState is set (which BUG-497(1)'s engine.ts fix
+// guarantees by force-clearing insolvencyPopup on the tick declineState is
+// set — see bug496-497-insolvency-decline.test.mjs for that reducer-level
+// proof). This test drives a REAL city through the actual bailout -> second
+// bailout -> decline state machine via the reducer (not a hand-built fixture)
+// and renders the REAL MapView component, so it exercises the actual wiring
+// between engine.ts and MapView.tsx, not a mock of either.
+async function rideRealCityToDecline() {
+  const { initialState, reducer } = await import('../src/sim/engine.ts');
+  const {
+    DEBT_THRESHOLD_FOR_BAILOUT,
+    INSOLVENCY_WARNING_THRESHOLD,
+    BAILOUT_DURATION_TICKS,
+    SECOND_BAILOUT_DURATION_TICKS,
+    FINAL_DECLINE_FUNDS_THRESHOLD,
+  } = await import('../src/sim/fiscal.ts');
+
+  function tickAtFunds(state: any, targetFunds: number) {
+    const forced = reducer(state, { type: 'debugFunds', amount: targetFunds - state.funds });
+    return reducer(forced, { type: 'tick' });
+  }
+
+  const warningFunds = Math.round((INSOLVENCY_WARNING_THRESHOLD + DEBT_THRESHOLD_FOR_BAILOUT) / 2);
+  const crisisFunds = DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000;
+  const declineFunds = FINAL_DECLINE_FUNDS_THRESHOLD - 5_000_000;
+
+  let s: any = tickAtFunds(initialState(), warningFunds);
+  s = tickAtFunds(s, crisisFunds);
+  if (!s.bailoutState) throw new Error('fixture precondition failed: first bailout must be active');
+  for (let i = 0; i < BAILOUT_DURATION_TICKS; i++) s = tickAtFunds(s, crisisFunds);
+  if (!s.bailoutSecondState) throw new Error('fixture precondition failed: second bailout must have auto-triggered');
+  for (let i = 0; i < SECOND_BAILOUT_DURATION_TICKS; i++) s = tickAtFunds(s, declineFunds);
+  if (!s.declineState) throw new Error('fixture precondition failed: city must have declined');
+  return s;
+}
+
+async function renderMapView(state: any) {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimContext } = await import('../src/sim/simContext.ts');
+  const { BusyProvider } = await import('../src/components/Busy.tsx');
+  const { MapView } = await import('../src/components/MapView.tsx');
+
+  const ctx: any = {
+    state,
+    dispatch: () => {},
+    cityName: 'Attackville',
+    listSaves: () => [],
+    listRecent: () => [],
+    saveGame: async () => true,
+    saveGameAs: async () => {},
+    loadGame: async () => {},
+    loadNamed: async () => {},
+    renameCity: () => true,
+  };
+  return renderToString(
+    React.default.createElement(
+      SimContext.Provider,
+      { value: ctx },
+      React.default.createElement(BusyProvider, {
+        children: React.default.createElement(MapView),
+      })
+    )
+  );
+}
+
+test('BUG-497 (1)+(2): declineState precondition — the real ride-to-decline fixture carries insolvencyPopup === null', async () => {
+  const declined = await rideRealCityToDecline();
+  assert.equal(
+    declined.insolvencyPopup,
+    null,
+    'precondition for the mount test below: engine.ts must have force-cleared the popup on the decline tick',
+  );
+});
+
+test('BUG-497 (2)/(3): MapView renders the DeclineScreen overlay and NOT the InsolvencyPopup overlay once declined', async () => {
+  const declined = await rideRealCityToDecline();
+  const html = await renderMapView(declined);
+
+  assert.ok(html.length > 0, 'MapView must actually render');
+  assert.ok(/decline-screen-overlay/.test(html), 'the DeclineScreen overlay must be mounted once declineState is set');
+  assert.ok(/City in Decline/.test(html), 'the DeclineScreen headline must render');
+  assert.ok(
+    !/insolvency-popup-overlay/.test(html),
+    'BUG-497(1): the InsolvencyPopup overlay must NOT be mounted once the game has ended — it must not contest DeclineScreen for the screen',
+  );
+});
+
+test('BUG-497 (2) MUTATION-PROVE target: a state that has NOT declined shows no DeclineScreen at all (the overlay is conditional, not always-on)', async () => {
+  const { initialState } = await import('../src/sim/engine.ts');
+  const html = await renderMapView(initialState());
+  assert.ok(html.length > 0, 'MapView must actually render');
+  assert.ok(
+    !/decline-screen-overlay/.test(html),
+    'a fresh, solvent city must never show the DeclineScreen overlay — proving the assertion above is a real gate, not vacuously true',
+  );
+});
+
+test('BUG-497 (3): decline-screen-overlay is pinned above every other known overlay z-index in styles.css', async () => {
+  const fs = await import('fs/promises');
+  const pathMod = await import('path');
+  let testDir = new URL(import.meta.url).pathname;
+  if (testDir.startsWith('/') && testDir[2] === ':') testDir = testDir.slice(1);
+  testDir = pathMod.dirname(testDir);
+  const styles = await fs.readFile(pathMod.resolve(testDir, '../src/styles.css'), 'utf-8');
+
+  function zIndexOf(selector: string): number {
+    const re = new RegExp(selector.replace(/[.]/g, '\\.') + '\\s*\\{[^}]*\\}', 's');
+    const m = styles.match(re);
+    assert.ok(m, `${selector} CSS rule must exist`);
+    const z = m![0].match(/z-index:\s*(\d+)/);
+    assert.ok(z, `${selector} must declare a z-index`);
+    return Number(z![1]);
+  }
+
+  const decline = zIndexOf('.decline-screen-overlay');
+  const otherOverlays = [
+    '.insolvency-popup-overlay',
+    '.forced-asset-sales-panel',
+    '.levelup-banner',
+    '.perf-hud',
+  ];
+  for (const sel of otherOverlays) {
+    const z = zIndexOf(sel);
+    assert.ok(
+      decline > z,
+      `decline-screen-overlay (z-index ${decline}) must beat ${sel} (z-index ${z}) — the hard game-over must win the stacking order over every other overlay`,
+    );
+  }
+});

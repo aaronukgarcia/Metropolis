@@ -385,6 +385,8 @@ function rawState(): SimState {
     lastArrivalsByMode: { road: 0, railLow: 0, railHs: 0, sea: 0, plane: 0 },
     // FEAT-1972079923 inc1: opening treasury is well above both thresholds — solvent.
     insolvencyState: 'solvent',
+    // BUG-496: raw funds-band tracked separately from the overlaid insolvencyState above.
+    insolvencyRawBand: 'solvent',
     insolvencyPopup: null,
     // FEAT-1972079923 inc2: no bailout active at game start.
     bailoutState: null,
@@ -1274,6 +1276,10 @@ function advance(s: SimState): SimState {
   const preInjectionFunds = funds;
   const prevInsolvencyState: InsolvencyState = s.insolvencyState ?? 'solvent';
   const insolvencyState = insolvencyStateForFunds(preInjectionFunds);
+  // BUG-496: the RAW band from the previous tick, compared like-for-like against
+  // the RAW band this tick (both are insolvencyStateForFunds output, never the
+  // overlaid/exposed insolvencyState) — see insolvencyRawBand's doc in types.ts.
+  const prevInsolvencyRawBand: InsolvencyState = s.insolvencyRawBand ?? 'solvent';
 
   // FEAT-1972079923 inc2 (AC-1, AC-2, AC-12): the IMF BAILOUT EVENT state
   // machine. Triggered exactly once — the SAME tick and SAME one-shot
@@ -1430,10 +1436,22 @@ function advance(s: SimState): SimState {
   // transitions INTO 'crisis' from a non-crisis band, so the popup states the
   // conditions exactly once per entry rather than re-appearing every
   // subsequent tick while still in crisis.
-  const insolvencyPopup =
-    insolvencyState === 'crisis' && prevInsolvencyState !== 'crisis'
+  // BUG-496: this MUST compare the RAW band to the PREVIOUS RAW band (both
+  // insolvencyStateForFunds output) — comparing the raw band against the
+  // EXPOSED previous value (prevInsolvencyState, which reads 'bailout'/
+  // 'administration'/'bailout_second' while the raw band is still 'crisis')
+  // made "transitioned into crisis" evaluate true on every tick an overlay
+  // was active, since the exposed value is never literally 'crisis' then.
+  const rawInsolvencyPopup =
+    insolvencyState === 'crisis' && prevInsolvencyRawBand !== 'crisis'
       ? { state: insolvencyState, enteredAt: tick }
       : (s.insolvencyPopup ?? null);
+  // BUG-497 (1): the popup is moot once the game is over — force-clear it on the
+  // very tick declineState is set (declineState is computed above, before this
+  // point) so the InsolvencyPopup overlay is never simultaneously mounted with
+  // the DeclineScreen overlay; no further tick can undo this because advance()
+  // hard-stops the instant declineState is non-null (see the top-of-function guard).
+  const insolvencyPopup = declineState !== null ? null : rawInsolvencyPopup;
 
   // FEAT-1972079923 inc3/inc4 (AC-5, AC-7, AC-10, AC-11): the EXPOSED
   // insolvencyState overlays the pure funds band, highest-precedence overlay
@@ -1485,6 +1503,7 @@ function advance(s: SimState): SimState {
     lastRewardedLevel,
     notice: nextNotice,
     insolvencyState: exposedInsolvencyState,
+    insolvencyRawBand: insolvencyState,
     insolvencyPopup,
     bailoutState,
     administrationState,

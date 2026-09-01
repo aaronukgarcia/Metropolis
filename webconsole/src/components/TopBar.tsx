@@ -66,6 +66,20 @@ export function TopBar() {
           </span>
         </span>
         <span className="stat mono">{gameDate(state.tick)}</span>
+        {/* BUG-497 (2): once declineState is set advance() freezes the clock forever
+            BY DESIGN (see engine.ts's declineState hard-stop) — a frozen clock with
+            no signal reads as a hang. This badge makes the freeze unmistakably
+            intentional wherever the HUD is visible (defence-in-depth alongside the
+            DeclineScreen overlay itself, which is the primary game-over surface). */}
+        {state.declineState && (
+          <span
+            className="stat sim-ended-badge"
+            role="status"
+            title="Persistent insolvency ended the game — the clock is frozen by design, not hung."
+          >
+            ⏸ SIMULATION ENDED
+          </span>
+        )}
         <span className="stat" title={`Level ${level}: ${state.xp} XP`}>
           Lv {level}
           <span className="xp-mini">

@@ -490,6 +490,7 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   railNotice: 'sim.railNotice',
   placeNotice: 'sim.placeNotice',
   insolvencyState: 'sim.insolvencyState',
+  insolvencyRawBand: 'sim.insolvencyRawBand',
   insolvencyPopup: 'sim.insolvencyPopup',
   bailoutState: 'sim.bailoutState',
   administrationState: 'sim.administrationState',

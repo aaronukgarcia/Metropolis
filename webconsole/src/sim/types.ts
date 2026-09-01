@@ -350,6 +350,19 @@ export interface SimState {
    */
   insolvencyState?: InsolvencyState;
   /**
+   * BUG-496 fix — the RAW funds-derived band (insolvencyStateForFunds output),
+   * persisted SEPARATELY from the exposed/overlaid `insolvencyState` above.
+   * `insolvencyState` gets overlaid to 'decline'/'administration'/'bailout_second'
+   * while the underlying funds band is still 'crisis', so comparing the raw band
+   * against the EXPOSED previous value made "transitioned into crisis" evaluate
+   * true on every tick a bailout/administration overlay was active — the popup
+   * (and the AC-2 bailout injection, which happened to be separately guarded by
+   * `bailoutState === null` and so was unaffected) must compare raw-to-raw.
+   * Optional for backward tolerance: a legacy state without it is treated as
+   * 'solvent' until the next tick recomputes it.
+   */
+  insolvencyRawBand?: InsolvencyState;
+  /**
    * FEAT-1972079923 inc1 (AC-8, scenario 1 only) — set ONCE, on the tick the
    * band transitions into 'crisis' from a non-crisis band, so the MapView popup
    * states the conditions exactly once per entry rather than every tick. Cleared

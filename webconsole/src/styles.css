@@ -333,6 +333,46 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .insolvency-popup ul { margin: 6px 0; padding-left: 18px; font-size: 12.5px; }
 .insolvency-popup-note { color: var(--muted); font-style: italic; font-size: 11px; }
 
+/* BUG-497 (3): the FINAL DECLINE screen (hard game-over, FEAT-1972079923 inc4
+   AC-11) is a HARD STOP the player can never navigate away from — it MUST win
+   the stacking order over every other overlay in the app, including the
+   insolvency popup above (z-index 210) and the perf debug panel (1000). Pinned
+   well above both rather than "just higher than the popup" so a future overlay
+   added anywhere else in the app cannot accidentally re-bury it. */
+.decline-screen-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 8, 11, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 24px;
+}
+.decline-screen {
+  width: min(480px, 92vw);
+  background: rgba(15, 18, 22, 0.98);
+  border: 1px solid var(--danger);
+  border-radius: 10px;
+  padding: 20px 24px;
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  text-align: center;
+}
+.decline-screen h2 { margin: 0 0 6px; color: var(--danger); font-size: 17px; }
+.decline-cause { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
+.decline-stats { list-style: none; margin: 0 0 16px; padding: 0; text-align: left; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
+.decline-screen-actions { display: flex; gap: 10px; justify-content: center; }
+
+/* BUG-497 (2): the "SIMULATION ENDED" HUD badge — a frozen clock is otherwise
+   indistinguishable from a hang. */
+.sim-ended-badge {
+  color: var(--danger);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
 /* ---------- IMF insolvency flow inc2 (FEAT-1972079923) ---------- */
 /* Forced Asset Sales panel (AC-2/AC-3/AC-4) — visible for the whole active
    bailout, listing sellable assets by capital value descending. */
