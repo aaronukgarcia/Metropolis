@@ -770,12 +770,20 @@
             "outboundGuid": "2885bd32-5cdb-4828-9d93-c0e6752b170f"
           },
           {
+            "key": "engine.attract",
+            "outboundGuid": "7c3d420c-3d6e-48de-9c21-f46ff1b38ead"
+          },
+          {
             "key": "engine.build",
             "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
           },
           {
             "key": "engine.citizens",
             "outboundGuid": "c128a4e1-80d2-46f8-ae99-aa902f806983"
+          },
+          {
+            "key": "engine.consumption",
+            "outboundGuid": "06f76f29-785a-413c-9b28-9862a326e116"
           },
           {
             "key": "engine.core",
@@ -788,6 +796,10 @@
           {
             "key": "engine.finance",
             "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
+          },
+          {
+            "key": "engine.market",
+            "outboundGuid": "cef595b0-f597-46b7-9143-2154175859c4"
           },
           {
             "key": "engine.refuse",
@@ -3907,6 +3919,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },
@@ -4005,6 +4022,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },
@@ -4840,6 +4862,11 @@
             "key": "engine.world",
             "moduleGuid": "4c1cd0b8-7112-4c20-833c-bba4368c6b63",
             "inboundGuid": "2d8855b8-f4f0-43a3-a179-67accca83115"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

@@ -1383,12 +1383,14 @@
       },
       "deps": [
         "engine.core",
-        "foundation.data"
+        "foundation.data",
+        "int.serializer"
       ],
       "calls": [
         "engine.core",
         "foundation.data",
-        "foundation.errors"
+        "foundation.errors",
+        "int.serializer"
       ],
       "sprint": 4
     },
@@ -1411,7 +1413,8 @@
       "deps": [
         "engine.world",
         "foundation.data",
-        "engine.market"
+        "engine.market",
+        "int.serializer"
       ],
       "calls": [
         "engine.world",
@@ -1420,7 +1423,8 @@
         "engine.season",
         "engine.finance",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 4,
       "collaborations": {
@@ -1687,7 +1691,8 @@
       "deps": [
         "engine.citizens",
         "engine.finance",
-        "engine.households"
+        "engine.households",
+        "int.serializer"
       ],
       "calls": [
         "engine.citizens",
@@ -1700,7 +1705,8 @@
         "engine.logistics",
         "engine.market",
         "engine.season",
-        "engine.world"
+        "engine.world",
+        "int.serializer"
       ],
       "sprint": 6
     },
