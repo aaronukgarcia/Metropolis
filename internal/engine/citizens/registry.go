@@ -48,6 +48,16 @@ type CitizensAPI struct {
 	// fertility.go's fertilityChildIDBase doc comment.
 	nextFertilityChildID uint64
 
+	// mortalityCfg is the loaded data/mortality.json death-queue smoothing
+	// budget (FEAT-087 mkey feat.deathwave), read once at construction
+	// (GR#15: the monthly budget is data, never a Go literal). deathQueue
+	// is the LIVE citywide smoothing buffer applyMonthly's mortality draw
+	// enqueues into and AdvanceDayTick's realisation step drains from, once
+	// per completed month, bounded by mortalityCfg.MonthlyDeathBudget()
+	// (AC-1/AC-2 — see deathwave.go and AdvanceDayTick's doc comment).
+	mortalityCfg MortalityConfig
+	deathQueue   *DeathQueue
+
 	// curMonthBirths/curMonthDeaths accumulate the current (in-progress)
 	// calendar month's fertility births and mortality deaths across its 30
 	// day-ticks; lastMonthBirths/lastMonthDeaths hold the totals for the
@@ -83,6 +93,10 @@ func NewCitizensAPI(seed uint64, correlationID string) (*CitizensAPI, error) {
 	if err != nil {
 		return nil, err
 	}
+	mortalityCfg, err := LoadDefaultMortalityConfig(correlationID)
+	if err != nil {
+		return nil, err
+	}
 	c := &CitizensAPI{
 		seed:            seed,
 		workers:         1,
@@ -90,6 +104,8 @@ func NewCitizensAPI(seed uint64, correlationID string) (*CitizensAPI, error) {
 		households:      make(map[uint64]*Household),
 		nextHouseholdID: 1, // 0 is the "no household" sentinel
 		fertilityCfg:    fertilityCfg,
+		mortalityCfg:    mortalityCfg,
+		deathQueue:      NewDeathQueue(),
 		monthParams:     ColdPassParams{MortalityMultiplier: 1.0},
 	}
 	for i := range c.cold {
@@ -405,6 +421,30 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 		// household id AND the departed citizen's own Partner id must be
 		// resolved BEFORE the citizen is removed from hot+cold (no record
 		// remains to read them back from afterwards).
+		//
+		// FEAT-087 (mkey feat.deathwave) inc1.5 integration fix: this is a
+		// GENERIC departure command (predates the death queue -- engine.
+		// attract's emigration path uses it directly, LifeEventCommand's
+		// own doc), independent of the cold-pass mortality hazard draw. A
+		// citizen can now be QUEUED (hazard-selected, not yet realised --
+		// still an ordinary resident per ASM-581) at the moment SOME OTHER
+		// departure (e.g. emigration) removes them via this path. Left
+		// unreconciled, the death queue would carry a permanently STALE
+		// pending entry for an id no longer resident: it would keep
+		// occupying a monthly budget slot forever (never draining), and
+		// the eventual Realise() that releases it would report a "death"
+		// for a citizen already gone, double-counting the departure and
+		// breaking AC-2's totalRealised==totalSelected conservation
+		// invariant. RealiseByID force-closes the queue entry HERE (a
+		// no-op if the citizen was never queued) -- it marks the selection
+		// realised in the queue's own bookkeeping WITHOUT feeding
+		// AdvanceDayTick's returned deaths count (only the AdvanceDayTick-
+		// driven Realise call below in this file does that), so this
+		// reconciliation never double-counts against compose's vitalDeaths
+		// ledger; it only keeps the death queue itself honest.
+		if _, queued := c.deathQueue.IsQueued(cmd.CitizenID, cmd.CorrelationID); queued {
+			_ = c.deathQueue.RealiseByID(cmd.CitizenID, c.month, cmd.CorrelationID)
+		}
 		var householdID, partnerID uint64
 		if cit, ok := c.hot[cmd.CitizenID]; ok {
 			householdID = cit.Household
@@ -485,16 +525,21 @@ func (c *CitizensAPI) ApplyLifeEventCommand(cmd LifeEventCommand) error {
 // live-tick composition root's (internal/engine/compose) T0 conservation
 // seam: the ICD (docs/planning/icd/engine.citizens-coldpass.md §5) requires
 // a births/deaths delta land in the caller's own conservation ledger the
-// SAME TICK it is computed, but this pass's mortality/fertility mutations
-// land on the cold store incrementally, one amortised shard-slice per
-// day-tick — VitalEvents' monthly-completed-totals granularity would defer
-// that credit past the tick the mutation actually happened on (a real
-// conservation violation the daily invariant check WOULD catch, and did,
-// during FEAT-169's build: same-tick per-day totals were added precisely
-// because the deferred-batch design failed that check). VitalEvents is
-// unchanged and still reports the completed-month totals for any consumer
-// that wants a monthly view; it is simply no longer the compose-side
-// conservation seam.
+// SAME TICK it is computed. Fertility mutations still land incrementally,
+// one amortised shard-slice per day-tick, and dayBirths reports exactly
+// that tick's own births. Mortality (FEAT-087 mkey feat.deathwave, inc1.5)
+// is different since the death-queue wiring landed: a hazard-selected
+// death is ENQUEUED on its shard's one scheduled day-tick but not REMOVED
+// until the death queue's bounded monthly budget releases it, which this
+// method does once per completed month (on the day-tick that schedules the
+// LAST shard, DaysPerMonth-1 — see the realisation block below) rather
+// than incrementally. The returned `deaths` is that realisation's own
+// count, reported on the SAME tick the removal actually happens (the T0
+// requirement still holds — it is just that most day-ticks in a month
+// legitimately return deaths=0 and one returns the month's whole batch,
+// instead of a same-sized trickle every tick). VitalEvents is unchanged
+// and still reports the completed-month totals for any consumer that wants
+// a monthly view; it is simply not the compose-side conservation seam.
 func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, err error) {
 	if err := c.checkNotCopied(correlationID, "AdvanceDayTick"); err != nil {
 		return 0, 0, err
@@ -512,50 +557,85 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	month := c.month
 	seed := c.seed
 
-	// Each goroutine writes only its own shard's slot (same discipline as
-	// results itself), so the per-shard death slices never alias.
-	deathsByShard := make([][]coldDeath, numColdShards)
+	// FEAT-087 (mkey feat.deathwave) inc1.5: applyMonthly now ENQUEUES a
+	// hazard-selected death into c.deathQueue rather than removing it
+	// immediately -- deathQueue is safe for concurrent Enqueue from every
+	// shard goroutine (it holds its own mutex).
 	results := runShardsParallel(c.workers, shards, func(shard int) passTotals {
-		tot, deaths := c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
+		return c.cold[shard].applyMonthly(seed, month, params, func(id uint64) bool {
 			return hotSet[id]
-		})
-		deathsByShard[shard] = deaths
-		return tot
+		}, c.deathQueue, correlationID)
 	})
 
 	// Sum in ascending shard order (deterministic merge), ignoring slots for
-	// shards not scheduled this day.
+	// shards not scheduled this day. tot.selected is informational only
+	// (this call's new hazard SELECTIONS, i.e. enqueues) -- it is not a
+	// population change and must never feed curMonthDeaths or this call's
+	// returned deaths count; see passTotals' doc comment.
 	var tot passTotals
 	for _, t := range results {
 		tot = tot.add(t)
 	}
-	c.curMonthDeaths += tot.deaths
 
-	// BUG-369: route this pass's cold deaths through the SAME household-
-	// dissolution path LifeEventDeath uses — a bare removeAt left the
-	// surviving partner's Partner reference dangling on the dead id, leaked
-	// the dead member into the household forever, and let
-	// householdChildCountLocked count the unresolvable dead member as a
-	// child against MaxChildrenPerHousehold. Applied SEQUENTIALLY after the
-	// parallel pass has fully completed (never inside runShardsParallel's
-	// goroutines): removeHouseholdMemberLocked touches the shared
-	// households map and potentially cross-shard survivors — the same
-	// sequential-after-parallel discipline applyFertilityLocked documents.
-	// Ascending schedule order and within-shard death order are both fixed,
-	// so the merge is deterministic (AC-17).
-	for _, shard := range shards {
-		for _, d := range deathsByShard[shard] {
-			// BUG-270: an ELEVATED citizen's death (the cold pass now draws
-			// mortality for hot/warm citizens too) must also drop them from the
-			// hot elevation cache, exactly as LifeEventDeath's delete(c.hot,...)
-			// does -- otherwise a dead id lingers in c.hot pointing at a removed
-			// cold record. A no-op for a citizen who was cold. Done before the
-			// household unwiring, mirroring LifeEventDeath's order (the survivor,
-			// not the departed id, is the one removeHouseholdMemberLocked reads).
+	// FEAT-087 inc1.5 — REALISATION (AC-1/AC-2, the live cliff-kill): drain
+	// the death queue by at most mortalityCfg.MonthlyDeathBudget() of its
+	// oldest entries, but only once every scheduled shard has had its one
+	// day-tick this month (ColdPassSchedule assigns shard 255 -- the last
+	// -- to day 29 = DaysPerMonth-1; ascending shard order across the whole
+	// month covers every shard by then, doc.go's "amortised cold pass"
+	// section). Realising exactly once per COMPLETED month, not per
+	// day-tick, keeps "monthly budget" a literal monthly quantity: every
+	// hazard selection from every shard this month has already been
+	// enqueued by the time Realise runs, so a same-birthMonth cohort's
+	// cliff is bounded to at most the budget in the SAME month it was
+	// selected, never smeared thinner by re-deriving a daily fraction.
+	var realisedDeaths int
+	if c.dayTick == DaysPerMonth-1 {
+		realised := c.deathQueue.Realise(c.mortalityCfg.MonthlyDeathBudget(), month, correlationID)
+		realisedDeaths = len(realised)
+
+		// BUG-369/BUG-270 parity, at REALISATION time (not selection time):
+		// dissolution fires only now, because ASM-581 keeps a queued citizen
+		// a full living household member up to the instant they are
+		// actually removed -- so the household/partner snapshot MUST be
+		// read HERE, immediately before removeAt, never cached from the
+		// (possibly much earlier) month the citizen was selected in. Applied
+		// sequentially (this whole block runs under c.mu, after the
+		// parallel shard pass has completed), in the queue's own FIFO
+		// realisation order -- itself a pure function of queue contents,
+		// never of Enqueue call order (AC-4/AC-15), so this dissolution
+		// sequence is deterministic and worker-count invariant too.
+		for _, id := range realised {
+			shard := det.ShardForEntity(id)
+			row := c.cold[shard].rowOf(id)
+			if row < 0 {
+				// Structurally unreachable: a realised id was Enqueue'd from
+				// this exact shard (det.ShardForEntity is a pure function of
+				// id) and, being queued, was never removed until this very
+				// realisation loop -- so it must still be resident. Never
+				// silently drop a real death's dissolution; skip defensively
+				// rather than index a negative row, but this indicates a
+				// genuine invariant violation if it is ever hit.
+				continue
+			}
+			shardStore := c.cold[shard]
+			d := coldDeath{
+				citizenID:   id,
+				householdID: uint64(shardStore.households[row]),
+				partnerID:   uint64(shardStore.partners[row]),
+			}
+			// BUG-270: an ELEVATED citizen's death must also drop them from
+			// the hot elevation cache, exactly as LifeEventDeath's
+			// delete(c.hot,...) does -- a no-op for a citizen who was cold.
+			// Done before the household unwiring, mirroring LifeEventDeath's
+			// order (the survivor, not the departed id, is the one
+			// removeHouseholdMemberLocked reads).
 			delete(c.hot, d.citizenID)
+			shardStore.removeAt(row)
 			c.removeHouseholdMemberLocked(d.citizenID, d.householdID, d.partnerID)
 		}
 	}
+	c.curMonthDeaths += realisedDeaths
 
 	// Fertility (FEAT-160): a deterministic SEQUENTIAL pass over the same
 	// scheduled shards, run only after the parallel mortality/education/job
@@ -583,7 +663,7 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 		c.curMonthBirths = 0
 		c.curMonthDeaths = 0
 	}
-	return dayBirths, tot.deaths, nil
+	return dayBirths, realisedDeaths, nil
 }
 
 // VitalEvents returns the fertility births and mortality deaths tallied

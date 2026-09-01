@@ -1188,8 +1188,41 @@ func TestFEAT169_NoFakeFlatBirths(t *testing.T) {
 // citizen the composition root then seeds (spawnCitizens always passes
 // BirthMonth=0) is therefore already at that clamped age the moment the
 // cold pass first runs, so death is not merely likely but GUARANTEED,
-// deterministically, within the very first sim month — no probabilistic
-// flake risk.
+// deterministically — no probabilistic flake risk.
+//
+// FEAT-087 (mkey feat.deathwave) inc1.5 amendment: hazard-selected deaths
+// are now realised through the live death-queue smoothing budget
+// (data/mortality.json's monthlyDeathBudget, 25/month as of this writing),
+// not removed the instant the hazard hits — that immediate-removal
+// behaviour is the exact one-month population cliff FEAT-087 exists to
+// kill (AC-1). seedCitizenCount=64 exceeds the budget, so this test now
+// drives enough months to fully DRAIN the queue (ceil(64/25)=3, plus one
+// month of headroom) rather than asserting completeness within month 1.
+//
+// Two things changed about what this test can assert once other live
+// composition systems are given that extra time to run (found the hard
+// way, 2026-09-01): engine.attract's migration (admission + AC-6's
+// ambition-weighted emigration, both routed through the SAME citizens.
+// LifeEventDeath command mortality now shares) is wired unconditionally
+// by Wire — over multiple months it admits and emigrates its own
+// citizens, so comp.VitalDeaths() (a package-wide mortality tally) is no
+// longer pinned to exactly seedCitizenCount once migrant churn is in the
+// mix. What FEAT-087 actually guarantees, and what this test asserts
+// instead:
+//   - AC-1 (the cliff itself): the FIRST month's population delta for the
+//     original ancient cohort is bounded by the data-file budget — proven
+//     directly by counting how many of ids [1, seedCitizenCount) are
+//     already gone after month 1 alone.
+//   - AC-2 (conservation, never dropped nor duplicated): every one of the
+//     ORIGINAL seedCitizenCount ancient citizens (guaranteed hazard=1) is
+//     eventually gone by the end of the drain window — checked directly
+//     via CitizenAt on ids [1, seedCitizenCount), independent of whatever
+//     migrant churn also happened alongside them.
+//   - Zero conservation violations throughout (the invariant hook), which
+//     is what actually proves the LifeEventDeath/death-queue reconciliation
+//     fix (an emigrating citizen who was still queued for mortality must
+//     not be double-counted or leave a stale queue entry) holds under a
+//     real mixed mortality+migration workload, not just in isolation.
 func TestFEAT169_LiveDeaths_RealMortality(t *testing.T) {
 	cid := errs.NewCorrelationID()
 	api, err := citizens.NewCitizensAPI(3, cid)
@@ -1223,16 +1256,68 @@ func TestFEAT169_LiveDeaths_RealMortality(t *testing.T) {
 		t.Fatalf("seed population = %d, want %d", before, seedCitizenCount)
 	}
 
-	// One month is enough: ColdPassSchedule guarantees every cold shard is
-	// processed exactly once per calendar month (AC-6/AC-7), so all
-	// seedCitizenCount ancient citizens are scheduled and die within it.
-	advanceInChunks(t, e, int64(core.DailyTicksPerMonth))
+	// countOriginalCohortAlive counts how many of the ORIGINAL ids
+	// [1, seedCitizenCount] (spawnCitizens mints them sequentially from 1,
+	// compose.go's nextCitizenID) are still resident — independent of
+	// whatever migrant ids (attract.MigrantIDBase-and-above) also churn
+	// through the population alongside them.
+	countOriginalCohortAlive := func() int {
+		alive := 0
+		for id := uint64(1); id <= uint64(seedCitizenCount); id++ {
+			if _, ok := api.CitizenAt(id, cid); ok {
+				alive++
+			}
+		}
+		return alive
+	}
 
-	if got := comp.VitalDeaths(); got != int64(seedCitizenCount) {
-		t.Fatalf("VitalDeaths() = %d after 1 month with a guaranteed (hazard-clamped) death for every one of the %d ancient seed citizens, want exactly %d", got, seedCitizenCount, seedCitizenCount)
+	mcfg, err := citizens.LoadDefaultMortalityConfig(cid)
+	if err != nil {
+		t.Fatalf("LoadDefaultMortalityConfig: %v", err)
+	}
+	budget := mcfg.MonthlyDeathBudget()
+
+	// ColdPassSchedule guarantees every cold shard is processed exactly
+	// once per calendar month (AC-6/AC-7), so all seedCitizenCount ancient
+	// citizens are hazard-SELECTED (enqueued) within the first month — but
+	// FEAT-087's live death-queue budget (data/mortality.json) now bounds
+	// how many of them are actually REALISED that same month (AC-1).
+	//
+	// Checked via comp.VitalDeaths() specifically, NOT via how many of the
+	// original cohort are simply gone: engine.attract's own emigration
+	// (AC-6, ambition-weighted, routed through the SAME LifeEventDeath
+	// command mortality uses) can ALSO remove an original-cohort citizen
+	// in month 1 — a real, separate mechanism, correctly uncapped by the
+	// mortality smoothing budget. VitalDeaths() is fed exclusively from
+	// AdvanceDayTick's own Realise() return (coldPassHook.ApplyEffect),
+	// never from the LifeEventDeath command emigration issues directly, so
+	// it isolates the mortality-specific realisation count AC-1 actually
+	// bounds.
+	advanceInChunks(t, e, int64(core.DailyTicksPerMonth))
+	if got := comp.VitalDeaths(); got > int64(budget) {
+		t.Fatalf("VitalDeaths() = %d after month 1 alone, want <= budget=%d (AC-1: the cohort cliff must be smoothed, not immediate)", got, budget)
+	}
+
+	// Drive enough MORE months to fully drain the queue: ceil(64/25)=3
+	// total, plus one month of headroom in case a citizen's shard-visit
+	// ordering pushed its selection a tick later than expected (mirrors
+	// coldpass_deathwave_test.go's TestLiveColdPassConservationAcrossDrain
+	// pattern in the citizens package itself).
+	const monthsToFullyDrain = 4
+	for i := 1; i < monthsToFullyDrain; i++ {
+		advanceInChunks(t, e, int64(core.DailyTicksPerMonth))
+	}
+
+	// AC-2: every one of the ORIGINAL guaranteed-hazard citizens must
+	// eventually be gone — smoothing defers, it never drops a death.
+	// Checked against the ORIGINAL cohort specifically (not the aggregate
+	// comp.VitalDeaths(), which now also folds in engine.attract's own
+	// migration-driven admissions/emigrations over these several months).
+	if stillAlive := countOriginalCohortAlive(); stillAlive != 0 {
+		t.Fatalf("%d of the original %d ancient seed citizens are still alive after %d months (enough to fully drain the death queue) — FEAT-087 AC-2 requires every hazard-selected death to eventually realise", stillAlive, seedCitizenCount, monthsToFullyDrain)
 	}
 	if got := violations.Load(); got != 0 {
-		t.Fatalf("conservation suite reported %d violations while %d real deaths landed, want 0", got, seedCitizenCount)
+		t.Fatalf("conservation suite reported %d violations across the drain (mortality smoothing + migration churn both active), want 0", got)
 	}
 }
 

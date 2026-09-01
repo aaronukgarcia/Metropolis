@@ -68,13 +68,19 @@ type ColdPassParams struct {
 // passTotals aggregates one monthly cold pass's effects. The zero value is
 // the identity (MergeInOrder-style combine: field-wise addition).
 type passTotals struct {
-	deaths  int
-	updated int
+	// selected counts hazard-selected deaths ENQUEUED this call (FEAT-087
+	// inc1.5) -- informational only. It is NOT a population change: a
+	// selected death stays resident (still ages, still counts, ASM-581)
+	// until DeathQueue.Realise actually removes it. AdvanceDayTick's
+	// returned/conserved deaths count comes from Realise's own return, NOT
+	// from this field.
+	selected int
+	updated  int
 }
 
 // add folds one shard's totals into the accumulator (in shard order).
 func (t passTotals) add(o passTotals) passTotals {
-	return passTotals{deaths: t.deaths + o.deaths, updated: t.updated + o.updated}
+	return passTotals{selected: t.selected + o.selected, updated: t.updated + o.updated}
 }
 
 // runShardsParallel runs fn over every shard in shards, spread across
@@ -114,10 +120,14 @@ func runShardsParallel(workers int, shards []int, fn func(shard int) passTotals)
 	return results
 }
 
-// coldDeath is one cold-pass mortality, snapshotted at removal time so the
-// caller can route the death through the same household-dissolution path
-// LifeEventDeath uses (BUG-369): the citizen's household and partner ids
-// must be read BEFORE removeAt overwrites the row via swap-with-last.
+// coldDeath is one REALISED cold-pass mortality, snapshotted at removal
+// time so the caller can route the death through the same
+// household-dissolution path LifeEventDeath uses (BUG-369): the citizen's
+// household and partner ids must be read BEFORE removeAt overwrites the row
+// via swap-with-last. Built at REALISATION (registry.go's AdvanceDayTick),
+// never at selection/enqueue time (FEAT-087 inc1.5) -- the household/
+// partner snapshot must be current as of removal, not stale from the
+// (possibly much earlier) month the citizen was selected in.
 type coldDeath struct {
 	citizenID   uint64
 	householdID uint64
@@ -156,18 +166,30 @@ type coldDeath struct {
 // survivor skips them here -- exactly the prior behaviour for everything
 // except the now-universal mortality draw.
 //
-// Returns the pass totals PLUS this shard's deaths as dissolution records
-// (BUG-369): removing a deceased citizen's row is only half of a death —
-// the caller must apply removeHouseholdMemberLocked for each returned
-// record (prune Members, clear the surviving partner's Partner reference,
-// delete the household once empty). The caller applies them sequentially
-// after the parallel pass completes, in ascending shard order, because
-// dissolution touches the shared households map and potentially
-// cross-shard survivors — the same sequential-after-parallel discipline
-// applyFertilityLocked documents.
-func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool) (passTotals, []coldDeath) {
+// Returns the pass totals only (FEAT-087 inc1.5): a hazard-selected death
+// is now ENQUEUED into dq, not removed here -- removal (and the BUG-369
+// household-dissolution record) happens only at REALISATION, driven
+// sequentially by the caller (registry.go's AdvanceDayTick) once every
+// shard has had its one scheduled day-tick this month. See the death-queue
+// paragraph below for why applyMonthly itself never calls removeAt for a
+// mortality selection any more.
+//
+// # Death-queue wiring (FEAT-087 inc1.5 -- the cohort cliff killed LIVE)
+//
+// dq is the CitizensAPI-wide DeathQueue (deathwave.go), safe to Enqueue
+// into concurrently from every shard's goroutine (it holds its own mutex).
+// A citizen already dq.IsQueued (selected in this or an earlier month, not
+// yet realised) MUST NOT be drawn for mortality again (AC-3(b): the queue
+// entry is the single, terminal selection event) -- it is simply skipped
+// past the mortality draw and falls through to every other monthly effect
+// below exactly as an ordinary living citizen would (ASM-581: queued is
+// alive, ageing, and counted, never a frozen or separately-tracked state).
+// A fresh hazard hit calls dq.Enqueue and keeps going through the rest of
+// this citizen's monthly effects the same way -- selection alone changes
+// nothing observable about the citizen until the caller's Realise step
+// removes them.
+func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams, isHot func(uint64) bool, dq *DeathQueue, correlationID string) passTotals {
 	var tot passTotals
-	var deaths []coldDeath
 	i := 0
 	for i < s.count() {
 		id := s.ids[i]
@@ -177,26 +199,27 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 
 		// Mortality: per-person draw from hash(worldSeed, id, month,
 		// "mortality") against the Gompertz-Makeham hazard scaled by the
-		// sample-measured multiplier. A death is a removal, never a cull —
-		// it is the per-individual probabilistic event §5.1 specifies.
-		stream := det.NewStream(seed, id, month, "mortality")
-		hazard := MortalityHazard(age, HealthBand(s.healthBands[i]), s.access[i]) * params.MortalityMultiplier
-		if hazard > 1 {
-			hazard = 1
-		}
-		if stream.Float64() < hazard {
-			// Snapshot the household/partner wiring BEFORE removeAt's
-			// swap-with-last overwrites this row (BUG-369): the caller
-			// needs the departed citizen's own pre-removal Partner id to
-			// dissolve the pairing on the survivor's side.
-			deaths = append(deaths, coldDeath{
-				citizenID:   id,
-				householdID: uint64(s.households[i]),
-				partnerID:   uint64(s.partners[i]),
-			})
-			s.removeAt(i)
-			tot.deaths++
-			continue
+		// sample-measured multiplier. A death is a SELECTION now, never an
+		// immediate removal (FEAT-087 inc1.5) — the per-individual
+		// probabilistic event §5.1 specifies feeds the smoothing queue,
+		// which is what bounds it to a non-cliff monthly release (AC-1).
+		if _, queued := dq.IsQueued(id, correlationID); !queued {
+			stream := det.NewStream(seed, id, month, "mortality")
+			hazard := MortalityHazard(age, HealthBand(s.healthBands[i]), s.access[i]) * params.MortalityMultiplier
+			if hazard > 1 {
+				hazard = 1
+			}
+			if stream.Float64() < hazard {
+				// Enqueue, do not remove: the Enqueue error is intentionally
+				// ignored here -- it can only fire for a citizenID already
+				// queued or already realised, and the IsQueued check just
+				// above already excludes both (an id belongs to exactly one
+				// shard via det.ShardForEntity, and a shard is visited at
+				// most once per day-tick, so nothing else can race this same
+				// id into the queue between the check and this call).
+				_ = dq.Enqueue(id, month, correlationID)
+				tot.selected++
+			}
 		}
 
 		// An elevated survivor takes the mortality draw above (BUG-270) but
@@ -250,7 +273,7 @@ func (s *ColdShard) applyMonthly(seed uint64, month int64, params ColdPassParams
 		tot.updated++
 		i++
 	}
-	return tot, deaths
+	return tot
 }
 
 // advanceStage advances a citizen's education stage deterministically (the

@@ -342,8 +342,18 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 		"seed":         "worldSeed construction/header input, not participant state",
 		"workers":      "perf pool size (AC-17: affects wall-clock only, never results)",
 		"fertilityCfg": "immutable data/fertility.json config, reloaded by NewCitizensAPI",
-		"mu":           "runtime lock, not state",
-		"self":         "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
+		"mortalityCfg": "immutable data/mortality.json config, reloaded by NewCitizensAPI",
+		"deathQueue": "FEAT-087 (mkey feat.deathwave) inc1.5 KNOWN GAP, disclosed not silent: " +
+			"the live smoothing queue's pending (selected-but-unrealised) entries are mutable " +
+			"per-citizen simulation state, not yet serialized. A save/reload across a pending " +
+			"queue entry silently drops that citizen's queue membership -- the citizen itself is " +
+			"unharmed (still resident in the cold store, never double-removed, never phantom-" +
+			"killed) but loses its FIFO queue priority, and AC-2's totalRealised==totalSelected " +
+			"count is no longer guaranteed to hold ACROSS a reload boundary (it still holds " +
+			"within one continuous run). Flagged as inc1.5's own follow-up (death-queue wire " +
+			"serialization), out of this increment's cold-pass-wiring scope.",
+		"mu":   "runtime lock, not state",
+		"self": "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
 	}
 	covered := map[string]bool{
 		"month": true, "dayTick": true, "cold": true, "hot": true,

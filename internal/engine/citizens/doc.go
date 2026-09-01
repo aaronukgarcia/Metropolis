@@ -168,8 +168,19 @@
 //     aggregates until realised (Aaron's ASM-581 ruling, 2026-08-27) — the
 //     queue entry is that citizen's single, terminal selection event.
 //
-// inc1 (the current state) builds this core only. Two later increments
-// extend it without reshaping DeathQueue's API: inc2 adds a declared
+// inc1 built the DeathQueue core in isolation (proven by deathwave_test.go
+// calling Enqueue/Realise directly). inc1.5 (the current state) WIRES it
+// into the LIVE cold pass: [ColdShard.applyMonthly]'s mortality draw now
+// Enqueues a hazard hit instead of removing the citizen inline, and
+// [CitizensAPI.AdvanceDayTick] Realises the data-file budget exactly once
+// per completed calendar month (the day-tick that schedules the last cold
+// shard, so every shard's selection this month has already been
+// enqueued), removing only the released ids and running the BUG-369/
+// BUG-270 household-dissolution path at that same point — dissolution
+// fires at REALISATION, never at selection, so a queued citizen's
+// household stays fully intact for as long as they wait in the queue
+// (coldpass_deathwave_test.go's live-tick proof suite). Two later
+// increments extend it without reshaping DeathQueue's API: inc2 adds a declared
 // weather emergency (consumed through engine.season's SeasonAPI curves,
 // §9) that suspends the smoothing budget for one legitimate non-smoothed
 // major death event, without itself touching the underlying hazard
