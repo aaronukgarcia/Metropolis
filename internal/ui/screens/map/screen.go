@@ -2,6 +2,7 @@ package mapscreen
 
 import (
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -10,6 +11,10 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/protocol"
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
+
+// correlationSuffixRe matches one trailing " (correlation: <id>)" segment
+// of an errs.E-rendered Display string — see dedupeCorrelationSuffix.
+var correlationSuffixRe = regexp.MustCompile(`\s\(correlation: [^)]*\)`)
 
 // cellData is this screen's own working-copy of one grid cell, built
 // entirely from "f1.viewport" wireCell payloads — never from an
@@ -140,6 +145,19 @@ type MapScreen struct {
 	// nil map reads cleanly, so an ApplyDelta before any bind is an
 	// "unknown subscription" log, never a panic.
 	subs map[protocol.SubscriptionID]string
+
+	// buildNotice is BUG-490's fix: the last KindBuy/KindBuild CommandResult
+	// this screen was told about, surfaced as visible text (render.go's
+	// drawBuildNotice) rather than only the registry-sourced log entry
+	// router.ErrRouteMiss leaves when nobody is listening. Empty when the
+	// last known result was an Accept, a dismissed rejection
+	// (DismissBuildNotice, BUG-493 item 3), or none has arrived yet — see
+	// ApplyResult's doc comment for the full rationale. Stored VERBATIM as
+	// the registry's own Display text, deduplicated of any repeated
+	// trailing "(correlation: ...)" segment (dedupeCorrelationSuffix,
+	// BUG-493 item 2) — the render-time width truncation (drawBuildNotice)
+	// is a SEPARATE concern (item 1) and never mutates this field.
+	buildNotice string
 }
 
 // NewMapScreen constructs an empty MapScreen (no snapshot applied yet).
@@ -586,4 +604,171 @@ func (m *MapScreen) Inspect(x, y int) InspectResult {
 		Road:      c.Road,
 		Building:  c.Building,
 	}
+}
+
+// ApplyResult surfaces the outcome of a KindBuy/KindBuild command issued
+// from this screen's own keyboard path (BUG-362's 'y'/'b' map keys,
+// registerMapBuildKeys in cmd/metropolis/boot.go) — BUG-490's fix,
+// hardened by BUG-493.
+//
+// Before this method existed, those keys sent their command fire-and-
+// forget with no ResultReceiver registered at all (boot.go's own prior
+// doc comment on registerMapBuildKeys said exactly that: "the
+// CommandResult left to ui/router's own ErrRouteMiss accounting"), so a
+// REJECTED command — insufficient funds, tile not owned, unknown zone —
+// produced nothing the player could see: no tile change (correctly —
+// nothing happened), no message, no sound, nothing. Aaron's own dogfood
+// report (BUG-490) named exactly this: "queueing a build via the screen
+// has no effect the player can observe". The player-visible half of the
+// fix is this method plus drawBuildNotice (render.go); the boot.go half
+// registers this screen as the ResultReceiver for those two commands'
+// CorrelationIDs before sending, mirroring services.Screen.ApplyResult's
+// existing wiring for the F4 funding slider.
+//
+// On a rejection (Accepted == false, Error != nil), the engine's own
+// registry-sourced ErrorRef.Display (GR#1/GR#7 — never a message this
+// screen invents) is stored — deduplicated of a repeated trailing
+// "(correlation: ...)" segment via dedupeCorrelationSuffix (BUG-493 item
+// 2, the BUG-267-class double-wrap this session's Phase-3 finance bridge
+// independently found and fixed the same way, internal/converge/
+// finance_ab_actions.go's stripCorrelationSuffix — GR#3, one canonical
+// fix reused rather than reinvented) — and rendered until the next
+// result arrives, a subsequent Accept clears it, or the player presses
+// the dismiss key (DismissBuildNotice, BUG-493 item 3).
+//
+// On an accept, any previously-shown rejection is cleared — a later
+// successful command must not leave a stale error on screen (mirrors
+// finance.Screen.ApplyResult's loanRejectedReason and
+// services.Screen.ApplyResult's fundingRejectedReason, both cleared
+// symmetrically on their own Accept branch).
+//
+// A REJECTED result carrying a nil Error is protocol-malformed
+// (protocol.ErrRejectedResultMissingError's own contract — nothing on
+// this delivery path enforces that today) and, before BUG-493, was
+// treated exactly like an Accept: the notice was silently wiped with no
+// trace at all, indistinguishable from success to the player and
+// invisible to any operator (GR#1/GR#17 gap). BUG-493 item 4 closes
+// that: the notice is still cleared (a malformed result is not "kept
+// showing a possibly-stale rejection" either), but a registry-sourced
+// MET-U102 warn is logged first, so the gap is diagnosable rather than
+// silent.
+//
+// This method does NOT attempt to distinguish which of 'y'/'b' (or which
+// cell) a given result belongs to — CommandResult carries only
+// CorrelationID/Tick/Accepted/Error (protocol/envelope.go), no payload
+// echo — so "one live notice at a time, last result wins" is the whole
+// contract, same information-theoretic limit services.Screen documents
+// for its own ApplyResult.
+func (m *MapScreen) ApplyResult(res protocol.CommandResult) {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyResult"}); err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "ApplyResult"}); err != nil {
+		return
+	}
+	if res.Accepted {
+		m.buildNotice = ""
+		return
+	}
+	if res.Error == nil {
+		// BUG-493 item 4: a REJECTED result with no ErrorRef is malformed
+		// (protocol.ErrRejectedResultMissingError) — log it via the
+		// registry (GR#1/GR#7) before clearing, rather than silently
+		// wiping the notice as if this were an ordinary Accept.
+		_ = errs.New("MET-U102", m.correlationID, map[string]any{
+			"cause": "ApplyResult received a rejected CommandResult with Error == nil",
+		})
+		m.buildNotice = ""
+		return
+	}
+	m.buildNotice = dedupeCorrelationSuffix(res.Error.Display)
+}
+
+// BuildNotice returns the text ApplyResult last surfaced for a rejected
+// KindBuy/KindBuild command — "" when the last known result was an
+// accept, the notice has been dismissed (DismissBuildNotice), or no
+// result has arrived yet. Exported so a test (or a future second
+// renderer) can assert on it without decoding the drawn buffer.
+func (m *MapScreen) BuildNotice() string {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BuildNotice"}); err != nil {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "BuildNotice"}); err != nil {
+		return ""
+	}
+	return m.buildNotice
+}
+
+// DismissBuildNotice clears a currently-showing build rejection notice
+// (BUG-493 item 3) without waiting for a subsequent command result.
+//
+// Why a dismiss key rather than a wall-clock or tick-based timeout:
+// Render's own doc comment documents this package's AC-10 purity
+// contract — "the same state renders identically across repeated calls,
+// and nothing here samples the wall clock" — so a time.Now()-driven
+// expiry inside Render (or anything Render reads) would be a direct
+// regression of that invariant, and this package carries no tick-count
+// field today (MapScreen never observes protocol.Tick at all — Wiring
+// one in is a bigger change than this bug's scope). A dismiss key is
+// deterministic, trivially testable, and mirrors the explicit-clear
+// precedent already in this codebase (internal/ui/screens/chrome's
+// Chrome.ResolveAlert: "the next delta reporting a resolved underlying
+// condition drops the alert, rather than leaving a dead entry the player
+// must dismiss" — here there is no such delta to key off, so the
+// player's own keypress is the resolving signal instead). Bound to the
+// 'c' map key in cmd/metropolis/boot.go's registerMapBuildKeys
+// ("clear notice") — 'y'/'b' are taken by Buy/Build, and Esc/'q' are the
+// walking skeleton's process-lifecycle quit keys (cmd/metropolis/
+// run.go's isQuitInput), not available for a screen-local dismiss.
+// Idempotent: dismissing an already-empty notice is a silent no-op, not
+// an error.
+func (m *MapScreen) DismissBuildNotice() {
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "DismissBuildNotice"}); err != nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := m.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "DismissBuildNotice"}); err != nil {
+		return
+	}
+	m.buildNotice = ""
+}
+
+// dedupeCorrelationSuffix collapses every trailing " (correlation: ...)"
+// segment in an externally-sourced, already fully-rendered errs.E
+// Display string (errs.go's E.Display(): "[code] msg (correlation: id)")
+// down to exactly ONE occurrence (BUG-493 item 2, the BUG-267-class
+// double-wrap: "[MET-G804] [MET-E404] ... (correlation: X) (correlation:
+// X)" — two stacked error codes from a chained errs.Wrap upstream, each
+// contributing its own copy of the same correlation ID).
+//
+// This reuses the identical pattern internal/converge/
+// finance_ab_actions.go's stripCorrelationSuffix independently found and
+// fixed for the same defect class this session (Phase-3 finance bridge,
+// GR#3 — one canonical fix, not reinvented) but cannot call that function
+// directly: stripCorrelationSuffix is written for a caller that is about
+// to WRAP the stripped string inside a fresh errs.New (whose own
+// Display() will append exactly one new "(correlation: ...)" suffix), so
+// it always removes the trailing segment entirely, leaving zero. This
+// screen has no such wrapping step — ApplyResult stores the engine's
+// Display text as-is for the player to read (never inventing or
+// re-wrapping it, per this method's own doc comment) — so the equivalent
+// fix here must COLLAPSE repeats down to exactly one rather than strip to
+// zero, keeping the first correlation ID found (every occurrence in the
+// observed double-wrap shapes carries the same ID, since a single
+// ApplyResult call's chain of errs.Wrap calls shares one).
+//
+// A Display with zero or one "(correlation: ...)" segment is returned
+// unchanged.
+func dedupeCorrelationSuffix(display string) string {
+	matches := correlationSuffixRe.FindAllString(display, -1)
+	if len(matches) <= 1 {
+		return display
+	}
+	cleaned := correlationSuffixRe.ReplaceAllString(display, "")
+	return cleaned + matches[0]
 }

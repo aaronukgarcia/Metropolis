@@ -63,33 +63,51 @@ func runBoundedSEC020(t *testing.T, name string, fn func()) {
 //
 // Results — every exported method, its guard, and its fail-closed value:
 //
-//	screen.go   ApplyPatch()      -- pre-check + own mu.Lock() site, pre+post -- silently drops (same posture as every other malformed-patch cause)
-//	screen.go   SetStale()        -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
-//	screen.go   SetViewportSize() -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
-//	screen.go   Pan()             -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
-//	screen.go   Offset()          -- pre-check + own mu.Lock() site, pre+post -- fails closed to (0, 0)
-//	screen.go   MoveCursor()      -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
-//	screen.go   CursorPos()       -- pre-check + own mu.Lock() site, pre+post -- fails closed to (0, 0)
-//	screen.go   Inspect()         -- pre-check + own mu.Lock() site, pre+post -- fails closed to InspectResult{Found:false}
-//	screen.go   InspectCursor()   -- pre-check only (delegates to CursorPos/Inspect, both already guarded) -- fails closed to InspectResult{Found:false}
-//	screen.go   Subscribe()       -- pre-check only (reads m.correlationID, never touches mu)             -- propagates the checkNotCopied error
-//	render.go   Render()          -- pre-check + own mu.Lock() site, pre+post -- draws nothing, returns (ASM-015)
-//	overlay.go  ActiveOverlay()   -- pre-check + own mu.Lock() site, pre+post -- fails closed to overlayOrder[0]
-//	overlay.go  CycleOverlay()    -- pre-check + own mu.Lock() site, pre+post -- fails closed to overlayOrder[0] (write silently dropped)
+//	screen.go   Subscribe()          -- pre-check only (reads m.correlationID, never touches mu)             -- propagates the checkNotCopied error
+//	screen.go   BindSubscription()   -- pre-check + own mu.Lock() site, pre+post -- silently drops the write (BUG-323)
+//	screen.go   UnbindSubscription() -- pre-check + own mu.Lock() site, pre+post -- silently drops the write (BUG-323)
+//	screen.go   ApplyDelta()         -- pre-check + own mu.Lock() site (read-only, for the subs lookup), pre only -- drops (delegates to ApplyPatch once past the lookup, which is separately guarded) (BUG-323)
+//	screen.go   ApplyPatch()         -- pre-check + own mu.Lock() site, pre+post -- silently drops (same posture as every other malformed-patch cause)
+//	screen.go   SetStale()           -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
+//	screen.go   SetViewportSize()    -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
+//	screen.go   Pan()                -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
+//	screen.go   Offset()             -- pre-check + own mu.Lock() site, pre+post -- fails closed to (0, 0)
+//	screen.go   MoveCursor()         -- pre-check + own mu.Lock() site, pre+post -- silently drops the write
+//	screen.go   CursorPos()          -- pre-check + own mu.Lock() site, pre+post -- fails closed to (0, 0)
+//	screen.go   Inspect()            -- pre-check + own mu.Lock() site, pre+post -- fails closed to InspectResult{Found:false}
+//	screen.go   InspectCursor()      -- pre-check only (delegates to CursorPos/Inspect, both already guarded) -- fails closed to InspectResult{Found:false}
+//	screen.go   ApplyResult()        -- pre-check + own mu.Lock() site, pre+post -- silently drops the write (BUG-490)
+//	screen.go   BuildNotice()        -- pre-check + own mu.Lock() site, pre+post -- fails closed to "" (BUG-490)
+//	screen.go   DismissBuildNotice() -- pre-check + own mu.Lock() site, pre+post -- silently drops the write (BUG-493)
+//	render.go   Render()             -- pre-check + own mu.Lock() site, pre+post -- draws nothing, returns (ASM-015)
+//	overlay.go  ActiveOverlay()      -- pre-check + own mu.Lock() site, pre+post -- fails closed to overlayOrder[0]
+//	overlay.go  CycleOverlay()       -- pre-check + own mu.Lock() site, pre+post -- fails closed to overlayOrder[0] (write silently dropped)
 //
-// That is 13 exported methods total: 11 with their OWN direct
-// m.mu.Lock() site (ApplyPatch, SetStale, SetViewportSize, Pan, Offset,
-// MoveCursor, CursorPos, Inspect, Render, ActiveOverlay, CycleOverlay)
-// plus 2 pre-check-only (InspectCursor, Subscribe — neither touches mu
-// directly, but both still read receiver state so both are guarded) —
-// every one of the 13 exercised below by name.
+// That is 19 exported methods total: 17 with their OWN direct
+// m.mu.Lock() site (BindSubscription, UnbindSubscription, ApplyDelta,
+// ApplyPatch, SetStale, SetViewportSize, Pan, Offset, MoveCursor,
+// CursorPos, Inspect, ApplyResult, BuildNotice, DismissBuildNotice,
+// Render, ActiveOverlay, CycleOverlay) plus 2 pre-check-only
+// (InspectCursor, Subscribe — neither touches mu directly, but both
+// still read receiver state so both are guarded) — every one of the 19
+// exercised below by name.
 //
-// (Corrected 7 -> 9 for the lock-touching count — the itemised list
-// above was always right, the summary arithmetic was not, the same
-// shape of slip Weakness pattern #3's audit-trail note warns about. This
-// comment IS the audit trail for the next person auditing this package,
-// so a wrong number in it is a real defect even though every listed site
-// is, independently verified, genuinely guarded.)
+// (BUG-493 item 5: this comment previously claimed 15 ("Corrected 7 -> 9
+// -> 15"), itself wrong — the true count at that point was 18: BUG-323's
+// ApplyDelta/BindSubscription/UnbindSubscription were guarded and shipped
+// but never added to THIS enumeration or exercised by name in the tests
+// below (a real coverage gap, not just an arithmetic one), and BUG-490's
+// own +2 for ApplyResult/BuildNotice was applied on top of the
+// already-wrong 13 rather than the real 16, propagating the miscount
+// instead of re-auditing it — exactly the "corrected the wrong way"
+// pattern Weakness pattern #3 warns about, now itself the audit-trail
+// entry for the NEXT person editing this file. BUG-493 both fixes the
+// count (16 pre-existing + ApplyResult/BuildNotice + this bug's own new
+// DismissBuildNotice = 19) and closes the exercise gap: ApplyDelta,
+// BindSubscription and UnbindSubscription are now called by name in both
+// TestSEC020_EveryGuardedMethod_RejectsStructCopy and
+// TestSEC020_CopyTakenWhileLockHeld_RejectedNotHung below, not merely
+// guarded in production code.)
 //
 // NOT guarded, and why (the one deliberate exclusion, logged rather than
 // silent): none. Every exported method on *MapScreen reads at least one
@@ -98,13 +116,14 @@ func runBoundedSEC020(t *testing.T, name string, fn func()) {
 // parameters and reads no receiver field at all, there is no exported
 // *MapScreen method in that shape.
 //
-// (13, not 12 or 14 — recount deliberately spelled out per Weakness
+// (19, not 18 or 20 — recount deliberately spelled out per Weakness
 // pattern #3's "get the arithmetic right, this comment IS the audit
-// trail" instruction: the two internal helper Lock sites this package
-// has — Render's snapshotLocked and clampOffsetLocked/clampCursorLocked
-// — are unexported, never called except from within an already-guarded
-// caller's critical section, and are covered by that caller's pre+post
-// checks, not counted again here.)
+// trail" instruction, and per BUG-493's own finding that the PREVIOUS
+// such spelled-out recount was itself wrong: the two internal helper
+// Lock sites this package has — Render's snapshotLocked and
+// clampOffsetLocked/clampCursorLocked — are unexported, never called
+// except from within an already-guarded caller's critical section, and
+// are covered by that caller's pre+post checks, not counted again here.)
 
 // mapScreenByteCopy performs SEC-020's attack — a plain MapScreen struct
 // copy — via a raw byte-for-byte memcpy through unsafe.Pointer, mirroring
@@ -144,6 +163,18 @@ func TestSEC020_EveryGuardedMethod_RejectsStructCopy(t *testing.T) {
 
 	wantMapScreenCopied(t, "Subscribe", cp.Subscribe(func(protocol.Command) error { return nil }))
 
+	// BUG-493 item 5: BindSubscription/UnbindSubscription/ApplyDelta were
+	// guarded in production but never exercised BY NAME here — this
+	// closes that gap. cp.BindSubscription must not register anything
+	// observable on the copy (no getter exists; ApplyDelta below proves
+	// it indirectly by never reaching the copy's ApplyPatch either).
+	cp.BindSubscription(protocol.SubscriptionID("sec020-sub"))
+	cp.ApplyDelta(protocol.Delta{SubscriptionID: protocol.SubscriptionID("sec020-sub"), Patch: fullPatchRaw(t)})
+	if res := cp.Inspect(0, 0); res.Found {
+		t.Fatalf("copy.Inspect(0,0) after a copy's ApplyDelta: Found = true, want false (ApplyDelta must have been rejected, not applied)")
+	}
+	cp.UnbindSubscription(protocol.SubscriptionID("sec020-sub"))
+
 	cp.ApplyPatch(fullPatchRaw(t)) // no panic, no state change (checked below)
 	if res := cp.Inspect(0, 0); res.Found {
 		t.Fatalf("copy.Inspect(0,0) after a copy's ApplyPatch: Found = true, want false (ApplyPatch must have been rejected, not applied)")
@@ -168,6 +199,15 @@ func TestSEC020_EveryGuardedMethod_RejectsStructCopy(t *testing.T) {
 	}
 	if res := cp.InspectCursor(); res.Found {
 		t.Fatalf("copy.InspectCursor() = %+v, want Found=false", res)
+	}
+
+	cp.ApplyResult(protocol.CommandResult{Accepted: false, Error: &protocol.ErrorRef{Code: "MET-V400", Display: "should never land"}})
+	if got := cp.BuildNotice(); got != "" {
+		t.Fatalf("copy.BuildNotice() after copy's ApplyResult = %q, want \"\" (write must have been rejected)", got)
+	}
+	cp.DismissBuildNotice() // must not panic; nothing to observe on a copy
+	if got := cp.BuildNotice(); got != "" {
+		t.Fatalf("copy.BuildNotice() after copy's DismissBuildNotice = %q, want \"\"", got)
 	}
 
 	buf := core.NewBuffer(10, 10)
@@ -214,6 +254,12 @@ func TestSEC020_CopyTakenWhileLockHeld_RejectedNotHung(t *testing.T) {
 	runBoundedSEC020(t, "Subscribe", func() { subscribeErr = cp.Subscribe(func(protocol.Command) error { return nil }) })
 	wantMapScreenCopied(t, "Subscribe", subscribeErr)
 
+	runBoundedSEC020(t, "BindSubscription", func() { cp.BindSubscription(protocol.SubscriptionID("sec020-sub")) })
+	runBoundedSEC020(t, "ApplyDelta", func() {
+		cp.ApplyDelta(protocol.Delta{SubscriptionID: protocol.SubscriptionID("sec020-sub"), Patch: fullPatchRaw(t)})
+	})
+	runBoundedSEC020(t, "UnbindSubscription", func() { cp.UnbindSubscription(protocol.SubscriptionID("sec020-sub")) })
+
 	runBoundedSEC020(t, "ApplyPatch", func() { cp.ApplyPatch(fullPatchRaw(t)) })
 
 	runBoundedSEC020(t, "SetStale", func() { cp.SetStale(true) })
@@ -241,6 +287,16 @@ func TestSEC020_CopyTakenWhileLockHeld_RejectedNotHung(t *testing.T) {
 	if inspectRes.Found {
 		t.Fatalf("Inspect() on a copy taken mid-lock = %+v, want Found=false", inspectRes)
 	}
+
+	runBoundedSEC020(t, "ApplyResult", func() {
+		cp.ApplyResult(protocol.CommandResult{Accepted: false, Error: &protocol.ErrorRef{Code: "MET-V400", Display: "should never land"}})
+	})
+	var noticeAfterCopy string
+	runBoundedSEC020(t, "BuildNotice", func() { noticeAfterCopy = cp.BuildNotice() })
+	if noticeAfterCopy != "" {
+		t.Fatalf("BuildNotice() on a copy taken mid-lock = %q, want \"\"", noticeAfterCopy)
+	}
+	runBoundedSEC020(t, "DismissBuildNotice", func() { cp.DismissBuildNotice() })
 
 	buf := core.NewBuffer(4, 4)
 	runBoundedSEC020(t, "Render", func() { cp.Render(buf, core.Rect{X: 0, Y: 0, W: 4, H: 4}) })

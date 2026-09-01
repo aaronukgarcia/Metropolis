@@ -1,6 +1,8 @@
 package mapscreen
 
 import (
+	"regexp"
+
 	"github.com/gdamore/tcell/v2"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -241,7 +243,118 @@ func (m *MapScreen) Render(buf *core.Buffer, rect core.Rect) {
 	if snap.isEmpty() {
 		widgets.PlaceholderEmpty(buf, viewportRect, "MAP", emptyMapReason(snap), m.palette, tcell.StyleDefault)
 	}
+	// BUG-490: a rejected 'y'/'b' build command must be visible to the
+	// player, not just a router.ErrRouteMiss log line. Drawn after the
+	// EMPTY placeholder (so it is legible even on a snapshot-less map) but
+	// before the staleness dot, matching drawStalenessDot's own "always
+	// last" contract for its corner cell.
+	drawBuildNotice(buf, viewportRect, snap.buildNotice, m.palette)
 	drawStalenessDot(buf, rect, snap.stale, m.palette)
+}
+
+// buildNoticeChromeRe matches the leading "[CODE] " tokens an engine
+// registry Display string stacks when multiple errs.Wrap calls chained
+// (BUG-493 item 1/item 2: "[MET-G804] [MET-E404] PurchaseTile rejected
+// ..."). Stripped FIRST when a notice does not fit rect.W — see
+// drawBuildNotice's own doc comment for why chrome, not the reason text,
+// is what gets sacrificed under width pressure.
+var buildNoticeChromeRe = regexp.MustCompile(`^(\[[^\]]+\]\s*)+`)
+
+// drawBuildNotice draws notice (ApplyResult's last-rejected Display text,
+// already deduplicated of a repeated correlation suffix by
+// dedupeCorrelationSuffix) as one line at the top-left of rect, styled
+// the same way finance.RenderLoans draws "Loan Rejected: ..." (red/bold)
+// so a rejected build reads as an error at a glance, not a stray line of
+// terrain text. A "" notice (the common case: no command yet, the last
+// one was accepted, or it was dismissed) draws nothing — it never
+// overwrites the viewport with a blank line, so it cannot itself become a
+// second "looks broken" state.
+//
+// BUG-493 item 1: measured real Display strings are 121 and 179 chars —
+// far wider than a real terminal's usable columns (80, even 40). Drawn
+// naively on one unwrapped row, the actual human-readable REASON (the
+// tail of the message) is exactly what falls off the edge, leaving only
+// registry chrome — "[MET-G804] [MET-E404] PurchaseTile rejected for
+// tile {15 15}: a" at 80 columns, cut mid-word, is the reported defect.
+// This package has no existing multi-line wrap widget to reuse
+// (internal/ui/screens/finance's RenderLoans and every other transient
+// one-line message in this codebase — "Loan Rejected: ...", "Funding
+// rejected: ..." — draw a single row too, clipped the same naive way),
+// so rather than introduce a new wrapping primitive for one call site,
+// this fixes the ACTUAL failure mode directly: truncate the boilerplate
+// (leading "[CODE]" chrome, BUG-493 item 2's already-deduplicated trailing
+// correlation suffix) BEFORE the reason, per this item's own remedy text
+// ("truncate ... in a way that PRESERVES the reason text ... never the
+// human-readable reason"). Only if the reason itself still overflows
+// rect.W (a genuinely long reason, or a very narrow terminal) does this
+// fall back to an ellipsis-truncated tail of what remains — chrome is
+// ALWAYS sacrificed first, in full, before a single byte of reason is
+// ever cut.
+func drawBuildNotice(buf *core.Buffer, rect core.Rect, notice string, palette widgets.Palette) {
+	if notice == "" || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	style := tcell.StyleDefault.Foreground(palette.Color(widgets.TokenDanger)).Bold(true)
+	const prefix = "Build rejected: "
+	text := prefix + notice
+	if len([]rune(text)) > rect.W {
+		// Chrome first: drop the leading "[CODE] [CODE] ..." tokens and
+		// the trailing "(correlation: ...)" segment (at most one, since
+		// ApplyResult already deduplicated it) — neither carries anything
+		// a player reading THIS screen needs; both are preserved verbatim
+		// in BuildNotice()/errs.Recent() for anyone who does need them.
+		reason := buildNoticeChromeRe.ReplaceAllString(notice, "")
+		reason = correlationSuffixRe.ReplaceAllString(reason, "")
+		reason = trimSpaceASCII(reason)
+		if reason == "" {
+			// The whole message WAS chrome (defensive — not a shape any
+			// real registry entry produces today, but drawing nothing
+			// would resurrect the exact "player sees no feedback" defect
+			// BUG-490 fixed): fall back to the untouched notice rather
+			// than an empty line.
+			reason = notice
+		}
+		text = prefix + reason
+	}
+	drawEllipsisTruncated(buf, rect, text, style)
+}
+
+// trimSpaceASCII trims leading/trailing ASCII spaces — buildNoticeChromeRe
+// and correlationSuffixRe strips can leave one behind at the join point
+// (e.g. "[CODE] " stripped from the front, or " (correlation: x)" from
+// the back) and strings.TrimSpace would be one more import for exactly
+// this; kept local and tiny rather than pulling in "strings" for a single
+// call.
+func trimSpaceASCII(s string) string {
+	start := 0
+	for start < len(s) && s[start] == ' ' {
+		start++
+	}
+	end := len(s)
+	for end > start && s[end-1] == ' ' {
+		end--
+	}
+	return s[start:end]
+}
+
+// drawEllipsisTruncated draws text at rect's top-left, ellipsis-truncating
+// it to fit rect.W if it still does not fit after drawBuildNotice's
+// chrome-first truncation (a genuinely long reason, or a very narrow
+// rect). Never writes past rect.W and never bleeds onto a second row.
+func drawEllipsisTruncated(buf *core.Buffer, rect core.Rect, text string, style tcell.Style) {
+	runes := []rune(text)
+	if len(runes) > rect.W {
+		if rect.W <= 1 {
+			runes = runes[:rect.W]
+		} else {
+			runes = append(runes[:rect.W-1], '…')
+		}
+	}
+	x := rect.X
+	for _, r := range runes {
+		buf.Set(x, rect.Y, r, style)
+		x++
+	}
 }
 
 // emptyMapReason picks the short explanation BUG-330's EMPTY placeholder
@@ -289,6 +402,11 @@ type renderSnapshot struct {
 	// rectangle — the "looks broken" state this closes.
 	haveSnapshot bool
 	hasKnown     bool
+	// buildNotice is BUG-490's fix: the last rejected KindBuy/KindBuild
+	// command's registry-sourced Display text (ApplyResult, screen.go,
+	// already deduplicated of a repeated correlation suffix), or "" when
+	// nothing is currently showing. See drawBuildNotice.
+	buildNotice string
 }
 
 // isEmpty reports whether the viewport has nothing real to draw (BUG-330):
@@ -343,6 +461,7 @@ func (m *MapScreen) snapshotLocked() renderSnapshot {
 		activeOverlay: overlayOrder[m.overlayIdx],
 		haveSnapshot:  m.haveSnapshot,
 		hasKnown:      m.cachedHasKnown,
+		buildNotice:   m.buildNotice,
 	}
 }
 

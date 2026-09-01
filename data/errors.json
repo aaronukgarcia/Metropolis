@@ -492,6 +492,12 @@
       "message": "MapScreen method called on a struct-copied value (SEC-020): {cause}",
       "remedy": "A *mapscreen.MapScreen value was copied by assignment/passing instead of being used via the single pointer mapscreen.NewMapScreen returned (mu is a sync.Mutex VALUE and grid is an aliased slice — a copy is a second, independent lock racing the original over the same backing array). The call was rejected rather than risking a lock-order hang or a torn grid read; construct exactly one MapScreen via NewMapScreen and pass its pointer everywhere instead of a dereferenced copy."
     },
+    "MET-U102": {
+      "severity": "warn",
+      "module": "ui.screen.map",
+      "message": "KindBuy/KindBuild CommandResult rejected with no ErrorRef: {cause}",
+      "remedy": "ApplyResult received Accepted=false with Error==nil, a malformed CommandResult per protocol's ErrRejectedResultMissingError contract; the notice was cleared (treated as a no-op, never as an accept) and this warn logged so the gap is diagnosable rather than a silent success-looking clear. Check the sender (router/transport/engine command dispatch) for a rejection path that omits the registry ErrorRef."
+    },
     "MET-U200": {
       "severity": "warn",
       "module": "ui.screen.debug",

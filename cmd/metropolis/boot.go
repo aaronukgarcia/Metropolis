@@ -1030,15 +1030,24 @@ const mapBuildDefaultZone = "dwelling"
 // registerMapBuildKeys wires w.mapGrammar (see its field doc comment):
 // arrow keys move mapScreen's cursor, 'y' buys the tile under it
 // (protocol.KindBuy), 'b' builds mapBuildDefaultZone there
-// (protocol.KindBuild). Every send goes straight through transport —
-// these are fire-and-forget, exactly as mapScreen's own pre-existing
-// Pan/MoveCursor calls are purely local — with the CommandResult left to
-// ui/router's own ErrRouteMiss (MET-V400) accounting for an unregistered
-// CorrelationID (router.go), which is a loud, registry-sourced log entry,
-// never a silent drop (GR#1/GR#17). A future increment that wants
-// accept/reject feedback surfaced ON SCREEN (not just logged) registers a
-// real ResultReceiver here, the same way sendServicesCommand does for
-// servicesScreen.
+// (protocol.KindBuild), and 'c' dismisses a currently-showing build
+// rejection notice (BUG-493 item 3, MapScreen.DismissBuildNotice). 'y'/'b'
+// go through sendMapCommand below, which registers w.mapScreen as the
+// CorrelationID's ResultReceiver with w.router BEFORE sending — the same
+// register-then-send ordering sendServicesCommand (above) already uses
+// for the F4 funding slider (router.RegisterResultHandler's contract:
+// register before or at the send, never after).
+//
+// BUG-490 fix (previously fire-and-forget): before this fix every send
+// went straight through transport with NO ResultReceiver registered, so
+// a rejected command's CommandResult became an unrecoverable
+// router.ErrRouteMiss (MET-V400) — a registry-sourced LOG entry
+// (GR#1/GR#17: never a silent drop), but nothing a player watching the
+// screen could ever see. Aaron's own dogfood report named exactly this
+// ("queueing a build via the screen has no effect the player can
+// observe", BUG-490). Registering the receiver here means a rejection
+// now reaches MapScreen.ApplyResult and renders via render.go's
+// drawBuildNotice.
 func registerMapBuildKeys(w *skeletonWiring, transport protocol.Transport) error {
 	w.mapGrammar = keys.NewKeyGrammar(nil, 0, 0, w.correlationID)
 
@@ -1061,9 +1070,19 @@ func registerMapBuildKeys(w *skeletonWiring, transport protocol.Transport) error
 		}
 	}
 
+	// BUG-490 fix: register w.mapScreen as the ResultReceiver for the
+	// CorrelationID BEFORE sending (router.RegisterResultHandler's own
+	// contract — the same ordering sendServicesCommand above already
+	// follows), so a REJECTED command now reaches MapScreen.ApplyResult
+	// and renders as drawBuildNotice's visible line instead of only
+	// leaving a router.ErrRouteMiss log entry nobody sees on screen.
+	sendMapCommand := func(cmd protocol.Command) error {
+		w.router.RegisterResultHandler(cmd.CorrelationID, w.mapScreen)
+		return transport.SendCommand(cmd)
+	}
 	if err := w.mapGrammar.RegisterGlobal(keys.KeyRune('y'), keys.Action{Name: "Buy tile (y)", Run: func(keys.ActionArgs) {
 		x, y := w.mapScreen.CursorPos()
-		_ = transport.SendCommand(buyCommandAt(x, y))
+		_ = sendMapCommand(buyCommandAt(x, y))
 	}}); err != nil {
 		return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
 			"component": "ui.keys.RegisterGlobal", "key": "y",
@@ -1071,10 +1090,23 @@ func registerMapBuildKeys(w *skeletonWiring, transport protocol.Transport) error
 	}
 	if err := w.mapGrammar.RegisterGlobal(keys.KeyRune('b'), keys.Action{Name: "Build dwelling (b)", Run: func(keys.ActionArgs) {
 		x, y := w.mapScreen.CursorPos()
-		_ = transport.SendCommand(buildCommandAt(x, y, mapBuildDefaultZone))
+		_ = sendMapCommand(buildCommandAt(x, y, mapBuildDefaultZone))
 	}}); err != nil {
 		return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
 			"component": "ui.keys.RegisterGlobal", "key": "b",
+		})
+	}
+	// BUG-493 item 3: an explicit dismiss key for a showing build
+	// rejection notice — see MapScreen.DismissBuildNotice's doc comment
+	// for why this is a key rather than a wall-clock/tick timeout. 'c'
+	// ("clear notice") is free on this grammar; Esc/'q' are the walking
+	// skeleton's process-lifecycle quit keys (run.go's isQuitInput), not
+	// available for a screen-local dismiss.
+	if err := w.mapGrammar.RegisterGlobal(keys.KeyRune('c'), keys.Action{Name: "Clear build notice (c)", Run: func(keys.ActionArgs) {
+		w.mapScreen.DismissBuildNotice()
+	}}); err != nil {
+		return errs.Wrap(codeBootFailure, w.correlationID, err, map[string]any{
+			"component": "ui.keys.RegisterGlobal", "key": "c",
 		})
 	}
 	return nil
