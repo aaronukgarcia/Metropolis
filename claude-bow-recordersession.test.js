@@ -267,24 +267,24 @@ const _svStored = bow.normalizeRecorderCwd(_svRoot);
 const _svSub = bow.normalizeRecorderCwd(path.join(_svRoot, '.claude', 'worktrees', 'attacker'));
 
 test('isSelfVerdict(): true only when BOTH recorder_session and recorder_cwd match', () => {
-  const v = { recorder_session: 'sess-A', recorder_cwd: 'e:/git/metropolis' };
-  assert.equal(bow.isSelfVerdict(v, 'sess-A', 'E:\\git\\Metropolis'), true);
+  const v = { recorder_session: 'sess-A', recorder_cwd: _svStored };
+  assert.equal(bow.isSelfVerdict(v, 'sess-A', _svRoot), true);
 });
 
 test('isSelfVerdict(): false when session matches but cwd differs (PROVE-CAN-FAIL: this is the exact dispatched-round case F1 exists for)', () => {
-  const v = { recorder_session: 'sess-A', recorder_cwd: 'e:/git/metropolis/.claude/worktrees/attacker' };
-  assert.equal(bow.isSelfVerdict(v, 'sess-A', 'E:\\git\\Metropolis'), false);
+  const v = { recorder_session: 'sess-A', recorder_cwd: _svSub };
+  assert.equal(bow.isSelfVerdict(v, 'sess-A', _svRoot), false);
 });
 
 test('isSelfVerdict(): false when cwd matches but session differs', () => {
-  const v = { recorder_session: 'sess-B', recorder_cwd: 'e:/git/metropolis' };
-  assert.equal(bow.isSelfVerdict(v, 'sess-A', 'E:\\git\\Metropolis'), false);
+  const v = { recorder_session: 'sess-B', recorder_cwd: _svStored };
+  assert.equal(bow.isSelfVerdict(v, 'sess-A', _svRoot), false);
 });
 
 test('isSelfVerdict(): false when either identity is "unknown"/empty/null, never treated as a match', () => {
-  assert.equal(bow.isSelfVerdict({ recorder_session: null, recorder_cwd: null }, 'sess-A', 'E:\\git\\Metropolis'), false);
-  assert.equal(bow.isSelfVerdict({ recorder_session: 'unknown', recorder_cwd: 'unknown' }, 'unknown', 'E:\\git\\Metropolis'), false);
-  assert.equal(bow.isSelfVerdict({ recorder_session: 'sess-A', recorder_cwd: null }, 'sess-A', 'E:\\git\\Metropolis'), false);
+  assert.equal(bow.isSelfVerdict({ recorder_session: null, recorder_cwd: null }, 'sess-A', _svRoot), false);
+  assert.equal(bow.isSelfVerdict({ recorder_session: 'unknown', recorder_cwd: 'unknown' }, 'unknown', _svRoot), false);
+  assert.equal(bow.isSelfVerdict({ recorder_session: 'sess-A', recorder_cwd: null }, 'sess-A', _svRoot), false);
 });
 
 // ---------------------------------------------------------------------------
