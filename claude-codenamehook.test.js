@@ -76,9 +76,24 @@ function initRepo(dir) {
   gitOk(dir, ['init', '-b', 'main']);
   gitOk(dir, ['config', 'user.name', SANCTIONED_NAME]);
   gitOk(dir, ['config', 'user.email', SANCTIONED_EMAIL]);
-  for (const f of ['claude-author-identity.js', 'claude-codename-content-scan.js', 'claude-codename-patterns.js', 'claude-codename-diff.js', 'claude-codename-guard.js', 'claude-git-commit-trigger.js', 'claude-quote-mask.js']) {
+  for (const f of ['claude-author-identity.js', 'claude-codename-content-scan.js', 'claude-codename-patterns.js', 'claude-codename-diff.js', 'claude-codename-guard.js', 'claude-git-commit-trigger.js', 'claude-quote-mask.js', 'claude-destructive-guard.js']) {
     fs.copyFileSync(path.join(__dirname, f), path.join(dir, f));
   }
+  // BUG-340/BUG-336: githooks/commit-msg now also requires
+  // githooks/verdict-guard.js (the third check in this hook slot) — mirror
+  // the real production layout, same reasoning as claude-committhook.test.js's
+  // own initRepo(). This fixture's commits never stage anything under an
+  // enforced dir, so verdict-guard.js never needs claude-bow.js/claude-db.js/
+  // mysql2 here (see loadClassificationDeps() vs loadVerdictDeps()).
+  fs.mkdirSync(path.join(dir, 'githooks'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'githooks', 'verdict-guard.js'), path.join(dir, 'githooks', 'verdict-guard.js'));
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }), 'utf8');
+  // Commit the support files BEFORE installing the hook (hook-free commit)
+  // so every test's own `git add -A` has nothing new to say about them —
+  // same reasoning as claude-committhook.test.js's own initRepo() fix.
+  gitOk(dir, ['add', '-A']);
+  gitOk(dir, ['commit', '-m', 'seed fixture support files (pre-hook, not under test)']);
   install.install(dir);
 }
 

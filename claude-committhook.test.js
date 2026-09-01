@@ -118,6 +118,47 @@ function initRepo(dir) {
     path.join(__dirname, 'claude-quote-mask.js'),
     path.join(dir, 'claude-quote-mask.js')
   );
+  // BUG-340/BUG-336: githooks/commit-msg now also requires
+  // githooks/verdict-guard.js (the third check in this hook slot) which in
+  // turn requires claude-destructive-guard.js at repo root — mirror the real
+  // production layout here too, same reasoning as every copy above. This
+  // fixture's commits only ever stage root-level `.txt` files (never
+  // code-bearing), so verdict-guard.js never needs to load claude-bow.js/
+  // claude-db.js/mysql2 here (see loadClassificationDeps() vs
+  // loadVerdictDeps() in verdict-guard.js's own header) — only
+  // claude-destructive-guard.js's lightweight classification exports are
+  // ever touched by these tests.
+  fs.copyFileSync(
+    path.join(__dirname, 'claude-destructive-guard.js'),
+    path.join(dir, 'claude-destructive-guard.js')
+  );
+  fs.mkdirSync(path.join(dir, 'githooks'), { recursive: true });
+  fs.copyFileSync(
+    path.join(__dirname, 'githooks', 'verdict-guard.js'),
+    path.join(dir, 'githooks', 'verdict-guard.js')
+  );
+  // A staged ROOT-level file (this fixture's a.txt/b.txt) makes
+  // isCodeBearing() consult .claude/settings.json (deriveRootGuardScripts) —
+  // an empty-but-valid hooks object keeps that read from throwing (a missing
+  // settings.json is a deliberate DENY per AC-11/BUG-216, correct for a REAL
+  // root guard script, but not something this identity/codename-focused
+  // fixture is testing).
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }), 'utf8');
+  // BUG-340/BUG-336: commit ALL the fixture support files copied above
+  // BEFORE installing the hook — every test below stages its own a.txt/b.txt
+  // with `git add -A`, which (now that these support files exist on disk)
+  // would otherwise sweep the root-level `claude-*.js` copies and
+  // `.claude/settings.json` into THAT commit's staged set too. Those paths
+  // are exactly BUG-216's "always code-bearing" shapes in
+  // claude-destructive-guard.js's own classification (reused unchanged by
+  // verdict-guard.js — GR#3), which would wrongly turn every one of these
+  // identity/codename-focused tests into a GR#23-gated commit. Committing
+  // them here, hook-free (install.install(dir) runs AFTER this commit), means
+  // they are already tracked-and-unmodified by the time each test's own
+  // `git add -A` runs, so that add has nothing new to say about them.
+  gitOk(dir, ['add', '-A']);
+  gitOk(dir, ['commit', '-m', 'seed fixture support files (pre-hook, not under test)']);
   install.install(dir);
 }
 

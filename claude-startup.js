@@ -211,6 +211,11 @@ function printSessionSummary(name, checkinOutput, committhookRepoRoot) {
   // the real one) — production call sites never pass it, so this always
   // checks the real installed hook in normal operation.
   console.log(committhook.summaryLine(committhookRepoRoot || projectRoot));
+  // BUG-340/BUG-336 (deliverable 3): same unconditional-visibility treatment
+  // for the pre-push GR#28 floor gate — printed as its OWN line (never
+  // folded into the commit-msg line above) so absent/stale is distinguishable
+  // per-hook, same AC-13 "never collapsed" reasoning.
+  console.log(committhook.summaryLine(committhookRepoRoot || projectRoot, 'pre-push'));
 
   // FEAT-070 (AC-6/AC-7/AC-8): split the standing-loop status block (if any)
   // out of raw checkin stdout BEFORE the SUMMARY_MARKER slice-to-end below —

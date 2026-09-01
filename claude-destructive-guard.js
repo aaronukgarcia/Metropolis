@@ -266,7 +266,16 @@ function loadDependencies() {
     );
   }
 
-  const requiredBowFns = ['findItemByRef', 'latestDestructiveVerdict', 'latestGitRefForItem'];
+  // BUG-340: currentSessionIdentity added alongside the other required BOW
+  // exports — the self-verdict independence check below cannot function
+  // without it, so a missing/wrong-shape export must fail the same way as
+  // any other broken dependency here (denied, named reason), not silently
+  // skip the independence check.
+  // BUG-340 r1 F1: isSelfVerdict added alongside currentSessionIdentity — the
+  // "session AND cwd" independence rule lives in ONE place (claude-bow.js,
+  // GR#3) and both this guard and githooks/verdict-guard.js call it, never
+  // re-derive it.
+  const requiredBowFns = ['findItemByRef', 'latestDestructiveVerdict', 'latestGitRefForItem', 'currentSessionIdentity', 'isSelfVerdict'];
   const missingBowFns = requiredBowFns.filter(fn => typeof bowMod[fn] !== 'function');
   if (missingBowFns.length) {
     throw new Error(
@@ -295,6 +304,8 @@ function loadDependencies() {
     findItemByRef: bowMod.findItemByRef,
     latestDestructiveVerdict: bowMod.latestDestructiveVerdict,
     latestGitRefForItem: bowMod.latestGitRefForItem,
+    currentSessionIdentity: bowMod.currentSessionIdentity,
+    isSelfVerdict: bowMod.isSelfVerdict,
     typePrefixes: new Set(Object.values(bowMod.TYPE_PREFIX)),
   };
 }
@@ -721,14 +732,31 @@ function isRootLevel(filePath) {
 // also covers `.cjs`/`.mjs` guard/hook scripts, not just `.js`.
 const ROOT_GUARD_SCRIPT_RE = /^claude-[A-Za-z0-9._-]*\.(?:c|m)?js$/i;
 const DOT_CLAUDE_DIR_RE = /^\.claude\//i;
+// BUG-340 r1 F4 (independent round REJECT, finding A2): `githooks/` (the
+// tracked source for the git-side GR#23/GR#28 enforcement surface — commit-msg,
+// verdict-guard.js, pre-push) and `.github/workflows/` (CI's own enforcement
+// definitions) were NOT covered by any code-bearing check at all: not
+// ENFORCED_DIR_RE (cmd|internal|data|tools only) and not the two shapes
+// above (githooks/ files are not root-level, and not under .claude/). That
+// meant a commit that gutted the git-side verdict gate itself, or CI's own
+// workflow file, needed zero Destructive verdict — the enforcement surface
+// could disable itself without ever being attacked. Same case-insensitive
+// posture as ENFORCED_DIR_RE/ROOT_GUARD_SCRIPT_RE (this repo's Windows
+// filesystem is core.ignorecase).
+const GITHOOKS_DIR_RE = /^githooks\//i;
+const GITHUB_WORKFLOWS_DIR_RE = /^\.github\/workflows\//i;
 
 /** True when `filePath` (as reported by `git diff --cached --name-only`,
- * forward or back slashes) is a root-level `claude-*.js` guard/hook script OR
- * lives under `.claude/`. Full-tier code-bearing by BUG-216, independent of
- * whether the script is currently wired into settings.json. */
+ * forward or back slashes) is a root-level `claude-*.js` guard/hook script,
+ * lives under `.claude/`, under `githooks/` (BUG-340 r1 F4), or under
+ * `.github/workflows/` (BUG-340 r1 F4). Full-tier code-bearing by BUG-216 /
+ * BUG-340, independent of whether the script is currently wired into
+ * settings.json. */
 function isGuardOrHookPath(filePath) {
   const p = filePath.replace(/\\/g, '/');
   if (DOT_CLAUDE_DIR_RE.test(p)) return true;
+  if (GITHOOKS_DIR_RE.test(p)) return true;
+  if (GITHUB_WORKFLOWS_DIR_RE.test(p)) return true;
   if (!p.includes('/') && ROOT_GUARD_SCRIPT_RE.test(p)) return true;
   return false;
 }
@@ -1201,9 +1229,13 @@ function isSameRepository(targetDir, baseRepoRoot) {
 /** Get staged files from a specific directory's index.
  * BUG-386: queries git diff --cached from the target directory instead of
  * the hook's cwd. Returns an array of normalized, canonicalized paths.
- * Throws on unresolvable directory or git failure. */
+ * Throws on unresolvable directory or git failure.
+ * BUG-340 r1 F3: --no-renames -- without it, a rename collapses to ONLY the
+ * destination path (the deleted source side is invisible), so renaming a
+ * code-bearing file to a docs/test-exempt name silently classifies the whole
+ * commit as exempt. Both sides of a rename must be visible for classification. */
 function getStagedFilesFromDir(targetDir) {
-  const stagedRaw = execSync('git diff --cached --name-only', {
+  const stagedRaw = execSync('git diff --cached --no-renames --name-only', {
     cwd: targetDir,
     encoding: 'utf8',
     timeout: 5000,
@@ -1752,7 +1784,7 @@ async function connectReadOnly() {
 // Deny-message builders
 // ---------------------------------------------------------------------------
 
-function noTagDenyMessage() {
+function noTagDenyMessage(bypassEnv = 'CLAUDE_DISABLE_DESTRUCTIVE_GUARD') {
   return [
     '\uD83D\uDED1 DESTRUCTIVE GUARD (GR#23, tool.destructiveguard / FEAT-040): this commit ' +
       'touches code-bearing paths (cmd/, internal/, data/, tools/, or a root script wired into ' +
@@ -1767,11 +1799,11 @@ function noTagDenyMessage() {
     '  git commit -m "[FEAT-040] ..."',
     '',
     'Emergency bypass (operator-only, set BEFORE the session starts — never inline in this ' +
-      'command, see this file\'s header): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1',
+      'command, see this file\'s header): ' + bypassEnv + '=1',
   ].join('\n');
 }
 
-function verdictDenyMessage(unresolved, missing) {
+function verdictDenyMessage(unresolved, missing, bypassEnv = 'CLAUDE_DISABLE_DESTRUCTIVE_GUARD') {
   const lines = [
     '\uD83D\uDED1 DESTRUCTIVE GUARD (GR#23, tool.destructiveguard / FEAT-040): missing or ' +
       'non-accepted Destructive verdict(s).',
@@ -1793,14 +1825,14 @@ function verdictDenyMessage(unresolved, missing) {
   lines.push('Record a verdict: node claude-bow.js destructive <code> --verdict accept|reject --attacker "<name>" [--class c1,c2] [--findings SEC-001,...] [--note "..."]');
   lines.push('Check a verdict:  node claude-bow.js verdict <code>');
   lines.push('GR#23: a Tester PASS proves the criteria hold; only a Destructive round proves the code survives someone actively trying to break it.');
-  lines.push('Emergency bypass (operator-only, set BEFORE the session starts — never inline in this command, see this file\'s header): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1');
+  lines.push('Emergency bypass (operator-only, set BEFORE the session starts — never inline in this command, see this file\'s header): ' + bypassEnv + '=1');
   return lines.join('\n');
 }
 
 // BUG-332 failure mode 2 (verdict-tie rule): a code-bearing commit ref'd onto a
 // BOW item AFTER that item's latest accept verdict is code committed post-attack,
 // hence un-attacked — GR#23 requires a fresh round for every new state of the code.
-function postAttackDenyMessage(postAttack) {
+function postAttackDenyMessage(postAttack, bypassEnv = 'CLAUDE_DISABLE_DESTRUCTIVE_GUARD') {
   const lines = [
     '🛑 DESTRUCTIVE GUARD (GR#23, tool.destructiveguard / FEAT-040): code committed after the ' +
       'latest Destructive verdict.',
@@ -1817,9 +1849,35 @@ function postAttackDenyMessage(postAttack) {
   lines.push('');
   lines.push('Record a fresh verdict against the CURRENT code: node claude-bow.js destructive <code> --verdict accept|reject --attacker "<name>" [--note "..."]');
   lines.push('GR#23: every code-bearing commit needs a recorded Destructive verdict on the state actually being committed.');
-  lines.push('Emergency bypass (operator-only, set BEFORE the session starts — never inline in this command, see this file\'s header): CLAUDE_DISABLE_DESTRUCTIVE_GUARD=1');
+  lines.push('Emergency bypass (operator-only, set BEFORE the session starts — never inline in this command, see this file\'s header): ' + bypassEnv + '=1');
   return lines.join('\n');
 }
+
+// BUG-340 (GR#23 independence amendment, mechanical verdict independence):
+// a covering ACCEPT verdict whose recorder_session matches the CURRENT
+// session is a self-verdict — "the Destructive attacker must NOT be the
+// author" (CLAUDE.md GR#23) — and is refused here, the same "found a
+// covering row but it doesn't actually satisfy the rule" shape as
+// postAttackDenyMessage() above.
+function selfVerdictDenyMessage(selfVerdicts, bypassEnv = 'CLAUDE_DISABLE_DESTRUCTIVE_GUARD') {
+  const lines = [
+    '🛑 DESTRUCTIVE GUARD (GR#23 independence amendment, BUG-340/BUG-340-r1-F1): the only covering ACCEPT ' +
+      'verdict on the item(s) below was recorded by THIS SAME session AND cwd — a self-verdict, which GR#23 ' +
+      'explicitly treats as insufficient ("the Destructive attacker must NOT be the author").',
+    '',
+    'Item(s) whose latest accept verdict was recorded from THIS session/worktree pair:',
+  ];
+  for (const sv of selfVerdicts) {
+    const cwdNote = sv.recorderCwd ? ` in ${sv.recorderCwd}` : '';
+    lines.push(`  - ${sv.code} "${sv.title}" — recorded from ${cwdNote ? sv.recorderCwd : '(unknown cwd)'} by session "${sv.recorder}" (this session/cwd)`);
+  }
+  lines.push('');
+  lines.push('A dispatched round (same session, DIFFERENT worktree) is allowed — see BUG-340 r1 F1. This refusal fired because BOTH the session id and the recording cwd matched the committer.');
+  lines.push('An INDEPENDENT session/agent must run the Destructive round and record the verdict — see /round. A verdict note claiming an attack that was not independently run is an integrity violation worse than no verdict.');
+  lines.push(`Emergency bypass (operator-only, set BEFORE the session starts — never inline in this command, see this file's header): ${bypassEnv}=1`);
+  return lines.join('\n');
+}
+
 
 // ---------------------------------------------------------------------------
 // BUG-332 r19 (independent attacker REJECT of the uncommitted guard estate):
@@ -2024,7 +2082,7 @@ async function main() {
     allowSilently();
     return;
   }
-  const { authorGuard, findItemByRef, latestDestructiveVerdict, latestGitRefForItem, typePrefixes } = deps;
+  const { authorGuard, findItemByRef, latestDestructiveVerdict, latestGitRefForItem, currentSessionIdentity, isSelfVerdict, typePrefixes } = deps;
 
   // BUG-232 fail-closed recognition sweep: run BEFORE the commit check, so a
   // git invocation that findCommitInvocation() reports as "null" because it
@@ -2152,7 +2210,7 @@ async function main() {
 
   let stagedRaw;
   try {
-    stagedRaw = execSync('git diff --cached --name-only', {
+    stagedRaw = execSync('git diff --cached --no-renames --name-only', {
       cwd: stagedFilesDir,
       encoding: 'utf8',
       timeout: 5000,
@@ -2219,7 +2277,7 @@ async function main() {
   // BUG-386: if -C was specified, query the working-tree diff from that
   // directory, not from the hook's rootDir().
   if (argClass.allFlag) {
-    const wtRaw = execSync('git diff --name-only', {
+    const wtRaw = execSync('git diff --no-renames --name-only', {
       cwd: stagedFilesDir,
       encoding: 'utf8',
       timeout: 5000,
@@ -2316,10 +2374,25 @@ async function main() {
     return;
   }
 
+  // BUG-340 (GR#23 independence amendment): the CURRENT session's identity,
+  // computed ONCE via the shared claude-bow.js function (never a second,
+  // independently-hand-typed env read — GR#3). 'unknown' means this session
+  // has no resolvable identity (a bare terminal, or a non-Claude lane) — the
+  // self-verdict check below treats that as "cannot prove self-verdict",
+  // never as a match.
+  const mySessionId = currentSessionIdentity();
+  // BUG-340 r1 F1: the COMMITTER's repo root — `stagedFilesDir` is already
+  // the -C-resolved effective commit directory computed above; resolve its
+  // git toplevel (repoRootForDir falls back to null on failure, and
+  // isSelfVerdict() treats an unresolvable myRepoRoot as "cannot prove a
+  // cwd match", never as a match).
+  const myRepoRoot = repoRootForDir(stagedFilesDir);
+
   try {
     const unresolved = [];
     const missing = [];
     const postAttack = [];
+    const selfVerdicts = [];
     for (const tag of tags) {
       // eslint-disable-next-line no-await-in-loop
       const item = await findItemByRef(db, tag);
@@ -2331,6 +2404,20 @@ async function main() {
       const verdict = await latestDestructiveVerdict(db, tag);
       if (!verdict || verdict.verdict !== 'accept') {
         missing.push({ code: item.code, title: item.title, state: verdict ? verdict.verdict : 'none' });
+        continue;
+      }
+      // BUG-340 r1 F1 (independent round REJECT, Aaron's design-call ruling):
+      // a covering ACCEPT verdict is a self-verdict ONLY when BOTH the
+      // recorder_session AND recorder_cwd match the committer's own —
+      // recorder_session alone false-positived on every legitimate dispatched
+      // round, because a subagent INHERITS the lead's CLAUDE_CODE_SESSION_ID.
+      // isSelfVerdict() (claude-bow.js, GR#3 shared) is the single place this
+      // "both must match" rule lives — see its own header for the full
+      // reasoning and the unknown/unresolvable-never-matches posture.
+      const recorder = (verdict.recorder_session || '').trim();
+      const recorderCwd = (verdict.recorder_cwd || '').trim();
+      if (isSelfVerdict(verdict, mySessionId, myRepoRoot)) {
+        selfVerdicts.push({ code: item.code, title: item.title, recorder, recorderCwd });
         continue;
       }
       // BUG-332 failure mode 2 (verdict-tie rule): if a git ref was recorded on the
@@ -2359,6 +2446,10 @@ async function main() {
 
     if (unresolved.length || missing.length) {
       deny(verdictDenyMessage(unresolved, missing));
+      return;
+    }
+    if (selfVerdicts.length) {
+      deny(selfVerdictDenyMessage(selfVerdicts));
       return;
     }
     if (postAttack.length) {
@@ -2403,6 +2494,7 @@ if (require.main === module) {
     noTagDenyMessage,
     verdictDenyMessage,
     postAttackDenyMessage,
+    selfVerdictDenyMessage,
     loadDependencies,
     looksLikeCommitFallback,
     // BUG-224

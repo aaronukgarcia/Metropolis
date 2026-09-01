@@ -68,9 +68,33 @@ function copyHookSiblingModules(dir) {
     'claude-codename-guard.js',
     'claude-git-commit-trigger.js',
     'claude-quote-mask.js',
+    // BUG-340/BUG-336: githooks/commit-msg now also requires
+    // githooks/verdict-guard.js (the third check in this hook slot), which
+    // in turn requires claude-destructive-guard.js — same reasoning as every
+    // module above.
+    'claude-destructive-guard.js',
   ]) {
     fs.copyFileSync(path.join(__dirname, name), path.join(dir, name));
   }
+  fs.mkdirSync(path.join(dir, 'githooks'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, 'githooks', 'verdict-guard.js'), path.join(dir, 'githooks', 'verdict-guard.js'));
+  // A staged ROOT-level file (this file's a.txt/b.txt/c.txt fixtures) makes
+  // verdict-guard.js's isCodeBearing() consult .claude/settings.json — an
+  // empty-but-valid hooks object keeps that read from throwing (see
+  // claude-committhook.test.js's own initRepo() fix for the full reasoning).
+  fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ hooks: {} }), 'utf8');
+  // BUG-340/BUG-336: commit ALL of the above BEFORE the hook is installed
+  // (every call site here calls install.install(dir) immediately after this
+  // function returns) — every test's own `git add -A` would otherwise sweep
+  // these root-level `claude-*.js` copies and `.claude/settings.json` into
+  // its OWN commit's staged set (BUG-216's "always code-bearing" shapes),
+  // wrongly turning every one of these identity-focused tests into a
+  // GR#23-gated commit. Committing them here, hook-free, means they are
+  // already tracked-and-unmodified by the time each test's own `git add -A`
+  // runs — same fix as claude-committhook.test.js's own initRepo().
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-m', 'seed fixture support files (pre-hook, not under test)']);
 }
 
 function initRepoWithHistory(dir, commitCount = 3) {

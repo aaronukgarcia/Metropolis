@@ -451,10 +451,50 @@ async function ensureSchema(db) {
     weakness_classes VARCHAR(512) NULL,
     findings         VARCHAR(512) NULL,
     note             TEXT NULL,
+    recorder_session VARCHAR(128) NULL,
     created_at       TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
     CONSTRAINT fk_bow_destructive_item FOREIGN KEY (item_guid) REFERENCES bow_items(guid) ON DELETE CASCADE ON UPDATE CASCADE,
     INDEX idx_bow_destructive_item (item_guid)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+  // BUG-340 (mechanical verdict independence, GR#23 independence amendment):
+  // stamp the RECORDING session's identity onto every verdict row, so a
+  // self-verdict (recorder_session === the current committing session) can
+  // be refused mechanically by both claude-destructive-guard.js and
+  // githooks/verdict-guard.js — see currentSessionIdentity() below.
+  // `ADD COLUMN IF NOT EXISTS` (MariaDB extension, same idiom bow_items'
+  // own migration above already relies on) so an EXISTING metro database
+  // picks up the column without a destructive drop/recreate; a brand-new
+  // database's CREATE TABLE above already declares it, making this a no-op
+  // there. NULL/'unknown' (old rows, or a session with no resolvable
+  // identity) is deliberately never backfilled — see recordDestructiveVerdict.
+  await db.query('ALTER TABLE bow_destructive_verdicts ADD COLUMN IF NOT EXISTS recorder_session VARCHAR(128) NULL AFTER note');
+  // BUG-340 r1 F1 (independent round REJECT, Aaron's design-call ruling
+  // 2026-09-01): recorder_session ALONE mechanically blocks every legitimate
+  // lead round, because CLAUDE_CODE_SESSION_ID is INHERITED by a dispatched
+  // subagent from the lead's own shell — the attacker's verdict is stamped
+  // with the lead's session, and the lead's own commit then reads as a
+  // self-verdict. The identity is now a PAIR: recorder_session (unchanged)
+  // + recorder_cwd (the absolute/normalised/case-folded process.cwd() of the
+  // RECORDING process — the attacker records from ITS OWN worktree per the
+  // /round convention, a different cwd from the lead's checkout even though
+  // the session env is shared). The guard refuses ONLY when BOTH match the
+  // committer's identity — see isSelfVerdict() below. Same `ADD COLUMN IF
+  // NOT EXISTS` idempotent-migration idiom as recorder_session immediately
+  // above; a brand-new database's CREATE TABLE would need updating too, but
+  // this file's CREATE TABLE intentionally stays column-minimal and relies
+  // on these migrations to converge any environment (existing or fresh) —
+  // see the recorder_session comment for why NULL is never backfilled here.
+  // KNOWN LIMIT (documented, not silently assumed away — see F6 in the
+  // BUG-340 r1 fix note): both recorder_session and recorder_cwd are
+  // ENV-DERIVED and therefore spoofable by anything that controls its own
+  // process environment/working directory. This is a proportionate
+  // mechanical guard against ACCIDENTAL self-verdicts (the common case —
+  // inherited session env), not cryptographic proof of independence; a
+  // deliberately adversarial actor could still fake both fields. GR#23's
+  // independence amendment remains primarily a CULTURAL rule (the lead
+  // dispatches the attacker); this migration only closes the mechanical gap
+  // that was blocking HONEST dispatched rounds.
+  await db.query('ALTER TABLE bow_destructive_verdicts ADD COLUMN IF NOT EXISTS recorder_cwd VARCHAR(500) NULL AFTER recorder_session');
   // BUG-221: migrate any of the five FKs above that were created by an OLDER
   // run of this file (before `ON UPDATE CASCADE` was added to the CREATE
   // TABLE text) and are still missing it -- see ensureFkOnUpdateCascade's own
@@ -986,6 +1026,212 @@ async function cmdRef(db) {
  * without writing anything (AC-5). `opts.classes`/`opts.findings` accept
  * either a comma-separated string (the CLI shape) or an array.
  */
+// BUG-340 (mechanical verdict independence): the CURRENT session's identity,
+// sourced from the same env vars claude-sync.js's own WINDOW_ID already
+// treats as this machine's session identity (CLAUDE_CODE_SESSION_ID checked
+// first — the harness's own var — then CLAUDE_SESSION_ID for parity with
+// non-Claude/manual invocations), never a second, independently-derived
+// source (GR#3). Returns the literal string 'unknown' when neither is set
+// (a bare terminal invocation, or a non-Claude lane with no session env) —
+// 'unknown' is a real, queryable value distinct from NULL/absent, and both
+// consumers (claude-destructive-guard.js's self-verdict check and
+// githooks/verdict-guard.js's own copy) treat 'unknown' as "cannot prove
+// self-verdict, allow but warn" rather than either "definitely a self-verdict"
+// or "definitely not" — the check tightens as session identities propagate,
+// it does not brick a lane that has none.
+function currentSessionIdentity() {
+  const id = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  return id.trim() || 'unknown';
+}
+
+// BUG-340 r1 F1: absolute, normalised, case-folded form of a path used for
+// recorder_cwd identity comparisons. Case-folded because this project's own
+// Windows filesystem is `core.ignorecase` (see claude-destructive-guard.js's
+// own ENFORCED_DIR_RE/ROOT_GUARD_SCRIPT_RE comments for the same reasoning
+// applied to staged-file paths) -- two spellings of the SAME directory must
+// never compare as different worktrees. Returns '' for an empty/unusable
+// input (never throws) so a caller can treat that as "no cwd resolvable",
+// mirroring currentSessionIdentity()'s 'unknown' posture at the call site.
+function normalizeRecorderCwd(p) {
+  if (p == null) return '';
+  const raw = String(p).trim();
+  if (!raw) return '';
+  let n;
+  try {
+    n = path.resolve(raw);
+  } catch {
+    return '';
+  }
+  // BUG-340 r1 F1 (PROVE-CAN-FAIL round-trip finding): Windows can hand back
+  // EITHER an 8.3 short-form path (`AARONG~1`) or the long form
+  // (`aarongarcia`) for the SAME directory depending on which API produced
+  // it — os.tmpdir()/process.cwd() vs `git rev-parse --show-toplevel`
+  // demonstrably disagree on this in practice (verified live: a throwaway
+  // temp dir round-tripped as `...\AARONG~1\...` from process.cwd() but
+  // `.../aarongarcia/...` from git). Comparing those two spellings
+  // byte-for-byte would treat the SAME worktree as two different ones and
+  // silently defeat the self-verdict match. fs.realpathSync resolves BOTH
+  // short-name and symlink indirection to one canonical form; falls back to
+  // the plain resolved path (never throws) when the directory does not
+  // exist at comparison time (e.g. a since-deleted worktree) — an
+  // unresolvable path still normalises to SOMETHING comparable rather than
+  // aborting the whole check.
+  try {
+    n = fs.realpathSync.native ? fs.realpathSync.native(n) : fs.realpathSync(n);
+  } catch {
+    /* path does not exist right now — fall back to the plain resolved form */
+  }
+  n = n.replace(/\\/g, '/');
+  if (n.length > 1 && n.endsWith('/')) n = n.slice(0, -1);
+  return n.toLowerCase();
+}
+
+// BUG-340 r2 F1 (independent round REJECT, finding B2): `git rev-parse
+// --show-toplevel` run from `cwd`, or null when git is unavailable/`cwd` is
+// not inside a repo. Never throws — every failure mode (git missing from
+// PATH, a bare directory with no .git, a detached/corrupt repo) collapses to
+// null so the caller can fall back deterministically. Kept as its own
+// function (rather than inlined into currentRecorderCwd) so a test can stub
+// it without needing a real git binary.
+function resolveGitToplevelSafe(cwd) {
+  try {
+    const out = execSync('git rev-parse --show-toplevel', {
+      cwd, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out || null;
+  } catch {
+    return null;
+  }
+}
+
+// BUG-340 r1 F1 / r2 F1 (independent round REJECT, finding B2): the
+// RECORDING process's identity for the self-verdict cwd check.
+//
+// r1 stamped raw process.cwd() deliberately (see the superseded comment this
+// replaces). r2 proved that choice wrong: the COMMITTER side always compares
+// against a git TOPLEVEL (repoRootForDir in claude-destructive-guard.js), so
+// a verdict recorded from ANY subdirectory of the very repo being committed
+// (`cd internal/pkg && node ../../claude-bow.js destructive ...`) stamped a
+// recorder_cwd that could never string-equal the committer's toplevel — an
+// ordinary, non-adversarial way to accidentally mint a self-verdict that
+// escaped the independence check entirely (live-verified through the
+// installed commit-msg hook).
+//
+// Fix: resolve THIS process's own git toplevel first (same command, same
+// normalisation as the committer side — GR#3, one way to derive "the repo
+// this cwd is in"), and stamp that. When git cannot resolve a toplevel at
+// all (no git on PATH, a bare/non-repo cwd), fall back to the raw cwd but
+// PREFIX it with the UNRESOLVED_CWD_MARKER sentinel — isSelfVerdict() below
+// treats that prefix as "cannot prove same-tree or different-tree" and,
+// on a session match, refuses FAIL-CLOSED (assumes same-tree) rather than
+// silently requiring a byte-exact path match that may never occur. This is
+// the documented, printed limitation for a git-unavailable recorder: it
+// cannot escape the independence check by that route, but it also cannot
+// prove independence either — see isSelfVerdict()'s own comment.
+//
+// isSelfVerdict() ALSO implements path-containment (not just equality) as a
+// second, independent layer — so even a recorder_cwd that is a raw
+// subdirectory (a pre-r2 row, or opts.recorderCwd overridden by a caller
+// that bypasses this function) is still caught. Belt and braces: the
+// stamping fix here narrows what NEW rows look like; the comparison fix
+// there closes the hole for every row regardless of how it was stamped.
+const UNRESOLVED_CWD_MARKER = 'unresolved-cwd:';
+
+function currentRecorderCwd() {
+  const cwd = process.cwd();
+  const toplevel = resolveGitToplevelSafe(cwd);
+  if (toplevel) {
+    const norm = normalizeRecorderCwd(toplevel);
+    if (norm) return norm;
+  }
+  const rawNorm = normalizeRecorderCwd(cwd);
+  if (!rawNorm) return 'unknown';
+  return UNRESOLVED_CWD_MARKER + rawNorm;
+}
+
+// BUG-340 r1 F1: the SHARED (GR#3 — one source of truth) self-verdict
+// predicate, called by BOTH claude-destructive-guard.js and
+// githooks/verdict-guard.js so the "same session AND same cwd" rule can
+// never independently drift between the two enforcement surfaces. `verdict`
+// is a bow_destructive_verdicts row (recorder_session/recorder_cwd may be
+// NULL for pre-BUG-340/pre-F1 rows). `mySessionId` is this checking
+// process's currentSessionIdentity(). `myRepoRoot` is the COMMITTER's
+// repository root for the commit under evaluation (callers resolve this via
+// `git rev-parse --show-toplevel` against the actual target directory, NOT
+// simply process.cwd(), since a guard can evaluate a -C'd/other directory).
+//
+// Refuses (returns true) when BOTH the session id matches AND the cwds are
+// either the SAME tree or the recorder's cwd is CONTAINED WITHIN the
+// committer's repo (a legitimate dispatched round shares the lead's session
+// env — inherited by the subagent — but runs from a DIFFERENT worktree
+// entirely, so that case is correctly allowed through; recording from a
+// subdirectory of the SAME worktree is not). 'unknown'/empty on either side
+// of either field is NEVER treated as a match (old rows, non-Claude lanes,
+// an unresolvable git toplevel) — see F6: allow-on-unknown, not brick a lane
+// with no resolvable identity.
+//
+// BUG-340 r2 F1 (independent round REJECT, finding B2): containment, not
+// bare equality, closes the subdirectory hole for every recorder_cwd shape —
+// both a NEW row (currentRecorderCwd() now stamps the recorder's own git
+// toplevel, so it should already equal myRepoRoot exactly) and an OLD/
+// override row whose recorder_cwd is a raw subdirectory path (a pre-r2 row,
+// or a caller-supplied opts.recorderCwd that bypassed the toplevel
+// resolution). Containment is checked with a trailing-separator boundary
+// (`recorderCwd === myCwdNorm + '/...'`) so a sibling directory that merely
+// shares a textual PREFIX (myRepoRoot="/tmp/repo", recorderCwd=
+// "/tmp/repo2/sub") can never falsely match — see the r2 F1(c) normalisation
+// controls for the path-folding this depends on.
+//
+// WORKTREE BOUNDARY (Metropolis-specific, documented convention — CLAUDE.md
+// / docs/planning/parallel-coder-brief.md): every dispatched round's
+// worktree lives at `<mainRepo>/.claude/worktrees/<agent-id>`, i.e.
+// FILESYSTEM-nested under the lead's own checkout even though it is a
+// SEPARATE `git worktree` with its OWN toplevel. `git rev-parse
+// --show-toplevel` run from inside one of these correctly returns the
+// worktree's own root (not the main checkout's), so a *stamped* toplevel
+// already differs and plain equality already rejects it correctly. But
+// containment must not re-swallow that distinction for a raw/legacy
+// recorder_cwd that still names a path deeper inside a worktree dir (e.g.
+// ".../.claude/worktrees/agent-x/internal/pkg") — WORKTREE_BOUNDARY_RE
+// detects the `.claude/worktrees/` segment in the relative remainder and
+// refuses containment across it, so a genuinely independent dispatched
+// round is never folded into "contained, therefore self" just because its
+// worktree happens to live under the same directory tree on disk.
+const WORKTREE_BOUNDARY_RE = /(^|\/)\.claude\/worktrees\//;
+//
+// The UNRESOLVED_CWD_MARKER sentinel (git was unavailable at record time —
+// see currentRecorderCwd()'s own comment) is handled as a DOCUMENTED,
+// PRINTED fail-closed limitation: once the session already matches, a
+// marker-prefixed recorder_cwd can prove neither "same tree" nor "different
+// tree", so it is treated as a match (assume same-tree) rather than
+// fail-open. This is the one case where isSelfVerdict can flag a
+// legitimately independent round as a false self-verdict — the printed
+// remediation (claude-destructive-guard.js's deny text) tells the operator
+// to re-record the verdict from an environment where git is on PATH, which
+// resolves it permanently for that row.
+function isSelfVerdict(verdict, mySessionId, myRepoRoot) {
+  const recorderSession = String((verdict && verdict.recorder_session) || '').trim();
+  if (!recorderSession || recorderSession === 'unknown') return false;
+  if (!mySessionId || mySessionId === 'unknown') return false;
+  if (recorderSession !== mySessionId) return false;
+
+  const recorderCwdRaw = String((verdict && verdict.recorder_cwd) || '').trim().toLowerCase();
+  if (!recorderCwdRaw || recorderCwdRaw === 'unknown') return false;
+
+  // Fail-closed: the recorder could not resolve a git toplevel at record
+  // time. Session already matches above, so — unable to prove either way —
+  // treat this as a self-verdict rather than silently allowing it through.
+  if (recorderCwdRaw.startsWith(UNRESOLVED_CWD_MARKER)) return true;
+
+  const myCwdNorm = normalizeRecorderCwd(myRepoRoot);
+  if (!myCwdNorm) return false;
+  if (recorderCwdRaw === myCwdNorm) return true;
+  if (!recorderCwdRaw.startsWith(myCwdNorm + '/')) return false;
+  const remainder = recorderCwdRaw.slice(myCwdNorm.length);
+  if (WORKTREE_BOUNDARY_RE.test(remainder)) return false;
+  return true;
+}
+
 async function recordDestructiveVerdict(db, ref, opts = {}) {
   const item = await findItem(db, ref);
   if (!item) {
@@ -1044,13 +1290,32 @@ async function recordDestructiveVerdict(db, ref, opts = {}) {
   validateLen('findings', findingsVal, BOW_COLUMN_MAX_LEN.verdict_findings,
     { mode: 'throw', context: `--findings list for verdict on ${item.code}` });
 
+  // BUG-340: stamp the recording session's identity, sourced from the SAME
+  // env-derived function every consumer calls (opts.recorderSession lets a
+  // caller override for testing — the CLI never does, so production always
+  // stamps the real invoking session, never a hand-typed value).
+  const recorderSession = opts.recorderSession != null ? String(opts.recorderSession).trim() || 'unknown' : currentSessionIdentity();
+  validateLen('recorder_session', recorderSession, BOW_COLUMN_MAX_LEN.verdict_recorder_session,
+    { mode: 'throw', context: `recording session identity for verdict on ${item.code}` });
+
+  // BUG-340 r1 F1: recorder_cwd, same override-for-testing / real-by-default
+  // shape as recorderSession above. opts.recorderCwd lets a test (or an
+  // attacker deliberately recording "as if" from a specific worktree)
+  // override; production (the CLI) never passes it, so the real invoking
+  // process's own cwd is always stamped.
+  const recorderCwd = opts.recorderCwd != null
+    ? normalizeRecorderCwd(opts.recorderCwd) || 'unknown'
+    : currentRecorderCwd();
+  validateLen('recorder_cwd', recorderCwd, BOW_COLUMN_MAX_LEN.verdict_recorder_cwd || 500,
+    { mode: 'throw', context: `recording session cwd for verdict on ${item.code}` });
+
   const guid = crypto.randomUUID();
   await db.query(
-    `INSERT INTO bow_destructive_verdicts (guid, item_guid, verdict, attacker, weakness_classes, findings, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [guid, item.guid, verdict, attacker, weaknessClassesVal, findingsVal, opts.note || null]);
+    `INSERT INTO bow_destructive_verdicts (guid, item_guid, verdict, attacker, weakness_classes, findings, note, recorder_session, recorder_cwd)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [guid, item.guid, verdict, attacker, weaknessClassesVal, findingsVal, opts.note || null, recorderSession, recorderCwd]);
 
-  return { guid, item, verdict, attacker, classes, findings: findingsList };
+  return { guid, item, verdict, attacker, classes, findings: findingsList, recorderSession, recorderCwd };
 }
 
 /**
@@ -1105,6 +1370,7 @@ async function cmdDestructive(db) {
     console.log(`Recorded ${result.verdict.toUpperCase()} verdict on ${result.item.code} by "${result.attacker}".`);
     if (result.classes.length) console.log(`  Classes:  ${result.classes.join(', ')}`);
     if (result.findings.length) console.log(`  Findings: ${result.findings.join(', ')}`);
+    console.log(`  Recorder session: ${result.recorderSession}${result.recorderSession === 'unknown' ? ' (no session identity resolved — self-verdict check cannot apply to this row)' : ''}`);
   } catch (err) {
     console.error(`claude-bow destructive: ${err.message}`);
     process.exit(1);
@@ -3094,6 +3360,7 @@ const BOW_COLUMN_MAX_LEN = {
   comment_author: 32, comment_language: 32,
   ref_commit_hash: 40, ref_branch: 128, ref_note: 255,
   verdict_attacker: 128, verdict_weakness_classes: 512, verdict_findings: 512,
+  verdict_recorder_session: 128, verdict_recorder_cwd: 500,
   gate_check_name: 64, gate_runner: 128,
 };
 // Back-compat alias for redact's field-keyed lookup below.
@@ -3936,6 +4203,21 @@ module.exports = {
   // claude-bow-trunkdiv.test.js.
   trunkDivergence, formatTrunkDivergence,
   recordDestructiveVerdict, latestDestructiveVerdict, latestGitRefForItem,
+  // BUG-340: exported so claude-destructive-guard.js and
+  // githooks/verdict-guard.js both derive the current session's identity
+  // from this ONE function — never a second, independently-hand-typed
+  // env-var read that could drift from claude-sync.js's own WINDOW_ID logic.
+  currentSessionIdentity,
+  // BUG-340 r1 F1: recorder_cwd identity pair + the shared self-verdict
+  // predicate — same GR#3 "one source of truth" reasoning as
+  // currentSessionIdentity above; claude-destructive-guard.js and
+  // githooks/verdict-guard.js both call isSelfVerdict() rather than each
+  // re-deriving the "session AND cwd both match" rule.
+  normalizeRecorderCwd, currentRecorderCwd, isSelfVerdict,
+  // BUG-340 r2 F1: exported for direct unit testing of the git-toplevel
+  // resolution / fail-closed-marker mechanism without needing a real
+  // dispatched round.
+  resolveGitToplevelSafe, UNRESOLVED_CWD_MARKER, WORKTREE_BOUNDARY_RE,
   // BUG-075: batch existence check exported for direct unit testing in
   // addition to the required real-subprocess CLI tests.
   cmdExists,

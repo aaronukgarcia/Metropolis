@@ -83,29 +83,74 @@ function connectDb() {
   });
 }
 
+// BUG-152: the code must be shaped like a REAL production BOW code
+// (TYPE_PREFIX + "-" + a purely-numeric id, exactly what claude-bow.js's
+// nextCode() generates) so it survives claude-destructive-guard.js's
+// looksLikeRealTag() shape filter and actually reaches BOW resolution — the
+// old "FEAT-T<hex>" shape mixed letters into the suffix and would now be
+// silently dropped as prose before ever hitting the DB.
+//
+// BUG-340 r2 N1 (independent round REJECT): the ORIGINAL purely-numeric
+// scheme drew from the FULL uint32 range (0..4294967295) via
+// `crypto.randomBytes(4).readUInt32BE(0)`, which overlaps the numeric range
+// real large-random FEAT keys ALSO draw from (FEAT-1972079945,
+// FEAT-2326609711, etc. all sit inside that same uint32 span) — two stale
+// 2026-08-22 fixture rows survived in the LIVE metro BOW as a result, one
+// adjacent to a real item. fixtureCode() below stays purely numeric (still
+// passes looksLikeRealTag()) but draws from a RESERVED sub-range strictly
+// ABOVE the uint32 max, so no uint32-based real-code generator can ever
+// produce a collision; the title also now carries an unmistakable
+// "DESTRUCTIVE-SCRATCH" prefix so a human auditing `node claude-bow.js list`
+// can immediately identify — and hand-remove — any row that somehow
+// survives a failed cleanup.
+const FIXTURE_CODE_RESERVED_BASE = 9990000000; // > 4294967295 (uint32 max)
+function fixtureCode() {
+  const tail = crypto.randomBytes(4).readUInt32BE(0) % 9000000; // 0..8999999
+  return `FEAT-${FIXTURE_CODE_RESERVED_BASE + tail}`;
+}
+
+// BUG-340 r2 N1: every fixture guid created by this file is tracked here and
+// swept by the test.after() backstop below — belt-and-braces so a test
+// whose assertion throws OUTSIDE its own try/finally still gets cleaned up.
+const _fixtureGuids = new Set();
+
 /** Insert a throwaway bow_items row directly (feature type), unique per call. */
 async function createFixtureItem(db, label) {
   const suffix = crypto.randomBytes(4).toString('hex');
   const guid = crypto.randomUUID();
-  // BUG-152: the code must be shaped like a REAL production BOW code
-  // (TYPE_PREFIX + "-" + a purely-numeric id, exactly what claude-bow.js's
-  // nextCode() generates) so it survives claude-destructive-guard.js's new
-  // looksLikeRealTag() shape filter and actually reaches BOW resolution —
-  // the old "FEAT-T<hex>" shape mixed letters into the suffix and would now
-  // be silently dropped as prose before ever hitting the DB. A large random
-  // 32-bit number keeps this collision-free against the slowly-incrementing
-  // sequential codes nextCode() produces, without needing letters at all.
-  const code = `FEAT-${crypto.randomBytes(4).readUInt32BE(0)}`;
+  const code = fixtureCode();
   const mkey = `test.destructiveguard.${label}.${suffix}`;
   await db.query(
     'INSERT INTO bow_items (guid, code, mkey, item_type, title, priority) VALUES (?, ?, ?, ?, ?, ?)',
-    [guid, code, mkey, 'feature', `TEMP fixture — ${label} (${suffix})`, 'P3']);
+    [guid, code, mkey, 'feature', `DESTRUCTIVE-SCRATCH fixture — ${label} (${suffix})`, 'P3']);
+  _fixtureGuids.add(guid);
   return { guid, code, mkey };
 }
 
 async function deleteFixtureItem(db, guid) {
   await db.query('DELETE FROM bow_items WHERE guid = ?', [guid]);
+  _fixtureGuids.delete(guid);
 }
+
+// BUG-340 r2 N1: guaranteed cleanup backstop, same convention adopted across
+// every claude-*.test.js fixture helper this round.
+test.after(async () => {
+  if (!_fixtureGuids.size) return;
+  let db;
+  try {
+    db = await connectDb();
+  } catch {
+    return;
+  }
+  try {
+    for (const guid of _fixtureGuids) {
+      // eslint-disable-next-line no-await-in-loop
+      await db.query('DELETE FROM bow_items WHERE guid = ?', [guid]).catch(() => {});
+    }
+  } finally {
+    await db.end().catch(() => {});
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Git/repo fixture helpers
@@ -624,7 +669,7 @@ test('REGRESSION: plain git spellings (git.exe / git.cmd) go through the FULL ve
   const db = await connectDb();
   const item = await createFixtureItem(db, 'exe-suffix-verdict');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
 
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
@@ -673,7 +718,7 @@ test('BUG-164 end-to-end: a commit citing a REAL, accepted-verdict tag whose mes
   const db = await connectDb();
   const item = await createFixtureItem(db, 'bug164-prose-abbrev');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
 
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
@@ -806,7 +851,7 @@ test('ROUND-4 end-to-end: `\'git\' commit` with an accepted verdict still passes
   const db = await connectDb();
   const item = await createFixtureItem(db, 'quoted-bare-verdict');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
       const r = runGuard(dir, `'git' commit -m '[${item.code}] change via quoted-bare git'`);
@@ -981,8 +1026,8 @@ test('AC-14/AC-15: an item with an accepted verdict passes; a second item with o
   const ok = await createFixtureItem(db, 'accept-path');
   const bad = await createFixtureItem(db, 'reject-path');
   try {
-    await recordDestructiveVerdict(db, ok.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
-    await recordDestructiveVerdict(db, bad.code, { verdict: 'reject', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, ok.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
+    await recordDestructiveVerdict(db, bad.code, { verdict: 'reject', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
 
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
@@ -1019,7 +1064,7 @@ test('BUG-152 end-to-end: a real, accepted tag passes even when the SAME message
   const db = await connectDb();
   const item = await createFixtureItem(db, 'bug152-mixed');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
 
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
@@ -1386,7 +1431,7 @@ test('BUG-224 (3c): SEPARATE `git add` then `git commit` tool calls, with an acc
   const db = await connectDb();
   const item = await createFixtureItem(db, 'bug224-separate-ok');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
     withTempRepo((dir) => {
       stageFile(dir, 'internal/foo.go', 'package foo\n');
       const r = runGuard(dir, `git commit -m "[${item.code}] change, separate calls"`);
@@ -3067,7 +3112,7 @@ test('BUG-332 (9): a code-bearing commit on an item whose git ref POST-DATES its
   const item = await createFixtureItem(db, 'bug332-tiepost');
   try {
     // Accept verdict first...
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
     // ...then a git ref recorded AFTER the verdict (the code changed post-attack).
     // Read the verdict's own created_at and add 2s so the ref is deterministically
     // newer even when both would otherwise land in the same TIMESTAMP second.
@@ -3100,7 +3145,7 @@ test('BUG-332 (10) CONTROL: a git ref PRE-DATING the accept verdict does NOT tri
     await db.query(
       'INSERT INTO bow_git_refs (item_guid, commit_hash, branch, note, created_at) VALUES (?, ?, ?, ?, ?)',
       [item.guid, 'd'.repeat(40), 'main', 'older ref', new Date(Date.now() - 120_000)]);
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
     withTempRepo((dir) => {
       stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
       const r = runGuard(dir, `git commit -m "[${item.code}] change"`);
@@ -3117,7 +3162,7 @@ test('BUG-332 (11) CONTROL: an accepted verdict with NO git ref at all still pas
   const db = await connectDb();
   const item = await createFixtureItem(db, 'bug332-tienoref');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
     withTempRepo((dir) => {
       stageFile(dir, 'internal/engine/evil.go', 'package engine\n');
       const r = runGuard(dir, `git commit -m "[${item.code}] change"`);
@@ -3137,7 +3182,7 @@ test('BUG-332 r2 (17): a git ref at the SAME INSTANT as the accept verdict is DE
   const db = await connectDb();
   const item = await createFixtureItem(db, 'bug332-tieeq');
   try {
-    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture' });
+    await recordDestructiveVerdict(db, item.code, { verdict: 'accept', attacker: 'Destructive-Fixture', recorderSession: 'independent-attacker-fixture' });
     // Read back the exact verdict instant (TIMESTAMP(6) -> JS Date) and insert the
     // ref at precisely that instant. Equal timestamps must trip the tie rule.
     const [[verdictRow]] = await db.query(

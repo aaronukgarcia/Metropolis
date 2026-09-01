@@ -167,6 +167,24 @@
  *       Flagged as an Escalation in the acceptance file
  *       (docs/planning/acceptance/tool.codenamehook.md) for Bill/Aaron,
  *       not resolved unilaterally here.
+ *
+ * ============================================================================
+ * BUG-340/BUG-336: a THIRD check, added to this SAME hook slot — the
+ * git-side half of GR#23's Destructive-verdict gate.
+ * ============================================================================
+ *
+ * claude-destructive-guard.js (the PreToolUse GR#23 gate) only ever sees a
+ * commit made as a Bash/PowerShell tool call inside a Claude Code session —
+ * a plain terminal commit, a non-Claude lane, or any other route to `git
+ * commit` never passes through it. This hook slot already gives merge-commit
+ * and every-tool coverage for identity (FEAT-045) and codename content
+ * (FEAT-046); the same coverage is needed for the Destructive-verdict rule,
+ * so it runs here too, as a third check, delegated ENTIRELY to
+ * verdict-guard.js (this file defines no verdict logic of its own — GR#3).
+ * Runs only once identity + codename have both passed. FAIL-CLOSED, same
+ * posture as the two checks above — see verdict-guard.js's own header for
+ * the DB-unreachable / self-verdict / verdict-tie reasoning and the
+ * CLAUDE_DISABLE_GIT_VERDICT_GUARD bypass.
  */
 
 'use strict';
@@ -223,8 +241,26 @@ function resolveCodenameScanModulePath() {
   );
 }
 
+/** Same two-candidate resolution shape again (BUG-340/BUG-336), for the
+ * git-side Destructive-verdict check — see verdict-guard.js's own header for
+ * why this third check lives in this same commit-msg slot. */
+function resolveVerdictGuardModulePath() {
+  const candidates = [
+    path.join(__dirname, '..', '..', 'githooks', 'verdict-guard.js'), // installed: .git/hooks -> repo-root/githooks
+    path.join(__dirname, 'verdict-guard.js'), // tracked source, required directly: githooks/ -> githooks/
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error(
+    `verdict-guard.js not found relative to ${__dirname} ` +
+      `(tried: ${candidates.join(', ')})`
+  );
+}
+
 const identity = require(resolveIdentityModulePath());
 const codenameScan = require(resolveCodenameScanModulePath());
+const verdictGuard = require(resolveVerdictGuardModulePath());
 
 /** Denies the commit: non-zero exit, message to stderr. commit-msg running
  * before the commit object is written means a non-zero exit here writes
@@ -255,6 +291,15 @@ function failCodename(reason) {
       `\`git commit --no-verify\` escape hatch — see this file's header, ` +
       `AC-10/AC-11 (disclosed, uncovered gaps — not this escape hatch).\n`
   );
+  process.exitCode = 1;
+}
+
+/** Same shape as fail()/failCodename() above, but for the BUG-340/BUG-336
+ * git-side Destructive-verdict check — a distinct message so a denied
+ * operator immediately knows this is the THIRD check in this slot, not the
+ * identity or codename one. */
+function failVerdict(reason) {
+  process.stderr.write(`\n${reason}\n`);
   process.exitCode = 1;
 }
 
@@ -303,7 +348,7 @@ function checkAgainstSanctioned(sanctioned, authorIdent, committerIdent) {
  * identity.deriveSanctioned() is caught HERE (not left to propagate to a
  * generic top-level handler) so the fail-closed reasoning is explicit and
  * co-located with the rest of this hook's decision logic. */
-function main() {
+async function main() {
   let authorIdent;
   let committerIdent;
   try {
@@ -361,13 +406,29 @@ function main() {
     return;
   }
 
+  // BUG-340/BUG-336: the THIRD check occupying this same hook slot — the
+  // git-side half of GR#23's Destructive-verdict gate (see
+  // verdict-guard.js's own header). Runs only once identity + codename have
+  // both already passed, same "one reason per denial" reasoning as above.
+  // argv[2] is commit-msg's own contract (the path to the commit-message
+  // file) — passed through unchanged; verdict-guard.js reads it itself.
+  let verdictResult;
+  try {
+    verdictResult = await verdictGuard.checkStagedCommit(process.cwd());
+  } catch (err) {
+    failVerdict(verdictGuard.internalErrorMessage(err));
+    return;
+  }
+  if (!verdictResult.ok) {
+    failVerdict(verdictResult.reason);
+    return;
+  }
+
   process.exitCode = 0;
 }
 
 if (require.main === module) {
-  try {
-    main();
-  } catch (err) {
+  main().catch((err) => {
     // Defense in depth: main() already catches its own known failure modes
     // and fails closed explicitly; this is the fail-closed backstop for
     // anything that still escapes (e.g. an unreadable commit message file
@@ -375,7 +436,7 @@ if (require.main === module) {
     // this hook, but AC-16 names it as a class this hook must fail closed
     // on if it is ever added).
     fail(`internal error: ${err.message}\n\nFailing closed.`);
-  }
+  });
 } else {
   module.exports = {
     gitVar,
@@ -383,6 +444,10 @@ if (require.main === module) {
     checkAgainstSanctioned,
     main,
     deriveSanctioned: identity.deriveSanctioned,
+    // BUG-340/BUG-336: exported so tests can exercise the verdict-guard
+    // wiring directly (e.g. monkeypatching checkStagedCommit to throw / deny)
+    // without needing a fresh subprocess for every case.
+    checkStagedCommit: verdictGuard.checkStagedCommit,
     // FEAT-046: exported so tests can exercise the codename-scan wiring
     // directly (e.g. monkeypatching scanStagedDiff to throw for AC-7,
     // asserting the same require target as claude-codename-guard.js for

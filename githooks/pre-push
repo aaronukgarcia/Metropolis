@@ -1,0 +1,382 @@
+#!/usr/bin/env node
+// Module key: tool.gitprepushgate (BOW ref pending — see BUG-340/BUG-336)
+// Spec ref: GR#28 (Verify Against CI, Not Just Locally); M0-ENG §5 (hooks)
+
+/**
+ * githooks/pre-push — TRACKED canonical source for `.git/hooks/pre-push`
+ * (BUG-340/BUG-336 deliverable 3, GR#28 floor). Installed alongside
+ * commit-msg via `node claude-committhook-install.js install`.
+ *
+ * WHY THIS EXISTS. GR#28 (CLAUDE.md, added 2026-08-31) exists because ~20
+ * commits landed on `main` CI-red because only local gates were run and CI
+ * was never checked — `go vet` is NOT `golangci-lint`, and a push is not
+ * "done" until CI is actually seen green. `/ci-green` is the authoritative
+ * full bar (golangci-lint at CI's pinned version, gofmt, go build, FULL go
+ * test, the webconsole node-test glob) and remains the thing to run before
+ * every push — but nothing MECHANICALLY enforced that before this file: a
+ * session could simply forget. This hook is a FLOOR, not a replacement: a
+ * fast, synchronous subset (gofmt -l, go build ./..., go vet ./...) that
+ * catches the cheapest, most common CI-red causes (a stray unformatted file,
+ * a build break, an obvious vet finding) for free, at push time, for EVERY
+ * tool that pushes (not just a Claude Code session that remembers to run
+ * the skill). It deliberately does NOT run the full test suite or
+ * golangci-lint — both are too slow to run synchronously inside a git hook
+ * on every push — so passing this hook is necessary, not sufficient: /ci-green
+ * before push and `gh run view` after remain mandatory (GR#28's own text).
+ *
+ * CI JOBS THIS HOOK DOES NOT COVER (see .github/workflows/ci.yml — check
+ * that file, not this comment, if the job list ever changes):
+ *   - build-test-vet's `go test ./... -race -count=1` — the FULL suite with
+ *     the race detector. This hook runs neither `go test` nor `-race` at
+ *     all; a data race or a logic-level test failure reaches CI undetected.
+ *   - determinism-gate's `go test ./internal/engine/detgate/ -run
+ *     TestDeterminismGate -count=1 -race` — GR#21's own dedicated job.
+ *   - lint's `golangci-lint` (pinned version via golangci-lint-action@v7) —
+ *     a strictly larger, differently-configured check than `go vet`; GR#28
+ *     exists specifically because "go vet is NOT golangci-lint".
+ *   - node-test — the webconsole/root Node test glob CI runs.
+ *   - perf-smoke / perf-1m-probe — the performance gates.
+ * This hook covers ONLY build-test-vet's `gofmt check` and `go vet ./...`
+ * steps, plus a `go build ./...` compile check CI does not run as a
+ * separate step (folded into `go test` there). Passing this hook proves
+ * NOTHING about the five items above — /ci-green before push and `gh run
+ * view` after remain the only way to know CI itself is green.
+ *
+ * SCOPE: only checks pushes that touch `refs/heads/main` — feature branches
+ * are not slowed down by a hook whose whole reason to exist is protecting
+ * the shared trunk. A push touching only other refs exits 0 immediately,
+ * without even reading `go`/`gofmt` off PATH.
+ *
+ * TIME BUDGET: ~30-60s worst case (each of the three gates below runs with
+ * its own generous-but-bounded timeout). This is a FAST subset by design —
+ * see the header above for what it deliberately excludes.
+ *
+ * GOFMT SCOPE vs CI (BUG-340 r2 N3): CI runs `gofmt -l .` — one directory
+ * argument, no argv limit possible. This hook instead enumerates `git
+ * ls-files '*.go'` and CHUNKS the resulting file list (see
+ * GOFMT_ARGV_CHUNK_BYTES below) because a single `gofmt -l <every file>`
+ * invocation blew Windows' CreateProcess argv limit outright on this repo's
+ * file count (BUG-340 r1 F2 — see runGofmtCheck's own comment). The chunked
+ * form is semantically equivalent to `gofmt -l .` for every file `git
+ * ls-files` reports (tracked .go files only — CI's `.` walk and this hook's
+ * ls-files enumeration can only diverge on an UNTRACKED .go file, which CI's
+ * checkout does not have either), kept as an explicit files-array rather
+ * than switching to a bare `.` scan so a caller/test can still pass a small
+ * fixture list without needing a real git repo.
+ *
+ * FAIL-CLOSED, with a documented operator-only bypass (same convention as
+ * CLAUDE_DISABLE_DESTRUCTIVE_GUARD / CLAUDE_DISABLE_GIT_VERDICT_GUARD):
+ * CLAUDE_DISABLE_PREPUSH_GATE=1 — set BEFORE the shell starts, never inline
+ * in the push command. A gate that cannot run at all (go/gofmt missing from
+ * PATH, git ls-files failing) DENIES with the exact remediation printed,
+ * rather than silently letting a red build reach the shared remote.
+ *
+ * git's pre-push contract: argv[2]=remote name, argv[3]=remote URL; stdin
+ * carries one line per ref being pushed: "<local ref> <local sha1> <remote
+ * ref> <remote sha1>". A ref DELETION is pushed with local sha1 = 40 zeros
+ * and is never gated here (nothing to build/vet for a deletion).
+ */
+
+'use strict';
+
+const { execFileSync } = require('child_process');
+
+const BYPASS_ENV = 'CLAUDE_DISABLE_PREPUSH_GATE';
+const ZERO_SHA = '0'.repeat(40);
+const TARGET_REF = 'refs/heads/main';
+const GATE_TIMEOUT_MS = 60000;
+
+/** Parses pre-push's stdin contract into an array of
+ * { localRef, localSha, remoteRef, remoteSha }. Blank lines (trailing
+ * newline) are dropped — git legitimately emits those. A line that is NOT
+ * blank but does not split into exactly 4 whitespace-separated fields is
+ * dropped from THIS array too (unchanged shape — callers that only want the
+ * parseable refs, e.g. an already-known-well-formed test fixture, keep
+ * working against a plain array) but is separately surfaced by
+ * findUnparseableLines() below, which checkPush() now consults BEFORE
+ * deciding whether a push "touches main" — see that function's own header
+ * for why (BUG-340 r1 F8). */
+function parsePushedRefs(stdinText) {
+  const refs = [];
+  for (const line of String(stdinText || '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(/\s+/);
+    if (parts.length !== 4) continue;
+    const [localRef, localSha, remoteRef, remoteSha] = parts;
+    refs.push({ localRef, localSha, remoteRef, remoteSha });
+  }
+  return refs;
+}
+
+/** BUG-340 r1 F8 (independent round REJECT, finding B2): every NON-BLANK
+ * stdin line that does NOT parse into exactly 4 whitespace-separated
+ * fields. git's own pre-push contract never emits a malformed line — but
+ * this hook must not simply trust that as a security-relevant boundary
+ * ("git never does that" was already proven wrong for the ENAMETOOLONG
+ * case, F2). The original parsePushedRefs() silently DROPPED any such
+ * line, so touchesMainPush() read "nothing recognised" as "does not touch
+ * main" and checkPush() returned { ok:true, skipped:true } — a push to
+ * main that ran ZERO gates while this file's own header claims fail-closed.
+ * checkPush() now denies (fail-closed) whenever this returns anything
+ * non-empty, rather than silently reporting success on input it could not
+ * fully evaluate — "a gate that cannot evaluate must not report success"
+ * (this repo's standing verification rule, docs/planning — see
+ * metropolis-verification-standards). */
+function findUnparseableLines(stdinText) {
+  const bad = [];
+  for (const line of String(stdinText || '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed.split(/\s+/).length !== 4) bad.push(trimmed);
+  }
+  return bad;
+}
+
+/** True when at least one NON-DELETION pushed ref targets refs/heads/main.
+ * A deletion (localSha all zeros) is excluded — there is no new code to
+ * gate. */
+function touchesMainPush(pushedRefs) {
+  return pushedRefs.some((r) => r.remoteRef === TARGET_REF && r.localSha !== ZERO_SHA);
+}
+
+/** Every tracked `.go` file in the repo (`git ls-files` — respects
+ * .gitignore/tracked state, so generated/vendored-but-untracked files never
+ * appear). Throws on a git failure — the caller treats that as "cannot run
+ * this gate", fail-closed, same as every other "cannot verify" path in this
+ * repo's guards. */
+function listTrackedGoFiles(cwd) {
+  const raw = execFileSync('git', ['ls-files', '*.go'], { cwd, encoding: 'utf8', timeout: 10000 });
+  return raw.split('\n').map((f) => f.trim()).filter(Boolean);
+}
+
+// BUG-340 r1 F2 (independent round REJECT, finding B1): the ORIGINAL
+// runGofmtCheck spawned a single `gofmt -l <every tracked .go file>`. This
+// repo tracks 1568+ .go files (~59,770 bytes of argv at round r1) against
+// Windows' 32,767-byte CreateProcess argv limit — the gate REJECTED EVERY
+// PUSH TO MAIN on this project's own documented-Windows environment, with
+// the only escape being CLAUDE_DISABLE_PREPUSH_GATE=1 (disabling the whole
+// gate, not just this one check). CI itself runs `gofmt -l .` (a single
+// directory argument, no argv blowup at all) — chunking is the equivalent
+// fix for THIS function's existing files-array shape (kept so a caller can
+// still pass an explicit small fixture list without a real git repo, and so
+// `listTrackedGoFiles`'s git-ls-files-derived list — closer to what a
+// developer expects "which files got checked" to mean than a bare directory
+// scan — remains the source of the file set). Each chunk's joined argv is
+// kept comfortably under both the Windows limit AND this file's own
+// GOFMT_ARGV_CHUNK_BYTES budget so this scales to a repo many times this
+// size without a second incident.
+const GOFMT_ARGV_CHUNK_BYTES = 8000;
+
+/** Splits `files` into chunks whose joined UTF-8 byte length (plus a
+ * per-file separator/quoting allowance) never exceeds `maxBytes`. A single
+ * file longer than `maxBytes` still gets its own one-file chunk (never
+ * silently dropped) — the OS argv limit is per-invocation, not per-file, so
+ * even a single pathologically long path is attempted rather than skipped. */
+function chunkFilesByArgvBytes(files, maxBytes) {
+  const chunks = [];
+  let current = [];
+  let currentBytes = 0;
+  for (const f of files) {
+    // +1 for the separating space git/execFileSync effectively costs per
+    // argument when the OS assembles the command line.
+    const bytes = Buffer.byteLength(f, 'utf8') + 1;
+    if (current.length && currentBytes + bytes > maxBytes) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(f);
+    currentBytes += bytes;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+/** Runs `gofmt -l <files>` in argv-safe CHUNKS (BUG-340 r1 F2 — see
+ * GOFMT_ARGV_CHUNK_BYTES's header) — prints the names of any file that is
+ * NOT gofmt-clean, across every chunk. Empty combined output = clean.
+ * Returns { ok, output }. `files` is threaded through explicitly (rather
+ * than re-deriving it internally) so tests can pass a small fixture list
+ * without needing a real git repo. A single chunk's failure denies the
+ * whole check (fail-closed) rather than silently skipping the remaining
+ * chunks. */
+function runGofmtCheck(cwd, files) {
+  if (!files.length) return { ok: true, output: '' };
+  const chunks = chunkFilesByArgvBytes(files, GOFMT_ARGV_CHUNK_BYTES);
+  const dirty = [];
+  for (const chunk of chunks) {
+    try {
+      const out = execFileSync('gofmt', ['-l', ...chunk], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
+      const trimmed = out.trim();
+      if (trimmed) dirty.push(trimmed);
+    } catch (err) {
+      // A SPAWN-level failure (the process could not even be started at
+      // all -- ENAMETOOLONG/E2BIG from an argv that is still too long
+      // despite chunking, or gofmt missing from PATH entirely) never
+      // populates stdout/stderr, because no child process ever ran to
+      // produce them. A process that DID run but exited non-zero (gofmt's
+      // own real error output -- e.g. a listed file no longer exists on
+      // disk) DOES carry stdout/stderr, even if empty, and is surfaced
+      // as-is (same shape as runGoBuild/runGoVet below) rather than
+      // mislabelled "could not run", which would falsely read as an argv
+      // failure to any caller/test grepping for that phrase.
+      const ran = err.stdout != null || err.stderr != null;
+      if (!ran) {
+        return { ok: false, output: `gofmt could not run: ${err.message}` };
+      }
+      const out = [err.stdout, err.stderr].filter(Boolean).join('\n').trim();
+      if (out) dirty.push(out);
+    }
+  }
+  const combined = dirty.join('\n');
+  return { ok: combined.length === 0, output: combined };
+}
+
+/** Runs `go build ./...` from `cwd`. Returns { ok, output } — output is
+ * stdout+stderr on failure (go's build errors go to stderr), empty on
+ * success. */
+function runGoBuild(cwd) {
+  try {
+    execFileSync('go', ['build', './...'], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: '' };
+  } catch (err) {
+    const out = [err.stdout, err.stderr].filter(Boolean).join('\n') || err.message;
+    return { ok: false, output: out };
+  }
+}
+
+/** Runs `go vet ./...` from `cwd`. Same shape as runGoBuild. */
+function runGoVet(cwd) {
+  try {
+    execFileSync('go', ['vet', './...'], { cwd, encoding: 'utf8', timeout: GATE_TIMEOUT_MS, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: '' };
+  } catch (err) {
+    const out = [err.stdout, err.stderr].filter(Boolean).join('\n') || err.message;
+    return { ok: false, output: out };
+  }
+}
+
+function denyMessage(gateName, output) {
+  return (
+    `\n🛑 PRE-PUSH GATE (GR#28 floor, BUG-340/BUG-336) — push to main REJECTED:\n\n` +
+    `"${gateName}" failed:\n\n${output}\n\n` +
+    `This is a FAST FLOOR only (gofmt -l / go build / go vet) — it does NOT replace /ci-green ` +
+    `(golangci-lint at CI's pinned version + FULL go test + the webconsole node-test glob), which ` +
+    `remains mandatory before every push per GR#28. Fix the failure above and retry.\n\n` +
+    `Emergency bypass (operator-only, set BEFORE the shell starts — never inline in the push ` +
+    `command): ${BYPASS_ENV}=1\n`
+  );
+}
+
+/** Full check, factored out from the CLI entry for direct unit testing.
+ * `cwd` defaults to process.cwd() in production; tests override it to point
+ * at a throwaway repo/fixture. `runners` lets tests substitute fake
+ * gofmt/build/vet implementations without invoking a real Go toolchain.
+ * Returns { ok: true } or { ok: false, reason }. */
+function checkPush(stdinText, cwd, runners) {
+  const { gofmt = runGofmtCheck, build = runGoBuild, vet = runGoVet, listGoFiles = listTrackedGoFiles } = runners || {};
+
+  if (process.env[BYPASS_ENV] === '1') {
+    return { ok: true, bypassed: true };
+  }
+
+  // BUG-340 r1 F8 (independent round REJECT, finding B2): an unparseable
+  // stdin line must fail closed, NOT be silently dropped into "does not
+  // touch main" -> allow. Checked BEFORE parsePushedRefs()/touchesMainPush()
+  // decide anything, so a malformed line can never let a genuine main-push
+  // slip through ungated — see findUnparseableLines()'s own header for the
+  // live-verified bypass this closes.
+  const unparseableLines = findUnparseableLines(stdinText);
+  if (unparseableLines.length) {
+    return {
+      ok: false,
+      reason: denyMessage(
+        'parse pre-push stdin',
+        `could not parse ${unparseableLines.length} stdin line(s) (expected exactly 4 whitespace-separated ` +
+          `fields per git's own pre-push contract): ${JSON.stringify(unparseableLines)}. Denying (fail-closed) ` +
+          'rather than silently treating an unrecognised push as "does not touch main".'
+      ),
+    };
+  }
+
+  const pushedRefs = parsePushedRefs(stdinText);
+  if (!touchesMainPush(pushedRefs)) {
+    return { ok: true, skipped: true };
+  }
+
+  let goFiles;
+  try {
+    goFiles = listGoFiles(cwd);
+  } catch (err) {
+    return { ok: false, reason: denyMessage('git ls-files (*.go)', err.message) };
+  }
+
+  const gofmtResult = gofmt(cwd, goFiles);
+  if (!gofmtResult.ok) {
+    return {
+      ok: false,
+      reason: denyMessage('gofmt -l', gofmtResult.output || '(non-empty gofmt -l output — see above)'),
+    };
+  }
+
+  const buildResult = build(cwd);
+  if (!buildResult.ok) {
+    return { ok: false, reason: denyMessage('go build ./...', buildResult.output) };
+  }
+
+  const vetResult = vet(cwd);
+  if (!vetResult.ok) {
+    return { ok: false, reason: denyMessage('go vet ./...', vetResult.output) };
+  }
+
+  return { ok: true };
+}
+
+module.exports = {
+  BYPASS_ENV,
+  TARGET_REF,
+  ZERO_SHA,
+  parsePushedRefs,
+  findUnparseableLines,
+  touchesMainPush,
+  listTrackedGoFiles,
+  chunkFilesByArgvBytes,
+  GOFMT_ARGV_CHUNK_BYTES,
+  runGofmtCheck,
+  runGoBuild,
+  runGoVet,
+  denyMessage,
+  checkPush,
+};
+
+// ---------------------------------------------------------------------------
+// CLI entry
+// ---------------------------------------------------------------------------
+
+if (require.main === module) {
+  let input = '';
+  try {
+    input = require('fs').readFileSync(0, 'utf8');
+  } catch {
+    input = '';
+  }
+  let result;
+  try {
+    result = checkPush(input, process.cwd());
+  } catch (err) {
+    process.stderr.write(
+      `\n🛑 PRE-PUSH GATE internal error: ${err && err.message ? err.message : err}\n\n` +
+        `Failing closed deliberately (GR#28 is a CI-safety rule). Bypass only if you have checked ` +
+        `by hand (operator-only, set BEFORE the shell starts): ${BYPASS_ENV}=1\n`
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (!result.ok) {
+    process.stderr.write(result.reason);
+    process.exitCode = 1;
+  } else {
+    process.exitCode = 0;
+  }
+}
