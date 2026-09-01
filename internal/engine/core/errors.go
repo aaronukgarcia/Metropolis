@@ -172,4 +172,12 @@ const (
 	// a later replay's determinism comparison -- a replay-fidelity gap, not
 	// a gameplay rejection.
 	ErrJournalWriteFailed = "MET-E021"
+
+	// ErrInvalidClockSeed: SeedClockForRestore was called with a negative
+	// tick value (FEAT-1972079944). A restored composition's tick is
+	// always a non-negative elapsed-daily-tick count (Clock.Tick's own
+	// doc comment), so a negative seed can only be a caller mistake --
+	// rejected loudly (GR#1) rather than silently producing a Clock whose
+	// Month/DayInMonth derivations go negative.
+	ErrInvalidClockSeed = "MET-E022"
 )

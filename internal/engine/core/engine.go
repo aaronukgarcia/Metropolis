@@ -541,6 +541,55 @@ func (e *Engine) Clock() (Clock, error) {
 	return e.clock, nil
 }
 
+// SeedClockForRestore seeds the Engine's clock to tick, WITHOUT running any
+// phase or command (FEAT-1972079944, Aaron's ruling option A). This is the
+// narrow, restore-only counterpart to the sealed-clock invariant documented
+// on the sealed field: the clock otherwise advances ONLY via AdvanceTicks,
+// and this method deliberately does not change that for a live/running
+// engine -- it exists purely so a LOAD path (internal/engine/compose's
+// Composition.LoadAt) can seed a freshly restored, never-yet-ticked Engine
+// to the tick its saved state was captured at, closing the gap Load()
+// leaves (a state-exact snapshot stuck at tick 0 -- see save_wire.go's
+// Load doc comment).
+//
+// Restore-only, mechanically enforced, not just documented: this call is
+// REJECTED with ErrEngineSealed once the Engine has run its first
+// AdvanceTicks (see the sealed field's doc comment) -- the exact same
+// one-way latch RegisterPhaseHook is gated on, reused here rather than a
+// parallel mechanism. There is deliberately no other public API that can
+// move the clock: AdvanceTicks is still the only way to advance a live
+// engine, and this method cannot be called again to any effect once
+// sealed, so the "clock only moves via AdvanceTicks" invariant holds for
+// every engine that has ever ticked. A caller cannot use this to rewind or
+// tamper with a running simulation's clock -- only to finish constructing
+// one that has not started yet.
+//
+// tick must be >= 0 (Clock.Tick's own contract: an elapsed daily-tick
+// count since genesis can never be negative) -- rejected with
+// ErrInvalidClockSeed otherwise, and the clock is left unchanged.
+//
+// Also returns ErrEngineCopied (SEC-014/SEC-016) if called on a
+// struct-copied Engine value, checked before mu is ever touched, exactly
+// like every other mu-acquiring method in this file.
+func (e *Engine) SeedClockForRestore(correlationID string, tick int64) error {
+	if err := e.checkNotCopied(correlationID, map[string]any{"method": "SeedClockForRestore"}); err != nil {
+		return err
+	}
+	if tick < 0 {
+		return errs.New(ErrInvalidClockSeed, correlationID, map[string]any{"tick": tick})
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := e.checkNotCopied(correlationID, map[string]any{"method": "SeedClockForRestore"}); err != nil {
+		return err
+	}
+	if e.sealed {
+		return errs.New(ErrEngineSealed, correlationID, map[string]any{"method": "SeedClockForRestore"})
+	}
+	e.clock.tick = tick
+	return nil
+}
+
 // RegisterPhaseHook wires hook into kind's phase-pipeline slot. Must be
 // called before AdvanceTicks is first invoked for kind's phase to run
 // it deterministically from tick 1 — there is no "hot" re-registration

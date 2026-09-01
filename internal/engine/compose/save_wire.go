@@ -11,6 +11,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/unlocks"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
 // FEAT-1972079941 AC-6 — save live-wiring. This is the integration payoff:
@@ -155,5 +156,67 @@ func (c *Composition) Load(root string) error {
 	// compose participant and these two mirrors recomputed, the full
 	// StateDigest round-trips exactly.
 	c.state.syncMoneyFromLedger()
+	return nil
+}
+
+// LoadAt is Load's tick-continuous sibling (FEAT-1972079944, Aaron's ruling
+// option A): it restores every composed module's state exactly like Load
+// does, seeds the engine's clock to tick via the narrow, restore-only
+// core.Engine.SeedClockForRestore, and re-establishes the BUG-288
+// ledger-closing trackers (compose_ledger_participant.go's "NOT SERIALIZED"
+// section -- lastClosedTick/previousClosingPop/previousClosingMoney) that a
+// plain Load deliberately leaves at their fresh, clock-relative defaults --
+// so the returned composition is not just state-exact but genuinely
+// tick-continuous with the original: driving it forward with AdvanceTicks
+// from here produces the same state a same-seed engine that never stopped
+// would have produced.
+//
+// Why the trackers need re-establishing, not just the clock: snapshot()'s
+// closeLedgerForTick gates purely on lastClosedTick vs the current tick
+// (compose.go). A fresh Wire's lastClosedTick is 0, so the very next
+// invariant-hook tick after a clock-seeded-but-tracker-naive load would see
+// lastClosedTick(0) < tick+1 and roll the ledger's opening baseline back to
+// previousClosingPop/Money's fresh-Wire zero values -- corrupting the
+// conservation ledger even though every module's own state loaded exactly
+// right. Because Load has already restored citizens/finance byte-exact (and
+// syncMoneyFromLedger has already re-synced the treasury/citizenWealth
+// mirrors), the closing values a live engine would have recorded at the END
+// of tick `tick` are exactly the CURRENT restored population and money
+// totals -- so LoadAt sets lastClosedTick=tick and
+// previousClosingPop/Money from those already-restored figures, matching
+// what closeLedgerForTick(tick) itself would have left behind.
+//
+// This is deliberately a SEPARATE entry point rather than a change to
+// Load's own behaviour: Load's documented contract (a state snapshot at
+// tick 0) is unchanged -- see TestSaveRoundTrip_IsSnapshotNotTickContinuous
+// -- and the sealed-clock invariant (a live/already-ticked engine can never
+// have its clock set except by AdvanceTicks) is preserved unconditionally,
+// because SeedClockForRestore itself refuses to run once the engine has
+// sealed. LoadAt only succeeds, therefore, on a freshly constructed,
+// never-yet-ticked Engine -- exactly the shape a caller reconstructing a
+// composition for a Load has (see buildComposition in
+// save_roundtrip_test.go): a bare core.NewEngine + Wire, before any command
+// or AdvanceTicks call has touched it.
+//
+// tick is normally the CreatedAtTick the corresponding Save call recorded
+// (see Save's save.Context construction above) -- callers restoring from a
+// snapshot+journal-tail bundle (FEAT-1972079936 inc3) pass that snapshot's
+// tick here before replaying the tail.
+func (c *Composition) LoadAt(root string, tick int64) error {
+	if err := c.Load(root); err != nil {
+		return err
+	}
+	if err := c.state.e.SeedClockForRestore(c.state.cid, tick); err != nil {
+		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "seed-clock", "tick": tick})
+	}
+	// Re-establish the BUG-288 clock-relative ledger-closing trackers a
+	// plain Load deliberately leaves unrestored (see this method's doc
+	// comment): the closing values a live engine would hold immediately
+	// after tick `tick`'s snapshot are exactly the population/money totals
+	// Load has already restored (state is byte-exact at this point).
+	st := c.state
+	st.lastClosedTick = tick
+	st.previousClosingPop = int64(st.citizens.TotalPopulation(st.cid))
+	st.previousClosingMoney = num.SatAdd(st.treasury, st.citizenWealth)
 	return nil
 }

@@ -701,6 +701,12 @@
       "message": "recording accepted command {correlationId} to the replay journal failed: {cause}",
       "remedy": "Check harness.replay's Recorder is wired and its underlying storage is writable -- a failed journal write means this accepted command will NOT be present in a later replay's determinism comparison (GR#27's rationale applies here too: a lost accepted-command record is unrecoverable dogfood data). The command itself was already accepted and its side effects already applied; this error surfaces the journal gap loudly (GR#17) rather than silently dropping it."
     },
+    "MET-E022": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "SeedClockForRestore rejected tick={tick}: must be a non-negative elapsed daily-tick count",
+      "remedy": "Pass tick >= 0 -- the saved CreatedAtTick this composition was captured at (or a snapshot+journal-tail bundle's snapshot tick), never a negative or synthetic value. Clock.Tick is defined as an elapsed count since genesis and can never be negative."
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",
