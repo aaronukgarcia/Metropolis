@@ -153,51 +153,60 @@ func (c *ContainerPort) checkNotCopied(method string) error {
 }
 
 // WireRail wires the engine.rail intermodal seam (AC-4). Call before
-// IntermodalTransfer; nil leaves the point unregistered (rejected loudly).
-func (c *ContainerPort) WireRail(rail RailIntermodal) {
+// IntermodalTransfer; nil leaves the point unregistered (rejected loudly). A
+// struct-copied value is rejected with ErrCopiedValue rather than silently
+// wiring a dead copy (SEC-160).
+func (c *ContainerPort) WireRail(rail RailIntermodal) error {
 	if err := c.checkNotCopied("WireRail"); err != nil {
-		return
+		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.rail = rail
+	return nil
 }
 
 // WirePermit wires the feat.facilitypermits permit authority seam (AC-7).
-// Call before Build; nil rejects every build as unpermitted.
-func (c *ContainerPort) WirePermit(permit PermitAuthority) {
+// Call before Build; nil rejects every build as unpermitted. A struct-copied
+// value is rejected with ErrCopiedValue rather than silently wiring a dead
+// copy (SEC-160).
+func (c *ContainerPort) WirePermit(permit PermitAuthority) error {
 	if err := c.checkNotCopied("WirePermit"); err != nil {
-		return
+		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.permit = permit
+	return nil
 }
 
 // WireDecommission wires the feat.decommission liability-registrar seam
 // (AC-7). Call before Build; nil rejects every build (a day-one liability
-// that cannot be recorded is never silently dropped).
-func (c *ContainerPort) WireDecommission(decom DecommissionRegistrar) {
+// that cannot be recorded is never silently dropped). A struct-copied value
+// is rejected with ErrCopiedValue rather than silently wiring a dead copy
+// (SEC-160).
+func (c *ContainerPort) WireDecommission(decom DecommissionRegistrar) error {
 	if err := c.checkNotCopied("WireDecommission"); err != nil {
-		return
+		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.decom = decom
+	return nil
 }
 
 // Tiers returns the port ladder in ascending (milestone, cost) order —
 // cargo_port_small → container_terminal → deep_sea_terminal (AC-2). The
 // order is fixed at load time (GR#21), so this is deterministic.
-func (c *ContainerPort) Tiers() []PortTier {
+func (c *ContainerPort) Tiers() ([]PortTier, error) {
 	if err := c.checkNotCopied("Tiers"); err != nil {
-		return nil
+		return nil, err
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := make([]PortTier, len(c.cfg.tiers))
 	copy(out, c.cfg.tiers)
-	return out
+	return out, nil
 }
 
 // Tier resolves one ladder rung by key, or errors with
@@ -341,11 +350,11 @@ func (c *ContainerPort) IntermodalAccount() (IntermodalAccount, error) {
 // BalanceOfTrade returns FreightAPI's independently-sourced import/export
 // ledgers (engine.freight.md AC-9) — the two totals the importer→exporter
 // flip reads off, never one computed as the other's complement (AC-6).
-func (c *ContainerPort) BalanceOfTrade() BalanceOfTrade {
+func (c *ContainerPort) BalanceOfTrade() (BalanceOfTrade, error) {
 	if err := c.checkNotCopied("BalanceOfTrade"); err != nil {
-		return BalanceOfTrade{}
+		return BalanceOfTrade{}, err
 	}
-	return c.freight.BalanceOfTrade()
+	return c.freight.BalanceOfTrade(), nil
 }
 
 // Import brings commodity tonnage into the city through the deep-sea terminal
@@ -368,13 +377,13 @@ func (c *ContainerPort) Export(commodity Commodity, tonnes int64, mode Mode) (Mo
 }
 
 // ActiveTier returns the currently-built tier key ("" while nothing is built).
-func (c *ContainerPort) ActiveTier() string {
+func (c *ContainerPort) ActiveTier() (string, error) {
 	if err := c.checkNotCopied("ActiveTier"); err != nil {
-		return ""
+		return "", err
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.activeTier
+	return c.activeTier, nil
 }
 
 // Build provisions a port tier (AC-7/AC-8). It is permit-gated through the

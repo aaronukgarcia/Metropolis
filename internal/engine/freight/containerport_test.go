@@ -72,6 +72,40 @@ func loadContainerPortErr(t *testing.T, mutate func(map[string]any)) error {
 	return err
 }
 
+// mustActiveTier reads ActiveTier() and fails the test on a non-nil error
+// (AC-3: ActiveTier now surfaces the copy guard instead of a bare "").
+func mustActiveTier(t *testing.T, cp *ContainerPort) string {
+	t.Helper()
+	at, err := cp.ActiveTier()
+	if err != nil {
+		t.Fatalf("ActiveTier: %v", err)
+	}
+	return at
+}
+
+// mustWirePermit/mustWireDecommission/mustWireRail wire a seam and fail the
+// test on a non-nil error (AC-3: Wire* now return error instead of void).
+func mustWirePermit(t *testing.T, cp *ContainerPort, p PermitAuthority) {
+	t.Helper()
+	if err := cp.WirePermit(p); err != nil {
+		t.Fatalf("WirePermit: %v", err)
+	}
+}
+
+func mustWireDecommission(t *testing.T, cp *ContainerPort, d DecommissionRegistrar) {
+	t.Helper()
+	if err := cp.WireDecommission(d); err != nil {
+		t.Fatalf("WireDecommission: %v", err)
+	}
+}
+
+func mustWireRail(t *testing.T, cp *ContainerPort, r RailIntermodal) {
+	t.Helper()
+	if err := cp.WireRail(r); err != nil {
+		t.Fatalf("WireRail: %v", err)
+	}
+}
+
 // containerPortTier returns one tier entry from the decoded containerport.json
 // map (for mutation).
 func containerPortTier(t *testing.T, m map[string]any, key string) map[string]any {
@@ -180,15 +214,19 @@ func TestPortTierLadder(t *testing.T) {
 
 	// Tiers() is the ascending (milestone, cost) ladder — the deep-sea tier
 	// must sort strictly above container_terminal and cargo_port_small.
+	tiers, err := cp.Tiers()
+	if err != nil {
+		t.Fatalf("Tiers: %v", err)
+	}
 	idx := map[string]int{}
-	for i, tr := range cp.Tiers() {
+	for i, tr := range tiers {
 		idx[tr.Key] = i
 	}
 	if idx["deep_sea_terminal"] <= idx["container_terminal"] {
-		t.Fatalf("deep_sea_terminal must sort strictly above container_terminal (got order %v)", cp.Tiers())
+		t.Fatalf("deep_sea_terminal must sort strictly above container_terminal (got order %v)", tiers)
 	}
 	if idx["container_terminal"] <= idx["cargo_port_small"] {
-		t.Fatalf("container_terminal must sort above cargo_port_small (got order %v)", cp.Tiers())
+		t.Fatalf("container_terminal must sort above cargo_port_small (got order %v)", tiers)
 	}
 
 	// The deep-sea tier is a real capacity step, not a renamed container_terminal.
@@ -310,8 +348,12 @@ func TestImporterExporterFlip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Import: %v", err)
 	}
-	imp := cp.BalanceOfTrade().Imports.TotalTonnes
-	exp := cp.BalanceOfTrade().Exports.TotalTonnes
+	bot, err := cp.BalanceOfTrade()
+	if err != nil {
+		t.Fatalf("BalanceOfTrade: %v", err)
+	}
+	imp := bot.Imports.TotalTonnes
+	exp := bot.Exports.TotalTonnes
 	if imp != impRes.Moved {
 		t.Fatalf("imports total %d != moved %d", imp, impRes.Moved)
 	}
@@ -323,8 +365,12 @@ func TestImporterExporterFlip(t *testing.T) {
 	if _, err := cp.Export("concrete", 25, ModeRoad); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-	imp2 := cp.BalanceOfTrade().Imports.TotalTonnes
-	exp2 := cp.BalanceOfTrade().Exports.TotalTonnes
+	bot2, err := cp.BalanceOfTrade()
+	if err != nil {
+		t.Fatalf("BalanceOfTrade: %v", err)
+	}
+	imp2 := bot2.Imports.TotalTonnes
+	exp2 := bot2.Exports.TotalTonnes
 	if exp2 <= imp2 {
 		t.Fatalf("exports did not cross imports: exports %d vs imports %d", exp2, imp2)
 	}
@@ -345,45 +391,45 @@ func TestNoPermit(t *testing.T) {
 	if !errors.Is(err, &errs.E{Code: ErrContainerPortBuildRejected}) {
 		t.Fatalf("Build without permit authority: want ErrContainerPortBuildRejected, got %v", err)
 	}
-	if cp.ActiveTier() != "" {
-		t.Fatalf("state mutated on a rejected build: active tier %q", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "" {
+		t.Fatalf("state mutated on a rejected build: active tier %q", mustActiveTier(t, cp))
 	}
 
 	// Below the milestone gate.
-	cp.WirePermit(&stubPermit{grant: true})
-	cp.WireDecommission(&stubDecom{})
+	mustWirePermit(t, cp, &stubPermit{grant: true})
+	mustWireDecommission(t, cp, &stubDecom{})
 	err = cp.Build("deep_sea_terminal", 5)
 	if !errors.Is(err, &errs.E{Code: ErrContainerPortBuildRejected}) {
 		t.Fatalf("Build below milestone: want ErrContainerPortBuildRejected, got %v", err)
 	}
-	if cp.ActiveTier() != "" {
-		t.Fatalf("state mutated on a below-milestone build: %q", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "" {
+		t.Fatalf("state mutated on a below-milestone build: %q", mustActiveTier(t, cp))
 	}
 
 	// Permit authority wired but denies.
 	cp2 := loadContainerPortFixture(t, nil)
-	cp2.WirePermit(&stubPermit{grant: false})
-	cp2.WireDecommission(&stubDecom{})
+	mustWirePermit(t, cp2, &stubPermit{grant: false})
+	mustWireDecommission(t, cp2, &stubDecom{})
 	err = cp2.Build("deep_sea_terminal", 9)
 	if !errors.Is(err, &errs.E{Code: ErrContainerPortBuildRejected}) {
 		t.Fatalf("Build with denied permit: want ErrContainerPortBuildRejected, got %v", err)
 	}
-	if cp2.ActiveTier() != "" {
-		t.Fatalf("state mutated on a denied-permit build: %q", cp2.ActiveTier())
+	if mustActiveTier(t, cp2) != "" {
+		t.Fatalf("state mutated on a denied-permit build: %q", mustActiveTier(t, cp2))
 	}
 }
 
 func TestBuildSuccess(t *testing.T) {
 	cp := loadContainerPortFixture(t, nil)
-	cp.WirePermit(&stubPermit{grant: true})
+	mustWirePermit(t, cp, &stubPermit{grant: true})
 	decom := &stubDecom{}
-	cp.WireDecommission(decom)
+	mustWireDecommission(t, cp, decom)
 
 	if err := cp.Build("deep_sea_terminal", 9); err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if cp.ActiveTier() != "deep_sea_terminal" {
-		t.Fatalf("active tier = %q, want deep_sea_terminal", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "deep_sea_terminal" {
+		t.Fatalf("active tier = %q, want deep_sea_terminal", mustActiveTier(t, cp))
 	}
 	decom.mu.Lock()
 	liability := decom.liabilities["deep_sea_terminal"]
@@ -401,8 +447,8 @@ func TestUnknownTier(t *testing.T) {
 	if err := cp.Build("noSuchTier", 9); !errors.Is(err, &errs.E{Code: ErrContainerPortUnknownTier}) {
 		t.Fatalf("Build(unknown tier): want ErrContainerPortUnknownTier, got %v", err)
 	}
-	if cp.ActiveTier() != "" {
-		t.Fatalf("state mutated on an unknown-tier build: %q", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "" {
+		t.Fatalf("state mutated on an unknown-tier build: %q", mustActiveTier(t, cp))
 	}
 }
 
@@ -410,15 +456,15 @@ func TestUnknownTier(t *testing.T) {
 
 func TestBuildRejectsDowngrade(t *testing.T) {
 	cp := loadContainerPortFixture(t, nil)
-	cp.WirePermit(&stubPermit{grant: true})
+	mustWirePermit(t, cp, &stubPermit{grant: true})
 	decom := &stubDecom{}
-	cp.WireDecommission(decom)
+	mustWireDecommission(t, cp, decom)
 
 	if err := cp.Build("deep_sea_terminal", 9); err != nil {
 		t.Fatalf("Build deep_sea_terminal: %v", err)
 	}
-	if cp.ActiveTier() != "deep_sea_terminal" {
-		t.Fatalf("active tier = %q, want deep_sea_terminal", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "deep_sea_terminal" {
+		t.Fatalf("active tier = %q, want deep_sea_terminal", mustActiveTier(t, cp))
 	}
 
 	// A downgrade to container_terminal must be rejected with no state change
@@ -426,8 +472,8 @@ func TestBuildRejectsDowngrade(t *testing.T) {
 	if err := cp.Build("container_terminal", 9); !errors.Is(err, &errs.E{Code: ErrContainerPortBuildRejected}) {
 		t.Fatalf("downgrade build: want ErrContainerPortBuildRejected, got %v", err)
 	}
-	if cp.ActiveTier() != "deep_sea_terminal" {
-		t.Fatalf("active tier downgraded to %q, want deep_sea_terminal", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "deep_sea_terminal" {
+		t.Fatalf("active tier downgraded to %q, want deep_sea_terminal", mustActiveTier(t, cp))
 	}
 
 	// A repeat of the same tier is also rejected (not a strict upgrade).
@@ -447,9 +493,9 @@ func TestBuildRejectsDowngrade(t *testing.T) {
 
 func TestBuildAllowsUpgrade(t *testing.T) {
 	cp := loadContainerPortFixture(t, nil)
-	cp.WirePermit(&stubPermit{grant: true})
+	mustWirePermit(t, cp, &stubPermit{grant: true})
 	decom := &stubDecom{}
-	cp.WireDecommission(decom)
+	mustWireDecommission(t, cp, decom)
 
 	if err := cp.Build("container_terminal", 9); err != nil {
 		t.Fatalf("Build container_terminal: %v", err)
@@ -458,8 +504,8 @@ func TestBuildAllowsUpgrade(t *testing.T) {
 	if err := cp.Build("deep_sea_terminal", 9); err != nil {
 		t.Fatalf("Build deep_sea_terminal (upgrade): %v", err)
 	}
-	if cp.ActiveTier() != "deep_sea_terminal" {
-		t.Fatalf("active tier = %q, want deep_sea_terminal", cp.ActiveTier())
+	if mustActiveTier(t, cp) != "deep_sea_terminal" {
+		t.Fatalf("active tier = %q, want deep_sea_terminal", mustActiveTier(t, cp))
 	}
 	decom.mu.Lock()
 	defer decom.mu.Unlock()
@@ -588,9 +634,9 @@ func TestContainerPortDeterminism(t *testing.T) {
 	run := func() string {
 		cp := loadContainerPortFixture(t, nil)
 		rail := newStubRail()
-		cp.WireRail(rail)
-		cp.WirePermit(&stubPermit{grant: true})
-		cp.WireDecommission(&stubDecom{})
+		_ = cp.WireRail(rail)
+		_ = cp.WirePermit(&stubPermit{grant: true})
+		_ = cp.WireDecommission(&stubDecom{})
 
 		mustAdvance(t, cp.freight)
 		_, _ = cp.Import("concrete", 5, ModeRoad)
@@ -599,11 +645,14 @@ func TestContainerPortDeterminism(t *testing.T) {
 		_, _ = cp.IntermodalTransfer(ModeRail, ModeRoad, 100)
 		_ = cp.Build("deep_sea_terminal", 9)
 
+		tiers, _ := cp.Tiers()
+		activeTier, _ := cp.ActiveTier()
 		phys, _ := cp.PhysicalCapacity()
 		customs, _ := cp.CustomsCapacity()
 		sat, _ := cp.CustomsSaturation()
 		risk, _ := cp.SmugglingRisk()
 		acct, _ := cp.IntermodalAccount()
+		trade, _ := cp.BalanceOfTrade()
 		b, _ := json.Marshal(struct {
 			Tiers      []PortTier
 			ActiveTier string
@@ -614,13 +663,13 @@ func TestContainerPortDeterminism(t *testing.T) {
 			Trade      BalanceOfTrade
 			Account    IntermodalAccount
 		}{
-			Tiers:      cp.Tiers(),
-			ActiveTier: cp.ActiveTier(),
+			Tiers:      tiers,
+			ActiveTier: activeTier,
 			Phys:       phys,
 			Customs:    customs,
 			Saturation: sat,
 			Risk:       risk,
-			Trade:      cp.BalanceOfTrade(),
+			Trade:      trade,
 			Account:    acct,
 		})
 		return string(b)
@@ -656,8 +705,12 @@ func TestTiersDeterministicEqualRanks(t *testing.T) {
 	var want string
 	for i := 0; i < 200; i++ {
 		cp := loadContainerPortFixture(t, mutate)
+		tiers, err := cp.Tiers()
+		if err != nil {
+			t.Fatalf("Tiers: %v", err)
+		}
 		var order []string
-		for _, tr := range cp.Tiers() {
+		for _, tr := range tiers {
 			order = append(order, tr.Key)
 		}
 		got := strings.Join(order, ",")
@@ -680,7 +733,7 @@ func TestTiersDeterministicEqualRanks(t *testing.T) {
 
 func TestContainerPortRace(t *testing.T) {
 	cp := loadContainerPortFixture(t, nil)
-	cp.WireRail(newStubRail())
+	mustWireRail(t, cp, newStubRail())
 	mustAdvance(t, cp.freight)
 
 	var wg sync.WaitGroup
@@ -693,8 +746,8 @@ func TestContainerPortRace(t *testing.T) {
 				_, _ = cp.CustomsCapacity()
 				_, _ = cp.CustomsSaturation()
 				_, _ = cp.SmugglingRisk()
-				_ = cp.Tiers()
-				_ = cp.BalanceOfTrade()
+				_, _ = cp.Tiers()
+				_, _ = cp.BalanceOfTrade()
 				_, _ = cp.IntermodalTransfer(ModeSea, ModeRail, 1)
 			}
 		}()

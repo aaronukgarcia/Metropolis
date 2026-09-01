@@ -38,7 +38,9 @@ func TestIntermodalTonnesConservation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rail.NewRailAPI: %v", err)
 	}
-	cp.WireRail(r)
+	if err := cp.WireRail(r); err != nil {
+		t.Fatalf("WireRail: %v", err)
+	}
 
 	// SEC-125 (ASM-1271): a below-minimum sea leg must be REJECTED with
 	// ErrRailTransferRejected through the wired seam, never silently accepted.
