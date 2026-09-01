@@ -1,0 +1,24 @@
+{
+  "$comment": "feat.deathwave (FEAT-087) death-queue smoothing configuration, extending engine.citizens' Gompertz-Makeham mortality (mortality.go). Every numeric value below is a PLACEHOLDER pending Aaron's balance pass (the standing balance-number regime, Vestige metropolis-balance-number-regime — same convention as data/fertility.json/data/census.json) — tests check direction/shape only (a smooth ~N/month tail, never a 2% one-month population cliff), never a pinned magnitude. Spec refs: §5.2 (cold-pass mortality hazard), §9 (seasonality — minor winter health wave, summer water stress; consumed via engine.season, see meta.emergencySource below), §H (health & deathcare — cemetery/crematorium/hearse throughput). Handoff target: FEAT-088 feat.deathservices drains the realised-death queue (funeral throughput as an INJECTED drain capacity, never derived from this file's budget — ASM-580, ADR two independent knobs). inc1 (this file's initial scope) builds only the smoothing-queue core (AC-1..5, AC-12..19); the weather-emergency suspension (AC-6..8, inc2) and the FEAT-088 handoff/injected-drain surface (AC-9..11, inc3) are later increments and do not yet read monthlyEmergencyBudget below.",
+  "version": 1,
+  "meta": {
+    "module": "engine.citizens",
+    "featureKey": "feat.deathwave",
+    "specRefs": ["§5.2", "§9", "§H"],
+    "emergencySource": "engine.season (SeasonAPI month-index curves — HealthWaveModifier for winter-shaped months, WaterDemandMultiplier for drought-shaped months); consumed by inc2, not yet by inc1.",
+    "handoffTarget": "FEAT-088 feat.deathservices",
+    "balanceRegime": "Every numeric entry below is a disclosed placeholder pending Aaron's balance pass. Units are stated per entry. The only spec'd property is directional: ~N deaths/month smooth, never a 2% population cliff."
+  },
+  "params": {
+    "monthlyDeathBudget": {
+      "value": 25,
+      "unit": "deaths/month",
+      "disclosure": "placeholder — the maximum number of hazard-selected deaths the smoothing queue may realise in one ordinary (non-emergency) month, pending Aaron's balance pass. Must be a positive integer. The remainder of any month's hazard-selected deaths beyond this cap is RETAINED in the queue (delay, never a cull — §14/§19, GR#12), drained by subsequent months' budget."
+    },
+    "monthlyEmergencyBudget": {
+      "value": 0,
+      "unit": "deaths/month (0 = unbounded)",
+      "disclosure": "placeholder, NOT YET CONSUMED (inc2 scope, ASM-579) — reserved field for the declared-weather-emergency throughput override that will suspend monthlyDeathBudget's cap. 0 is a sentinel meaning \"no cap\" (realise the full queue) once inc2 wires the emergency declaration through engine.season; inc1 does not read this field."
+    }
+  }
+}

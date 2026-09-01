@@ -104,4 +104,46 @@ const (
 	// last-resort catch if that convention is ever violated by a future
 	// caller.
 	ErrDuplicateCitizenID = "MET-G010"
+
+	// --- feat.deathwave (FEAT-087) — range G5400-G5409, claimed via
+	// tools/plan/add-error.js claim-range (BUG-273's allocator). A
+	// separate range from engine.citizens' own G000-G099 block because the
+	// death-queue smoothing mechanism is a distinct feature (mkey
+	// feat.deathwave) landing inside this package, not a new engine.citizens
+	// AC.
+
+	// ErrMortalityDataInvalid: data/mortality.json (FEAT-087's death-queue
+	// smoothing budget config) is missing, malformed, or fails its own
+	// schema validation (missing/negative/non-integer budget, missing
+	// unit/disclosure). Rejected at load time rather than silently
+	// defaulting to an unbounded or budget-of-1 substitution — a silent
+	// default would silently re-enable the cohort cliff AC-1 exists to
+	// prevent (GR#15/AC-12).
+	ErrMortalityDataInvalid = "MET-G5400"
+
+	// ErrCitizenAlreadyQueued: DeathQueue.Enqueue was called for a citizen
+	// that already has a pending (not yet realised) death-queue entry. A
+	// queue entry is the single, terminal selection event (AC-3(b)) — a
+	// second Enqueue is rejected rather than silently overwriting the
+	// original selectionMonth, which would corrupt the AC-4 FIFO order and
+	// double-select a single death.
+	ErrCitizenAlreadyQueued = "MET-G5401"
+
+	// ErrCitizenNotQueued: DeathQueue.RealiseByID was called for a citizen
+	// with no pending queue entry. Rejected rather than fabricating a
+	// phantom death record (AC-13/GR#7).
+	ErrCitizenNotQueued = "MET-G5402"
+
+	// ErrDoubleRealisation: DeathQueue.RealiseByID was called for a citizen
+	// whose death has already been realised. Rejected rather than creating
+	// a second, duplicate death record for the same citizen (AC-13/GR#7).
+	ErrDoubleRealisation = "MET-G5403"
+
+	// ErrDeathQueueCopied: a *DeathQueue method was called on a struct copy
+	// of the value NewDeathQueue returned (SEC-020 family, mirroring
+	// CitizensAPI's ErrAPICopied). DeathQueue's mutex is a value type while
+	// its maps/slices are reference types a copy would alias — an
+	// unrejected copy is a second, independent lock racing the original
+	// over the same referents.
+	ErrDeathQueueCopied = "MET-G5404"
 )

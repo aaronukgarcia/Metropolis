@@ -141,6 +141,47 @@
 // across all three id spaces, not a single shared allocator (unifying them
 // is a larger refactor flagged as a follow-up, not done here).
 //
+// # Death-queue smoothing (FEAT-087, mkey feat.deathwave, §5.2/§9/§10/§H)
+//
+// [DeathQueue] (deathwave.go) extends this package's existing
+// Gompertz-Makeham mortality (mortality.go's MortalityHazard/
+// MortalityDeath, §5.2, consumed not re-derived) with a bounded monthly
+// realisation buffer, so a same-birthMonth cohort riding the steep
+// Gompertz slope (§10: "deaths are continuous, so is deathcare demand")
+// cannot produce a one-month population cliff. The mechanism separates
+// SELECTION from REALISATION:
+//
+//   - Enqueue records a hazard-selected death; the citizen is NOT removed
+//     from the living population at selection time.
+//   - Realise releases at most a data-file-sourced monthly budget
+//     (data/mortality.json's monthlyDeathBudget, GR#15 — never a bare Go
+//     literal) of the OLDEST queued entries, FIFO by
+//     (selectionMonth, citizenID) — a deterministic total order that is a
+//     pure function of queue CONTENTS, never of Enqueue call order, so
+//     the realised sequence is byte-identical at any worker count
+//     (M0-ENG §1.2, GR#21).
+//   - The remainder is retained, never dropped: over a full drain, total
+//     realised deaths equals total selected deaths exactly (§14/§19,
+//     GR#12 — smoothing is delay, never a cull or a leak).
+//   - A queued (selected-but-unrealised) citizen still counts in the
+//     living population, still ages, and still contributes to population
+//     aggregates until realised (Aaron's ASM-581 ruling, 2026-08-27) — the
+//     queue entry is that citizen's single, terminal selection event.
+//
+// inc1 (the current state) builds this core only. Two later increments
+// extend it without reshaping DeathQueue's API: inc2 adds a declared
+// weather emergency (consumed through engine.season's SeasonAPI curves,
+// §9) that suspends the smoothing budget for one legitimate non-smoothed
+// major death event, without itself touching the underlying hazard
+// (suspension of throughput, not a second mortality model); inc3 adds the
+// queryable, FIFO-ordered (citizenId, deathMonth, emergencyFlag) handoff
+// stream FEAT-088 (feat.deathservices, §H — cemetery/crematorium/hearse
+// throughput) drains, replacing a fixed test drain rate with FEAT-088's
+// own injected funeral-throughput capacity (realisation becomes
+// min(budget, drainCapacity, queued) — ASM-580: the smoothing budget and
+// the funeral drain rate are two independent knobs, never one derived
+// from the other).
+//
 // # NVMe and paging (A7, §5.3)
 //
 // NVMe SSD is a stated hardware requirement for very large cities: beyond
