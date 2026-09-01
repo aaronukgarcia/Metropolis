@@ -19,6 +19,7 @@ const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const mysql = require('mysql2/promise');
 
+const path = require('node:path');
 const bow = require('./claude-bow.js');
 const { recordDestructiveVerdict, latestDestructiveVerdict, currentSessionIdentity, ensureSchema } = bow;
 
@@ -259,6 +260,12 @@ test('recordDestructiveVerdict(): an explicit opts.recorderCwd overrides the pro
 // isSelfVerdict() — the shared "session AND cwd both match" predicate
 // ---------------------------------------------------------------------------
 
+// Platform-neutral fixtures (the earlier 'E:\git...' literals only
+// normalised on Windows and reddened on the Linux CI node-test runner).
+const _svRoot = path.resolve('/tmp/selfverdict/repo');
+const _svStored = bow.normalizeRecorderCwd(_svRoot);
+const _svSub = bow.normalizeRecorderCwd(path.join(_svRoot, '.claude', 'worktrees', 'attacker'));
+
 test('isSelfVerdict(): true only when BOTH recorder_session and recorder_cwd match', () => {
   const v = { recorder_session: 'sess-A', recorder_cwd: 'e:/git/metropolis' };
   assert.equal(bow.isSelfVerdict(v, 'sess-A', 'E:\\git\\Metropolis'), true);
@@ -295,13 +302,13 @@ test('BUG-340 r3 F1: an unresolved-cwd: marked row IS a self-verdict on session 
     recorder_cwd: bow.UNRESOLVED_CWD_MARKER + 'e:/somewhere/entirely/else',
   };
   assert.equal(
-    bow.isSelfVerdict(v, 'sess-A', 'E:\git\Metropolis'),
+    bow.isSelfVerdict(v, 'sess-A', _svRoot),
     true,
     'an unresolved-cwd row on a matching session must be treated as SELF (fail-closed), regardless of the path it carries'
   );
   // And with a DIFFERENT session it stays not-self (the marker never widens
   // the deny to other sessions).
-  assert.equal(bow.isSelfVerdict(v, 'sess-B', 'E:\git\Metropolis'), false);
+  assert.equal(bow.isSelfVerdict(v, 'sess-B', _svRoot), false);
 });
 
 test('BUG-340 r3 F2: currentRecorderCwd() run from a SUBDIRECTORY stamps the repo toplevel, not the subdir (PROVE-CAN-FAIL: reverting to raw-cwd stamping must redden this)', () => {

@@ -112,7 +112,13 @@ test('BUG-340 r2 F1(c): recorder_cwd normalisation folds slashes, trailing separ
   const base = path.resolve('/tmp/r2fixture/repo');
   const n = bow.normalizeRecorderCwd(base);
   assert.equal(bow.normalizeRecorderCwd(base + path.sep), n, 'trailing separator must normalise away');
-  assert.equal(bow.normalizeRecorderCwd(base.replace(/[\\/]/g, '\\')), n, 'backslash spelling must normalise');
+  if (path.sep === '\\') {
+    // Backslash-as-separator folding is Windows-only semantics; on POSIX a
+    // backslash is a valid filename character, so this assertion is only
+    // meaningful (and only true) where path.sep === '\\'. Without this guard
+    // the case reddens on the Linux CI node-test runner.
+    assert.equal(bow.normalizeRecorderCwd(base.replace(/[\\/]/g, '\\')), n, 'backslash spelling must normalise (Windows separator semantics)');
+  }
   assert.equal(bow.normalizeRecorderCwd(base.replace(/[\\/]/g, '/')), n, 'forward-slash spelling must normalise');
   assert.equal(bow.normalizeRecorderCwd(base.toUpperCase()), n, 'case must fold (core.ignorecase filesystem)');
   assert.match(n, /^[^A-Z]*$/, 'the normalised form is lower-case');
