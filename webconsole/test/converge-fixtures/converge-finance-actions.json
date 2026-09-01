@@ -1,0 +1,57 @@
+{
+  "schema": "converge-finance-actions-v1",
+  "description": "FEAT-1972079936 Phase-3 inc2 canonical action list. The SAME list drives BOTH sides of the finance A/B parity gate: webconsole/test/converge-fixture-emit.mjs (TS engine.ts reducer, via 'place'/'tick' actions) and internal/converge/finance_ab_actions.go (the Go composed engine, via protocol.Command). 'tick' in this file means a LOGICAL checkpoint on the shared canonical clock this fixture defines -- it is NOT either engine's own internal tick counter (the TS reducer's initialState() already sits at tick 1 before this list starts; the Go core.Engine starts at tick 0). Every Sample this file's two consumers emit is tagged with this file's own cumulative 'n' totals (30/60/90), never either engine's raw internal tick, so the two trajectories are comparable without either side leaking its own clock offset into the comparison.",
+  "actions": [
+    {
+      "op": "advance",
+      "n": 30,
+      "sampleAfterTick": 30,
+      "note": "Month 1: zero gameplay activity on both sides -- the segment TestFinanceAB_MonotonicUnderZeroActivity and TestFinanceAB_SignConvention_Holds are evaluated over. financeHook still posts its monthly wage/tax/consumption legs on the Go side even with no player commands (compose.go's financeHook doc comment: 'the net money change is zero... the budget closes'); the TS side still runs its own per-tick fiscal accrual via advance()."
+    },
+    {
+      "op": "zone",
+      "cell": { "x": 5, "y": 5 },
+      "zoneType": "dwelling",
+      "tsSpec": "res_hut",
+      "note": "Residential cell 1. Go: Buy(5,5) then Zone(5,5,'dwelling') via handleGameplay. TS: {type:'place',spec:'res_hut',x:5,y:5}. F5 CORRECTION (2026-09-01, independent round r1): res_hut's catalogue cost is GBP220,000 (data.ts), but placementCost() (data.ts) returns GBP0 for any 'zones'-category spec -- zoning is free (FEAT-1972079882). The ACTUAL funds delta measured for this placement is -GBP600,000, entirely from autoConnect()'s auto-laid road connector tiles (engine.ts) wiring the new cell to the road network, not from the zone spec itself. Never hand-type this figure again -- re-derive it from a live reducer run."
+    },
+    {
+      "op": "zone",
+      "cell": { "x": 6, "y": 5 },
+      "zoneType": "dwelling",
+      "tsSpec": "res_hut",
+      "note": "Residential cell 2, adjacent to cell 1 (no footprint overlap, both 1x1)."
+    },
+    {
+      "op": "zone",
+      "cell": { "x": 10, "y": 5 },
+      "zoneType": "shop",
+      "tsSpec": "com_shop",
+      "note": "Commercial cell. Go: Buy+Zone 'shop'. TS: com_shop, catalogue cost GBP320,000 but placementCost()=GBP0 (zoning is free, same as res_hut above). F5 CORRECTION (2026-09-01, independent round r1): the measured funds deltas for this checkpoint's three zone placements are res_hut -GBP600,000, res_hut -GBP12,000, com_shop -GBP48,000 -- total -GBP660,000, all road-auto-connect spend (autoConnect(), engine.ts), never the catalogue building prices quoted in earlier versions of this note."
+    },
+    {
+      "op": "advance",
+      "n": 30,
+      "sampleAfterTick": 60,
+      "note": "Month 2: the zoned cells accrue their monthly effects (Go: financeHook's wage/tax/consumption legs against a slightly larger zoned city; TS: computeFlows' Council/Business Tax lines pick up the new buildings)."
+    },
+    {
+      "op": "place_utility_ts_only",
+      "cell": { "x": 40, "y": 5 },
+      "tsSpec": "pow_wind",
+      "note": "Power plant (Wind Turbine, GBP4,800,000). TS-ONLY: the protocol vocabulary (internal/protocol/commands.go) has no BuildingType/ZoneType for a power generator -- engine.build's baseline-one catalogue only exposes the eight ZoneType land-use zones (dwelling/shop/office/entertainment/farming/manufacturing/heavy_industry/mining), not a distinct utility-building Kind. This op is SKIPPED by the Go bridge (finance_ab_actions.go documents the skip explicitly) and applied only by the TS emitter. Also note: at BUG-452's realistic-GBP scale, GBP4,800,000 exceeds the GBP1,500,000 opening treasury even before cell 1-3's GBP760,000 spend -- this placement is EXPECTED to be silently rejected by the TS reducer's affordability gate (engine.ts 'place' case, cost>0 && funds<cost), which is itself an honest, load-bearing observation for the AB report: a fresh baseline-one city cannot literally afford a power plant on day one under the current balance numbers."
+    },
+    {
+      "op": "place_utility_ts_only",
+      "cell": { "x": 40, "y": 10 },
+      "tsSpec": "wat_clean",
+      "note": "Water works (GBP4,680,000). Same TS-only / same expected-rejection reasoning as pow_wind above."
+    },
+    {
+      "op": "advance",
+      "n": 30,
+      "sampleAfterTick": 90,
+      "note": "Month 3: final checkpoint, spans the utility-placement attempts above (whether or not they landed)."
+    }
+  ]
+}

@@ -5220,6 +5220,18 @@
       "message": "journal entry (tick {tick}, op {op}) failed against the {domain} domain: {reason}",
       "remedy": "The domain adapter could not apply this journal entry to the live engine (unknown op name, malformed args, or the engine call itself returned an error). Fix the journal or the adapter; a failed op is a fixture-defect, never silently skipped."
     },
+    "MET-H504": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "finance A/B action list decode failed: {path}: {reason}",
+      "remedy": "check the canonical action-list JSON shape against finance_ab_actions.go actionList schema"
+    },
+    "MET-H505": {
+      "severity": "error",
+      "module": "harness.converge",
+      "message": "finance A/B bridge could not apply action {index} op {op}: {reason}",
+      "remedy": "check the op name and args against the actionList schema and the composed engine command vocabulary"
+    },
     "MET-P035": {
       "severity": "error",
       "module": "int.protocol",

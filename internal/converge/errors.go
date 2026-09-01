@@ -32,4 +32,18 @@ const (
 	// file (see finance_domain.go's layering note for why the adapter
 	// itself lives here and not in internal/engine/finance).
 	codeJournalOpFailed = "MET-H503"
+
+	// codeActionListDecodeFailed: FEAT-1972079936 inc2's P2 bridge
+	// (finance_ab_actions.go) could not read or parse the canonical
+	// action-list JSON (converge-finance-actions.json) shared with the
+	// TS-side emitter (webconsole/test/converge-fixture-emit.mjs).
+	codeActionListDecodeFailed = "MET-H504"
+
+	// codeActionOpFailed: the P2 bridge could not apply one action-list
+	// entry against the composed engine (unrecognised op, malformed
+	// args, or the composed engine's HandleCommand rejected the
+	// translated protocol.Command). Never silently skipped — a
+	// deliberately-uncovered op (place_utility_ts_only) is recorded as a
+	// SkippedOp instead, not routed through this code.
+	codeActionOpFailed = "MET-H505"
 )
