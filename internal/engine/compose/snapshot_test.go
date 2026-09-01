@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
@@ -513,5 +514,277 @@ func TestSplitJournalAtTick_ProveCanFail_JournalShorterThanSnapshotErrors(t *tes
 	}
 	if !errors.Is(err, &errs.E{Code: ErrSnapshotTailShort}) {
 		t.Fatalf("err = %v, want to wrap ErrSnapshotTailShort", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// BUG-480 — walk-back past a tail-inconsistent newest snapshot, and the
+// journal-dirty gate that stops MaybeSnapshotEvery from manufacturing one
+// during live operation.
+// ---------------------------------------------------------------------------
+
+// failingAppendStore fails the Nth AppendJournal call (1-based) with a
+// synthetic error — the same BUG-472 swallow-modelling shape
+// cmd/metroserve/attack_inc3b_test.go's attackFailingAppendStore uses, kept
+// as its own small copy here so compose's own tests do not need to import
+// cmd/metroserve (which would be a layering inversion — internal/ui ->
+// internal/engine is banned by GR#20, and cmd -> internal is the wrong
+// direction to reverse). Single-goroutine use only (every BUG-480 test
+// below drives ticks synchronously via advanceViaCommand), so calls is a
+// plain int64, not atomic.
+type failingAppendStore struct {
+	persist.Store
+	calls    int64
+	failCall int64
+}
+
+func (s *failingAppendStore) AppendJournal(ctx context.Context, city persist.CityKey, rec []byte) error {
+	s.calls++
+	if s.calls == s.failCall {
+		return errors.New("test: synthetic durable-append failure")
+	}
+	return s.Store.AppendJournal(ctx, city, rec)
+}
+
+// TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest is
+// BUG-480 deliverable (a)'s headline proof: given a newest snapshot whose
+// recorded tick cannot be reconciled with the durable journal (the class
+// BUG-472's swallowed-append policy produces), restore WALKS BACK to the
+// next-older, still-consistent snapshot instead of bricking forever with
+// ErrSnapshotTailShort.
+//
+// The inconsistent snapshot #2 is manufactured by calling
+// buildSnapshotBytes/PutSnapshot DIRECTLY, bypassing MaybeSnapshotEvery's
+// own dirty gate (deliverable (b), tested separately below) — this is
+// deliberate: deliverable (b) closes the specific LIVE, same-process race
+// that would otherwise let a dirty journaler write exactly this kind of bad
+// snapshot, so reproducing the scenario through that same live path can no
+// longer happen (that IS deliverable (b) working). Bypassing the gate here
+// models every OTHER way an inconsistent snapshot can still reach a store —
+// data written by a pre-BUG-480 binary, a future out-of-band/administrative
+// snapshot trigger, or simply a direct probe of walk-back's own contract —
+// and proves deliverable (a) is correct in complete isolation from (b).
+func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *testing.T) {
+	ctx := context.Background()
+	const cadence = int64(4)
+	mem := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "walkback-480"}
+	// advanceViaCommand sends ONE AdvanceTicks{N:n} command per call, so
+	// each call below is exactly one AppendJournal attempt regardless of
+	// how many ticks n itself advances. failCall targets the SECOND call —
+	// the very first tick advance AFTER the good snapshot at tick=cadence
+	// — so the durable journal is short by exactly that one frame from
+	// that point on, while comp1's own live engine (BUG-472: the command
+	// stays ACCEPTED regardless of the journal-write failure) keeps
+	// advancing normally.
+	failing := &failingAppendStore{Store: mem, failCall: 2}
+
+	e1, comp1 := buildPersistedComposition(t, failing, city)
+	advanceViaCommand(t, e1, cadence) // call #1 (ok): tick=4.
+	if _, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, city, cadence); err != nil || !ok {
+		t.Fatalf("snapshot #1 (good, tick=%d): ok=%v err=%v", cadence, ok, err)
+	}
+
+	advanceViaCommand(t, e1, 1)         // call #2 -- FAILS (swallowed), tick=5 live, journal stuck at 4.
+	advanceViaCommand(t, e1, cadence-1) // call #3 (ok): tick=8 live, journal reconstructs only to 7.
+	liveTick, err := e1.Clock()
+	if err != nil {
+		t.Fatalf("Clock (live): %v", err)
+	}
+	if liveTick.Tick() != 2*cadence {
+		t.Fatalf("precondition: live tick = %d, want %d", liveTick.Tick(), 2*cadence)
+	}
+
+	// Manufacture the inconsistent newest snapshot directly (see doc
+	// comment above): it records comp1's CURRENT live tick (8), which the
+	// durable journal (short by the swallowed frame) can never reach.
+	badData, err := comp1.buildSnapshotBytes()
+	if err != nil {
+		t.Fatalf("buildSnapshotBytes: %v", err)
+	}
+	if _, err := failing.PutSnapshot(ctx, city, badData); err != nil {
+		t.Fatalf("PutSnapshot (manufactured bad snapshot): %v", err)
+	}
+
+	ids, err := mem.ListSnapshots(ctx, city)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("precondition: %d snapshots, want exactly 2 (one good, one manufactured-inconsistent)", len(ids))
+	}
+
+	// The honest ground truth: replaying ONLY the commands that actually
+	// persisted (the swallowed one is genuinely, permanently lost —
+	// BUG-472's accepted policy, untouched by this fix) from genesis. Same
+	// world seed as comp1 (roundTripSeed, via buildPersistedComposition) —
+	// Wire's own construction (seedCitizenCount etc.) is seed-derived and
+	// genesis replay never goes through Load, so a mismatched seed here
+	// would diverge the digest for a reason that has nothing to do with
+	// the walk-back logic this test is actually proving.
+	eGenesis := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
+	compGenesis, err := Wire(eGenesis, nil)
+	if err != nil {
+		t.Fatalf("Wire (genesis reference): %v", err)
+	}
+	persistedCmds, err := RestoreCommands(ctx, mem, city)
+	if err != nil {
+		t.Fatalf("RestoreCommands: %v", err)
+	}
+	if err := replayCommands(eGenesis, persistedCmds); err != nil {
+		t.Fatalf("replayCommands (genesis reference): %v", err)
+	}
+	refClock, err := eGenesis.Clock()
+	if err != nil {
+		t.Fatalf("Clock (genesis reference): %v", err)
+	}
+	if refClock.Tick() != 2*cadence-1 {
+		t.Fatalf("precondition: genesis-replay reference tick = %d, want %d (one tick short of live, the swallowed frame)", refClock.Tick(), 2*cadence-1)
+	}
+	refDigest := compGenesis.StateDigest()
+
+	// Restore: RestoreLatestSnapshotOrGenesis MUST walk back past snapshot
+	// #2 (tail-inconsistent) to snapshot #1, reproducing EXACTLY the
+	// genesis-replay-of-the-persisted-journal reference above — never the
+	// live tick/digest, which included the lost command's effect and can
+	// never be honestly reconstructed from what actually persisted.
+	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
+	compR, err := Wire(eR, nil)
+	if err != nil {
+		t.Fatalf("Wire (restore target): %v", err)
+	}
+	usedSnapshot, tick, err := RestoreLatestSnapshotOrGenesis(ctx, eR, compR, mem, city)
+	if err != nil {
+		t.Fatalf("RestoreLatestSnapshotOrGenesis: walk-back should have succeeded via the older snapshot, got error: %v", err)
+	}
+	if !usedSnapshot {
+		t.Fatal("usedSnapshot = false, want true (snapshot #1 is a valid walk-back target)")
+	}
+	if tick != refClock.Tick() {
+		t.Fatalf("restored tick = %d, want %d (genesis-replay reference)", tick, refClock.Tick())
+	}
+	if compR.StateDigest() != refDigest {
+		t.Fatalf("restored digest = %x, want %x (genesis-replay-of-persisted-journal reference)", compR.StateDigest(), refDigest)
+	}
+
+	// The skip must be LOUD (ErrSnapshotSkipped, GR#7/GR#1) and name the
+	// skipped candidate's own tick (8, the manufactured snapshot's
+	// recorded tick — NOT the tick it eventually restored to).
+	foundSkip := false
+	for _, entry := range errs.Recent() {
+		if entry.Code != ErrSnapshotSkipped {
+			continue
+		}
+		if cityCtx, _ := entry.Ctx["city"].(string); !strings.Contains(cityCtx, "walkback-480") {
+			continue
+		}
+		if tickCtx, ok := entry.Ctx["tick"].(int64); ok && tickCtx == 2*cadence {
+			foundSkip = true
+		}
+	}
+	if !foundSkip {
+		t.Fatal("no ErrSnapshotSkipped entry found via errs.Recent() naming this city and the skipped snapshot's tick (8) — the walk-back was not logged loudly")
+	}
+
+	// Journal-never-grows: walk-back's validation attempts run entirely on
+	// a throwaway engine/composition and never touch the durable store, so
+	// the journal frame count must be unchanged by the restore above.
+	framesAfter, err := mem.ReadJournal(ctx, city)
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	if len(framesAfter) != len(persistedCmds) {
+		t.Fatalf("journal grew during restore: %d frames, want %d (unchanged)", len(framesAfter), len(persistedCmds))
+	}
+}
+
+// TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend is BUG-480
+// deliverable (b)'s direct proof: once persistCommandJournaler observes a
+// failed durable AppendJournal, MaybeSnapshotEvery refuses every subsequent
+// cadence-boundary snapshot for the REST OF THIS PROCESS (dirty never
+// clears — see persistjournal.go's dirty field doc comment) — logging
+// ErrSnapshotRefusedDirty exactly ONCE, not once per boundary — so no
+// FUTURE snapshot can ever repeat the tail-inconsistency class the previous
+// test walks back from. A restart (a fresh journaler/composition) then
+// restores cleanly from the last known-good snapshot plus its consistent
+// tail — no walk-back needed, because no bad snapshot was ever produced in
+// the first place.
+func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
+	ctx := context.Background()
+	const cadence = int64(4)
+	mem := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "dirty-gate-480"}
+	failing := &failingAppendStore{Store: mem, failCall: 2}
+
+	e1, comp1 := buildPersistedComposition(t, failing, city)
+	advanceViaCommand(t, e1, cadence) // call #1 (ok): tick=4.
+	if _, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, city, cadence); err != nil || !ok {
+		t.Fatalf("snapshot #1 (good): ok=%v err=%v", ok, err)
+	}
+
+	// call #2 -- FAILS (swallowed), latches dirty. Advances a full cadence
+	// (rather than a single tick, as the walk-back test above does) purely
+	// so every later boundary below still lands on an exact multiple of
+	// cadence — this test's assertions care about the dirty gate holding
+	// across boundaries, not about exercising a mid-cadence swallow.
+	advanceViaCommand(t, e1, cadence) // tick=8 live, journal stuck at 4.
+
+	// THREE more cadence boundaries, each of which would (pre-BUG-480) have
+	// written a new snapshot. Every single one must be refused.
+	for i := 0; i < 3; i++ {
+		advanceViaCommand(t, e1, cadence)
+		id, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, city, cadence)
+		if err != nil {
+			t.Fatalf("MaybeSnapshotEvery (dirty, boundary %d): unexpected error %v (refusal must be ok=false,err=nil, not a fault)", i, err)
+		}
+		if ok {
+			t.Fatalf("MaybeSnapshotEvery (dirty, boundary %d): ok=true, id=%q -- wrote a snapshot while dirty", i, id)
+		}
+	}
+
+	ids, err := mem.ListSnapshots(ctx, city)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("store holds %d snapshots after the dirty journaler crossed 3 more cadence boundaries, want exactly 1 (only the pre-swallow snapshot) -- the dirty gate did not hold", len(ids))
+	}
+
+	// Exactly ONE ErrSnapshotRefusedDirty entry for this city, despite 3
+	// refused boundaries -- the "log once" requirement.
+	refusalCount := 0
+	for _, entry := range errs.Recent() {
+		if entry.Code != ErrSnapshotRefusedDirty {
+			continue
+		}
+		if cityCtx, _ := entry.Ctx["city"].(string); strings.Contains(cityCtx, "dirty-gate-480") {
+			refusalCount++
+		}
+	}
+	if refusalCount != 1 {
+		t.Fatalf("ErrSnapshotRefusedDirty logged %d times for this city, want exactly 1 (log-once, not per boundary) -- note errs.Recent()'s ring buffer coalesces IDENTICAL repeats into one slot with a Repeat count, so this counts DISTINCT entries, not occurrences", refusalCount)
+	}
+
+	// Restart: a FRESH journaler (dirty=false again) restores from the
+	// still-only snapshot plus its consistent tail -- no walk-back needed.
+	eR := core.NewEngine()
+	compR, err := Wire(eR, nil)
+	if err != nil {
+		t.Fatalf("Wire (restore target): %v", err)
+	}
+	usedSnapshot, tick, err := RestoreLatestSnapshotOrGenesis(ctx, eR, compR, mem, city)
+	if err != nil {
+		t.Fatalf("RestoreLatestSnapshotOrGenesis: %v", err)
+	}
+	if !usedSnapshot {
+		t.Fatal("usedSnapshot = false, want true")
+	}
+	// journal-reconstructable max = cadence (snapshot) + 3*cadence (three
+	// clean boundary crossings after the swallow) = 4*cadence = one
+	// cadence short of live (which advanced 1+3*cadence beyond the
+	// snapshot, i.e. one tick further, from the swallowed command).
+	wantTick := cadence + 3*cadence
+	if tick != wantTick {
+		t.Fatalf("restored tick = %d, want %d", tick, wantTick)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -131,6 +132,30 @@ func (c *Composition) MaybeSnapshotEvery(ctx context.Context, store persist.Stor
 	if !ShouldSnapshotEvery(tick, cadence) {
 		return "", false, nil
 	}
+	// BUG-480 deliverable (b) — JOURNAL-DIRTY GATE: once the composition's
+	// durable journaler has recorded ANY failed AppendJournal (BUG-472's
+	// swallow class -- persistCommandJournaler.dirty, persistjournal.go), a
+	// snapshot taken from here on can never be proven tail-consistent with
+	// the journal (its recorded tick could again run ahead of what the
+	// journal's AdvanceTicks frames sum to, exactly the class
+	// RestoreLatestSnapshotOrGenesis's walk-back exists to route around --
+	// refusing the write here means there is one fewer inconsistent
+	// snapshot for a future restore to have to skip). This is a REFUSAL,
+	// not a fault: ok=false, err=nil, mirroring the cadence<=0 "off" no-op
+	// above -- a dirty journaler is a documented, permanent operating mode
+	// for this process, not a new failure each boundary. The registry
+	// error is logged the FIRST time only (dirtyJournaler.MarkDirtyLoggedOnce),
+	// never once per cadence boundary, so an ongoing dirty condition never
+	// floods the log.
+	if dj, isDirty := c.Journaler().(dirtyJournaler); isDirty && dj.Dirty() {
+		if dj.MarkDirtyLoggedOnce() {
+			_ = errs.New(ErrSnapshotRefusedDirty, c.state.cid, map[string]any{
+				"city": city.TenantID + "/" + city.CityID,
+				"tick": tick,
+			})
+		}
+		return "", false, nil
+	}
 	data, err := c.buildSnapshotBytes()
 	if err != nil {
 		return "", false, err
@@ -154,6 +179,22 @@ func (c *Composition) MaybeSnapshotEvery(ctx context.Context, store persist.Stor
 		return id, true, err
 	}
 	return id, true, nil
+}
+
+// dirtyJournaler is the narrow capability persistCommandJournaler exposes
+// (persistjournal.go) that MaybeSnapshotEvery's dirty gate needs: whether a
+// durable append has ever failed, and a one-shot latch so the refusal is
+// logged exactly once. Composition.Journaler() returns the plain
+// core.CommandJournaler interface (a single ObserveCommand method), so this
+// local interface plus a type assertion is how snapshot.go reaches the
+// concrete adapter's extra state without compose.go's journaler field ever
+// needing a wider public type -- every non-persisted journaler (the default
+// replay.Recorder, or a test spy) simply fails the assertion and the dirty
+// gate is a no-op, exactly matching pre-BUG-480 behaviour when persistence
+// is off.
+type dirtyJournaler interface {
+	Dirty() bool
+	MarkDirtyLoggedOnce() bool
 }
 
 // pruneSnapshots deletes the oldest snapshots for city beyond
@@ -239,14 +280,25 @@ func (c *Composition) restoreFromSnapshotBytes(data []byte) (int64, error) {
 // LoadAt itself carries, since a snapshot restore ends in a LoadAt call) —
 // from store's durable records for city:
 //
-//   - If store holds at least one snapshot, restore is
-//     "latest snapshot + replay the journal tail" (this increment's payoff):
-//     GetSnapshot the newest one, LoadAt it (state + clock, tick-continuous),
-//     then replay only the journal commands recorded strictly AFTER that
-//     snapshot's tick (splitJournalAtTick below).
-//   - If store holds no snapshot yet, restore falls back to the existing
-//     genesis-replay path: every durably journaled command replayed from
-//     tick 0 (RestoreCommands, inc2).
+//   - If store holds at least one snapshot, restore WALKS BACK from the
+//     newest (BUG-480): GetSnapshot it, LoadAt it (state + clock,
+//     tick-continuous), then replay only the journal commands recorded
+//     strictly AFTER that snapshot's tick (splitJournalAtTick below). If
+//     that candidate's tail cannot be reconciled with the journal (a
+//     TAIL-INCONSISTENCY — ErrSnapshotTailShort or
+//     ErrSnapshotTailReplayRejected, the class BUG-472's swallowed-append
+//     policy can produce when the swallow lands at or before a cadence
+//     boundary), the candidate is skipped (logged via ErrSnapshotSkipped)
+//     and the NEXT-older snapshot is tried, and so on. A CORRUPT snapshot
+//     payload (ErrSnapshotUnpackFailed — a decode/unzip failure, i.e. real
+//     data corruption rather than a tail mismatch) or a Store-level read
+//     failure is NEVER walked past — BUG-480 explicitly forbids widening
+//     the fallback to hide corruption, so either fails the whole restore
+//     closed immediately, exactly as before this increment.
+//   - If store holds no snapshot yet, or every snapshot's tail proved
+//     inconsistent, restore falls back to the pre-existing genesis-replay
+//     path: every durably journaled command replayed from tick 0
+//     (RestoreCommands, inc2).
 //
 // Returns whether a snapshot was used (false == genesis fallback) and the
 // final restored tick (read back from the engine's own clock after replay,
@@ -263,39 +315,153 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 	}
 
 	if len(ids) == 0 {
-		if err := replayCommands(e, cmds); err != nil {
+		return restoreGenesis(e, c, cmds)
+	}
+
+	// Walk back newest -> oldest (ListSnapshots is documented oldest-first,
+	// so this iterates the slice in reverse). Each candidate is validated
+	// on a THROWAWAY engine/composition first (tryRestoreCandidate) — never
+	// on the caller's real e/c — because core.Engine seals permanently the
+	// first time an AdvanceTicks command is accepted (see core.Engine's
+	// sealed field), so a partially-replayed tail on the real engine could
+	// never be retried against an older snapshot. Only once a candidate is
+	// PROVEN clean is it (deterministically, GR#21) replayed for real onto
+	// e/c — exactly once, so the real engine is never touched by a
+	// candidate that turns out to be skipped.
+	for i := len(ids) - 1; i >= 0; i-- {
+		id := ids[i]
+		data, getErr := store.GetSnapshot(ctx, city, id)
+		if getErr != nil {
+			// A Store-level read failure is not a tail-inconsistency signal
+			// — never walked past (see doc comment above).
+			return false, 0, getErr
+		}
+		_, tail, ok, valErr := tryRestoreCandidate(data, cmds, city, c.state.cid)
+		if valErr != nil {
+			// Corrupt/undecodable snapshot payload — fail closed, no
+			// further walk-back (BUG-480: never widen the fallback to hide
+			// real corruption).
+			return false, 0, valErr
+		}
+		if !ok {
+			// Tail-inconsistency — already logged inside
+			// tryRestoreCandidate via ErrSnapshotSkipped. Try the
+			// next-older snapshot.
+			continue
+		}
+		// Candidate validated clean: apply it for real, exactly once, onto
+		// the caller's own e/c (never touched until this point).
+		if _, err := c.restoreFromSnapshotBytes(data); err != nil {
+			return false, 0, err
+		}
+		if err := replayCommands(e, tail); err != nil {
 			return false, 0, err
 		}
 		finalTick, err := engineTick(e, c.state.cid)
 		if err != nil {
 			return false, 0, err
 		}
-		return false, finalTick, nil
+		return true, finalTick, nil
 	}
 
-	// ListSnapshots is documented to return IDs oldest-first (deterministic
-	// ascending order) — the last element is the newest snapshot.
-	latest := ids[len(ids)-1]
-	data, err := store.GetSnapshot(ctx, city, latest)
-	if err != nil {
-		return false, 0, err
-	}
-	snapTick, err := c.restoreFromSnapshotBytes(data)
-	if err != nil {
-		return false, 0, err
-	}
-	tail, err := splitJournalAtTick(cmds, snapTick, city, c.state.cid)
-	if err != nil {
-		return false, 0, err
-	}
-	if err := replayCommands(e, tail); err != nil {
+	// Every snapshot's tail proved inconsistent with the journal: fall back
+	// to a full genesis replay, which never depends on a snapshot at all.
+	return restoreGenesis(e, c, cmds)
+}
+
+// restoreGenesis replays cmds (the full durable journal) onto e/c from tick
+// 0 — the pre-inc3 always-correct fallback, reached both when no snapshot
+// has ever been taken and when every existing snapshot's tail proved
+// inconsistent with the journal (BUG-480's walk-back exhaustion case).
+func restoreGenesis(e *core.Engine, c *Composition, cmds []protocol.Command) (usedSnapshot bool, tick int64, err error) {
+	if err := replayCommands(e, cmds); err != nil {
 		return false, 0, err
 	}
 	finalTick, err := engineTick(e, c.state.cid)
 	if err != nil {
 		return false, 0, err
 	}
-	return true, finalTick, nil
+	return false, finalTick, nil
+}
+
+// tryRestoreCandidate validates whether a snapshot payload's tail
+// reconciles with cmds WITHOUT ever touching the caller's real
+// engine/composition: it restores into a brand-new throwaway engine (a bare
+// core.NewEngine wired with Wire(e, nil) — persistence is irrelevant to
+// validation, since Load/LoadAt fully overwrite whatever the throwaway
+// engine's default construction left in place, so its seed/pool options
+// never affect the result). This is what lets BUG-480's walk-back retry
+// cheaply: a candidate that fails here never seals or partially mutates the
+// REAL engine RestoreLatestSnapshotOrGenesis was handed.
+//
+// Returns ok=true with the resolved snapshot tick + tail commands when the
+// candidate reconciles — the caller then replays this SAME data
+// deterministically (GR#21) onto the real e/c. ok=false with err=nil means
+// a TAIL-inconsistency (ErrSnapshotTailShort from splitJournalAtTick, or
+// ErrSnapshotTailReplayRejected from replayCommands) — logged here via
+// ErrSnapshotSkipped and safe to walk back past. A non-nil err is a
+// corrupt-frame failure (ErrSnapshotUnpackFailed) — BUG-480 requires this
+// to fail the whole restore closed immediately, never walked past.
+func tryRestoreCandidate(data []byte, cmds []protocol.Command, city persist.CityKey, correlationID string) (snapTick int64, tail []protocol.Command, ok bool, err error) {
+	valE := core.NewEngine()
+	valC, wireErr := Wire(valE, nil)
+	if wireErr != nil {
+		return 0, nil, false, errs.Wrap(ErrModuleFailed, correlationID, wireErr, map[string]any{"module": "snapshot", "step": "validate-wire"})
+	}
+	snapTick, unpackErr := valC.restoreFromSnapshotBytes(data)
+	if unpackErr != nil {
+		return 0, nil, false, unpackErr // corrupt snapshot payload — fail closed, no walk-back.
+	}
+	t, splitErr := splitJournalAtTick(cmds, snapTick, city, correlationID)
+	if splitErr != nil {
+		// isTailInconsistency is a defensive double-check, not the primary
+		// dispatch: splitJournalAtTick only ever returns
+		// ErrSnapshotTailShort today, but skip-vs-fail-closed is exactly
+		// the distinction BUG-480 requires never drift silently, so any
+		// error this function does NOT recognise as a tail-inconsistency
+		// fails the whole restore closed rather than being walked past.
+		if !isTailInconsistency(splitErr) {
+			return 0, nil, false, splitErr
+		}
+		logSnapshotSkip(city, snapTick, splitErr, correlationID)
+		return 0, nil, false, nil
+	}
+	if replayErr := replayCommands(valE, t); replayErr != nil {
+		if !isTailInconsistency(replayErr) {
+			return 0, nil, false, replayErr
+		}
+		logSnapshotSkip(city, snapTick, replayErr, correlationID)
+		return 0, nil, false, nil
+	}
+	return snapTick, t, true, nil
+}
+
+// logSnapshotSkip records ErrSnapshotSkipped (GR#7, registry-sourced, GR#1
+// auto-logged by errs.New) for one walked-past snapshot candidate — loud
+// and specific about which tick was skipped and why, per BUG-480's
+// deliverable (a).
+func logSnapshotSkip(city persist.CityKey, snapTick int64, cause error, correlationID string) {
+	_ = errs.New(ErrSnapshotSkipped, correlationID, map[string]any{
+		"city":  city.TenantID + "/" + city.CityID,
+		"tick":  snapTick,
+		"cause": cause.Error(),
+	})
+}
+
+// isTailInconsistency reports whether err is one of the two
+// tail-inconsistency codes (ErrSnapshotTailShort / ErrSnapshotTailReplayRejected)
+// BUG-480's walk-back is allowed to skip past, as opposed to a genuine
+// corrupt-frame failure (ErrSnapshotUnpackFailed) which must fail closed.
+// Retained as a documented, testable predicate even though
+// tryRestoreCandidate's own call sites already know statically which code
+// each failure carries — a future caller reasoning about an *errs.E value
+// from elsewhere can use this instead of re-deriving the code list.
+func isTailInconsistency(err error) bool {
+	var e *errs.E
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.Code == ErrSnapshotTailShort || e.Code == ErrSnapshotTailReplayRejected
 }
 
 // engineTick is a tiny helper so RestoreLatestSnapshotOrGenesis's two

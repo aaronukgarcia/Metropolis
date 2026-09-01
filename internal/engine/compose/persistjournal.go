@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
 	"github.com/aaronukgarcia/Metropolis/internal/persist"
@@ -43,11 +44,15 @@ import (
 // ever widened, any non-command Observe* would delegate straight to inner
 // (they are not part of the command journal).
 //
-// No mutex, by construction (GR#21): the adapter holds only immutable
-// fields set at construction and never mutates its own state, so it is an
-// astgate SEC-020 non-candidate (zero copyguard findings expected). All
-// concurrency safety lives in the wrapped Store (persist.MemStore/DiskStore
-// each guard their own state) and the wrapped Recorder (its own mutex).
+// No mutex (GR#21): every field set at construction (inner/store/city/ctx)
+// stays immutable for the adapter's life; concurrency safety for THOSE lives
+// in the wrapped Store (persist.MemStore/DiskStore each guard their own
+// state) and the wrapped Recorder (its own mutex). BUG-480 (deliverable b)
+// added the ONE piece of adapter-owned mutable state, the dirty/dirtyLogged
+// latches — both plain atomic.Bool, set-once-ever (dirty) or
+// CompareAndSwap-raced (dirtyLogged), so no lock is needed for either and
+// the astgate SEC-020 copyguard scan still finds no non-atomic mutable
+// field shared without a mutex.
 type persistCommandJournaler struct {
 	inner core.CommandJournaler
 	store persist.Store
@@ -58,6 +63,48 @@ type persistCommandJournaler struct {
 	// construction to context.Background(); a later increment can widen the
 	// constructor to accept a caller ctx without changing this seam's shape.
 	ctx context.Context
+
+	// dirty latches true the FIRST time store.AppendJournal fails (BUG-472's
+	// swallow class: engine.core's journalAccepted logs MET-E021 and keeps
+	// the command accepted regardless of what ObserveCommand returns here,
+	// so the command's state effect is live but its journal frame is
+	// missing). It NEVER clears for the process lifetime (BUG-480's
+	// deliverable (b) design ruling): a snapshot taken after a lost command
+	// can never be proven tail-consistent with the journal again — the
+	// journal's own AdvanceTicks total is now permanently short of what the
+	// live engine's tick actually is, by exactly the ticks (if any) the
+	// dropped command would have advanced, and there is no way for this
+	// adapter to know in general whether a LATER successful append somehow
+	// makes up the shortfall (it cannot, since the shortfall is a specific
+	// missing frame, not a running balance). The only genuinely safe
+	// "re-sync" is a fresh, from-genesis journal for this city, which is an
+	// operator action (or a process restart against a store that has since
+	// been repaired), not something this adapter can detect or perform
+	// itself — so simplest-and-honest is never-clears-in-process rather than
+	// inventing a heuristic recovery condition. snapshot.go's
+	// MaybeSnapshotEvery consults Dirty() via this exact reasoning to refuse
+	// writing a new (inevitably still-inconsistent) snapshot while dirty.
+	dirty atomic.Bool
+
+	// dirtyLogged guards BUG-480's "log once, not every tick" requirement:
+	// the first caller to observe dirty via MarkDirtyLoggedOnce logs
+	// ErrSnapshotRefusedDirty; every later cadence boundary while still
+	// dirty is a silent, cheap no-op instead of a per-tick log flood.
+	dirtyLogged atomic.Bool
+}
+
+// Dirty reports whether store.AppendJournal has EVER failed for this
+// journaler (see the dirty field's doc comment for why this never clears
+// for the process lifetime).
+func (p *persistCommandJournaler) Dirty() bool { return p.dirty.Load() }
+
+// MarkDirtyLoggedOnce reports true exactly once — for whichever caller
+// first observes dirty==true — and false for every call after that,
+// including calls that race the first one (CompareAndSwap makes exactly one
+// winner). Callers use this to log a refusal exactly once rather than at
+// every subsequent cadence boundary.
+func (p *persistCommandJournaler) MarkDirtyLoggedOnce() bool {
+	return p.dirtyLogged.CompareAndSwap(false, true)
 }
 
 // compile-time proof the adapter satisfies the seam exactly.
@@ -99,6 +146,12 @@ func (p *persistCommandJournaler) ObserveCommand(cmd protocol.Command) error {
 		return err
 	}
 	if err := p.store.AppendJournal(p.ctx, p.city, data); err != nil {
+		// BUG-480 deliverable (b): latch dirty BEFORE returning, so any
+		// caller observing this failure (including engine.core's own
+		// journalAccepted, which swallows this exact error per BUG-472's
+		// policy — untouched here) has already made the dirty state visible
+		// to snapshot.go's MaybeSnapshotEvery by the time this call returns.
+		p.dirty.Store(true)
 		return err
 	}
 	return nil

@@ -120,4 +120,27 @@ const (
 	// state diverged from what produced the journal, or the command
 	// stream is corrupt.
 	ErrSnapshotTailReplayRejected = "MET-G811"
+
+	// ErrSnapshotSkipped (BUG-480): during snapshot-aware restore's
+	// walk-back, a candidate snapshot's tail could not be reconciled with
+	// the durable journal (ErrSnapshotTailShort or
+	// ErrSnapshotTailReplayRejected -- a tail-INCONSISTENCY, never a
+	// corrupt/undecodable snapshot payload, which stays fail-closed and is
+	// never walked past) and was skipped in favour of the next-older
+	// snapshot, or genesis if none remain. Raised once per skipped
+	// candidate so an operator can see exactly which snapshot(s) were
+	// bypassed and why (ctx: city, tick, cause).
+	ErrSnapshotSkipped = "MET-G812"
+
+	// ErrSnapshotRefusedDirty (BUG-480/BUG-472): MaybeSnapshotEvery refused
+	// to write a durable snapshot because the composition's
+	// persistCommandJournaler has recorded at least one failed durable
+	// AppendJournal this process lifetime (the "dirty" latch --
+	// persistjournal.go) -- a snapshot taken after a lost command can never
+	// be proven tail-consistent, so writing one would just manufacture a
+	// future ErrSnapshotSkipped/ErrSnapshotTailShort. Logged exactly ONCE
+	// per dirty journaler (persistCommandJournaler.MarkDirtyLoggedOnce),
+	// never once per cadence boundary, so an ongoing dirty condition does
+	// not flood the log.
+	ErrSnapshotRefusedDirty = "MET-G813"
 )

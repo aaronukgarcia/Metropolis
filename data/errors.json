@@ -2377,6 +2377,18 @@
       "message": "journal-tail replay after snapshot restore rejected command {kind} ({correlationId})",
       "remedy": "A command in the durable journal tail (the commands after the latest snapshot's recorded tick) was rejected by the freshly LoadAt'd engine during snapshot-aware restore. Since the same command was accepted originally, this indicates the loaded snapshot state diverged from what produced the journal, or the command stream is corrupt -- fall back to genesis replay (RestoreCommands + full replay) and file a determinism bug (GR#21)."
     },
+    "MET-G812": {
+      "severity": "warn",
+      "module": "feat.compositionroot",
+      "message": "compose: snapshot skipped during restore walk-back for city {city} (tick {tick}): tail inconsistent -- {cause}",
+      "remedy": "BUG-480: a swallowed durable journal append (BUG-472's fail-loud-but-continue policy) can leave a snapshot's recorded tick ahead of what the journal's AdvanceTicks frames sum to, which RestoreLatestSnapshotOrGenesis detects and walks back from -- this snapshot is skipped in favour of the next-older one (or genesis if none remain). No data was lost by this skip: the skipped snapshot is simply not used as a restore base. If every snapshot for this city is being skipped, investigate the underlying durable-append failures (MET-E021 entries) for this city."
+    },
+    "MET-G813": {
+      "severity": "warn",
+      "module": "feat.compositionroot",
+      "message": "compose: snapshot write refused for city {city} (tick {tick}): the durable journaler has recorded at least one failed append this process lifetime, so a new snapshot could never be tail-consistent",
+      "remedy": "BUG-480/BUG-472: once persistCommandJournaler observes a failed AppendJournal it latches dirty for the process lifetime (see internal/engine/compose/persistjournal.go) -- a snapshot taken after a lost command can never be proven tail-consistent with the journal, so MaybeSnapshotEvery refuses to write one at every subsequent cadence boundary (this code is logged ONCE, not per boundary). The journal and live state are unaffected -- genesis replay and any earlier, still-consistent snapshot remain fully correct. Restart the process (or otherwise re-establish a durably clean journal) to clear the flag."
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",

@@ -473,23 +473,34 @@ func TestAttackInc3b_ConcurrentProducersRestoreExact(t *testing.T) {
 // ATTACK 6 — BUG-472 journal-swallow vs. a snapshot at the same boundary
 // ---------------------------------------------------------------------------
 
-// TestAttackInc3b_SwallowedJournalAppendAtBoundary documents, as an executable
-// regression, what happens when BUG-472's journaler swallow policy drops a
-// journal frame for a command whose state effect IS captured by a snapshot
-// taken at the same cadence boundary.
+// TestAttackInc3b_SwallowedJournalAppendAtBoundary is BUG-480's flipped
+// regression: it used to DOCUMENT that a swallowed journal append (BUG-472's
+// policy) landing at the very tick a snapshot cadence boundary fires could
+// leave a snapshot recorded AHEAD of what the journal's AdvanceTicks frames
+// sum to, bricking every future restore for that city with a PERMANENT
+// ErrSnapshotTailShort (compose.RestoreLatestSnapshotOrGenesis always picked
+// the newest snapshot with no fallback).
 //
-// The snapshot's recorded tick then runs AHEAD of what the journal's
-// AdvanceTicks frames sum to, so splitJournalAtTick can never reach
-// snapshotTick and restore fails with ErrSnapshotTailShort. This is FAIL-CLOSED
-// (no silent divergence, no data invented) but it is also PERMANENT for that
-// city: RestoreLatestSnapshotOrGenesis always selects the NEWEST snapshot and
-// has no fallback to an older, still-consistent one, so every subsequent
-// restart fails identically.
+// BUG-480 shipped two complementary fixes and this test now proves BOTH,
+// live, through the real production wiring (startCommandLoop /
+// wireAndRehydrate — no compose-package white-box access):
 //
-// The test pins the current behaviour so a future fallback (or an explicit
-// operator-facing remedy) is a deliberate, visible change rather than a silent
-// one. It asserts ONLY that the failure is loud and non-divergent, which is the
-// property that must never regress.
+//  1. deliverable (b), the JOURNAL-DIRTY GATE: MaybeSnapshotEvery refuses to
+//     write a snapshot once its journaler has observed a failed durable
+//     append (persistCommandJournaler.dirty) — including at the EXACT tick
+//     the failure itself occurred, since the gate is checked synchronously
+//     on the same goroutine right after journalAccepted's swallow. This
+//     closes the specific live race the pre-fix test documented: the
+//     scenario "a bad snapshot gets written at the very boundary the
+//     swallow happens on" can no longer arise in-process, so this test
+//     asserts NO snapshot is ever taken for this city (ids stays empty)
+//     rather than skipping when that turns out to be the case.
+//  2. deliverable (a), WALK-BACK: even with (b) closing the live race, a
+//     restart must still restore correctly with NO durable snapshot at all
+//     for this city (RestoreLatestSnapshotOrGenesis's pre-existing
+//     genesis-replay fallback, unaffected by BUG-480) — proving the fix
+//     did not regress the always-worked path while it was busy repairing
+//     the always-broken one.
 func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 	const cadence = int64(4)
 	dir := t.TempDir()
@@ -499,11 +510,12 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 		t.Fatalf("NewDiskStore: %v", err)
 	}
 	// Fail the 4th append: the AdvanceTicks that lands exactly on tick 4, the
-	// first cadence boundary. Its state effect happens; its journal frame does
-	// not; the snapshot for tick 4 is still written.
+	// first cadence boundary. Its state effect happens (BUG-472, untouched);
+	// its journal frame does not — and BUG-480's dirty gate must now refuse
+	// the tick-4 snapshot itself, not just some later one.
 	failing := &attackFailingAppendStore{Store: disk, failCall: 4}
 
-	_, tick := attackDriveTicks(t, failing, city, cadence, 2*cadence)
+	liveDigest, tick := attackDriveTicks(t, failing, city, cadence, 2*cadence)
 	if tick != 2*cadence {
 		t.Fatalf("engine tick %d, want %d", tick, 2*cadence)
 	}
@@ -511,35 +523,62 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSnapshots: %v", err)
 	}
-	if len(ids) == 0 {
-		t.Skip("no snapshot was written for the boundary tick; the swallow scenario did not arise")
+	if len(ids) != 0 {
+		t.Fatalf("BUG-480 deliverable (b) regressed: %d durable snapshot(s) exist for a city whose journaler observed a failed append -- the dirty gate did not hold", len(ids))
 	}
 
+	// The honest reference: genesis replay of exactly what persisted (the
+	// swallowed frame is genuinely, permanently lost -- BUG-472's policy,
+	// untouched by this fix).
+	persistedCmds, err := compose.RestoreCommands(context.Background(), disk, city)
+	if err != nil {
+		t.Fatalf("RestoreCommands: %v", err)
+	}
+	eRef := newEngine()
+	compRef, err := compose.Wire(eRef, nil)
+	if err != nil {
+		t.Fatalf("Wire (reference): %v", err)
+	}
+	for i, cmd := range persistedCmds {
+		if res := eRef.HandleCommand(cmd); !res.Accepted {
+			t.Fatalf("reference replay: command %d (%s) rejected: %+v", i, cmd.Kind, res.Error)
+		}
+	}
+	refClock, err := eRef.Clock()
+	if err != nil {
+		t.Fatalf("Clock (reference): %v", err)
+	}
+	if refClock.Tick() != tick-1 {
+		t.Fatalf("precondition: reference (persisted-journal-only) tick = %d, want %d (one tick short of live %d -- the swallowed frame)", refClock.Tick(), tick-1, tick)
+	}
+	if compRef.StateDigest() == liveDigest {
+		t.Fatal("precondition: reference digest equals the live digest -- the swallowed command carried no observable effect, weakening this test's fault injection")
+	}
+
+	// Restart: no durable snapshot exists at all, so restore MUST use the
+	// pre-existing genesis-replay fallback (usedSnapshot=false) and must
+	// reproduce the reference EXACTLY -- never the live digest, which
+	// included the lost command's effect and can never be honestly
+	// reconstructed from what actually persisted.
 	var log bytes.Buffer
 	e := newEngine()
-	comp, restoreErr := wireAndRehydrate(context.Background(), e, disk, city, &log)
-
-	if restoreErr != nil {
-		// Fail-closed: acceptable, but assert it is LOUD and names the city, so
-		// an operator can act. Silence or a bare panic would not be.
-		if !strings.Contains(restoreErr.Error(), "rehydrate city") {
-			t.Fatalf("restore failed but not through the rehydrate wrapper: %v", restoreErr)
-		}
-		t.Logf("documented: a swallowed journal append at a snapshot boundary makes restore fail closed: %v", restoreErr)
-		return
+	comp, err := wireAndRehydrate(context.Background(), e, disk, city, &log)
+	if err != nil {
+		t.Fatalf("wireAndRehydrate: restore with NO durable snapshot must always succeed via genesis replay, got: %v — log=%q", err, log.String())
 	}
-	// If restore SUCCEEDS, it must not have invented state: the restored clock
-	// must not exceed the live tick. A restored tick > live tick would mean the
-	// tail was double-applied on top of the snapshot.
-	clock, err := e.Clock()
+	if !strings.Contains(log.String(), "full genesis replay") {
+		t.Fatalf("restore did not report the genesis-replay path: %q", log.String())
+	}
+	restoredClock, err := e.Clock()
 	if err != nil {
 		t.Fatalf("Clock: %v", err)
 	}
-	if clock.Tick() > tick {
-		t.Fatalf("restore over-applied the tail: restored tick %d > live tick %d (digest %x, log=%q)",
-			clock.Tick(), tick, comp.StateDigest(), log.String())
+	if restoredClock.Tick() != refClock.Tick() {
+		t.Fatalf("restored tick = %d, want %d (reference)", restoredClock.Tick(), refClock.Tick())
 	}
-	t.Logf("documented: restore succeeded after a swallowed append; restored tick %d vs live %d", clock.Tick(), tick)
+	if comp.StateDigest() != compRef.StateDigest() {
+		t.Fatalf("restored digest = %x, want %x (reference) -- restore must honestly reproduce only what persisted", comp.StateDigest(), compRef.StateDigest())
+	}
 }
 
 // ---------------------------------------------------------------------------
