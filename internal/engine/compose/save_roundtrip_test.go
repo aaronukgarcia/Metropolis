@@ -118,8 +118,8 @@ func participantStreams(t *testing.T, comp *Composition) map[string][]byte {
 
 // TestSaveRoundTrip_PerModuleStateIsByteIdentical is the make-or-break
 // proof for AC-6: after Save on a driven composition and Load into a fresh
-// one, EVERY one of the seven participants' saved record streams matches
-// byte-for-byte. A mismatch names the module whose state did not
+// one, EVERY one of the (now twelve) participants' saved record streams
+// matches byte-for-byte. A mismatch names the module whose state did not
 // round-trip.
 func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 	eA, compA := buildComposition(t)
@@ -128,12 +128,13 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 
 	// Sanity: the driven composition is genuinely non-trivial (some module
 	// state moved off its post-Wire default), so an all-empty "round trip"
-	// cannot pass vacuously. Eleven participants as of FEAT-1972079945: the
+	// cannot pass vacuously. Twelve participants as of FEAT-1972079947: the
 	// seven stateful modules + crime + the stateless market/consumption
-	// scaffolds (empty-but-conformant, Aaron 2026-09-01) + the compose-owned
-	// ledger participant.
-	if len(streamsA) != 11 {
-		t.Fatalf("expected 11 participants, got %d", len(streamsA))
+	// scaffolds (empty-but-conformant, Aaron 2026-09-01) + attract (closes
+	// the LoadAt cross-month-boundary gap, FEAT-1972079947) + the
+	// compose-owned ledger participant.
+	if len(streamsA) != 12 {
+		t.Fatalf("expected 12 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()

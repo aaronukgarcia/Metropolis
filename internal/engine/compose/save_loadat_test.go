@@ -4,10 +4,110 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/invariant"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/unlocks"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
+
+// participantsWithoutAttract reproduces the exact pre-FEAT-1972079947
+// Participants() shape (save_wire.go, minus the attract entry it now
+// includes) — the negative control's fixture. Used by BOTH the save and
+// the load side of the prove-can-fail test below, so the reproduced
+// scenario is faithful to history: attract never had a shard written for
+// it at all (not a shard present-but-unmatched, which save.Load correctly
+// fails closed on — see MET-E812 in save/errors.go — a stronger property
+// than the historical bug this control reproduces).
+func participantsWithoutAttract(st *simState) []save.Participant {
+	return []save.Participant{
+		world.NewSaveParticipant(st.world),
+		citizens.NewSaveParticipant(st.citizens),
+		finance.NewSaveParticipant(st.finance),
+		build.NewSaveParticipant(st.buildAPI),
+		refuse.NewSaveParticipant(st.refuse),
+		traffic.NewSaveParticipant(st.traffic),
+		unlocks.NewSaveParticipant(st.unlocks),
+		crime.NewSaveParticipant(st.crime),
+		market.NewSaveParticipant(st.market),
+		consumption.NewSaveParticipant(st.consumption),
+		// attract.NewSaveParticipant(st.attract) deliberately OMITTED —
+		// reproducing the pre-FEAT-1972079947 shape.
+		newComposeLedgerParticipant(st),
+	}
+}
+
+// saveWithoutAttractParticipant mirrors Composition.Save but writes the
+// bundle through participantsWithoutAttract's reduced list, so — unlike a
+// full Save followed by a reduced Load — no "attract" shard is written at
+// all (the actual historical shape: attract never implemented
+// save.Participant, so Save never emitted anything for it).
+func saveWithoutAttractParticipant(c *Composition, root string) error {
+	st := c.state
+	clock, err := st.e.Clock()
+	if err != nil {
+		return err
+	}
+	ctx := save.Context{
+		WorldSeed:     int64(st.seed),
+		CreatedAtTick: clock.Tick(),
+		GameMonth:     clock.Month(),
+		AppVersion:    compositionSaveAppVersion,
+	}
+	mgr := save.NewManager(root, participantsWithoutAttract(st), st.cid)
+	return mgr.SaveManual(ctx, compositionSaveName)
+}
+
+// loadAtWithoutAttractParticipant is
+// TestLoadAt_ProveCanFail_AttractParticipantMissingBreaksMonthBoundaryContinuity's
+// negative control: it duplicates Composition.LoadAt's logic (Load +
+// SeedClockForRestore + BUG-288 tracker re-establishment) but loads
+// through participantsWithoutAttract's reduced list — matched against a
+// bundle written by saveWithoutAttractParticipant, so this is a like-for-
+// like reproduction of the pre-FEAT-1972079947 world: attract's state was
+// simply never part of the save/load contract, left at whatever
+// [c.state.attract] already held (a freshly-Wired composition's default,
+// in this test).
+func loadAtWithoutAttractParticipant(c *Composition, root string, tick int64) error {
+	st := c.state
+	summaries, _, err := save.List(root)
+	if err != nil {
+		return err
+	}
+	dir := ""
+	for _, s := range summaries {
+		if s.DisplayName == compositionSaveName {
+			dir = s.Path
+			break
+		}
+	}
+	if dir == "" {
+		return errors.New("loadAtWithoutAttractParticipant: no composition save found")
+	}
+	mgr := save.NewManager(root, participantsWithoutAttract(st), st.cid)
+	if _, _, err := mgr.Load(dir); err != nil {
+		return err
+	}
+	st.syncMoneyFromLedger()
+
+	if err := st.e.SeedClockForRestore(st.cid, tick); err != nil {
+		return err
+	}
+	st.lastClosedTick = tick
+	st.previousClosingPop = int64(st.citizens.TotalPopulation(st.cid))
+	st.previousClosingMoney = num.SatAdd(st.treasury, st.citizenWealth)
+	return nil
+}
 
 // FEAT-1972079944 (Aaron's ruling option A): LoadAt is Load's
 // tick-continuous sibling -- it restores module state exactly like Load,
@@ -100,17 +200,15 @@ func TestLoadAt_ProveCanFail_OffByOneSeedDetected(t *testing.T) {
 // extraTicks is deliberately kept well inside the SAME calendar month the
 // save was taken in (< DailyTicksPerMonth ticks remain before the next
 // month boundary — driveMultiDomain leaves the driven engine at an exact
-// month boundary, tick 90). This is the honest scope of what
-// FEAT-1972079944 alone delivers: clock continuity (core.Engine's new
+// month boundary, tick 90): clock continuity (core.Engine's new
 // SeedClockForRestore) plus the BUG-288 ledger-closing-tracker continuity
-// LoadAt re-establishes (see its doc comment). Crossing a NEW month
-// boundary after LoadAt currently still diverges for an UNRELATED, already
-// -filed reason — engine.attract's own internal momentum state
-// (reputation/lastAdvancedMonth/nextMigrantID) has no save.Participant and
-// is not restored by Load at all (FEAT-1972079947) — see
-// TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary
-// below, which proves and documents that gap explicitly rather than
-// silently passing or silently failing here.
+// LoadAt re-establishes (see its doc comment). Continuity across a NEW
+// calendar month boundary — which additionally requires engine.attract's
+// own internal momentum state (reputation/lastAdvancedMonth/nextMigrantID)
+// to have round-tripped — is proved separately by
+// TestLoadAt_TickContinuity_AcrossMonthBoundary below (FEAT-1972079947
+// closed that gap by giving engine.attract a save.Participant; it was
+// previously a documented known limitation).
 func TestLoadAt_TickContinuity(t *testing.T) {
 	const extraTicks = int64(10)
 
@@ -162,26 +260,25 @@ func TestLoadAt_TickContinuity(t *testing.T) {
 	}
 }
 
-// TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary is a
-// POSITIVE assertion of a known, separately-tracked limitation (mirrors
-// TestSaveRoundTrip_IsSnapshotNotTickContinuous's own honesty convention for
-// Load): LoadAt's tick continuity does NOT yet extend across a NEW calendar
-// month boundary, because engine.attract's own internal momentum state
-// (reputation, lastAdvancedMonth, nextMigrantID -- internal/engine/attract/
-// api.go) has no save.Participant at all and is therefore not restored by
-// Load/LoadAt. Filed as FEAT-1972079947, out of FEAT-1972079944's narrow
-// clock-seed-only scope.
-//
-// This test drives two extra full months past the save point (unlike
-// TestLoadAt_TickContinuity's within-month extraTicks) and asserts the
-// digests DIVERGE -- proving the gap is real and precisely bounded (clock +
-// BUG-288 trackers are fine; attract's own module state is the missing
-// piece), not silently papered over by a test that only ever exercises the
-// safe, within-month case. One extra month alone is not enough to observe
-// the divergence (the fresh-vs-continued reputation-momentum paths happen
-// to agree on their very first post-load decision); two makes it visible.
-func TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary(t *testing.T) {
-	extraTicks := int64(2 * core.DailyTicksPerMonth) // two full extra months -- one alone is not enough to expose the reputation-momentum divergence
+// TestLoadAt_TickContinuity_AcrossMonthBoundary is FEAT-1972079947's payoff
+// test: it REPLACES the former
+// TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary,
+// which documented that LoadAt's tick continuity broke the instant
+// continued ticking crossed a NEW calendar month boundary, because
+// engine.attract's own internal momentum state (reputation,
+// lastAdvancedMonth, nextMigrantID -- internal/engine/attract/api.go) had
+// no save.Participant at all and was therefore not restored by
+// Load/LoadAt. Now that engine.attract implements save.Participant
+// (attract/participant.go, wired into save_wire.go's Participants()),
+// this test proves the gap is closed: it drives TWO extra full months past
+// the save point (the same history the old known-limitation test used, and
+// the same extraTicks that used to prove a MUST-diverge) and asserts the
+// digests now MATCH -- the loaded composition is genuinely tick-continuous
+// with a reference engine that never stopped, across a month boundary and
+// not just within one (which TestLoadAt_TickContinuity above already
+// covered).
+func TestLoadAt_TickContinuity_AcrossMonthBoundary(t *testing.T) {
+	extraTicks := int64(2 * core.DailyTicksPerMonth) // two full extra months, crossing at least one calendar month boundary
 
 	eRef, compRef := buildComposition(t)
 	driveMultiDomain(t, eRef, compRef)
@@ -189,6 +286,10 @@ func TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary(t *te
 		t.Fatalf("AdvanceTicks (reference): %v", err)
 	}
 	refDigest := compRef.StateDigest()
+	refClock, err := eRef.Clock()
+	if err != nil {
+		t.Fatalf("Clock (reference): %v", err)
+	}
 
 	eA, compA := buildComposition(t)
 	driveMultiDomain(t, eA, compA)
@@ -209,9 +310,60 @@ func TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary(t *te
 		t.Fatalf("AdvanceTicks (loaded): %v", err)
 	}
 	loadedDigest := compB.StateDigest()
+	loadedClock, err := eB.Clock()
+	if err != nil {
+		t.Fatalf("Clock (loaded): %v", err)
+	}
+
+	if loadedClock.Tick() != refClock.Tick() {
+		t.Fatalf("tick continuity broken: loaded clock=%d, reference clock=%d", loadedClock.Tick(), refClock.Tick())
+	}
+	if loadedDigest != refDigest {
+		t.Fatalf("tick continuity broken across a month boundary: StateDigest after continued ticking does not match the reference that never stopped: loaded=%x ref=%x -- if this reverts, engine.attract's participant (attract/participant.go) or its wiring (save_wire.go) most likely regressed", loadedDigest, refDigest)
+	}
+}
+
+// TestLoadAt_ProveCanFail_AttractParticipantMissingBreaksMonthBoundaryContinuity
+// proves TestLoadAt_TickContinuity_AcrossMonthBoundary's comparison has
+// teeth: it repeats the exact same drive/save/LoadAt/advance sequence but
+// saves AND loads through participantsWithoutAttract's reduced list (a
+// like-for-like reproduction of the pre-FEAT-1972079947 shape: attract
+// never had a shard written for it at all) — the loaded state must then
+// DIVERGE from the reference across the month boundary, the same failure
+// the removed known-limitation test used to document as expected. This is
+// the prove-can-fail control for the positive test above.
+func TestLoadAt_ProveCanFail_AttractParticipantMissingBreaksMonthBoundaryContinuity(t *testing.T) {
+	extraTicks := int64(2 * core.DailyTicksPerMonth)
+
+	eRef, compRef := buildComposition(t)
+	driveMultiDomain(t, eRef, compRef)
+	if err := eRef.AdvanceTicks(errs.NewCorrelationID(), extraTicks); err != nil {
+		t.Fatalf("AdvanceTicks (reference): %v", err)
+	}
+	refDigest := compRef.StateDigest()
+
+	eA, compA := buildComposition(t)
+	driveMultiDomain(t, eA, compA)
+	clockA, err := eA.Clock()
+	if err != nil {
+		t.Fatalf("Clock (A): %v", err)
+	}
+	dir := t.TempDir()
+	if err := saveWithoutAttractParticipant(compA, dir); err != nil {
+		t.Fatalf("saveWithoutAttractParticipant: %v", err)
+	}
+
+	eB, compB := buildComposition(t)
+	if err := loadAtWithoutAttractParticipant(compB, dir, clockA.Tick()); err != nil {
+		t.Fatalf("loadAtWithoutAttractParticipant: %v", err)
+	}
+	if err := eB.AdvanceTicks(errs.NewCorrelationID(), extraTicks); err != nil {
+		t.Fatalf("AdvanceTicks (loaded, attract participant withheld): %v", err)
+	}
+	loadedDigest := compB.StateDigest()
 
 	if loadedDigest == refDigest {
-		t.Fatal("known-limitation test did not reproduce the expected divergence -- either FEAT-1972079947 has already landed (update/remove this test and widen TestLoadAt_TickContinuity's extraTicks back across a month boundary) or driveMultiDomain's history no longer exercises attract's momentum path")
+		t.Fatal("prove-can-fail: loading WITHOUT the attract participant still matched the reference across a month boundary -- either the comparison has no teeth, or driveMultiDomain's history no longer exercises attract's momentum/migrant-id path")
 	}
 }
 

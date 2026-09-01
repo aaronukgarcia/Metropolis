@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"github.com/aaronukgarcia/Metropolis/internal/engine/attract"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/consumption"
@@ -56,8 +57,8 @@ const compositionSaveAppVersion = "metropolis-compose"
 // Order is fixed and load-order-independent (save routes each shard back to
 // its Participant by Kind, and a fresh RecordSource is taken per Source
 // call), but stated explicitly so the saved shard sequence is deterministic:
-// world, citizens, finance, build, refuse, traffic, unlocks, crime, then the
-// composition root's OWN ledger participant.
+// world, citizens, finance, build, refuse, traffic, unlocks, crime, market,
+// consumption, attract, then the composition root's OWN ledger participant.
 //
 // FEAT-1972079943 completed the full-composed StateDigest STATE SNAPSHOT
 // round-trip by adding the last two entries:
@@ -93,6 +94,16 @@ func (c *Composition) Participants() []save.Participant {
 		// at birth rather than silently unserialized.
 		market.NewSaveParticipant(st.market),
 		consumption.NewSaveParticipant(st.consumption),
+		// FEAT-1972079947 — engine.attract's own internal momentum state
+		// (reputation/lastAdvancedMonth/nextMigrantID) closes the gap
+		// TestLoadAt_KnownLimitation_AttractStateNotRestoredAcrossMonthBoundary
+		// (save_loadat_test.go) named and proved: without this participant,
+		// LoadAt's tick continuity broke the instant a NEW calendar month's
+		// ApplyMigration ran, because attract's own momentum/id-counter state
+		// was silently left at its post-Wire fresh default rather than
+		// restored. attract itself is already a registered outbound edge of
+		// this composition root (compose.go imports it directly).
+		attract.NewSaveParticipant(st.attract),
 		newComposeLedgerParticipant(st),
 	}
 }
