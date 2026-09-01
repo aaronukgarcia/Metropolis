@@ -27,8 +27,15 @@ func drawText(buf *core.Buffer, rect core.Rect, x, y int, text string, style tce
 	}
 }
 
+// micropoundsPerPound mirrors ui.screen.build/ui.screen.trade's own local
+// copy (GR#20 bars this UI package from importing internal/engine/finance
+// directly) — rebased 1,000,000 -> 1,000 alongside its engine-side
+// siblings (BUG-452, 2026-09-01; see
+// internal/foundation/det/money.go's MicropoundsPerPound doc comment).
+const micropoundsPerPound = 1000.0
+
 func formatPounds(micropounds int64) string {
-	pounds := float64(micropounds) / 1000000.0
+	pounds := float64(micropounds) / micropoundsPerPound
 	return fmt.Sprintf("£%.2f", pounds)
 }
 

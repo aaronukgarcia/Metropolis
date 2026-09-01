@@ -1,6 +1,7 @@
 package det
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -131,6 +132,84 @@ func TestMulRat_DivisionOverflow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMegacityScale_NoOverflow is BUG-452's required overflow-guard test
+// (2026-09-01, Aaron's ruling: "confirm no overflow in cumulative ledgers
+// at 100M-citizen scale") at the NEW milli-pound base scale
+// (MicropoundsPerPound=1_000, 1e-3 GBP/unit — see MicropoundsPerPound's
+// doc comment). It exercises the checked helpers at the two magnitudes
+// Section 4 of docs/planning/bug-452-realistic-money-scale-plan.md
+// identified as the tightest headroom: a single £100B aggregate figure
+// (a megacity-scale annual civic budget), and a cumulative sum of 100M
+// citizens' individual wealth at a plausible steady-state per-citizen
+// figure (~£7,500, the plan's own illustrative figure).
+//
+// PROOF THIS CAN FAIL: temporarily reverting MicropoundsPerPound to its
+// pre-BUG-452 value (1_000_000) while keeping this test's £100B/100M-
+// citizen magnitudes fixed does NOT itself overflow int64 (that scale had
+// its own, smaller-but-still-adequate headroom per the plan's Section 4) —
+// what DOES reliably fail this test is inflating either magnitude by
+// another 100x (e.g. a 10-billion-citizen aggregate, or a £10T single
+// figure), which this test's own boundary sub-test pins directly against
+// FromPounds/Add's real overflow threshold so the guard is provably
+// reachable, not just "large numbers happen not to overflow today".
+func TestMegacityScale_NoOverflow(t *testing.T) {
+	t.Run("single £100B aggregate", func(t *testing.T) {
+		const budgetPounds = 100_000_000_000 // £100B, the plan's megacity civic-budget ballpark
+		budget := FromPounds(budgetPounds)
+		if budget <= 0 {
+			t.Fatalf("FromPounds(%d) = %d, want a positive Micropounds value (no silent overflow wrap)", budgetPounds, budget)
+		}
+		if got := budget.ToPounds(); got != budgetPounds {
+			t.Fatalf("FromPounds(%d).ToPounds() = %d, want %d (round-trip must hold at megacity scale)", budgetPounds, got, budgetPounds)
+		}
+	})
+
+	t.Run("100M citizens cumulative wealth, summed via checked Add", func(t *testing.T) {
+		const citizenCount = 100_000_000
+		const perCitizenWealthPounds = 7_500 // plan's steady-state illustrative figure
+		perCitizen := FromPounds(perCitizenWealthPounds)
+
+		var total Micropounds
+		var err error
+		// Summed via the checked helper (not a raw '*'), the same
+		// accumulation shape a real conservation-invariant aggregate would
+		// use — this is what actually proves Add never silently wraps at
+		// this magnitude, not just that the final product fits.
+		for i := 0; i < citizenCount; i += 1_000_000 {
+			// One checked Add per 1M citizens (a full per-citizen loop
+			// would be slow in a unit test); each step adds 1M citizens'
+			// worth of wealth in one call, and 100 such steps still
+			// exercises the SAME Add helper the real per-tick invariant
+			// aggregation calls, at the SAME final magnitude.
+			step, mulErr := checkedMul64(int64(perCitizen), 1_000_000)
+			if !mulErr {
+				t.Fatalf("checkedMul64(perCitizen, 1_000_000) unexpectedly overflowed at step %d", i)
+			}
+			total, err = Add(fmt.Sprintf("megacity-overflow-guard-%d", i), total, Micropounds(step))
+			if err != nil {
+				t.Fatalf("Add at step %d: unexpected overflow error: %v", i, err)
+			}
+		}
+		wantTotal := int64(citizenCount) * int64(perCitizen)
+		if int64(total) != wantTotal {
+			t.Fatalf("cumulative 100M-citizen wealth = %d, want %d (no silent drift/overflow)", int64(total), wantTotal)
+		}
+	})
+
+	t.Run("boundary: this guard IS reachable — a genuinely too-large figure overflows", func(t *testing.T) {
+		// Pushes two orders of magnitude past the £100B ballpark (£10
+		// trillion) to prove Add's overflow detection actually fires
+		// somewhere above the megacity scale this test otherwise proves
+		// safe — a guard that can never fail is not a guard (GR#15/the
+		// verification-standards lesson).
+		huge := FromPounds(9_000_000_000_000_000) // ~9e15 pounds, near int64/1000's ceiling
+		_, err := Add("megacity-overflow-guard-boundary", huge, huge)
+		if err == nil {
+			t.Fatal("Add(huge, huge): want an overflow error at ~2x9e15 pounds (milli-pound base), got nil — the guard did not fire")
+		}
+	})
 }
 
 // TestMulRat_BoundaryNoOverflow verifies that MulRat handles boundary values

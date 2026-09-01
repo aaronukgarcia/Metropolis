@@ -50,22 +50,21 @@ import (
 // --- Ledger scale (see moneycirc.go's "Ledger scale vs real-world scale"
 // doc comment for the general convention this mirrors) ---
 //
-// The real, citable UK figure is recorded for magnitude/traceability, but
-// is NOT posted directly: at typical Baseline One build volumes (a single
-// zone's materials bill is 60-400 tonnes, data/buildings.json), even the
-// already-1000x-scaled-down monthly-figure treatment
-// (monthlyConsumptionSpendMicropounds's own convention) would still
-// overdraft the £10 seed treasury by one to two orders of magnitude
-// (150,000 micropounds/tonne x 400 tonnes = £60). Construction cost is a
-// per-tonne ACCUMULATING quantity, not a flat per-capita monthly figure,
-// so the flat-placeholder treatment (mirroring
-// baselineOneMonthlyRentMicropounds's own documented deviation from a
-// naive real-value/ledgerScaleDivisor division) is used instead: a small
-// toy-scale per-tonne price, empirically sized to keep a full zone's
-// materials bill within a few pence of baseline-one's toy treasury.
-// TODO(BUG-452): once initialTreasury/seedCitizenCount are real-derived,
-// revisit this constant alongside every other flat placeholder in
-// moneycirc.go.
+// BUG-452 (2026-09-01, Aaron's ruling): the real, citable UK per-tonne
+// figure is now posted DIRECTLY — the old ~1.5-million-to-one hand-tuned
+// toy-scale hack (constructionMaterialLedgerPriceMicropoundsPerTonne=100,
+// vs the real constructionMaterialPricePerTonneRealMicropounds) is
+// retired, now that initialTreasury is a realistic £1,500,000
+// (compose.go), not the old £10 toy seed: at typical Baseline One build
+// volumes (a single zone's materials bill is 60-400 tonnes,
+// data/buildings.json), even the largest zone's full real-price materials
+// bill (£150/tonne x 400 tonnes = £60,000) is a small fraction of the new
+// treasury, unlike against the old £10 seed where it would have overdrafted
+// by three-plus orders of magnitude. constructionMaterialLedgerPriceMicropoundsPerTonne
+// is kept as an identifier (every call site below and this file's own test
+// helper reference it symbolically) but is now DEFINED AS
+// constructionMaterialPricePerTonneRealMicropounds directly — one real
+// number, not two independently-tuned ones that could drift apart.
 const (
 	// commercialPaymentTermTicksReal is the real-world grounding for the
 	// NET-90 business-to-business trade-credit convention (Aaron's
@@ -90,18 +89,24 @@ const (
 	// counter price for the BLENDED basket a real merchant actually
 	// stocks — aggregate, timber, brick, insulation — sits materially
 	// higher than raw aggregate alone). Real-world-grounded, balance-pass
-	// adjustable (GR#15) — recorded for magnitude/traceability; NOT posted
-	// directly (see this file's doc comment).
-	constructionMaterialPricePerTonneRealMicropounds = 150_000_000
+	// adjustable (GR#15). BUG-452 (2026-09-01): rebased 150_000_000 ->
+	// 150_000 for the money base-unit change (same real £150), and is now
+	// POSTED DIRECTLY (see constructionMaterialLedgerPriceMicropoundsPerTonne
+	// below and this file's doc comment — the old toy scale-down hack is
+	// retired).
+	constructionMaterialPricePerTonneRealMicropounds = 150_000
 
 	// constructionMaterialLedgerPriceMicropoundsPerTonne is the LEDGER-
-	// facing per-tonne price accrueAndSettleConstruction actually charges:
-	// a flat toy-scale placeholder (see this file's doc comment for why a
-	// naive ledgerScaleDivisor division still overdrafts), sized so a full
-	// zone's materials bill (60-400 tonnes) settles as a few pence against
-	// baseline-one's £10 seed treasury rather than instantly overdrafting
-	// it.
-	constructionMaterialLedgerPriceMicropoundsPerTonne = 100
+	// facing per-tonne price accrueAndSettleConstruction actually charges.
+	// BUG-452 (2026-09-01): this is now simply
+	// constructionMaterialPricePerTonneRealMicropounds — the old
+	// hand-tuned ~1.5-million-to-one toy-scale hack (100 vs the real
+	// 150_000_000) is retired now that initialTreasury is real-scale (see
+	// this file's doc comment). Kept as a distinct identifier (rather than
+	// replacing every call site with the real-price constant) so
+	// accrueAndSettleConstruction's LEDGER-facing intent stays
+	// self-documenting at the call site.
+	constructionMaterialLedgerPriceMicropoundsPerTonne = constructionMaterialPricePerTonneRealMicropounds
 
 	// buildersMerchantStaffCount is the auto-placed merchant's founding
 	// staff count (RegisterFirm's staff argument) — a Startup-stage
@@ -124,10 +129,6 @@ const (
 	// RegisterFirm usage which carries the same kind of descriptive tag).
 	buildersMerchantPremises = "industrial"
 )
-
-// referenced to preserve the real-world figure for BUG-452 scale-up (unused
-// until the ledger divisor is removed).
-var _ = constructionMaterialPricePerTonneRealMicropounds
 
 // maybeAutoPlaceBuildersMerchant is FEAT-1972079927 inc2's deterministic,
 // state-derived auto-placement trigger: the first time engine.build

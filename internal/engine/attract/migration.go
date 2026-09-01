@@ -19,13 +19,19 @@ import (
 // wealthLogSigma is the log-scale shape parameter the doc derives from
 // that median/mean pair. This is a per-citizen data field (Citizen.Wealth),
 // never posted to engine.finance's ledger, so it is safe to use at full
-// real-world scale regardless of baseline-one's much smaller toy treasury
-// (see internal/engine/compose's ledgerScaleDivisor doc comment for why
-// the LEDGER-facing amounts are scaled down and this one is not).
+// real-world scale regardless of baseline-one's treasury (see
+// internal/engine/compose/moneycirc.go's "Ledger scale vs real-world
+// scale" doc comment for why LEDGER-facing amounts get separate treatment
+// and this one does not — pre-BUG-452 that doc comment described a
+// ledgerScaleDivisor hack; BUG-452 (2026-09-01) retired it in favour of
+// posting real figures directly against a real-scale treasury).
 const (
 	// migrantWealthMedianMicropounds is the log-normal median (exp(ln-mean)
-	// when Z=0) — real-world-grounded, balance-pass adjustable.
-	migrantWealthMedianMicropounds = 2_500_000_000 // µ£, £2,500
+	// when Z=0) — real-world-grounded, balance-pass adjustable. Rebased
+	// 2_500_000_000 -> 2_500_000 (BUG-452, 2026-09-01) alongside the money
+	// base-unit rebase (1e-6 GBP/unit -> 1e-3 GBP/unit) so this stays the
+	// same real £2,500, not a value 1000x too large.
+	migrantWealthMedianMicropounds = 2_500_000 // µ£, £2,500
 	// migrantWealthLogSigma is the log-scale standard deviation — real-
 	// world-grounded (derived from the £2,500 median / £6,000 mean pair),
 	// balance-pass adjustable.

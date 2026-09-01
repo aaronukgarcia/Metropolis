@@ -11,11 +11,16 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/ui/widgets"
 )
 
-// micropoundsPerPound is the money scale (1 GBP = 1,000,000 micro-pounds,
-// M0-ENG §1.2 / engine.finance.money.go). It is a unit conversion constant,
-// not a balance value — used only to DISPLAY int64 micro-pound figures as
-// pounds (the stored value stays int64; GR#16).
-const micropoundsPerPound int64 = 1_000_000
+// micropoundsPerPound is the money scale (1 GBP = 1,000 units since the
+// BUG-452 rebase, 2026-09-01 — was 1,000,000 pre-rebase; M0-ENG §1.2 /
+// engine.finance.money.go). It is a unit conversion constant, not a
+// balance value — used only to DISPLAY int64 money-unit figures as pounds
+// (the stored value stays int64; GR#16). GR#20 bars this UI package from
+// importing internal/engine/finance directly, so this stays a
+// hand-duplicated literal — rebased alongside its engine-side siblings
+// (see internal/foundation/det/money.go's MicropoundsPerPound doc comment)
+// rather than left silently stale.
+const micropoundsPerPound int64 = 1_000
 
 // drawText writes s left-to-right starting at (x, y), clipped to rect's
 // right edge — the small shared primitive every label row uses, mirroring
@@ -54,9 +59,17 @@ func formatPounds(micropounds int64) string {
 	} else {
 		mag = uint64(micropounds)
 	}
+	// unitsPerPenny/half-unit rounding are DERIVED from micropoundsPerPound
+	// (100 pence per pound), not hand-duplicated literals — BUG-452
+	// (2026-09-01) found the pre-existing hardcoded "10000"/"5000" pair
+	// silently wrong after the base-unit rebase (they assumed the
+	// pre-rebase 1,000,000 scale) and this file's own
+	// TestFormatPounds_Deterministic caught it, so the formula is
+	// generalized here to survive any future rescale.
+	unitsPerPenny := uint64(micropoundsPerPound) / 100
 	pounds := mag / uint64(micropoundsPerPound)
 	frac := mag % uint64(micropoundsPerPound)
-	hundredths := (frac + 5000) / 10000
+	hundredths := (frac + unitsPerPenny/2) / unitsPerPenny
 	if hundredths >= 100 {
 		pounds++
 		hundredths -= 100
