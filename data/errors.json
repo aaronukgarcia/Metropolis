@@ -250,6 +250,12 @@
       "message": "Micropounds arithmetic overflow in op {op}",
       "remedy": "The requested Micropounds add/sub/mulrat operation would overflow int64 (or divide by zero, for mulrat). This is reported rather than silently wrapped or truncated so money never drifts (AC-11) — check the calling code for an unreasonably large input rather than retry with the same values."
     },
+    "MET-F203": {
+      "severity": "error",
+      "module": "foundation.det",
+      "message": "duplicate (shard {shard}, sequence {sequence}) pair",
+      "remedy": "ApplyBarrier / the single-shard fast path requires exactly one message per (Shard, Sequence) pair. Check the emitting hook/shard for a Sequence counter that was reused or reset, rather than applying two messages for the same canonical slot, which would make the applied order depend on submission order and break determinism."
+    },
     "MET-F300": {
       "severity": "error",
       "module": "foundation.serialize",

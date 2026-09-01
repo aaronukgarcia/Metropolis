@@ -1,12 +1,15 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/registry"
 )
 
@@ -452,6 +455,51 @@ func TestSingleShardHook_FastPathMatchesPooledPath(t *testing.T) {
 		if eff.Sequence != i {
 			t.Fatalf("gotFast[%d].Sequence = %d, want %d (ascending canonical order)", i, eff.Sequence, i)
 		}
+	}
+}
+
+// TestSingleShardHook_FastPathRejectsDuplicateSequence is BUG-287's
+// phase_test.go coverage: a SingleShardHook whose shard 0 emits two
+// Effects sharing the same Sequence (the single-shard degenerate of
+// ApplyBarrier's duplicate (Shard, Sequence) rule, since every effect on
+// this path shares Shard 0) must be rejected by the fast path with
+// ErrBarrierDuplicate, and NOTHING must be applied — mirroring
+// ApplyBarrier's own "validate before any apply" contract exactly, so the
+// fast path and the pooled path continue to agree (this time, both now
+// error instead of silently diverging on which duplicate wins).
+func TestSingleShardHook_FastPathRejectsDuplicateSequence(t *testing.T) {
+	var mu, applyMu sync.Mutex
+	calls := 0
+	var calledShards []int
+	var applied []Effect
+
+	hook := singleShardCountingHook{&countingHook{
+		mu: &mu, calls: &calls, calledShards: &calledShards,
+		shard0Effects: []Effect{
+			{Sequence: 2, Payload: "dup-a"},
+			{Sequence: 2, Payload: "dup-b"},
+			{Sequence: 0, Payload: "unrelated"},
+		},
+		applyMu: &applyMu, applied: &applied,
+	}}
+
+	e := NewEngine(WithPoolSize(4))
+	if err := e.RegisterPhaseHook(PhaseDailyTick, hook); err != nil {
+		t.Fatalf("RegisterPhaseHook: %v", err)
+	}
+
+	err := e.AdvanceTicks("corr-dup-seq", 1)
+	if err == nil {
+		t.Fatal("AdvanceTicks with a duplicate-Sequence SingleShardHook: want error, got nil")
+	}
+	if !errors.Is(err, &errs.E{Code: det.ErrBarrierDuplicate}) {
+		t.Fatalf("AdvanceTicks error = %v, want ErrBarrierDuplicate (%s)", err, det.ErrBarrierDuplicate)
+	}
+
+	applyMu.Lock()
+	defer applyMu.Unlock()
+	if len(applied) != 0 {
+		t.Fatalf("applied = %v, want nothing applied when the fast path rejects a duplicate Sequence", applied)
 	}
 }
 

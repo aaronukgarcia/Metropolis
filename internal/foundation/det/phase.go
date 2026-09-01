@@ -77,7 +77,13 @@ func RunPhase[T any, M any](correlationID string, workers int, zero T, shardFn S
 		return zero, err
 	}
 
-	ApplyBarrier(messages, applyMsg)
+	if err := ApplyBarrier(correlationID, messages, applyMsg); err != nil {
+		// BUG-287: ApplyBarrier is now strict (rejects an out-of-range
+		// shard or a duplicate (Shard, Sequence) pair before applying
+		// anything) — propagate its registry-sourced *errs.E unchanged,
+		// mirroring the MergeInOrder propagation immediately above.
+		return zero, err
+	}
 
 	return merged, nil
 }

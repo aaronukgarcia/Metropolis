@@ -21,4 +21,12 @@ const (
 	// ErrMoneyOverflow: a Micropounds arithmetic helper detected an
 	// int64 overflow rather than silently wrapping/truncating (AC-11).
 	ErrMoneyOverflow = "MET-F220"
+
+	// ErrBarrierDuplicate: ApplyBarrier (or the single-shard fast path,
+	// engine/core's runPhaseForHookFast) was handed two messages with the
+	// same (Shard, Sequence) pair — BUG-287. Mirrors ErrShardDuplicate's
+	// semantic for MergeInOrder: a duplicate canonical key would make the
+	// applied order depend on submission order, so it is rejected before
+	// any message is applied rather than silently tolerated.
+	ErrBarrierDuplicate = "MET-F203"
 )
