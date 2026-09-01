@@ -179,19 +179,45 @@
 // BUG-270 household-dissolution path at that same point — dissolution
 // fires at REALISATION, never at selection, so a queued citizen's
 // household stays fully intact for as long as they wait in the queue
-// (coldpass_deathwave_test.go's live-tick proof suite). Two later
-// increments extend it without reshaping DeathQueue's API: inc2 adds a declared
-// weather emergency (consumed through engine.season's SeasonAPI curves,
-// §9) that suspends the smoothing budget for one legitimate non-smoothed
-// major death event, without itself touching the underlying hazard
-// (suspension of throughput, not a second mortality model); inc3 adds the
-// queryable, FIFO-ordered (citizenId, deathMonth, emergencyFlag) handoff
-// stream FEAT-088 (feat.deathservices, §H — cemetery/crematorium/hearse
-// throughput) drains, replacing a fixed test drain rate with FEAT-088's
-// own injected funeral-throughput capacity (realisation becomes
-// min(budget, drainCapacity, queued) — ASM-580: the smoothing budget and
-// the funeral drain rate are two independent knobs, never one derived
-// from the other).
+// (coldpass_deathwave_test.go's live-tick proof suite). Neither increment
+// below reshapes DeathQueue's own API.
+//
+// inc2 (AC-6/AC-7/AC-8, ASM-579, current state) adds a declared weather
+// emergency, consumed through the registered feat.deathwave -> engine.
+// season outbound edge ([weatheremergency.go]'s [IsWeatherEmergency]):
+// a month is declared a winter-shaped emergency when the magnitude of
+// SeasonAPI.HealthWaveModifier is at or above data/mortality.json's
+// winterHealthWaveThreshold, or a drought-shaped emergency when
+// SeasonAPI.WaterDemandMultiplier is at or above
+// droughtWaterDemandThreshold — direction/shape only (ASM-579's ruling),
+// derived LOCALLY from engine.season's EXISTING curves rather than a new
+// engine.season surface or feat.disasters' aquifer-drought event (that
+// edge stays deliberately unregistered; a tripwire test asserts no
+// feat.disasters import). [CitizensAPI.AdvanceDayTick]'s once-per-month
+// realisation step declares the emergency before releasing
+// ([EmergencyRealise]): a declared emergency SUSPENDS the ordinary
+// monthlyDeathBudget for that release and substitutes
+// monthlyEmergencyBudget (0 is the documented "unbounded" sentinel —
+// release the ENTIRE queue), producing the one legitimate non-smoothed
+// major death event AC-6 names. The suspension touches ONLY how much of
+// the FIFO head is released — it never reaches back into
+// [ColdShard.applyMonthly]'s hazard draw or [DeathQueue.Enqueue], so a
+// fixed set of hazard SELECTIONS realises differently under an emergency
+// (more of them, sooner) while WHICH citizens the Gompertz-Makeham hazard
+// picked is completely unaffected (AC-8 — suspension of throughput, never
+// a second mortality model). engine.season is an OPTIONAL injected
+// dependency, wired post-construction via [CitizensAPI.SetSeason]
+// (mirroring engine.build/engine.cafe/engine.education's own SetSeason
+// precedent); a CitizensAPI never wired to engine.season simply never
+// declares an emergency, so every pre-inc2 caller is unaffected.
+//
+// inc3 adds the queryable, FIFO-ordered (citizenId, deathMonth,
+// emergencyFlag) handoff stream FEAT-088 (feat.deathservices, §H —
+// cemetery/crematorium/hearse throughput) drains, replacing a fixed test
+// drain rate with FEAT-088's own injected funeral-throughput capacity
+// (realisation becomes min(budget, drainCapacity, queued) — ASM-580: the
+// smoothing budget and the funeral drain rate are two independent knobs,
+// never one derived from the other).
 //
 // # NVMe and paging (A7, §5.3)
 //

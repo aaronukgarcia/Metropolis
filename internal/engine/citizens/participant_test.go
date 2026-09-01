@@ -354,6 +354,12 @@ func TestCitizensAPIFieldsAllClassified(t *testing.T) {
 			"serialization), out of this increment's cold-pass-wiring scope.",
 		"mu":   "runtime lock, not state",
 		"self": "SEC-020 copy-guard pointer, re-armed by NewCitizensAPI",
+		"season": "FEAT-087 (mkey feat.deathwave) inc2 — an INJECTED DEPENDENCY " +
+			"(*season.SeasonAPI), re-wired by the composition root on load via SetSeason, " +
+			"not simulation state this module owns (mirrors engine.consumption's own " +
+			"season field, participant.go precedent). engine.season is itself pure " +
+			"month-index curves read from data/seasonal.json -- there is nothing here to " +
+			"serialize, only a pointer to re-wire.",
 	}
 	covered := map[string]bool{
 		"month": true, "dayTick": true, "cold": true, "hot": true,
