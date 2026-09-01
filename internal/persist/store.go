@@ -52,6 +52,16 @@ type Store interface {
 	// filesystem/map iteration order).
 	ListSnapshots(ctx context.Context, city CityKey) ([]SnapshotID, error)
 
+	// DeleteSnapshot durably removes one previously committed snapshot
+	// for the given city (FEAT-1972079936 Phase 1 inc3 — bounded
+	// snapshot retention, mirroring internal/engine/checkpoint's
+	// MaxRetainedForks pruning pattern; the journal itself is NEVER
+	// pruned by this — see the epic's inc3 ruling that a snapshot is a
+	// restore-speed optimization, not a journal replacement). Deleting
+	// an id that does not exist (already pruned, or never existed) is
+	// NOT an error — pruning is idempotent and safe to retry.
+	DeleteSnapshot(ctx context.Context, city CityKey, id SnapshotID) error
+
 	// ListCities returns every CityKey with at least one durably
 	// committed journal record or snapshot under the given tenant,
 	// sorted by CityID (deterministic order).

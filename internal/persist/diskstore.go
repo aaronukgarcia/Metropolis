@@ -340,6 +340,29 @@ func (s *DiskStore) GetSnapshot(ctx context.Context, city CityKey, id SnapshotID
 	return data, nil
 }
 
+// DeleteSnapshot implements Store. Removing an id that does not exist (or
+// never existed) is a no-op success — pruning is idempotent.
+func (s *DiskStore) DeleteSnapshot(ctx context.Context, city CityKey, id SnapshotID) error {
+	if err := s.checkNotCopied(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	dir := s.cityDir(city)
+	snapDir := filepath.Join(dir, snapshotsDirName)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	path := filepath.Join(snapDir, string(id)+snapshotSuffix)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("persist: delete snapshot: %w", err)
+	}
+	return nil
+}
+
 // ListSnapshots implements Store.
 func (s *DiskStore) ListSnapshots(ctx context.Context, city CityKey) ([]SnapshotID, error) {
 	if err := s.checkNotCopied(); err != nil {

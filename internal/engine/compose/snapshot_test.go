@@ -1,0 +1,517 @@
+package compose
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/aaronukgarcia/Metropolis/internal/engine/core"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
+	"github.com/aaronukgarcia/Metropolis/internal/persist"
+	"github.com/aaronukgarcia/Metropolis/internal/protocol"
+)
+
+// FEAT-1972079936 Phase 1 inc3 — durable snapshot cadence + snapshot-aware
+// restore. These tests prove: (1) ShouldSnapshot's cadence gate is exact and
+// deterministic (no wall-clock, GR#21), (2) MaybeSnapshot only ever writes
+// at cadence boundaries and its bounded retention (MaxRetainedSnapshots)
+// actually deletes the oldest snapshots, (3) the headline payoff —
+// snapshot-aware restore (latest snapshot + journal-tail replay) reproduces
+// EXACTLY the same StateDigest and clock tick as a straight-through
+// reference run, and also exactly matches the pre-existing genesis-replay
+// path, and (4) the digest-equality comparisons above have real teeth: a
+// deliberately truncated tail replay is proven to diverge, and
+// splitJournalAtTick's own boundary arithmetic is proven correct
+// (exact-boundary, mid-command straddling, and out-of-sync-journal error
+// cases).
+
+// advanceViaCommand submits an AdvanceTicks command through e.HandleCommand
+// (NOT e.AdvanceTicks directly) so the advance is durably journaled —
+// core.Engine.AdvanceTicks itself does not journal (see
+// core/engine.go:AdvanceTicks); only the command path
+// (handleAdvanceTicks -> accept -> journalAccepted) does. Snapshot-aware
+// restore's journal-tail replay depends on every tick-advancing step being
+// a journaled AdvanceTicks command, so every test in this file must drive
+// ticks this way, not via driveMultiDomain's direct e.AdvanceTicks call.
+func advanceViaCommand(t *testing.T, e *core.Engine, n int64) {
+	t.Helper()
+	cmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.NewCorrelationID(),
+		Kind:            protocol.KindAdvanceTicks,
+		Payload:         protocol.AdvanceTicksPayload{N: n},
+	}
+	res := e.HandleCommand(cmd)
+	if !res.Accepted {
+		t.Fatalf("AdvanceTicks(%d) command rejected: %+v", n, res.Error)
+	}
+}
+
+// buildPersistedComposition wires a fresh composition with durable
+// persistence enabled (Deps.PersistStore/PersistCity), so every accepted
+// command — gameplay AND AdvanceTicks — is durably journaled via
+// persistCommandJournaler (inc2).
+func buildPersistedComposition(t *testing.T, store persist.Store, city persist.CityKey) (*core.Engine, *Composition) {
+	t.Helper()
+	e := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
+	comp, err := Wire(e, &Deps{PersistStore: store, PersistCity: city})
+	if err != nil {
+		t.Fatalf("Wire (persisted): %v", err)
+	}
+	return e, comp
+}
+
+// driveGameplayOnly issues the same Buy+Zone+Build opening driveMultiDomain
+// uses (all journaled gameplay commands), WITHOUT any tick advance — tests
+// in this file drive ticks themselves via advanceViaCommand so cadence
+// boundaries land exactly where each test expects.
+func driveGameplayOnly(t *testing.T, e *core.Engine) {
+	t.Helper()
+	cells := []protocol.CellRef{{X: 0, Y: 0}, {X: 1, Y: 0}, {X: 0, Y: 1}}
+	buy := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.CorrelationID("snap-buy"),
+		Kind:            protocol.KindBuy,
+		Payload:         protocol.BuyPayload{Cell: cells[0]},
+	}
+	if res := e.HandleCommand(buy); !res.Accepted {
+		t.Fatalf("Buy rejected: %+v", res.Error)
+	}
+	for i, cell := range cells {
+		zone := protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   protocol.CorrelationID("snap-zone"),
+			Kind:            protocol.KindZone,
+			Payload:         protocol.ZonePayload{Cell: cell, ZoneType: "dwelling"},
+		}
+		if res := e.HandleCommand(zone); !res.Accepted {
+			t.Fatalf("Zone %d rejected: %+v", i, res.Error)
+		}
+		build := protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   protocol.CorrelationID("snap-build"),
+			Kind:            protocol.KindBuild,
+			Payload:         protocol.BuildPayload{Cell: cell, BuildingType: "dwelling"},
+		}
+		if res := e.HandleCommand(build); !res.Accepted {
+			t.Fatalf("Build %d rejected: %+v", i, res.Error)
+		}
+	}
+}
+
+// TestShouldSnapshot_CadenceIsExactAndDeterministic proves the cadence gate
+// fires ONLY at strictly-positive exact multiples of SnapshotCadenceTicks —
+// a pure function of tick, never wall-clock (GR#21).
+func TestShouldSnapshot_CadenceIsExactAndDeterministic(t *testing.T) {
+	cases := []struct {
+		tick int64
+		want bool
+	}{
+		{0, false},
+		{1, false},
+		{SnapshotCadenceTicks - 1, false},
+		{SnapshotCadenceTicks, true},
+		{SnapshotCadenceTicks + 1, false},
+		{2 * SnapshotCadenceTicks, true},
+		{2*SnapshotCadenceTicks - 1, false},
+		{3 * SnapshotCadenceTicks, true},
+	}
+	for _, tc := range cases {
+		if got := ShouldSnapshot(tc.tick); got != tc.want {
+			t.Errorf("ShouldSnapshot(%d) = %v, want %v", tc.tick, got, tc.want)
+		}
+	}
+	if SnapshotCadenceTicks != 360 {
+		t.Fatalf("SnapshotCadenceTicks = %d, want 360 (12*DailyTicksPerMonth=12*30, Aaron's 2026-08-31 ruling) — update this test's expectations if the placeholder was deliberately retuned", SnapshotCadenceTicks)
+	}
+}
+
+// TestMaybeSnapshot_FiresOnlyAtCadenceBoundaries drives a composition tick
+// by tick (the finest granularity, so no cadence boundary can ever be
+// skipped) and proves a durable snapshot is written EXACTLY at each
+// multiple of SnapshotCadenceTicks and at no other tick.
+func TestMaybeSnapshot_FiresOnlyAtCadenceBoundaries(t *testing.T) {
+	ctx := context.Background()
+	store := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "cadence"}
+	e, comp := buildPersistedComposition(t, store, city)
+
+	const totalTicks = int64(3)*SnapshotCadenceTicks + 5
+	var snapshotsAtTick []int64
+	for i := int64(0); i < totalTicks; i++ {
+		advanceViaCommand(t, e, 1)
+		_, ok, err := comp.MaybeSnapshot(ctx, store, city)
+		if err != nil {
+			t.Fatalf("MaybeSnapshot at tick %d: %v", i+1, err)
+		}
+		if ok {
+			snapshotsAtTick = append(snapshotsAtTick, i+1)
+		}
+	}
+
+	want := []int64{SnapshotCadenceTicks, 2 * SnapshotCadenceTicks, 3 * SnapshotCadenceTicks}
+	if len(snapshotsAtTick) != len(want) {
+		t.Fatalf("snapshots fired at %v, want %v", snapshotsAtTick, want)
+	}
+	for i := range want {
+		if snapshotsAtTick[i] != want[i] {
+			t.Fatalf("snapshots fired at %v, want %v", snapshotsAtTick, want)
+		}
+	}
+
+	ids, err := store.ListSnapshots(ctx, city)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(ids) != len(want) {
+		t.Fatalf("store holds %d snapshots, want %d (retention bound not yet exceeded)", len(ids), len(want))
+	}
+}
+
+// TestMaybeSnapshot_PruningRetainsBound proves bounded snapshot retention:
+// once more than MaxRetainedSnapshots cadence boundaries have been crossed,
+// the store never holds more than MaxRetainedSnapshots snapshots for the
+// city, and it is always the NEWEST ones that survive (the oldest are
+// pruned first) — mirroring engine.checkpoint's MaxRetainedForks pattern.
+// The journal itself (RestoreCommands) is proven UNAFFECTED by pruning —
+// snapshots are a restore-speed optimization only, never a journal
+// replacement (this increment's ruling).
+func TestMaybeSnapshot_PruningRetainsBound(t *testing.T) {
+	ctx := context.Background()
+	store := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "pruning"}
+	e, comp := buildPersistedComposition(t, store, city)
+
+	const cadenceCrossings = MaxRetainedSnapshots + 3
+	for i := int64(0); i < cadenceCrossings; i++ {
+		advanceViaCommand(t, e, SnapshotCadenceTicks)
+		id, ok, err := comp.MaybeSnapshot(ctx, store, city)
+		if err != nil {
+			t.Fatalf("MaybeSnapshot (crossing %d): %v", i, err)
+		}
+		if !ok {
+			t.Fatalf("MaybeSnapshot (crossing %d): expected a snapshot, got none (id=%q)", i, id)
+		}
+	}
+
+	ids, err := store.ListSnapshots(ctx, city)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(ids) != MaxRetainedSnapshots {
+		t.Fatalf("store holds %d snapshots after %d cadence crossings, want exactly MaxRetainedSnapshots=%d (pruning did not retain the bound)", len(ids), cadenceCrossings, MaxRetainedSnapshots)
+	}
+
+	// The journal itself must be completely unpruned: every crossing's
+	// AdvanceTicks command is still durably present.
+	cmds, err := RestoreCommands(ctx, store, city)
+	if err != nil {
+		t.Fatalf("RestoreCommands: %v", err)
+	}
+	var journaledTicks int64
+	for _, cmd := range cmds {
+		if cmd.Kind == protocol.KindAdvanceTicks {
+			journaledTicks += cmd.Payload.(protocol.AdvanceTicksPayload).N
+		}
+	}
+	if journaledTicks != cadenceCrossings*SnapshotCadenceTicks {
+		t.Fatalf("journal retained %d ticks worth of AdvanceTicks commands, want %d — pruning must never touch the journal", journaledTicks, cadenceCrossings*SnapshotCadenceTicks)
+	}
+}
+
+// TestSnapshotRestore_MatchesReferenceAndUsesTailReplay is the headline
+// payoff test: a live composition is driven through gameplay commands, then
+// two AdvanceTicks commands that land EXACTLY on a cadence boundary
+// (160+200=360), triggering one durable snapshot, then two more AdvanceTicks
+// commands AFTER the snapshot (10+10=20 more ticks, tick 380 final — kept
+// well inside the SAME calendar month the snapshot was taken in, exactly
+// like TestLoadAt_TickContinuity's own extraTicks does for LoadAt: crossing
+// a NEW month after a restore hits the separately-filed, already-documented
+// FEAT-1972079947 gap — engine.attract's own momentum state has no
+// save.Participant — which is LoadAt's known limitation, not something
+// this increment's snapshot/tail-replay plumbing introduces or is scoped to
+// fix).
+//
+// A completely independent reference composition is driven through the
+// IDENTICAL command sequence with no save/restore at all — the ground
+// truth. RestoreLatestSnapshotOrGenesis on a THIRD, freshly Wired
+// composition must reproduce the reference's StateDigest and clock tick
+// exactly, using the snapshot (usedSnapshot=true) plus ONLY the
+// post-snapshot journal tail — proving both that Save/LoadAt capture state
+// correctly (FEAT-1972079941/1972079943/1972079944's payoff) and that
+// splitJournalAtTick correctly excludes the pre-snapshot commands.
+func TestSnapshotRestore_MatchesReferenceAndUsesTailReplay(t *testing.T) {
+	ctx := context.Background()
+	runSequence := func(e *core.Engine) {
+		driveGameplayOnly(t, e)
+		advanceViaCommand(t, e, 160)
+		advanceViaCommand(t, e, 200) // tick=360 -- exact cadence boundary
+		advanceViaCommand(t, e, 10)  // tick=370 (still month 12)
+		advanceViaCommand(t, e, 10)  // tick=380 (still month 12)
+	}
+
+	// Reference: ground truth, no save/restore involved at all.
+	eRef, compRef := buildComposition(t)
+	runSequence(eRef)
+	refDigest := compRef.StateDigest()
+	refClock, err := eRef.Clock()
+	if err != nil {
+		t.Fatalf("Clock (reference): %v", err)
+	}
+	if refClock.Tick() != 380 {
+		t.Fatalf("precondition: reference tick = %d, want 380", refClock.Tick())
+	}
+
+	// Live: same sequence, durably journaled + snapshotted at cadence.
+	store := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "restore-payoff"}
+	eLive, compLive := buildPersistedComposition(t, store, city)
+	driveGameplayOnly(t, eLive)
+	advanceViaCommand(t, eLive, 160)
+	advanceViaCommand(t, eLive, 200)
+	if _, ok, err := compLive.MaybeSnapshot(ctx, store, city); err != nil {
+		t.Fatalf("MaybeSnapshot: %v", err)
+	} else if !ok {
+		t.Fatal("MaybeSnapshot: expected a snapshot at tick 360, got none")
+	}
+	advanceViaCommand(t, eLive, 10)
+	advanceViaCommand(t, eLive, 10)
+	if compLive.StateDigest() != refDigest {
+		t.Fatalf("precondition: live and reference digests differ before restore is even attempted")
+	}
+
+	ids, err := store.ListSnapshots(ctx, city)
+	if err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("precondition: expected exactly 1 snapshot, got %d", len(ids))
+	}
+
+	// Restore: fresh, never-ticked composition, via snapshot + tail replay.
+	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
+	compR, err := Wire(eR, nil)
+	if err != nil {
+		t.Fatalf("Wire (restore target): %v", err)
+	}
+	usedSnapshot, tick, err := RestoreLatestSnapshotOrGenesis(ctx, eR, compR, store, city)
+	if err != nil {
+		t.Fatalf("RestoreLatestSnapshotOrGenesis: %v", err)
+	}
+	if !usedSnapshot {
+		t.Fatal("RestoreLatestSnapshotOrGenesis: usedSnapshot = false, want true (a snapshot exists)")
+	}
+	if tick != 380 {
+		t.Fatalf("RestoreLatestSnapshotOrGenesis: tick = %d, want 380", tick)
+	}
+	if compR.StateDigest() != refDigest {
+		t.Fatalf("snapshot-aware restore StateDigest mismatch: got %x, want %x (reference)", compR.StateDigest(), refDigest)
+	}
+	restoredClock, err := eR.Clock()
+	if err != nil {
+		t.Fatalf("Clock (restored): %v", err)
+	}
+	if restoredClock.Tick() != refClock.Tick() {
+		t.Fatalf("restored clock tick = %d, want %d", restoredClock.Tick(), refClock.Tick())
+	}
+}
+
+// TestSnapshotRestore_FallsBackToGenesisWhenNoSnapshotExists proves the
+// no-snapshot-yet fallback: fewer ticks than one cadence period means the
+// store holds zero snapshots, and restore must fall back to the
+// pre-existing genesis-replay path (usedSnapshot=false) while still
+// reproducing the reference exactly.
+func TestSnapshotRestore_FallsBackToGenesisWhenNoSnapshotExists(t *testing.T) {
+	ctx := context.Background()
+	runSequence := func(e *core.Engine) {
+		driveGameplayOnly(t, e)
+		advanceViaCommand(t, e, 100) // well short of SnapshotCadenceTicks=360
+	}
+
+	eRef, compRef := buildComposition(t)
+	runSequence(eRef)
+	refDigest := compRef.StateDigest()
+
+	store := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "genesis-fallback"}
+	eLive, compLive := buildPersistedComposition(t, store, city)
+	runSequence(eLive)
+	if _, ok, err := compLive.MaybeSnapshot(ctx, store, city); err != nil {
+		t.Fatalf("MaybeSnapshot: %v", err)
+	} else if ok {
+		t.Fatal("MaybeSnapshot fired before reaching a cadence boundary")
+	}
+
+	if ids, err := store.ListSnapshots(ctx, city); err != nil {
+		t.Fatalf("ListSnapshots: %v", err)
+	} else if len(ids) != 0 {
+		t.Fatalf("precondition: expected zero snapshots, got %d", len(ids))
+	}
+
+	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
+	compR, err := Wire(eR, nil)
+	if err != nil {
+		t.Fatalf("Wire (restore target): %v", err)
+	}
+	usedSnapshot, tick, err := RestoreLatestSnapshotOrGenesis(ctx, eR, compR, store, city)
+	if err != nil {
+		t.Fatalf("RestoreLatestSnapshotOrGenesis: %v", err)
+	}
+	if usedSnapshot {
+		t.Fatal("RestoreLatestSnapshotOrGenesis: usedSnapshot = true, want false (no snapshot exists — must fall back to genesis)")
+	}
+	if tick != 100 {
+		t.Fatalf("tick = %d, want 100", tick)
+	}
+	if compR.StateDigest() != refDigest {
+		t.Fatalf("genesis-fallback restore StateDigest mismatch: got %x, want %x", compR.StateDigest(), refDigest)
+	}
+}
+
+// TestSnapshotRestore_ProveCanFail_TruncatedTailDiverges proves the
+// digest-equality assertions above have real teeth: replaying only PART of
+// the correct journal tail (dropping the final AdvanceTicks command) must
+// NOT reproduce the reference's StateDigest. This is the negative control
+// — if this test ever passed with digests equal, the comparison used by
+// the payoff test above would be vacuous.
+func TestSnapshotRestore_ProveCanFail_TruncatedTailDiverges(t *testing.T) {
+	ctx := context.Background()
+
+	eRef, compRef := buildComposition(t)
+	driveGameplayOnly(t, eRef)
+	advanceViaCommand(t, eRef, 160)
+	advanceViaCommand(t, eRef, 200) // tick=360
+	advanceViaCommand(t, eRef, 10)  // tick=370
+	advanceViaCommand(t, eRef, 10)  // tick=380 (full, correct sequence)
+	refDigest := compRef.StateDigest()
+
+	store := persist.NewMemStore()
+	city := persist.CityKey{TenantID: "t", CityID: "truncated-tail"}
+	eLive, compLive := buildPersistedComposition(t, store, city)
+	driveGameplayOnly(t, eLive)
+	advanceViaCommand(t, eLive, 160)
+	advanceViaCommand(t, eLive, 200)
+	if _, ok, err := compLive.MaybeSnapshot(ctx, store, city); err != nil || !ok {
+		t.Fatalf("MaybeSnapshot: ok=%v err=%v", ok, err)
+	}
+	advanceViaCommand(t, eLive, 10)
+	advanceViaCommand(t, eLive, 10)
+
+	ids, err := store.ListSnapshots(ctx, city)
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("precondition: ListSnapshots ids=%v err=%v", ids, err)
+	}
+	data, err := store.GetSnapshot(ctx, city, ids[0])
+	if err != nil {
+		t.Fatalf("GetSnapshot: %v", err)
+	}
+	allCmds, err := RestoreCommands(ctx, store, city)
+	if err != nil {
+		t.Fatalf("RestoreCommands: %v", err)
+	}
+
+	eR := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
+	compR, err := Wire(eR, nil)
+	if err != nil {
+		t.Fatalf("Wire: %v", err)
+	}
+	snapTick, err := compR.restoreFromSnapshotBytes(data)
+	if err != nil {
+		t.Fatalf("restoreFromSnapshotBytes: %v", err)
+	}
+	fullTail, err := splitJournalAtTick(allCmds, snapTick, city, errs.NewCorrelationID())
+	if err != nil {
+		t.Fatalf("splitJournalAtTick: %v", err)
+	}
+	if len(fullTail) < 2 {
+		t.Fatalf("precondition: tail has %d commands, want at least 2 to truncate", len(fullTail))
+	}
+	// Deliberately DROP the final tail command (the last AdvanceTicks) --
+	// this is the injected fault this test exists to catch.
+	truncatedTail := fullTail[:len(fullTail)-1]
+	if err := replayCommands(eR, truncatedTail); err != nil {
+		t.Fatalf("replayCommands (truncated): %v", err)
+	}
+
+	if compR.StateDigest() == refDigest {
+		t.Fatal("prove-can-fail: a TRUNCATED tail replay produced the SAME digest as the correct reference -- the digest-equality comparison has no teeth")
+	}
+	restoredClock, err := eR.Clock()
+	if err != nil {
+		t.Fatalf("Clock: %v", err)
+	}
+	if restoredClock.Tick() == 380 {
+		t.Fatal("prove-can-fail: truncated tail still reached tick 380 -- the dropped command carried no ticks, weakening this test's fault injection")
+	}
+}
+
+// TestSplitJournalAtTick_ExactBoundary proves the exact-multiple case: a
+// non-advance command occurring strictly BEFORE the snapshot tick is
+// excluded from the tail, and everything (advance or not) occurring at or
+// after the snapshot tick is included verbatim.
+func TestSplitJournalAtTick_ExactBoundary(t *testing.T) {
+	adv := func(n int64) protocol.Command {
+		return protocol.Command{Kind: protocol.KindAdvanceTicks, Payload: protocol.AdvanceTicksPayload{N: n}}
+	}
+	buy := protocol.Command{Kind: protocol.KindBuy, CorrelationID: "pre-boundary-buy"}
+	zone := protocol.Command{Kind: protocol.KindZone, CorrelationID: "post-boundary-zone"}
+	cmds := []protocol.Command{adv(100), buy, adv(260), zone}
+	city := persist.CityKey{TenantID: "t", CityID: "split"}
+
+	tail, err := splitJournalAtTick(cmds, 360, city, errs.NewCorrelationID())
+	if err != nil {
+		t.Fatalf("splitJournalAtTick: %v", err)
+	}
+	if len(tail) != 1 || tail[0].CorrelationID != "post-boundary-zone" {
+		t.Fatalf("tail = %v, want exactly [zone] (the pre-boundary buy must be excluded)", tail)
+	}
+}
+
+// TestSplitJournalAtTick_StraddlingCommandIsSplit proves the defensive
+// mid-command straddling path: an AdvanceTicks command whose N would carry
+// the running tick total PAST snapshotTick (rather than landing exactly on
+// it) is replaced in the tail by a synthetic AdvanceTicks command carrying
+// only the remainder, so replaying the tail still advances the clock by
+// exactly the same total the full journal would have.
+func TestSplitJournalAtTick_StraddlingCommandIsSplit(t *testing.T) {
+	adv := func(n int64) protocol.Command {
+		return protocol.Command{Kind: protocol.KindAdvanceTicks, Payload: protocol.AdvanceTicksPayload{N: n}}
+	}
+	cmds := []protocol.Command{adv(200), adv(200)} // cumulative 200, then 400 -- snapshotTick=300 lands mid-second-command
+	city := persist.CityKey{TenantID: "t", CityID: "split-straddle"}
+
+	tail, err := splitJournalAtTick(cmds, 300, city, errs.NewCorrelationID())
+	if err != nil {
+		t.Fatalf("splitJournalAtTick: %v", err)
+	}
+	if len(tail) != 1 {
+		t.Fatalf("tail = %v, want exactly 1 synthetic AdvanceTicks command", tail)
+	}
+	got, ok := tail[0].Payload.(protocol.AdvanceTicksPayload)
+	if !ok {
+		t.Fatalf("tail[0].Payload = %T, want protocol.AdvanceTicksPayload", tail[0].Payload)
+	}
+	if got.N != 100 {
+		t.Fatalf("tail[0].Payload.N = %d, want 100 (400-300 remainder)", got.N)
+	}
+}
+
+// TestSplitJournalAtTick_ProveCanFail_JournalShorterThanSnapshotErrors
+// proves a journal that never reaches the recorded snapshot tick (a
+// corrupt/mismatched Store) surfaces MET-G810 rather than silently
+// returning an empty or partial tail.
+func TestSplitJournalAtTick_ProveCanFail_JournalShorterThanSnapshotErrors(t *testing.T) {
+	adv := func(n int64) protocol.Command {
+		return protocol.Command{Kind: protocol.KindAdvanceTicks, Payload: protocol.AdvanceTicksPayload{N: n}}
+	}
+	cmds := []protocol.Command{adv(100)} // only 100 ticks -- snapshotTick=360 is never reached
+	city := persist.CityKey{TenantID: "t", CityID: "split-short"}
+
+	_, err := splitJournalAtTick(cmds, 360, city, errs.NewCorrelationID())
+	if err == nil {
+		t.Fatal("prove-can-fail: an out-of-sync journal (never reaches the snapshot tick) silently succeeded")
+	}
+	if !errors.Is(err, &errs.E{Code: ErrSnapshotTailShort}) {
+		t.Fatalf("err = %v, want to wrap ErrSnapshotTailShort", err)
+	}
+}

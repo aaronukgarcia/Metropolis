@@ -109,6 +109,44 @@ func runStoreConformance(t *testing.T, newStore storeFactory) {
 		}
 	})
 
+	t.Run("delete_snapshot_removes_it_and_is_idempotent", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "tenant-a", CityID: "city-delete"}
+
+		id1, err := s.PutSnapshot(ctx, city, []byte("snap-1"))
+		if err != nil {
+			t.Fatalf("PutSnapshot 1: %v", err)
+		}
+		id2, err := s.PutSnapshot(ctx, city, []byte("snap-2"))
+		if err != nil {
+			t.Fatalf("PutSnapshot 2: %v", err)
+		}
+
+		if err := s.DeleteSnapshot(ctx, city, id1); err != nil {
+			t.Fatalf("DeleteSnapshot: %v", err)
+		}
+		if _, err := s.GetSnapshot(ctx, city, id1); err != ErrNotFound {
+			t.Fatalf("GetSnapshot after delete: err = %v, want ErrNotFound", err)
+		}
+		ids, err := s.ListSnapshots(ctx, city)
+		if err != nil {
+			t.Fatalf("ListSnapshots: %v", err)
+		}
+		if len(ids) != 1 || ids[0] != id2 {
+			t.Fatalf("ListSnapshots after delete = %v, want [%s]", ids, id2)
+		}
+
+		// Deleting again (already gone) and deleting a never-existed id are
+		// both no-ops, not errors — pruning must be safe to retry.
+		if err := s.DeleteSnapshot(ctx, city, id1); err != nil {
+			t.Fatalf("DeleteSnapshot (already deleted): %v", err)
+		}
+		if err := s.DeleteSnapshot(ctx, city, SnapshotID("never-existed")); err != nil {
+			t.Fatalf("DeleteSnapshot (never existed): %v", err)
+		}
+	})
+
 	t.Run("city_isolation_journal_and_snapshots", func(t *testing.T) {
 		s := newStore(t) // static type Store — see storeFactory's signature
 		ctx := context.Background()
