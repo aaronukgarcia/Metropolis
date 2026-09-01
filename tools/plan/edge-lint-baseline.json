@@ -1,0 +1,28 @@
+{
+  "$comment": "BUG-482 edge-lint baseline — explicit allowlist of reverse-direction findings that already existed on trunk when this lint was introduced (commit 757087a, 2026-09-01). The gate is green on trunk because every entry here is baselined; it reddens the moment a NEW (from,to,source) or (key,side) combination appears that is not listed. Burn-down of these 3 entries is separate follow-up work (the lead files it, per BUG-482's instructions) — do NOT silence a finding by adding it here casually; every addition should be reviewed the same way a code.json edge registration would be.",
+  "createdAt": "2026-09-01",
+  "createdBy": "BUG-482",
+  "entries": [
+    {
+      "code": "EDGE-LINT-001",
+      "from": "feat.skeleton",
+      "to": "foundation.num",
+      "source": "import",
+      "note": "cmd/metropolis (feat.skeleton) imports internal/foundation/num (tickdriver.go) with no outbound.calls edge in code.json"
+    },
+    {
+      "code": "EDGE-LINT-001",
+      "from": "feat.skeleton",
+      "to": "ui.alerts",
+      "source": "import",
+      "note": "cmd/metropolis (feat.skeleton) imports internal/ui/screens/chrome (registered as ui.alerts) with no outbound.calls edge in code.json"
+    },
+    {
+      "code": "EDGE-LINT-001",
+      "from": "harness.replay",
+      "to": "foundation.errors",
+      "source": "import",
+      "note": "internal/harness/replay (harness.replay) imports internal/foundation/errs with no outbound.calls edge in code.json"
+    }
+  ]
+}
