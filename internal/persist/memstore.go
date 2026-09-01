@@ -168,6 +168,33 @@ func (s *MemStore) ListSnapshots(ctx context.Context, city CityKey) ([]SnapshotI
 	return ids, nil
 }
 
+// DeleteSnapshot implements Store. Removing an id that does not exist (or
+// never existed, or the city was never written) is a no-op success —
+// pruning is idempotent.
+func (s *MemStore) DeleteSnapshot(ctx context.Context, city CityKey, id SnapshotID) error {
+	if err := s.checkNotCopied(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.cities[cityMapKey(city)]
+	if !ok {
+		return nil
+	}
+	delete(c.snapshots, id)
+	kept := make([]int64, 0, len(c.seqs))
+	for _, sq := range c.seqs {
+		if SnapshotID(formatSeq(sq)) != id {
+			kept = append(kept, sq)
+		}
+	}
+	c.seqs = kept
+	return nil
+}
+
 // ListCities implements Store.
 func (s *MemStore) ListCities(ctx context.Context, tenant string) ([]CityKey, error) {
 	if err := s.checkNotCopied(); err != nil {

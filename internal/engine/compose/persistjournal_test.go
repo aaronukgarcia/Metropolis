@@ -246,6 +246,9 @@ func (failingStore) GetSnapshot(context.Context, persist.CityKey, persist.Snapsh
 func (failingStore) ListSnapshots(context.Context, persist.CityKey) ([]persist.SnapshotID, error) {
 	panic("failingStore.ListSnapshots called")
 }
+func (failingStore) DeleteSnapshot(context.Context, persist.CityKey, persist.SnapshotID) error {
+	panic("failingStore.DeleteSnapshot called")
+}
 func (failingStore) ListCities(context.Context, string) ([]persist.CityKey, error) {
 	panic("failingStore.ListCities called")
 }

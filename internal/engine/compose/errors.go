@@ -89,4 +89,35 @@ const (
 	// credit flow, silently breaking money conservation (GR#16) — this
 	// code is raised instead of posting the sign-flipped transaction.
 	ErrInvalidWireAmount = "MET-G807"
+
+	// ErrSnapshotPackFailed (FEAT-1972079936 Phase 1 inc3): building a
+	// durable snapshot payload failed — either Save into the temp bundle
+	// directory failed, or zipping that directory into one opaque []byte
+	// failed. ctx["step"] names which sub-step failed
+	// (mkdtemp/save/zip).
+	ErrSnapshotPackFailed = "MET-G808"
+
+	// ErrSnapshotUnpackFailed (FEAT-1972079936 Phase 1 inc3): restoring
+	// from a durable snapshot payload failed — unzipping it, listing the
+	// unpacked save bundle, or locating the composition's own save
+	// summary inside it. ctx["step"] names which sub-step failed
+	// (mkdtemp/unzip/list/locate).
+	ErrSnapshotUnpackFailed = "MET-G809"
+
+	// ErrSnapshotTailShort (FEAT-1972079936 Phase 1 inc3): the journal-tail
+	// split walked the FULL durable journal for a city and the running
+	// AdvanceTicks total never reached the latest snapshot's recorded
+	// tick. This means the snapshot and journal are out of sync for that
+	// city (a corrupt Store, or a snapshot written against a different
+	// city's journal) — a partial/best-effort replay is refused.
+	ErrSnapshotTailShort = "MET-G810"
+
+	// ErrSnapshotTailReplayRejected (FEAT-1972079936 Phase 1 inc3): during
+	// snapshot-aware restore, a command in the journal tail (the commands
+	// recorded after the latest snapshot's tick) was rejected by the
+	// freshly LoadAt'd engine. Since the same command was accepted when it
+	// was originally journaled, a rejection here means the loaded snapshot
+	// state diverged from what produced the journal, or the command
+	// stream is corrupt.
+	ErrSnapshotTailReplayRejected = "MET-G811"
 )

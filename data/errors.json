@@ -2351,6 +2351,30 @@
       "message": "extcommute finance seam rejected a non-positive money amount ({amount} micropounds) for {verb}",
       "remedy": "A FinanceSeam verb (RecordOffMapWage/RemoveOffMapWage/RecordBusinessRates/RecordCorpShare/RecordWageLeakage) was called with a negative amountMicropounds. A negative amount posted through the debit/credit pair would reverse the credit flow (money conservation, GR#16) -- the seam rejects it loudly instead of posting a sign-flipped transaction. Fix the caller (engine.extcommute) so it never derives a negative wage/amount."
     },
+    "MET-G808": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "compose snapshot packaging failed while building the durable snapshot payload ({step})",
+      "remedy": "Composition.buildSnapshotBytes could not Save the composed state to a temp directory or could not zip it into a single opaque payload for persist.Store.PutSnapshot. Check the underlying error (wrapped) and disk space/permissions on the OS temp directory."
+    },
+    "MET-G809": {
+      "severity": "error",
+      "module": "feat.compositionroot",
+      "message": "compose snapshot restore failed while unpacking a durable snapshot payload ({step})",
+      "remedy": "restoreFromSnapshotBytes could not unzip a persist.Store snapshot payload into a temp directory, or could not locate/parse the composition save bundle inside it. The snapshot record itself may be corrupt -- check the wrapped error."
+    },
+    "MET-G810": {
+      "severity": "fatal",
+      "module": "feat.compositionroot",
+      "message": "durable journal for {city} has fewer AdvanceTicks than the latest snapshot's recorded tick {tick}",
+      "remedy": "The journal-tail replay walked the FULL durable journal and never reached the snapshot's recorded tick. This means the snapshot and journal are out of sync (a corrupt/mismatched Store, or a snapshot written against a DIFFERENT city's journal) -- do not attempt a partial replay; investigate the Store contents for this city."
+    },
+    "MET-G811": {
+      "severity": "fatal",
+      "module": "feat.compositionroot",
+      "message": "journal-tail replay after snapshot restore rejected command {kind} ({correlationId})",
+      "remedy": "A command in the durable journal tail (the commands after the latest snapshot's recorded tick) was rejected by the freshly LoadAt'd engine during snapshot-aware restore. Since the same command was accepted originally, this indicates the loaded snapshot state diverged from what produced the journal, or the command stream is corrupt -- fall back to genesis replay (RestoreCommands + full replay) and file a determinism bug (GR#21)."
+    },
     "MET-G900": {
       "severity": "error",
       "module": "engine.unlocks",
