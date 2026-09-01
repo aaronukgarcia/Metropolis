@@ -1742,7 +1742,8 @@
         "engine.firms",
         "int.persist",
         "feat.saveux",
-        "engine.unlocks"
+        "engine.unlocks",
+        "int.serializer"
       ],
       "calls": [
         "engine.core",
@@ -1777,7 +1778,8 @@
         "int.persist",
         "foundation.data",
         "feat.saveux",
-        "engine.unlocks"
+        "engine.unlocks",
+        "int.serializer"
       ],
       "sprint": 6
     },

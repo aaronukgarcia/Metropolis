@@ -941,7 +941,8 @@
         "engine.firms",
         "int.persist",
         "feat.saveux",
-        "engine.unlocks"
+        "engine.unlocks",
+        "int.serializer"
       ]
     },
     {

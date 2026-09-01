@@ -810,6 +810,10 @@
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
           },
           {
+            "key": "feat.compositionroot",
+            "outboundGuid": "ccb71e33-e413-4de2-afc2-4a453beec322"
+          },
+          {
             "key": "feat.debugmode",
             "outboundGuid": "ac1e5b30-d9e6-4ffd-917d-e933e2c07f8d"
           },
@@ -5044,6 +5048,11 @@
             "key": "engine.unlocks",
             "moduleGuid": "50d7fc81-4770-4361-854c-8675fce10299",
             "inboundGuid": "865f4351-b2c5-48fd-aa71-261c24e1ac3c"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

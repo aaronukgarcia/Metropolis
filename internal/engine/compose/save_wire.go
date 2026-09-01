@@ -3,6 +3,7 @@ package compose
 import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/build"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/crime"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
@@ -52,8 +53,25 @@ const compositionSaveAppVersion = "metropolis-compose"
 // Order is fixed and load-order-independent (save routes each shard back to
 // its Participant by Kind, and a fresh RecordSource is taken per Source
 // call), but stated explicitly so the saved shard sequence is deterministic:
-// world, citizens, finance, build, refuse, traffic, unlocks — the seven
-// modules that have implemented the contract as of FEAT-1972079941.
+// world, citizens, finance, build, refuse, traffic, unlocks, crime, then the
+// composition root's OWN ledger participant.
+//
+// FEAT-1972079943 completed the full-composed StateDigest STATE SNAPSHOT
+// round-trip by adding the last two entries:
+//   - crime (crime.NewSaveParticipant, the 8th module participant): crime
+//     observables are part of StateDigest but were saved by nothing.
+//   - the compose-owned conservation/liveness ledgers
+//     (newComposeLedgerParticipant, Kind "compose"): the durable simState
+//     fields StateDigest hashes that no module holds — see
+//     compose_ledger_participant.go's durable-vs-derived analysis. The
+//     derived mirrors (treasury/citizenWealth) are NOT in that participant;
+//     Load recomputes them from the restored finance ledger.
+//
+// SNAPSHOT, NOT tick-continuous: Save/Load restore module + ledger STATE so
+// StateDigest() matches AT THE LOAD POINT, but do NOT restore the engine clock
+// (a loaded composition is at tick 0). Clock restoration is FEAT-1972079944
+// (it touches the sealed-clock invariant); the snapshot+journal-tail restore
+// path (FEAT-1972079936 inc3) re-establishes the clock via tail-replay.
 func (c *Composition) Participants() []save.Participant {
 	st := c.state
 	return []save.Participant{
@@ -64,6 +82,8 @@ func (c *Composition) Participants() []save.Participant {
 		refuse.NewSaveParticipant(st.refuse),
 		traffic.NewSaveParticipant(st.traffic),
 		unlocks.NewSaveParticipant(st.unlocks),
+		crime.NewSaveParticipant(st.crime),
+		newComposeLedgerParticipant(st),
 	}
 }
 
@@ -92,9 +112,14 @@ func (c *Composition) Save(root string) error {
 // written by Save under root. It builds a save.Manager over THIS
 // composition's Participants() (so each shard streams straight back into
 // this composition's live module instances via their Handler) and loads the
-// well-known composition bundle. A fresh Composition therefore becomes an
-// exact replica of the saved one for every module that implements the
-// Participant contract.
+// well-known composition bundle. A fresh Composition therefore becomes a
+// STATE-EXACT replica of the saved one for every module that implements the
+// Participant contract: its StateDigest() matches AT the load point. This is a
+// snapshot, not a tick-continuous resume — Load does NOT restore the engine
+// clock (a loaded composition is at tick 0), so continuing to tick a loaded
+// composition is NOT equivalent to continuing the original. Clock restoration
+// is FEAT-1972079944; the journal-tail replay (FEAT-1972079936 inc3) supplies
+// the clock/continuation on top of this state snapshot.
 func (c *Composition) Load(root string) error {
 	summaries, _, err := save.List(root)
 	if err != nil {
@@ -120,5 +145,15 @@ func (c *Composition) Load(root string) error {
 	if _, _, err := mgr.Load(dir); err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "save", "step": "load", "dir": dir})
 	}
+	// FEAT-1972079943 — recompute the DERIVED compose-owned ledgers from the
+	// now-restored modules. treasury/citizenWealth are publish-mirrors of the
+	// finance ledger (AcctTreasury / AcctHouseholds); the compose ledger
+	// participant deliberately does NOT serialize them, so re-sync them here,
+	// after mgr.Load has restored the finance participant. Order-safe:
+	// syncMoneyFromLedger reads only the finance module, which the load above
+	// has already reconstructed. With the durable ledgers restored by the
+	// compose participant and these two mirrors recomputed, the full
+	// StateDigest round-trips exactly.
+	c.state.syncMoneyFromLedger()
 	return nil
 }

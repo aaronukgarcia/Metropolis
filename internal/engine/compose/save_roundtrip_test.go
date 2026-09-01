@@ -128,9 +128,10 @@ func TestSaveRoundTrip_PerModuleStateIsByteIdentical(t *testing.T) {
 
 	// Sanity: the driven composition is genuinely non-trivial (some module
 	// state moved off its post-Wire default), so an all-empty "round trip"
-	// cannot pass vacuously.
-	if len(streamsA) != 7 {
-		t.Fatalf("expected 7 participants, got %d", len(streamsA))
+	// cannot pass vacuously. Nine participants as of FEAT-1972079943: the
+	// seven modules + crime + the compose-owned ledger participant.
+	if len(streamsA) != 9 {
+		t.Fatalf("expected 9 participants, got %d", len(streamsA))
 	}
 
 	dir := t.TempDir()
@@ -192,19 +193,26 @@ func TestSaveRoundTrip_ProveCanFail(t *testing.T) {
 	}
 }
 
-// TestSaveRoundTrip_StateDigestCoverageFinding documents the FINDING (not a
-// weakened assertion): Composition.StateDigest() does NOT round-trip
-// through Save/Load of the seven participants, because StateDigest hashes
-// state that no participant covers — engine.crime observables and the
-// composition root's OWN simState conservation/liveness ledgers (treasury,
-// citizenWealth, moneyFlows, netMigration, consumptionDelivered,
-// vitalBirths/Deaths, the people/money opening+delta pairs). It is
-// simultaneously a SUPERSET (crime + compose ledgers) and not a superset
-// (it omits build/traffic/world/unlocks), so it is the wrong oracle for
-// "did the seven modules round-trip". This test records which digest
-// components survive a load and which do not, so the coverage gap is
-// visible and tracked rather than silently papered over.
-func TestSaveRoundTrip_StateDigestCoverageFinding(t *testing.T) {
+// TestSaveRoundTrip_StateDigestRoundTripsExactly is the FEAT-1972079943
+// HEADLINE: after Save→Load into a FRESH composition, the FULL composed
+// engine's StateDigest() — every observable it hashes, including crime and the
+// composition root's OWN conservation/liveness ledgers — is byte-identical to
+// the original. This is the property the prior build could not achieve: crime
+// was not a save participant, and the compose-owned durable ledgers
+// (moneyFlows, netMigration, consumptionDelivered, vitalBirths/Deaths, and the
+// people/money opening+delta pairs) were saved by nothing. Crime is now the
+// 8th participant and a compose-owned ledger participant serializes the durable
+// fields; the derived mirrors (treasury/citizenWealth) are recomputed from the
+// restored finance ledger in Composition.Load. Together the full digest now
+// round-trips EXACTLY at the load point.
+//
+// This is a STATE SNAPSHOT: the digest matches at the load point, but Load does
+// NOT restore the engine clock (see TestSaveRoundTrip_IsSnapshotNotTickContinuous).
+// The clock-relative BUG-288 ledger-closing trackers are therefore deliberately
+// NOT serialized — restoring them onto a tick-0 engine would freeze the ledger
+// close (FEAT-1972079944 restores the clock; FEAT-1972079936 inc3's journal
+// tail supplies continuation).
+func TestSaveRoundTrip_StateDigestRoundTripsExactly(t *testing.T) {
 	eA, compA := buildComposition(t)
 	driveMultiDomain(t, eA, compA)
 	digestA := compA.StateDigest()
@@ -220,13 +228,90 @@ func TestSaveRoundTrip_StateDigestCoverageFinding(t *testing.T) {
 	}
 	digestB := compB.StateDigest()
 
-	// The saved modules DID round-trip (proven by the per-module test), so
-	// finance/citizens/refuse — the StateDigest components those modules
-	// own — match; crime and the compose-owned ledgers do NOT, so the full
-	// digest differs. Record the observable ledger fields on both sides.
-	t.Logf("StateDigest A == B: %v", digestA == digestB)
-	t.Logf("compose ledger A: treasury=%d citizenWealth=%d moneyFlows=%d netMigration=%d vitalBirths=%d vitalDeaths=%d",
-		compA.Treasury(), compA.CitizenWealth(), compA.MoneyFlows(), compA.NetMigration(), compA.VitalBirths(), compA.VitalDeaths())
-	t.Logf("compose ledger B: treasury=%d citizenWealth=%d moneyFlows=%d netMigration=%d vitalBirths=%d vitalDeaths=%d",
-		compB.Treasury(), compB.CitizenWealth(), compB.MoneyFlows(), compB.NetMigration(), compB.VitalBirths(), compB.VitalDeaths())
+	if digestA != digestB {
+		// Surface the compose-owned ledger fields on both sides to localise
+		// any residual divergence to a concrete field.
+		t.Errorf("full StateDigest did NOT round-trip: A=%x B=%x", digestA, digestB)
+		t.Logf("compose ledger A: treasury=%d citizenWealth=%d moneyFlows=%d netMigration=%d consumption=%f vitalBirths=%d vitalDeaths=%d",
+			compA.Treasury(), compA.CitizenWealth(), compA.MoneyFlows(), compA.NetMigration(), compA.ConsumptionDelivered(), compA.VitalBirths(), compA.VitalDeaths())
+		t.Logf("compose ledger B: treasury=%d citizenWealth=%d moneyFlows=%d netMigration=%d consumption=%f vitalBirths=%d vitalDeaths=%d",
+			compB.Treasury(), compB.CitizenWealth(), compB.MoneyFlows(), compB.NetMigration(), compB.ConsumptionDelivered(), compB.VitalBirths(), compB.VitalDeaths())
+	}
+}
+
+// TestSaveRoundTrip_IsSnapshotNotTickContinuous documents the SNAPSHOT
+// boundary explicitly (FEAT-1972079943 verdict): Composition.Save/Load restore
+// STATE — the loaded StateDigest matches the original AT the load point — but
+// do NOT restore the engine clock. A composition saved at tick>0 loads onto a
+// tick-0 engine. This is a positive assertion of the known limitation (not a
+// hidden divergence): state is snapshot-exact, the clock is not, so a
+// standalone loaded composition is not tick-continuous with the original.
+// Clock restoration is FEAT-1972079944; the journal-tail replay
+// (FEAT-1972079936 inc3) supplies continuation on top of this state snapshot.
+func TestSaveRoundTrip_IsSnapshotNotTickContinuous(t *testing.T) {
+	eA, compA := buildComposition(t)
+	driveMultiDomain(t, eA, compA)
+
+	clockA, err := eA.Clock()
+	if err != nil {
+		t.Fatalf("Clock (A): %v", err)
+	}
+	if clockA.Tick() == 0 {
+		t.Fatalf("precondition: driven composition A should be at tick>0, got tick=0 — the snapshot-boundary assertion would be vacuous")
+	}
+	digestA := compA.StateDigest()
+
+	dir := t.TempDir()
+	if err := compA.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	eB, compB := buildComposition(t)
+	if err := compB.Load(dir); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// STATE is restored: the digest matches at the load point.
+	if compB.StateDigest() != digestA {
+		t.Errorf("state snapshot: loaded StateDigest did NOT match original at the load point: A=%x B=%x", digestA, compB.StateDigest())
+	}
+
+	// The CLOCK is NOT restored: the loaded engine is at tick 0, documenting
+	// the snapshot's known limitation (clock restoration is FEAT-1972079944).
+	clockB, err := eB.Clock()
+	if err != nil {
+		t.Fatalf("Clock (B): %v", err)
+	}
+	if clockB.Tick() != 0 {
+		t.Errorf("snapshot boundary: expected loaded engine clock at tick 0 (Load restores state, not the clock — FEAT-1972079944), got tick=%d", clockB.Tick())
+	}
+}
+
+// TestSaveRoundTrip_StateDigestProveCanFail proves the exact-round-trip
+// assertion above has teeth: a composition loaded from the SAME bundle but
+// then advanced one extra month diverges in StateDigest, so the equality
+// assertion is not vacuously true (e.g. a StateDigest that ignored the
+// restored fields would match trivially).
+func TestSaveRoundTrip_StateDigestProveCanFail(t *testing.T) {
+	eA, compA := buildComposition(t)
+	driveMultiDomain(t, eA, compA)
+	digestA := compA.StateDigest()
+
+	dir := t.TempDir()
+	if err := compA.Save(dir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	eB, compB := buildComposition(t)
+	if err := compB.Load(dir); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Mutate the loaded composition — one extra month of ticks moves module
+	// AND compose-owned state, so its digest must differ from the saved one.
+	if err := eB.AdvanceTicks(errs.NewCorrelationID(), int64(core.DailyTicksPerMonth)); err != nil {
+		t.Fatalf("AdvanceTicks: %v", err)
+	}
+	if compB.StateDigest() == digestA {
+		t.Fatal("prove-can-fail: an extra month after load produced an identical StateDigest — the exact-round-trip assertion cannot detect a real difference")
+	}
 }
