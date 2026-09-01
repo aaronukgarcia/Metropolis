@@ -19,12 +19,18 @@ import assert from 'node:assert/strict';
 import { initialState, reducer, TICKS_PER_YEAR } from '../src/sim/engine.ts';
 import {
   DEBT_THRESHOLD_FOR_BAILOUT,
+  INSOLVENCY_WARNING_THRESHOLD,
   ADMINISTRATION_DURATION_TICKS,
   ADMINISTRATION_PLACE_BLOCKED_MESSAGE,
   ADMINISTRATION_POLICY_BLOCKED_MESSAGE,
 } from '../src/sim/fiscal.ts';
 import { isStateAffecting } from '../src/sim/journal.ts';
 import { placementCost, SPECS, pickAutoSpec } from '../src/sim/data.ts';
+
+// BUG-452 inc1 (2026-09-01): derived from the ratio-preserved thresholds (see
+// imf-insolvency-inc1.test.mjs) rather than hardcoded to the old £10M-scale
+// -6,000,000 literal, so this suite auto-scales with STARTING_TREASURY.
+const WARNING_BAND_FUNDS = Math.round((INSOLVENCY_WARNING_THRESHOLD + DEBT_THRESHOLD_FOR_BAILOUT) / 2);
 
 // Advance the state by one tick, forcing funds to a target value first (mirrors
 // imf-insolvency-inc1/inc2.test.mjs's helper exactly).
@@ -43,7 +49,7 @@ function tickN(state, n) {
 // precondition for the 'enterAdministration' action (AC-5).
 function enterBailout(fundsBelowThreshold = DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000) {
   const s0 = initialState();
-  const warning = tickAtFunds(s0, -6_000_000);
+  const warning = tickAtFunds(s0, WARNING_BAND_FUNDS);
   const crisis = tickAtFunds(warning, fundsBelowThreshold);
   assert.ok(crisis.bailoutState, 'precondition: bailout must be active');
   return crisis;
@@ -51,10 +57,11 @@ function enterBailout(fundsBelowThreshold = DEBT_THRESHOLD_FOR_BAILOUT - 1_000_0
 
 // FEAT-1972079882: any 'zones'-category structure is free to PLACE (placementCost
 // returns 0), so a zone is the genuinely free scenario for AC-6 — 'road' itself is
-// NOT free (see inc1's PAID_SPEC), it is 'network'-category and costs 40.
+// NOT free (see inc1's PAID_SPEC), it is 'network'-category and has a real cost
+// (BUG-452 inc1 rebased the catalogue — read live via placementCost(), never inlined).
 const FREE_SPEC = 'res_hut'; // zones-category — cost 0 via placementCost.
 const FREE_COST = placementCost(SPECS[FREE_SPEC]);
-const PAID_SPEC = 'road'; // network-category — cost 40 (mirrors inc1's PAID_SPEC).
+const PAID_SPEC = 'road'; // network-category — real cost (mirrors inc1's PAID_SPEC).
 const PAID_COST = placementCost(SPECS[PAID_SPEC]);
 
 assert.equal(FREE_COST, 0, 'precondition: a zone spec is free (AC-6 scenario 2 basis)');

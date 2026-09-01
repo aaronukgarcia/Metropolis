@@ -297,13 +297,24 @@ test('BUG-392 F1: pickAutoSpec sign cure — returns undersupplied service, not 
   // its demand is -100, not > 25), but it would pick from the wrong end of
   // the distribution. The test proves the sort works by demonstrating that
   // an undersupplied service is selected, never an oversupplied one.
-  const s = city(15000, {
-    // Healthcare: UNDERSUPPLIED
-    hea_clinic: 1,      // 5000 vs 15000 → demand ~+40
-    hea_hospital: 1,
-    // Police: OVERSUPPLIED (to ensure it's in the sorted list but not picked)
-    pol_station: 3,     // 30000 vs 15000 → demand -100
-  });
+  // BUG-452 inc1: services-category catalogue costs are now real (£M-scale),
+  // so the default STARTING_TREASURY (fiscal.ts) can no longer afford ANY
+  // candidate — pickAutoSpec's OWN affordability filter (proven separately by
+  // bug396-place-feedback.test.mjs #4) would then correctly return null
+  // regardless of sort direction, making this sort-order test vacuous. Funds
+  // is boosted here so a real candidate is affordable and the sort-direction
+  // behaviour this test actually targets is exercised.
+  const s = city(
+    15000,
+    {
+      // Healthcare: UNDERSUPPLIED
+      hea_clinic: 1,      // 5000 vs 15000 → demand ~+40
+      hea_hospital: 1,
+      // Police: OVERSUPPLIED (to ensure it's in the sorted list but not picked)
+      pol_station: 3,     // 30000 vs 15000 → demand -100
+    },
+    (st) => ({ ...st, funds: 999_000_000_000 }),
+  );
 
   const demands = serviceDemandOf(s);
   const gpDemand = demands.find((d) => d.id === 'gp')?.value ?? 0;

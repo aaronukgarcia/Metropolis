@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import { initialState, reducer, TICKS_PER_YEAR, forcedSaleAssets } from '../src/sim/engine.ts';
 import {
   DEBT_THRESHOLD_FOR_BAILOUT,
+  INSOLVENCY_WARNING_THRESHOLD,
   BAILOUT_DURATION_TICKS,
   BAILOUT_INCOME_INJECTION,
   ADMINISTRATION_DURATION_TICKS,
@@ -48,10 +49,15 @@ function tickN(state, n) {
   return s;
 }
 
+// BUG-452 inc1 (2026-09-01): derived from the ratio-preserved thresholds (see
+// imf-insolvency-inc1.test.mjs) rather than hardcoded to the old £10M-scale
+// -6,000,000 literal, so this suite auto-scales with STARTING_TREASURY.
+const WARNING_BAND_FUNDS = Math.round((INSOLVENCY_WARNING_THRESHOLD + DEBT_THRESHOLD_FOR_BAILOUT) / 2);
+
 // Drive a fresh game into an ACTIVE first bailout (mirrors inc3's enterBailout()).
 function enterBailout(fundsBelowThreshold = DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000) {
   const s0 = initialState();
-  const warning = tickAtFunds(s0, -6_000_000);
+  const warning = tickAtFunds(s0, WARNING_BAND_FUNDS);
   const crisis = tickAtFunds(warning, fundsBelowThreshold);
   assert.ok(crisis.bailoutState, 'precondition: first bailout must be active');
   return crisis;

@@ -55,9 +55,17 @@ function mk(over) {
   };
 }
 
-const RES_ESTATE_COST = 45000;
+// BUG-452 inc1: read live from SPECS (never inlined) so this test survives any
+// future catalogue retune, per GR#15 — this exact class of bug (a hardcoded
+// 45000 duplicating res_estate's catalogue cost) went stale silently the
+// moment the money-scale rebase changed the real number underneath it.
+const RES_ESTATE_COST = SPECS['res_estate'].cost;
 const EXPECTED_UPGRADE_COST = Math.round(RES_ESTATE_COST * BUILDING_AUTO_SCALE_COST_FRACTION);
-assert.equal(EXPECTED_UPGRADE_COST, 6750, 'precondition: pinned literal matches 45000 * 0.15');
+assert.equal(
+  EXPECTED_UPGRADE_COST,
+  Math.round(RES_ESTATE_COST * 0.15),
+  'precondition: pinned literal matches RES_ESTATE_COST * 0.15',
+);
 
 // N well above the cap so the pre-fix behavior (all upgrade) and the fixed behavior
 // (at most MAX per pass) are clearly distinguishable.

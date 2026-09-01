@@ -26,11 +26,27 @@ const key = (x, y) => `${x},${y}`;
 
 // A clean board: initialState() but with the starter city REPLACED by an explicit
 // building list, unlockedAll so gateways (unlock 5/6) are placeable.
+//
+// BUG-452 inc1 (2026-09-01): funds is boosted well past the default
+// STARTING_TREASURY (fiscal.ts) — this file places genuine gateway landmarks
+// (station_ashford / land_airport), which the money-scale rebase moved from a
+// toy £80,000/£450,000 up to real airport/international-terminal capex. This
+// suite is about the deterministic rail-branch router, not affordability, so
+// funds is set generously ample rather than tied to the catalogue's exact
+// current figure (keeps this file decoupled from future catalogue retunes).
 function board(buildings) {
   const base = initialState();
   let maxId = 0;
   for (const b of buildings) if (b.id > maxId) maxId = b.id;
-  return { ...base, unlockedAll: true, buildings, nextId: maxId + 1, roadNotice: null, railNotice: null };
+  return {
+    ...base,
+    unlockedAll: true,
+    buildings,
+    nextId: maxId + 1,
+    roadNotice: null,
+    railNotice: null,
+    funds: 999_000_000_000,
+  };
 }
 
 // Lay a horizontal line of 1×1 tiles of `spec` at row y, x in [x0,x1).
@@ -316,7 +332,14 @@ function driveAndRecord(actions) {
 
 // Starter city has rail at y=84 and hs1 at y=205 (both full width). A gateway placed
 // BETWEEN them at y=140 (clear column x=300) branches UP to rail and DOWN to hs1.
+//
+// BUG-452 inc1 (2026-09-01): station_ashford's realistic international-terminal
+// capex now exceeds genesis STARTING_TREASURY (fiscal.ts), so a journaled
+// debugFunds top-up is recorded FIRST — same pattern as the imf-insolvency
+// suites' tickAtFunds helper — keeping this script fully replayable/
+// deterministic (debugFunds is a normal state-affecting, journaled action).
 const REPLAY_SCRIPT = [
+  { type: 'debugFunds', amount: 999_000_000_000 },
   { type: 'unlockAll' }, // station_ashford is unlock 5 — god-mode makes it placeable at genesis xp
   { type: 'place', spec: 'station_ashford', x: 300, y: 140 },
   { type: 'tick' },

@@ -7,27 +7,82 @@
 import type { FlowItem, InsolvencyState, PolicyId, ZoneKind } from './types.ts';
 
 /**
- * Council tax per tick: population * rate.residential * 2 / 100
- * PLACEHOLDER (balance-number regime): 2% effective rate per citizen.
+ * BUG-452 inc1 (2026-09-01, Aaron's approved GBP-scale anchors): the webconsole
+ * starting treasury, moved off the old toy £10,000,000 to a "truly small"
+ * £1.5M grant — the midpoint of Aaron's "start truly small, £1-2M" ruling.
+ * NAMED so the balance pass can retune this ONE constant and have every
+ * ratio-derived insolvency threshold below auto-scale with it (GR#3 SSOT).
+ * Referenced by engine.ts's rawState() (funds/fundsAtTickStart/fundsAtTickEnd).
+ */
+export const STARTING_TREASURY = 1_500_000;
+
+/**
+ * BUG-452 inc1 — must equal engine.ts's TICKS_PER_MONTH (30). Kept as a local
+ * reference constant (not an import) to avoid a fiscal.ts -> engine.ts
+ * module-eval-time cycle (engine.ts already imports FROM fiscal.ts) — mirrors
+ * the existing BAILOUT_DURATION_TICKS/TICKS_PER_YEAR pattern below. Asserted
+ * equal to engine.ts's TICKS_PER_MONTH by a test.
+ */
+const TICKS_PER_MONTH_REF = 30;
+
+/**
+ * BUG-452 inc1 — real UK-grounded per-citizen monthly anchors (carried forward
+ * from money-numbers-real-world.md / Aaron's rulings, already used at full
+ * scale on the Go engine side, moneycirc.go:130,155,166-167):
+ *   - council tax: £47/month/person (Band D Folkestone & Hythe ÷ ~3 residents/household)
+ *   - net wage: £1,512/month/citizen (Kent ONS-grounded)
+ * Tick-adjusted below by TICKS_PER_MONTH_REF so the SAME real monthly figure
+ * is what actually accrues over a real month of ticks.
+ */
+export const REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH = 47;
+export const REAL_NET_WAGE_PER_CITIZEN_PER_MONTH = 1512;
+
+/**
+ * BUG-452 inc1 — the residential tax-rate value the council-tax anchor above is
+ * CALIBRATED against (engine.ts rawState()'s taxRates.residential initial = 9).
+ * councilTaxPerTick's taxRate parameter scales proportionally AROUND this
+ * default, so the real £47/mo anchor holds exactly at the default rate while
+ * the player's tax-rate slider still moves revenue up/down as before.
+ */
+const DEFAULT_RESIDENTIAL_TAX_RATE = 9;
+
+/**
+ * Council tax per tick: population * real-£47/mo-per-citizen (tick-adjusted),
+ * scaled by the player's residential tax rate relative to the DEFAULT rate.
+ * BUG-452 inc1: rebased from the old directional placeholder (population *
+ * taxRate * 2 / 100) onto the real anchor above — no longer a placeholder for
+ * the £-per-citizen magnitude, though the tax-RATE lever's exact sensitivity
+ * is still an independent gameplay knob (balance-pass pending).
  */
 export function councilTaxPerTick(population: number, taxRate: number): number {
-  return Math.round((population * taxRate * 2) / 100);
+  const rateMultiplier = taxRate / DEFAULT_RESIDENTIAL_TAX_RATE;
+  return Math.round(population * FISCAL_COEFFICIENTS.councilTaxPerCapitaPerTick * rateMultiplier);
 }
 
 /**
- * Business tax per tick: commercial zones * rate.commercial * 0.4
- * PLACEHOLDER (balance-number regime): ~40% of the catalogue rate per zone.
+ * Business tax per tick: commercial zones * rate.commercial * fraction.
+ * PLACEHOLDER (balance-number regime): no real per-zone £ citation exists
+ * (money-numbers-real-world.md has none) — BUG-452 inc1 keeps this an
+ * INDEPENDENT lever, retuned only so its OUTPUT sits in the same £-per-tick
+ * range as the newly-real-anchored council tax above (internal consistency,
+ * not a new citation).
  */
 export function businessTaxPerTick(commercialZones: number, taxRate: number): number {
-  return Math.round(commercialZones * taxRate * 0.4);
+  return Math.round(commercialZones * taxRate * FISCAL_COEFFICIENTS.businessTaxFraction);
 }
 
 /**
- * Wages per tick: population * 0.5
- * PLACEHOLDER (balance-number regime): directional cost per citizen.
+ * Wages per tick: population * real-£1,512/mo-per-citizen (tick-adjusted).
+ * BUG-452 inc1: rebased from the old directional placeholder (population *
+ * 0.5) onto the real net-wage anchor (money-numbers-real-world.md §4,
+ * already used at full scale on the Go side, moneycirc.go:166-167).
+ * Simplification carried over unchanged from the pre-existing design: this
+ * uses total population as the wage-bearing base (not a separate "employed"
+ * subset — the TS sim has no employment-status field), same as the old
+ * placeholder did.
  */
 export function wagesPerTick(population: number): number {
-  return Math.round(population * 0.5);
+  return Math.round(population * FISCAL_COEFFICIENTS.wagesPerCitizen);
 }
 
 /**
@@ -114,14 +169,29 @@ export const UPKEEP_BUCKET: Partial<Record<ZoneKind, string>> = {
   leisure: 'Leisure',
 };
 
-/** Coefficients for fiscal calculations (PLACEHOLDER, balance-number regime). */
+/**
+ * Coefficients for fiscal calculations. BUG-452 inc1 (2026-09-01): the
+ * council-tax and wage coefficients are now REAL-ANCHORED (money-numbers-
+ * real-world.md), tick-adjusted by TICKS_PER_MONTH_REF; businessTaxFraction
+ * remains an independent PLACEHOLDER (balance-number regime), retuned only so
+ * its £-per-tick output sits in the same range as the rebased council tax.
+ */
 export const FISCAL_COEFFICIENTS = {
-  /** Council tax: effective rate per citizen (as % of tax rate). */
-  councilTaxEffectiveRate: 2,
-  /** Business tax: fraction of catalogue rate per commercial zone. */
-  businessTaxFraction: 0.4,
-  /** Wages: cost per citizen per tick. */
-  wagesPerCitizen: 0.5,
+  /**
+   * Council tax: real £47/mo/person (REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH)
+   * ÷ TICKS_PER_MONTH_REF, applying exactly at DEFAULT_RESIDENTIAL_TAX_RATE —
+   * councilTaxPerTick() then scales this by taxRate/DEFAULT_RESIDENTIAL_TAX_RATE.
+   */
+  councilTaxPerCapitaPerTick: REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH / TICKS_PER_MONTH_REF, // = 1.5667
+  /**
+   * Business tax: fraction of catalogue rate per commercial zone. PLACEHOLDER —
+   * no real per-zone £ citation exists; retuned from the old 0.4 by the SAME
+   * ratio the council-tax-per-citizen figure moved by (1.5667/0.18 ≈ 8.7037)
+   * so the two taxes stay in the same order of magnitude at their defaults.
+   */
+  businessTaxFraction: 3.4815,
+  /** Wages: real £1,512/mo/citizen (REAL_NET_WAGE_PER_CITIZEN_PER_MONTH) ÷ TICKS_PER_MONTH_REF. */
+  wagesPerCitizen: REAL_NET_WAGE_PER_CITIZEN_PER_MONTH / TICKS_PER_MONTH_REF, // = 50.4
 } as const;
 
 /** PLACEHOLDER (balance-number regime). BUG-438: never apply this to |funds| uncapped. */
@@ -142,24 +212,23 @@ export function sanitizeFunds(n: number): number {
 }
 
 /**
- * FEAT-1972079923 inc1 (AC-1) — PLACEHOLDER (balance-number regime): funds at or
- * below this trip the 'crisis' band, the future IMF bailout entry point. Value
- * taken verbatim from the BA criteria's placeholder-constants table
- * (docs/planning/acceptance/feat-1972079923-imf-insolvency.md); Aaron's
- * row-by-row balance approval pending. Named DEBT_THRESHOLD_FOR_BAILOUT (not a
- * generic "insolvency" name) to match the AC doc so the balance pass finds one
- * SSOT constant, not a second table (GR#3).
+ * FEAT-1972079923 inc1 (AC-1) / BUG-452 inc1 (2026-09-01): funds at or below
+ * this trip the 'crisis' band, the future IMF bailout entry point. Aaron's
+ * approved RATIO (recorded on BUG-452): -1x STARTING_TREASURY — defined as a
+ * ratio, not an absolute literal, so retuning STARTING_TREASURY auto-scales
+ * this threshold. Named DEBT_THRESHOLD_FOR_BAILOUT (not a generic "insolvency"
+ * name) to match the original AC doc so the balance pass finds one SSOT
+ * constant, not a second table (GR#3).
  */
-export const DEBT_THRESHOLD_FOR_BAILOUT = -10_000_000;
+export const DEBT_THRESHOLD_FOR_BAILOUT = -STARTING_TREASURY;
 
 /**
- * FEAT-1972079923 inc1 (companion to AC-1, not in the BA doc's placeholder
- * table) — PLACEHOLDER: funds at or below this (but still above
- * DEBT_THRESHOLD_FOR_BAILOUT) trip the 'warning' band, giving the player
- * advance notice before the crisis threshold is crossed so the eventual
- * bailout is not a surprise (task point 3). Balance pass pending.
+ * FEAT-1972079923 inc1 (companion to AC-1) / BUG-452 inc1: funds at or below
+ * this (but still above DEBT_THRESHOLD_FOR_BAILOUT) trip the 'warning' band,
+ * giving the player advance notice before the crisis threshold is crossed.
+ * Aaron's approved RATIO: -0.5x STARTING_TREASURY.
  */
-export const INSOLVENCY_WARNING_THRESHOLD = -5_000_000;
+export const INSOLVENCY_WARNING_THRESHOLD = -Math.round(STARTING_TREASURY * 0.5);
 
 /**
  * FEAT-1972079923 inc1 (AC-1, AC-12) — pure, state-derived insolvency band.
@@ -182,24 +251,26 @@ export function insolvencyStateForFunds(funds: number): InsolvencyState {
 export const BAILOUT_DURATION_TICKS = 360;
 
 /**
- * FEAT-1972079923 inc2 — PLACEHOLDER (balance-number regime): one-time cash
- * injection credited to the treasury the SAME tick the bailout is entered.
- * Aaron's ruling: this is a legitimate external inflow (like a grant), not
- * manufactured money — booked as a normal labelled inflow (see
- * BAILOUT_INJECTION_LABEL) so conservation (fundsAtTickEnd === fundsAtTickStart
- * + Σinflows − Σoutflows) can trace it exactly like every other inflow.
+ * FEAT-1972079923 inc2 / BUG-452 inc1 (2026-09-01, Aaron's "bigger relief"
+ * ruling): one-time cash injection credited to the treasury the SAME tick the
+ * bailout is entered — 50% of the debt hole (computed against
+ * DEBT_THRESHOLD_FOR_BAILOUT's magnitude, i.e. STARTING_TREASURY), a bigger
+ * relief than the old flat 2,000,000 (previously 0.2x treasury). This is a
+ * legitimate external inflow (like a grant), not manufactured money — booked
+ * as a normal labelled inflow (see BAILOUT_INJECTION_LABEL) so conservation
+ * (fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows) can trace it
+ * exactly like every other inflow.
  */
-export const BAILOUT_INCOME_INJECTION = 2_000_000;
+export const BAILOUT_INCOME_INJECTION = Math.round(Math.abs(DEBT_THRESHOLD_FOR_BAILOUT) * 0.5);
 
 /**
- * FEAT-1972079923 inc2 (AC-4) — PLACEHOLDER (balance-number regime): fraction
- * of a building's capital value (placementCost) credited to the treasury on a
- * FORCED asset sale. Mirrors the existing bulldoze-refund pattern (25% of paid
- * cost, engine.ts case 'bulldoze') but at a higher fraction since this is a
- * deliberate sale under bailout conditions, not a demolition refund. Balance
- * pass pending.
+ * FEAT-1972079923 inc2 (AC-4) / BUG-452 inc1: fraction of a building's capital
+ * value (placementCost) credited to the treasury on a FORCED asset sale.
+ * Aaron's 2026-09-01 ruling: 0.6 -> 0.5, the real distressed-sale rate (a
+ * forced sale realises materially less than the original capex — a real
+ * fire-sale discount, not merely "less generous than a normal refund").
  */
-export const ASSET_SALE_VALUE_FRACTION = 0.6;
+export const ASSET_SALE_VALUE_FRACTION = 0.5;
 
 /**
  * FEAT-1972079923 inc2 (AC-4) — SSOT label for the one-time bailout cash
@@ -259,14 +330,14 @@ export const ADMINISTRATION_POLICY_BLOCKED_MESSAGE =
 export const SECOND_BAILOUT_DURATION_TICKS = 360;
 
 /**
- * FEAT-1972079923 inc4 (AC-10) — PLACEHOLDER (balance-number regime): the
- * SECOND bailout's one-time cash injection, credited the SAME tick the second
- * bailout auto-triggers. Aaron's round-2 ruling (2026-08-31): the second
- * bailout is on WORSE TERMS than the first — this value is deliberately LOWER
- * than BAILOUT_INCOME_INJECTION so the balance pass finds one obvious knob per
- * bailout, not a duplicated literal (GR#3).
+ * FEAT-1972079923 inc4 (AC-10) / BUG-452 inc1 (2026-09-01): the SECOND
+ * bailout's one-time cash injection, credited the SAME tick the second
+ * bailout auto-triggers. Aaron's ruling: the second bailout is on WORSE TERMS
+ * than the first — 25% of the debt hole (vs. the first bailout's 50%),
+ * computed against the SAME DEBT_THRESHOLD_FOR_BAILOUT magnitude so both
+ * injections auto-scale together with STARTING_TREASURY (GR#3).
  */
-export const BAILOUT_INCOME_INJECTION_SECOND = 1_000_000;
+export const BAILOUT_INCOME_INJECTION_SECOND = Math.round(Math.abs(DEBT_THRESHOLD_FOR_BAILOUT) * 0.25);
 
 /**
  * FEAT-1972079923 inc4 (AC-10) — SSOT label for the second bailout's one-time

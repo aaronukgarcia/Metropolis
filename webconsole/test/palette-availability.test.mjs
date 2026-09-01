@@ -121,8 +121,12 @@ test('AC-9: Spec properties used in card are ALWAYS read from data.ts SPECS, nev
   // Sample specs with various properties.
   const airport = SPECS.land_airport;
   assert.ok(airport, 'airport spec exists');
-  assert.equal(airport.cost, 450000, 'airport cost comes from data.ts');
-  assert.equal(airport.upkeep, 3000, 'airport upkeep comes from data.ts');
+  // BUG-452 inc1 rescaled the catalogue — these pin the CURRENT SPECS values so
+  // a regression (a hardcoded value creeping into SpecCard.tsx) is still
+  // caught, without re-deriving the numbers from a formula (which would let a
+  // SpecCard-side hardcode drift silently alongside a future catalogue retune).
+  assert.equal(airport.cost, 810000000, 'airport cost comes from data.ts');
+  assert.equal(airport.upkeep, 45000, 'airport upkeep comes from data.ts');
   assert.equal(airport.tourism, 140, 'airport tourism comes from data.ts');
   assert.equal(airport.unlock, 6, 'airport unlock comes from data.ts');
 

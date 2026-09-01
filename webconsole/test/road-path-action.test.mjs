@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { recordAction, emptyJournal, isStateAffecting } from '../src/sim/journal.ts';
+import { SPECS } from '../src/sim/data.ts';
 
 // Build a clean board for testing.
 function board(buildings) {
@@ -343,18 +344,22 @@ test('AC-6c RED proof: conversion-cost charged once per tile, matches SPECS', ()
     { x: 10, y: 13 },
   ];
 
-  const costPerRoad = 40; // 'road' spec cost (for streets)
-  const costPerAvenue = 90; // 'rd_avenue' spec cost
-  const costPerRoundabout = 50; // 'rd_roundabout' conversion cost
+  // BUG-452 inc1: read live from SPECS (never inlined) so this test survives
+  // any future catalogue retune, per GR#15.
+  const costPerAvenue = SPECS['rd_avenue'].cost;
+  const costPerRoundabout = SPECS['rd_roundabout'].cost; // conversion cost
 
-  // Cost = 2 NEW avenue tiles (11, 13) × 90 + 1 CONVERSION (12) × roundabout-cost
-  // Total = 180 + 50 = 230
+  // Cost = 2 NEW avenue tiles (11, 13) + 1 CONVERSION (12) × roundabout-cost
   const expectedCost = 2 * costPerAvenue + 1 * costPerRoundabout;
 
   s = reducer(s, { type: 'placeRoadPath', spec: 'rd_avenue', tiles: avenueB });
 
   const actualCost = beforeFunds - s.funds;
-  assert.equal(actualCost, expectedCost, `cost = 2 avenues × 90 + 1 conversion × 50 = 230`);
+  assert.equal(
+    actualCost,
+    expectedCost,
+    `cost = 2 avenues × ${costPerAvenue} + 1 conversion × ${costPerRoundabout} = ${expectedCost}`,
+  );
 
   // Verify the ledger records the conversion.
   const lastEvent = s.ledger[0];
@@ -372,16 +377,16 @@ test('AC-6d RED proof: insufficient funds for conversion cost → all placement 
   s = reducer(s, { type: 'placeRoadPath', spec: 'road', tiles: street });
 
   // Crossing path: avenue crossing street
-  // Cost = 2 new avenues (180) + 1 conversion (50) = 230
+  // Cost = 2 new avenues + 1 conversion (BUG-452 inc1: read live from SPECS).
   const avenueB = [
     { x: 10, y: 11 },
     { x: 10, y: 12 }, // crosses → conversion cost
     { x: 10, y: 13 },
   ];
 
-  const costPerAvenue = 90;
-  const costPerRoundabout = 50;
-  const totalCost = 2 * costPerAvenue + 1 * costPerRoundabout; // 230
+  const costPerAvenue = SPECS['rd_avenue'].cost;
+  const costPerRoundabout = SPECS['rd_roundabout'].cost;
+  const totalCost = 2 * costPerAvenue + 1 * costPerRoundabout;
 
   // Set funds to less than total.
   s = { ...s, funds: totalCost - 1 };
@@ -426,8 +431,9 @@ test('AC-6e RED proof: self-intersection (same tile twice in path) deduped, zero
   const roads = s.buildings.filter((b) => b.spec === 'road');
   assert.equal(roads.length, 3, 'dedup reduces duplicate tile to one placement');
 
-  // Verify cost is 3 roads × 40 (no extra charge for duplicate).
-  const costPerRoad = 40;
+  // Verify cost is 3 roads (no extra charge for duplicate). BUG-452 inc1:
+  // read live from SPECS, never inlined.
+  const costPerRoad = SPECS['road'].cost;
   const expectedCost = 3 * costPerRoad;
   const actualCost = beforeFunds - s.funds;
   assert.equal(actualCost, expectedCost, 'dedup does not charge for duplicate');
@@ -449,11 +455,11 @@ test('Repeat-drag: identical path twice → second commit deduped, zero cost', (
 
   let s = board([]);
 
-  // First drag: place path
+  // First drag: place path. BUG-452 inc1: read live from SPECS, never inlined.
   const beforeFirst = s.funds;
   s = reducer(s, { type: 'placeRoadPath', spec: 'road', tiles: path });
   const firstCost = beforeFirst - s.funds;
-  assert.equal(firstCost, 120, 'first drag costs 3 roads × 40');
+  assert.equal(firstCost, 3 * SPECS['road'].cost, 'first drag costs 3 roads');
 
   const beforeSecond = s.funds;
   const beforeBuildingCount = s.buildings.length;
@@ -513,7 +519,6 @@ test('Demolish: removing roundabout building removes it fully (no orphans)', () 
 
 // Helper: import isRailSpec to verify rd_railbridge is recognized as rail
 import { isRailSpec, RAIL_BRIDGE_COST_MULTIPLIER } from '../src/sim/data.ts';
-import { SPECS } from '../src/sim/data.ts';
 import { buildRailGeometry } from '../src/sim/trains.ts';
 
 // AC-7a RED proof: structural rail line continuity through bridge
@@ -834,7 +839,7 @@ test('AC-8a RED proof: road crossing motorway → rd_mwyjunction, id preserved',
 });
 
 // AC-8b: motorway junction cost is the flat MOTORWAY_JUNCTION_COST from spec
-test('AC-8b: motorway junction cost = flat MOTORWAY_JUNCTION_COST (£250k)', () => {
+test('AC-8b: motorway junction cost = flat MOTORWAY_JUNCTION_COST (read live, BUG-452 inc1 rescaled)', () => {
   // Place a motorway
   let s = board([]);
   s = reducer(s, { type: 'place', spec: 'm20', x: 10, y: 12 });

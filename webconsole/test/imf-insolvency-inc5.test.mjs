@@ -34,6 +34,7 @@ import {
 } from '../src/sim/engine.ts';
 import {
   DEBT_THRESHOLD_FOR_BAILOUT,
+  INSOLVENCY_WARNING_THRESHOLD,
   BAILOUT_DURATION_TICKS,
   SECOND_BAILOUT_DURATION_TICKS,
   FINAL_DECLINE_FUNDS_THRESHOLD,
@@ -74,6 +75,11 @@ function tickAtFunds(state, targetFunds) {
   return reducer(forced, { type: 'tick' });
 }
 
+// BUG-452 inc1 (2026-09-01): derived from the ratio-preserved thresholds (see
+// imf-insolvency-inc1.test.mjs) rather than hardcoded to the old £10M-scale
+// -6,000,000 literal, so this suite auto-scales with STARTING_TREASURY.
+const WARNING_BAND_FUNDS = Math.round((INSOLVENCY_WARNING_THRESHOLD + DEBT_THRESHOLD_FOR_BAILOUT) / 2);
+
 /**
  * Drive a FRESH game from genesis, through warning -> crisis -> first bailout
  * -> (still broke) auto second bailout -> (still broke) hard decline, using
@@ -100,7 +106,7 @@ function driveGenesisToDecline() {
   };
 
   // Warning band, then crisis (triggers the FIRST bailout).
-  driveTickAtFunds(-6_000_000);
+  driveTickAtFunds(WARNING_BAND_FUNDS);
   driveTickAtFunds(DEBT_THRESHOLD_FOR_BAILOUT - 1_000_000);
   assert.ok(s.bailoutState, 'precondition: first bailout must be active');
   const firstBailoutEnteredAt = s.bailoutState.enteredAt;

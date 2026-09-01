@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { initialState, reducer, forcedSaleAssets, TICKS_PER_YEAR } from '../src/sim/engine.ts';
 import {
   DEBT_THRESHOLD_FOR_BAILOUT,
+  INSOLVENCY_WARNING_THRESHOLD,
   BAILOUT_DURATION_TICKS,
   BAILOUT_INCOME_INJECTION,
   ASSET_SALE_VALUE_FRACTION,
@@ -26,6 +27,12 @@ import {
 } from '../src/sim/fiscal.ts';
 import { isStateAffecting } from '../src/sim/journal.ts';
 import { placementCost, SPECS } from '../src/sim/data.ts';
+
+// BUG-452 inc1 (2026-09-01): derived from the ratio-preserved thresholds (see
+// imf-insolvency-inc1.test.mjs) rather than hardcoded to the old £10M-scale
+// -6,000,000 literal, so this suite auto-scales with STARTING_TREASURY.
+const WARNING_BAND_FUNDS = Math.round((INSOLVENCY_WARNING_THRESHOLD + DEBT_THRESHOLD_FOR_BAILOUT) / 2);
+const CRISIS_FUNDS = DEBT_THRESHOLD_FOR_BAILOUT * 2; // well below (more negative than) the crisis threshold
 
 // Advance the state by one tick, forcing funds to a target value first (mirrors
 // imf-insolvency-inc1.test.mjs's helper exactly).
@@ -53,10 +60,10 @@ test('AC-1/AC-2: crossing into crisis triggers the bailout state machine exactly
   const s0 = initialState();
   assert.equal(s0.bailoutState ?? null, null, 'precondition: no bailout at game start');
 
-  const warning = tickAtFunds(s0, -6_000_000);
+  const warning = tickAtFunds(s0, WARNING_BAND_FUNDS);
   assert.equal(warning.bailoutState ?? null, null, 'no bailout while only in the warning band');
 
-  const enteredCrisis = tickAtFunds(warning, -12_000_000);
+  const enteredCrisis = tickAtFunds(warning, CRISIS_FUNDS);
   assert.equal(enteredCrisis.insolvencyState, 'crisis');
   assert.ok(enteredCrisis.bailoutState, 'bailoutState must be stamped on the ENTRY tick');
   assert.equal(enteredCrisis.bailoutState.enteredAt, enteredCrisis.tick);
@@ -77,9 +84,9 @@ test('AC-1/AC-2: crossing into crisis triggers the bailout state machine exactly
 
 test('AC-2: the bailout injects BAILOUT_INCOME_INJECTION as a labelled inflow, exactly once', () => {
   const s0 = initialState();
-  const warning = tickAtFunds(s0, -6_000_000);
+  const warning = tickAtFunds(s0, WARNING_BAND_FUNDS);
   const preEntryFunds = warning.funds;
-  const entered = tickAtFunds(warning, -12_000_000);
+  const entered = tickAtFunds(warning, CRISIS_FUNDS);
 
   const injectionFlow = entered.lastFlows.inflows.find((f) => f.label === BAILOUT_INJECTION_LABEL);
   assert.ok(injectionFlow, 'the injection must be a NAMED inflow, traceable by the consistency checker');
@@ -260,8 +267,8 @@ test('sellAsset is state-affecting — must be journaled for replay (mirrors bul
 test('Determinism: two identical bailout-entry runs produce byte-identical state (event + injection + list)', () => {
   const s0 = initialState();
   const runOnce = () => {
-    let s = tickAtFunds(s0, -6_000_000);
-    s = tickAtFunds(s, -12_000_000); // bailout entry
+    let s = tickAtFunds(s0, WARNING_BAND_FUNDS);
+    s = tickAtFunds(s, CRISIS_FUNDS); // bailout entry
     return s;
   };
   const a = runOnce();

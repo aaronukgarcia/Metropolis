@@ -17,9 +17,10 @@ import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { pickAutoSpec, placementCost, SPECS } from '../src/sim/data.ts';
 
-// A free zone (category 'zones' → placementCost 0) and a paid network spec (£40).
+// A free zone (category 'zones' → placementCost 0) and a paid network spec
+// (real cost, BUG-452 inc1 rebased — read live via placementCost(), never inlined).
 const FREE_ZONE = 'res_hut'; // Small Holding — category 'zones', placementCost 0.
-const PAID_SPEC = 'road'; // Road — category 'network', cost 40.
+const PAID_SPEC = 'road'; // Road — category 'network', real (non-zero) cost.
 const PAID_COST = placementCost(SPECS[PAID_SPEC]);
 
 // An empty tile clear of the starter city (starterCity fills rows ~56-96 near
@@ -54,13 +55,18 @@ test('BUG-396 #2: a PAID placement with insufficient funds is BLOCKED and sets p
 });
 
 test('BUG-396 #3: a PAID placement WITH sufficient funds proceeds, charges the cost, clears the notice', () => {
-  // Seed a stale notice to prove a successful placement clears it.
-  const rich = { ...initialState(), funds: 1000, placeNotice: 'Insufficient funds — £40 needed' };
+  // Seed a stale notice to prove a successful placement clears it. The exact
+  // wording/amount in the seeded notice string is irrelevant (it only proves
+  // clearing) — funds must comfortably exceed PAID_COST regardless of the
+  // catalogue's current scale (BUG-452 inc1 rebased road's real cost, so this
+  // is derived, not a hardcoded £1,000/£40 pair that predates the rescale).
+  const richFunds = PAID_COST + 1_000_000;
+  const rich = { ...initialState(), funds: richFunds, placeNotice: 'Insufficient funds — shortfall noted' };
   const before = rich.buildings.length;
   const after = reducer(rich, { type: 'place', spec: PAID_SPEC, x: X, y: Y });
   assert.equal(after.buildings.length, before + 1, 'the building is placed');
   assert.equal(countAt(after, X, Y), 1, 'the building landed at the target tile');
-  assert.equal(after.funds, 1000 - PAID_COST, 'funds charged exactly the placement cost');
+  assert.equal(after.funds, richFunds - PAID_COST, 'funds charged exactly the placement cost');
   assert.equal(after.placeNotice, null, 'a successful placement clears any prior notice');
 });
 

@@ -57,7 +57,7 @@ import type {
   BailoutOrigin,
 } from './types.ts';
 import { fmtMoney } from './utils.ts';
-import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD } from './fiscal.ts';
+import { councilTaxPerTick, businessTaxPerTick, wagesPerTick, gridExportRevenuePerTick, GRID_EXPORT_TARIFF_PER_MW, applyOutflowPolicies, UPKEEP_BUCKET, overdraftInterestPerTick, sanitizeFunds, insolvencyStateForFunds, DEBT_THRESHOLD_FOR_BAILOUT, BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION, ASSET_SALE_VALUE_FRACTION, BAILOUT_INJECTION_LABEL, ASSET_SALE_LABEL, ADMINISTRATION_DURATION_TICKS, ADMINISTRATION_PLACE_BLOCKED_MESSAGE, ADMINISTRATION_POLICY_BLOCKED_MESSAGE, SECOND_BAILOUT_DURATION_TICKS, BAILOUT_INCOME_INJECTION_SECOND, BAILOUT_SECOND_INJECTION_LABEL, FINAL_DECLINE_FUNDS_THRESHOLD, STARTING_TREASURY } from './fiscal.ts';
 import type {
   FlowItem,
   LedgerEntry,
@@ -342,7 +342,10 @@ function rawState(): SimState {
   return {
     tick: 0,
     speed: 1,
-    funds: 10000000,
+    // BUG-452 inc1 (2026-09-01): STARTING_TREASURY (fiscal.ts) is the SSOT —
+    // was a hardcoded £10,000,000 toy figure, now Aaron's real "£1.5M, start
+    // truly small" anchor. Retune in ONE place (fiscal.ts).
+    funds: STARTING_TREASURY,
     loanBalance: 0,
     population: 0,
     xp: 30,
@@ -358,8 +361,8 @@ function rawState(): SimState {
     ledger: [],
     nextLedgerId: 1,
     lastFlows: { inflows: [], outflows: [] },
-    fundsAtTickStart: 10000000,
-    fundsAtTickEnd: 10000000,
+    fundsAtTickStart: STARTING_TREASURY,
+    fundsAtTickEnd: STARTING_TREASURY,
     pendingRewards: [],
     // Start already "at" the seed level so the opening state grants no reward.
     lastRewardedLevel: levelOf(30),
@@ -388,7 +391,10 @@ function rawState(): SimState {
     declineState: null,
     // FEAT-1972079923 inc4 (AC-11): decline trackers start from the opening state.
     peakPopulation: 0,
-    minFundsEver: 10_000_000,
+    // BUG-452 inc1: derive from the STARTING_TREASURY SSOT so a retune auto-scales
+    // (was a leftover £10M toy-scale literal; harmless at genesis since the first
+    // advance min()'s it to funds, but it must honour the one-constant promise).
+    minFundsEver: STARTING_TREASURY,
     totalSpending: 0,
   };
 }
@@ -397,8 +403,13 @@ function rawState(): SimState {
  * God-mode "Unlock all" price (FEAT-1972079899). PLACEHOLDER under the balance-number
  * regime — a deliberately large cash gate pending Aaron's balance sign-off; not a
  * derived/tuned value. Charged once by the `unlockAll` action to flip s.unlockedAll.
+ * BUG-452 inc1 (2026-09-01): defined as a RATIO of STARTING_TREASURY (fiscal.ts) —
+ * 0.5x, preserving the old £5,000,000-of-£10,000,000 relationship — rather than a
+ * re-hardcoded absolute, so a future treasury retune keeps this gate affordable-but-
+ * costly instead of silently exceeding the entire seed treasury (as a bare £5,000,000
+ * literal now would against the rebased £1,500,000 starting funds).
  */
-export const UNLOCK_ALL_COST = 5_000_000;
+export const UNLOCK_ALL_COST = Math.round(STARTING_TREASURY * 0.5);
 
 /**
  * Single-source catalogue unlock gate (FEAT-1972079899). A spec is available for

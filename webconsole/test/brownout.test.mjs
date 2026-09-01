@@ -40,6 +40,7 @@ import {
   BROWNOUT_INDEX_FLOOR,
   BROWNOUT_WELLBEING_K,
 } from '../src/sim/data.ts';
+import { businessTaxPerTick } from '../src/sim/fiscal.ts';
 
 /**
  * Deterministic test city: 10 shops (income), 1 water works (so the
@@ -64,10 +65,13 @@ const DEFICIT_50PC = () => city({ pow_solar: 4 }); //  4*25 = 100 MW: 50% defici
 const RESTORED = () => city({ pow_wind: 24, pow_coal: 1 }); // 272 MW: recovered
 
 /** The UN-scaled Business Tax the flows formula produces, derived from the
- * same state the sim reads (GR#15) — not a hardcoded constant. */
+ * same state the sim reads (GR#15) — via the SAME SSOT function computeFlows
+ * uses (fiscal.ts's businessTaxPerTick), never a duplicated/hardcoded
+ * coefficient (BUG-452 inc1 rebased businessTaxFraction — a locally-inlined
+ * 0.4 here would have silently drifted, exactly the GR#3 class of bug). */
 function unscaledBusinessTax(s) {
   const shops = s.buildings.filter((b) => SPECS[b.spec].kind === 'commercial').length;
-  return Math.round(shops * s.taxRates.commercial * 0.4);
+  return businessTaxPerTick(shops, s.taxRates.commercial);
 }
 
 const businessTax = (s) =>

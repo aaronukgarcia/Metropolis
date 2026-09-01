@@ -194,7 +194,13 @@ test('history aggregation: one closed month sums exactly the per-tick flows reco
 });
 
 test('history ring is bounded at DEMOGRAPHIC_HISTORY_CAP months', () => {
-  let state = baseState({ population: 500, buildings: residentialBuildings(60) });
+  // BUG-452 inc1: wages are now real-anchored (£1,512/mo/citizen) and this
+  // fixture has no tax-generating zones, so the baseState() default 10M would
+  // insolvency-spiral to the AC-11 decline freeze well before 130 months —
+  // which stops tick() advancing and would make this test about fiscal
+  // collapse, not the ring-cap invariant it actually targets. Funds is
+  // boosted so the city survives the full 130-month horizon solvent.
+  let state = baseState({ population: 500, buildings: residentialBuildings(60), funds: 999_000_000_000 });
   const months = 130; // > the 120-month cap
   for (let t = 0; t < TICKS_PER_MONTH * months; t++) {
     state = reducer(state, { type: 'tick' });

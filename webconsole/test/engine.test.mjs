@@ -128,7 +128,10 @@ test('computeFlows: landmark, residential, station upkeep are captured', () => {
   });
 
   const totalUpkeepOutflow = upkeepOutflows.reduce((sum, o) => sum + o.value, 0);
-  const expectedUpkeep = 260 + 1 + 15; // land_stadium + res_hut + station_sanderling
+  // BUG-452 inc1: read live from SPECS (never inlined), so this survives any
+  // future catalogue retune, per GR#15.
+  const expectedUpkeep =
+    SPECS['land_stadium'].upkeep + SPECS['res_hut'].upkeep + SPECS['station_sanderling'].upkeep;
 
   assert.equal(
     totalUpkeepOutflow,
@@ -156,8 +159,9 @@ test('RED: removing a bucket key makes upkeep vanish silently', () => {
   // Road upkeep SHOULD appear. If it doesn't, the bucket is broken.
   // This test PASSES because road IS in UPKEEP_BUCKET. Simulate failure:
   // Remove the 'road' entry from UPKEEP_BUCKET, and this would fail—proving the bucket matters.
+  // BUG-452 inc1: read live from SPECS (never inlined), per GR#15.
   assert.ok(
-    roadOutflows.length > 0 && roadOutflows[0].value === 3,
+    roadOutflows.length > 0 && roadOutflows[0].value === SPECS['road'].upkeep,
     'Road upkeep must be captured in Roads stream. ' +
     'If UPKEEP_BUCKET["road"] is deleted, this assertion fails (proving the bucket matters).'
   );

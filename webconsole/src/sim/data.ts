@@ -188,8 +188,20 @@ export const POWER_LINES: PowerLineClass[] = [
   },
 ];
 
+/**
+ * BUG-452 inc1 (2026-09-01): the cost-per-tick divisor for constructionTicks(),
+ * bumped by the SAME ~1000x the catalogue's 'zones'/'services' categories were
+ * rescaled by (see CIVIC_SCALE_FACTOR/ZONES_SCALE_FACTOR below), so build-time
+ * pacing stays roughly where it was pre-rebase instead of exploding into
+ * millennia once costs read in the hundreds of millions (a straight £-per-1500
+ * divisor against a £1.12bn nuclear plant would be ~750,000 ticks — over 2,000
+ * game-years). Named + derived so a future catalogue retune can reason about
+ * it explicitly rather than rediscovering the coupling.
+ */
+const CONSTRUCTION_COST_DIVISOR = 1_500_000;
+
 export function constructionTicks(sp: Spec): number {
-  const base = Math.max(3, Math.round(sp.cost / 1500));
+  const base = Math.max(3, Math.round(sp.cost / CONSTRUCTION_COST_DIVISOR));
   // FEAT-159: DEBUG-ONLY per-class fast-build override. When the debug flag is
   // OFF (the default) scaleConstructionTicks returns `base` byte-for-byte, so
   // normal play and replay are unchanged. When ON it scales the lead-time down
@@ -269,9 +281,16 @@ export const RAIL_BRIDGE_COST_MULTIPLIER = 4;
 
 /**
  * FEAT-1972079910 inc3 (AC-8): Flat cost for motorway junction (where a road
- * crosses the highest-tier motorway-class road). PLACEHOLDER-balance.
+ * crosses the highest-tier motorway-class road). BUG-452 inc1 (2026-09-01):
+ * rescaled as a "flat premium" over the rebased rd_dual tier (~5x) rather
+ * than the road catalogue's general 300x tile-scale multiplier — a literal
+ * 300x on the old £250,000 would land near £75M, which would swallow the
+ * ENTIRE STARTING_TREASURY (fiscal.ts) on a single junction and break every
+ * existing reducer test that converts a junction at genesis funds (e.g.
+ * road-path-action.test.mjs's AC-8b). Still a genuine premium over a plain
+ * tier-4 dual-carriageway tile — PLACEHOLDER-balance, Aaron's pass pending.
  */
-export const MOTORWAY_JUNCTION_COST = 250000;
+export const MOTORWAY_JUNCTION_COST = 480000;
 
 /**
  * Road tier of a spec, or 0 when it is not a drivable road. Reads `roadTier`
@@ -996,59 +1015,93 @@ export function sortPaletteItems(state: SimState, items: string[]): string[] {
   });
 }
 
+/**
+ * BUG-452 inc1 (2026-09-01, Aaron's approved GBP-scale anchors): the full
+ * `cost`/`upkeep` catalogue below was rebased off toy £40-£560,000 figures
+ * onto realistic UK capex, PRESERVING the cheap->expensive spread (the whole
+ * point — not flattened to one number). Category-by-category basis:
+ *   - 'power' generators (mw field): cost = mw × a per-MW rate WITHIN the
+ *     anchor's £0.75-1.5M/MW range, upkeep = 2%/year of that cost. The rate
+ *     is DIFFERENTIATED by generator type (not one flat £/MW for everyone),
+ *     preserving Aaron's FEAT-1972079901 ruling ("nuclear VERY expensive up
+ *     front... above renewables/gas per-MW"): fusion £1.6M (experimental
+ *     premium, priciest) > nuclear £1.4M > hydro £1.0M (mega-tier, still
+ *     cheaper per-MW at huge scale) > coal £0.85M > gas CCGT £0.8M (mid
+ *     fossil tier) > offshore wind £0.75M > onshore wind £0.7M > solar
+ *     £0.65M > small wind turbine £0.6M (small renewables cheapest).
+ *     megapower-inc1.test.mjs pins this ordering.
+ *   - 'services' category (non-power): cost × 1800 — calibrated so
+ *     edu_primary lands at ~£9.36M, inside the anchor's £8-11M primary-school
+ *     range — upkeep recomputed as 2%/year of the new cost.
+ *   - 'network' (roads/junctions/stations): hand-tuned, NOT a blanket
+ *     multiplier — several existing reducer tests place buildings at genesis
+ *     funds (now STARTING_TREASURY = £1.5M, fiscal.ts) or a fixed "ample"
+ *     fixture, so MOTORWAY_JUNCTION_COST/rd_dual/station_ashford etc. are
+ *     capped well under those fixtures rather than pushed to the full
+ *     multi-million real-world figure a literal per-km anchor would imply.
+ *   - 'zones' (residential/commercial/industrial/office/mine/park/farm):
+ *     cost × 1000 — COSMETIC ONLY. placementCost() returns £0 for every
+ *     'zones' spec regardless of `sp.cost` (zoning is free to place), so this
+ *     bump has NO fiscal affordability effect; it exists only to keep
+ *     constructionTicks() build-time pacing unchanged (its cost-per-tick
+ *     divisor was bumped by the same 1000x, see CONSTRUCTION_COST_DIVISOR
+ *     above) — upkeep (which DOES matter fiscally) is left UNCHANGED.
+ * All figures remain PLACEHOLDER-balance (Aaron's row-by-row pass pending) —
+ * this rebase fixes the ORDER OF MAGNITUDE, not the final tuned numbers.
+ */
 export const SPECS: Record<string, Spec> = {
   m20: P('m20', 'motorway', 'M20 Motorway', '', 1, 1, 0, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
   rail: P('rail', 'rail', 'Rail Line', '', 1, 1, 0, 0, '#8a6d3b', 'network', 99),
   station_sanderling: P('station_sanderling', 'station', 'Sanderling Station', '', 1, 1, 0, 15, '#d0a83c', 'network', 99),
-  station_ashford: P('station_ashford', 'station', 'Ashford International', 'HS1 international gateway · 60,000 served · x3 commuter weight', 4, 2, 80000, 220, '#e0559f', 'network', 5, { served: 60000 }),
+  station_ashford: P('station_ashford', 'station', 'Ashford International', 'HS1 international gateway · 60,000 served · x3 commuter weight', 4, 2, 150000000, 8333, '#e0559f', 'network', 5, { served: 60000 }),
   hs1: P('hs1', 'rail', 'HS1 High-Speed Line', '', 1, 1, 0, 0, '#c2477e', 'network', 99),
   pylon: P('pylon', 'pylon', 'HV Pylon', '', 1, 1, 0, 5, '#9aa4ae', 'network', 99),
 
-  road: P('road', 'road', 'Road', '', 1, 1, 40, 3, '#4a525c', 'network', 1, { roadTier: 1, capacity: 100 }),
+  road: P('road', 'road', 'Road', '', 1, 1, 12000, 1, '#4a525c', 'network', 1, { roadTier: 1, capacity: 100 }),
 
-  res_hut: P('res_hut', 'residential', 'Small Holding', '8 residents', 1, 1, 220, 1, '#4c9aff', 'zones', 1, { residents: 8 }),
-  res_block: P('res_block', 'residential', 'Estate Block', '60 residents', 2, 2, 1600, 6, '#4c9aff', 'zones', 2, { residents: 60 }),
+  res_hut: P('res_hut', 'residential', 'Small Holding', '8 residents', 1, 1, 220000, 1, '#4c9aff', 'zones', 1, { residents: 8 }),
+  res_block: P('res_block', 'residential', 'Estate Block', '60 residents', 2, 2, 1600000, 6, '#4c9aff', 'zones', 2, { residents: 60 }),
 
-  com_shop: P('com_shop', 'commercial', 'Corner Shop', 'Local trade', 1, 1, 320, 2, '#e3b341', 'zones', 1),
-  com_retail: P('com_retail', 'commercial', 'Retail Park', 'Shopping quarter', 3, 2, 4200, 18, '#e3b341', 'zones', 2),
+  com_shop: P('com_shop', 'commercial', 'Corner Shop', 'Local trade', 1, 1, 320000, 2, '#e3b341', 'zones', 1),
+  com_retail: P('com_retail', 'commercial', 'Retail Park', 'Shopping quarter', 3, 2, 4200000, 18, '#e3b341', 'zones', 2),
 
-  farm_wheat: P('farm_wheat', 'industrial', 'Wheat Farm', 'Arable · golden crop', 2, 2, 800, 4, '#d9b13b', 'zones', 1),
-  farm_cattle: P('farm_cattle', 'industrial', 'Cattle Pasture', 'Dairy herd', 3, 3, 1400, 6, '#7da24f', 'zones', 1),
-  farm_orchard: P('farm_orchard', 'industrial', 'Orchard', 'Fruit · blossom crop', 2, 2, 1000, 5, '#97c15c', 'zones', 1),
-  ind_factory: P('ind_factory', 'industrial', 'Factory', 'Goods + freight jobs', 2, 2, 2400, 14, '#a371f7', 'zones', 2, { tag: 'pollution' }),
+  farm_wheat: P('farm_wheat', 'industrial', 'Wheat Farm', 'Arable · golden crop', 2, 2, 800000, 4, '#d9b13b', 'zones', 1),
+  farm_cattle: P('farm_cattle', 'industrial', 'Cattle Pasture', 'Dairy herd', 3, 3, 1400000, 6, '#7da24f', 'zones', 1),
+  farm_orchard: P('farm_orchard', 'industrial', 'Orchard', 'Fruit · blossom crop', 2, 2, 1000000, 5, '#97c15c', 'zones', 1),
+  ind_factory: P('ind_factory', 'industrial', 'Factory', 'Goods + freight jobs', 2, 2, 2400000, 14, '#a371f7', 'zones', 2, { tag: 'pollution' }),
 
-  park: P('park', 'park', 'Park', 'Green space', 1, 1, 150, 10, '#3fb950', 'zones', 1),
+  park: P('park', 'park', 'Park', 'Green space', 1, 1, 150000, 10, '#3fb950', 'zones', 1),
 
-  pow_wind: P('pow_wind', 'power', 'Wind Turbine', '8 MW · clean', 1, 1, 1400, 8, '#7fb2e5', 'services', 2, { mw: 8 }),
-  pow_coal: P('pow_coal', 'power', 'Coal Plant', '80 MW · polluting', 2, 2, 6500, 90, '#f0883e', 'services', 3, { mw: 80, tag: 'pollution' }),
+  pow_wind: P('pow_wind', 'power', 'Wind Turbine', '8 MW · clean', 1, 1, 4800000, 267, '#7fb2e5', 'services', 2, { mw: 8 }),
+  pow_coal: P('pow_coal', 'power', 'Coal Plant', '80 MW · polluting', 2, 2, 68000000, 3778, '#f0883e', 'services', 3, { mw: 80, tag: 'pollution' }),
   // FEAT-1972079901 realistic power costs: nuclear is the priciest generator to
   // BUILD (Aaron's ask — nuclear VERY expensive up front). Capex raised 150k→560k
   // (~£500/MW, above renewables/gas per-MW) and opex 600→1400. `mw`/footprint/tag
   // UNCHANGED — cost-only retune. ⚠ PLACEHOLDER-balance — Aaron's row-by-row pass.
-  pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 560000, 1400, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution' }),
+  pow_nuke: P('pow_nuke', 'power', 'Nuclear Plant', 'Twin AGR · 1,120 MW · Dungeness-scale', 13, 13, 1568000000, 87111, '#e05d38', 'services', 5, { mw: 1120, tag: 'pollution' }),
 
-  wat_clean: P('wat_clean', 'water', 'Water Works', 'Clean water for 20,000', 2, 2, 2600, 38, '#39c5cf', 'services', 3, { tag: 'clean', served: 20000 }),
-  wat_waste: P('wat_waste', 'water', 'Waste-Water Plant', 'Treats sewage for 20,000', 2, 2, 3400, 44, '#6b8f71', 'services', 3, { tag: 'waste', served: 20000 }),
+  wat_clean: P('wat_clean', 'water', 'Water Works', 'Clean water for 20,000', 2, 2, 4680000, 260, '#39c5cf', 'services', 3, { tag: 'clean', served: 20000 }),
+  wat_waste: P('wat_waste', 'water', 'Waste-Water Plant', 'Treats sewage for 20,000', 2, 2, 6120000, 340, '#6b8f71', 'services', 3, { tag: 'waste', served: 20000 }),
 
-  hea_clinic: P('hea_clinic', 'health', 'Clinic', 'GPs for 5,000', 1, 1, 1800, 26, '#ff7b72', 'services', 2, { served: 5000 }),
-  hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 16000, 210, '#d95f57', 'services', 4, { served: 40000 }),
-  pol_station: P('pol_station', 'police', 'Police Station', 'Covers 10,000', 2, 1, 2600, 34, '#6e7bd9', 'services', 3, { served: 10000 }),
+  hea_clinic: P('hea_clinic', 'health', 'Clinic', 'GPs for 5,000', 1, 1, 3240000, 180, '#ff7b72', 'services', 2, { served: 5000 }),
+  hea_hospital: P('hea_hospital', 'health', 'General Hospital', 'Serves 40,000', 2, 2, 28800000, 1600, '#d95f57', 'services', 4, { served: 40000 }),
+  pol_station: P('pol_station', 'police', 'Police Station', 'Covers 10,000', 2, 1, 4680000, 260, '#6e7bd9', 'services', 3, { served: 10000 }),
 
-  edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 1200, 22, '#ffd166', 'services', 2, { children: 30, stage: 'nursery' }),
-  edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 5200, 70, '#f2c14e', 'services', 3, { children: 300, stage: 'primary' }),
-  edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 32000, 320, '#e3a92f', 'services', 4, { children: 2000, stage: 'city' }),
-  col_sixth: P('col_sixth', 'school', 'College', '1,500 places · ages 16–19', 2, 2, 18000, 190, '#b58fd8', 'services', 4, { children: 1500, stage: 'tertiary' }),
-  uni: P('uni', 'school', 'University', '6,000 students', 3, 3, 75000, 520, '#a371f7', 'services', 5, { children: 6000, stage: 'tertiary' }),
+  edu_nursery: P('edu_nursery', 'school', 'Kindergarten', '30 places · ages 0–4', 1, 1, 2160000, 120, '#ffd166', 'services', 2, { children: 30, stage: 'nursery' }),
+  edu_primary: P('edu_primary', 'school', 'Primary School', '300 places · ages 5–11', 2, 2, 9360000, 520, '#f2c14e', 'services', 3, { children: 300, stage: 'primary' }),
+  edu_city: P('edu_city', 'school', 'City School', '2,000 places · ages 5–15', 3, 2, 57600000, 3200, '#e3a92f', 'services', 4, { children: 2000, stage: 'city' }),
+  col_sixth: P('col_sixth', 'school', 'College', '1,500 places · ages 16–19', 2, 2, 32400000, 1800, '#b58fd8', 'services', 4, { children: 1500, stage: 'tertiary' }),
+  uni: P('uni', 'school', 'University', '6,000 students', 3, 3, 135000000, 7500, '#a371f7', 'services', 5, { children: 6000, stage: 'tertiary' }),
 
-  off_suite: P('off_suite', 'office', 'Office Suite', '25 office jobs', 1, 1, 900, 5, '#43aa8b', 'zones', 2, { jobs: 25 }),
-  off_tower: P('off_tower', 'office', 'Office Tower', '300 office jobs', 2, 3, 22000, 120, '#43aa8b', 'zones', 4, { jobs: 300 }),
+  off_suite: P('off_suite', 'office', 'Office Suite', '25 office jobs', 1, 1, 900000, 5, '#43aa8b', 'zones', 2, { jobs: 25 }),
+  off_tower: P('off_tower', 'office', 'Office Tower', '300 office jobs', 2, 3, 22000000, 120, '#43aa8b', 'zones', 4, { jobs: 300 }),
 
-  mine_quarry: P('mine_quarry', 'mine', 'Quarry', 'Materials + freight jobs', 2, 2, 3200, 20, '#b08d55', 'zones', 3, { tag: 'pollution', jobs: 30 }),
-  mine_deep: P('mine_deep', 'mine', 'Deep Mine', 'Heavy freight output', 3, 3, 15000, 80, '#9c6f3f', 'zones', 5, { tag: 'pollution', jobs: 90 }),
+  mine_quarry: P('mine_quarry', 'mine', 'Quarry', 'Materials + freight jobs', 2, 2, 3200000, 20, '#b08d55', 'zones', 3, { tag: 'pollution', jobs: 30 }),
+  mine_deep: P('mine_deep', 'mine', 'Deep Mine', 'Heavy freight output', 3, 3, 15000000, 80, '#9c6f3f', 'zones', 5, { tag: 'pollution', jobs: 90 }),
 
-  land_stadium: P('land_stadium', 'landmark', 'Regional Stadium', 'Tourism magnet + approval', 3, 2, 24000, 260, '#d0a83c', 'services', 5, { tourism: 60 }),
-  land_airport: P('land_airport', 'landmark', 'International Airport', 'Heathrow-scale · 1,227 ha · twin 3.9 km runways', 70, 70, 450000, 3000, '#5eb3d6', 'services', 6, { tourism: 140 }),
-  land_harbour: P('land_harbour', 'landmark', 'Deep-Water Harbour', 'Freight income x1.4', 3, 3, 38000, 300, '#5e8bb0', 'services', 7, {}),
+  land_stadium: P('land_stadium', 'landmark', 'Regional Stadium', 'Tourism magnet + approval', 3, 2, 43200000, 2400, '#d0a83c', 'services', 5, { tourism: 60 }),
+  land_airport: P('land_airport', 'landmark', 'International Airport', 'Heathrow-scale · 1,227 ha · twin 3.9 km runways', 70, 70, 810000000, 45000, '#5eb3d6', 'services', 6, { tourism: 140 }),
+  land_harbour: P('land_harbour', 'landmark', 'Deep-Water Harbour', 'Freight income x1.4', 3, 3, 68400000, 3800, '#5e8bb0', 'services', 7, {}),
 
   // ════════════════════════════════════════════════════════════════════════
   // FEAT-1972079877 — PLACEHOLDER OBJECT CATALOGUE.
@@ -1064,60 +1117,60 @@ export const SPECS: Record<string, Spec> = {
   // ════════════════════════════════════════════════════════════════════════
 
   // ---- Transport (buses / trams / metro / ferries / parking) ----
-  bus_stop: P('bus_stop', 'transport', 'Bus Stop', 'Local hopper services', 1, 1, 300, 4, '#5ea0c8', 'services', 2),
-  bus_depot: P('bus_depot', 'transport', 'Bus Depot', 'Runs 20 local routes', 2, 2, 4500, 40, '#5ea0c8', 'services', 4, { jobs: 20 }),
-  car_park: P('car_park', 'transport', 'Multi-storey Car Park', 'Park & ride commuters', 2, 2, 6000, 30, '#7f93a8', 'services', 5),
-  bus_station: P('bus_station', 'transport', 'Bus Station', 'Regional coach interchange', 2, 2, 9000, 70, '#5ea0c8', 'services', 6, { served: 12000 }),
-  tram_depot: P('tram_depot', 'transport', 'Tram Depot', 'Street tram network hub', 2, 2, 14000, 110, '#4d8fb8', 'services', 8, { jobs: 35 }),
-  ferry_pier: P('ferry_pier', 'transport', 'Ferry Pier', 'Cross-channel foot ferry', 1, 2, 11000, 90, '#4a9dae', 'services', 9, { tourism: 15 }),
-  metro_station: P('metro_station', 'transport', 'Metro Station', 'Underground rapid transit', 2, 2, 26000, 180, '#3d7ea6', 'services', 12, { served: 30000 }),
-  grand_terminus: P('grand_terminus', 'transport', 'Grand Terminus', 'Victorian rail cathedral', 3, 2, 60000, 320, '#d0a83c', 'services', 14, { served: 80000, jobs: 60 }),
+  bus_stop: P('bus_stop', 'transport', 'Bus Stop', 'Local hopper services', 1, 1, 540000, 30, '#5ea0c8', 'services', 2),
+  bus_depot: P('bus_depot', 'transport', 'Bus Depot', 'Runs 20 local routes', 2, 2, 8100000, 450, '#5ea0c8', 'services', 4, { jobs: 20 }),
+  car_park: P('car_park', 'transport', 'Multi-storey Car Park', 'Park & ride commuters', 2, 2, 10800000, 600, '#7f93a8', 'services', 5),
+  bus_station: P('bus_station', 'transport', 'Bus Station', 'Regional coach interchange', 2, 2, 16200000, 900, '#5ea0c8', 'services', 6, { served: 12000 }),
+  tram_depot: P('tram_depot', 'transport', 'Tram Depot', 'Street tram network hub', 2, 2, 25200000, 1400, '#4d8fb8', 'services', 8, { jobs: 35 }),
+  ferry_pier: P('ferry_pier', 'transport', 'Ferry Pier', 'Cross-channel foot ferry', 1, 2, 19800000, 1100, '#4a9dae', 'services', 9, { tourism: 15 }),
+  metro_station: P('metro_station', 'transport', 'Metro Station', 'Underground rapid transit', 2, 2, 46800000, 2600, '#3d7ea6', 'services', 12, { served: 30000 }),
+  grand_terminus: P('grand_terminus', 'transport', 'Grand Terminus', 'Victorian rail cathedral', 3, 2, 108000000, 6000, '#d0a83c', 'services', 14, { served: 80000, jobs: 60 }),
 
   // ---- Housing tiers ----
-  res_terrace: P('res_terrace', 'residential', 'Terrace Row', '30 residents · Victorian brick', 2, 1, 900, 3, '#4c9aff', 'zones', 3, { residents: 30 }),
-  res_lowrise: P('res_lowrise', 'residential', 'Low-rise Flats', '120 residents', 2, 2, 3200, 10, '#4c9aff', 'zones', 4, { residents: 120 }),
-  res_midrise: P('res_midrise', 'residential', 'Mid-rise Flats', '280 residents', 2, 2, 7800, 22, '#3d84e6', 'zones', 6, { residents: 280 }),
-  res_highrise: P('res_highrise', 'residential', 'High-rise Tower', '600 residents', 2, 2, 21000, 60, '#3d84e6', 'zones', 9, { residents: 600 }),
-  res_penthouse: P('res_penthouse', 'residential', 'Penthouse Tower', '350 wealthy residents', 2, 2, 45000, 90, '#6ab0ff', 'zones', 13, { residents: 350 }),
+  res_terrace: P('res_terrace', 'residential', 'Terrace Row', '30 residents · Victorian brick', 2, 1, 900000, 3, '#4c9aff', 'zones', 3, { residents: 30 }),
+  res_lowrise: P('res_lowrise', 'residential', 'Low-rise Flats', '120 residents', 2, 2, 3200000, 10, '#4c9aff', 'zones', 4, { residents: 120 }),
+  res_midrise: P('res_midrise', 'residential', 'Mid-rise Flats', '280 residents', 2, 2, 7800000, 22, '#3d84e6', 'zones', 6, { residents: 280 }),
+  res_highrise: P('res_highrise', 'residential', 'High-rise Tower', '600 residents', 2, 2, 21000000, 60, '#3d84e6', 'zones', 9, { residents: 600 }),
+  res_penthouse: P('res_penthouse', 'residential', 'Penthouse Tower', '350 wealthy residents', 2, 2, 45000000, 90, '#6ab0ff', 'zones', 13, { residents: 350 }),
 
   // ---- Retail tiers ----
-  com_market: P('com_market', 'commercial', 'Market Hall', 'Covered traders market', 2, 2, 2200, 10, '#e3b341', 'zones', 3, { jobs: 25 }),
-  com_super: P('com_super', 'commercial', 'Supermarket', 'Weekly shop anchor', 2, 2, 5200, 24, '#e3b341', 'zones', 4, { jobs: 40 }),
-  com_mall: P('com_mall', 'commercial', 'Shopping Mall', 'Regional retail destination', 3, 3, 30000, 160, '#d9a52e', 'zones', 8, { jobs: 220 }),
+  com_market: P('com_market', 'commercial', 'Market Hall', 'Covered traders market', 2, 2, 2200000, 10, '#e3b341', 'zones', 3, { jobs: 25 }),
+  com_super: P('com_super', 'commercial', 'Supermarket', 'Weekly shop anchor', 2, 2, 5200000, 24, '#e3b341', 'zones', 4, { jobs: 40 }),
+  com_mall: P('com_mall', 'commercial', 'Shopping Mall', 'Regional retail destination', 3, 3, 30000000, 160, '#d9a52e', 'zones', 8, { jobs: 220 }),
 
   // ---- Industry tiers ----
-  ind_light: P('ind_light', 'industrial', 'Light Industrial Units', 'Workshops + trades', 2, 2, 1800, 10, '#a371f7', 'zones', 3, { jobs: 24 }),
-  ind_warehouse: P('ind_warehouse', 'industrial', 'Warehouse', 'Storage + distribution', 2, 2, 3600, 16, '#9a6ee0', 'zones', 5, { jobs: 18 }),
-  ind_heavy: P('ind_heavy', 'industrial', 'Heavy Industry Estate', 'Big plant · heavy freight', 3, 3, 16000, 90, '#8957d9', 'zones', 7, { tag: 'pollution', jobs: 110 }),
-  ind_cement: P('ind_cement', 'industrial', 'Cement Works', 'Construction materials', 2, 2, 12000, 70, '#8957d9', 'zones', 9, { tag: 'pollution', jobs: 45 }),
-  ind_logistics: P('ind_logistics', 'industrial', 'Automated Logistics Hub', 'Robotic freight sorting', 3, 3, 48000, 210, '#b58fd8', 'zones', 15, { jobs: 60 }),
+  ind_light: P('ind_light', 'industrial', 'Light Industrial Units', 'Workshops + trades', 2, 2, 1800000, 10, '#a371f7', 'zones', 3, { jobs: 24 }),
+  ind_warehouse: P('ind_warehouse', 'industrial', 'Warehouse', 'Storage + distribution', 2, 2, 3600000, 16, '#9a6ee0', 'zones', 5, { jobs: 18 }),
+  ind_heavy: P('ind_heavy', 'industrial', 'Heavy Industry Estate', 'Big plant · heavy freight', 3, 3, 16000000, 90, '#8957d9', 'zones', 7, { tag: 'pollution', jobs: 110 }),
+  ind_cement: P('ind_cement', 'industrial', 'Cement Works', 'Construction materials', 2, 2, 12000000, 70, '#8957d9', 'zones', 9, { tag: 'pollution', jobs: 45 }),
+  ind_logistics: P('ind_logistics', 'industrial', 'Automated Logistics Hub', 'Robotic freight sorting', 3, 3, 48000000, 210, '#b58fd8', 'zones', 15, { jobs: 60 }),
 
   // ---- Offices ----
-  off_data: P('off_data', 'office', 'Data Centre', '90 tech jobs · heavy power draw', 2, 2, 34000, 240, '#2f8f74', 'zones', 12, { jobs: 90 }),
+  off_data: P('off_data', 'office', 'Data Centre', '90 tech jobs · heavy power draw', 2, 2, 34000000, 240, '#2f8f74', 'zones', 12, { jobs: 90 }),
 
   // ---- Parks tiers ----
-  park_playground: P('park_playground', 'park', 'Playground', 'Swings + climbing frame', 1, 1, 400, 6, '#3fb950', 'zones', 2),
-  park_town: P('park_town', 'park', 'Town Park', 'Bandstand + boating lake', 2, 2, 2400, 30, '#3fb950', 'zones', 4),
-  park_botanical: P('park_botanical', 'park', 'Botanical Garden', 'Glasshouses + collections', 2, 2, 9000, 80, '#2f9e44', 'zones', 8, { tourism: 20 }),
-  park_nature: P('park_nature', 'park', 'Nature Reserve', 'Wetland + wildlife', 3, 3, 6000, 40, '#2f9e44', 'zones', 12),
+  park_playground: P('park_playground', 'park', 'Playground', 'Swings + climbing frame', 1, 1, 400000, 6, '#3fb950', 'zones', 2),
+  park_town: P('park_town', 'park', 'Town Park', 'Bandstand + boating lake', 2, 2, 2400000, 30, '#3fb950', 'zones', 4),
+  park_botanical: P('park_botanical', 'park', 'Botanical Garden', 'Glasshouses + collections', 2, 2, 9000000, 80, '#2f9e44', 'zones', 8, { tourism: 20 }),
+  park_nature: P('park_nature', 'park', 'Nature Reserve', 'Wetland + wildlife', 3, 3, 6000000, 40, '#2f9e44', 'zones', 12),
 
   // ---- Leisure ----
-  lei_leisure: P('lei_leisure', 'leisure', 'Leisure Centre', 'Pool + courts for 8,000', 2, 2, 7000, 85, '#e07be0', 'services', 4, { served: 8000 }),
-  lei_cinema: P('lei_cinema', 'leisure', 'Cinema', 'Eight-screen multiplex', 2, 1, 5500, 45, '#e07be0', 'services', 5, { tourism: 10 }),
-  lei_theatre: P('lei_theatre', 'leisure', 'Theatre', 'Rep company + touring shows', 2, 2, 12000, 95, '#c95fc9', 'services', 7, { tourism: 18 }),
-  lei_museum: P('lei_museum', 'leisure', 'Museum', 'County collection', 2, 2, 15000, 110, '#c95fc9', 'services', 9, { tourism: 25 }),
-  lei_arena: P('lei_arena', 'leisure', 'Arena', '12,000-seat events bowl', 3, 3, 55000, 380, '#b34fb3', 'services', 11, { tourism: 70 }),
-  lei_themepark: P('lei_themepark', 'leisure', 'Theme Park', 'Coasters + day-trippers', 4, 4, 120000, 700, '#b34fb3', 'services', 16, { tourism: 160 }),
+  lei_leisure: P('lei_leisure', 'leisure', 'Leisure Centre', 'Pool + courts for 8,000', 2, 2, 12600000, 700, '#e07be0', 'services', 4, { served: 8000 }),
+  lei_cinema: P('lei_cinema', 'leisure', 'Cinema', 'Eight-screen multiplex', 2, 1, 9900000, 550, '#e07be0', 'services', 5, { tourism: 10 }),
+  lei_theatre: P('lei_theatre', 'leisure', 'Theatre', 'Rep company + touring shows', 2, 2, 21600000, 1200, '#c95fc9', 'services', 7, { tourism: 18 }),
+  lei_museum: P('lei_museum', 'leisure', 'Museum', 'County collection', 2, 2, 27000000, 1500, '#c95fc9', 'services', 9, { tourism: 25 }),
+  lei_arena: P('lei_arena', 'leisure', 'Arena', '12,000-seat events bowl', 3, 3, 99000000, 5500, '#b34fb3', 'services', 11, { tourism: 70 }),
+  lei_themepark: P('lei_themepark', 'leisure', 'Theme Park', 'Coasters + day-trippers', 4, 4, 216000000, 12000, '#b34fb3', 'services', 16, { tourism: 160 }),
 
   // ---- Power additions ----
-  pow_substation: P('pow_substation', 'power', 'Substation', 'Grid step-down node', 1, 1, 1200, 12, '#9aa4ae', 'services', 3),
-  pow_solar: P('pow_solar', 'power', 'Solar Farm', '25 MW · clean', 3, 3, 9000, 30, '#f6c744', 'services', 6, { mw: 25 }),
-  pow_windfarm: P('pow_windfarm', 'power', 'Onshore Wind Farm', '60 MW · clean', 3, 3, 18000, 60, '#7fb2e5', 'services', 7, { mw: 60 }),
-  pow_ccgt: P('pow_ccgt', 'power', 'CCGT Gas Plant', '420 MW · fast response', 3, 3, 42000, 260, '#f0883e', 'services', 8, { mw: 420, tag: 'pollution' }),
-  pow_offshore: P('pow_offshore', 'power', 'Offshore Wind Array', '300 MW · clean', 3, 3, 90000, 240, '#5b8fc9', 'services', 12, { mw: 300 }),
+  pow_substation: P('pow_substation', 'power', 'Substation', 'Grid step-down node', 1, 1, 2160000, 120, '#9aa4ae', 'services', 3),
+  pow_solar: P('pow_solar', 'power', 'Solar Farm', '25 MW · clean', 3, 3, 16250000, 903, '#f6c744', 'services', 6, { mw: 25 }),
+  pow_windfarm: P('pow_windfarm', 'power', 'Onshore Wind Farm', '60 MW · clean', 3, 3, 42000000, 2333, '#7fb2e5', 'services', 7, { mw: 60 }),
+  pow_ccgt: P('pow_ccgt', 'power', 'CCGT Gas Plant', '420 MW · fast response', 3, 3, 336000000, 18667, '#f0883e', 'services', 8, { mw: 420, tag: 'pollution' }),
+  pow_offshore: P('pow_offshore', 'power', 'Offshore Wind Array', '300 MW · clean', 3, 3, 225000000, 12500, '#5b8fc9', 'services', 12, { mw: 300 }),
   // FEAT-1972079901 realistic power costs: experimental mega-plant, dearest per-MW
   // capex of all generators (400k→520k, ~£650/MW; opex 900→1500). `mw` UNCHANGED.
-  pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 520000, 1500, '#ff9f43', 'services', 19, { mw: 800 }),
+  pow_fusion: P('pow_fusion', 'power', 'Fusion Pilot Plant', '800 MW · experimental', 4, 4, 1280000000, 71111, '#ff9f43', 'services', 19, { mw: 800 }),
 
   // FEAT-1972079901 — FIVE GORGES DAM (GRADUATED from a roadmap placeholder to a
   // real, placeable mega-hydro GENERATOR). A single huge hydroelectric station:
@@ -1128,50 +1181,50 @@ export const SPECS: Record<string, Spec> = {
   // Hydro is clean, so (like pow_wind/pow_solar) it takes no `pollution` tag.
   // Huge 8×8 footprint + late unlock (16). ⚠ every figure PLACEHOLDER-balance —
   // directional only, pending Aaron's row-by-row pass.
-  pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 600000, 900, '#5b8fc9', 'services', 16, { mw: 5000 }),
+  pow_hydro: P('pow_hydro', 'power', 'Five Gorges Dam', 'Mega hydroelectric dam · 5,000 MW · dwarfs a nuclear plant', 8, 8, 5000000000, 277778, '#5b8fc9', 'services', 16, { mw: 5000 }),
 
   // ---- Water & waste additions ----
-  wat_tower: P('wat_tower', 'water', 'Water Tower', 'Pressure head for 4,000', 1, 1, 1500, 14, '#39c5cf', 'services', 2, { tag: 'clean', served: 4000 }),
-  wat_reservoir: P('wat_reservoir', 'water', 'Reservoir', 'Valley dam · serves 60,000', 4, 4, 45000, 150, '#2ba7b1', 'services', 9, { tag: 'clean', served: 60000 }),
-  wat_sewage_regional: P('wat_sewage_regional', 'water', 'Regional Sewage Works', 'Treats waste for 60,000', 3, 3, 38000, 170, '#6b8f71', 'services', 11, { tag: 'waste', served: 60000 }),
+  wat_tower: P('wat_tower', 'water', 'Water Tower', 'Pressure head for 4,000', 1, 1, 2700000, 150, '#39c5cf', 'services', 2, { tag: 'clean', served: 4000 }),
+  wat_reservoir: P('wat_reservoir', 'water', 'Reservoir', 'Valley dam · serves 60,000', 4, 4, 81000000, 4500, '#2ba7b1', 'services', 9, { tag: 'clean', served: 60000 }),
+  wat_sewage_regional: P('wat_sewage_regional', 'water', 'Regional Sewage Works', 'Treats waste for 60,000', 3, 3, 68400000, 3800, '#6b8f71', 'services', 11, { tag: 'waste', served: 60000 }),
 
   // FEAT-1972079906 inc1: the Refuse Depot GRADUATES from a "coming soon" roadmap
   // placeholder to a real, placeable collection depot — runs the city's rounds.
   // `wasteCapacity` (tonnes/tick collected) drives collectionCoverageOf(); it has
   // NO water tag, so it never counts as clean/waste-water capacity. ⚠ cost /
   // upkeep / wasteCapacity are PLACEHOLDER-balance — Aaron's row-by-row pass.
-  waste_depot: P('waste_depot', 'water', 'Refuse Depot', 'Collects refuse on city rounds · 50 t/tick', 2, 2, 3000, 40, '#6b8f71', 'services', 4, { wasteCapacity: 50 }),
+  waste_depot: P('waste_depot', 'water', 'Refuse Depot', 'Collects refuse on city rounds · 50 t/tick', 2, 2, 5400000, 300, '#6b8f71', 'services', 4, { wasteCapacity: 50 }),
 
   // ---- Education additions ----
-  edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 24000, 210, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary' }),
+  edu_tech: P('edu_tech', 'school', 'Technical College', '2,200 places · trades + T-levels', 2, 2, 43200000, 2400, '#b58fd8', 'services', 6, { children: 2200, stage: 'tertiary' }),
 
   // ---- Health additions ----
-  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 3800, 55, '#ff7b72', 'services', 5, { served: 15000 }),
-  hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 8500, 95, '#d95f57', 'services', 7, { served: 90 }),
-  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 85000, 650, '#c24f47', 'services', 10, { served: 120000 }),
+  hea_ambulance: P('hea_ambulance', 'health', 'Ambulance Station', 'Six-crew emergency cover', 1, 1, 6840000, 380, '#ff7b72', 'services', 5, { served: 15000 }),
+  hea_eldercare: P('hea_eldercare', 'health', 'Elder-care Home', '90 assisted-living places', 2, 2, 15300000, 850, '#d95f57', 'services', 7, { served: 90 }),
+  hea_teaching: P('hea_teaching', 'health', 'Teaching Hospital', 'Serves 120,000 + trains doctors', 3, 3, 153000000, 8500, '#c24f47', 'services', 10, { served: 120000 }),
 
   // ---- Police & justice ----
-  pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 15000, 160, '#6e7bd9', 'services', 9, { served: 60000 }),
-  civ_courthouse: P('civ_courthouse', 'civic', 'Courthouse', 'Magistrates + crown courts', 2, 2, 12000, 130, '#8a94a8', 'services', 8),
-  civ_prison: P('civ_prison', 'civic', 'Prison', 'Category B · 800 places', 3, 2, 26000, 240, '#707a8c', 'services', 10),
+  pol_hq: P('pol_hq', 'police', 'Divisional HQ', 'Commands 60,000 coverage', 2, 2, 27000000, 1500, '#6e7bd9', 'services', 9, { served: 60000 }),
+  civ_courthouse: P('civ_courthouse', 'civic', 'Courthouse', 'Magistrates + crown courts', 2, 2, 21600000, 1200, '#8a94a8', 'services', 8),
+  civ_prison: P('civ_prison', 'civic', 'Prison', 'Category B · 800 places', 3, 2, 46800000, 2600, '#707a8c', 'services', 10),
   // FEAT-1972079870 — the ADX supermax.
-  civ_adx: P('civ_adx', 'civic', 'ADX Supermax', 'Maximum-security prison · escape-proof', 3, 3, 90000, 520, '#565e6e', 'services', 17),
+  civ_adx: P('civ_adx', 'civic', 'ADX Supermax', 'Maximum-security prison · escape-proof', 3, 3, 162000000, 9000, '#565e6e', 'services', 17),
 
   // ---- Fire & rescue ----
-  fire_post: P('fire_post', 'fire', 'Volunteer Fire Post', 'Retained crew · covers 4,000', 1, 1, 1000, 16, '#f65b56', 'services', 2, { served: 4000 }),
-  fire_station: P('fire_station', 'fire', 'Fire Station', 'Two pumps · covers 20,000', 2, 1, 4800, 70, '#f65b56', 'services', 4, { served: 20000 }),
-  fire_hq: P('fire_hq', 'fire', 'Regional Fire HQ', 'Command + specialist appliances', 2, 2, 18000, 180, '#d94a45', 'services', 11, { served: 80000 }),
+  fire_post: P('fire_post', 'fire', 'Volunteer Fire Post', 'Retained crew · covers 4,000', 1, 1, 1800000, 100, '#f65b56', 'services', 2, { served: 4000 }),
+  fire_station: P('fire_station', 'fire', 'Fire Station', 'Two pumps · covers 20,000', 2, 1, 8640000, 480, '#f65b56', 'services', 4, { served: 20000 }),
+  fire_hq: P('fire_hq', 'fire', 'Regional Fire HQ', 'Command + specialist appliances', 2, 2, 32400000, 1800, '#d94a45', 'services', 11, { served: 80000 }),
 
   // ---- Civic ----
-  civ_library: P('civ_library', 'civic', 'Library', 'Lending + study space', 1, 1, 3000, 40, '#8a94a8', 'services', 5),
-  civ_townhall: P('civ_townhall', 'civic', 'Town Hall', 'Local governance seat', 2, 2, 9000, 90, '#8a94a8', 'services', 6),
-  civ_cityhall: P('civ_cityhall', 'civic', 'City Hall', 'Metropolitan administration', 2, 2, 30000, 220, '#707a8c', 'services', 12),
+  civ_library: P('civ_library', 'civic', 'Library', 'Lending + study space', 1, 1, 5400000, 300, '#8a94a8', 'services', 5),
+  civ_townhall: P('civ_townhall', 'civic', 'Town Hall', 'Local governance seat', 2, 2, 16200000, 900, '#8a94a8', 'services', 6),
+  civ_cityhall: P('civ_cityhall', 'civic', 'City Hall', 'Metropolitan administration', 2, 2, 54000000, 3000, '#707a8c', 'services', 12),
 
   // ---- Landmark additions ----
-  land_cathedral: P('land_cathedral', 'landmark', 'Cathedral', 'Gothic spire · pilgrimage draw', 2, 2, 40000, 150, '#d0a83c', 'services', 11, { tourism: 45 }),
-  land_eye: P('land_eye', 'landmark', 'The Folkestone Eye', 'Coastal observation wheel', 1, 1, 28000, 130, '#5eb3d6', 'services', 13, { tourism: 55 }),
-  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 250000, 1200, '#c2477e', 'services', 18, { tourism: 80 }),
-  land_space: P('land_space', 'landmark', 'Space Launch Complex', 'Kent spaceport · mega-project', 5, 5, 600000, 2500, '#ff9f43', 'services', 20, { tourism: 200 }),
+  land_cathedral: P('land_cathedral', 'landmark', 'Cathedral', 'Gothic spire · pilgrimage draw', 2, 2, 72000000, 4000, '#d0a83c', 'services', 11, { tourism: 45 }),
+  land_eye: P('land_eye', 'landmark', 'The Folkestone Eye', 'Coastal observation wheel', 1, 1, 50400000, 2800, '#5eb3d6', 'services', 13, { tourism: 55 }),
+  land_tunnel: P('land_tunnel', 'landmark', 'Channel Tunnel Portal', 'Continental rail gateway', 3, 3, 450000000, 25000, '#c2477e', 'services', 18, { tourism: 80 }),
+  land_space: P('land_space', 'landmark', 'Space Launch Complex', 'Kent spaceport · mega-project', 5, 5, 1080000000, 60000, '#ff9f43', 'services', 20, { tourism: 200 }),
   // ═══════════════════ end FEAT-1972079877 placeholder block ═══════════════
 
   // ════════════════════════════════════════════════════════════════════════
@@ -1187,16 +1240,16 @@ export const SPECS: Record<string, Spec> = {
   // FEAT-1972079907 inc1: rd_avenue/rd_aroad/rd_dual GRADUATE from placeholders to
   // real placeable road tiers — real cost/upkeep + roadTier/capacity, placeholder
   // flag removed. ⚠ PLACEHOLDER-balance cost/upkeep/capacity — Aaron's sign-off.
-  rd_avenue: P('rd_avenue', 'road', 'Avenue', 'Tree-lined urban avenue · tier 2', 1, 1, 90, 6, '#4a525c', 'network', 3, { roadTier: 2, capacity: 250 }),
-  rd_aroad: P('rd_aroad', 'road', 'A-Road', 'Arterial trunk road · tier 3', 1, 1, 180, 10, '#454c56', 'network', 4, { roadTier: 3, capacity: 500 }),
-  rd_dual: P('rd_dual', 'road', 'Dual Carriageway', 'High-capacity dual road · tier 4', 1, 1, 320, 16, '#3f4650', 'network', 5, { roadTier: 4, capacity: 1000 }),
+  rd_avenue: P('rd_avenue', 'road', 'Avenue', 'Tree-lined urban avenue · tier 2', 1, 1, 27000, 2, '#4a525c', 'network', 3, { roadTier: 2, capacity: 250 }),
+  rd_aroad: P('rd_aroad', 'road', 'A-Road', 'Arterial trunk road · tier 3', 1, 1, 54000, 3, '#454c56', 'network', 4, { roadTier: 3, capacity: 500 }),
+  rd_dual: P('rd_dual', 'road', 'Dual Carriageway', 'High-capacity dual road · tier 4', 1, 1, 96000, 5, '#3f4650', 'network', 5, { roadTier: 4, capacity: 1000 }),
 
   // FEAT-1972079910 inc2: auto-junction specs — placed at tile where new road crosses existing.
   // AC-6: below avenue tier → plain crossroads; avenue+ → roundabout (tier = max of the two roads).
   // unlock: 99 (seed infrastructure) because junctions are auto-placed, never manually selected.
   // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
-  rd_junction: P('rd_junction', 'road', 'Crossroads', 'Plain crossing · auto-placed', 1, 1, 15, 1, '#5a626d', 'network', 99, { roadTier: 1, capacity: 100 }),
-  rd_roundabout: P('rd_roundabout', 'road', 'Roundabout', 'Traffic circle · auto-placed', 1, 1, 50, 3, '#515961', 'network', 99, { roadTier: 2, capacity: 250 }),
+  rd_junction: P('rd_junction', 'road', 'Crossroads', 'Plain crossing · auto-placed', 1, 1, 4500, 0, '#5a626d', 'network', 99, { roadTier: 1, capacity: 100 }),
+  rd_roundabout: P('rd_roundabout', 'road', 'Roundabout', 'Traffic circle · auto-placed', 1, 1, 15000, 1, '#515961', 'network', 99, { roadTier: 2, capacity: 250 }),
 
   // FEAT-1972079910 inc3 (AC-7): rail bridge — auto-placed grade-separated crossing
   // where a dual+ road crosses a rail tile. Spec has kind:'rail' so it participates
@@ -1209,7 +1262,7 @@ export const SPECS: Record<string, Spec> = {
   // crosses the highest-tier motorway-class spec (m20). Both roads are continuous
   // through the junction. unlock: 99 (auto-placed, never manual).
   // ⚠ PLACEHOLDER-balance cost/upkeep — directional, pending Aaron's approval.
-  rd_mwyjunction: P('rd_mwyjunction', 'road', 'Motorway Junction', 'Grade-separated motorway crossing · auto-placed', 1, 1, 250000, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
+  rd_mwyjunction: P('rd_mwyjunction', 'road', 'Motorway Junction', 'Grade-separated motorway crossing · auto-placed', 1, 1, 480000, 0, '#1d5fa8', 'network', 99, { roadTier: 5, capacity: 2500 }),
 
   rail_branch: PH('rail_branch', 'rail', 'Branch Line', 'Planned — single-track branch railway', 1, 1, '#8a6d3b', 'network', 6),
 
@@ -1240,20 +1293,20 @@ export const SPECS: Record<string, Spec> = {
   // — directional only, anchored to the constituent specs, pending Aaron's row-by-row pass.
   // FEAT-1972079878 inc1: housing estates now have three density tiers (compact/medium/sprawl)
   // with auto-scale support via capacityTiers arrays. Capacity progression ~10%/tier.
-  res_estate_compact: P('res_estate_compact', 'residential', 'Compact Housing', 'Apartment blocks in dense urban cores · 4×4', 4, 4, 32000, 90, '#4c9aff', 'zones', 8, { residents: 900, capacityTiers: [900, 990, 1089, 1197, 1317, 1449, 1594, 1753, 1929, 2121] }),
-  res_estate: P('res_estate', 'residential', 'Housing Estate', 'Master-planned housing estate · ≈ 12 low-rise blocks', 5, 5, 45000, 130, '#4c9aff', 'zones', 10, { residents: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
-  res_estate_sprawl: P('res_estate_sprawl', 'residential', 'Sprawl Housing', 'Low-rise suburban sprawl · 6×6', 6, 6, 70000, 200, '#4c9aff', 'zones', 15, { residents: 2500, capacityTiers: [2500, 2750, 3025, 3327, 3660, 4026, 4429, 4872, 5359, 5894] }),
-  off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000, 420, '#43aa8b', 'zones', 12, { jobs: 1200, capacityTiers: [1200, 1320, 1452, 1597, 1757, 1933, 2126, 2339, 2573, 2830] }),
-  off_towers_downtown: P('off_towers_downtown', 'office', 'Downtown Towers', 'Dense downtown office towers', 5, 5, 128000, 630, '#43aa8b', 'zones', 14, { jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
-  ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
-  farm_estate: P('farm_estate', 'industrial', 'Farm Estate', 'Large integrated farm · mixed crop + livestock', 6, 6, 2400, 15, '#7da24f', 'zones', 12, { jobs: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
+  res_estate_compact: P('res_estate_compact', 'residential', 'Compact Housing', 'Apartment blocks in dense urban cores · 4×4', 4, 4, 32000000, 90, '#4c9aff', 'zones', 8, { residents: 900, capacityTiers: [900, 990, 1089, 1197, 1317, 1449, 1594, 1753, 1929, 2121] }),
+  res_estate: P('res_estate', 'residential', 'Housing Estate', 'Master-planned housing estate · ≈ 12 low-rise blocks', 5, 5, 45000000, 130, '#4c9aff', 'zones', 10, { residents: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
+  res_estate_sprawl: P('res_estate_sprawl', 'residential', 'Sprawl Housing', 'Low-rise suburban sprawl · 6×6', 6, 6, 70000000, 200, '#4c9aff', 'zones', 15, { residents: 2500, capacityTiers: [2500, 2750, 3025, 3327, 3660, 4026, 4429, 4872, 5359, 5894] }),
+  off_businesspark: P('off_businesspark', 'office', 'Business Park', 'Landscaped out-of-town office park · ≈ 4 towers', 5, 5, 85000000, 420, '#43aa8b', 'zones', 12, { jobs: 1200, capacityTiers: [1200, 1320, 1452, 1597, 1757, 1933, 2126, 2339, 2573, 2830] }),
+  off_towers_downtown: P('off_towers_downtown', 'office', 'Downtown Towers', 'Dense downtown office towers', 5, 5, 128000000, 630, '#43aa8b', 'zones', 14, { jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
+  ind_estate: P('ind_estate', 'industrial', 'Industrial Estate', 'Heavy industrial estate · ≈ 18 factories · ICI-Wilton scale', 6, 6, 180000000, 900, '#a371f7', 'zones', 11, { tag: 'pollution', jobs: 2000, capacityTiers: [2000, 2200, 2420, 2662, 2928, 3221, 3543, 3897, 4287, 4716] }),
+  farm_estate: P('farm_estate', 'industrial', 'Farm Estate', 'Large integrated farm · mixed crop + livestock', 6, 6, 2400000, 15, '#7da24f', 'zones', 12, { jobs: 1500, capacityTiers: [1500, 1650, 1815, 1996, 2196, 2416, 2657, 2923, 3215, 3536] }),
 
   // ---- Retail ----
   // FEAT-1972079900 inc1 — the RETAIL estate (out-of-town shopping / retail park).
   // Graduated from a placeholder into a real, placeable estate-scale retail object
   // carrying the AGGREGATE retail jobs of an out-of-town superstore. Same DATA-only
   // treatment as the other estates above (no mw, no water tag). PLACEHOLDER-balance.
-  com_hypermarket: P('com_hypermarket', 'commercial', 'Hypermarket', 'Out-of-town retail estate · ≈ 20 shops', 5, 5, 90000, 480, '#e3b341', 'zones', 10, { jobs: 800 }),
+  com_hypermarket: P('com_hypermarket', 'commercial', 'Hypermarket', 'Out-of-town retail estate · ≈ 20 shops', 5, 5, 90000000, 480, '#e3b341', 'zones', 10, { jobs: 800 }),
   com_discounter: PH('com_discounter', 'commercial', 'Discount Store', 'Planned — value discount retailer', 2, 2, '#d9a52e', 'zones', 5),
   com_darkstore: PH('com_darkstore', 'commercial', 'Dark Store', 'Planned — online-only fulfilment store', 2, 2, '#c99a2a', 'zones', 9),
 
@@ -1294,10 +1347,10 @@ export const SPECS: Record<string, Spec> = {
   // static `mw`: its grid contribution is THROUGHPUT-based (efwPowerOf), so an
   // idle incinerator produces no power. ⚠ cost / upkeep / processCapacity are all
   // PLACEHOLDER-balance — Aaron's row-by-row pass.
-  waste_landfill: P('waste_landfill', 'water', 'Landfill', 'Buries residual refuse · cheap, finite · 300 t/tick', 3, 3, 5000, 30, '#5f7f66', 'services', 5, { processCapacity: 300 }),
-  waste_incinerator: P('waste_incinerator', 'water', 'Energy-from-Waste', 'Burns residual for grid power · 60 t/tick', 3, 3, 42000, 180, '#6b8f71', 'services', 9, { processCapacity: 60 }),
-  waste_recycling: P('waste_recycling', 'water', 'Recycling Centre', 'MRF recovers materials for sale · 40 t/tick', 2, 2, 8000, 70, '#5f9e6a', 'services', 6, { processCapacity: 40 }),
-  waste_compost: P('waste_compost', 'water', 'Composting Site', 'Turns organics into compost · 30 t/tick', 2, 2, 3500, 30, '#6b9e6b', 'services', 5, { processCapacity: 30 }),
+  waste_landfill: P('waste_landfill', 'water', 'Landfill', 'Buries residual refuse · cheap, finite · 300 t/tick', 3, 3, 9000000, 500, '#5f7f66', 'services', 5, { processCapacity: 300 }),
+  waste_incinerator: P('waste_incinerator', 'water', 'Energy-from-Waste', 'Burns residual for grid power · 60 t/tick', 3, 3, 75600000, 4200, '#6b8f71', 'services', 9, { processCapacity: 60 }),
+  waste_recycling: P('waste_recycling', 'water', 'Recycling Centre', 'MRF recovers materials for sale · 40 t/tick', 2, 2, 14400000, 800, '#5f9e6a', 'services', 6, { processCapacity: 40 }),
+  waste_compost: P('waste_compost', 'water', 'Composting Site', 'Turns organics into compost · 30 t/tick', 2, 2, 6300000, 350, '#6b9e6b', 'services', 5, { processCapacity: 30 }),
 
   // ---- Health & Deathcare ----
   death_cemetery: PH('death_cemetery', 'health', 'Cemetery', 'Planned — municipal cemetery', 3, 3, '#8a94a8', 'services', 4),

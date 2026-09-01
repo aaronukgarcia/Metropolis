@@ -88,9 +88,14 @@ describe('scaleConstructionTicks — ON scales per class', () => {
 });
 
 describe('constructionTicks() SSOT seam — real shipped function', () => {
-  // constructionTicks reads only sp.cost + sp.kind. base = max(3, round(cost/1500)).
-  const dwelling = { cost: 150000, kind: 'residential' }; // base = 100
-  const mega = { cost: 900000, kind: 'power' }; // base = 600
+  // constructionTicks reads only sp.cost + sp.kind. BUG-452 inc1 (2026-09-01)
+  // bumped the internal cost-per-tick divisor 1500 -> 1,500,000 (1000x) to
+  // keep build-time pacing sane once the catalogue's real £ figures landed —
+  // these synthetic fixture costs are scaled by the SAME 1000x so base stays
+  // 100/600 (this file tests the fast-build SCALING behaviour, not any real
+  // catalogue entry's actual price).
+  const dwelling = { cost: 150000000, kind: 'residential' }; // base = 100
+  const mega = { cost: 900000000, kind: 'power' }; // base = 600
 
   test('OFF (no localStorage): unchanged base is returned', () => {
     // No global localStorage in node → flag reads disabled → base unchanged.

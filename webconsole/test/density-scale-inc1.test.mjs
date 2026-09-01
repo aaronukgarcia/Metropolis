@@ -425,7 +425,8 @@ test('AC-8: building auto-scale cost appears in outflows', () => {
 // MUTATION PROOF (scratch cp/mv, restore after): change
 // `BUILDING_AUTO_SCALE_COST_FRACTION = 0.15` to `0.99` — the expected-cost
 // assertions below go RED (result.cost / the ledger amount no longer match).
-// The expected values below are PINNED LITERALS (45000 * 0.15 = 6750), not
+// The expected values below are PINNED LITERALS (45000000 * 0.15 = 6750000,
+// BUG-452 inc1 rescaled res_estate's catalogue cost 45000 -> 45000000), not
 // recomputed from the imported BUILDING_AUTO_SCALE_COST_FRACTION constant —
 // if the expectation were derived from that same (mutated) constant, both
 // sides of the assertion would drift together and the mutation would stay
@@ -454,8 +455,8 @@ test('BUG-448 AC-10: evaluateBuildingMonitors charges round(sp.cost × BUILDING_
   const result = evaluateBuildingMonitors(s, 30);
 
   assert.equal(result.upgraded, 1, 'precondition: the building actually scaled (not a no-op)');
-  assert.equal(sp.cost, 45000, 'precondition: res_estate catalogue cost is £45,000 (pins the literal below)');
-  const expectedCost = 6750; // PINNED LITERAL: 45000 * 0.15 — see note above
+  assert.equal(sp.cost, 45000000, 'precondition: res_estate catalogue cost is £45,000,000 post-BUG-452 (pins the literal below)');
+  const expectedCost = 6750000; // PINNED LITERAL: 45000000 * 0.15 — see note above
   assert.equal(result.cost, expectedCost, 'evaluateBuildingMonitors charges round(sp.cost × FRACTION), read from its own result');
 });
 
@@ -482,8 +483,8 @@ test('BUG-448 AC-10: the real post-tick ledger/outflow carries the ACTUAL charge
   const scaled = s1.buildings.find((b) => b.id === 1);
   assert.equal(scaled?.capacityTier, 1, 'precondition: the building actually scaled this tick');
 
-  assert.equal(sp.cost, 45000, 'precondition: res_estate catalogue cost is £45,000 (pins the literal below)');
-  const expectedCost = 6750; // PINNED LITERAL: 45000 * 0.15 — decoupled from the mutable constant, see note above
+  assert.equal(sp.cost, 45000000, 'precondition: res_estate catalogue cost is £45,000,000 post-BUG-452 (pins the literal below)');
+  const expectedCost = 6750000; // PINNED LITERAL: 45000000 * 0.15 — decoupled from the mutable constant, see note above
   const outflow = s1.lastFlows.outflows.find((f) => f.label === 'Building Auto-Scale');
   assert.ok(outflow, 'Building Auto-Scale outflow recorded');
   assert.equal(outflow.value, expectedCost, 'the REAL post-tick outflow equals round(sp.cost × FRACTION)');

@@ -15,8 +15,23 @@ import {
   reducer,
   initialState,
   xpForLevel,
+  TICKS_PER_MONTH,
 } from '../src/sim/engine.ts';
-import { OVERDRAFT_PER_TICK, sanitizeFunds, overdraftInterestPerTick } from '../src/sim/fiscal.ts';
+import {
+  OVERDRAFT_PER_TICK,
+  sanitizeFunds,
+  overdraftInterestPerTick,
+  STARTING_TREASURY,
+  DEBT_THRESHOLD_FOR_BAILOUT,
+  INSOLVENCY_WARNING_THRESHOLD,
+  BAILOUT_INCOME_INJECTION,
+  BAILOUT_INCOME_INJECTION_SECOND,
+  ASSET_SALE_VALUE_FRACTION,
+  wagesPerTick,
+  councilTaxPerTick,
+  REAL_NET_WAGE_PER_CITIZEN_PER_MONTH,
+  REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH,
+} from '../src/sim/fiscal.ts';
 import { SPECS } from '../src/sim/data.ts';
 
 // Minimal SimState with no loans, no policies, default tax rates.
@@ -274,4 +289,96 @@ test('BUG-438 AC-5: sanitizeFunds fail-closed on non-integer money', () => {
   assert.ok(OVERDRAFT_PER_TICK > 0);
   assert.equal(overdraftInterestPerTick(-1_000_000, 80_000), Math.round(1_000_000 * OVERDRAFT_PER_TICK));
   assert.equal(overdraftInterestPerTick(-1e28, 80_000), 80_000);
+});
+
+// ========== BUG-452 inc1: GBP-scale rebase — ratios auto-scale with STARTING_TREASURY ==========
+//
+// Prove-can-fail: every assertion below directly encodes Aaron's approved
+// ratios/range (2026-09-01, BOW-452). Mutating STARTING_TREASURY (e.g. back to
+// the old £10,000,000 toy figure, or to something outside £1-2M) or breaking
+// any ratio in fiscal.ts's derivation would trip these — proved live during
+// this build via a scratch cp/mv of fiscal.ts (never a git revert, GR#24):
+// reverting DEBT_THRESHOLD_FOR_BAILOUT to a hardcoded -10_000_000 literal
+// turned the "ratio" assertion red immediately (thresholds no longer equal
+// exactly -1x/-0.5x treasury), then restored.
+
+test('BUG-452: STARTING_TREASURY sits within Aaron\'s approved £1-2M "start truly small" range', () => {
+  assert.ok(
+    STARTING_TREASURY >= 1_000_000 && STARTING_TREASURY <= 2_000_000,
+    `STARTING_TREASURY (${STARTING_TREASURY}) must be in Aaron's approved £1,000,000-£2,000,000 range`,
+  );
+  // The specific approved anchor (midpoint of the range) — a retune within the
+  // range is fine, but the anchor itself should not silently drift.
+  assert.equal(STARTING_TREASURY, 1_500_000);
+});
+
+test('BUG-452: insolvency thresholds are EXACT ratios of STARTING_TREASURY, so a retune auto-scales them', () => {
+  assert.equal(DEBT_THRESHOLD_FOR_BAILOUT, -STARTING_TREASURY, 'crisis threshold must be exactly -1x treasury');
+  assert.equal(
+    INSOLVENCY_WARNING_THRESHOLD,
+    -Math.round(STARTING_TREASURY * 0.5),
+    'warning threshold must be exactly -0.5x treasury',
+  );
+  // Ratio-preservation check independent of the literal STARTING_TREASURY value:
+  // re-derive what the thresholds WOULD be at a different treasury and confirm
+  // the RATIO (not just today's absolute numbers) is what fiscal.ts encodes.
+  const impliedTreasuryFromCrisis = -DEBT_THRESHOLD_FOR_BAILOUT;
+  const impliedTreasuryFromWarning = -INSOLVENCY_WARNING_THRESHOLD / 0.5;
+  assert.equal(impliedTreasuryFromCrisis, STARTING_TREASURY);
+  assert.equal(impliedTreasuryFromWarning, STARTING_TREASURY);
+});
+
+test('BUG-452: bailout injections are 50%/25% of the debt-hole magnitude, second strictly smaller (worse terms)', () => {
+  const debtHoleMagnitude = Math.abs(DEBT_THRESHOLD_FOR_BAILOUT);
+  assert.equal(BAILOUT_INCOME_INJECTION, Math.round(debtHoleMagnitude * 0.5), 'first bailout = 50% of the debt hole');
+  assert.equal(
+    BAILOUT_INCOME_INJECTION_SECOND,
+    Math.round(debtHoleMagnitude * 0.25),
+    'second bailout = 25% of the debt hole',
+  );
+  assert.ok(
+    BAILOUT_INCOME_INJECTION_SECOND < BAILOUT_INCOME_INJECTION,
+    'second bailout must remain strictly less generous (worse terms) than the first',
+  );
+});
+
+test('BUG-452: ASSET_SALE_VALUE_FRACTION is the real distressed-sale rate (0.5), not the old 0.6', () => {
+  assert.equal(ASSET_SALE_VALUE_FRACTION, 0.5);
+});
+
+test('BUG-452: wagesPerTick summed over a real month == REAL_NET_WAGE_PER_CITIZEN_PER_MONTH per citizen', () => {
+  const population = 1000;
+  let total = 0;
+  for (let i = 0; i < TICKS_PER_MONTH; i++) total += wagesPerTick(population);
+  const expected = REAL_NET_WAGE_PER_CITIZEN_PER_MONTH * population;
+  // Per-tick rounding can drift the monthly total by at most one rounding unit
+  // per tick — assert it lands within TICKS_PER_MONTH of the exact real figure,
+  // not byte-identical (Math.round() is applied every tick, not once a month).
+  assert.ok(
+    Math.abs(total - expected) <= TICKS_PER_MONTH,
+    `monthly wages total ${total} should be ~= real £${expected} (population ${population} x £${REAL_NET_WAGE_PER_CITIZEN_PER_MONTH}/mo)`,
+  );
+});
+
+test('BUG-452: councilTaxPerTick at the DEFAULT residential rate, summed over a month, == REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH per person', () => {
+  const population = 1000;
+  const DEFAULT_RESIDENTIAL_TAX_RATE = 9; // engine.ts rawState()'s taxRates.residential initial
+  let total = 0;
+  for (let i = 0; i < TICKS_PER_MONTH; i++) total += councilTaxPerTick(population, DEFAULT_RESIDENTIAL_TAX_RATE);
+  const expected = REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH * population;
+  assert.ok(
+    Math.abs(total - expected) <= TICKS_PER_MONTH,
+    `monthly council tax total ${total} should be ~= real £${expected} (population ${population} x £${REAL_COUNCIL_TAX_PER_CAPITA_PER_MONTH}/mo)`,
+  );
+});
+
+test('BUG-452 MUTATION-PROVE: councilTaxPerTick still scales with the player\'s tax-rate lever around the default', () => {
+  const population = 1000;
+  const atDefault = councilTaxPerTick(population, 9);
+  const doubled = councilTaxPerTick(population, 18);
+  assert.ok(doubled > atDefault, 'doubling the residential tax rate must increase council tax per tick');
+  assert.ok(
+    Math.abs(doubled - atDefault * 2) <= 1,
+    `doubling the tax rate should ~double the per-tick council tax: ${atDefault} -> ${doubled}`,
+  );
 });
