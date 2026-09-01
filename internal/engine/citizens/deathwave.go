@@ -39,14 +39,21 @@ import (
 // double-realise request), AC-14/AC-16/AC-17 (no shared RNG, no wall
 // clock, race-clean under concurrent Enqueue/Realise).
 //
-// # Deferred to later increments (NOT built here)
+// # inc2 (AC-6/AC-7/AC-8, built in weatheremergency.go, NOT this file)
 //
-//   - inc2 (AC-6/AC-7/AC-8): a declared weather emergency (via
-//     engine.season) suspending the smoothing budget for a genuine
-//     non-smoothed major death event. Realise's signature below already
-//     shapes for this: an inc2 caller adds an `emergency bool` (or
-//     equivalent) argument that, when true, bypasses the budget clamp
-//     entirely -- a caller-side wrapper, not a DeathQueue rewrite.
+// A declared weather emergency (consumed through the registered
+// feat.deathwave -> engine.season edge) suspends the smoothing budget for
+// a genuine non-smoothed major death event. Exactly as this file's doc
+// anticipated, inc2 is a CALLER-SIDE wrapper ([EmergencyRealise] in
+// weatheremergency.go), not a DeathQueue rewrite: it calls this file's own
+// [DeathQueue.Realise] with a different (emergency) budget when a weather
+// emergency is declared, and the ordinary budget otherwise. Realise itself
+// is unchanged by inc2 -- it has no notion of "emergency", keeping AC-8's
+// boundary mechanical (the hazard SELECTION path, Enqueue, is untouched
+// either way).
+//
+// # Deferred to a later increment (NOT built here)
+//
 //   - inc3 (AC-9/AC-10/AC-11): the queryable, flagged
 //     (citizenId, deathMonth, emergencyFlag) handoff surface FEAT-088
 //     drains, and replacing Realise's fixed test-only drain assumption

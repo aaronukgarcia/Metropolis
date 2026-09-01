@@ -1229,12 +1229,27 @@ func TestFEAT169_LiveDeaths_RealMortality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewCitizensAPI: %v", err)
 	}
-	// Advance 2400 empty-store months (~200 sim years) so the hazard curve
-	// is already clamped to 1.0 (MortalityHazard's doc comment: "clamped
-	// to [0, 1]") before compose ever seeds a single citizen into it. The
+	// Advance ~200 sim years of empty-store months so the hazard curve is
+	// already clamped to 1.0 (MortalityHazard's doc comment: "clamped to
+	// [0, 1]") before compose ever seeds a single citizen into it. The
 	// store is empty throughout this loop (no cold records yet), so it
-	// costs nothing beyond 2400*30 no-op day-ticks (~0.3s measured).
-	const preAgeMonths = 2400
+	// costs nothing beyond preAgeMonths*30 no-op day-ticks (~0.3s measured).
+	//
+	// 2403, not the rounder 2400 (FEAT-087 inc2, mkey feat.deathwave,
+	// 2026-09-01): compose.go now wires engine.season into citizens
+	// (SetSeason) so AC-6's weather-emergency suspension is LIVE end to
+	// end, and month 2400 % 12 == 0 == January -- a winter month under
+	// data/mortality.json's thresholds, which would suspend the very
+	// smoothing budget this test's first assertion (month 1's realised
+	// deaths <= budget) exists to prove. 2403 % 12 == 3 == April, a mild
+	// month under those same thresholds (see citizens/weatheremergency_
+	// test.go's monthApril fixture), so this test again exercises ORDINARY
+	// (non-emergency) smoothing -- exactly its original intent -- while
+	// AC-6 itself is proven separately and live-wired (citizens'
+	// TestEmergencyDoesNotAffectHazardSelection/TestUnwiredCitizensAPI...
+	// and this package's own TestFEAT169LiveDeaths... sibling, if the
+	// emergency-suspension case needs a compose-level proof too).
+	const preAgeMonths = 2403
 	for i := 0; i < preAgeMonths; i++ {
 		if err := api.AdvanceMonth(cid); err != nil {
 			t.Fatalf("pre-age AdvanceMonth: %v", err)

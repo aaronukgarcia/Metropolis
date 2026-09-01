@@ -597,6 +597,16 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 	if err != nil {
 		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "season"})
 	}
+	// FEAT-087 (mkey feat.deathwave) inc2: wire engine.season into citizens
+	// so AdvanceDayTick's once-per-month death-queue realisation can
+	// declare a weather emergency (AC-6/AC-7) through the registered
+	// feat.deathwave -> engine.season edge. Mirrors buildAPI.SetSeason
+	// below exactly -- an unwired citizens.CitizensAPI (e.g. a bare
+	// citizens.NewCitizensAPI in an older/unrelated test) simply never
+	// declares an emergency, so this wiring is additive-only.
+	if err := c.SetSeason(seasonAPI, cid); err != nil {
+		return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "citizens"})
+	}
 	logisticsAPI := deps.Logistics
 	if logisticsAPI == nil {
 		var err error

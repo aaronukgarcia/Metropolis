@@ -1,11 +1,11 @@
 {
-  "$comment": "feat.deathwave (FEAT-087) death-queue smoothing configuration, extending engine.citizens' Gompertz-Makeham mortality (mortality.go). Every numeric value below is a PLACEHOLDER pending Aaron's balance pass (the standing balance-number regime, Vestige metropolis-balance-number-regime — same convention as data/fertility.json/data/census.json) — tests check direction/shape only (a smooth ~N/month tail, never a 2% one-month population cliff), never a pinned magnitude. Spec refs: §5.2 (cold-pass mortality hazard), §9 (seasonality — minor winter health wave, summer water stress; consumed via engine.season, see meta.emergencySource below), §H (health & deathcare — cemetery/crematorium/hearse throughput). Handoff target: FEAT-088 feat.deathservices drains the realised-death queue (funeral throughput as an INJECTED drain capacity, never derived from this file's budget — ASM-580, ADR two independent knobs). inc1 (this file's initial scope) builds only the smoothing-queue core (AC-1..5, AC-12..19); the weather-emergency suspension (AC-6..8, inc2) and the FEAT-088 handoff/injected-drain surface (AC-9..11, inc3) are later increments and do not yet read monthlyEmergencyBudget below.",
+  "$comment": "feat.deathwave (FEAT-087) death-queue smoothing configuration, extending engine.citizens' Gompertz-Makeham mortality (mortality.go). Every numeric value below is a PLACEHOLDER pending Aaron's balance pass (the standing balance-number regime, Vestige metropolis-balance-number-regime — same convention as data/fertility.json/data/census.json) — tests check direction/shape only (a smooth ~N/month tail, never a 2% one-month population cliff), never a pinned magnitude. Spec refs: §5.2 (cold-pass mortality hazard), §9 (seasonality — minor winter health wave, summer water stress; consumed via engine.season, see meta.emergencySource below), §H (health & deathcare — cemetery/crematorium/hearse throughput). Handoff target: FEAT-088 feat.deathservices drains the realised-death queue (funeral throughput as an INJECTED drain capacity, never derived from this file's budget — ASM-580, ADR two independent knobs). inc1 built the smoothing-queue core (AC-1..5, AC-12..19). inc2 (this revision, ASM-579) wires the weatherEmergency thresholds below and monthlyEmergencyBudget into the live suspension mechanism (AC-6..8) — the FEAT-088 handoff/injected-drain surface (AC-9..11, inc3) is still a later increment.",
   "version": 1,
   "meta": {
     "module": "engine.citizens",
     "featureKey": "feat.deathwave",
     "specRefs": ["§5.2", "§9", "§H"],
-    "emergencySource": "engine.season (SeasonAPI month-index curves — HealthWaveModifier for winter-shaped months, WaterDemandMultiplier for drought-shaped months); consumed by inc2, not yet by inc1.",
+    "emergencySource": "engine.season (SeasonAPI month-index curves — HealthWaveModifier for winter-shaped months, WaterDemandMultiplier for drought-shaped months), consumed by inc2 via the registered feat.deathwave -> engine.season outbound edge. Per ASM-579, the emergency flag is derived LOCALLY in this package by comparing those curves against the weatherEmergency thresholds below (direction/shape only, no invented cutoff) — never a mortality-local 12-entry calendar duplicating engine.season's own seasonality (GR#3), and never feat.disasters' aquifer-drought event (unregistered edge, out of scope, tripwire-enforced).",
     "handoffTarget": "FEAT-088 feat.deathservices",
     "balanceRegime": "Every numeric entry below is a disclosed placeholder pending Aaron's balance pass. Units are stated per entry. The only spec'd property is directional: ~N deaths/month smooth, never a 2% population cliff."
   },
@@ -18,7 +18,19 @@
     "monthlyEmergencyBudget": {
       "value": 0,
       "unit": "deaths/month (0 = unbounded)",
-      "disclosure": "placeholder, NOT YET CONSUMED (inc2 scope, ASM-579) — reserved field for the declared-weather-emergency throughput override that will suspend monthlyDeathBudget's cap. 0 is a sentinel meaning \"no cap\" (realise the full queue) once inc2 wires the emergency declaration through engine.season; inc1 does not read this field."
+      "disclosure": "placeholder, NOW CONSUMED by inc2 (AC-6/ASM-579): during a declared weather emergency (see weatherEmergency below) this value REPLACES monthlyDeathBudget for that month's realisation. 0 is the documented sentinel meaning \"no cap\" (release the entire queue this month, the major non-smoothed death event AC-6 requires) — pending Aaron's balance pass on whether a genuine finite emergency throughput (rather than fully unbounded) is the better v1 default."
+    },
+    "weatherEmergency": {
+      "winterHealthWaveThreshold": {
+        "value": 0.04,
+        "unit": "abs(engine.season HealthWaveModifier) magnitude",
+        "disclosure": "placeholder pending Aaron's balance pass — a month is a winter weather emergency when the magnitude of engine.season's HealthWaveModifier at that month is >= this threshold. Against data/seasonal.json's current healthWaveModifier curve (0.05 Dec/Jan/Feb, 0.02 Mar/Nov, 0.0 elsewhere) this threshold fires for Dec/Jan/Feb only — direction/shape only (ASM-579), not a spec-pinned cutoff."
+      },
+      "droughtWaterDemandThreshold": {
+        "value": 1.2,
+        "unit": "engine.season WaterDemandMultiplier",
+        "disclosure": "placeholder pending Aaron's balance pass — a month is a drought-shaped weather emergency when engine.season's WaterDemandMultiplier at that month is >= this threshold. Against data/seasonal.json's current waterSummerPeak curve (1.25 Jun/Jul/Aug, 1.0 elsewhere) this threshold fires for Jun/Jul/Aug only — direction/shape only (ASM-579); this is NOT feat.disasters' aquifer-drought event (that edge is unregistered and out of scope, tripwire-enforced), just a water-demand-shaped proxy for a genuine adverse-weather month."
+      }
     }
   }
 }

@@ -42,14 +42,29 @@ type MortalityMeta struct {
 	BalanceRegime   string   `json:"balanceRegime"`
 }
 
+// WeatherEmergencyThresholds holds the inc2 (ASM-579) local-derivation
+// thresholds: a declared weather emergency is winter-shaped when
+// engine.season's HealthWaveModifier magnitude at a month is at or above
+// WinterHealthWaveThreshold, or drought-shaped when engine.season's
+// WaterDemandMultiplier at a month is at or above
+// DroughtWaterDemandThreshold. Direction/shape only (ASM-579's ruling) —
+// neither threshold is a spec-pinned cutoff, both are GR#15 data, and
+// neither invents a NEW engine.season curve or consumes feat.disasters.
+type WeatherEmergencyThresholds struct {
+	WinterHealthWaveThreshold   MortalityNumber `json:"winterHealthWaveThreshold"`
+	DroughtWaterDemandThreshold MortalityNumber `json:"droughtWaterDemandThreshold"`
+}
+
 // MortalityParams holds the death-queue smoothing budget placeholders
-// (FEAT-087). MonthlyDeathBudget is the only field inc1 consumes;
-// MonthlyEmergencyBudget is reserved for inc2 (ASM-579) and is validated
-// (never left to rot as an unchecked field) but not yet read by any inc1
-// code path.
+// (FEAT-087). MonthlyDeathBudget is inc1's throughput cap; inc2
+// (ASM-579/AC-6..8) additionally consumes MonthlyEmergencyBudget (the
+// suspension-throughput override) and WeatherEmergency (the local
+// emergency-declaration thresholds) — both were reserved-but-unread by
+// inc1 and are now live.
 type MortalityParams struct {
-	MonthlyDeathBudget     MortalityNumber `json:"monthlyDeathBudget"`
-	MonthlyEmergencyBudget MortalityNumber `json:"monthlyEmergencyBudget"`
+	MonthlyDeathBudget     MortalityNumber            `json:"monthlyDeathBudget"`
+	MonthlyEmergencyBudget MortalityNumber            `json:"monthlyEmergencyBudget"`
+	WeatherEmergency       WeatherEmergencyThresholds `json:"weatherEmergency"`
 }
 
 // MortalityConfig is the loaded data/mortality.json configuration.
@@ -83,6 +98,8 @@ func (cfg *MortalityConfig) validate(correlationID string) error {
 	}{
 		{"params.monthlyDeathBudget", cfg.Params.MonthlyDeathBudget},
 		{"params.monthlyEmergencyBudget", cfg.Params.MonthlyEmergencyBudget},
+		{"params.weatherEmergency.winterHealthWaveThreshold", cfg.Params.WeatherEmergency.WinterHealthWaveThreshold},
+		{"params.weatherEmergency.droughtWaterDemandThreshold", cfg.Params.WeatherEmergency.DroughtWaterDemandThreshold},
 	}
 	for _, e := range numbers {
 		if !num.IsFinite(e.n.Value) {
@@ -110,6 +127,20 @@ func (cfg *MortalityConfig) validate(correlationID string) error {
 	}
 	if emergency != float64(int64(emergency)) {
 		return bad("params.monthlyEmergencyBudget.value must be a whole number of deaths/month")
+	}
+
+	// AC-6/AC-7 (ASM-579): both emergency-declaration thresholds must be
+	// non-negative — a negative winter magnitude threshold or a negative
+	// water-demand-multiplier threshold would make EVERY month qualify as
+	// an emergency (HealthWaveModifier's magnitude and WaterDemandMultiplier
+	// are both non-negative by data/seasonal.json's own schema), silently
+	// suspending the smoothing budget every month rather than for a genuine
+	// weather-driven event.
+	if cfg.Params.WeatherEmergency.WinterHealthWaveThreshold.Value < 0 {
+		return bad("params.weatherEmergency.winterHealthWaveThreshold.value must be non-negative")
+	}
+	if cfg.Params.WeatherEmergency.DroughtWaterDemandThreshold.Value < 0 {
+		return bad("params.weatherEmergency.droughtWaterDemandThreshold.value must be non-negative")
 	}
 
 	return nil
@@ -158,4 +189,28 @@ func LoadDefaultMortalityConfig(correlationID string) (MortalityConfig, error) {
 // integer deaths/month cap, for DeathQueue.Realise's budget argument.
 func (cfg MortalityConfig) MonthlyDeathBudget() int {
 	return int(cfg.Params.MonthlyDeathBudget.Value)
+}
+
+// MonthlyEmergencyBudget returns the loaded config's declared-emergency
+// throughput override (AC-6/inc2). 0 is the documented "unbounded" sentinel
+// — a caller that reads 0 must release the ENTIRE queue that month (see
+// weatheremergency.go's EmergencyRealise), never treat it as a budget of
+// zero (which would freeze the queue during the one event AC-6 exists to
+// make non-smoothed).
+func (cfg MortalityConfig) MonthlyEmergencyBudget() int {
+	return int(cfg.Params.MonthlyEmergencyBudget.Value)
+}
+
+// WinterHealthWaveThreshold returns the ASM-579 local-derivation threshold
+// against which engine.season's HealthWaveModifier magnitude is compared
+// to declare a winter-shaped weather emergency (AC-7).
+func (cfg MortalityConfig) WinterHealthWaveThreshold() float64 {
+	return cfg.Params.WeatherEmergency.WinterHealthWaveThreshold.Value
+}
+
+// DroughtWaterDemandThreshold returns the ASM-579 local-derivation
+// threshold against which engine.season's WaterDemandMultiplier is
+// compared to declare a drought-shaped weather emergency (AC-7).
+func (cfg MortalityConfig) DroughtWaterDemandThreshold() float64 {
+	return cfg.Params.WeatherEmergency.DroughtWaterDemandThreshold.Value
 }

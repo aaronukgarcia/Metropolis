@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/aaronukgarcia/Metropolis/internal/engine/season"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
@@ -57,6 +58,19 @@ type CitizensAPI struct {
 	// (AC-1/AC-2 — see deathwave.go and AdvanceDayTick's doc comment).
 	mortalityCfg MortalityConfig
 	deathQueue   *DeathQueue
+
+	// season is the OPTIONAL injected engine.season dependency (FEAT-087
+	// inc2, mkey feat.deathwave, AC-6/AC-7): consumed only to declare a
+	// weather emergency (weatheremergency.go's IsWeatherEmergency) at the
+	// once-per-completed-month realisation step below. Wired post-
+	// construction via SetSeason (mirroring engine.build/engine.cafe/
+	// engine.education's own SetSeason(*season.SeasonAPI) precedent) rather
+	// than a NewCitizensAPI constructor argument, so every existing caller
+	// (~80 call sites across the repo) keeps compiling unchanged. A nil
+	// season is a documented no-op: IsWeatherEmergency always returns false
+	// for a CitizensAPI that was never wired to engine.season, so ordinary
+	// (non-emergency) smoothing behaves exactly as inc1/inc1.5 built it.
+	season *season.SeasonAPI
 
 	// curMonthBirths/curMonthDeaths accumulate the current (in-progress)
 	// calendar month's fertility births and mortality deaths across its 30
@@ -125,6 +139,25 @@ func (c *CitizensAPI) checkNotCopied(correlationID string, method string) error 
 	if c.self.Load() != c {
 		return errs.New(ErrAPICopied, correlationID, map[string]any{"method": method})
 	}
+	return nil
+}
+
+// SetSeason wires the engine.season dependency inc2's weather-emergency
+// declaration consumes (FEAT-087 mkey feat.deathwave, AC-6/AC-7) — the
+// registered feat.deathwave -> engine.season outbound edge (code.json).
+// Mirrors engine.build/engine.cafe/engine.education's own SetSeason
+// precedent: an optional post-construction wire, never a constructor
+// argument (so the ~80 existing NewCitizensAPI call sites are unaffected).
+// A CitizensAPI never wired via SetSeason simply never declares a weather
+// emergency (see weatheremergency.go's IsWeatherEmergency nil-season
+// no-op) — ordinary smoothing is unaffected either way.
+func (c *CitizensAPI) SetSeason(s *season.SeasonAPI, correlationID string) error {
+	if err := c.checkNotCopied(correlationID, "SetSeason"); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.season = s
 	return nil
 }
 
@@ -577,9 +610,10 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 		tot = tot.add(t)
 	}
 
-	// FEAT-087 inc1.5 — REALISATION (AC-1/AC-2, the live cliff-kill): drain
-	// the death queue by at most mortalityCfg.MonthlyDeathBudget() of its
-	// oldest entries, but only once every scheduled shard has had its one
+	// FEAT-087 inc1.5/inc2 — REALISATION (AC-1/AC-2/AC-6, the live
+	// cliff-kill and the emergency major-event release): drain the death
+	// queue by at most mortalityCfg.MonthlyDeathBudget() of its oldest
+	// entries, but only once every scheduled shard has had its one
 	// day-tick this month (ColdPassSchedule assigns shard 255 -- the last
 	// -- to day 29 = DaysPerMonth-1; ascending shard order across the whole
 	// month covers every shard by then, doc.go's "amortised cold pass"
@@ -589,9 +623,29 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	// enqueued by the time Realise runs, so a same-birthMonth cohort's
 	// cliff is bounded to at most the budget in the SAME month it was
 	// selected, never smeared thinner by re-deriving a daily fraction.
+	//
+	// inc2 (mkey feat.deathwave, AC-6/AC-7/AC-8): BEFORE realising, declare
+	// whether this completed month is a weather emergency
+	// (weatheremergency.go's IsWeatherEmergency, consumed through the
+	// registered feat.deathwave -> engine.season edge via c.season -- a nil
+	// c.season, i.e. a CitizensAPI never wired via SetSeason, always
+	// declares false and behaves exactly as inc1/inc1.5). A declared
+	// emergency SUSPENDS the ordinary budget for this one release
+	// (EmergencyRealise), producing the major non-smoothed death event
+	// AC-6 requires; it never touches the hazard SELECTIONS already
+	// enqueued above (AC-8 -- selection happened unconditionally in
+	// applyMonthly, entirely independent of season/emergency state).
 	var realisedDeaths int
 	if c.dayTick == DaysPerMonth-1 {
-		realised := c.deathQueue.Realise(c.mortalityCfg.MonthlyDeathBudget(), month, correlationID)
+		emergency, emErr := IsWeatherEmergency(c.season, month, c.mortalityCfg, correlationID)
+		if emErr != nil {
+			// A season-curve lookup failure (e.g. a negative month index,
+			// structurally unreachable here since month only ever
+			// increases from 0) must never be silently treated as "no
+			// emergency" and swallowed -- surface it rather than guess.
+			return 0, 0, emErr
+		}
+		realised := EmergencyRealise(c.deathQueue, c.mortalityCfg, emergency, month, correlationID)
 		realisedDeaths = len(realised)
 
 		// BUG-369/BUG-270 parity, at REALISATION time (not selection time):
