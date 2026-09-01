@@ -576,17 +576,21 @@ func (l *LogisticsAPI) OrderSize(district string, c market.CommodityType, foreca
 // nonzero-shortfall [LogisticsAPI.Draw] (AC-10). A nil handler is ignored.
 // Handlers are invoked synchronously on the drawing goroutine, AFTER the
 // shelf mutation's lock is released, so a handler may safely call back
-// into this API without deadlocking.
-func (l *LogisticsAPI) SubscribeShortfalls(h ShortfallHandler) {
-	if l.checkNotCopied("SubscribeShortfalls") != nil {
-		return
+// into this API without deadlocking. A struct-copied receiver returns the
+// copy-guard error rather than silently dropping the subscription
+// (FEAT-1972079946 — a swallowed subscribe here would leave a caller
+// believing it is wired to shortfall events when it never was).
+func (l *LogisticsAPI) SubscribeShortfalls(h ShortfallHandler) error {
+	if err := l.checkNotCopied("SubscribeShortfalls"); err != nil {
+		return err
 	}
 	if h == nil {
-		return
+		return nil
 	}
 	l.mu.Lock()
 	l.subs = append(l.subs, h)
 	l.mu.Unlock()
+	return nil
 }
 
 // fireShortfall delivers ev to every subscribed handler. It copies the

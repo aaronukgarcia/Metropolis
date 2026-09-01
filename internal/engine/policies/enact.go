@@ -171,7 +171,9 @@ func (a *PoliciesAPI) commitEnactLocked(id EnactmentID, def *policyDef, scope Sc
 	appliedTax, err := a.applyTaxMovesLocked(def, scope)
 	if err != nil {
 		a.rollbackProjectionsLocked(enqueued)
-		a.resetTaxMovesLocked(appliedTax)
+		if resetErr := a.resetTaxMovesLocked(appliedTax); resetErr != nil {
+			return resetErr
+		}
 		return err
 	}
 
@@ -181,7 +183,9 @@ func (a *PoliciesAPI) commitEnactLocked(id EnactmentID, def *policyDef, scope Sc
 	if def.Cost.EnactmentMicroPounds > 0 {
 		if err := a.postOpex(def.ID, finance.Money(def.Cost.EnactmentMicroPounds), "policy enactment ("+string(def.ID)+")"); err != nil {
 			a.rollbackProjectionsLocked(enqueued)
-			a.resetTaxMovesLocked(appliedTax)
+			if resetErr := a.resetTaxMovesLocked(appliedTax); resetErr != nil {
+				return resetErr
+			}
 			return err
 		}
 	}
@@ -190,7 +194,9 @@ func (a *PoliciesAPI) commitEnactLocked(id EnactmentID, def *policyDef, scope Sc
 	a.previews[id] = preview
 	a.active[id] = &enactment{id: id, policyID: def.ID, scope: scope}
 	a.nextEnactmentID++
-	a.raiseConflictWarningsLocked(def, scope)
+	if err := a.raiseConflictWarningsLocked(def, scope); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -325,10 +331,12 @@ func (a *PoliciesAPI) rollbackProjectionsLocked(ids []string) {
 // (the pre-enactment value). The tax seam exposes no inverse, so policies
 // recomputes the prior value from its own tracked active set — it never
 // clobbers a prior still-active enactment's multiplier with a blanket neutral
-// 1.0.
-func (a *PoliciesAPI) resetTaxMovesLocked(applied []appliedTaxMove) {
+// 1.0. A struct-copied receiver returns the copy-guard error rather than
+// silently skipping the rollback (FEAT-1972079946 — a swallowed rollback here
+// would leave a failed enactment's tax moves applied, uncorrected).
+func (a *PoliciesAPI) resetTaxMovesLocked(applied []appliedTaxMove) error {
 	if err := a.checkNotCopied("resetTaxMovesLocked"); err != nil {
-		return
+		return err
 	}
 	for i := len(applied) - 1; i >= 0; i-- {
 		mv := applied[i]
@@ -338,6 +346,7 @@ func (a *PoliciesAPI) resetTaxMovesLocked(applied []appliedTaxMove) {
 		prior := a.districtMultiplierFromActiveLocked(mv.district, mv.instrument)
 		_ = a.tax.SetDistrictMultiplier(mv.district, mv.instrument, prior)
 	}
+	return nil
 }
 
 // districtMultiplierFromActiveLocked returns the district multiplier the
@@ -466,10 +475,12 @@ func (a *PoliciesAPI) computeEnactmentPreviewLocked(def *policyDef, scope Scope)
 
 // raiseConflictWarningsLocked raises a ConflictWarning for every already-
 // active enactment whose policy conflicts with def and whose scope overlaps
-// the newly-enacted scope (AC-11). It never blocks the enactment.
-func (a *PoliciesAPI) raiseConflictWarningsLocked(def *policyDef, scope Scope) {
+// the newly-enacted scope (AC-11). It never blocks the enactment. A
+// struct-copied receiver returns the copy-guard error rather than silently
+// dropping the conflict warnings (FEAT-1972079946).
+func (a *PoliciesAPI) raiseConflictWarningsLocked(def *policyDef, scope Scope) error {
 	if err := a.checkNotCopied("raiseConflictWarningsLocked"); err != nil {
-		return
+		return err
 	}
 	conflictSet := make(map[PolicyID]bool, len(def.Conflicts))
 	for _, c := range def.Conflicts {
@@ -489,6 +500,7 @@ func (a *PoliciesAPI) raiseConflictWarningsLocked(def *policyDef, scope Scope) {
 			ActiveScope:   e.scope,
 		})
 	}
+	return nil
 }
 
 // Conflicts returns every raised conflict warning in the order raised

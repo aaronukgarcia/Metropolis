@@ -63,7 +63,9 @@ func (s *State) InvokeCheat(correlationID string, kind CheatKind, ctx map[string
 	}
 
 	at := s.nowFunc()
-	s.recordCheatUsed(CheatUsedEvent{CorrelationID: correlationID, Kind: kind, Ctx: ctx, At: at})
+	if err := s.recordCheatUsed(CheatUsedEvent{CorrelationID: correlationID, Kind: kind, Ctx: ctx, At: at}); err != nil {
+		return err
+	}
 
 	// Mirror to the standard NDJSON log sink (GR#1: selectable,
 	// correlation-ID'd, structured) at warn severity. The constructed
@@ -88,23 +90,26 @@ func (s *State) InvokeCheat(correlationID string, kind CheatKind, ctx map[string
 // cheatLog mutation itself, is what actually guards THIS mu.Lock() site
 // rather than relying on an earlier caller having checked a different
 // one (Weakness pattern #3: guard the site that does the mutating, not
-// just an upstream call on the same request). On a copy, the append is
-// silently dropped — cheatLog is a slice a copy ALIASES with the
-// original's backing array; a copy appending to its own (post-copy,
-// possibly reallocated) cheatLog would diverge from the original's audit
-// trail rather than corrupt it directly, but it is still not a
-// legitimate operation on a value nothing constructed, so it is refused
-// the same as every other guarded mutation in this package.
-func (s *State) recordCheatUsed(e CheatUsedEvent) {
+// just an upstream call on the same request).
+//
+// FEAT-1972079946 (Aaron, 2026-09-01): this is a MUTATING method (it
+// appends the AC-6 audit trail), so a struct-copied receiver now returns
+// ErrStateCopied rather than silently dropping the append — AC-6's own
+// "cheats must be visible in the record, not silent" requirement is
+// undermined by a cheat that fires but is invisibly NOT recorded, so
+// InvokeCheat surfaces this error to its caller rather than reporting a
+// bare success the audit log does not back up.
+func (s *State) recordCheatUsed(e CheatUsedEvent) error {
 	if err := s.checkNotCopied(e.CorrelationID, map[string]any{"kind": string(e.Kind)}); err != nil {
-		return
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkNotCopied(e.CorrelationID, map[string]any{"kind": string(e.Kind)}); err != nil {
-		return
+		return err
 	}
 	s.cheatLog = append(s.cheatLog, e)
+	return nil
 }
 
 // CheatLog returns a snapshot (defensive copy) of every successfully

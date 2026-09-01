@@ -280,25 +280,25 @@ func (s *State) Enable(source EnableSource, correlationID string) error {
 // Do not add a path here (or anywhere) that clears DebugTouched.
 //
 // SEC-020 wave 2: identity-checked BEFORE mu is touched and again after
-// acquisition — same ordering as Enable/IsOn. Disable has no
-// correlationID parameter (matching its existing signature, which this
-// fix does not change) and no error return to carry a rejection through,
-// so — mirroring SubscriptionServer.PublishEngineStatus's identical
-// no-correlationID/no-return situation — a copy simply has its Disable()
-// call silently dropped rather than mutating its own independent `on`
-// flag: dropping is safe because the real State's on-state (the only one
-// that matters) is left exactly as it was, and a copy's own `on` field
-// was never a channel any other code reads through anyway.
-func (s *State) Disable() {
+// acquisition — same ordering as Enable/IsOn. FEAT-1972079946 (Aaron,
+// 2026-09-01): Disable is a MUTATING method (it sets s.on) behind this
+// guard, so a struct-copied receiver now returns ErrStateCopied rather
+// than silently dropping the call — the prior void signature meant a
+// caller could not distinguish "debug was turned off" from "the call was
+// silently a no-op on a copied receiver", which is exactly the class this
+// ruling closes even though, on THIS specific mutation, the dropped write
+// only ever touched the copy's own dead `on` field.
+func (s *State) Disable() error {
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Disable"}); err != nil {
-		return
+		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.checkNotCopied(errs.NewCorrelationID(), map[string]any{"method": "Disable"}); err != nil {
-		return
+		return err
 	}
 	s.on = false
+	return nil
 }
 
 // requireOn is the single gate check every capability below (speed-8x,
