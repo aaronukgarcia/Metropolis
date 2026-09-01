@@ -146,4 +146,18 @@ const (
 	// unrejected copy is a second, independent lock racing the original
 	// over the same referents.
 	ErrDeathQueueCopied = "MET-G5404"
+
+	// ErrNegativeDrainCapacity (BUG-483 F2, GR#17): RealiseDrained observed
+	// a negative return from the injected FEAT-088 DrainCapacity for some
+	// month -- a buggy consumer. The behaviour is unchanged and stays SAFE
+	// (a negative drain is treated as zero via budgetFor/realiseLocked's
+	// ordinary no-op on a non-positive budget -- no separate clamp exists
+	// -- deferring realisation that month rather than dropping a queued
+	// death or panicking), but until this code existed that was completely
+	// SILENT: nobody would notice a stuck death queue until population
+	// anomalies surfaced much later. Logged once per DeathQueue the first
+	// time a negative drain is observed (see DeathQueue.negativeDrainWarned)
+	// -- a WARNING, not an "error", because the queue keeps making safe
+	// forward progress; it is a diagnosability alarm, not a fault report.
+	ErrNegativeDrainCapacity = "MET-G5405"
 )

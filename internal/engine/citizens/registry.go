@@ -203,6 +203,26 @@ func (c *CitizensAPI) DeathHandoff(correlationID string) ([]RealisedDeath, error
 	return c.deathQueue.RealisedDeaths(correlationID), nil
 }
 
+// DeathHandoffSince is the CitizensAPI-level surface for BUG-483 F3's
+// paging safety valve over the handoff stream (see
+// [DeathQueue.DeathHandoffSince]'s doc for the full contract: cursor is
+// the caller's own running consumed-count, a negative cursor clamps to 0,
+// and a caught-up cursor returns an empty slice, never an error). Mirrors
+// DeathHandoff exactly except for the cursor parameter -- DeathHandoff's
+// full-cumulative-list behaviour is completely unchanged by this addition.
+func (c *CitizensAPI) DeathHandoffSince(cursor int, correlationID string) ([]RealisedDeath, error) {
+	if err := c.checkNotCopied(correlationID, "DeathHandoffSince"); err != nil {
+		return nil, err
+	}
+	// Belt-and-suspenders SEC-020 guard (astgate) -- see SetDeathDrainCapacity's
+	// identical comment above for why this direct check is needed alongside
+	// DeathHandoffSince's own internal checkNotCopied.
+	if err := c.deathQueue.checkNotCopied(correlationID, "DeathHandoffSince"); err != nil {
+		return nil, err
+	}
+	return c.deathQueue.DeathHandoffSince(cursor, correlationID), nil
+}
+
 // SeedColdRecords bulk-loads cold citizen records (the harness.synth path)
 // into their id-hash shards. It is a command-path mutation, not an
 // exported field-set on ColdShard.

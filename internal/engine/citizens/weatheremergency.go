@@ -94,6 +94,14 @@ func IsWeatherEmergency(seasonAPI *season.SeasonAPI, monthIndex int64, cfg Morta
 // major non-smoothed death event AC-6 requires. This function makes no
 // hazard draw and calls no Enqueue — it only decides how much of the FIFO
 // head Realise releases (AC-8's boundary).
+//
+// The budget rule itself lives in [budgetFor] (deathwave.go, BUG-483 F1) —
+// this function and [DeathQueue.RealiseDrained] both call that ONE helper
+// rather than each keeping their own copy of the same three lines, so the
+// two functions' documented byte-identical-budget behaviour (see
+// RealiseDrained's doc, and attack_feat087_inc3_handoff_test.go's
+// differential regression) is guaranteed by sharing code, not merely by a
+// test proving two independent implementations happen to agree today.
 func EmergencyRealise(q *DeathQueue, cfg MortalityConfig, emergency bool, month int64, correlationID string) []uint64 {
 	// SEC-020 copy-guard (astgate): q.Realise below already rejects a
 	// struct-copy call and returns nil, but this function itself takes the
@@ -103,12 +111,6 @@ func EmergencyRealise(q *DeathQueue, cfg MortalityConfig, emergency bool, month 
 	if err := q.checkNotCopied(correlationID, "EmergencyRealise"); err != nil {
 		return nil
 	}
-	budget := cfg.MonthlyDeathBudget()
-	if emergency {
-		budget = cfg.MonthlyEmergencyBudget()
-		if budget <= 0 {
-			budget = q.Len(correlationID)
-		}
-	}
+	budget := budgetFor(q, cfg, emergency, correlationID)
 	return q.Realise(budget, month, correlationID)
 }

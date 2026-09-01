@@ -5196,6 +5196,12 @@
       "message": "DeathQueue method {method} called on a struct copy, not the *DeathQueue NewDeathQueue returned",
       "remedy": "DeathQueue's mutex and maps are reference/value types a struct copy would alias or duplicate unsafely (SEC-020 family, mirroring engine.citizens' ErrAPICopied). Always pass/store a *DeathQueue pointer, never dereference and copy the value."
     },
+    "MET-G5405": {
+      "severity": "warn",
+      "module": "feat.deathwave",
+      "message": "DeathQueue.RealiseDrained observed a negative monthly drain capacity ({drain}) from the injected FEAT-088 consumer for month {month} -- treated as zero, deferring all realisation this month rather than dropping or crashing",
+      "remedy": "A DrainCapacity.MonthlyDrainCapacity implementation returned a negative value, which is treated as zero via budgetFor/realiseLocked's ordinary no-op on a non-positive budget -- no separate clamp exists (RealiseDrained never releases more than a non-negative drain allows, and never drops queued deaths). This is safe but was previously silent -- fix the FEAT-088 consumer's throughput calculation so it never returns a negative capacity; a stuck-at-zero drain otherwise halts all realisation indefinitely with no visible signal until population anomalies appear."
+    },
     "MET-H500": {
       "severity": "error",
       "module": "harness.converge",

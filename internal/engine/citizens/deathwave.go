@@ -121,6 +121,16 @@ type DeathQueue struct {
 	// would be a second, independent lock racing the original over the
 	// same referents.
 	self atomic.Pointer[DeathQueue]
+
+	// negativeDrainWarned (BUG-483 F2, GR#17): true once RealiseDrained has
+	// logged [ErrNegativeDrainCapacity] for this queue at least once. A
+	// negative return from an injected [DrainCapacity] is a buggy FEAT-088
+	// consumer, not a normal condition -- every occurrence would otherwise
+	// be identical noise (a stuck-at-zero drain calls MonthlyDrainCapacity
+	// every month), so this fires the registry warning exactly ONCE per
+	// DeathQueue rather than flooding the log for as long as the consumer
+	// stays broken. Read/written only under mu (alongside drain/handoff).
+	negativeDrainWarned bool
 }
 
 // NewDeathQueue constructs an empty death queue.
@@ -344,9 +354,11 @@ type RealisedDeath struct {
 // in via [DeathQueue.SetDrainCapacity]/[CitizensAPI.SetDeathDrainCapacity].
 type DrainCapacity interface {
 	// MonthlyDrainCapacity returns the consumer's own throughput bound for
-	// monthIndex. RealiseDrained clamps this to be non-negative before
-	// using it (a negative return is treated as zero, never as "no bound"
-	// -- see RealiseDrained's doc).
+	// monthIndex. RealiseDrained treats a negative return as zero -- not as
+	// "no bound" -- via budgetFor/realiseLocked's ordinary no-op on a
+	// non-positive budget (no separate clamp exists); MET-G5405 is logged
+	// once per DeathQueue the first time this occurs (see RealiseDrained's
+	// doc).
 	MonthlyDrainCapacity(monthIndex int64) int
 }
 
@@ -389,24 +401,79 @@ func (q *DeathQueue) RealisedDeaths(correlationID string) []RealisedDeath {
 	return out
 }
 
-// RealiseDrained is FEAT-087 inc3's entry point (AC-9/AC-10/AC-11):
-// combines the ordinary-or-emergency budget selection (mirroring
-// EmergencyRealise's own budget logic exactly, so EmergencyRealise itself
-// stays untouched byte-for-byte -- see the file doc) with ASM-580's second,
-// independent knob (the injected drain capacity, [DeathQueue.SetDrainCapacity])
-// and AC-9/AC-10's ordered, flagged handoff stream. Realisation this month
-// is min(ordinary-or-emergency budget, injected drain, queued) (ASM-580);
-// a nil injected drain (the default) makes this call release the identical
-// set/order of citizens EmergencyRealise would for the same
-// (cfg, emergency, month) inputs -- wiring RealiseDrained into the live
-// cold-pass realisation step is therefore a behavioural no-op for every
-// world that has no FEAT-088 consumer wired yet (registry.go's
-// AdvanceDayTick does exactly this).
-func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month int64, correlationID string) []RealisedDeath {
-	if err := q.checkNotCopied(correlationID, "RealiseDrained"); err != nil {
-		return nil
+// DeathHandoffSince is BUG-483 F3's safety valve for the handoff stream's
+// unbounded growth: [RealisedDeaths]/[DeathHandoff] always return the
+// FULL cumulative stream (deliberate FEAT-087 semantics, pinned by
+// TestAttackInc3_RealisedDeathsIsCumulativeNotDrainedOnRead -- AC-9 does
+// not mandate drain-on-read, and this method does not change that
+// default). At the 100M-citizen Option-B target that full-stream read
+// grows for the life of the DeathQueue, which is fine for the
+// FEAT-087-era tests but would be an unbounded per-poll payload for a
+// FUTURE FEAT-088 consumer that simply wants "what's new since I last
+// looked". DeathHandoffSince gives that consumer a page: everything
+// STRICTLY AFTER index cursor in FIFO release order, i.e. handoff[cursor:]
+// at the moment of the call.
+//
+// cursor is the count of records the caller has already consumed (0 on a
+// consumer's very first call, then the RUNNING TOTAL of records it has
+// received so far — e.g. cursor + len(previous result) — never an index
+// into some other coordinate space). A negative cursor is treated as 0
+// (never a panic or a negative-slice-bounds fault); a cursor at or past
+// the current stream length returns an empty, non-nil slice (the consumer
+// is simply caught up) rather than an error — being caught up is not a
+// malformed request.
+//
+// This is a PURE READ over the same handoff slice DeathHandoff/
+// RealisedDeaths already expose in full — DeathQueue itself never
+// truncates handoff, never advances an internal cursor, and never treats
+// any call to this method as an acknowledgement. Building an
+// acknowledged-watermark truncation (if FEAT-088 ever needs one) is that
+// future consumer's own job, coordinated with this package first per
+// BUG-483's own text — not something this P3 follow-up forces today.
+// FIFO order (AC-4) and the SEC-020 copyguard both apply exactly as they
+// do to RealisedDeaths (read-only violations are logged, not fatal,
+// mirroring every other read accessor in this file).
+func (q *DeathQueue) DeathHandoffSince(cursor int, correlationID string) []RealisedDeath {
+	_ = q.checkNotCopied(correlationID, "DeathHandoffSince")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if cursor < 0 {
+		cursor = 0
 	}
+	if cursor >= len(q.handoff) {
+		return []RealisedDeath{}
+	}
+	out := make([]RealisedDeath, len(q.handoff)-cursor)
+	copy(out, q.handoff[cursor:])
+	return out
+}
 
+// budgetFor computes AC-6/AC-8's ordinary-or-emergency budget for one
+// realisation call: cfg.MonthlyDeathBudget() unless emergency is true, in
+// which case cfg.MonthlyEmergencyBudget() applies, with the 0 sentinel
+// meaning "unbounded" (release the queue's entire current length, q.Len).
+//
+// This is the SINGLE SOURCE OF TRUTH for that rule (GR#3, BUG-483 F1) —
+// [EmergencyRealise] (weatheremergency.go, inc2) and [DeathQueue.RealiseDrained]
+// (this file, inc3) both delegate to it rather than each re-implementing
+// the same three lines, so their documented byte-identical-budget claim is
+// now STRUCTURAL (one function, one behaviour) rather than merely proven by
+// attack_feat087_inc3_handoff_test.go's differential test — that test stays
+// in place as a regression, now exercising two callers of one shared
+// helper instead of two independent copies of the rule.
+//
+// SEC-020 copy-guard (astgate): budgetFor takes a candidate *DeathQueue
+// parameter, so it checks first even though both of its current callers
+// (EmergencyRealise, RealiseDrained) already check the SAME q before
+// calling in -- astgate's syntactic, no-call-graph analysis cannot see
+// that the check is already satisfied by the caller (the same
+// already-guarded-reachable-path blind spot documented for
+// EmergencyRealise's own belt-and-suspenders check). q.Len below performs
+// its own internal check too; this one is deliberately redundant with it,
+// matching the project's established double-check convention at this
+// call shape.
+func budgetFor(q *DeathQueue, cfg MortalityConfig, emergency bool, correlationID string) int {
+	_ = q.checkNotCopied(correlationID, "budgetFor")
 	budget := cfg.MonthlyDeathBudget()
 	if emergency {
 		budget = cfg.MonthlyEmergencyBudget()
@@ -414,6 +481,40 @@ func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month i
 			budget = q.Len(correlationID)
 		}
 	}
+	return budget
+}
+
+// RealiseDrained is FEAT-087 inc3's entry point (AC-9/AC-10/AC-11):
+// combines the ordinary-or-emergency budget selection ([budgetFor] --
+// shared, byte-for-byte, with [EmergencyRealise]; see budgetFor's doc and
+// BUG-483 F1) with ASM-580's second, independent knob (the injected drain
+// capacity, [DeathQueue.SetDrainCapacity]) and AC-9/AC-10's ordered,
+// flagged handoff stream. Realisation this month is min(ordinary-or-
+// emergency budget, injected drain, queued) (ASM-580); a nil injected
+// drain (the default) makes this call release the identical set/order of
+// citizens EmergencyRealise would for the same (cfg, emergency, month)
+// inputs -- wiring RealiseDrained into the live cold-pass realisation step
+// is therefore a behavioural no-op for every world that has no FEAT-088
+// consumer wired yet (registry.go's AdvanceDayTick does exactly this).
+//
+// A negative [DrainCapacity.MonthlyDrainCapacity] return (a buggy FEAT-088
+// consumer) is passed straight through as `effective` without an explicit
+// clamp to 0 (BUG-483 F2): [realiseLocked] already treats ANY
+// budget/effective <= 0 as a no-op (see its doc), so a separate "if d < 0
+// { d = 0 }" step here would be dead code -- both a negative effective and
+// a zero effective release nothing and leave the queue untouched, byte-
+// for-byte. What was previously silent is the DIAGNOSABILITY of that
+// state: the first time a negative drain is observed for this queue, a
+// [ErrNegativeDrainCapacity] WARNING is logged (once per queue, not once
+// per call, since a stuck-at-zero-or-negative consumer would otherwise
+// call this every month) so a stuck death queue is visible in the log
+// well before population anomalies would otherwise be the only symptom.
+func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month int64, correlationID string) []RealisedDeath {
+	if err := q.checkNotCopied(correlationID, "RealiseDrained"); err != nil {
+		return nil
+	}
+
+	budget := budgetFor(q, cfg, emergency, correlationID)
 
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -421,8 +522,9 @@ func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month i
 	effective := budget
 	if q.drain != nil {
 		if d := q.drain.MonthlyDrainCapacity(month); d < effective {
-			if d < 0 {
-				d = 0
+			if d < 0 && !q.negativeDrainWarned {
+				q.negativeDrainWarned = true
+				_ = errs.New(ErrNegativeDrainCapacity, correlationID, map[string]any{"drain": d, "month": month})
 			}
 			effective = d
 		}
