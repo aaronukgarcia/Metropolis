@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import { strictEqual, deepStrictEqual, ok } from 'node:assert';
 import { reducer, initialState } from '../src/sim/engine.ts';
+import { placementCost, SPECS } from '../src/sim/data.ts';
 import type { Clipboard, Building } from '../src/sim/types.ts';
 
 describe('clone-stamp', () => {
@@ -175,8 +176,10 @@ describe('clone-stamp', () => {
       y: 50,
     });
 
-    // Roads cost 40 each, so total cost = 80.
-    ok(result.funds === testState.funds - 80);
+    // Two roads placed — charge the live placement cost each (BUG-452: catalogue
+    // rebased to realistic GBP, so derive from placementCost rather than a literal).
+    const roadCost = placementCost(SPECS['road']);
+    ok(result.funds === testState.funds - 2 * roadCost);
   });
 
   it('grants XP: 4 per placed item', () => {
@@ -241,9 +244,12 @@ describe('clone-stamp', () => {
       y: 50,
     });
 
-    // Road to demolish costs 40, so 25% refund = 10.
-    // New road costs 40. Net cost = 40 - 10 = 30.
-    ok(result.funds === testState.funds - 30);
+    // Replacing the existing road: charge the new road's placement cost, refund
+    // 25% (the bulldoze convention) of the demolished road. Net = cost - round(cost*0.25).
+    // Derived from the live catalogue (BUG-452 realistic-GBP rebase), not a literal.
+    const roadCost = placementCost(SPECS['road']);
+    const refund = Math.round(roadCost * 0.25);
+    ok(result.funds === testState.funds - (roadCost - refund));
   });
 
   it('setClipboard action stores clipboard without affecting game state', () => {
