@@ -722,7 +722,8 @@
       "guidOut": "cef595b0-f597-46b7-9143-2154175859c4",
       "deps": [
         "engine.core",
-        "foundation.data"
+        "foundation.data",
+        "int.serializer"
       ]
     },
     {
@@ -742,7 +743,8 @@
       "deps": [
         "engine.world",
         "foundation.data",
-        "engine.market"
+        "engine.market",
+        "int.serializer"
       ]
     },
     {
@@ -782,7 +784,8 @@
       "deps": [
         "engine.world",
         "int.solver",
-        "engine.citizens"
+        "engine.citizens",
+        "int.serializer"
       ]
     },
     {
@@ -842,7 +845,8 @@
         "engine.world",
         "engine.finance",
         "engine.logistics",
-        "foundation.data"
+        "foundation.data",
+        "int.serializer"
       ]
     },
     {
@@ -1423,7 +1427,8 @@
       "guidOut": "f4f37400-9913-4c53-b2eb-675921b8dc99",
       "deps": [
         "engine.logistics",
-        "engine.services"
+        "engine.services",
+        "int.serializer"
       ]
     },
     {

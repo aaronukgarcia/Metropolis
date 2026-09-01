@@ -1381,12 +1381,14 @@
       },
       "deps": [
         "engine.core",
-        "foundation.data"
+        "foundation.data",
+        "int.serializer"
       ],
       "calls": [
         "engine.core",
         "foundation.data",
-        "foundation.errors"
+        "foundation.errors",
+        "int.serializer"
       ],
       "sprint": 4
     },
@@ -1409,7 +1411,8 @@
       "deps": [
         "engine.world",
         "foundation.data",
-        "engine.market"
+        "engine.market",
+        "int.serializer"
       ],
       "calls": [
         "engine.world",
@@ -1418,7 +1421,8 @@
         "engine.season",
         "engine.finance",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 4,
       "collaborations": {
@@ -1488,7 +1492,8 @@
       "deps": [
         "engine.world",
         "int.solver",
-        "engine.citizens"
+        "engine.citizens",
+        "int.serializer"
       ],
       "calls": [
         "engine.world",
@@ -1499,7 +1504,8 @@
         "engine.education",
         "engine.leisure",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 5,
       "collaborations": {
@@ -1588,7 +1594,8 @@
         "engine.world",
         "engine.finance",
         "engine.logistics",
-        "foundation.data"
+        "foundation.data",
+        "int.serializer"
       ],
       "calls": [
         "engine.world",
@@ -1600,7 +1607,8 @@
         "foundation.errors",
         "foundation.num",
         "engine.staffing",
-        "engine.firms"
+        "engine.firms",
+        "int.serializer"
       ],
       "sprint": 6,
       "collaborations": {
@@ -2461,7 +2469,8 @@
       },
       "deps": [
         "engine.logistics",
-        "engine.services"
+        "engine.services",
+        "int.serializer"
       ],
       "calls": [
         "engine.logistics",
@@ -2471,7 +2480,8 @@
         "engine.market",
         "foundation.data",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 9,
       "collaborations": {
