@@ -1,5 +1,7 @@
 package citizens
 
+import "github.com/aaronukgarcia/Metropolis/internal/foundation/det"
+
 // Small named types shared across the hot and cold records. Every enum
 // here is a bucketed code (an integer, never a string) so the cold store
 // can field-compress it (AC-5's "bucketed enums, not strings").
@@ -151,13 +153,28 @@ const (
 	NumIncomeBands = 5
 )
 
-// IncomeBandFor maps wealth (micro-pounds) to its stratification band.
+// IncomeBandFor maps wealth (the engine's money base unit — see
+// internal/foundation/det.Micropounds) to its stratification band.
 // The thresholds are a documented balance placeholder (GR#15's balance
 // regime: directional, pending M2 Batch tuning) — they are the five
 // quintile boundaries of a synthetic population, not player-felt numbers.
+//
+// BUG-452 (2026-09-01): the wealth-units-per-pound divisor is DERIVED
+// from det.MicropoundsPerPound, not a hand-duplicated raw literal — this
+// was a 7th hand-duplicated copy of the money base scale (missed by the
+// original 6-site inventory, caught by an independent destructive round)
+// and it silently went 1000x stale after the base-unit rebase
+// (1e-6 GBP/unit -> 1e-3 GBP/unit): with the raw literal still 1_000_000,
+// every citizen's wealth (now expressed in the smaller, rebased unit)
+// divided down to a pounds figure 1000x too small, pinning the ENTIRE
+// population to IncomeBand0 forever (see TestIncomeBandFor_RebasedScale
+// for the regression this now carries). Deriving the divisor here means
+// any FUTURE base-scale change auto-propagates instead of needing a
+// found-by-round fix again.
 func IncomeBandFor(wealthMicroPounds int64) IncomeBand {
-	// Thresholds in whole pounds (wealth is stored in micro-pounds).
-	pounds := wealthMicroPounds / 1_000_000
+	// Thresholds in whole pounds (wealth is stored in the engine's money
+	// base unit — det.MicropoundsPerPound units per pound).
+	pounds := wealthMicroPounds / int64(det.MicropoundsPerPound)
 	switch {
 	case pounds < 15_000:
 		return IncomeBand0

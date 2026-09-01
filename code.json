@@ -42,31 +42,31 @@
   "units": [
     {
       "key": "money.micropound",
-      "name": "micro-pound",
-      "symbol": "µ£",
+      "name": "milli-pound",
+      "symbol": "m£",
       "dimension": "money",
       "scale": 1,
       "definedAt": "internal/engine/finance/money.go:21",
-      "note": "BASE money unit (this registry's convention: scale = how many base units make one of this unit). The only fixed-point money representation on the tick path. Declared four times: finance.MicropoundsPerPound / micropoundsScale, det.MicropoundsPerPound, unlocks.micropoundsPerPound, market.Micropounds (type, prose)."
+      "note": "BASE money unit (this registry's convention: scale = how many base units make one of this unit). The only fixed-point money representation on the tick path. BUG-452 (2026-09-01, Aaron's ruling): rebased from 1e-6 GBP/unit (micro-pound) to 1e-3 GBP/unit (milli-pound) for megacity int64 headroom. The key/identifiers keep the historical 'micropound' name deliberately — a mechanical Micropounds->Millipounds rename touches ~230 occurrences across ~40 files codebase-wide (verified by grep), cascading beyond BUG-452's single-increment scope per its own STOP guardrail; see internal/foundation/det/money.go's MicropoundsPerPound doc comment. Declared (at minimum) six times: finance.MicropoundsPerPound / micropoundsScale, det.MicropoundsPerPound, unlocks.micropoundsPerPound, market.Micropounds (type, prose), freight.micropoundsPerPound (containerport.go, unit-conversion local), plus three UI-side display-only duplicates (ui.screens.build/trade/finance render.go, GR#20-barred from importing engine.finance directly) — all six rebased together 2026-09-01."
     },
     {
       "key": "money.pence",
       "name": "pence",
       "symbol": "p",
       "dimension": "money",
-      "scale": 10000,
+      "scale": 10,
       "baseUnit": "money.micropound",
       "definedAt": "internal/engine/fuel/fuel.go:361",
-      "note": "1 pence = 10,000 micro-pounds (the 10000 literal at fuel.go:361)."
+      "note": "1 pence = 10 base units (BUG-452 rebase, 2026-09-01 — was 10,000 pre-rebase). fuel.go's conversion factor is now derived (finance.MicropoundsPerPound/100) rather than a hand-duplicated literal, so it tracks the base scale automatically."
     },
     {
       "key": "money.pound",
       "name": "pound sterling",
       "symbol": "£",
       "dimension": "money",
-      "scale": 1000000,
+      "scale": 1000,
       "baseUnit": "money.micropound",
-      "note": "Whole pounds. 1 GBP = 100 pence = 1,000,000 micro-pounds."
+      "note": "Whole pounds. 1 GBP = 100 pence = 1,000 base units (BUG-452 rebase, 2026-09-01 — was 1,000,000 pre-rebase)."
     },
     {
       "key": "ratio.per-mille",

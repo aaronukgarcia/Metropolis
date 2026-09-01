@@ -110,7 +110,9 @@ func TestRenderCatalogue_UnavailableEntryBadge(t *testing.T) {
 
 func TestRenderLandPrice_ShowsPrice(t *testing.T) {
 	style := widgets.DefaultPalette.Style(widgets.TokenMoney)
-	price := LandPriceView{Cell: protocol.CellRef{X: 2, Y: 3}, PriceMicropounds: 1_250_000}
+	// BUG-452 (2026-09-01): 1_250_000 -> 1_250 for the money base-unit
+	// rebase (1e-6 GBP/unit -> 1e-3 GBP/unit) — same real £1.25.
+	price := LandPriceView{Cell: protocol.CellRef{X: 2, Y: 3}, PriceMicropounds: 1_250}
 	buf := renderBuf(60, 2, func(b *core.Buffer, r core.Rect) {
 		RenderLandPrice(b, r, price, true, style)
 	})
@@ -122,7 +124,9 @@ func TestRenderLandPrice_ShowsPrice(t *testing.T) {
 
 func TestRenderDemolition_ShowsCompensation(t *testing.T) {
 	style := widgets.DefaultPalette.Style(widgets.TokenMoney)
-	dem := DemolitionView{Cell: protocol.CellRef{X: 2, Y: 3}, CompensationMicropounds: 600_000}
+	// BUG-452 (2026-09-01): 600_000 -> 600 for the money base-unit rebase
+	// (same real £0.60).
+	dem := DemolitionView{Cell: protocol.CellRef{X: 2, Y: 3}, CompensationMicropounds: 600}
 	buf := renderBuf(60, 2, func(b *core.Buffer, r core.Rect) {
 		RenderDemolition(b, r, dem, true, style)
 	})
@@ -158,18 +162,24 @@ func TestDrillTargets_EveryFigureHasASource(t *testing.T) {
 	}
 }
 
+// BUG-452 (2026-09-01): finite-value cases rebased (÷1000 on the old
+// literal) alongside the money base-unit change so they still exercise
+// the SAME real £ amounts; the MaxInt64/MinInt64 boundary cases keep
+// their raw int64 inputs (the boundary is about int64 itself, not a real
+// £ figure) with expected strings updated to the new
+// micropoundsPerPound=1_000 divisor's actual output.
 func TestFormatPounds_Deterministic(t *testing.T) {
 	cases := []struct {
 		micropounds int64
 		want        string
 	}{
-		{1_250_000, "£1.25"},
-		{600_000, "£0.60"},
+		{1_250, "£1.25"},
+		{600, "£0.60"},
 		{0, "£0.00"},
-		{1_000_000_000, "£1000.00"},
-		{-1_500_000, "-£1.50"},
-		{math.MaxInt64, "£9223372036854.78"},
-		{math.MinInt64, "-£9223372036854.78"},
+		{1_000_000, "£1000.00"},
+		{-1_500, "-£1.50"},
+		{math.MaxInt64, "£9223372036854775.81"},
+		{math.MinInt64, "-£9223372036854775.81"},
 	}
 	for _, c := range cases {
 		if got := formatPounds(c.micropounds); got != c.want {

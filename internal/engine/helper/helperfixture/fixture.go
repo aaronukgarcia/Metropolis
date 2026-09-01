@@ -44,7 +44,10 @@ const errPreconditionEvalFailed = "MET-E704"
 // duplicated constant and confirm the test catches it, don't just add
 // the test") — see that test for the deliberately-duplicated
 // counter-example it constructs to demonstrate the check can fail.
-var sharedFixtureCostMicropounds int64 = 5_000_000 // £5.00, arbitrary fixture value
+// BUG-452 (2026-09-01): rebased 5_000_000 -> 5_000 alongside the money
+// base-unit rebase (1e-6 GBP/unit -> 1e-3 GBP/unit) so this fixture keeps
+// reading as the same real £5.00, not a value 1000x too large.
+var sharedFixtureCostMicropounds int64 = 5_000 // £5.00, arbitrary fixture value
 
 // FixtureExecuteCost stands in for the cost a real feature's ACTUAL
 // execution path would charge, for the drift test to compare
@@ -196,9 +199,15 @@ func (u *UnreachableFixtureAction) Preconditions() []helper.Precondition {
 
 func (u *UnreachableFixtureAction) ProjectConsequence(state helper.GameStateView, params map[string]any) (helper.ConsequenceProjection, error) {
 	return helper.ConsequenceProjection{
-		ActionID:        u.id,
-		Summary:         "fixture action: currently unreachable",
-		CostMicropounds: 1_000_000,
+		ActionID: u.id,
+		Summary:  "fixture action: currently unreachable",
+		// BUG-452 (2026-09-01): rebased 1_000_000 -> 1_000 alongside its
+		// sibling sharedFixtureCostMicropounds (same money base-unit
+		// change, same real £1.00) — this action's own Preconditions()
+		// always fail (alwaysFailPrecondition{}), so this figure is never
+		// actually charged, but is kept consistent with the rest of this
+		// file's money constants rather than left silently stale.
+		CostMicropounds: 1_000,
 	}, nil
 }
 

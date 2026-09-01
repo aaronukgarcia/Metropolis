@@ -45,10 +45,29 @@ const (
 
 	seedCitizenCount = 64 // baseline-one seed population (AC-8's non-zero seed)
 
-	initialTreasury      = 10_000_000 // micropounds (10 pounds)
-	initialCitizenWealth = 5_000_000  // micropounds (5 pounds)
-	monthlyWages         = 1_000_000  // finance stub, per month (1 pound)
-	monthlyTax           = 1_000_000  // finance stub, per month (1 pound; budget closes)
+	// BUG-452 (2026-09-01, Aaron's ruling): starting treasury moved from
+	// the toy £10 to a realistic £1,500,000 grant (aligning with the
+	// webconsole dogfood sim's committed STARTING_TREASURY=£1.5M), on top
+	// of the money base-unit rebase itself (1e-6 GBP/unit -> 1e-3 GBP/unit,
+	// see internal/foundation/det/money.go's MicropoundsPerPound doc
+	// comment) — so the raw literal below reflects BOTH changes: £1,500,000
+	// x 1,000 units/£ = 1,500,000,000.
+	initialTreasury = 1_500_000_000 // money-unit base (£1,500,000)
+	// initialCitizenWealth keeps its pre-existing 0.5:1 ratio to
+	// initialTreasury (Aaron's ruling: "keep initialCitizenWealth's 0.5:1
+	// ratio to treasury") — £750,000 x 1,000 units/£.
+	initialCitizenWealth = 750_000_000 // money-unit base (£750,000, ratio-preserved)
+	// monthlyWages/monthlyTax are the pre-existing finance STUBS (distinct
+	// from moneycirc.go's real-world-grounded wage/tax figures) that this
+	// package's own overdraft/BUG-355 tests exercise against
+	// initialTreasury. Rescaled by the SAME factor initialTreasury grew by
+	// (150,000x in real terms: £10 -> £1,500,000) so their ratio to the new
+	// treasury — and hence every dynamic that reads them (e.g. attract's
+	// HousingAffordability income basis, see moneycirc.go's
+	// monthlyRentForHouseholds doc comment) — is unchanged from before this
+	// rebase: £1 x 150,000 x 1,000 units/£.
+	monthlyWages = 150_000_000 // money-unit base (£150,000, ratio-preserved)
+	monthlyTax   = 150_000_000 // money-unit base (£150,000, ratio-preserved; budget closes)
 )
 
 // baseline-one real-module placeholders. Like the block above, these are

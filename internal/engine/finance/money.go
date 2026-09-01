@@ -6,19 +6,26 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
 
-// Money is the single monetary type in this package: int64 micro-pounds
-// (AC-2, M0-ENG §1.2). One pound sterling is 1,000,000 micro-pounds, so
-// a value of 2_500_000 is £2.50. Every field in this package that holds
-// money is a Money (or, where the amount is a ratio, an int64 fixed-point
-// value with a documented scale — see BasisPoints and the factorScale
-// constant in land.go). float32/float64 never touches a monetary field.
+// Money is the single monetary type in this package: int64 fixed-point
+// micro-pounds by name (AC-2, M0-ENG §1.2). Since the BUG-452 rebase
+// (2026-09-01) one pound sterling is 1,000 units (was 1,000,000
+// pre-rebase — see MicropoundsPerPound's doc comment for why the name is
+// kept despite the scale change), so a value of 2_500 is £2.50. Every
+// field in this package that holds money is a Money (or, where the amount
+// is a ratio, an int64 fixed-point value with a documented scale — see
+// BasisPoints and the factorScale constant in land.go). float32/float64
+// never touches a monetary field.
 type Money int64
 
-// MicropoundsPerPound is the fixed scale factor: 1 GBP = 1,000,000
-// micro-pounds. It is the exact scale engine.market's Micropounds type
-// uses, so a price crossing the Market/finance boundary never silently
-// loses precision (US-5).
-const MicropoundsPerPound Money = 1_000_000
+// MicropoundsPerPound is the fixed scale factor: 1 GBP = 1,000 units
+// (BUG-452 rebase, 2026-09-01 — was 1,000,000/1e-6 GBP pre-rebase, now
+// 1e-3 GBP/unit for megacity int64 headroom; see
+// internal/foundation/det/money.go's MicropoundsPerPound doc comment for
+// the full rationale and why the identifier keeps its historical name).
+// It is the exact scale engine.market's Micropounds type uses, so a price
+// crossing the Market/finance boundary never silently loses precision
+// (US-5).
+const MicropoundsPerPound Money = 1_000
 
 // micropoundsScale is MicropoundsPerPound as a plain int64, for
 // arithmetic that multiplies or divides an int64 by the scale.

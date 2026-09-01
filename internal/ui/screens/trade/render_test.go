@@ -36,9 +36,12 @@ func TestRenderContracts_UnavailableAndEmpty(t *testing.T) {
 
 func TestRenderContracts_ShowsTermPenaltyAndPrice(t *testing.T) {
 	style := widgets.DefaultPalette.Style(widgets.TokenMoney)
+	// BUG-452 (2026-09-01): amounts rebased ÷1000 alongside the money
+	// base-unit change (1e-6 GBP/unit -> 1e-3 GBP/unit) so they still
+	// exercise the same real £ figures the row assertions below expect.
 	contracts := []ImportContract{
-		{ID: "c-1", Commodity: "grain", TermMonths: 12, MonthsRemaining: 8, CancellationPenaltyMicropounds: 1500000, PricePerUnitMicropounds: 45_000_000, Status: StatusActive},
-		{ID: "c-2", Commodity: "fuel", TermMonths: 6, MonthsRemaining: 2, CancellationPenaltyMicropounds: 0, PricePerUnitMicropounds: 90_000_000, Status: StatusCancelled},
+		{ID: "c-1", Commodity: "grain", TermMonths: 12, MonthsRemaining: 8, CancellationPenaltyMicropounds: 1500, PricePerUnitMicropounds: 45_000, Status: StatusActive},
+		{ID: "c-2", Commodity: "fuel", TermMonths: 6, MonthsRemaining: 2, CancellationPenaltyMicropounds: 0, PricePerUnitMicropounds: 90_000, Status: StatusCancelled},
 	}
 	buf := renderBuf(90, 4, func(b *core.Buffer, r core.Rect) {
 		RenderContracts(b, r, contracts, true, style)
@@ -51,7 +54,7 @@ func TestRenderContracts_ShowsTermPenaltyAndPrice(t *testing.T) {
 		t.Errorf("contract row missing £/unit price: %v", rows)
 	}
 	if !rowContains(rows, "£1.50") {
-		t.Errorf("contract row missing penalty £1.50 (1500000 micropounds): %v", rows)
+		t.Errorf("contract row missing penalty £1.50 (1500 micropounds): %v", rows)
 	}
 	if !rowContains(rows, "[cancelled]") {
 		t.Errorf("cancelled contract row missing [cancelled] marker: %v", rows)
@@ -136,14 +139,17 @@ func TestRenderPort_UnlockGatingAndUnavailable(t *testing.T) {
 
 func TestRenderBalance_ShowsCommodityAndArtery(t *testing.T) {
 	style := widgets.DefaultPalette.Style(widgets.TokenMoney)
+	// BUG-452 (2026-09-01): amounts rebased ÷1000 alongside the money
+	// base-unit change so they still exercise the same real £/day figures
+	// the assertions below expect (e.g. £1.80/day).
 	balance := BalanceOfTradeView{
 		Imports: TradeLedgerView{
-			ByCommodity: []TradeFlow{{Key: "grain", TonnesPerDay: 40, ValuePerDayMicropounds: 1800000}},
-			ByArtery:    []TradeFlow{{Key: "sea", TonnesPerDay: 60, ValuePerDayMicropounds: 2700000}},
+			ByCommodity: []TradeFlow{{Key: "grain", TonnesPerDay: 40, ValuePerDayMicropounds: 1800}},
+			ByArtery:    []TradeFlow{{Key: "sea", TonnesPerDay: 60, ValuePerDayMicropounds: 2700}},
 		},
 		Exports: TradeLedgerView{
-			ByCommodity: []TradeFlow{{Key: "machinery", TonnesPerDay: 12, ValuePerDayMicropounds: 9600000}},
-			ByArtery:    []TradeFlow{{Key: "rail", TonnesPerDay: 12, ValuePerDayMicropounds: 9600000}},
+			ByCommodity: []TradeFlow{{Key: "machinery", TonnesPerDay: 12, ValuePerDayMicropounds: 9600}},
+			ByArtery:    []TradeFlow{{Key: "rail", TonnesPerDay: 12, ValuePerDayMicropounds: 9600}},
 		},
 	}
 	buf := renderBuf(90, 8, func(b *core.Buffer, r core.Rect) {
@@ -210,18 +216,24 @@ func TestDrillTargets_EveryFigureHasASource(t *testing.T) {
 	}
 }
 
+// BUG-452 (2026-09-01): finite-value cases rebased (÷1000 on the old
+// literal) alongside the money base-unit change so they still exercise
+// the SAME real £ amounts; the MaxInt64/MinInt64 boundary cases keep
+// their raw int64 inputs (the boundary is about int64 itself, not a real
+// £ figure) with expected strings updated to the new
+// micropoundsPerPound=1_000 divisor's actual output.
 func TestFormatPounds_Deterministic(t *testing.T) {
 	cases := []struct {
 		micropounds int64
 		want        string
 	}{
-		{1_500_000, "£1.50"},
-		{45_000_000, "£45.00"},
+		{1_500, "£1.50"},
+		{45_000, "£45.00"},
 		{0, "£0.00"},
-		{1_000_000_000, "£1000.00"},
-		{-1_500_000, "-£1.50"},
-		{math.MaxInt64, "£9223372036854.78"},
-		{math.MinInt64, "-£9223372036854.78"},
+		{1_000_000, "£1000.00"},
+		{-1_500, "-£1.50"},
+		{math.MaxInt64, "£9223372036854775.81"},
+		{math.MinInt64, "-£9223372036854775.81"},
 	}
 	for _, c := range cases {
 		if got := formatPounds(c.micropounds); got != c.want {

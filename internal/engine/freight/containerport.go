@@ -106,12 +106,18 @@ type IntermodalAccount struct {
 	DwellTonnes map[Mode]int64
 }
 
-// Unit-conversion constants (NOT capacity figures): £M → £ → micropounds
-// (M0-ENG §1.2), used only to hand feat.decommission's seam a canonical
-// money figure for the day-one decommission liability.
+// Unit-conversion constants (NOT capacity figures): £M → £ → the engine's
+// money base unit (M0-ENG §1.2), used only to hand feat.decommission's
+// seam a canonical money figure for the day-one decommission liability.
+// poundsPerMillion is a plain "million" multiplier (unrelated to the
+// money base scale — unchanged by BUG-452). micropoundsPerPound is a
+// separate, hand-duplicated copy of the money base scale
+// (finance.MicropoundsPerPound) — rebased alongside it 2026-09-01 (BUG-452:
+// 1,000,000 -> 1,000, 1e-6 GBP/unit -> 1e-3 GBP/unit) rather than left
+// stale.
 const (
 	poundsPerMillion    = 1_000_000
-	micropoundsPerPound = 1_000_000
+	micropoundsPerPound = 1_000
 )
 
 // costMicropounds converts a data-file "costMillions" (£M) figure into

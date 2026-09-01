@@ -352,14 +352,21 @@ func (f *FuelAPI) PostFuelDuty(era string) (finance.Money, error) {
 	return t.Revenue(instrument)
 }
 
-// fullDutyBaseLocked returns the 0%-EV fuel-duty taxable base in micro-pounds:
-// total road-fuel demand at 0% EV (car + van + truck + logistics fleet) × the
-// duty rate (pence per litre) × 10,000 micro-pounds per pence. Caller holds at
-// least a read lock.
+// microPoundsPerPence is the pence->finance.Money unit-conversion factor:
+// finance.MicropoundsPerPound/100 (100 pence per pound), derived from the
+// live scale constant rather than a hand-duplicated literal so this file
+// tracks the BUG-452 base-unit rebase (2026-09-01) automatically instead
+// of silently going 1000x stale the way a hardcoded "10000" would have.
+const microPoundsPerPence = int64(finance.MicropoundsPerPound) / 100
+
+// fullDutyBaseLocked returns the 0%-EV fuel-duty taxable base in the
+// engine's money base unit: total road-fuel demand at 0% EV (car + van +
+// truck + logistics fleet) × the duty rate (pence per litre) ×
+// microPoundsPerPence. Caller holds at least a read lock.
 func (f *FuelAPI) fullDutyBaseLocked() finance.Money {
 	litres := f.carDemand + f.vanDemand + f.truckDemand + f.logisticsDemand
 	pence := litres * f.dutyRatePence
-	return finance.Money(num.ClampInt64FromFloat(pence * 10000))
+	return finance.Money(num.ClampInt64FromFloat(pence * float64(microPoundsPerPence)))
 }
 
 // ChargingLoad returns the EV charging load as a consumption.Demand (power

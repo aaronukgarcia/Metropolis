@@ -6,25 +6,52 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
-// Micropounds is fixed-point money: one Micropound is 1e-6 GBP. Every
-// money value in the simulation is a Micropounds (§1.2 point 4: "Money is
-// int64 micro-pounds") — float64 must never touch a money computation,
-// because summation order changes a float64's rounding and this project's
-// entire determinism guarantee depends on identical inputs producing
-// identical outputs regardless of worker/summation order.
+// Micropounds is fixed-point money. Every money value in the simulation is
+// a Micropounds (§1.2 point 4: "Money is int64 micro-pounds") — float64
+// must never touch a money computation, because summation order changes a
+// float64's rounding and this project's entire determinism guarantee
+// depends on identical inputs producing identical outputs regardless of
+// worker/summation order.
+//
+// BUG-452 (2026-09-01, Aaron's ruling): the base scale was rebased from
+// 1e-6 GBP (micro-pound) to 1e-3 GBP (milli-pound) for megacity int64
+// headroom — see MicropoundsPerPound's doc comment. The type keeps its
+// historical name deliberately: the four independent declarations of this
+// scale factor across the codebase (this one, engine.finance.Money's
+// MicropoundsPerPound/micropoundsScale, engine.unlocks.micropoundsPerPound,
+// engine.market.Micropounds — see code.json's units registry,
+// money.micropound) are already a documented duplication (GR#3 flags it as
+// an extraction candidate), and a mechanical Micropounds->Millipounds
+// identifier rename touches ~230 occurrences across ~40 files codebase-wide
+// (verified by grep, 2026-09-01) — cascading well beyond this single,
+// cleanly-reviewable increment's blast radius (per BUG-452's own STOP
+// guardrail). Rescaling the constant here (and its three sibling
+// declarations, kept in lock-step) achieves the headroom goal with a
+// contained, single-increment diff; the name/scale mismatch is a
+// documented, deliberate trade-off, not an oversight — a future dedicated
+// increment MAY do the identifier rename separately if Aaron wants the name
+// corrected, verified purely by `go build` (a rename cannot silently
+// miscompile: every missed reference fails to build).
 type Micropounds int64
 
-// MicropoundsPerPound is the fixed-point scale factor.
-const MicropoundsPerPound Micropounds = 1_000_000
+// MicropoundsPerPound is the fixed-point scale factor: 1 GBP = 1,000
+// Micropounds (BUG-452 rebase, 2026-09-01 — was 1,000,000 pre-rebase, i.e.
+// 1e-6 GBP/unit; now 1e-3 GBP/unit). Megacity (100M-citizen) design-target
+// headroom: a £100B aggregate figure is 1e14 units, ~92,233x under int64
+// max (~9.22e18) — roughly 1000x more headroom than the pre-rebase scale
+// gave at the same real-£ magnitude, which is the entire point of the
+// rebase (BUG-452's task: "milli-£ base unit... for megacity headroom").
+const MicropoundsPerPound Micropounds = 1_000
 
 // FromPounds converts a whole-pound integer amount to Micropounds.
-// Unchecked: pounds values would need to exceed roughly ±9.2 trillion
-// pounds to overflow int64 after the ×1e6 scale, several orders of
-// magnitude beyond any balance this simulation's economy models — so
-// FromPounds is deliberately infallible (no correlation ID plumbing) to
-// keep the common construction path ergonomic; the checked helpers below
-// (Add, Sub, MulRat) are what guard the arithmetic that can plausibly
-// overflow through repeated accumulation.
+// Unchecked: pounds values would need to exceed roughly ±9.2 quadrillion
+// pounds to overflow int64 after the ×1e3 scale (BUG-452 rebase — was ±9.2
+// trillion pre-rebase, at the old ×1e6 scale), several orders of magnitude
+// beyond any balance this simulation's economy models — so FromPounds is
+// deliberately infallible (no correlation ID plumbing) to keep the common
+// construction path ergonomic; the checked helpers below (Add, Sub,
+// MulRat) are what guard the arithmetic that can plausibly overflow
+// through repeated accumulation.
 func FromPounds(pounds int64) Micropounds {
 	return Micropounds(pounds) * MicropoundsPerPound
 }
