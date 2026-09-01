@@ -3,7 +3,7 @@
   "project": "Metropolis",
   "planVersion": "1.1.0",
   "specSource": "docs/METROPOLIS-MASTER-v2.1.md (Master Design Document v2.1 incl. Amendment A1)",
-  "updated": "2026-08-31",
+  "updated": "2026-09-01",
   "conventions": {
     "naming": {
       "moduleKey": "dot-separated lowercase: <layer>.<name> (e.g. engine.traffic, ui.widgets); matches BOW mkey and code.json key",
@@ -780,6 +780,10 @@
           {
             "key": "engine.finance",
             "outboundGuid": "a5c519c3-eb51-40a3-9f2f-dedd24d0bbf6"
+          },
+          {
+            "key": "engine.unlocks",
+            "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
           {
             "key": "feat.checkpoint",
@@ -5213,6 +5217,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

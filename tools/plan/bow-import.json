@@ -994,7 +994,8 @@
       "deps": [
         "engine.core",
         "foundation.data",
-        "engine.finance"
+        "engine.finance",
+        "int.serializer"
       ]
     },
     {
