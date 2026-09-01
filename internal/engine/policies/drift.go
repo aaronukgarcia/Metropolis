@@ -88,7 +88,9 @@ func (a *PoliciesAPI) AdvanceMonth(month int64) ([]PreviewDriftEvent, error) {
 	// double-appends events. The dedupe pass also makes a re-run of the same
 	// checkpoint month (e.g. via Checkpoint then AdvanceMonth) accumulate no
 	// duplicate events.
-	a.appendDriftEventsLocked(events)
+	if err := a.appendDriftEventsLocked(events); err != nil {
+		return nil, err
+	}
 	a.currentMonth = month
 	a.lastPostedMonth = month
 	return events, nil
@@ -180,7 +182,9 @@ func (a *PoliciesAPI) checkpointLocked(month int64) ([]PreviewDriftEvent, error)
 	if err != nil {
 		return nil, err
 	}
-	a.appendDriftEventsLocked(raised)
+	if err := a.appendDriftEventsLocked(raised); err != nil {
+		return nil, err
+	}
 	return raised, nil
 }
 
@@ -199,9 +203,12 @@ type driftEventKey struct {
 // skipping any whose (enactment, coefficient, checkpoint) already exists —
 // so a re-run of the same month's checkpoint never double-appends the same
 // reckoning (drift-event dedupe, AC-7/US-3). The caller holds the write lock.
-func (a *PoliciesAPI) appendDriftEventsLocked(raised []PreviewDriftEvent) {
+// A struct-copied receiver returns the copy-guard error rather than silently
+// dropping the raised events (FEAT-1972079946 — a void swallow here would
+// leave a checkpoint's drift events unrecorded with no signal to the caller).
+func (a *PoliciesAPI) appendDriftEventsLocked(raised []PreviewDriftEvent) error {
 	if err := a.checkNotCopied("appendDriftEventsLocked"); err != nil {
-		return
+		return err
 	}
 	seen := make(map[driftEventKey]struct{}, len(a.events)+len(raised))
 	for _, ev := range a.events {
@@ -215,6 +222,7 @@ func (a *PoliciesAPI) appendDriftEventsLocked(raised []PreviewDriftEvent) {
 		seen[key] = struct{}{}
 		a.events = append(a.events, ev)
 	}
+	return nil
 }
 
 // evaluateCheckpointLocked computes the PreviewDrift events for month WITHOUT

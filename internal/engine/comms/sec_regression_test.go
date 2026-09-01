@@ -143,9 +143,11 @@ func TestDeliverParcelsShortfallHandlerNoDeadlock(t *testing.T) {
 	}
 
 	// A shortfall handler that re-enters comms from inside logistics.Draw.
-	l.SubscribeShortfalls(func(logistics.ShortfallEvent) {
+	if err := l.SubscribeShortfalls(func(logistics.ShortfallEvent) {
 		_ = c.ECommerceShare()
-	})
+	}); err != nil {
+		t.Fatalf("SubscribeShortfalls: %v", err)
+	}
 
 	done := make(chan struct{})
 	go func() {

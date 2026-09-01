@@ -205,7 +205,9 @@ func TestDrawAdequateStockNoShortfall(t *testing.T) {
 
 	// A handler must NOT fire when there is no shortfall.
 	fired := 0
-	api.SubscribeShortfalls(func(ShortfallEvent) { fired++ })
+	if err := api.SubscribeShortfalls(func(ShortfallEvent) { fired++ }); err != nil {
+		t.Fatalf("SubscribeShortfalls: %v", err)
+	}
 
 	res, err := api.Draw("d1", market.FoodStaples, 60, ConsumerHousehold)
 	if err != nil {
@@ -232,11 +234,13 @@ func TestShortfallHookFiresOnce(t *testing.T) {
 
 	var mu sync.Mutex
 	var events []ShortfallEvent
-	api.SubscribeShortfalls(func(e ShortfallEvent) {
+	if err := api.SubscribeShortfalls(func(e ShortfallEvent) {
 		mu.Lock()
 		events = append(events, e)
 		mu.Unlock()
-	})
+	}); err != nil {
+		t.Fatalf("SubscribeShortfalls: %v", err)
+	}
 
 	res, err := api.Draw("d1", market.ConstructionMaterials, 10, ConsumerConstruction)
 	if err != nil {
@@ -562,7 +566,9 @@ func TestConcurrentDrawStockRaceFree(t *testing.T) {
 	if _, err := api.Provision("d1", market.FoodStaples, 100000, 100000); err != nil {
 		t.Fatalf("Provision: %v", err)
 	}
-	api.SubscribeShortfalls(func(ShortfallEvent) {})
+	if err := api.SubscribeShortfalls(func(ShortfallEvent) {}); err != nil {
+		t.Fatalf("SubscribeShortfalls: %v", err)
+	}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 16; i++ {

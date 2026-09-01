@@ -42,7 +42,9 @@ func TestTogglingDebugDoesNotAffectEngineState(t *testing.T) {
 	if err := s.InvokeCheat("corr-cheat", CheatFreeMoney, nil, func() error { return nil }); err != nil {
 		t.Fatalf("InvokeCheat: %v", err)
 	}
-	s.Disable()
+	if err := s.Disable(); err != nil {
+		t.Fatalf("Disable: %v", err)
+	}
 
 	var after bytes.Buffer
 	if _, err := e.Snapshot(&after, "corr-snap-after"); err != nil {

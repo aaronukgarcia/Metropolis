@@ -259,7 +259,10 @@ func (d *DecayAPI) AdvanceMonth(in MonthInput) (MonthResult, error) {
 
 	// ---- State mutation phase (under d.mu) ----
 	d.mu.Lock()
-	d.recordPopulationLocked(in.Month, in.Population)
+	if err := d.recordPopulationLocked(in.Month, in.Population); err != nil {
+		d.mu.Unlock()
+		return MonthResult{}, err
+	}
 	peak := d.historicPeak
 
 	prevAttractiveness := d.prevAttractiveness
@@ -368,10 +371,13 @@ func (d *DecayAPI) AdvanceMonth(in MonthInput) (MonthResult, error) {
 }
 
 // recordPopulationLocked appends/overwrites the population history and
-// updates the historic peak. Caller holds d.mu.
-func (d *DecayAPI) recordPopulationLocked(month, population int64) {
+// updates the historic peak. Caller holds d.mu. A struct-copied receiver
+// returns the copy-guard error rather than silently dropping the recorded
+// population (FEAT-1972079946 — a swallowed record here would corrupt the
+// popHistory/historicPeak curve AdvanceMonth and death evaluation depend on).
+func (d *DecayAPI) recordPopulationLocked(month, population int64) error {
 	if err := d.checkNotCopied("recordPopulationLocked"); err != nil {
-		return
+		return err
 	}
 	if population < 0 {
 		population = 0
@@ -385,6 +391,7 @@ func (d *DecayAPI) recordPopulationLocked(month, population int64) {
 		d.historicPeak = population
 		d.historicPeakMonth = month
 	}
+	return nil
 }
 
 // financeSnapshot returns the wired finance dependency, or nil.

@@ -58,7 +58,7 @@ func wantStateCopied(t *testing.T, method string, err error) {
 //
 //	state.go   IsOn()               -- pre-lock + post-lock check (fails closed to false; ASM-002)
 //	state.go   Enable()             -- pre-lock + post-lock check (returns ErrStateCopied)
-//	state.go   Disable()            -- pre-lock + post-lock check (silently drops; no error return to carry one)
+//	state.go   Disable()            -- pre-lock + post-lock check (returns ErrStateCopied, FEAT-1972079946)
 //	state.go   nowFunc()            -- pre-lock + post-lock check (fails closed to zeroClock())
 //	cheats.go  recordCheatUsed()    -- pre-lock + post-lock check (silently drops the append)
 //	cheats.go  CheatLog()           -- pre-lock + post-lock check (returns empty slice)
@@ -90,10 +90,11 @@ func wantStateCopied(t *testing.T, method string, err error) {
 // TestSEC020_EveryGuardedMethod_RejectsStructCopy is the enumeration
 // sweep: every method identified above is called on the SAME
 // deterministically-constructed copy and asserted to reject it (or, for
-// the three methods with no error return — IsOn, Disable, nowFunc — to
-// fail closed to their documented safe value). Naming each call
-// individually means a stripped guard on any one site fails ONLY that
-// assertion, identifying the regressed site by name.
+// the two read-only query methods with no error return — IsOn, nowFunc —
+// to fail closed to their documented safe value; Disable now returns
+// ErrStateCopied like every other mutating method, FEAT-1972079946).
+// Naming each call individually means a stripped guard on any one site
+// fails ONLY that assertion, identifying the regressed site by name.
 func TestSEC020_EveryGuardedMethod_RejectsStructCopy(t *testing.T) {
 	h := newTestHeader()
 	orig := NewState(
@@ -112,7 +113,7 @@ func TestSEC020_EveryGuardedMethod_RejectsStructCopy(t *testing.T) {
 		t.Fatalf("IsOn() on a struct-copied State = %v, want false (fail-closed, ASM-002) even though the copied `on` field is true", got)
 	}
 	wantStateCopied(t, "Enable", cp.Enable(SourcePalette, "corr-1"))
-	cp.Disable() // no return value; hygiene-invariant test below proves this is a genuine no-op, not merely "didn't panic"
+	wantStateCopied(t, "Disable", cp.Disable())
 	if got := cp.nowFunc(); !got.IsZero() {
 		t.Fatalf("nowFunc() on a struct-copied State = %v, want zero time.Time (fail-closed)", got)
 	}
@@ -196,12 +197,12 @@ func TestSEC020_CopyCannotTouchHeaderViaEnable(t *testing.T) {
 	// just because the copied `on` bool happens to already read true.
 	wantStateCopied(t, "Enable", cp.Enable(SourcePalette, "corr-attack"))
 
-	// The real test: cp.Disable() must NOT be able to clear
-	// header.DebugTouched (it never legitimately could — Disable never
-	// clears the sticky flag even on the original, see state.go's
-	// Disable doc comment — but a copy must additionally be unable to
-	// reach h at all through its own independent mu).
-	cp.Disable()
+	// The real test: cp.Disable() must be REJECTED outright (not merely a
+	// harmless no-op) — it never legitimately could clear the sticky flag
+	// even on the original, see state.go's Disable doc comment — and a
+	// copy must additionally be unable to reach h at all through its own
+	// independent mu.
+	wantStateCopied(t, "Disable", cp.Disable())
 	if !h.DebugTouched() {
 		t.Fatalf("header.DebugTouched = false after a copy's Disable, want true (sticky; must survive even a copy-identity attack)")
 	}
@@ -274,7 +275,7 @@ func TestSEC020_CopyTakenWhileLockHeld_RejectedNotHung(t *testing.T) {
 	if got := cp.IsOn(); got != false {
 		t.Fatalf("IsOn() on a copy taken mid-lock = %v, want false", got)
 	}
-	cp.Disable()
+	wantStateCopied(t, "Disable", cp.Disable())
 	if got := cp.nowFunc(); !got.IsZero() {
 		t.Fatalf("nowFunc() on a copy taken mid-lock = %v, want zero time.Time", got)
 	}
@@ -314,7 +315,7 @@ func TestSEC020_ZeroValue_FailsClosed_NoMuTouch(t *testing.T) {
 	if got := s.nowFunc(); !got.IsZero() {
 		t.Fatalf("zero-value State.nowFunc() = %v, want zero time.Time", got)
 	}
-	s.Disable() // must not panic
+	wantStateCopied(t, "Disable", s.Disable())
 }
 
 // TestSEC020_NewState_Pointer_FailsClosed covers `new(State)` explicitly
@@ -351,7 +352,7 @@ func TestSEC020_HandBuiltLiteral_SelfUnset_FailsClosed(t *testing.T) {
 	}
 	wantStateCopied(t, "Enable", literal.Enable(SourceFlag, "corr-literal"))
 	wantStateCopied(t, "AllowSpeed8x", literal.AllowSpeed8x("corr-literal-2"))
-	literal.Disable()
+	wantStateCopied(t, "Disable", literal.Disable())
 	if !h.DebugTouched() {
 		t.Fatalf("header.DebugTouched = false after a self-unset literal's Disable, want still true (sticky; the literal must never have been able to touch it in the first place)")
 	}
