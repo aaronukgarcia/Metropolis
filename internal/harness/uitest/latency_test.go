@@ -1,6 +1,7 @@
 package uitest
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -19,8 +20,24 @@ import (
 // UI-SPEC §5's own wall-clock budgets, not gating correctness on wall
 // time.
 
+// skipLatencyOnCI skips a wall-clock latency assertion when running under
+// CI (GitHub Actions sets CI=true). The project's verification standard
+// forbids wall-clock upper bounds as CI gates — shared-runner scheduling
+// noise false-reds them (TestLatencyDiffFlushTypical red-failed run
+// 33504088488 on a commit that never touched this package; the same class
+// as the BUG-272/BUG-473 perf-smoke ruling that made wall time advisory).
+// The budgets stay hard-failing LOCALLY, where the doc.go §5 numbers are
+// actually meaningful on dedicated hardware.
+func skipLatencyOnCI(t *testing.T) {
+	t.Helper()
+	if os.Getenv("CI") != "" {
+		t.Skip("wall-clock latency budget: advisory on CI shared runners (hard-failing locally)")
+	}
+}
+
 // TestLatencyKeystrokeEcho: keystroke -> echo must be < 10ms.
 func TestLatencyKeystrokeEcho(t *testing.T) {
+	skipLatencyOnCI(t)
 	echoCh := make(chan time.Time, 1)
 	h := NewHarness(errs.NewCorrelationID(), func(msg uicore.InputMsg) {
 		if msg.Kind == uicore.KeyInput {
@@ -50,6 +67,7 @@ func TestLatencyKeystrokeEcho(t *testing.T) {
 // headless equivalent of a real UI switching which screen is on top)
 // through to a completed Render() must be < 30ms.
 func TestLatencyScreenSwitch(t *testing.T) {
+	skipLatencyOnCI(t)
 	h := NewHarness(errs.NewCorrelationID(), nil)
 	defer h.Stop()
 	if _, err := h.Render(); err != nil { // warm up
@@ -73,6 +91,7 @@ func TestLatencyScreenSwitch(t *testing.T) {
 // TestLatencyDiffFlushTypical: a full-terminal diff flush with a small,
 // "typical" changed region must be < 3ms.
 func TestLatencyDiffFlushTypical(t *testing.T) {
+	skipLatencyOnCI(t)
 	back := uicore.NewBuffer(uicore.MinCols, uicore.MinRows)
 	front := uicore.NewBuffer(uicore.MinCols, uicore.MinRows)
 	uicore.Flush(nopWriter{}, back, front) // prime front == back
@@ -90,6 +109,7 @@ func TestLatencyDiffFlushTypical(t *testing.T) {
 // cell (the worst case UI-SPEC §5 names explicitly: "on resize", where
 // the entire buffer necessarily differs) must be < 8ms.
 func TestLatencyDiffFlushWorst(t *testing.T) {
+	skipLatencyOnCI(t)
 	back := uicore.NewBuffer(uicore.MinCols, uicore.MinRows)
 	front := uicore.NewBuffer(uicore.MinCols, uicore.MinRows)
 	uicore.Flush(nopWriter{}, back, front) // prime front == back
