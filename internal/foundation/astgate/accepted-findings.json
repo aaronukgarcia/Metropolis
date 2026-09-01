@@ -1,5 +1,29 @@
 [
   {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|PersistHalted|e.subs|*Engine.subs",
+    "reason": "BUG-472 r2 (2026-09-01): PersistHalted has its OWN direct e.checkNotCopied() call (added this round, mirroring Clock()/HookCount()'s guard shape), but SEC-049's field-access enumeration only recognises a guard call TARGETING the exact matched value name (here \"e.subs\", i.e. an e.subs.checkNotCopied() call) as satisfying isGuarded for a field-access-chain finding -- see gate.go's isGuarded/callTargetsValue. PersistHalted never touches e.subs at all (it only reads e.persistHalt), so an e.subs.checkNotCopied() call would be nonsensical noise, not a real guard -- same over-approximation shape as this file's own HandleCommand|e.subs entry above (now dispatchCommand's), which PersistHalted's genuine e.checkNotCopied() guard does not, and structurally cannot, silence for this specific enumeration path."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|dispatchCommand|e.subs|*Engine.subs",
+    "reason": "BUG-472 r2 (commands.go's single-signal-point refactor, 2026-09-01): dispatchCommand is the renamed body of the OLD HandleCommand -- identical decode/dispatch logic, identical own checkNotCopied call at its top, moved out only so the new HandleCommand can wrap every dispatchCommand return with exactly one signalSubscriptionPump call (see HandleCommand's doc comment). SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same over-approximation the pre-existing HandleCommand|e.subs entry in this same file already documents, which this entry supersedes under the new function name). dispatchCommand's body was read in full and contains zero references to e.subs anywhere."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|latchPersistHalt|e|*Engine",
+    "reason": "BUG-472 r2 (2026-09-01): latchPersistHalt is an unexported helper called ONLY from journalAccepted (on an append failure), itself called ONLY from accept() -- the same already-guarded-reachable-path shape this file's own already-accepted journalAccepted entry documents (accept/dispatchCommand's callers all identity-check before ever reaching this far). Never independently reachable."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|latchPersistHalt|e.subs|*Engine.subs",
+    "reason": "BUG-472 r2 (2026-09-01): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same over-approximation shape already accepted for this file's HandleCommand/accept/reject/etc. entries). latchPersistHalt's body was read in full and contains zero references to e.subs -- it only touches e.persistHalt (an atomic.Pointer, not a candidate type) via CompareAndSwap."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|receiver method|persistHaltResult|e|*Engine",
+    "reason": "BUG-472 r2 (2026-09-01): persistHaltResult is an unexported helper called only from dispatchCommand's own halt short-circuit (guarded: dispatchCommand checks identity before the halt check even runs) and from journalAccepted (itself reachable only through accept(), reached only through dispatchCommand's already-guarded dispatch) -- same already-guarded-reachable-path shape as this file's existing journalAccepted/clockTickForResult/reject entries. Never independently reachable."
+  },
+  {
+    "finding": "internal/engine/core/commands.go|*Engine|field access chain|persistHaltResult|e.subs|*Engine.subs",
+    "reason": "BUG-472 r2 (2026-09-01): SEC-049's field-access enumeration (KindFieldAccess, findFieldReachableFuncs) registers a ReachableFunc for the owning type's EVERY declared method once that type has a field naming a candidate type -- by design it does not check whether the method body actually references the field (same over-approximation shape already accepted for this file's HandleCommand/accept/reject/etc. entries). persistHaltResult's body was read in full and contains zero references to e.subs -- it only touches e.persistHalt (Load), e.clockTickForResult, and e.reject."
+  },
+  {
     "finding": "internal/engine/core/commands.go|*Engine|receiver method|RunCommandLoop|e|*Engine",
     "reason": "Pre-existing finding recorded on the BUG-024 ratchet landing (ASM-204 ruling), re-keyed under BUG-119 round 7's complete-identity key format (Bill's ruling, 2026-08-12) on the same date: astgate's syntactic, no-call-graph analysis cannot distinguish an unexported *Locked-suffixed helper (or another already-guarded reachable path) from a genuine unguarded entry point (doc.go's known blind spots; see internal/foundation/errs/copyguard_test.go's rotateLocked note for the precedent this project treats as safe). Triage of individual findings is separate BOW-tracked work (ASM-120, ASM-121), not resolved by this ratchet."
   },

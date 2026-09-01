@@ -170,7 +170,50 @@ func (e *Engine) SetCommandJournaler(j CommandJournaler) error {
 // anything slower than an Engine method call or a phase-pipeline run
 // (AdvanceTicks) — there is no I/O and no wall-clock wait anywhere in
 // this file.
+//
+// BUG-472 r2 finding #1 (single source of truth, GR#3): this is now the
+// ONE place that calls signalSubscriptionPump, for every return path —
+// success, rejection, AND the persist-halt short-circuit below. r1 had
+// each accepting handler call signalSubscriptionPump itself, which left
+// handleGameplay/handleInspectEntity/handleDebug (3 of 9 dispatch
+// targets) and the halt-check return silently un-signalled: once halted,
+// EVERY later command is refused at the top-of-function check before any
+// handler runs, so if that check itself never signals, NO command of any
+// Kind can ever wake the pump again and an already-subscribed client is
+// never told the sim paused. Moving the signal here, wrapping
+// dispatchCommand unconditionally, closes that structurally — a future
+// Kind added to dispatchCommand's switch cannot repeat the omission,
+// because it does not need to call signalSubscriptionPump itself at all.
+// The extra signal on paths that used to skip it (e.g. handleUnsubscribe,
+// the copy-check short-circuit) is harmless: signalSubscriptionPump is a
+// cheap, non-blocking, coalescing send (see its own doc comment) — waking
+// the pump one extra time for a rejection nobody needed to observe costs
+// one recompute, not correctness.
 func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
+	// SEC-018/astgate: identity-checked directly here too, not only inside
+	// dispatchCommand — a copy must never reach the unconditional
+	// signalSubscriptionPump() call below (e.deltaSignal is a copied
+	// channel HEADER aliasing the same underlying channel as the
+	// original, so signalling from a copy would still wake the REAL
+	// pump — harmless in effect, but this checks identity explicitly
+	// rather than relying on that being merely benign).
+	if err := e.checkNotCopied(string(cmd.CorrelationID), nil); err != nil {
+		return protocol.CommandResult{
+			CorrelationID: cmd.CorrelationID,
+			Tick:          0,
+			Accepted:      false,
+			Error:         toErrorRef(err),
+		}
+	}
+	result := e.dispatchCommand(cmd)
+	e.signalSubscriptionPump()
+	return result
+}
+
+// dispatchCommand is HandleCommand's actual decode/dispatch body, split
+// out so HandleCommand itself can wrap every return path with exactly one
+// signalSubscriptionPump call (see HandleCommand's doc comment above).
+func (e *Engine) dispatchCommand(cmd protocol.Command) protocol.CommandResult {
 	// SEC-018: identity-checked BEFORE anything else in this function,
 	// including cmd.Validate()'s own rejection path — reject() calls
 	// Clock() (now itself guarded, see engine.go), but building the
@@ -187,6 +230,22 @@ func (e *Engine) HandleCommand(cmd protocol.Command) protocol.CommandResult {
 			Accepted:      false,
 			Error:         toErrorRef(err),
 		}
+	}
+	// BUG-472 (Aaron ruling 2026-09-01, "HALT + SURFACE"): checked BEFORE
+	// cmd.Validate() and BEFORE dispatch, so a persist-halted Engine
+	// refuses EVERY command kind — including a malformed one that would
+	// otherwise have been rejected with ErrInvalidEnvelope — with the halt
+	// error instead. This preserves the STRUCTURAL gate property (one
+	// check before the switch, covering every Kind including a future one
+	// and the default branch) that r1's independent round verified: no
+	// handler can ever be reached once halted, by construction, not by
+	// convention. See persistHaltState's doc comment for why this is a
+	// lock-free atomic.Pointer read (safe on every command, any goroutine)
+	// and persistHaltResult's doc comment for why this branch never calls
+	// errs.New/Wrap itself (that already happened exactly once, at the
+	// moment the ORIGINAL append failed).
+	if e.persistHalt.Load() != nil {
+		return e.persistHaltResult(cmd)
 	}
 	if err := cmd.Validate(); err != nil {
 		return e.reject(cmd, errs.New(ErrInvalidEnvelope, "", map[string]any{"cause": err.Error()}))
@@ -243,9 +302,14 @@ func (e *Engine) handleGameplay(cmd protocol.Command, correlationID string) prot
 // handleInspectEntity, handleDebug) — journalAccepted is called from here,
 // not duplicated into each handler, so no handler can forget to journal
 // (lead-default ruling #1, FEAT-1972079852 inc3: "journal inside accept(),
-// not per-handler — simpler, ensures consistency").
+// not per-handler — simpler, ensures consistency"). BUG-472: a durable
+// append failure observed here turns this into a REJECTED CommandResult
+// instead (Aaron's "HALT + SURFACE" ruling) — see journalAccepted's doc
+// comment for the full policy.
 func (e *Engine) accept(cmd protocol.Command) protocol.CommandResult {
-	e.journalAccepted(cmd)
+	if haltResult, halted := e.journalAccepted(cmd); halted {
+		return haltResult
+	}
 	return protocol.CommandResult{
 		CorrelationID: cmd.CorrelationID,
 		Tick:          e.clockTickForResult(),
@@ -253,57 +317,223 @@ func (e *Engine) accept(cmd protocol.Command) protocol.CommandResult {
 	}
 }
 
+// persistHaltState is the ORIGINAL durable-persist failure's identity,
+// latched exactly once by latchPersistHalt (below) into e.persistHalt and
+// read by every subsequent HandleCommand call (the halt check in
+// dispatchCommand) and by EngineStatusView (subscribe.go). Immutable after
+// construction — every field is filled in BEFORE the CompareAndSwap that
+// publishes it, so a Load() that observes a non-nil *persistHaltState
+// never needs its own synchronization to read these fields safely.
+//
+// display is precomputed (captured from the ONE errs.New call
+// latchPersistHalt makes, at the moment the ORIGINAL failure is first
+// observed) rather than recomputed on every later read. This matters for
+// two reasons: (1) errs.New/Wrap unconditionally LOG every call (GR#1/
+// GR#7's own registry sink), so recomputing it per rejected command while
+// halted — which could be arbitrarily many, e.g. a client hammering
+// retries against a paused sim — would flood the log with duplicate
+// entries describing the exact same fault; (2) EngineStatusView is read
+// far more often than any real command is rejected (every subscription
+// pump wake), so it must never construct a registry error itself. Both
+// readers use these three plain fields instead. Mirrors BUG-480's
+// dirtyLogged latch (persistjournal.go), which solves the identical
+// "don't re-log an already-established, permanent condition on every
+// subsequent cadence boundary" problem for the sibling dirty flag.
+type persistHaltState struct {
+	code          string // always ErrSimulationPersistHalted (MET-E023) — kept as data, not re-derived
+	correlationID string // the ORIGINAL failed AppendJournal's correlation ID — NEVER the correlation ID of whichever later command happens to be rejected
+	display       string // precomputed (*errs.E).Display() — "[MET-E023] ... (correlation: <original-id>)", the exact copy-paste-able string Aaron's Q100011 ruling requires
+}
+
 // journalAccepted records cmd into the replay journal via the configured
 // CommandJournaler, if one is wired (WithCommandJournaler/
-// SetCommandJournaler). Aaron's engine-owns-journal DD, applied via four
-// lead-default rulings (FEAT-1972079852 inc3, Aaron not yet consulted on
-// these specific defaults — flagged here and in the dispatch report for
-// his confirm):
+// SetCommandJournaler), applying BUG-472's "HALT + SURFACE" policy (Aaron
+// ruling 2026-09-01) on a durable-append failure. Returns (zero-value,
+// false) when cmd should be accepted normally (no journaler configured, or
+// the append succeeded); returns (haltResult, true) when the append failed
+// and the CALLER (accept()) must return haltResult to its own caller
+// INSTEAD of building an Accepted result.
 //
-//  1. TIMING: called from accept() itself, i.e. AFTER the engine has
-//     decided to accept cmd. This is necessarily also after cmd's
-//     side-effects already ran for the gameplay path (handleGameplay calls
-//     e.gameplayHandler(cmd) — which applies the effect — BEFORE calling
-//     accept(); only a nil error from the handler reaches accept() at
-//     all), and after AdvanceTicks/setSpeed/etc.'s own state changes for
-//     the other kinds. There is no earlier point at which "this command
-//     was accepted" is yet known, since rejection is possible right up
-//     until the handler returns.
-//  2. SIDE-EFFECT ORDER (replay-side, not live-side): "journal-then-apply"
-//     describes how a REPLAY of this journal must behave (apply cmd's
-//     effects fresh from the recorded command, deterministically) — it
-//     does not mean the LIVE engine must journal before running the
-//     handler, which would require journaling a command before knowing it
-//     will be accepted at all.
-//  3. REJECTED COMMANDS are never journaled: reject() (below) has no
-//     equivalent call, by construction — only paths that reach accept()
-//     ever reach journalAccepted.
-//  4. ERROR POLICY: a journal WRITE failure is surfaced as a
-//     registry-coded error (MET-E021, GR#17 — errs.Wrap logs it through
-//     the registry's own log sink, which is what "surfaced" means here)
-//     rather than silently swallowed. It does NOT retroactively reject
-//     cmd: the command's side effects already ran by the time accept() is
-//     reached (see point 1), so there is no accept/reject decision left to
-//     revisit, and protocol.CommandResult.Validate requires Error to be
-//     nil whenever Accepted is true — there is no wire-level slot to carry
-//     this fault on the CommandResult even if we wanted to. The tick keeps
-//     running; this is a replay-fidelity fault, never a crash.
+// # Policy history: this supersedes MET-E021's old swallow-and-continue
+//
+// Before BUG-472, a journal-write failure here was logged (MET-E021) and
+// otherwise ignored: the command stayed Accepted and the tick kept
+// running, on the theory that a lost journal FRAME (a replay-fidelity
+// gap) is a lesser fault than aborting a live tick. The 2026-08-31 inc2
+// destructive round proved that theory wrong for durable persistence
+// specifically: a store that keeps failing SILENTLY diverges the live
+// digest from anything a later restore can reconstruct, with no signal to
+// the caller that it happened. Aaron's ruling: HALT the composition and
+// SURFACE the fault the moment it is first observed, rather than letting
+// the divergence compound silently.
+//
+// # Why the FAILING command itself is still "rejected", even though its
+// own side effects already ran
+//
+// journalAccepted only runs from accept() (see accept()'s own doc comment
+// above this type), which is only reached AFTER a command's real effects
+// have already been applied — handleGameplay calls e.gameplayHandler(cmd)
+// (which mutates build/finance/world state) BEFORE calling accept() at
+// all; AdvanceTicks/SetSpeed/Pause/Resume/etc. have likewise already
+// mutated e.clock/e.subs by the time their own handler reaches accept().
+// There is no earlier point in this synchronous call at which "will this
+// be accepted" is yet decided, so there is no way to journal-then-decide.
+//
+// Aaron's ruling explicitly chose REJECTED over inventing an
+// accepted-but-not-durable wire slot (protocol.CommandResult.Validate
+// already forbids Error alongside Accepted=true, and the ruling text says
+// a new slot is "NOT wanted"). That means the wire response the client
+// sees for THIS specific command can legitimately disagree with what the
+// live engine just did internally — a known, documented, accepted
+// consequence of a durable-persistence fault this severe: the whole point
+// of halting immediately afterward is that no FURTHER command can build on
+// top of that now only-locally-applied effect, and the only supported
+// recovery (a fresh process restored via RestoreLatestSnapshotOrGenesis,
+// BUG-480) replays only what the journal durably has, which by
+// construction never includes the dropped command either.
+//
+// # Every later command while halted
+//
+// e.persistHalt is latched (CompareAndSwap, exactly one winner) BEFORE
+// this function returns, so dispatchCommand's own halt check
+// (commands.go) refuses every subsequent command before its handler ever
+// runs — no further side effects are ever applied once halted. Reused via
+// e.persistHaltResult (never a second errs.New call) for every one of
+// those later rejections, keyed by the SAME persistHaltState this function
+// established, so every rejection while halted — no matter how much
+// later, or which later command triggered it — carries the ORIGINAL
+// failed append's code and correlation ID (Aaron's Q100011 ruling), never
+// a fresh one.
 //
 // nil e.journaler (the default for a bare NewEngine(), and for every
 // Engine in this package's own tests that does not call
 // WithCommandJournaler/SetCommandJournaler) is a documented no-op —
 // mirrors WithPhaseObserver's optional-hook shape, not
 // gameplayHandler/speed8xGate's deny-by-default shape: journaling absence
-// is not a security gate, so there is nothing to deny.
-func (e *Engine) journalAccepted(cmd protocol.Command) {
+// is not a security gate, so there is nothing to deny or halt over.
+func (e *Engine) journalAccepted(cmd protocol.Command) (haltResult protocol.CommandResult, halted bool) {
 	if e.journaler == nil {
-		return
+		return protocol.CommandResult{}, false
 	}
 	if err := e.journaler.ObserveCommand(cmd); err != nil {
-		_ = errs.Wrap(ErrJournalWriteFailed, string(cmd.CorrelationID), err, map[string]any{
-			"kind": string(cmd.Kind),
-		})
+		e.latchPersistHalt(cmd, err)
+		return e.persistHaltResult(cmd), true
 	}
+	return protocol.CommandResult{}, false
+}
+
+// latchPersistHalt is called exactly at the moment a durable
+// CommandJournaler.ObserveCommand append fails. It ALWAYS constructs the
+// two registry errors describing this specific failure (MET-E021, kept
+// for the log-level detail the original swallow policy already provided;
+// MET-E023, the new halt code) — both are real, distinct, genuine
+// failures worth their own log line even if several goroutines race this
+// call concurrently for what turns out to be the SAME underlying store
+// outage (each one truly did fail its own append). What is latched into
+// e.persistHalt, however, is exactly ONE of those constructions: the
+// first to win the CompareAndSwap(nil, ...) race becomes the process's
+// permanent persistHaltState — every later reader (dispatchCommand's
+// check, EngineStatusView) sees that SAME winner's code/correlationID/
+// display, never whichever goroutine happened to call this function last.
+//
+// This is a genuine sync/atomic CompareAndSwap on e.persistHalt (an
+// atomic.Pointer[persistHaltState], engine.go), not merely tested as if it
+// were one — BUG-472 r1's round found this distinction under-verified
+// (mutating the CAS to a plain Store did not redden the same-Kind
+// concurrency test, only a MIXED-Kind race); see
+// TestAttackBUG472_MixedKindsRacingTheLatch (attack_bug472_surface_test.go)
+// for the regression that specifically catches a future CAS→Store
+// regression.
+//
+// # Un-pause decision -- CONFIRMED permanent (Aaron 2026-09-01, Q100022)
+//
+// See ErrSimulationPersistHalted's doc comment (errors.go): permanent for
+// the process lifetime, recovery only via a fresh process restore; the
+// paired write-then-verify save requirement is FEAT-2326609714.
+func (e *Engine) latchPersistHalt(cmd protocol.Command, appendErr error) {
+	wrapped := errs.Wrap(ErrJournalWriteFailed, string(cmd.CorrelationID), appendErr, map[string]any{
+		"kind": string(cmd.Kind),
+	})
+	haltE := errs.New(ErrSimulationPersistHalted, wrapped.CorrelationID, map[string]any{
+		"originalCode": wrapped.Code,
+		"kind":         string(cmd.Kind),
+	})
+	e.persistHalt.CompareAndSwap(nil, &persistHaltState{
+		code:          haltE.Code,
+		correlationID: haltE.CorrelationID,
+		display:       haltE.Display(),
+	})
+}
+
+// persistHaltResult builds the rejected CommandResult for cmd from the
+// CURRENTLY latched e.persistHalt state. It deliberately never calls
+// errs.New/Wrap itself (see persistHaltState's doc comment for why:
+// avoiding a duplicate registry-log entry, and avoiding any registry
+// lookup at all, for every command rejected while already halted) — every
+// field it needs was already computed once, by latchPersistHalt, at the
+// moment the ORIGINAL failure was first observed.
+//
+// Callers: dispatchCommand's halt check (this cmd is a LATER, unrelated
+// command arriving after the process was already halted) and
+// journalAccepted (this cmd IS the one whose own append just failed and
+// triggered the halt). Both read e.persistHalt.Load() AFTER it is
+// guaranteed non-nil — dispatchCommand checks Load()!=nil itself before
+// calling this; journalAccepted calls latchPersistHalt (unconditionally
+// CompareAndSwap-ing a non-nil value) immediately before this, so the
+// Load() below can never observe nil in practice. Guarded anyway (GR#1:
+// never assume a call that could return zero values cannot); the fallback
+// degrades to reject()'s normal errs.New-backed path rather than
+// panicking or returning a malformed nil-Error CommandResult, which
+// protocol.CommandResult.Validate would reject as
+// ErrRejectedResultMissingError.
+func (e *Engine) persistHaltResult(cmd protocol.Command) protocol.CommandResult {
+	state := e.persistHalt.Load()
+	if state == nil {
+		// Unreachable via either real call site (see doc comment above) —
+		// defensive fallback only, so this can never construct a wire
+		// CommandResult with Accepted=false and Error=nil. originalCode is
+		// supplied as "unknown" (never omitted) so this still renders
+		// without a literal {originalCode} token — the errs render-gate
+		// scans every call site statically, independent of reachability.
+		return e.reject(cmd, errs.New(ErrSimulationPersistHalted, string(cmd.CorrelationID), map[string]any{"kind": string(cmd.Kind), "originalCode": "unknown"}))
+	}
+	return protocol.CommandResult{
+		CorrelationID: cmd.CorrelationID,
+		Tick:          e.clockTickForResult(),
+		Accepted:      false,
+		Error:         &protocol.ErrorRef{Code: state.code, Display: state.display},
+	}
+}
+
+// PersistHalted reports whether BUG-472's persist-halt has latched for
+// this Engine and, if so, the registry code and ORIGINAL correlation ID of
+// the durable-persist failure that caused it (Aaron's Q100011 ruling: the
+// caller/client layer needs the ACTUAL code+correlation, not a generic
+// message). ok is false, with both strings empty, for an Engine that has
+// never halted — the default for a bare NewEngine() and for every Engine
+// until its first ObserveCommand failure, if any.
+//
+// This is the direct, synchronous counterpart to EngineStatusView's
+// PersistHalted/PersistHaltError fields (subscribe.go) — that pair
+// reaches a subscribed client proactively, over the existing delta-push
+// path, with no further command required; this method is for a caller
+// (metroserve's tick driver, a test, a health check) that already holds
+// *Engine and wants a synchronous, allocation-free check without going
+// through the subscription machinery at all. Both read the SAME
+// underlying e.persistHalt — no second source of truth (GR#3).
+func (e *Engine) PersistHalted() (code, correlationID string, ok bool) {
+	// SEC-018/astgate: guarded directly like Clock()/HookCount() — this is
+	// a real exported entry point external callers (metroserve's tick
+	// driver) hold a bare *Engine and call directly, not merely reachable
+	// through an already-guarded internal path.
+	if err := e.checkNotCopied("", nil); err != nil {
+		return "", "", false
+	}
+	state := e.persistHalt.Load()
+	if state == nil {
+		return "", "", false
+	}
+	return state.code, state.correlationID, true
 }
 
 func (e *Engine) reject(cmd protocol.Command, err error) protocol.CommandResult {
@@ -353,9 +583,10 @@ func (e *Engine) handleAdvanceTicks(cmd protocol.Command, correlationID string) 
 	if err := e.AdvanceTicks(correlationID, payload.N); err != nil {
 		return e.reject(cmd, err)
 	}
-	result := e.accept(cmd)
-	e.signalSubscriptionPump()
-	return result
+	// BUG-472 r2 finding #1: signalSubscriptionPump is now called exactly
+	// once, by HandleCommand itself, after every dispatchCommand return —
+	// see HandleCommand's doc comment. Handlers no longer call it here.
+	return e.accept(cmd)
 }
 
 func (e *Engine) handleSetSpeed(cmd protocol.Command, correlationID string) protocol.CommandResult {
@@ -383,9 +614,8 @@ func (e *Engine) handleSetSpeed(cmd protocol.Command, correlationID string) prot
 	e.mu.Lock()
 	e.clock.setSpeed(speed)
 	e.mu.Unlock()
-	result := e.accept(cmd)
-	e.signalSubscriptionPump()
-	return result
+	// BUG-472 r2 finding #1: see handleAdvanceTicks's identical note above.
+	return e.accept(cmd)
 }
 
 // checkSpeed8xAllowed is BUG-009's enforcement point: Speed8xDebug is
@@ -430,9 +660,8 @@ func (e *Engine) handlePause(cmd protocol.Command) protocol.CommandResult {
 	e.mu.Lock()
 	e.clock.setPaused(true)
 	e.mu.Unlock()
-	result := e.accept(cmd)
-	e.signalSubscriptionPump()
-	return result
+	// BUG-472 r2 finding #1: see handleAdvanceTicks's identical note above.
+	return e.accept(cmd)
 }
 
 // handleResume resumes at the previously set speed. Idempotent.
@@ -444,9 +673,8 @@ func (e *Engine) handleResume(cmd protocol.Command) protocol.CommandResult {
 	e.mu.Lock()
 	e.clock.setPaused(false)
 	e.mu.Unlock()
-	result := e.accept(cmd)
-	e.signalSubscriptionPump()
-	return result
+	// BUG-472 r2 finding #1: see handleAdvanceTicks's identical note above.
+	return e.accept(cmd)
 }
 
 func (e *Engine) handleSubscribe(cmd protocol.Command, correlationID string) protocol.CommandResult {
@@ -457,13 +685,12 @@ func (e *Engine) handleSubscribe(cmd protocol.Command, correlationID string) pro
 	if _, err := e.subs.Subscribe(payload.ViewName, payload.Params, cmd.CorrelationID, correlationID); err != nil {
 		return e.reject(cmd, err)
 	}
-	result := e.accept(cmd)
 	// The subscription's first delta is pushed asynchronously off this
 	// call path — see subscribe.go's SubscriptionServer.publishInitial
-	// and AC-7's "not inline in phase execution" requirement, which
-	// this generalises to "not inline in command handling" either.
-	e.signalSubscriptionPump()
-	return result
+	// and AC-7's "not inline in phase execution" requirement, which this
+	// generalises to "not inline in command handling" either.
+	// BUG-472 r2 finding #1: see handleAdvanceTicks's identical note above.
+	return e.accept(cmd)
 }
 
 func (e *Engine) handleUnsubscribe(cmd protocol.Command, correlationID string) protocol.CommandResult {

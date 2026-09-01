@@ -33,16 +33,18 @@ func TestAttackBUG480_NewRegistryCodesRenderWithoutLiteralTokens(t *testing.T) {
 	dirtyCity := persist.CityKey{TenantID: "t", CityID: "render-g813-480"}
 	failing := &nthAppendFailStore{Store: mem, failCall: 2}
 	e1, comp1 := buildPersistedComposition(t, failing, dirtyCity)
-	advanceViaCommand(t, e1, cadence)
+	advanceViaCommand(t, e1, cadence) // call #1 (ok): tick=4.
 	if _, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, dirtyCity, cadence); err != nil || !ok {
 		t.Fatalf("seed snapshot: ok=%v err=%v", ok, err)
 	}
-	advanceViaCommand(t, e1, cadence) // append FAILS -> dirty latches.
-	advanceViaCommand(t, e1, cadence)
+	// call #2 FAILS and HALTS the Engine (BUG-472's "HALT + SURFACE" ruling)
+	// -- its own effect still applies, landing exactly on the next cadence
+	// boundary (tick=8); no third command can ever run on e1 afterward.
+	advanceViaCommandExpectHalt(t, e1, cadence)
 	if _, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, dirtyCity, cadence); err != nil || ok {
 		t.Fatalf("dirty boundary: ok=%v err=%v, want the refusal", ok, err)
 	}
-	assertRendered(t, ErrSnapshotRefusedDirty, dirtyCity.CityID, []string{dirtyCity.CityID, "12"})
+	assertRendered(t, ErrSnapshotRefusedDirty, dirtyCity.CityID, []string{dirtyCity.CityID, "8"})
 
 	// --- MET-G812: a candidate skipped during the restore walk-back.
 	skipCity := persist.CityKey{TenantID: "t", CityID: "render-g812-480"}

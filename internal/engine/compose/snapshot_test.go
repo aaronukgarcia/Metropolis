@@ -48,6 +48,35 @@ func advanceViaCommand(t *testing.T, e *core.Engine, n int64) {
 	}
 }
 
+// advanceViaCommandExpectHalt drives ONE AdvanceTicks{N:n} command that this
+// test's fault-injecting store is deliberately about to fail the durable
+// append for -- BUG-472's "HALT + SURFACE" ruling (Aaron, 2026-09-01,
+// superseding the original swallow-and-continue policy every BUG-480 test in
+// this file was originally written against) means this specific command's
+// own tick effect still applies (journalAccepted's doc comment,
+// internal/engine/core/commands.go, explains why that ordering is
+// unavoidable) but the wire CommandResult is REJECTED with
+// core.ErrSimulationPersistHalted, and the Engine is now permanently halted:
+// no FURTHER command of any kind will ever be accepted on e again. Callers
+// use this exactly once per Engine, for the one command whose append is
+// engineered to fail.
+func advanceViaCommandExpectHalt(t *testing.T, e *core.Engine, n int64) {
+	t.Helper()
+	cmd := protocol.Command{
+		ProtocolVersion: protocol.ProtocolVersion,
+		CorrelationID:   protocol.NewCorrelationID(),
+		Kind:            protocol.KindAdvanceTicks,
+		Payload:         protocol.AdvanceTicksPayload{N: n},
+	}
+	res := e.HandleCommand(cmd)
+	if res.Accepted {
+		t.Fatalf("AdvanceTicks(%d) command accepted, want rejected (BUG-472 halt policy) -- the fault-injecting store did not fail this call as expected", n)
+	}
+	if res.Error == nil || res.Error.Code != core.ErrSimulationPersistHalted {
+		t.Fatalf("AdvanceTicks(%d) rejection = %+v, want code %s", n, res.Error, core.ErrSimulationPersistHalted)
+	}
+}
+
 // buildPersistedComposition wires a fresh composition with durable
 // persistence enabled (Deps.PersistStore/PersistCity), so every accepted
 // command — gameplay AND AdvanceTicks — is durably journaled via
@@ -548,9 +577,9 @@ func (s *failingAppendStore) AppendJournal(ctx context.Context, city persist.Cit
 
 // TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest is
 // BUG-480 deliverable (a)'s headline proof: given a newest snapshot whose
-// recorded tick cannot be reconciled with the durable journal (the class
-// BUG-472's swallowed-append policy produces), restore WALKS BACK to the
-// next-older, still-consistent snapshot instead of bricking forever with
+// recorded tick cannot be reconciled with the durable journal (the class a
+// lost journal frame produces), restore WALKS BACK to the next-older,
+// still-consistent snapshot instead of bricking forever with
 // ErrSnapshotTailShort.
 //
 // The inconsistent snapshot #2 is manufactured by calling
@@ -572,11 +601,16 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 	// advanceViaCommand sends ONE AdvanceTicks{N:n} command per call, so
 	// each call below is exactly one AppendJournal attempt regardless of
 	// how many ticks n itself advances. failCall targets the SECOND call —
-	// the very first tick advance AFTER the good snapshot at tick=cadence
-	// — so the durable journal is short by exactly that one frame from
-	// that point on, while comp1's own live engine (BUG-472: the command
-	// stays ACCEPTED regardless of the journal-write failure) keeps
-	// advancing normally.
+	// the very first tick advance AFTER the good snapshot at tick=cadence.
+	// Under BUG-472's "HALT + SURFACE" ruling (Aaron, 2026-09-01,
+	// superseding the swallow-and-continue policy this test was originally
+	// written against), that second command's OWN effect still applies
+	// (journalAccepted's doc comment, engine/core/commands.go) but it is
+	// REJECTED and the Engine is now PERMANENTLY halted -- there is no
+	// third command to drive further, so the halting command's own N is
+	// sized to land exactly on the next cadence boundary (2*cadence) in
+	// one step, matching what the old two-command (1 + cadence-1) sequence
+	// used to produce.
 	failing := &failingAppendStore{Store: mem, failCall: 2}
 
 	e1, comp1 := buildPersistedComposition(t, failing, city)
@@ -585,8 +619,9 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 		t.Fatalf("snapshot #1 (good, tick=%d): ok=%v err=%v", cadence, ok, err)
 	}
 
-	advanceViaCommand(t, e1, 1)         // call #2 -- FAILS (swallowed), tick=5 live, journal stuck at 4.
-	advanceViaCommand(t, e1, cadence-1) // call #3 (ok): tick=8 live, journal reconstructs only to 7.
+	// call #2 -- FAILS and HALTS the Engine; its own tick effect (advancing
+	// by cadence) still applies, journal stuck at 4.
+	advanceViaCommandExpectHalt(t, e1, cadence)
 	liveTick, err := e1.Clock()
 	if err != nil {
 		t.Fatalf("Clock (live): %v", err)
@@ -597,7 +632,8 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 
 	// Manufacture the inconsistent newest snapshot directly (see doc
 	// comment above): it records comp1's CURRENT live tick (8), which the
-	// durable journal (short by the swallowed frame) can never reach.
+	// durable journal (short by the halting command's own frame) can never
+	// reach.
 	badData, err := comp1.buildSnapshotBytes()
 	if err != nil {
 		t.Fatalf("buildSnapshotBytes: %v", err)
@@ -615,8 +651,8 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 	}
 
 	// The honest ground truth: replaying ONLY the commands that actually
-	// persisted (the swallowed one is genuinely, permanently lost —
-	// BUG-472's accepted policy, untouched by this fix) from genesis. Same
+	// persisted (the halting command's own frame is genuinely, permanently
+	// lost, and nothing after it was ever attempted) from genesis. Same
 	// world seed as comp1 (roundTripSeed, via buildPersistedComposition) —
 	// Wire's own construction (seedCitizenCount etc.) is seed-derived and
 	// genesis replay never goes through Load, so a mismatched seed here
@@ -638,8 +674,8 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 	if err != nil {
 		t.Fatalf("Clock (genesis reference): %v", err)
 	}
-	if refClock.Tick() != 2*cadence-1 {
-		t.Fatalf("precondition: genesis-replay reference tick = %d, want %d (one tick short of live, the swallowed frame)", refClock.Tick(), 2*cadence-1)
+	if refClock.Tick() != cadence {
+		t.Fatalf("precondition: genesis-replay reference tick = %d, want %d (only call #1 ever persisted, the halting command's frame)", refClock.Tick(), cadence)
 	}
 	refDigest := compGenesis.StateDigest()
 
@@ -703,12 +739,16 @@ func TestRestoreLatestSnapshotOrGenesis_WalksBackPastTailInconsistentNewest(t *t
 // failed durable AppendJournal, MaybeSnapshotEvery refuses every subsequent
 // cadence-boundary snapshot for the REST OF THIS PROCESS (dirty never
 // clears — see persistjournal.go's dirty field doc comment) — logging
-// ErrSnapshotRefusedDirty exactly ONCE, not once per boundary — so no
-// FUTURE snapshot can ever repeat the tail-inconsistency class the previous
-// test walks back from. A restart (a fresh journaler/composition) then
-// restores cleanly from the last known-good snapshot plus its consistent
-// tail — no walk-back needed, because no bad snapshot was ever produced in
-// the first place.
+// ErrSnapshotRefusedDirty exactly ONCE, not once per check — so no FUTURE
+// snapshot can ever repeat the tail-inconsistency class the previous test
+// walks back from. Since BUG-472's later "HALT + SURFACE" ruling means the
+// failing command also permanently halts the Engine (no further command can
+// ever run on it), "every subsequent boundary" is exercised here as
+// repeated MaybeSnapshotEvery calls at the one halted tick rather than by
+// advancing further ticks — see advanceViaCommandExpectHalt's doc comment.
+// A restart (a fresh journaler/composition) then restores cleanly from the
+// last known-good snapshot plus its consistent tail — no walk-back needed,
+// because no bad snapshot was ever produced in the first place.
 func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
 	ctx := context.Background()
 	const cadence = int64(4)
@@ -722,23 +762,28 @@ func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
 		t.Fatalf("snapshot #1 (good): ok=%v err=%v", ok, err)
 	}
 
-	// call #2 -- FAILS (swallowed), latches dirty. Advances a full cadence
-	// (rather than a single tick, as the walk-back test above does) purely
-	// so every later boundary below still lands on an exact multiple of
-	// cadence — this test's assertions care about the dirty gate holding
-	// across boundaries, not about exercising a mid-cadence swallow.
-	advanceViaCommand(t, e1, cadence) // tick=8 live, journal stuck at 4.
+	// call #2 -- FAILS and HALTS the Engine (BUG-472's "HALT + SURFACE"
+	// ruling, Aaron 2026-09-01, superseding the swallow-and-continue policy
+	// this test was originally written against): its own tick effect
+	// (advancing a full cadence, landing tick=8 exactly on the NEXT
+	// boundary) still applies, journal stuck at 4. There is no third
+	// command to drive after this -- every further command on e1 is
+	// refused outright -- so "three more cadence boundaries" below is
+	// re-expressed as three more MaybeSnapshotEvery calls AT THE SAME
+	// halted tick (still == 2*cadence, still a cadence boundary every
+	// time ShouldSnapshotEvery evaluates it, since that check is a pure
+	// function of tick/cadence with no per-call state), which equally
+	// exercises "the dirty gate holds across repeated boundary checks,
+	// logging exactly once" without requiring impossible further ticks.
+	advanceViaCommandExpectHalt(t, e1, cadence) // tick=8 live, journal stuck at 4.
 
-	// THREE more cadence boundaries, each of which would (pre-BUG-480) have
-	// written a new snapshot. Every single one must be refused.
 	for i := 0; i < 3; i++ {
-		advanceViaCommand(t, e1, cadence)
 		id, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, city, cadence)
 		if err != nil {
-			t.Fatalf("MaybeSnapshotEvery (dirty, boundary %d): unexpected error %v (refusal must be ok=false,err=nil, not a fault)", i, err)
+			t.Fatalf("MaybeSnapshotEvery (dirty, check %d): unexpected error %v (refusal must be ok=false,err=nil, not a fault)", i, err)
 		}
 		if ok {
-			t.Fatalf("MaybeSnapshotEvery (dirty, boundary %d): ok=true, id=%q -- wrote a snapshot while dirty", i, id)
+			t.Fatalf("MaybeSnapshotEvery (dirty, check %d): ok=true, id=%q -- wrote a snapshot while dirty", i, id)
 		}
 	}
 
@@ -747,11 +792,11 @@ func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
 		t.Fatalf("ListSnapshots: %v", err)
 	}
 	if len(ids) != 1 {
-		t.Fatalf("store holds %d snapshots after the dirty journaler crossed 3 more cadence boundaries, want exactly 1 (only the pre-swallow snapshot) -- the dirty gate did not hold", len(ids))
+		t.Fatalf("store holds %d snapshots after 3 more dirty-gate checks at the halted boundary, want exactly 1 (only the pre-swallow snapshot) -- the dirty gate did not hold", len(ids))
 	}
 
 	// Exactly ONE ErrSnapshotRefusedDirty entry for this city, despite 3
-	// refused boundaries -- the "log once" requirement.
+	// refused checks -- the "log once" requirement.
 	refusalCount := 0
 	for _, entry := range errs.Recent() {
 		if entry.Code != ErrSnapshotRefusedDirty {
@@ -781,11 +826,10 @@ func TestMaybeSnapshotEvery_DirtyGateRefusesAfterSwallowedAppend(t *testing.T) {
 	if !usedSnapshot {
 		t.Fatal("usedSnapshot = false, want true")
 	}
-	// journal-reconstructable max = cadence (snapshot) + 3*cadence (three
-	// clean boundary crossings after the swallow) = 4*cadence = one
-	// cadence short of live (which advanced 1+3*cadence beyond the
-	// snapshot, i.e. one tick further, from the swallowed command).
-	wantTick := cadence + 3*cadence
+	// journal-reconstructable max = cadence (call #1's own frame, the ONLY
+	// one that ever persisted) -- the halting command's frame (call #2,
+	// which would have advanced the journal to 2*cadence) never landed.
+	wantTick := cadence
 	if tick != wantTick {
 		t.Fatalf("restored tick = %d, want %d", tick, wantTick)
 	}

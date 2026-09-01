@@ -21,10 +21,12 @@ import (
 // it. Sequence, materialised end to end against a real on-disk
 // persist.DiskStore across three simulated process lifetimes:
 //
-//	P1: snapshot at a clean boundary -> a swallowed AppendJournal (BUG-472
-//	    policy: the command stays ACCEPTED, so the live engine tick runs
-//	    permanently AHEAD of what the journal can reconstruct) -> the dirty
-//	    latch refuses every later snapshot.
+//	P1: snapshot at a clean boundary -> a failed AppendJournal (BUG-472's
+//	    "HALT + SURFACE" ruling, Aaron 2026-09-01: the failing command's own
+//	    effect still applies, but it is REJECTED and the Engine permanently
+//	    halts -- superseding this test's original swallow-and-continue
+//	    premise, where the command stayed ACCEPTED and further commands kept
+//	    running) -> the dirty latch refuses every later snapshot check.
 //	P2: the process restarts. A brand-new journaler means dirty is GONE.
 //	    The city rehydrates, then keeps ticking and crosses a cadence
 //	    boundary — writing a NEW newest snapshot with no latch to stop it.
@@ -59,7 +61,7 @@ func TestAttackBUG480_RestartAfterDirtyLatchDoesNotRebrick(t *testing.T) {
 		return d
 	}
 
-	// ---- P1: good snapshot, then a swallowed append, then refusals -----
+	// ---- P1: good snapshot, then a halting append, then refusals -------
 	disk1 := newDisk()
 	failing := &nthAppendFailStore{Store: disk1, failCall: 2}
 	e1 := core.NewEngine(core.WithWorldSeed(roundTripSeed), core.WithPoolSize(1))
@@ -71,13 +73,16 @@ func TestAttackBUG480_RestartAfterDirtyLatchDoesNotRebrick(t *testing.T) {
 	if _, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, city, cadence); err != nil || !ok {
 		t.Fatalf("P1 snapshot at tick %d: ok=%v err=%v", cadence, ok, err)
 	}
-	advanceViaCommand(t, e1, 1) // append #2 FAILS (swallowed) -> live 5, journal 4.
-	advanceViaCommand(t, e1, 3) // append #3 ok            -> live 8, journal 7.
+	// append #2 FAILS and HALTS the Engine (BUG-472's "HALT + SURFACE"
+	// ruling) -- its own effect (advancing a full cadence) still applies,
+	// landing tick=8 exactly on the next boundary, journal stuck at 4.
+	// There is no third command to drive on e1 after this.
+	advanceViaCommandExpectHalt(t, e1, cadence) // live 8, journal 4.
 	// Live tick 8 IS a cadence boundary, so pre-BUG-480 this would have
-	// written a snapshot recording tick 8 that the journal (total 7) can
+	// written a snapshot recording tick 8 that the journal (total 4) can
 	// never reach. The dirty latch must refuse it.
 	if _, ok, err := comp1.MaybeSnapshotEvery(ctx, failing, city, cadence); err != nil || ok {
-		t.Fatalf("P1 boundary after swallow: ok=%v err=%v, want ok=false err=nil (dirty gate must refuse)", ok, err)
+		t.Fatalf("P1 boundary after halt: ok=%v err=%v, want ok=false err=nil (dirty gate must refuse)", ok, err)
 	}
 	if ids, err := disk1.ListSnapshots(ctx, city); err != nil || len(ids) != 1 {
 		t.Fatalf("P1 end: %d snapshots (err=%v), want exactly 1", len(ids), err)
@@ -100,16 +105,17 @@ func TestAttackBUG480_RestartAfterDirtyLatchDoesNotRebrick(t *testing.T) {
 	if !usedSnapshot {
 		t.Fatal("P2: usedSnapshot = false, want true (the P1 snapshot is clean and must be used)")
 	}
-	// The restored tick is derived from the JOURNAL (4+3), NOT from P1's
-	// live tick (8) — the swallowed command's tick is honestly lost. This
-	// is the property that stops the skew from compounding across restarts.
-	if wantTick := cadence + 3; tick2 != wantTick {
-		t.Fatalf("P2 restored tick = %d, want %d (journal-reconstructable, one tick behind P1 live) -- if this equals P1 live tick the skew was silently carried forward", tick2, wantTick)
+	// The restored tick is derived from the JOURNAL (call #1's frame only,
+	// 4), NOT from P1's live tick (8) — the halting command's own frame is
+	// honestly lost. This is the property that stops the skew from
+	// compounding across restarts.
+	if wantTick := cadence; tick2 != wantTick {
+		t.Fatalf("P2 restored tick = %d, want %d (journal-reconstructable, one command behind P1 live) -- if this equals P1 live tick the skew was silently carried forward", tick2, wantTick)
 	}
 
 	// Now tick past the next cadence boundary with a HEALTHY store: a new
 	// snapshot is written, unguarded by any latch.
-	advanceViaCommand(t, e2, 1) // live 8, journal total 8.
+	advanceViaCommand(t, e2, cadence) // live 8, journal total 8.
 	id2, ok, err := comp2.MaybeSnapshotEvery(ctx, guard2, city, cadence)
 	if err != nil || !ok {
 		t.Fatalf("P2 snapshot after restart: ok=%v err=%v, want a snapshot to be written (a fresh journaler is not dirty)", ok, err)

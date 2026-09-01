@@ -658,7 +658,7 @@ func buildCity(rootCtx, buildCtx context.Context, store persist.Store, key persi
 	// reused unchanged by tickLoop below exactly as pre-inc3b.
 	correlationID := string(protocol.NewCorrelationID())
 	loopDone := startCommandLoop(ctx, e, transport, comp, store, key, snapshotEvery, correlationID, logw)
-	tickDone := tickLoop(ctx, transport, tickInterval, correlationID)
+	tickDone := tickLoop(ctx, e, transport, tickInterval, correlationID)
 
 	return &runningCity{
 		engine:    e,

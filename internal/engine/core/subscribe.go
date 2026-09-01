@@ -82,6 +82,22 @@ type EngineStatusView struct {
 	Speed   int            `json:"speed"`
 	Paused  bool           `json:"paused"`
 	Modules []ModuleStatus `json:"modules"`
+
+	// PersistHalted/PersistHaltError are BUG-472's "SURFACE" half (Aaron
+	// ruling 2026-09-01, Q100011 follow-up): once a durable-persist
+	// journal append fails, this pair flips permanently and is pushed
+	// PROACTIVELY to every subscriber of this view the next time the
+	// subscription pump wakes (HandleCommand's single signalSubscriptionPump
+	// call, commands.go — BUG-472 r2 finding #1 fixed this to fire on
+	// EVERY command, including the halt-check short-circuit, so a client
+	// subscribed before the halt is told even if it never sends another
+	// command itself). PersistHaltError carries the ORIGINAL failed
+	// append's registry code and correlation ID, copy-paste-able verbatim
+	// (Aaron's "the player must see the actual code" ruling) — never a
+	// fresh one minted per view read (see persistHaltState's doc comment,
+	// commands.go, for why the Display string is precomputed once).
+	PersistHalted    bool               `json:"persistHalted"`
+	PersistHaltError *protocol.ErrorRef `json:"persistHaltError,omitempty"`
 }
 
 // ModuleStatus is one registry.ModuleEntry's projection into the
@@ -117,13 +133,25 @@ func (e *Engine) EngineStatusView() EngineStatusView {
 	for i, m := range entries {
 		modules[i] = ModuleStatus{Key: m.Key, Status: string(m.Status), Health: string(m.Health)}
 	}
-	return EngineStatusView{
+	view := EngineStatusView{
 		Tick:    c.Tick(),
 		Month:   c.Month(),
 		Speed:   int(c.Speed()),
 		Paused:  c.Paused(),
 		Modules: modules,
 	}
+	// BUG-472: reads the SAME e.persistHalt Engine.PersistHalted() reads —
+	// no second source of truth (GR#3) — and never constructs a fresh
+	// registry error (the precomputed display, latched once by
+	// latchPersistHalt, is reused verbatim; see persistHaltState's doc
+	// comment, commands.go, for why: this method is called on every
+	// subscription pump wake, far more often than any command is
+	// rejected, so it must never flood errs.Recent()).
+	if state := e.persistHalt.Load(); state != nil {
+		view.PersistHalted = true
+		view.PersistHaltError = &protocol.ErrorRef{Code: state.code, Display: state.display}
+	}
+	return view
 }
 
 // engineStatusViewPatch is "engine.status"'s ViewPatchFunc (FEAT-208),

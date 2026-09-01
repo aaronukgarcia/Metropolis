@@ -25,10 +25,18 @@ import (
 // command that the durable Store failed to persist MUST be visible, never
 // swallowed. So ObserveCommand returns the AppendJournal error rather than
 // logging-and-continuing — aligned with GR#27's fail-closed capture
-// principle. engine.core's journalAccepted (commands.go) already surfaces a
-// journaler error through the registry (MET-E021) rather than crashing the
-// tick, so a durable-persist failure degrades loudly at the seam this
-// adapter sits on, exactly as intended.
+// principle. engine.core's journalAccepted (commands.go) surfaces a
+// journaler error through the registry (MET-E021) AND — per BUG-472's
+// later "HALT + SURFACE" ruling (Aaron, 2026-09-01), which supersedes this
+// package's original swallow-and-continue policy — rejects the failing
+// command and permanently halts the Engine (MET-E023,
+// ErrSimulationPersistHalted) rather than crashing the tick. A
+// durable-persist failure degrades loudly at the seam this adapter sits
+// on, exactly as intended; this adapter's own dirty/dirtyLogged latches
+// (below) are orthogonal to that halt — they exist for snapshot.go's
+// MaybeSnapshotEvery gate, which must never write a snapshot for a city
+// whose journal is now permanently missing a frame, independent of
+// whatever engine.core does with the command's own wire result.
 
 // persistCommandJournaler wraps an inner core.CommandJournaler (never
 // replaces it — the in-memory replay.Recorder still records every command
@@ -64,11 +72,19 @@ type persistCommandJournaler struct {
 	// constructor to accept a caller ctx without changing this seam's shape.
 	ctx context.Context
 
-	// dirty latches true the FIRST time store.AppendJournal fails (BUG-472's
-	// swallow class: engine.core's journalAccepted logs MET-E021 and keeps
-	// the command accepted regardless of what ObserveCommand returns here,
-	// so the command's state effect is live but its journal frame is
-	// missing). It NEVER clears for the process lifetime (BUG-480's
+	// dirty latches true the FIRST time store.AppendJournal fails. Under
+	// BUG-472's later "HALT + SURFACE" ruling (2026-09-01, superseding
+	// this field's original swallow-and-continue rationale), engine.core's
+	// journalAccepted now REJECTS the failing command and permanently
+	// halts the Engine rather than keeping it accepted — but the command's
+	// own state effect had already run before that decision (journalAccepted's
+	// doc comment, commands.go, explains why that ordering is unavoidable),
+	// so the journal frame is still permanently missing for whatever DID
+	// apply, exactly as before. dirty is this adapter's own independent
+	// record of that fact, for snapshot.go's gate below — it does not need
+	// to agree with, or even know about, engine.core's own persistHalt
+	// latch (two different consumers of the same underlying fault). It
+	// NEVER clears for the process lifetime (BUG-480's
 	// deliverable (b) design ruling): a snapshot taken after a lost command
 	// can never be proven tail-consistent with the journal again — the
 	// journal's own AdvanceTicks total is now permanently short of what the
@@ -148,9 +164,10 @@ func (p *persistCommandJournaler) ObserveCommand(cmd protocol.Command) error {
 	if err := p.store.AppendJournal(p.ctx, p.city, data); err != nil {
 		// BUG-480 deliverable (b): latch dirty BEFORE returning, so any
 		// caller observing this failure (including engine.core's own
-		// journalAccepted, which swallows this exact error per BUG-472's
-		// policy — untouched here) has already made the dirty state visible
-		// to snapshot.go's MaybeSnapshotEvery by the time this call returns.
+		// journalAccepted, which now rejects the command and halts the
+		// Engine on this exact error per BUG-472's "HALT + SURFACE" ruling
+		// — untouched here) has already made the dirty state visible to
+		// snapshot.go's MaybeSnapshotEvery by the time this call returns.
 		p.dirty.Store(true)
 		return err
 	}

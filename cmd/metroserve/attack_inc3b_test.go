@@ -475,27 +475,35 @@ func TestAttackInc3b_ConcurrentProducersRestoreExact(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestAttackInc3b_SwallowedJournalAppendAtBoundary is BUG-480's flipped
-// regression: it used to DOCUMENT that a swallowed journal append (BUG-472's
-// policy) landing at the very tick a snapshot cadence boundary fires could
-// leave a snapshot recorded AHEAD of what the journal's AdvanceTicks frames
-// sum to, bricking every future restore for that city with a PERMANENT
-// ErrSnapshotTailShort (compose.RestoreLatestSnapshotOrGenesis always picked
-// the newest snapshot with no fallback).
+// regression: it used to DOCUMENT that a swallowed journal append (the
+// original BUG-472 swallow-and-continue policy) landing at the very tick a
+// snapshot cadence boundary fires could leave a snapshot recorded AHEAD of
+// what the journal's AdvanceTicks frames sum to, bricking every future
+// restore for that city with a PERMANENT ErrSnapshotTailShort
+// (compose.RestoreLatestSnapshotOrGenesis always picked the newest snapshot
+// with no fallback).
 //
 // BUG-480 shipped two complementary fixes and this test now proves BOTH,
 // live, through the real production wiring (startCommandLoop /
-// wireAndRehydrate — no compose-package white-box access):
+// wireAndRehydrate — no compose-package white-box access). It has been
+// UPDATED for BUG-472's later "HALT + SURFACE" ruling (Aaron, 2026-09-01),
+// which supersedes the swallow-and-continue policy this test's name still
+// refers to: a failing durable append now REJECTS that command and
+// permanently halts the Engine, rather than staying Accepted and letting
+// the tick keep running -- so this test drives ticks ONE AT A TIME (not
+// via the shared attackDriveTicks helper, which requires every tick to be
+// Accepted) up to and including the halting one, then stops, since no
+// further tick is possible on this Engine from that point on.
 //
 //  1. deliverable (b), the JOURNAL-DIRTY GATE: MaybeSnapshotEvery refuses to
 //     write a snapshot once its journaler has observed a failed durable
 //     append (persistCommandJournaler.dirty) — including at the EXACT tick
 //     the failure itself occurred, since the gate is checked synchronously
-//     on the same goroutine right after journalAccepted's swallow. This
+//     on the same goroutine right after journalAccepted's halt. This
 //     closes the specific live race the pre-fix test documented: the
 //     scenario "a bad snapshot gets written at the very boundary the
-//     swallow happens on" can no longer arise in-process, so this test
-//     asserts NO snapshot is ever taken for this city (ids stays empty)
-//     rather than skipping when that turns out to be the case.
+//     failure happens on" can no longer arise in-process, so this test
+//     asserts NO snapshot is ever taken for this city (ids stays empty).
 //  2. deliverable (a), WALK-BACK: even with (b) closing the live race, a
 //     restart must still restore correctly with NO durable snapshot at all
 //     for this city (RestoreLatestSnapshotOrGenesis's pre-existing
@@ -511,14 +519,61 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 		t.Fatalf("NewDiskStore: %v", err)
 	}
 	// Fail the 4th append: the AdvanceTicks that lands exactly on tick 4, the
-	// first cadence boundary. Its state effect happens (BUG-472, untouched);
-	// its journal frame does not — and BUG-480's dirty gate must now refuse
-	// the tick-4 snapshot itself, not just some later one.
+	// first cadence boundary. Its state effect happens (journalAccepted's
+	// doc comment, engine.core/commands.go, explains why that ordering is
+	// unavoidable even under the HALT policy); its journal frame does not —
+	// and BUG-480's dirty gate must refuse the tick-4 snapshot itself, not
+	// just some later one. Every command after this one is refused outright
+	// (BUG-472 halt), so this drives exactly `cadence` single-tick commands:
+	// the first cadence-1 succeed, the cadence-th is the halting one.
 	failing := &attackFailingAppendStore{Store: disk, failCall: 4}
 
-	liveDigest, tick := attackDriveTicks(t, failing, city, cadence, 2*cadence)
-	if tick != 2*cadence {
-		t.Fatalf("engine tick %d, want %d", tick, 2*cadence)
+	e := newEngine()
+	comp, err := wireAndRehydrate(context.Background(), e, failing, city, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("wireAndRehydrate (live): %v", err)
+	}
+	transport := protocol.NewInProcTransport(
+		protocol.DefaultCommandBuffer, protocol.DefaultResultBuffer,
+		protocol.DefaultEventBuffer, protocol.DefaultDeltaBuffer,
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	loopDone := startCommandLoop(ctx, e, transport, comp, failing, city, cadence, attackTickCorrelationID, &bytes.Buffer{})
+
+	for i := int64(1); i <= cadence; i++ {
+		res := sendAndAwait(t, transport, protocol.Command{
+			ProtocolVersion: protocol.ProtocolVersion,
+			CorrelationID:   protocol.CorrelationID(attackTickCorrelationID),
+			Kind:            protocol.KindAdvanceTicks,
+			Payload:         protocol.AdvanceTicksPayload{N: 1},
+		})
+		if i < cadence {
+			if !res.Accepted {
+				t.Fatalf("tick %d rejected: %+v (want accepted -- only tick %d should fail)", i, res.Error, cadence)
+			}
+			continue
+		}
+		// tick == cadence: this is the one whose append fails and halts.
+		if res.Accepted {
+			t.Fatalf("tick %d (the halting tick): accepted, want rejected (BUG-472 halt policy)", i)
+		}
+		if res.Error == nil || res.Error.Code != core.ErrSimulationPersistHalted {
+			t.Fatalf("tick %d rejection = %+v, want code %s", i, res.Error, core.ErrSimulationPersistHalted)
+		}
+	}
+	liveDigest := comp.StateDigest()
+	tick := int64(0)
+	if c, err := e.Clock(); err == nil {
+		tick = c.Tick()
+	}
+	cancel()
+	if err := <-loopDone; err != nil {
+		t.Fatalf("RunCommandLoop: %v", err)
+	}
+	_ = transport.Close()
+
+	if tick != cadence {
+		t.Fatalf("engine tick %d, want %d (the halting command's own side effect still applies)", tick, cadence)
 	}
 	ids, err := disk.ListSnapshots(context.Background(), city)
 	if err != nil {
@@ -529,8 +584,8 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 	}
 
 	// The honest reference: genesis replay of exactly what persisted (the
-	// swallowed frame is genuinely, permanently lost -- BUG-472's policy,
-	// untouched by this fix).
+	// halting command's own frame is genuinely, permanently lost, and
+	// nothing after it was ever attempted).
 	persistedCmds, err := compose.RestoreCommands(context.Background(), disk, city)
 	if err != nil {
 		t.Fatalf("RestoreCommands: %v", err)
@@ -550,10 +605,10 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 		t.Fatalf("Clock (reference): %v", err)
 	}
 	if refClock.Tick() != tick-1 {
-		t.Fatalf("precondition: reference (persisted-journal-only) tick = %d, want %d (one tick short of live %d -- the swallowed frame)", refClock.Tick(), tick-1, tick)
+		t.Fatalf("precondition: reference (persisted-journal-only) tick = %d, want %d (one tick short of live %d -- the halting command's frame)", refClock.Tick(), tick-1, tick)
 	}
 	if compRef.StateDigest() == liveDigest {
-		t.Fatal("precondition: reference digest equals the live digest -- the swallowed command carried no observable effect, weakening this test's fault injection")
+		t.Fatal("precondition: reference digest equals the live digest -- the halting command carried no observable effect, weakening this test's fault injection")
 	}
 
 	// Restart: no durable snapshot exists at all, so restore MUST use the
@@ -562,23 +617,23 @@ func TestAttackInc3b_SwallowedJournalAppendAtBoundary(t *testing.T) {
 	// included the lost command's effect and can never be honestly
 	// reconstructed from what actually persisted.
 	var log bytes.Buffer
-	e := newEngine()
-	comp, err := wireAndRehydrate(context.Background(), e, disk, city, &log)
+	e2 := newEngine()
+	comp2, err := wireAndRehydrate(context.Background(), e2, disk, city, &log)
 	if err != nil {
 		t.Fatalf("wireAndRehydrate: restore with NO durable snapshot must always succeed via genesis replay, got: %v — log=%q", err, log.String())
 	}
 	if !strings.Contains(log.String(), "full genesis replay") {
 		t.Fatalf("restore did not report the genesis-replay path: %q", log.String())
 	}
-	restoredClock, err := e.Clock()
+	restoredClock, err := e2.Clock()
 	if err != nil {
 		t.Fatalf("Clock: %v", err)
 	}
 	if restoredClock.Tick() != refClock.Tick() {
 		t.Fatalf("restored tick = %d, want %d (reference)", restoredClock.Tick(), refClock.Tick())
 	}
-	if comp.StateDigest() != compRef.StateDigest() {
-		t.Fatalf("restored digest = %x, want %x (reference) -- restore must honestly reproduce only what persisted", comp.StateDigest(), compRef.StateDigest())
+	if comp2.StateDigest() != compRef.StateDigest() {
+		t.Fatalf("restored digest = %x, want %x (reference) -- restore must honestly reproduce only what persisted", comp2.StateDigest(), compRef.StateDigest())
 	}
 }
 

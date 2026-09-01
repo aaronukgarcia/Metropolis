@@ -120,13 +120,20 @@ func (s *snapshotCommandSource) SendResult(r protocol.CommandResult) bool {
 //
 // A snapshot write failure is FAIL-LOUD but never stops the sim: it is
 // surfaced via a registry-coded error (MET-P035, GR#1/GR#7) and printed to
-// logw, mirroring engine.core's own MET-E021 policy for a failed journal
-// write (BUG-472's swallow-policy class: an accepted command's OWN
-// side-effects and its journal entry are already durable regardless of
-// this failure — only the restore-SPEED optimization, a durable snapshot
-// blob, is missing for this one cadence boundary; the next boundary
-// retries, and journal-only genesis replay, or a tail-replay from an older
-// snapshot, remain fully correct in the meantime).
+// logw — deliberately DIFFERENT from BUG-472's later "HALT + SURFACE"
+// policy for a failed COMMAND-JOURNAL append (engine.core's MET-E021/
+// MET-E023, commands.go's journalAccepted): the command that triggered
+// this cadence boundary was already accepted and durably JOURNALED before
+// this snapshot attempt ever ran (startCommandLoop's own doc comment above
+// explains why that ordering is guaranteed), so a snapshot write failure
+// here has NOT lost anything durable — only the restore-SPEED optimization,
+// a durable snapshot blob, is missing for this one cadence boundary; the
+// next boundary retries, and journal-only genesis replay, or a tail-replay
+// from an older snapshot, remain fully correct in the meantime. This is
+// why MaybeSnapshotEvery's own failure stays fail-loud-continue even though
+// the sibling command-journal-append failure now halts the whole
+// composition -- the two failures have different consequences for what is,
+// and is not, durably recoverable.
 func startCommandLoop(ctx context.Context, e *core.Engine, transport *protocol.InProcTransport, comp *compose.Composition, store persist.Store, city persist.CityKey, snapshotEvery int64, tickCorrelationID string, logw io.Writer) <-chan error {
 	var source core.CommandSource = transport
 	if comp != nil && store != nil && snapshotEvery > 0 {

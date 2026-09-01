@@ -133,8 +133,11 @@ func (c *Composition) MaybeSnapshotEvery(ctx context.Context, store persist.Stor
 		return "", false, nil
 	}
 	// BUG-480 deliverable (b) — JOURNAL-DIRTY GATE: once the composition's
-	// durable journaler has recorded ANY failed AppendJournal (BUG-472's
-	// swallow class -- persistCommandJournaler.dirty, persistjournal.go), a
+	// durable journaler has recorded ANY failed AppendJournal
+	// (persistCommandJournaler.dirty, persistjournal.go -- independent of
+	// whether engine.core's own journalAccepted swallowed that failure
+	// [pre-BUG-472] or, since BUG-472's "HALT + SURFACE" ruling, rejected
+	// the command and permanently halted the Engine on it), a
 	// snapshot taken from here on can never be proven tail-consistent with
 	// the journal (its recorded tick could again run ahead of what the
 	// journal's AdvanceTicks frames sum to, exactly the class
@@ -286,9 +289,9 @@ func (c *Composition) restoreFromSnapshotBytes(data []byte) (int64, error) {
 //     strictly AFTER that snapshot's tick (splitJournalAtTick below). If
 //     that candidate's tail cannot be reconciled with the journal (a
 //     TAIL-INCONSISTENCY — ErrSnapshotTailShort or
-//     ErrSnapshotTailReplayRejected, the class BUG-472's swallowed-append
-//     policy can produce when the swallow lands at or before a cadence
-//     boundary), the candidate is skipped (logged via ErrSnapshotSkipped)
+//     ErrSnapshotTailReplayRejected, the class a lost journal frame (a
+//     failed durable append landing at or before a cadence boundary) can
+//     produce), the candidate is skipped (logged via ErrSnapshotSkipped)
 //     and the NEXT-older snapshot is tried, and so on. A CORRUPT snapshot
 //     payload (ErrSnapshotUnpackFailed — a decode/unzip failure, i.e. real
 //     data corruption rather than a tail mismatch) or a Store-level read

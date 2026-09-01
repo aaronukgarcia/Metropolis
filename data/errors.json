@@ -714,6 +714,12 @@
       "message": "SeedClockForRestore rejected tick={tick}: must be a non-negative elapsed daily-tick count",
       "remedy": "Pass tick >= 0 -- the saved CreatedAtTick this composition was captured at (or a snapshot+journal-tail bundle's snapshot tick), never a negative or synthetic value. Clock.Tick is defined as an elapsed count since genesis and can never be negative."
     },
+    "MET-E023": {
+      "severity": "error",
+      "module": "engine.core",
+      "message": "durable persist halted after a failed journal append (originalCode {originalCode}, kind {kind}) -- every further command is refused until a fresh process restores from the durable store",
+      "remedy": "Restart metroserve against a healthy persist store; RestoreLatestSnapshotOrGenesis durably replays the journal/snapshot from scratch. The halt is permanent for the process lifetime by design (Aaron ruling 2026-09-01, A2Bev001 Q100022: option A confirmed) -- no in-process clear exists; a fresh process restore is the only recovery, paired with the write-then-verify save requirement tracked as FEAT-2326609714."
+    },
     "MET-H200": {
       "severity": "error",
       "module": "harness.headless",

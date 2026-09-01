@@ -125,7 +125,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	cityKey := persist.CityKey{TenantID: persistTenantID, CityID: *city}
 	loopDone := startCommandLoop(ctx, e, transport, comp, store, cityKey, *snapshotEvery, correlationID, stdout)
 
-	tickDone := tickLoop(ctx, transport, *tickInterval, correlationID)
+	tickDone := tickLoop(ctx, e, transport, *tickInterval, correlationID)
 
 	wsHandler := wsserver.New(transport, buildinfo.Version, wsserver.DefaultHandshakeTimeout)
 	mux := http.NewServeMux()
@@ -264,17 +264,41 @@ func runHosted(addr, persistDir, cityID string, tickInterval time.Duration, snap
 // Errors sending the tick (a full command queue, a closed transport) are
 // registry-logged (GR#1) and the loop keeps trying on the next interval
 // rather than crashing the whole server over a single missed tick.
-func tickLoop(ctx context.Context, transport *protocol.InProcTransport, interval time.Duration, correlationID string) <-chan struct{} {
+//
+// BUG-472 r2 finding #3(a): e is now required so this loop can check
+// e.PersistHalted() before every send. Before this fix, tickLoop kept
+// firing AdvanceTicks every interval FOREVER into a halted engine — each
+// one was refused by dispatchCommand's halt short-circuit (commands.go)
+// and cost nothing functionally (the halt is fail-closed regardless), but
+// nothing here ever noticed or said so: an operator watching metroserve's
+// stdout would see no sign the tick driver was now spinning uselessly
+// against a paused sim. haltLogged is a plain bool, not atomic/mutex-
+// guarded: this goroutine is tickLoop's only writer and only reader of it
+// (the select loop below runs on one goroutine), so there is no
+// concurrent access to guard against — the SAME "no-flood, log once"
+// shape persistHaltState's own doc comment (commands.go) and
+// startCommandLoop's MET-P035 policy (snapshotdriver.go) already
+// establish for their own permanent-condition latches, reused here rather
+// than reinvented (GR#3).
+func tickLoop(ctx context.Context, e *core.Engine, transport *protocol.InProcTransport, interval time.Duration, correlationID string) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		haltLogged := false
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if code, haltCorrID, ok := e.PersistHalted(); ok {
+					if !haltLogged {
+						haltLogged = true
+						fmt.Fprintf(os.Stderr, "metroserve: tickLoop: engine persist-halted (%s, correlation %s) -- no further AdvanceTicks will be sent; restart against a healthy persist store to resume\n", code, haltCorrID)
+					}
+					continue
+				}
 				cmd := protocol.Command{
 					ProtocolVersion: protocol.ProtocolVersion,
 					CorrelationID:   protocol.CorrelationID(correlationID),

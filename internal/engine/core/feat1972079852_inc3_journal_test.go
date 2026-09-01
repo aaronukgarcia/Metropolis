@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
@@ -117,30 +118,45 @@ func (failingJournaler) ObserveCommand(cmd protocol.Command) error {
 }
 
 // TestJournalAccepted_WriteFailureSurfacesRegistryError is the "journal
-// write failure surfaces a registry error" mutation target (lead-default
-// ruling #4): swallowing journalAccepted's error (e.g. replacing the
-// errs.Wrap call with a bare `_ = err` no-op, or removing the call
-// entirely) turns this RED, since MET-E021 would never reach errs.Recent().
+// write failure surfaces a registry error" mutation target, UPDATED for
+// BUG-472 (Aaron ruling 2026-09-01, "HALT + SURFACE" -- supersedes the
+// swallow-and-continue policy this test originally proved). The failing
+// command is now REJECTED (not accepted) with the new halt code
+// (ErrSimulationPersistHalted, MET-E023), and the ORIGINAL journal-write
+// failure (MET-E021) must still reach errs.Recent() for log-level detail
+// -- swallowing either the halt or the underlying MET-E021 log (e.g.
+// replacing latchPersistHalt's errs.Wrap/errs.New calls with a bare `_ =
+// err` no-op) turns this RED. See BUG-472's own dedicated test file
+// (bug472_persisthalt_test.go) for the full halt/refuse/correlation-id/
+// concurrency coverage this single test does not attempt to duplicate.
 func TestJournalAccepted_WriteFailureSurfacesRegistryError(t *testing.T) {
 	e := NewEngine(WithCommandJournaler(failingJournaler{}))
 	corrID := mustCorrID()
 	result := e.HandleCommand(pauseCmd(corrID))
 
-	// GR#17 point 1: the command was genuinely accepted and its side
-	// effects (the pause) already happened -- a journal-write fault must
-	// not retroactively reject it, and protocol.CommandResult.Validate
-	// forbids attaching Error when Accepted is true anyway.
-	if !result.Accepted {
-		t.Fatalf("Pause: rejected due to journal failure, want still accepted (result = %+v)", result)
+	// BUG-472: the command's own side effects (the pause) already
+	// happened by the time the journal-write fault is observed (see
+	// journalAccepted's doc comment for why that ordering cannot be
+	// avoided), but the WIRE result the client sees for it is now
+	// Rejected, per Aaron's explicit "REJECTED (not accepted)" ruling.
+	if result.Accepted {
+		t.Fatalf("Pause with a failing journaler: accepted, want rejected (BUG-472 halt policy) (result = %+v)", result)
 	}
-	if result.Error != nil {
-		t.Errorf("CommandResult.Error = %+v, want nil (Accepted=true forbids a non-nil Error, protocol.CommandResult.Validate)", result.Error)
+	if result.Error == nil {
+		t.Fatal("CommandResult.Error = nil, want the halt ErrorRef (protocol.CommandResult.Validate requires Error whenever Accepted is false)")
+	}
+	if result.Error.Code != ErrSimulationPersistHalted {
+		t.Errorf("CommandResult.Error.Code = %q, want %q", result.Error.Code, ErrSimulationPersistHalted)
+	}
+	if !strings.Contains(result.Error.Display, string(corrID)) {
+		t.Errorf("CommandResult.Error.Display = %q, does not contain the original failing command's correlation ID %q", result.Error.Display, corrID)
 	}
 
-	// GR#17 point 2: the fault must still be surfaced loudly through the
-	// registry's own log sink (errs.Recent(), the in-memory ring buffer
-	// populated whenever no file sink is configured -- exactly this
-	// process's test configuration).
+	// GR#17: the underlying journal-write fault must still be surfaced
+	// loudly through the registry's own log sink (errs.Recent(), the
+	// in-memory ring buffer populated whenever no file sink is configured
+	// -- exactly this process's test configuration) at its own MET-E021
+	// code, even though the wire-level result now carries MET-E023.
 	found := false
 	for _, entry := range errs.Recent() {
 		if entry.Code == ErrJournalWriteFailed && entry.CorrelationID == string(corrID) {

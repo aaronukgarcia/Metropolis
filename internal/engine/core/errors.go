@@ -180,4 +180,35 @@ const (
 	// rejected loudly (GR#1) rather than silently producing a Clock whose
 	// Month/DayInMonth derivations go negative.
 	ErrInvalidClockSeed = "MET-E022"
+
+	// ErrSimulationPersistHalted: BUG-472 (Aaron ruling 2026-09-01, "HALT +
+	// SURFACE" -- supersedes the earlier MET-E021 swallow-and-continue
+	// policy). Once journalAccepted (commands.go) observes a
+	// CommandJournaler.ObserveCommand failure it latches e.persistHalt
+	// (commands.go's persistHaltState) EXACTLY ONCE for the remainder of
+	// this process's life. From that point on, HandleCommand rejects EVERY
+	// subsequent command (any Kind, including the one whose append just
+	// failed) with this code, and the CorrelationID on the constructed
+	// *errs.E is always the ORIGINAL failed append's correlation ID (never
+	// a fresh one, never the rejected command's own ID) -- Display()
+	// therefore always names the exact original failure, in the
+	// copy-paste-able "[MET-E023] ... (correlation: <original-id>)" form
+	// Aaron's 2026-09-01 A2Bev001.md Q100011 ruling requires reach the
+	// player verbatim (see EngineStatusView's PersistHalted/PersistHaltError
+	// fields, subscribe.go, which carry this same code+display pair to the
+	// subscription-pushed client surface for display even absent a further
+	// command).
+	//
+	// PERMANENCE -- CONFIRMED by Aaron (2026-09-01, A2Bev001 Q100022,
+	// option A): PERMANENT-for-process-lifetime (no API clears
+	// e.persistHalt once latched; the supported recovery is a fresh
+	// process restart via RestoreLatestSnapshotOrGenesis, BUG-480). The
+	// same answer added the write-then-verify save requirement, tracked
+	// separately as FEAT-2326609714. Kept for history: if that ruling is
+	// ever reversed toward in-process auto-clear on a later successful
+	// append/health probe, the change shape is: the
+	// CompareAndSwap in latchPersistHalt (commands.go) becomes a plain
+	// Store guarded by success, and every caller of PersistHalted() must
+	// re-check on each call rather than treating a non-nil state as final.
+	ErrSimulationPersistHalted = "MET-E023"
 )

@@ -382,6 +382,20 @@ type Engine struct {
 	// the same lock Snapshot briefly holds (persist_test.go's
 	// concurrency assertion reads this).
 	tickCounter atomic.Uint64
+
+	// persistHalt is BUG-472's "HALT + SURFACE" latch (Aaron ruling
+	// 2026-09-01, commands.go's persistHaltState/latchPersistHalt/
+	// persistHaltResult): nil until a durable CommandJournaler.ObserveCommand
+	// append first fails, then CompareAndSwap'd exactly once to the
+	// *persistHaltState describing that ORIGINAL failure. atomic.Pointer, not
+	// a plain field, so HandleCommand's top-of-function check (the hottest
+	// read of this field — once per command, forever, once halted) is a
+	// single lock-free Load, and so the CompareAndSwap that publishes it has
+	// a well-defined single winner under concurrent first-failures (see
+	// latchPersistHalt's doc comment for the race proof this mirrors —
+	// persistjournal.go's dirty latch already established the identical
+	// shape for the sibling "a durable write failed" condition).
+	persistHalt atomic.Pointer[persistHaltState]
 }
 
 // NewEngine constructs an Engine. With no options, it boots with:
