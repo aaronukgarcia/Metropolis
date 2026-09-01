@@ -798,6 +798,10 @@
             "outboundGuid": "5cd6f596-459a-4855-adea-59eeb3e17bdc"
           },
           {
+            "key": "engine.world",
+            "outboundGuid": "d9ef1d5a-9436-4f25-a1db-a426d407efc1"
+          },
+          {
             "key": "feat.checkpoint",
             "outboundGuid": "d02049bd-50e8-46db-9b48-0602ee2d969b"
           },
@@ -3528,6 +3532,11 @@
             "key": "foundation.errors",
             "moduleGuid": "04773af2-1d23-4b2c-8a19-fd682052091f",
             "inboundGuid": "d230f06c-f605-4e79-a80f-61638344e6a8"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

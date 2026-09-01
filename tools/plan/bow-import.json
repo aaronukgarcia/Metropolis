@@ -649,7 +649,8 @@
       "guidOut": "d9ef1d5a-9436-4f25-a1db-a426d407efc1",
       "deps": [
         "engine.core",
-        "feat.georef"
+        "feat.georef",
+        "int.serializer"
       ]
     },
     {

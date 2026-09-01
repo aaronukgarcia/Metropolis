@@ -1274,12 +1274,14 @@
       },
       "deps": [
         "engine.core",
-        "feat.georef"
+        "feat.georef",
+        "int.serializer"
       ],
       "calls": [
         "engine.core",
         "int.protocol",
-        "foundation.errors"
+        "foundation.errors",
+        "int.serializer"
       ],
       "sprint": 3
     },
