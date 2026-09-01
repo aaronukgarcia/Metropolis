@@ -52,18 +52,23 @@ import (
 // boundary mechanical (the hazard SELECTION path, Enqueue, is untouched
 // either way).
 //
-// # Deferred to a later increment (NOT built here)
+// # inc3 (AC-9/AC-10/AC-11, built in THIS file below)
 //
-//   - inc3 (AC-9/AC-10/AC-11): the queryable, flagged
-//     (citizenId, deathMonth, emergencyFlag) handoff surface FEAT-088
-//     drains, and replacing Realise's fixed test-only drain assumption
-//     with FEAT-088's injected funeral-throughput capacity. ASM-580's rule
-//     (the smoothing budget and the funeral drain rate are two
-//     INDEPENDENT knobs, min(budget, drain, queued) -- never one derived
-//     from the other) is why Realise is written to take budget alone in
-//     inc1: inc3 adds a second capacity argument and takes the min,
-//     without needing to touch Enqueue, the FIFO ordering, or the
-//     conservation guarantee at all.
+// The queryable, flagged (citizenId, deathMonth, emergencyFlag) handoff
+// surface FEAT-088 drains ([RealisedDeath], [DeathQueue.RealisedDeaths]),
+// and the injected funeral-throughput capacity FEAT-088 provides
+// ([DrainCapacity], [DeathQueue.SetDrainCapacity]). Per ASM-580, the
+// smoothing budget (AC-5, data-filed) and the drain capacity (AC-11,
+// injected) are TWO INDEPENDENT knobs -- inc3 never derives one from the
+// other. [DeathQueue.RealiseDrained] is the new entry point that takes
+// min(budget, drain, queued) and tags each release with emergencyFlag;
+// [DeathQueue.Realise] and [EmergencyRealise] (inc1/inc2) are UNCHANGED --
+// every inc1/inc1.5/inc2 test still exercises them directly, byte-for-byte,
+// proving inc3 is purely additive. A DeathQueue that never has
+// SetDrainCapacity called on it (the default, and every world with no
+// FEAT-088 consumer wired) treats drain as unlimited, so RealiseDrained's
+// release set/order is identical to EmergencyRealise's for the same
+// (budget, emergency, month) inputs -- see RealiseDrained's own doc.
 
 // deathQueueEntry is one pending, hazard-selected death awaiting bounded
 // monthly realisation.
@@ -90,6 +95,23 @@ type DeathQueue struct {
 
 	realisedIDs []uint64         // realisation order (AC-4)
 	realisedAt  map[uint64]int64 // citizenID -> the month it was realised
+
+	// drain is FEAT-088's OPTIONAL injected funeral-throughput capacity
+	// (inc3, AC-11, ASM-580's second knob). nil (the NewDeathQueue default,
+	// and every DeathQueue SetDrainCapacity is never called on) means
+	// UNLIMITED -- RealiseDrained is then bounded by budget and queue
+	// length alone, byte-identical to Realise/EmergencyRealise's existing
+	// behaviour. Read/written only under mu.
+	drain DrainCapacity
+
+	// handoff is FEAT-088's ordered, flagged handoff stream (inc3, AC-9/
+	// AC-10): one append-only RealisedDeath record per citizen released
+	// through RealiseDrained, in release order (which IS realisedIDs'
+	// order -- realiseLocked already sorts FIFO by (selectionMonth,
+	// citizenID), AC-4). Realise/EmergencyRealise do NOT append here --
+	// only RealiseDrained does, keeping inc1/inc1.5/inc2's existing
+	// behaviour and tests completely untouched by inc3's addition.
+	handoff []RealisedDeath
 
 	// self is the SEC-020 copyguard (atomic.Pointer, mirroring
 	// CitizensAPI.self / engine.world's World.self): stored exactly once,
@@ -295,4 +317,123 @@ func (q *DeathQueue) RealiseByID(citizenID uint64, month int64, correlationID st
 	q.realisedAt[citizenID] = month
 	q.realisedIDs = append(q.realisedIDs, citizenID)
 	return nil
+}
+
+// RealisedDeath is FEAT-087 inc3's ordered handoff record (AC-9): one
+// realised death, carrying the minimum fields FEAT-088 (feat.deathservices)
+// needs to drive funeral throughput (hearses, one body per trip) in FIFO
+// order with no additional query back into engine.citizens.
+type RealisedDeath struct {
+	// CitizenID is the realised citizen's id.
+	CitizenID uint64
+	// DeathMonth is the simulation month realisation happened in (never the
+	// SELECTION month -- AC-9's handoff is about the release, which is what
+	// FEAT-088 schedules against).
+	DeathMonth int64
+	// EmergencyFlag is AC-10: true when this death was realised during a
+	// declared weather emergency (weatheremergency.go's IsWeatherEmergency),
+	// so FEAT-088 can switch to emergency dispensation (vans/trucks, 24x7)
+	// without re-deriving the weather state itself.
+	EmergencyFlag bool
+}
+
+// DrainCapacity is FEAT-088's injected funeral-throughput bound (AC-11,
+// ASM-580's second, INDEPENDENT knob -- this package never derives it from
+// its own smoothing budget, nor derives the budget from it). Implemented by
+// the FEAT-088 consumer (e.g. hearse fleet size x trips/month) and wired
+// in via [DeathQueue.SetDrainCapacity]/[CitizensAPI.SetDeathDrainCapacity].
+type DrainCapacity interface {
+	// MonthlyDrainCapacity returns the consumer's own throughput bound for
+	// monthIndex. RealiseDrained clamps this to be non-negative before
+	// using it (a negative return is treated as zero, never as "no bound"
+	// -- see RealiseDrained's doc).
+	MonthlyDrainCapacity(monthIndex int64) int
+}
+
+// DrainCapacityFunc adapts a plain func to [DrainCapacity] (mirrors
+// net/http's HandlerFunc precedent) for a consumer with no other state to
+// carry.
+type DrainCapacityFunc func(monthIndex int64) int
+
+// MonthlyDrainCapacity implements [DrainCapacity].
+func (f DrainCapacityFunc) MonthlyDrainCapacity(monthIndex int64) int {
+	return f(monthIndex)
+}
+
+// SetDrainCapacity wires FEAT-088's injected drain capacity into q (AC-11).
+// Passing nil restores the default UNLIMITED behaviour (RealiseDrained then
+// bounded by budget and queue length alone) -- the state before any
+// consumer is wired, and every world with no FEAT-088 consumer.
+func (q *DeathQueue) SetDrainCapacity(d DrainCapacity, correlationID string) error {
+	if err := q.checkNotCopied(correlationID, "SetDrainCapacity"); err != nil {
+		return err
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.drain = d
+	return nil
+}
+
+// RealisedDeaths returns a copy of the handoff stream so far (AC-9): every
+// death RealiseDrained has released, in FIFO release order, each carrying
+// (citizenId, deathMonth, emergencyFlag). Realise/EmergencyRealise releases
+// (inc1/inc1.5/inc2, or a caller that never adopted RealiseDrained) do NOT
+// appear here -- this is RealiseDrained's own stream, additive to (never a
+// replacement for) [DeathQueue.RealisedSequence].
+func (q *DeathQueue) RealisedDeaths(correlationID string) []RealisedDeath {
+	_ = q.checkNotCopied(correlationID, "RealisedDeaths")
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]RealisedDeath, len(q.handoff))
+	copy(out, q.handoff)
+	return out
+}
+
+// RealiseDrained is FEAT-087 inc3's entry point (AC-9/AC-10/AC-11):
+// combines the ordinary-or-emergency budget selection (mirroring
+// EmergencyRealise's own budget logic exactly, so EmergencyRealise itself
+// stays untouched byte-for-byte -- see the file doc) with ASM-580's second,
+// independent knob (the injected drain capacity, [DeathQueue.SetDrainCapacity])
+// and AC-9/AC-10's ordered, flagged handoff stream. Realisation this month
+// is min(ordinary-or-emergency budget, injected drain, queued) (ASM-580);
+// a nil injected drain (the default) makes this call release the identical
+// set/order of citizens EmergencyRealise would for the same
+// (cfg, emergency, month) inputs -- wiring RealiseDrained into the live
+// cold-pass realisation step is therefore a behavioural no-op for every
+// world that has no FEAT-088 consumer wired yet (registry.go's
+// AdvanceDayTick does exactly this).
+func (q *DeathQueue) RealiseDrained(cfg MortalityConfig, emergency bool, month int64, correlationID string) []RealisedDeath {
+	if err := q.checkNotCopied(correlationID, "RealiseDrained"); err != nil {
+		return nil
+	}
+
+	budget := cfg.MonthlyDeathBudget()
+	if emergency {
+		budget = cfg.MonthlyEmergencyBudget()
+		if budget <= 0 {
+			budget = q.Len(correlationID)
+		}
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	effective := budget
+	if q.drain != nil {
+		if d := q.drain.MonthlyDrainCapacity(month); d < effective {
+			if d < 0 {
+				d = 0
+			}
+			effective = d
+		}
+	}
+
+	ids := q.realiseLocked(effective, month, correlationID)
+	out := make([]RealisedDeath, 0, len(ids))
+	for _, id := range ids {
+		rd := RealisedDeath{CitizenID: id, DeathMonth: month, EmergencyFlag: emergency}
+		q.handoff = append(q.handoff, rd)
+		out = append(out, rd)
+	}
+	return out
 }

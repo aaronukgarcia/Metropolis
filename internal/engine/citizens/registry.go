@@ -161,6 +161,48 @@ func (c *CitizensAPI) SetSeason(s *season.SeasonAPI, correlationID string) error
 	return nil
 }
 
+// SetDeathDrainCapacity wires FEAT-088's injected funeral-throughput
+// capacity into the live death queue (FEAT-087 inc3, AC-11, ASM-580).
+// Optional -- a CitizensAPI that never calls this keeps drain capacity
+// UNLIMITED, exactly inc1/inc1.5/inc2's existing behaviour (see
+// deathwave.go's [DeathQueue.RealiseDrained] doc). Passing nil restores
+// that default. Mirrors SetSeason's post-construction wiring precedent
+// (no NewCitizensAPI constructor argument, so every existing call site
+// keeps compiling unchanged).
+func (c *CitizensAPI) SetDeathDrainCapacity(d DrainCapacity, correlationID string) error {
+	if err := c.checkNotCopied(correlationID, "SetDeathDrainCapacity"); err != nil {
+		return err
+	}
+	// Belt-and-suspenders SEC-020 guard (astgate): c.deathQueue.SetDrainCapacity
+	// below already rejects a struct-copy call on its own, but this function's
+	// body itself accesses the c.deathQueue field chain, so it checks the
+	// DeathQueue candidate directly too -- mirrors weatheremergency.go's
+	// EmergencyRealise, which does the identical double-check for the same
+	// reason (astgate's syntactic scan cannot see through the delegated call).
+	if err := c.deathQueue.checkNotCopied(correlationID, "SetDeathDrainCapacity"); err != nil {
+		return err
+	}
+	return c.deathQueue.SetDrainCapacity(d, correlationID)
+}
+
+// DeathHandoff returns FEAT-088's ordered, flagged handoff stream so far
+// (FEAT-087 inc3, AC-9/AC-10): every death realised through the live
+// AdvanceDayTick realisation step (which now calls
+// [DeathQueue.RealiseDrained], see AdvanceDayTick's doc), FIFO by release
+// order, each carrying (citizenId, deathMonth, emergencyFlag).
+func (c *CitizensAPI) DeathHandoff(correlationID string) ([]RealisedDeath, error) {
+	if err := c.checkNotCopied(correlationID, "DeathHandoff"); err != nil {
+		return nil, err
+	}
+	// Belt-and-suspenders SEC-020 guard (astgate) -- see SetDeathDrainCapacity's
+	// identical comment above for why this direct check is needed alongside
+	// RealisedDeaths' own internal checkNotCopied.
+	if err := c.deathQueue.checkNotCopied(correlationID, "DeathHandoff"); err != nil {
+		return nil, err
+	}
+	return c.deathQueue.RealisedDeaths(correlationID), nil
+}
+
 // SeedColdRecords bulk-loads cold citizen records (the harness.synth path)
 // into their id-hash shards. It is a command-path mutation, not an
 // exported field-set on ColdShard.
@@ -630,11 +672,22 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 	// registered feat.deathwave -> engine.season edge via c.season -- a nil
 	// c.season, i.e. a CitizensAPI never wired via SetSeason, always
 	// declares false and behaves exactly as inc1/inc1.5). A declared
-	// emergency SUSPENDS the ordinary budget for this one release
-	// (EmergencyRealise), producing the major non-smoothed death event
-	// AC-6 requires; it never touches the hazard SELECTIONS already
-	// enqueued above (AC-8 -- selection happened unconditionally in
-	// applyMonthly, entirely independent of season/emergency state).
+	// emergency SUSPENDS the ordinary budget for this one release, producing
+	// the major non-smoothed death event AC-6 requires; it never touches
+	// the hazard SELECTIONS already enqueued above (AC-8 -- selection
+	// happened unconditionally in applyMonthly, entirely independent of
+	// season/emergency state).
+	//
+	// inc3 (AC-9/AC-10/AC-11): the release itself now goes through
+	// [DeathQueue.RealiseDrained] rather than [EmergencyRealise] directly --
+	// same budget/emergency logic (RealiseDrained's own doc), PLUS ASM-580's
+	// injected drain-capacity knob and the AC-9/AC-10 (citizenId, deathMonth,
+	// emergencyFlag) handoff stream FEAT-088 will drain. c.deathQueue's
+	// drain capacity defaults to nil (unlimited) until a consumer calls
+	// [CitizensAPI.SetDeathDrainCapacity], so this call is a behavioural
+	// no-op for every world with no FEAT-088 consumer wired yet --
+	// EmergencyRealise itself is left untouched (still directly tested) as
+	// the reference implementation this wiring must stay byte-identical to.
 	var realisedDeaths int
 	if c.dayTick == DaysPerMonth-1 {
 		emergency, emErr := IsWeatherEmergency(c.season, month, c.mortalityCfg, correlationID)
@@ -645,8 +698,12 @@ func (c *CitizensAPI) AdvanceDayTick(correlationID string) (births, deaths int, 
 			// emergency" and swallowed -- surface it rather than guess.
 			return 0, 0, emErr
 		}
-		realised := EmergencyRealise(c.deathQueue, c.mortalityCfg, emergency, month, correlationID)
-		realisedDeaths = len(realised)
+		realisedHandoff := c.deathQueue.RealiseDrained(c.mortalityCfg, emergency, month, correlationID)
+		realisedDeaths = len(realisedHandoff)
+		realised := make([]uint64, len(realisedHandoff))
+		for i, rd := range realisedHandoff {
+			realised[i] = rd.CitizenID
+		}
 
 		// BUG-369/BUG-270 parity, at REALISATION time (not selection time):
 		// dissolution fires only now, because ASM-581 keeps a queued citizen
