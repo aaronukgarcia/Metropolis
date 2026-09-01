@@ -22,7 +22,7 @@ func TestAC1_WholeStateNotDelta(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget", entry{ID: 1, Name: "a", Score: 1.5}, entry{ID: 2, Name: "b", Score: 2.5})
 	gadgets := newMemParticipant("gadget", entry{ID: 7, Name: "g", Score: 0.25})
-	m := NewManager(root, []save.Participant{widgets, gadgets}, "corr-ac1")
+	m := NewManager(root, []save.Participant{widgets, gadgets}, "corr-ac1", 42)
 
 	if _, err := m.CreateCheckpoint(fixtureContext(100, 4), "cp1", ""); err != nil {
 		t.Fatalf("CreateCheckpoint cp1: %v", err)
@@ -65,7 +65,7 @@ func TestAC1_WholeStateNotDelta(t *testing.T) {
 func TestAC2_ReloadReproducesExactState(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget", entry{ID: 1, Name: "snapshot", Score: 3.0})
-	m := NewManager(root, []save.Participant{widgets}, "corr-ac2")
+	m := NewManager(root, []save.Participant{widgets}, "corr-ac2", 42)
 
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "cp", ""); err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
@@ -88,7 +88,7 @@ func TestAC2_ReloadReproducesExactState(t *testing.T) {
 func TestAC3_RevertForksNeverOverwrites(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget")
-	m := NewManager(root, []save.Participant{widgets}, "corr-ac3")
+	m := NewManager(root, []save.Participant{widgets}, "corr-ac3", 42)
 
 	widgets.setState(entry{ID: 1, Name: "state-A"})
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
@@ -148,7 +148,7 @@ func TestAC3_RevertForksNeverOverwrites(t *testing.T) {
 // parent (AC-4).
 func TestAC4_ParentageExplicitNotInferred(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac4")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac4", 42)
 
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
 		t.Fatalf("CreateCheckpoint A: %v", err)
@@ -194,7 +194,7 @@ func TestAC4_ParentageExplicitNotInferred(t *testing.T) {
 // (AC-16).
 func TestAC16_CurrentIDReadOnly(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac16")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac16", 42)
 
 	id, err := m.CurrentID()
 	if err != nil {
@@ -237,7 +237,7 @@ func TestAC13_ByteDeterminism(t *testing.T) {
 		root = t.TempDir()
 		widgets := newMemParticipant("widget", entry{ID: 1, Name: "w", Score: 1.25})
 		gadgets := newMemParticipant("gadget", entry{ID: 9, Name: "g", Score: 0.5})
-		m = NewManager(root, []save.Participant{widgets, gadgets}, "corr-ac13")
+		m = NewManager(root, []save.Participant{widgets, gadgets}, "corr-ac13", 42)
 		return root, m
 	}
 
@@ -317,7 +317,7 @@ func keysOf(m map[string][]byte) []string {
 // --- boundary / error-path tests (GR#1, GR#7) ---
 
 func TestCreateCheckpointRejectsInvalidID(t *testing.T) {
-	m := NewManager(t.TempDir(), nil, "corr")
+	m := NewManager(t.TempDir(), nil, "corr", 42)
 	for _, name := range []string{"", ".", "..", "../evil", "a/b", `a\b`, "a:b", "trailing."} {
 		if _, err := m.CreateCheckpoint(fixtureContext(1, 1), name, ""); !errors.Is(err, &errs.E{Code: ErrInvalidCheckpointID}) {
 			t.Fatalf("CreateCheckpoint(%q) error = %v, want ErrInvalidCheckpointID", name, err)
@@ -326,7 +326,7 @@ func TestCreateCheckpointRejectsInvalidID(t *testing.T) {
 }
 
 func TestCreateCheckpointRejectsDanglingParent(t *testing.T) {
-	m := NewManager(t.TempDir(), []save.Participant{newMemParticipant("w")}, "corr")
+	m := NewManager(t.TempDir(), []save.Participant{newMemParticipant("w")}, "corr", 42)
 	if _, err := m.CreateCheckpoint(fixtureContext(1, 1), "cp", "does-not-exist"); !errors.Is(err, &errs.E{Code: ErrParentNotFound}) {
 		t.Fatalf("CreateCheckpoint with dangling parent error = %v, want ErrParentNotFound", err)
 	}
@@ -334,7 +334,7 @@ func TestCreateCheckpointRejectsDanglingParent(t *testing.T) {
 
 func TestRevertRejectsNonCheckpoint(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("w")}, "corr")
+	m := NewManager(root, []save.Participant{newMemParticipant("w")}, "corr", 42)
 
 	// A non-existent ID is not a checkpoint.
 	if _, err := m.Revert(fixtureContext(1, 1), "ghost"); !errors.Is(err, &errs.E{Code: ErrNotACheckpoint}) {
@@ -352,14 +352,14 @@ func TestRevertRejectsNonCheckpoint(t *testing.T) {
 }
 
 func TestSetMaxRetainedForksRejectsNegative(t *testing.T) {
-	m := NewManager(t.TempDir(), nil, "corr")
+	m := NewManager(t.TempDir(), nil, "corr", 42)
 	if err := m.SetMaxRetainedForks(-1); !errors.Is(err, &errs.E{Code: ErrInvalidForkConfig}) {
 		t.Fatalf("SetMaxRetainedForks(-1) error = %v, want ErrInvalidForkConfig", err)
 	}
 }
 
 func TestManagerCopied(t *testing.T) {
-	m := NewManager(t.TempDir(), nil, "corr")
+	m := NewManager(t.TempDir(), nil, "corr", 42)
 	copied := managerByteCopy(m)
 	if _, err := copied.CreateCheckpoint(fixtureContext(1, 1), "cp", ""); !errors.Is(err, &errs.E{Code: ErrCheckpointCopied}) {
 		t.Fatalf("copied Manager CreateCheckpoint error = %v, want ErrCheckpointCopied", err)
@@ -404,7 +404,7 @@ func (b *blockingParticipant) Handler() serialize.RecordHandler {
 
 func TestCreateCheckpointRejectsConcurrent(t *testing.T) {
 	bp := &blockingParticipant{started: make(chan struct{}), release: make(chan struct{})}
-	m := NewManager(t.TempDir(), []save.Participant{bp}, "corr")
+	m := NewManager(t.TempDir(), []save.Participant{bp}, "corr", 42)
 
 	done := make(chan error, 1)
 	go func() {

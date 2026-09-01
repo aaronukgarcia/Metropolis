@@ -34,7 +34,7 @@ import (
 func TestSEC196_ForkOfForkChainRejectedBeforeOverLimit(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget", entry{ID: 1, Name: "state-A", Score: 1})
-	m := NewManager(root, []save.Participant{widgets}, "corr-sec196")
+	m := NewManager(root, []save.Participant{widgets}, "corr-sec196", 42)
 
 	longName := strings.Repeat("x", maxCheckpointNameLen)
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), longName, ""); err != nil {

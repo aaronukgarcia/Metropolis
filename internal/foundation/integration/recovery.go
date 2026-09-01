@@ -62,6 +62,18 @@ type RecoverPlan struct {
 	WALRoot        string
 	Participants   []save.Participant
 	CorrelationID  string
+
+	// ExpectedWorldSeed is the composition's own world seed (BUG-485) —
+	// the same value the live engine passes as save.Context.WorldSeed to
+	// every checkpoint.Manager.CreateCheckpoint call before a crash.
+	// Recover threads it into the checkpoint.Manager it constructs so the
+	// checkpoint load this function performs refuses a differently-seeded
+	// checkpoint bundle with save.ErrSaveSeedMismatch instead of silently
+	// rebuilding live state from a foreign trajectory (mirroring
+	// compose.Composition.Load's BUG-479 check one layer up). 0 is a
+	// legitimate seed value, not an "unchecked" sentinel — there is no
+	// way to construct a RecoverPlan that skips the check.
+	ExpectedWorldSeed int64
 }
 
 // RecoverResult reports what Recover actually did: whether a checkpoint
@@ -128,7 +140,7 @@ type RecoverResult struct {
 func Recover(plan RecoverPlan, apply func(protocol.Command) error) (RecoverResult, error) {
 	var result RecoverResult
 
-	mgr := checkpoint.NewManager(plan.CheckpointRoot, plan.Participants, plan.CorrelationID)
+	mgr := checkpoint.NewManager(plan.CheckpointRoot, plan.Participants, plan.CorrelationID, plan.ExpectedWorldSeed)
 	id, err := mgr.CurrentID()
 	if err != nil {
 		return result, errs.Wrap(ErrRecoveryCheckpointLoadFailed, plan.CorrelationID, err, map[string]any{"phase": "current-id"})

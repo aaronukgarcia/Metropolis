@@ -18,7 +18,7 @@ func TestAC7_RetentionParameterized(t *testing.T) {
 	for _, n := range []int{2, 5} {
 		t.Run(fmt.Sprintf("N=%d", n), func(t *testing.T) {
 			root := t.TempDir()
-			m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac7")
+			m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac7", 42)
 			if err := m.SetMaxRetainedForks(n); err != nil {
 				t.Fatalf("SetMaxRetainedForks: %v", err)
 			}
@@ -99,7 +99,7 @@ func TestAC7_RetentionParameterized(t *testing.T) {
 // (AC-8 — structural sharing, not raw age).
 func TestAC8_PruneNeverDeletesSharedAncestor(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac8")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac8", 42)
 	if err := m.SetMaxRetainedForks(1); err != nil {
 		t.Fatalf("SetMaxRetainedForks: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestAC8_PruneNeverDeletesSharedAncestor(t *testing.T) {
 // failed prune is still present and independently loadable afterward (AC-9).
 func TestAC9_PruneAtomicOnFailure(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac9")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac9", 42)
 	// Effectively disable pruning while we accumulate branches.
 	if err := m.SetMaxRetainedForks(100); err != nil {
 		t.Fatalf("SetMaxRetainedForks: %v", err)
@@ -231,7 +231,7 @@ func TestAC9_PruneAtomicOnFailure(t *testing.T) {
 // a future edit that broke ancestor retention would fail here.
 func TestRetentionSurvivesHeadAncestors(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac6")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac6", 42)
 	if err := m.SetMaxRetainedForks(0); err != nil {
 		t.Fatalf("SetMaxRetainedForks: %v", err)
 	}

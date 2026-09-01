@@ -39,7 +39,7 @@ func TestSEC188_ManualSaveNotOverwrittenByCreate(t *testing.T) {
 		t.Fatalf("SaveManual A: %v", err)
 	}
 
-	m := NewManager(root, []save.Participant{widgets}, "corr-sec188")
+	m := NewManager(root, []save.Participant{widgets}, "corr-sec188", 42)
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); !errors.Is(err, &errs.E{Code: ErrNameOccupied}) {
 		t.Fatalf("CreateCheckpoint over a manual save = %v, want ErrNameOccupied", err)
 	}
@@ -63,7 +63,7 @@ func TestSEC188_ManualSaveNotOverwrittenByCreate(t *testing.T) {
 func TestSEC188_ForkNameSkipsManualSaveCollision(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget", entry{ID: 1, Name: "state-A"})
-	m := NewManager(root, []save.Participant{widgets}, "corr-sec188")
+	m := NewManager(root, []save.Participant{widgets}, "corr-sec188", 42)
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
 		t.Fatalf("CreateCheckpoint A: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestSEC188_ForkNameSkipsManualSaveCollision(t *testing.T) {
 // finding's repro) is rejected at create rather than created-but-unrevertible.
 func TestSEC189_LongNameRejectedAtCreate(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec189")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec189", 42)
 
 	for _, name := range []string{
 		strings.Repeat("x", 250),                    // the finding's exact repro
@@ -114,7 +114,7 @@ func TestSEC189_LongNameRejectedAtCreate(t *testing.T) {
 // accepted AND revertible — the create-at and revert-at domains agree.
 func TestSEC189_MaxLenNameAcceptedAndRevertible(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec189")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec189", 42)
 
 	longName := strings.Repeat("x", maxCheckpointNameLen)
 	if _, err := m.CreateCheckpoint(fixtureContext(1, 1), longName, ""); err != nil {
@@ -145,7 +145,7 @@ func TestSEC189_ForkNameNeverExceedsLimit(t *testing.T) {
 // LastPruneError.
 func TestSEC190_PruneFailureNonFatal_CreateCheckpoint(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec190")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec190", 42)
 	if err := m.SetMaxRetainedForks(100); err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestSEC190_PruneFailureNonFatal_CreateCheckpoint(t *testing.T) {
 // for Revert: a prune failure does not make the fork look un-created.
 func TestSEC190_PruneFailureNonFatal_Revert(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec190")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-sec190", 42)
 	if err := m.SetMaxRetainedForks(100); err != nil {
 		t.Fatal(err)
 	}

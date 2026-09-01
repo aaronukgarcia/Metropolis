@@ -37,7 +37,7 @@ import (
 func TestSEC174_RecreateRejectedNoOverwrite(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget", entry{ID: 1, Name: "state-A", Score: 1})
-	m := NewManager(root, []save.Participant{widgets}, "corr-sec174")
+	m := NewManager(root, []save.Participant{widgets}, "corr-sec174", 42)
 
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
 		t.Fatalf("CreateCheckpoint A: %v", err)
@@ -87,7 +87,7 @@ func TestSEC174_RecreateRejectedNoOverwrite(t *testing.T) {
 func TestSEC175_ForkNameCollisionAvoided(t *testing.T) {
 	root := t.TempDir()
 	widgets := newMemParticipant("widget")
-	m := NewManager(root, []save.Participant{widgets}, "corr-sec175")
+	m := NewManager(root, []save.Participant{widgets}, "corr-sec175", 42)
 
 	widgets.setState(entry{ID: 1, Name: "state-A"})
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
@@ -136,7 +136,7 @@ func TestSEC175_ForkNameCollisionAvoided(t *testing.T) {
 func TestSEC176_FailedRevertRestoresPriorHead(t *testing.T) {
 	root := t.TempDir()
 	state := newFailSourceParticipant("widget")
-	m := NewManager(root, []save.Participant{state}, "corr-sec176")
+	m := NewManager(root, []save.Participant{state}, "corr-sec176", 42)
 
 	state.setState(entry{ID: 1, Name: "state-A"})
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {

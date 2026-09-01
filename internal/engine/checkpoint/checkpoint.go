@@ -47,18 +47,43 @@ type Manager struct {
 	// two-locks-one-referent shape). atomic.Pointer for the pre-lock
 	// ordering guarantee (SEC-016).
 	self atomic.Pointer[Manager]
+
+	// expectedWorldSeed is this Manager's OWN composition's world seed
+	// (BUG-485), given at construction — mirroring compose.Composition's
+	// c.state.seed field exactly (compose.go/save_wire.go), since a
+	// *Manager is a single-composition-lifetime object just like a
+	// *Composition, unlike the generic, seed-agnostic save.Manager it
+	// wraps. Every restore this package performs into LIVE participants
+	// (Load, Revert's restore-then-fork, recoverAfterLoad's undo-reload)
+	// passes save.WithExpectedWorldSeed(expectedWorldSeed) to the owned
+	// saveMgr, so a differently-seeded bundle is refused with
+	// save.ErrSaveSeedMismatch instead of silently diverging every
+	// seed-derived stateless draw from the composition's real trajectory
+	// — closing the gap BUG-479 deliberately left open at this layer
+	// (see save/options.go's loadOptions comment).
+	expectedWorldSeed int64
 }
 
 // NewManager constructs a *Manager rooted at root, saving/loading the
 // given participants via an owned feat.saveux Manager. correlationID is
 // attached to every registry-sourced error this package constructs (GR#1)
-// and is forwarded to the owned save.Manager.
-func NewManager(root string, participants []save.Participant, correlationID string) *Manager {
+// and is forwarded to the owned save.Manager. worldSeed is THIS Manager's
+// own composition's world seed (BUG-485) — the same value the caller
+// would pass as save.Context.WorldSeed to CreateCheckpoint/Revert — and
+// is checked against every bundle's header on every restore into live
+// participants (Load/Revert/recoverAfterLoad), refusing a mismatch with
+// save.ErrSaveSeedMismatch. Pass the composition's real seed even in
+// tests that never intend to exercise a mismatch: 0 is a legitimate seed
+// value, not an "unchecked" sentinel — there is no way to construct a
+// Manager that skips the check, by design (the pre-BUG-479 opt-in-only
+// gap this closes).
+func NewManager(root string, participants []save.Participant, correlationID string, worldSeed int64) *Manager {
 	m := &Manager{
-		root:             root,
-		saveMgr:          save.NewManager(root, participants, correlationID),
-		correlationID:    correlationID,
-		maxRetainedForks: MaxRetainedForks,
+		root:              root,
+		saveMgr:           save.NewManager(root, participants, correlationID),
+		correlationID:     correlationID,
+		maxRetainedForks:  MaxRetainedForks,
+		expectedWorldSeed: worldSeed,
 	}
 	m.self.Store(m)
 	return m
@@ -243,8 +268,12 @@ func (m *Manager) Revert(ctx save.Context, target ID) (Checkpoint, error) {
 	// Restore target's state into the live participants. This is the one
 	// side effect of revert outside this package's own on-disk tree; it is
 	// delegated to feat.saveux's Load, which reconstructs each participant
-	// via its Handler.
-	if _, _, err := m.saveMgr.Load(checkpointDir(m.root, target)); err != nil {
+	// via its Handler. BUG-485: passes save.WithExpectedWorldSeed so a
+	// target checkpoint whose bundle seed does not match this Manager's
+	// own expectedWorldSeed is refused with save.ErrSaveSeedMismatch
+	// before any participant is touched, instead of silently reverting
+	// live state into a differently-seeded trajectory.
+	if _, _, err := m.saveMgr.Load(checkpointDir(m.root, target), save.WithExpectedWorldSeed(m.expectedWorldSeed)); err != nil {
 		return Checkpoint{}, err
 	}
 
@@ -280,7 +309,12 @@ func (m *Manager) Revert(ctx save.Context, target ID) (Checkpoint, error) {
 // checkpoint bundle named id (AC-2, GR#12), delegating to feat.saveux's
 // Load — which runs serialize.ValidateBundle first, then streams each
 // shard to its participant's Handler. Returns the bundle's Header and
-// feat.saveux's Meta.
+// feat.saveux's Meta. BUG-485: refuses a bundle whose header WorldSeed
+// does not equal this Manager's own expectedWorldSeed (given at
+// NewManager construction) with save.ErrSaveSeedMismatch, BEFORE any
+// participant Handler runs — mirroring compose.Composition.Load's own
+// BUG-479 check at this package's layer, since this method restores
+// straight into the caller's live participants exactly as that one does.
 func (m *Manager) Load(id ID) (serialize.Header, save.Meta, error) {
 	if err := m.checkNotCopied(map[string]any{"method": "Load", "id": string(id)}); err != nil {
 		return serialize.Header{}, save.Meta{}, err
@@ -288,7 +322,7 @@ func (m *Manager) Load(id ID) (serialize.Header, save.Meta, error) {
 	if err := validateCheckpointID(id); err != nil {
 		return serialize.Header{}, save.Meta{}, errs.Wrap(ErrInvalidCheckpointID, m.correlationID, err, map[string]any{"id": string(id), "cause": err.Error()})
 	}
-	return m.saveMgr.Load(checkpointDir(m.root, id))
+	return m.saveMgr.Load(checkpointDir(m.root, id), save.WithExpectedWorldSeed(m.expectedWorldSeed))
 }
 
 // CurrentID returns the identifier of the currently-active checkpoint/
@@ -375,12 +409,16 @@ func (m *Manager) nextFreeForkName(target ID, startSeq int64) (string, int64, er
 // (SEC-176). It is best-effort: if priorActiveID is empty (no prior head
 // existed) or the reload itself fails, the caller's original error is
 // returned wrapped with ErrRevertRestoreFailed so the live state's
-// reverted-but-unrecovered condition is surfaced, never silent.
+// reverted-but-unrecovered condition is surfaced, never silent. BUG-485:
+// this reload also passes save.WithExpectedWorldSeed(m.expectedWorldSeed)
+// — priorActiveID names a bundle this same Manager wrote, so a mismatch
+// here would itself indicate corruption/tampering worth surfacing rather
+// than restoring silently.
 func (m *Manager) recoverAfterLoad(priorActiveID ID, cause error) error {
 	if priorActiveID == "" {
 		return cause
 	}
-	if _, _, err := m.saveMgr.Load(checkpointDir(m.root, priorActiveID)); err != nil {
+	if _, _, err := m.saveMgr.Load(checkpointDir(m.root, priorActiveID), save.WithExpectedWorldSeed(m.expectedWorldSeed)); err != nil {
 		return errs.Wrap(ErrRevertRestoreFailed, m.correlationID, err, map[string]any{
 			"priorHead":     string(priorActiveID),
 			"restoreCause":  err.Error(),

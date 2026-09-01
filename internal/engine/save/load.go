@@ -140,7 +140,17 @@ type SkipInfo struct {
 // successfully together with a record of everything skipped along the
 // way. Returns ErrNoValidSaveFound only if every autosave in the
 // history failed to load.
-func (m *Manager) LoadLatest() (serialize.Header, Meta, []SkipInfo, error) {
+//
+// opts forwards unchanged to the internal per-candidate m.Load call
+// (BUG-485), exactly like Load's own opts parameter: pass
+// WithExpectedWorldSeed(seed) so a candidate autosave whose header
+// WorldSeed does not match the caller's own composition seed is treated
+// as a failed-to-load candidate (ErrSaveSeedMismatch), skipped like any
+// other corrupt bundle, rather than silently becoming "the latest valid
+// save" and restoring a foreign trajectory. Omitting opts entirely
+// preserves LoadLatest's pre-BUG-485 behaviour byte-for-byte: no seed
+// check on any candidate, matching Load's own zero-option default.
+func (m *Manager) LoadLatest(opts ...LoadOption) (serialize.Header, Meta, []SkipInfo, error) {
 	// SEC-020-class: identity check before touching any field — see
 	// checkNotCopied's doc comment (manager.go).
 	if err := m.checkNotCopied(map[string]any{"method": "LoadLatest"}); err != nil {
@@ -155,7 +165,7 @@ func (m *Manager) LoadLatest() (serialize.Header, Meta, []SkipInfo, error) {
 	var skipped []SkipInfo
 	for _, seq := range seqs {
 		dir := autosaveDir(m.root, seq)
-		header, meta, err := m.Load(dir)
+		header, meta, err := m.Load(dir, opts...)
 		if err != nil {
 			skipped = append(skipped, SkipInfo{Path: dir, Reason: err})
 			continue

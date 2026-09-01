@@ -139,7 +139,7 @@ func TestRecover_CrashRecovery_ByteIdenticalToPreCrashState(t *testing.T) {
 	}
 	sumAtCheckpoint := live.Sum() // 1+2+3+4+5 = 15
 
-	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID)
+	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID, 7)
 	cp, err := mgr.CreateCheckpoint(fixtureCtx(int64(beforeCheckpoint)), "cp-partway", "")
 	if err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
@@ -181,10 +181,11 @@ func TestRecover_CrashRecovery_ByteIdenticalToPreCrashState(t *testing.T) {
 
 	recovered := newAccumulatorParticipant()
 	plan := RecoverPlan{
-		CheckpointRoot: checkpointRoot,
-		WALRoot:        walRoot,
-		Participants:   []save.Participant{recovered},
-		CorrelationID:  corrID,
+		CheckpointRoot:    checkpointRoot,
+		WALRoot:           walRoot,
+		Participants:      []save.Participant{recovered},
+		CorrelationID:     corrID,
+		ExpectedWorldSeed: 7,
 	}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
@@ -236,7 +237,7 @@ func TestRecover_Bug1Repro_CrashBetweenAcceptAndApply_EntrySurvives(t *testing.T
 	}
 
 	// A checkpoint at tick 0 with nothing applied yet (base case).
-	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID)
+	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID, 7)
 	if _, err := mgr.CreateCheckpoint(fixtureCtx(0), "cp-base", ""); err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
@@ -253,7 +254,7 @@ func TestRecover_Bug1Repro_CrashBetweenAcceptAndApply_EntrySurvives(t *testing.T
 	// --- "crash" here --- live/wal abandoned, never referenced again.
 
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -314,7 +315,7 @@ func TestRecover_Bug2Repro_WALIsContiguous_NoMidGapPossible(t *testing.T) {
 	// A cold Recover (no checkpoint at all) must therefore replay EVERY
 	// entry, in order, with none missed and none double-applied.
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: t.TempDir(), WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: t.TempDir(), WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -341,13 +342,13 @@ func TestRecover_NoBacklog_CheckpointAloneIsSufficient(t *testing.T) {
 
 	live := newAccumulatorParticipant()
 	live.Add(42)
-	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID)
+	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID, 7)
 	if _, err := mgr.CreateCheckpoint(fixtureCtx(1), "cp-only", ""); err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
 
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -381,7 +382,7 @@ func TestRecover_NoCheckpointYet_ReplaysOnTopOfZeroState(t *testing.T) {
 	}
 
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -436,7 +437,7 @@ func TestRecover_TornFinalWALEntry_StopsCleanlyAtLastComplete(t *testing.T) {
 	}
 
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
 		t.Fatalf("Recover: unexpected error on a torn final entry: %v", err)
@@ -480,7 +481,7 @@ func TestRecover_GenuineCorruption_IsAnError(t *testing.T) {
 	}
 
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	_, err = Recover(plan, applyBuyToAccumulator(recovered))
 	if err == nil {
 		t.Fatal("expected an error for a genuinely corrupted (present but undecodable) entry, got nil")
@@ -507,7 +508,7 @@ func TestRecover_ApplyFailure_HaltsImmediately(t *testing.T) {
 	}
 
 	failingApply := func(protocol.Command) error { return os.ErrInvalid }
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	_, err = Recover(plan, failingApply)
 	if err == nil {
 		t.Fatal("expected an error from a failing apply function")
@@ -544,7 +545,7 @@ func TestWAL_PruneOnCheckpoint_RecoverStillCorrectAfterPrune(t *testing.T) {
 			t.Fatalf("applyLive: %v", err)
 		}
 	}
-	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID)
+	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{live}, corrID, 7)
 	cp, err := mgr.CreateCheckpoint(fixtureCtx(5), "cp-5", "")
 	if err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
@@ -589,7 +590,7 @@ func TestWAL_PruneOnCheckpoint_RecoverStillCorrectAfterPrune(t *testing.T) {
 	// A crash "now": Recover from the checkpoint + pruned WAL must still
 	// produce the exact pre-crash sum.
 	recovered := newAccumulatorParticipant()
-	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+	plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 	result, err := Recover(plan, applyBuyToAccumulator(recovered))
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -622,7 +623,7 @@ func TestRecover_IdempotentAcrossRepeatedRuns(t *testing.T) {
 	corrID := "corr-idempotent"
 
 	seed := newAccumulatorParticipant()
-	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{seed}, corrID)
+	mgr := checkpoint.NewManager(checkpointRoot, []save.Participant{seed}, corrID, 7)
 	if _, err := mgr.CreateCheckpoint(fixtureCtx(0), "cp-seed", ""); err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
@@ -639,7 +640,7 @@ func TestRecover_IdempotentAcrossRepeatedRuns(t *testing.T) {
 
 	runOnce := func() (int64, RecoverResult) {
 		recovered := newAccumulatorParticipant()
-		plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+		plan := RecoverPlan{CheckpointRoot: checkpointRoot, WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 		result, err := Recover(plan, applyBuyToAccumulator(recovered))
 		if err != nil {
 			t.Fatalf("Recover: %v", err)
@@ -686,7 +687,7 @@ func TestRecover_DeterminismAcrossRuns_NoCheckpoint(t *testing.T) {
 
 	runOnce := func() (int64, RecoverResult) {
 		recovered := newAccumulatorParticipant()
-		plan := RecoverPlan{CheckpointRoot: t.TempDir(), WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID}
+		plan := RecoverPlan{CheckpointRoot: t.TempDir(), WALRoot: walRoot, Participants: []save.Participant{recovered}, CorrelationID: corrID, ExpectedWorldSeed: 7}
 		result, err := Recover(plan, applyBuyToAccumulator(recovered))
 		if err != nil {
 			t.Fatalf("Recover: %v", err)

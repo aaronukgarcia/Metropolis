@@ -15,7 +15,7 @@ import (
 // succeeds and reports correct identifiers, parentage, and ticks (AC-5).
 func TestAC5_LineageMetadataOnly(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac5")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac5", 42)
 
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
 		t.Fatalf("CreateCheckpoint A: %v", err)
@@ -64,7 +64,7 @@ func TestAC5_LineageMetadataOnly(t *testing.T) {
 // via the Children structure itself, not re-derived from ParentID (AC-10).
 func TestAC10_TreeStructureNavigable(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac10")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-ac10", 42)
 
 	if _, err := m.CreateCheckpoint(fixtureContext(10, 1), "A", ""); err != nil {
 		t.Fatalf("CreateCheckpoint A: %v", err)
@@ -118,7 +118,7 @@ func TestAC10_TreeStructureNavigable(t *testing.T) {
 // manual saves, so the two can never silently diverge.
 func TestManualSubdirMirrorsSaveLayout(t *testing.T) {
 	root := t.TempDir()
-	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-drift")
+	m := NewManager(root, []save.Participant{newMemParticipant("widget")}, "corr-drift", 42)
 	if _, err := m.CreateCheckpoint(fixtureContext(1, 1), "cp", ""); err != nil {
 		t.Fatalf("CreateCheckpoint: %v", err)
 	}
