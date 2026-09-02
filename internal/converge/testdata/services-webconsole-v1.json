@@ -1,0 +1,56 @@
+{
+  "domain": "services",
+  "samples": [
+    {
+      "tick": 30,
+      "values": {
+        "fire_capacity": 4000,
+        "fire_need": 100,
+        "fire_coverage_x10000": 10000,
+        "fire_ts_unclamped_coverage_x10000": 400000,
+        "education_capacity": 1830,
+        "education_need": 23,
+        "education_coverage_x10000": 10000,
+        "education_ts_unclamped_coverage_x10000": 795652,
+        "healthcare_capacity": 5000,
+        "healthcare_need": 200,
+        "healthcare_coverage_x10000": 10000,
+        "healthcare_ts_unclamped_coverage_x10000": 250000
+      }
+    },
+    {
+      "tick": 60,
+      "values": {
+        "fire_capacity": 4000,
+        "fire_need": 2000,
+        "fire_coverage_x10000": 10000,
+        "fire_ts_unclamped_coverage_x10000": 20000,
+        "education_capacity": 1830,
+        "education_need": 460,
+        "education_coverage_x10000": 10000,
+        "education_ts_unclamped_coverage_x10000": 39783,
+        "healthcare_capacity": 5000,
+        "healthcare_need": 4000,
+        "healthcare_coverage_x10000": 10000,
+        "healthcare_ts_unclamped_coverage_x10000": 12500
+      }
+    },
+    {
+      "tick": 90,
+      "values": {
+        "fire_capacity": 4000,
+        "fire_need": 12000,
+        "fire_coverage_x10000": 3333,
+        "fire_ts_unclamped_coverage_x10000": 3333,
+        "education_capacity": 1830,
+        "education_need": 2760,
+        "education_coverage_x10000": 6630,
+        "education_ts_unclamped_coverage_x10000": 6630,
+        "healthcare_capacity": 5000,
+        "healthcare_need": 24000,
+        "healthcare_coverage_x10000": 2083,
+        "healthcare_ts_unclamped_coverage_x10000": 2083
+      }
+    }
+  ]
+}

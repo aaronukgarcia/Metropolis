@@ -71,3 +71,33 @@ type Tolerance struct {
 // condition in Compare (codeUnknownTolerance) — an unconstrained field
 // is never silently treated as passing.
 type Contract map[string]Tolerance
+
+// FEAT-2326609747 (services.convergence) inc1's named tolerance constants
+// (AC-4: "the band width a named constant in internal/converge/tolerance.go
+// ... not a magic number inline in the comparison"). Mirrors
+// services_domain.go's ServicesDomain / webconsole/test/
+// converge-fixture-emit-services.mjs, which both quantize a raw coverage
+// ratio (capacity/demand, unbounded above, never negative) into an int64 by
+// multiplying by ServicesCoverageScale and rounding — the SAME scale both
+// sides use, so a "_coverage_x10000"-suffixed field name in a Sample is
+// self-documenting about which scale produced it.
+const (
+	// ServicesCoverageScale is the fixed-point multiplier applied to a raw
+	// coverage ratio before it is stored as an int64 Sample value (e.g. a
+	// coverage of 0.3333 becomes 3333). 10000 gives four significant
+	// decimal digits of precision, comfortably finer than the single named
+	// band below.
+	ServicesCoverageScale = 10000
+
+	// ServicesCoverageEpsilon is the TierBounded band (Section 6's
+	// recommendation: "start with a single named band ... rather than a
+	// per-row band") for every "*_coverage_x10000" field: the two engines
+	// compute the identical rational capacity/demand from identical
+	// integer inputs via ordinary float64 division, so any residual
+	// difference is IEEE-754 operation-ordering noise, not a genuine model
+	// divergence — 2 (0.02% of the *10000 scale) comfortably absorbs that
+	// noise while still catching a real one-row/one-tier mapping mistake,
+	// which would typically be off by hundreds or thousands of *10000
+	// units, not single digits.
+	ServicesCoverageEpsilon = 2
+)
