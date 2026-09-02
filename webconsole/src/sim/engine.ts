@@ -55,6 +55,9 @@ import {
   congestionFactorOf,
   sanitizeCongestionTicksBySpec,
   CONGESTION_CONSTANTS,
+  MILESTONES,
+  MILESTONE_REWARDS,
+  sanitizeClaimedMilestones,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -76,6 +79,7 @@ import type {
   FlowItem,
   LedgerEntry,
   LevelUpNotice,
+  MilestoneNotice,
   PolicyId,
   SimState,
   TaxRates,
@@ -754,6 +758,43 @@ export function computeLevelRewards(s: SimState): LevelRewardResult[] {
 }
 
 /**
+ * FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1). Result of a
+ * single newly-met milestone: the cash to queue plus the notice to show.
+ * Mirrors LevelRewardResult's shape.
+ */
+export interface MilestoneRewardResult {
+  totalReward: number;
+  milestoneId: string;
+  notice: MilestoneNotice;
+}
+
+/**
+ * SINGLE SOURCE OF TRUTH: which of data.ts's MILESTONES are met by `s` but not
+ * yet in `s.claimedMilestones` (already sanitized by the caller — GR#16). Pure
+ * + deterministic (GR#21): iterates MILESTONES in catalogue order, no Date/
+ * random. Returns one MilestoneRewardResult per newly-met milestone (usually
+ * 0 or 1 per tick, but a savepoint/replay boundary can legitimately surface
+ * several at once — e.g. an old save loaded already past several thresholds).
+ * Called by engine.ts's advance() against the fully-assembled next-tick state
+ * (population/history/funds all finalized), so m5 "Solvent City"'s
+ * s.history.slice(-60) read sees THIS tick's own history entry.
+ */
+export function computeMilestoneRewards(s: SimState, claimedMilestones: string[]): MilestoneRewardResult[] {
+  const results: MilestoneRewardResult[] = [];
+  for (const m of MILESTONES) {
+    if (claimedMilestones.includes(m.id)) continue;
+    if (!m.test(s)) continue;
+    const cash = Math.max(0, MILESTONE_REWARDS[m.id] ?? 0);
+    results.push({
+      totalReward: cash,
+      milestoneId: m.id,
+      notice: { id: m.id, label: m.label, cash },
+    });
+  }
+  return results;
+}
+
+/**
  * Drain and apply pending rewards, updating funds and lastRewardedLevel atomically.
  * Does NOT recompute; takes results verbatim from computeLevelRewards().
  * Called by advance() to apply queued rewards through flows.
@@ -1152,6 +1193,22 @@ function advance(s: SimState): SimState {
     nextNotice = pr.notice; // Last notice wins (multiple crossings rare but possible)
   }
 
+  // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1): drain the
+  // milestone-reward queue exactly like the Level Rewards queue above. The
+  // milestone was marked CLAIMED and the reward QUEUED on the tick its
+  // predicate was first observed true (see the detection block near the end
+  // of this function, evaluated against the fully-assembled next state); it
+  // is PAID here, one tick later, as a normal labelled inflow so it counts
+  // for the tick-boundary conservation invariant
+  // (fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows) on the tick
+  // the cash actually lands (mirrors the Level Rewards one-tick-lag design).
+  let nextMilestoneNotice: MilestoneNotice | null = s.milestoneNotice ?? null;
+  const pendingMilestoneRewards = s.pendingMilestoneRewards ?? [];
+  for (const pr of pendingMilestoneRewards) {
+    inflows = [...inflows, { label: `Milestone Reward: ${pr.notice.label}`, value: pr.totalReward }];
+    nextMilestoneNotice = pr.notice; // Last notice wins (multiple crossings rare but possible)
+  }
+
   const income = inflows.reduce((a, b) => a + b.value, 0);
   const expense = outflows.reduce((a, b) => a + b.value, 0);
   let funds = s.funds + income - expense;
@@ -1174,6 +1231,16 @@ function advance(s: SimState): SimState {
   if (buildingAutoScaleCost > 0) {
     ledger = [
       { id: nextLedger++, tick, label: `Auto-scaled ${buildingAutoScaleCount} building(s)`, amount: -buildingAutoScaleCost },
+      ...ledger,
+    ].slice(0, LEDGER_CAP);
+  }
+  // FEAT-milestone-cash-rewards-2026-09-02: visible ledger row for each
+  // milestone reward drained above — a real, positive-amount inflow row
+  // (mirrors the Play Mode injection precedent, fiscal.ts), never a silent
+  // funds bump. One row per milestone paid this tick (usually 0 or 1).
+  for (const pr of pendingMilestoneRewards) {
+    ledger = [
+      { id: nextLedger++, tick, label: `Milestone Reward: ${pr.notice.label}`, amount: pr.totalReward },
       ...ledger,
     ].slice(0, LEDGER_CAP);
   }
@@ -1669,6 +1736,7 @@ function advance(s: SimState): SimState {
     fundsAtTickStart,
     fundsAtTickEnd,
     pendingRewards: [], // Drained
+    pendingMilestoneRewards: [], // Drained (FEAT-milestone-cash-rewards-2026-09-02)
     population,
     xp: newXp,
     // FEAT-1972079907 inc2: buildings may carry monthly auto-scale tier bumps;
@@ -1693,6 +1761,7 @@ function advance(s: SimState): SimState {
     lastFlows: { inflows, outflows, population: s.population },
     lastRewardedLevel,
     notice: nextNotice,
+    milestoneNotice: nextMilestoneNotice,
     insolvencyState: exposedInsolvencyState,
     insolvencyRawBand: insolvencyState,
     insolvencyPopup,
@@ -1715,6 +1784,33 @@ function advance(s: SimState): SimState {
     congestionTicksBySpec,
   };
 
+  // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — detect any
+  // MILESTONES newly met using the FULLY-ASSEMBLED `next` state (population/
+  // history/funds all finalized this tick, so m5 "Solvent City"'s
+  // s.history.slice(-60) read sees this tick's own just-appended history
+  // entry). Sanitized EVERY tick (GR#16), not only when something new is
+  // found, so a corrupt/legacy claimedMilestones self-heals on the very next
+  // tick regardless of milestone state. Newly-met ids are marked claimed
+  // IMMEDIATELY (this tick) so an oscillating predicate (m5 in particular —
+  // a city can win and lose its 60-tick surplus window repeatedly) can never
+  // re-queue a reward once paid; the CASH is queued into
+  // pendingMilestoneRewards and paid one tick later by the drain block near
+  // the top of this function (same "claim now, pay next tick" split as
+  // lastRewardedLevel/pendingRewards). An old save loaded with milestones
+  // already met retroactively pays them exactly once, on the first tick that
+  // observes them met-but-unrewarded — no special-cased load path needed,
+  // this is simply the first evaluation of a freshly-loaded state.
+  const sanitizedClaimedMilestones = sanitizeClaimedMilestones(next.claimedMilestones);
+  const newlyMetMilestones = computeMilestoneRewards(next, sanitizedClaimedMilestones);
+  const patchedNext: SimState =
+    newlyMetMilestones.length > 0
+      ? {
+          ...next,
+          claimedMilestones: [...sanitizedClaimedMilestones, ...newlyMetMilestones.map((r) => r.milestoneId)],
+          pendingMilestoneRewards: [...next.pendingMilestoneRewards!, ...newlyMetMilestones],
+        }
+      : { ...next, claimedMilestones: sanitizedClaimedMilestones };
+
   // FEAT-crime-mechanic-2026-09-02 (Q100069 rec-on-all Q4, "immediate
   // prior-month"): snapshot THIS tick's crime rate for NEXT month's breeding
   // term, but only at month boundaries — `next` still carries the OLD
@@ -1724,9 +1820,9 @@ function advance(s: SimState): SimState {
   // field forward unchanged (no per-tick recompute — matches the monthly
   // aggregate idiom every other monthly system here uses, e.g. line 1051).
   if (tick % TICKS_PER_MONTH === 0) {
-    return { ...next, crimeRatePreviousMonth: crimeRateOf(next) };
+    return { ...patchedNext, crimeRatePreviousMonth: crimeRateOf(patchedNext) };
   }
-  return next;
+  return patchedNext;
 }
 
 /**
@@ -2786,6 +2882,7 @@ export type Action =
   | { type: 'debugFunds'; amount: number }
   | { type: 'debugXp'; amount: number }
   | { type: 'dismissNotice' }
+  | { type: 'dismissMilestoneNotice' }
   | { type: 'dismissPlaceNotice' }
   | { type: 'dismissInsolvencyPopup' }
   | { type: 'unlockAll' }
@@ -3736,6 +3833,13 @@ function reduceCore(state: SimState, action: Action): SimState {
     case 'dismissNotice':
       return state.notice == null ? state : { ...state, notice: null };
 
+    // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1): UI-only
+    // dismiss for the milestone-reward banner — mirrors dismissNotice exactly.
+    // The reward itself is unaffected (already paid via inflows/ledger by the
+    // time the notice is visible); dismissing only clears the banner.
+    case 'dismissMilestoneNotice':
+      return (state.milestoneNotice ?? null) == null ? state : { ...state, milestoneNotice: null };
+
     // FEAT-1972079923 inc1 (companion to BUG-396): UI-only dismiss for the
     // cannot-afford placement notice — mirrors dismissNotice. Not journaled
     // (see journal.ts isStateAffecting); a successful place() already clears
@@ -3862,8 +3966,32 @@ export function sanitizeTreasury(s: SimState): SimState {
   if (notice && (notice.cash < 0 || !Number.isSafeInteger(notice.cash))) {
     notice = { ...notice, cash: 0 };
   }
-  if (funds === s.funds && loanBalance === s.loanBalance && notice === s.notice) return s;
-  return { ...s, funds, loanBalance, notice };
+  // FEAT-milestone-cash-rewards-2026-09-02 (GR#16): a corrupt milestoneNotice.cash
+  // (negative / non-integer / NaN, e.g. a hand-edited savepoint) is clamped to 0
+  // rather than trusted, mirroring the level-up `notice` handling immediately
+  // above — this runs at the top of EVERY reducer() call, so it catches a
+  // corrupt load before any action (not just a tick) can read the bad value.
+  let milestoneNotice = s.milestoneNotice ?? null;
+  if (milestoneNotice && (milestoneNotice.cash < 0 || !Number.isSafeInteger(milestoneNotice.cash))) {
+    milestoneNotice = { ...milestoneNotice, cash: 0 };
+  }
+  // FEAT-milestone-cash-rewards-2026-09-02 (GR#16): claimedMilestones is
+  // sanitized here too (in addition to advance()'s per-tick self-heal) so a
+  // corrupt/legacy value is never read by a non-tick action either.
+  const claimedMilestones = sanitizeClaimedMilestones(s.claimedMilestones);
+  const claimedMilestonesChanged =
+    claimedMilestones.length !== (s.claimedMilestones ?? []).length ||
+    claimedMilestones.some((id, i) => id !== (s.claimedMilestones ?? [])[i]);
+  if (
+    funds === s.funds &&
+    loanBalance === s.loanBalance &&
+    notice === s.notice &&
+    milestoneNotice === (s.milestoneNotice ?? null) &&
+    !claimedMilestonesChanged
+  ) {
+    return s;
+  }
+  return { ...s, funds, loanBalance, notice, milestoneNotice, claimedMilestones };
 }
 
 export function reducer(state: SimState, action: Action): SimState {

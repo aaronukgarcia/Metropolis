@@ -33,6 +33,7 @@ import type {
   InsolvencyState,
   LedgerEntry,
   LevelUpNotice,
+  MilestoneNotice,
   MonthlyArrivalsByMode,
   MonthlyDemographics,
   RoadMonitor,
@@ -74,7 +75,7 @@ import {
   efwPowerOf,
 } from './data.ts';
 import type { PipeTierAgg } from './data.ts';
-import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec } from './data.ts';
+import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec, sanitizeClaimedMilestones } from './data.ts';
 import {
   HISTORY_CAP,
   LEDGER_CAP,
@@ -256,6 +257,12 @@ export interface DebugJson {
     crimeRatePreviousMonth: number;
     /** FEAT-congestion-teeth-2026-09-02 (AC-1) — per road-line-spec sustained-congestion tick counters. */
     congestionTicksBySpec: Record<string, number>;
+    /** FEAT-milestone-cash-rewards-2026-09-02 (Q100047b) — ids of data.ts MILESTONES already paid out. */
+    claimedMilestones: string[];
+    /** FEAT-milestone-cash-rewards-2026-09-02 — milestone rewards claimed but not yet paid (drains next tick). */
+    pendingMilestoneRewards: Array<{ totalReward: number; milestoneId: string; notice: MilestoneNotice }>;
+    /** FEAT-milestone-cash-rewards-2026-09-02 — active milestone-reward notification banner, or null. */
+    milestoneNotice: MilestoneNotice | null;
   };
   flows: {
     inflows: FlowItem[];
@@ -534,6 +541,10 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   crimeRatePreviousMonth: 'sim.crimeRatePreviousMonth',
   // FEAT-congestion-teeth-2026-09-02 (AC-1).
   congestionTicksBySpec: 'sim.congestionTicksBySpec',
+  // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1).
+  claimedMilestones: 'sim.claimedMilestones',
+  pendingMilestoneRewards: 'sim.pendingMilestoneRewards',
+  milestoneNotice: 'sim.milestoneNotice',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -810,6 +821,13 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       // above — sanitizeCongestionTicksBySpec covers backward tolerance AND a corrupt
       // save's non-object/negative/fractional entries.
       congestionTicksBySpec: sanitizeCongestionTicksBySpec(s.congestionTicksBySpec),
+      // FEAT-milestone-cash-rewards-2026-09-02 (GR#16): same shape as
+      // crimeRatePreviousMonth/congestionTicksBySpec above — sanitizeClaimedMilestones
+      // covers backward tolerance (legacy state -> []) AND a corrupt save's
+      // non-array/non-string/unrecognised-id entries.
+      claimedMilestones: sanitizeClaimedMilestones(s.claimedMilestones),
+      pendingMilestoneRewards: s.pendingMilestoneRewards ?? [],
+      milestoneNotice: s.milestoneNotice ?? null,
     },
     flows: {
       inflows: s.lastFlows.inflows,

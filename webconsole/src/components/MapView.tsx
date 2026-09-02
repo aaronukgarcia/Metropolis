@@ -1039,6 +1039,7 @@ export function MapView() {
         <span className="tier-fill-note">fill = % occupied</span>
       </div>
       <LevelUpBanner />
+      <MilestoneBanner />
       <PlaceNoticeBanner />
       <InsolvencyBanner />
       <AdministrationBanner />
@@ -1186,6 +1187,35 @@ function LevelUpBanner() {
           ? `Unlocked: ${n.unlocked.join(', ')}`
           : 'No new structures at this level — keep building.'}
       </p>
+    </div>
+  );
+}
+
+// FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — dismissible
+// milestone-reward banner. Mirrors LevelUpBanner exactly: reads the
+// milestoneNotice the reducer stamped on state when a MILESTONES predicate
+// was first observed met, showing the cash injection (through fmtMoney).
+// Dismiss clears it; it fires exactly once per milestone because the reward
+// is guarded by claimedMilestones (engine.ts's advance()).
+function MilestoneBanner() {
+  const { state, dispatch } = useSim();
+  const n = state.milestoneNotice;
+  if (!n) return null;
+  return (
+    <div className="levelup-banner milestone-banner" role="status">
+      <div className="levelup-head">
+        <b>Milestone reached: {n.label}</b>
+        <button className="btn tiny" onClick={() => dispatch({ type: 'dismissMilestoneNotice' })}>
+          Dismiss
+        </button>
+      </div>
+      {n.cash > 0 ? (
+        <p className="levelup-cash">
+          Cash injection <b>{fmtMoney(n.cash)}</b> awarded.
+        </p>
+      ) : (
+        <p className="levelup-cash">No cash injection for this milestone.</p>
+      )}
     </div>
   );
 }

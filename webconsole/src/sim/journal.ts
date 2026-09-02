@@ -78,6 +78,9 @@ export function isStateAffecting(action: Action): boolean {
       return false;
     case 'dismissInsolvencyPopup':
       return false;
+    // FEAT-milestone-cash-rewards-2026-09-02 — UI-only dismiss, mirrors dismissNotice.
+    case 'dismissMilestoneNotice':
+      return false;
 
     // Placement and demolition — state-affecting.
     case 'place':

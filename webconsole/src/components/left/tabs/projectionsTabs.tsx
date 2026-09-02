@@ -8,25 +8,39 @@
 // fabricated number).
 
 import { useSim } from '../../../sim/simContext';
-import { MILESTONES } from '../../../sim/data';
+import { MILESTONES, MILESTONE_REWARDS, sanitizeClaimedMilestones } from '../../../sim/data';
+import { fmtMoney } from '../../../sim/utils';
 import { STUB_LABEL } from '../../ragThresholds';
 
 // §1 row 20 — relocated from RightDock `milestones`, unchanged content.
 // §2 row 12: binary met/open per item today — no invented AMBER/RED band.
+// FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1): a met milestone
+// now also shows its cash reward and whether it has actually been paid yet
+// (claimed) vs. just met this tick and awaiting the one-tick payout lag — an
+// achieved milestone that visibly does nothing was the whole defect this
+// closes, so the chip alone is no longer the full story.
 export function MilestonesTab() {
   const { state } = useSim();
+  const claimed = sanitizeClaimedMilestones(state.claimedMilestones);
   return (
     <ul className="milestone-list">
       {MILESTONES.map((m) => {
         const met = m.test(state);
+        const isClaimed = claimed.includes(m.id);
+        const reward = MILESTONE_REWARDS[m.id] ?? 0;
         return (
           <li key={m.id} className={met ? 'met' : ''}>
             <span className="ms-dot" />
             <div>
               <b>{m.label}</b>
-              <p className="muted">{m.detail}</p>
+              <p className="muted">
+                {m.detail}
+                {reward > 0 ? ` — reward ${fmtMoney(reward)}` : ''}
+              </p>
             </div>
-            <span className={`chip ${met ? 'done' : 'open'}`}>{met ? 'Met' : 'Open'}</span>
+            <span className={`chip ${met ? 'done' : 'open'}`}>
+              {isClaimed ? 'Paid' : met ? 'Met' : 'Open'}
+            </span>
           </li>
         );
       })}

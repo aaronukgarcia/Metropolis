@@ -148,6 +148,21 @@ export interface LevelUpNotice {
   unlocked: string[];
 }
 
+/**
+ * Milestone-reward notification (FEAT-milestone-cash-rewards-2026-09-02, Q100047b
+ * ruling B1 — "an achieved milestone that does nothing reads as broken; small cash
+ * + a notice at minimum"). Mirrors LevelUpNotice's shape/consumption pattern but
+ * keyed by the milestone's data.ts MilestoneDef.id (a string) rather than a level
+ * number, since milestones have no ordering/level concept.
+ */
+export interface MilestoneNotice {
+  id: string;
+  /** data.ts MilestoneDef.label, so the banner can say what was achieved. */
+  label: string;
+  /** Cash injection granted for reaching this milestone (already added to funds). */
+  cash: number;
+}
+
 export interface TaxRates {
   residential: number;
   commercial: number;
@@ -526,6 +541,39 @@ export interface SimState {
    * AC-4).
    */
   congestionTicksBySpec?: Record<string, number>;
+  /**
+   * FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — ids of
+   * data.ts MILESTONES already paid out, so a one-time cash reward + notice
+   * fires EXACTLY ONCE per milestone no matter how many times its predicate
+   * flips true/false/true again afterward (e.g. m5 "Solvent City" can lose
+   * and regain its 60-tick surplus window many times over a game). The id is
+   * added to this set the SAME tick the predicate is first observed true
+   * (engine.ts's advance(), evaluated against the fully-assembled next
+   * state); the cash itself lands one tick later via pendingMilestoneRewards
+   * below, mirroring lastRewardedLevel/pendingRewards' claim-now/pay-next-
+   * tick split. Optional for backward tolerance: a legacy state without it
+   * is treated as `[]` (GR#16 — see data.ts's sanitizeClaimedMilestones,
+   * which ALSO drops any id not in the current MILESTONES catalogue so a
+   * future catalogue edit can't leave a dangling/unrecognised claim). A
+   * fresh save starts with every milestone unclaimed; an OLD save loaded
+   * with milestones already met retroactively pays them once on the first
+   * tick that observes them met-but-unrewarded (Aaron's steer, 2026-09-02) —
+   * simplest and player-friendly, and a fresh save can never double-pay
+   * because the claimed set persists across saves/loads.
+   */
+  claimedMilestones?: string[];
+  /**
+   * Queue of milestone rewards claimed this tick but not yet paid (mirrors
+   * pendingRewards' queue-and-drain-through-inflows idiom exactly). Drained
+   * by the NEXT advance() call into inflows + a ledger row, so the cash
+   * participates in the tick-boundary conservation invariant
+   * (fundsAtTickEnd === fundsAtTickStart + Σinflows − Σoutflows) on the tick
+   * it actually lands. Optional for backward tolerance: a legacy state
+   * without it is treated as `[]` (nothing queued).
+   */
+  pendingMilestoneRewards?: Array<{ totalReward: number; milestoneId: string; notice: MilestoneNotice }>;
+  /** Active milestone-reward notification banner, or null when dismissed / none pending. */
+  milestoneNotice?: MilestoneNotice | null;
 }
 
 /**

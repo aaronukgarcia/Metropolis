@@ -84,6 +84,8 @@ export function AlertsInfoTab() {
   const { info } = severityRows(state.insolvencyState, state.declineState, state.bailoutSecondState, state.funds);
   const extra: AlertRow[] = [];
   if (state.notice) extra.push({ key: 'levelup', text: `Level ${state.notice.level} reached — +${fmtMoney(state.notice.cash)}.` });
+  // FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1): mirrors the levelup row above.
+  if (state.milestoneNotice) extra.push({ key: 'milestone', text: `Milestone reached: ${state.milestoneNotice.label} — +${fmtMoney(state.milestoneNotice.cash)}.` });
   if (state.placeNotice) extra.push({ key: 'place', text: state.placeNotice });
   return <AlertList rows={[...extra, ...info]} empty="No informational notices." />;
 }

@@ -21,7 +21,7 @@ import { wellbeingCoreOf } from './engine.ts';
 import { scaleConstructionTicks } from './debugBuildSpeed.ts';
 // FEAT-2326609711 inc1: fiscal.ts is a leaf module (imports only ./types.ts),
 // so importing GRID_IMPORT_ENABLED_DEFAULT here creates no cycle.
-import { GRID_IMPORT_ENABLED_DEFAULT } from './fiscal.ts';
+import { GRID_IMPORT_ENABLED_DEFAULT, STARTING_TREASURY } from './fiscal.ts';
 // BUG-511: registry-sourced (GR#7) fail-loud guard for the residential
 // no-`residents` trap below (assertResidentialSpecsHaveResidents). backend.ts
 // is a leaf for this purpose too — it imports only commitqueue.ts and a
@@ -3411,6 +3411,46 @@ export const MILESTONES: MilestoneDef[] = [
   { id: 'm5', label: 'Solvent City', detail: 'Run a budget surplus for a full 60 ticks', test: (s) => s.tick > 60 && s.history.slice(-60).length === 60 && s.history.slice(-60).every((h) => h.income >= h.expense) },
   { id: 'm6', label: 'Metropolis', detail: 'Reach 1,000 citizens', test: (s) => s.population >= 1000 },
 ];
+
+/**
+ * FEAT-milestone-cash-rewards-2026-09-02 (Q100047b ruling B1) — one-time cash
+ * reward paid the first time each MILESTONES entry is observed met (see
+ * engine.ts's advance() + sanitizeClaimedMilestones below). Defined as RATIOS
+ * of STARTING_TREASURY (fiscal.ts SSOT — mirrors BAILOUT_INCOME_INJECTION/
+ * UNLOCK_ALL_COST's "one constant, everything else scales" convention) rather
+ * than flat literals, roughly ordered by each milestone's difficulty tier —
+ * m1 is a same-tick trivial first-placement, m6 is a genuine late-game goal.
+ * ⚠ PLACEHOLDER-balance (Balance Number Regime, Vestige
+ * metropolis-balance-number-regime): directional only, pending Aaron's
+ * row-by-row balance pass — do not treat these ratios as tuned.
+ */
+export const MILESTONE_REWARDS: Record<string, number> = {
+  m1: Math.round(STARTING_TREASURY * 0.01), // First Homes
+  m2: Math.round(STARTING_TREASURY * 0.02), // Village Green
+  m3: Math.round(STARTING_TREASURY * 0.05), // Market Town
+  m4: Math.round(STARTING_TREASURY * 0.08), // Full Services
+  m5: Math.round(STARTING_TREASURY * 0.12), // Solvent City
+  m6: Math.round(STARTING_TREASURY * 0.2), // Metropolis
+};
+
+/**
+ * FEAT-milestone-cash-rewards-2026-09-02 (GR#16 — never trust the TS type,
+ * coerce via a sanitizeX() helper). Covers BOTH backward tolerance for a
+ * legacy state predating SimState.claimedMilestones (undefined -> []) AND a
+ * corrupt save's non-array/non-string/unrecognised-id entries: keeps only
+ * strings that name a CURRENT MILESTONES.id (so a future catalogue edit that
+ * drops/renames a milestone can't leave a dangling claim around forever),
+ * deduplicated. Order is not meaningful (a Set of claims), but the returned
+ * array preserves MILESTONES' own catalogue order for determinism (GR#21) —
+ * two engines fed the same corrupt/legacy input always produce byte-identical
+ * output, never insertion-order-of-the-corrupt-input dependent.
+ */
+export function sanitizeClaimedMilestones(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  const validIds = new Set(MILESTONES.map((m) => m.id));
+  const claimed = new Set(v.filter((x): x is string => typeof x === 'string' && validIds.has(x)));
+  return MILESTONES.map((m) => m.id).filter((id) => claimed.has(id));
+}
 
 export interface PolicyDef {
   id: 'recycling' | 'transitSubsidy' | 'tourismDrive' | 'austerity';
