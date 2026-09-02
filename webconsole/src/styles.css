@@ -255,6 +255,13 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .tree-fam.has-active { border-color: var(--done); }
 .tree-title { flex: 1; }
 .tree-n { font-size: 11px; color: var(--muted); }
+/* FEAT-2326609748: domain headers grouping the tree-fam buttons (Utilities,
+   Education, Health, Industry & Economy, ...) — each domain is its own
+   column segment so the existing 3px inter-button gap still applies within
+   a domain, not just between domains. */
+.tree-domain { display: flex; flex-direction: column; gap: 3px; }
+.tree-domain-label { margin: 6px 0 2px; padding-left: 2px; }
+.tree-domain:first-child .tree-domain-label { margin-top: 0; }
 .tree-detail { flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start; overflow-y: auto; min-width: 0; }
 .pal-item { display: flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; color: var(--ink); font: inherit; font-size: 12px; cursor: pointer; }
 .pal-item:hover:not(:disabled) { border-color: var(--accent); }

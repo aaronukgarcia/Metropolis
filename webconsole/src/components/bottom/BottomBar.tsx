@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable, sortPaletteItems } from '../../sim/data';
+import { PALETTE, SPECS, placementCost, isFreeZone, constructionTicks, isPlaceable, sortPaletteItems, paletteByDomain } from '../../sim/data';
 import type { ToolMode } from '../../sim/types';
 import { useSim } from '../../sim/simContext';
 import { specUnlocked } from '../../sim/engine';
@@ -44,23 +44,35 @@ function BuildTab() {
     <>
       <div className="tree-wrap">
         <div className="tree-fams">
-          {PALETTE.map((g) => {
-            const color = SPECS[g.items[0]]?.color ?? '#888';
-            const hasActive = g.items.some((id) => state.tool.mode === 'build' && state.tool.spec === id);
-            return (
-              <button
-                key={g.title}
-                className={`tree-fam${fam === g.title ? ' open' : ''}${hasActive ? ' has-active' : ''}`}
-                onMouseEnter={() => setFam(g.title)}
-                onFocus={() => setFam(g.title)}
-                onClick={() => setFam(g.title)}
-              >
-                <span className="swatch big" style={{ background: color }} />
-                <span className="tree-title">{g.title}</span>
-                <span className="tree-n mono">{g.items.length}</span>
-              </button>
-            );
-          })}
+          {/* FEAT-2326609748: families grouped under domain headers (Utilities,
+              Education, Health, Industry & Economy, ...) instead of one flat
+              18-family list — Aaron 2026-09-02. Grouping is a pure lookup off
+              PALETTE's existing family titles (data.ts's paletteByDomain), so
+              this component holds no parallel spec/family list of its own.
+              Per-family selection (`fam`) is untouched by the regrouping:
+              it still just tracks the family title, same as before. */}
+          {paletteByDomain().map(({ domain, families }) => (
+            <div className="tree-domain" key={domain}>
+              <h4 className="tree-domain-label">{domain}</h4>
+              {families.map((g) => {
+                const color = SPECS[g.items[0]]?.color ?? '#888';
+                const hasActive = g.items.some((id) => state.tool.mode === 'build' && state.tool.spec === id);
+                return (
+                  <button
+                    key={g.title}
+                    className={`tree-fam${fam === g.title ? ' open' : ''}${hasActive ? ' has-active' : ''}`}
+                    onMouseEnter={() => setFam(g.title)}
+                    onFocus={() => setFam(g.title)}
+                    onClick={() => setFam(g.title)}
+                  >
+                    <span className="swatch big" style={{ background: color }} />
+                    <span className="tree-title">{g.title}</span>
+                    <span className="tree-n mono">{g.items.length}</span>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </div>
         <div className="tree-detail" ref={detailRef}>
           {sortedItems.map((id) => {

@@ -1567,6 +1567,81 @@ export const PALETTE: { title: string; items: string[] }[] = [
 
 export const PALETTE_FLAT: string[] = PALETTE.flatMap((g) => g.items);
 
+// FEAT-2326609748: domain groupings for the build-palette information strip
+// at the bottom of the screen (BottomBar.tsx's "tree-fams" column). Aaron
+// (2026-09-02): "power / water / waste are all utilities, we need one for
+// education, and one for health, one for industry etc" — instead of one flat
+// list of PALETTE.title families.
+//
+// GR#15 (validators/data derive from data): this is a PURE LOOKUP keyed off
+// PALETTE's existing `title` field (itself derived from each spec's `kind`
+// via the family groupings above) — it does NOT re-list individual spec ids,
+// so a new spec added to an existing family is picked up automatically with
+// no change here. Only a brand-new FAMILY (a new PALETTE title) needs a line
+// added to this map; PALETTE_DOMAIN_COMPLETE (below) proves at test time that
+// every family is covered so a missed one fails loudly instead of silently
+// vanishing from the UI.
+export const PALETTE_DOMAIN: Record<string, string> = {
+  Power: 'Utilities',
+  'Water & Waste': 'Utilities',
+  Education: 'Education',
+  Health: 'Health',
+  'Industry & Farms': 'Industry & Economy',
+  Mining: 'Industry & Economy',
+  Offices: 'Industry & Economy',
+  Retail: 'Industry & Economy',
+  'Police & Justice': 'Safety',
+  'Fire & Rescue': 'Safety',
+  Housing: 'Housing',
+  Network: 'Transport',
+  Transport: 'Transport',
+  Parks: 'Leisure & Tourism',
+  Leisure: 'Leisure & Tourism',
+  Landmarks: 'Leisure & Tourism',
+  Tourism: 'Leisure & Tourism',
+  Stay: 'Leisure & Tourism',
+  Civic: 'Civic',
+};
+
+// Display order for domain group headers. A family whose title is missing
+// from PALETTE_DOMAIN falls into 'General' (see domainOfFamily below) rather
+// than being dropped from the UI — 'General' is always last.
+export const PALETTE_DOMAIN_ORDER: string[] = [
+  'Utilities',
+  'Education',
+  'Health',
+  'Industry & Economy',
+  'Safety',
+  'Housing',
+  'Transport',
+  'Leisure & Tourism',
+  'Civic',
+  'General',
+];
+
+const UNMAPPED_DOMAIN = 'General';
+
+/** Domain for one PALETTE family title — 'General' for anything unmapped, so a
+ * new family can never silently disappear from the grouped UI (it just lands
+ * in the catch-all bucket until PALETTE_DOMAIN is updated). */
+export function domainOfFamily(title: string): string {
+  return PALETTE_DOMAIN[title] ?? UNMAPPED_DOMAIN;
+}
+
+/** PALETTE regrouped by domain, in PALETTE_DOMAIN_ORDER, each entry keeping
+ * its families in their original PALETTE order. Domains with no families
+ * present (e.g. 'General' when every family is mapped) are omitted. */
+export function paletteByDomain(): { domain: string; families: typeof PALETTE }[] {
+  const byDomain = new Map<string, typeof PALETTE>();
+  for (const fam of PALETTE) {
+    const d = domainOfFamily(fam.title);
+    const list = byDomain.get(d) ?? [];
+    list.push(fam);
+    byDomain.set(d, list);
+  }
+  return PALETTE_DOMAIN_ORDER.filter((d) => byDomain.has(d)).map((d) => ({ domain: d, families: byDomain.get(d)! }));
+}
+
 export const FAMILIES: { kind: ZoneKind; label: string; color: string }[] = [
   { kind: 'road', label: 'Roads', color: '#4a525c' },
   { kind: 'residential', label: 'Housing', color: '#4c9aff' },
