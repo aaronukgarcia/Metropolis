@@ -145,6 +145,7 @@ function MoveTab() {
     { mode: 'select', label: 'Select', hint: 'Click any structure to inspect it.' },
     { mode: 'move', label: 'Move', hint: `Click a structure, then an empty spot (${fmtMoney(25)} per relocation).` },
     { mode: 'bulldoze', label: 'Bulldoze', hint: 'Click a structure to demolish it for a 25% refund. Drag to clear a row.' },
+    { mode: 'clone', label: 'Clone', hint: 'Drag to select a region, then click elsewhere to stamp a copy (hotkey: C).' },
   ];
   const activeMode = state.movingId != null ? 'move' : state.tool.mode;
   const hint =

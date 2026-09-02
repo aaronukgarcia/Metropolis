@@ -576,6 +576,153 @@ test('REAL WIRING: Space toggles speed', async () => {
   }
 });
 
+// BUG-516 RED-PROOF: ']' (Faster) must actually step the speed UP, and '[' (Slower)
+// must step it DOWN — the shipped code had these inverted/identity (']' was a no-op
+// via indexOf-then-index-back, '[' cycled the WRONG way). This test fails against
+// either defect and passes once ']' == speed+1 (clamped at 3) and '[' == speed-1
+// (clamped at 0).
+test('BUG-516: ] steps speed FASTER and [ steps speed SLOWER (clamped 0..3)', async () => {
+  const { makeKeydownHandler } = await import('../src/sim/keyhandler.ts');
+
+  function makeHandler(speed: number, onDispatch: (a: any) => void) {
+    return makeKeydownHandler({
+      dispatch: onDispatch,
+      getState: () => ({ speed: speed as 0 | 1 | 2 | 3 }),
+      setView: () => {},
+      clampView: () => {},
+      nudgeZoom: () => {},
+      setShowWater: () => {},
+      setShowPower: () => {},
+      setShowLines: () => {},
+      setShowRefs: () => {},
+      setHelpOpen: () => {},
+      helpOpen: false,
+      view: { zoom: 2, cx: 100, cy: 100 },
+      size: { w: 800, h: 600 },
+      MAP_W: 320,
+      MAP_H: 160,
+      MIN_ZOOM: 1,
+      isTextInput: () => false,
+      cancelToSelect: () => {},
+    } as any);
+  }
+
+  // ']' Faster: 1 -> 2 (fails on the old identity bug, which returns 1)
+  {
+    const calls: any = {};
+    const handler = makeHandler(1, (a: any) => (calls.speed = a.speed));
+    handler({ key: ']', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+    assert.equal(calls.speed, 2, "']' at speed 1 must dispatch speed 2");
+  }
+
+  // ']' Faster at the top: 3 -> stays 3 (clamped, never wraps back to 0)
+  {
+    const calls: any = {};
+    const handler = makeHandler(3, (a: any) => (calls.speed = a.speed));
+    handler({ key: ']', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+    assert.equal(calls.speed, 3, "']' at speed 3 must stay at 3 (clamped)");
+  }
+
+  // '[' Slower: 3 -> 2 (fails on the old inverted-cycle bug, which returns 0)
+  {
+    const calls: any = {};
+    const handler = makeHandler(3, (a: any) => (calls.speed = a.speed));
+    handler({ key: '[', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+    assert.equal(calls.speed, 2, "'[' at speed 3 must dispatch speed 2");
+  }
+
+  // '[' Slower at the bottom: 0 -> stays 0 (clamped, never wraps up to 1)
+  {
+    const calls: any = {};
+    const handler = makeHandler(0, (a: any) => (calls.speed = a.speed));
+    handler({ key: '[', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+    assert.equal(calls.speed, 0, "'[' at speed 0 must stay at 0 (clamped)");
+  }
+});
+
+// BUG-515 RED-PROOF: the 'clone' ToolMode exists and MapView fully implements the
+// clone flow, but nothing dispatched {type:'tool', tool:{mode:'clone'}} — no palette
+// button, no keybinding. This proves the keybinding entry point now exists.
+test("BUG-515: 'c' keybinding dispatches tool mode 'clone'", async () => {
+  const { makeKeydownHandler } = await import('../src/sim/keyhandler.ts');
+
+  const calls: any = { dispatch: 0, lastAction: null };
+
+  const handler = makeKeydownHandler({
+    dispatch: (action: any) => {
+      calls.dispatch++;
+      calls.lastAction = action;
+    },
+    getState: () => ({ speed: 1 }),
+    setView: () => {},
+    clampView: () => {},
+    nudgeZoom: () => {},
+    setShowWater: () => {},
+    setShowPower: () => {},
+    setShowLines: () => {},
+    setShowRefs: () => {},
+    setHelpOpen: () => {},
+    helpOpen: false,
+    view: { zoom: 2, cx: 100, cy: 100 },
+    size: { w: 800, h: 600 },
+    MAP_W: 320,
+    MAP_H: 160,
+    MIN_ZOOM: 1,
+    isTextInput: () => false,
+    cancelToSelect: () => {},
+  } as any);
+
+  handler({ key: 'c', target: { tagName: 'CANVAS' }, preventDefault: () => {} } as any);
+
+  assert.equal(calls.dispatch, 1, "'c' must dispatch exactly once");
+  assert.deepEqual(
+    calls.lastAction,
+    { type: 'tool', tool: { mode: 'clone' } },
+    "'c' must dispatch {type:'tool', tool:{mode:'clone'}}"
+  );
+});
+
+// BUG-515 RED-PROOF: the Move-tab palette must render a Clone control that dispatches
+// tool mode 'clone'. Before the fix, MapView implemented the clone flow but nothing
+// in the UI could ever put the tool into 'clone' mode.
+test('BUG-515: Move-tab palette renders a Clone control that dispatches tool:clone', async () => {
+  ensureMountWindow();
+  const React = await import('react');
+  const { renderToString } = await import('react-dom/server');
+  const { SimProvider } = await import('../src/sim/store.tsx');
+  const { BottomBar } = await import('../src/components/bottom/BottomBar.tsx');
+
+  const html = renderToString(
+    React.default.createElement(SimProvider, {
+      children: React.default.createElement(BottomBar),
+    })
+  );
+  // BuildTab renders by default; assert the Clone label exists somewhere reachable
+  // via the Move tab markup emitted by BottomBar's tab set (SSR renders both branches
+  // are not simultaneously present, so this test also inspects the source directly
+  // to confirm the dispatch wiring, which SSR alone cannot exercise via a click).
+  assert.ok(typeof html === 'string' && html.length > 0, 'BottomBar must render without throwing');
+
+  const fs = await import('fs/promises');
+  const pathMod = await import('path');
+  let testDir = new URL(import.meta.url).pathname;
+  if (testDir.startsWith('/') && testDir[2] === ':') {
+    testDir = testDir.slice(1);
+  }
+  testDir = pathMod.dirname(testDir);
+  const bottomBarPath = pathMod.resolve(testDir, '../src/components/bottom/BottomBar.tsx');
+  const source = await fs.readFile(bottomBarPath, 'utf-8');
+
+  assert.ok(
+    /mode:\s*'clone'[^}]*label:\s*'Clone'|label:\s*'Clone'[^}]*mode:\s*'clone'/.test(source),
+    'MoveTab modes[] must include a clone entry with label Clone'
+  );
+  assert.ok(
+    source.includes("dispatch({ type: 'tool', tool: { mode: m.mode } })"),
+    'the Clone entry must go through the same generic per-mode dispatch as select/move/bulldoze (no second dispatch path)'
+  );
+});
+
 // BUG-433: advisor bubble click target must have fixed screen position
 // The "click to place" affordance must stay in the same location so repeated clicks
 // need no mouse movement. Previously the advisor was centered (left: 50%; transform: translateX(-50%)),

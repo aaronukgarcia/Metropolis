@@ -90,18 +90,16 @@ export function makeKeydownHandler(deps: KeydownHandlerDeps): (e: KeyboardEvent)
         const state = deps.getState();
         deps.dispatch({ type: 'speed', speed: state.speed === 0 ? 1 : 0 });
       } else if (e.key === '[') {
-        // [ cycles slower: 0 → 3 → 2 → 1 → 0
+        // BUG-516: [ steps one speed SLOWER: Turbo(3) -> Fast(2) -> Play(1) -> Pause(0),
+        // clamped at Pause (mirrors the linear 0..3 order of TopBar's speed buttons).
         const state = deps.getState();
-        const speeds: (0 | 1 | 2 | 3)[] = [3, 0, 1, 2]; // map speed to next slower
-        const idx = speeds.indexOf(state.speed as 0 | 1 | 2 | 3);
-        const next = speeds[(idx + 1) % speeds.length];
+        const next = Math.max(0, state.speed - 1) as 0 | 1 | 2 | 3;
         deps.dispatch({ type: 'speed', speed: next });
       } else if (e.key === ']') {
-        // ] cycles faster: 0 → 1 → 2 → 3 → 0
+        // BUG-516: ] steps one speed FASTER: Pause(0) -> Play(1) -> Fast(2) -> Turbo(3),
+        // clamped at Turbo (mirrors the linear 0..3 order of TopBar's speed buttons).
         const state = deps.getState();
-        const speeds: (0 | 1 | 2 | 3)[] = [1, 2, 3, 0]; // map speed to next faster
-        const idx = speeds.indexOf(state.speed as 0 | 1 | 2 | 3);
-        const next = speeds[idx];
+        const next = Math.min(3, state.speed + 1) as 0 | 1 | 2 | 3;
         deps.dispatch({ type: 'speed', speed: next });
       }
     } else if (binding.category === 'layer') {

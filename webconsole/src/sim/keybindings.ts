@@ -38,6 +38,17 @@ export const KEYBINDINGS: readonly KeyBinding[] = [
     action: { type: 'tool', tool: { mode: 'build', spec } as Tool },
   })),
 
+  // BUG-515: Clone tool — drag-select a region, then stamp copies of it elsewhere.
+  // MapView already implements the full clone flow (drag-select/clipboard/ghost/stamp);
+  // this binding is the only way to reach it, since it has no palette entry either.
+  {
+    key: 'c',
+    label: 'Clone',
+    category: 'tool',
+    description: 'Clone tool — drag-select a region, then click to stamp copies',
+    action: { type: 'tool', tool: { mode: 'clone' } as Tool },
+  },
+
   // ===== SPEED CONTROL =====
   // Space = toggle play/pause (computed in handler based on current state)
   {
@@ -52,14 +63,14 @@ export const KEYBINDINGS: readonly KeyBinding[] = [
     key: '[',
     label: 'Slower',
     category: 'speed',
-    description: 'Cycle to slower speed (Pause ← Play ← Fast ← Turbo)',
+    description: 'Step to the next slower speed (Turbo → Fast → Play → Pause), clamped at Pause',
     uiOnly: true,
   },
   {
     key: ']',
     label: 'Faster',
     category: 'speed',
-    description: 'Cycle to faster speed (Pause → Play → Fast → Turbo)',
+    description: 'Step to the next faster speed (Pause → Play → Fast → Turbo), clamped at Turbo',
     uiOnly: true,
   },
 
