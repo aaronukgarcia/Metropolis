@@ -10,6 +10,7 @@ import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/market"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/refuse"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/save"
+	"github.com/aaronukgarcia/Metropolis/internal/engine/services"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/traffic"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/unlocks"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/world"
@@ -33,6 +34,16 @@ import (
 // live-tree scan enforces the import graph). The other five participants'
 // packages (world/citizens/finance/build/refuse/traffic) are already on
 // the composition root's registered outbound edge set.
+//
+// FEAT-build-services-bridge-2026-09-02 round remedy (root fix): engine.
+// services (st.services) is now ALSO a save.Participant
+// (services.NewSaveParticipant) — the composition root already has a
+// registered edge to engine.services (compose.go imports it directly for
+// the SetFunding command seam), so this addition needs no NEW
+// compositionroot-level edge. The one genuinely new edge — engine.services'
+// OWN outbound edge to int.serializer (foundation/serialize) — was
+// registered by the lead in master-plan-v2.1.json/code.json (commit
+// 73696fd, GR#25, independently verified) before this file landed.
 
 // compositionSaveName is the fixed manual-save display name Save writes and
 // Load reads back. A stable, filesystem-safe literal (SaveManual rejects
@@ -58,7 +69,8 @@ const compositionSaveAppVersion = "metropolis-compose"
 // its Participant by Kind, and a fresh RecordSource is taken per Source
 // call), but stated explicitly so the saved shard sequence is deterministic:
 // world, citizens, finance, build, refuse, traffic, unlocks, crime, market,
-// consumption, attract, then the composition root's OWN ledger participant.
+// consumption, attract, services, then the composition root's OWN ledger
+// participant.
 //
 // FEAT-1972079943 completed the full-composed StateDigest STATE SNAPSHOT
 // round-trip by adding the last two entries:
@@ -104,6 +116,14 @@ func (c *Composition) Participants() []save.Participant {
 		// restored. attract itself is already a registered outbound edge of
 		// this composition root (compose.go imports it directly).
 		attract.NewSaveParticipant(st.attract),
+		// FEAT-build-services-bridge-2026-09-02 round remedy (root fix):
+		// engine.services' own registered instance table (spec, funding,
+		// currentUpgrade, demand/demandDist, allocated, districtDemand,
+		// poolAvailable) round-trips through this participant, closing the
+		// live-composition-rewind phantom-instance hazard the round found —
+		// see services/participant.go's doc comment for the full
+		// durable-vs-derived analysis and the BUG-586 reconciliation rule.
+		services.NewSaveParticipant(st.services),
 		newComposeLedgerParticipant(st),
 	}
 }
@@ -196,29 +216,54 @@ func (c *Composition) Load(root string, opts ...save.LoadOption) error {
 	// compose participant and these two mirrors recomputed, the full
 	// StateDigest round-trips exactly.
 	c.state.syncMoneyFromLedger()
-	// FEAT-build-services-bridge-2026-09-02 round remedy (b): engine.services
-	// is NOT itself a save.Participant above (it carries no durable state of
-	// its OWN worth persisting independently — its instance table is fully
-	// DERIVED from completed build orders), so a restore brings build's
-	// queue back with already-complete service orders but an empty services
-	// instance table. Re-drive registration for those orders here, right
-	// after both build (Participants(), above) and services (constructed
-	// once at Wire time and never rebuilt by Load) are in their
-	// post-restore state — this is the single choke point every restore
-	// path funnels through: bare Load, LoadAt, restoreFromSnapshotBytes
-	// (snapshot.go's walk-back branch), and therefore
-	// RestoreLatestSnapshotOrGenesis's snapshot branch, which is exactly
-	// cmd/metroserve's durable-host startup path (persist.go's
-	// wireAndRehydrate -> RestoreLatestSnapshotOrGenesis). The genesis-replay
-	// fallback (restoreGenesis, snapshot.go) does NOT go through Load at
-	// all — it re-executes the journaled SubmitBuildCommand/Tick commands
-	// from tick 0, which re-derives every registration naturally through
-	// Tick's own self-healing sweep (build.go's
-	// registerCompletedServicesLocked, now idempotent per remedy (a)), so
-	// calling it again here would be a harmless no-op for that path, not a
-	// gap. BuildAPI.RegisterCompletedServices is itself idempotent (a no-op
-	// over any order already tracked), so calling it unconditionally on
-	// every Load — not just a snapshot restore — is safe.
+	// FEAT-build-services-bridge-2026-09-02 root fix + round remedy (b):
+	// engine.services IS now a save.Participant (Participants(), above) — its
+	// own instance table, funding/upgrade/demand/allocated state,
+	// districtDemand, and poolAvailable round-trip verbatim, closing the
+	// live-composition-rewind phantom-instance hazard the round found (a
+	// service instance that existed only in a LATER save/live-composition
+	// state no longer survives a Load to an earlier one: resetForLoad wipes
+	// the instance table before the loaded records repopulate it — see
+	// services/participant.go's doc comment).
+	//
+	// RegisterCompletedServices still runs here, unconditionally, on every
+	// Load — NOT only to cover engine.services (which now restores its own
+	// state), but because it remains the ONLY rebuild path for an OLD save
+	// taken before this participant existed (no "services.*" shard in the
+	// bundle ⇒ services.SaveParticipant.Handler never runs ⇒ the live
+	// ServicesAPI is left exactly as SetServices/New constructed it, empty)
+	// — the documented migration path this round's fix must not regress.
+	// registerServiceLocked (build/build.go) already treats
+	// services.ErrDuplicateService as a no-op success (round remedy (a)),
+	// so calling the sweep AFTER this participant has restored a service
+	// the sweep also wants to (re-)register is a harmless idempotent no-op:
+	// the RESTORED funding/currentUpgrade/demand/allocated state is never
+	// overwritten by the sweep's fresh-spec re-derivation, because
+	// RegisterService only ever INSERTS a new id — it never mutates an
+	// existing one. Reconciliation rule when the two disagree: BUILD's own
+	// restored state (b.structures — the authoritative "still standing"
+	// record, itself an exact save round-trip) decides which build-order-
+	// derived services exist going forward; a services instance this
+	// participant restores for an order the loaded build queue no longer
+	// marks complete+standing is a residual the sweep does not clean up
+	// (the sweep is additive-only) — this is a known, documented gap
+	// (services/participant.go's doc comment), tracked as a follow-up for a
+	// dedicated cross-participant reconciliation pass, since normal Load
+	// calls always restore build and services from the SAME save bundle (so
+	// the two are mutually consistent at every real save point; the gap is
+	// reachable only from a hand-corrupted or externally-crafted save).
+	// This is the single choke point every restore path funnels through:
+	// bare Load, LoadAt, restoreFromSnapshotBytes (snapshot.go's walk-back
+	// branch), and therefore RestoreLatestSnapshotOrGenesis's snapshot
+	// branch, which is exactly cmd/metroserve's durable-host startup path
+	// (persist.go's wireAndRehydrate -> RestoreLatestSnapshotOrGenesis). The
+	// genesis-replay fallback (restoreGenesis, snapshot.go) does NOT go
+	// through Load at all — it re-executes the journaled
+	// SubmitBuildCommand/Tick commands from tick 0, which re-derives every
+	// registration naturally through Tick's own self-healing sweep
+	// (build.go's registerCompletedServicesLocked, idempotent per remedy
+	// (a)), so calling RegisterCompletedServices again here is a harmless
+	// no-op for that path, not a gap.
 	if err := c.state.buildAPI.RegisterCompletedServices(); err != nil {
 		return errs.Wrap(ErrModuleFailed, c.state.cid, err, map[string]any{"module": "build", "step": "register-completed-services"})
 	}
