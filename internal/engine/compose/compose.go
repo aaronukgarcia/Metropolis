@@ -58,17 +58,40 @@ const (
 	// initialTreasury (Aaron's ruling: "keep initialCitizenWealth's 0.5:1
 	// ratio to treasury") — £750,000 x 1,000 units/£.
 	initialCitizenWealth = 750_000_000 // money-unit base (£750,000, ratio-preserved)
-	// monthlyWages/monthlyTax are the pre-existing finance STUBS (distinct
-	// from moneycirc.go's real-world-grounded wage/tax figures) that this
-	// package's own overdraft/BUG-355 tests exercise against
-	// initialTreasury. Rescaled by the SAME factor initialTreasury grew by
-	// (150,000x in real terms: £10 -> £1,500,000) so their ratio to the new
-	// treasury — and hence every dynamic that reads them (e.g. attract's
-	// HousingAffordability income basis, see moneycirc.go's
-	// monthlyRentForHouseholds doc comment) — is unchanged from before this
-	// rebase: £1 x 150,000 x 1,000 units/£.
-	monthlyWages = 150_000_000 // money-unit base (£150,000, ratio-preserved)
-	monthlyTax   = 150_000_000 // money-unit base (£150,000, ratio-preserved; budget closes)
+
+	// monthlyWagesFloor is the pre-existing finance STUB (formerly named
+	// monthlyWages, ALWAYS posted flat regardless of population) — kept as
+	// a FLOOR, not the wage bill itself, by FEAT-083's de-stub
+	// (2026-09-02, Aaron-authorized directly). Rescaled by the SAME factor
+	// initialTreasury grew by (150,000x in real terms: £10 -> £1,500,000):
+	// £1 x 150,000 x 1,000 units/£.
+	//
+	// FEAT-083 makes the wage bill population/employment-derived
+	// (employedResidentCount() x moneycirc.go's real UK gross wage,
+	// see financeHook.ApplyEffect) — but a NAKED replacement (no floor)
+	// was tried and empirically FAILED: at baseline-one's seed scale
+	// (64 residents, ~75% employment placeholder), the realistic wage bill
+	// (~£60-90k/month) divided across ~32 households comes out BELOW
+	// households.RentBurdenOf's 35% threshold against
+	// baselineOneMonthlyRentPerHousehold (moneycirc.go, £1,000/month) —
+	// reproducing the EXACT catastrophic emigration collapse (population
+	// 64 -> 49 within month 1, HousingAffordability pinned at 0) that
+	// BUG-452's doc comment (moneycirc.go) already empirically ruled out
+	// for the OLD flat £150,000/month figure. This floor is this ticket's
+	// documented placeholder that keeps that already-validated safe
+	// baseline: the wage bill is max(monthlyWagesFloor, employed x real
+	// wage), so population-scaling only takes over once real employment
+	// income would EXCEED the floor (roughly 72+ employed residents at the
+	// current per-employed wage — reachable via migration growth over a
+	// longer run, proven directly in this ticket's monotonic-scaling unit
+	// test without needing to grow the full composed city that far).
+	// FLAGGED FOR AARON: this floor-vs-realistic-income tension is the
+	// same rent-burden fragility BUG-452 already surfaced — the 35%
+	// threshold was calibrated against an unrealistically generous flat
+	// wage, so a fully realistic (no-floor) wage bill sits right at that
+	// threshold's edge. Retiring this floor entirely is a genuine
+	// balance-pass call, not solved here.
+	monthlyWagesFloor = 150_000_000 // money-unit base (£150,000, ratio-preserved)
 )
 
 // baseline-one real-module placeholders. Like the block above, these are
@@ -1535,10 +1558,26 @@ func (h *financeHook) ApplyEffect(eff core.Effect) {
 			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "cause": err.Error()})
 			return
 		}
-		if _, err := st.finance.PostWages(finance.Money(monthlyWages)); err == nil {
-			flowed = monthlyWages
-			if _, err := st.finance.CollectTax(finance.TaxRates{IncomeRate: 10000}, finance.Money(monthlyWages), 0, 0); err == nil {
-				flowed += monthlyTax
+		// FEAT-083 de-stub: mark this month's resident employment BEFORE
+		// sizing the wage bill (moneycirc.go's markEmploymentAndCount doc
+		// comment) — the wage bill is employedCount x the real UK gross
+		// wage, not a flat constant, so employment must be decided first.
+		employed, empErr := st.markEmploymentAndCount(clock.Month())
+		if empErr != nil {
+			_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "cause": empErr.Error()})
+		}
+		wageBill := int64(employed) * monthlyWageGrossPerEmployedMicropounds
+		// monthlyWagesFloor's doc comment: never post BELOW the
+		// already-validated safe floor (avoids reproducing the BUG-452
+		// rent-burden emigration collapse at baseline-one's seed scale) —
+		// population-scaling only takes over once it would exceed the floor.
+		if wageBill < monthlyWagesFloor {
+			wageBill = monthlyWagesFloor
+		}
+		if _, err := st.finance.PostWages(finance.Money(wageBill)); err == nil {
+			flowed = wageBill
+			if receipts, err := st.finance.CollectTax(finance.TaxRates{IncomeRate: 10000}, finance.Money(wageBill), 0, 0); err == nil {
+				flowed = num.SatAdd(flowed, int64(receipts.Income))
 			}
 		}
 

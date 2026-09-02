@@ -3,6 +3,7 @@ package compose
 import (
 	"github.com/aaronukgarcia/Metropolis/internal/engine/citizens"
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/det"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/num"
 )
@@ -75,13 +76,13 @@ const (
 	// value (ledgerScaleDivisor deleted — see doc comment above).
 	monthlyUtilitySpendPerCapitaMicropounds = 55_000
 
-	// monthlyConsumptionSpendMicropounds is the LEDGER-facing amount
-	// PostHouseholdSpend actually posts each month: the real per-capita
-	// utility figure above, posted DIRECTLY at full scale since BUG-452
-	// retired ledgerScaleDivisor (flat, not population-scaled — the same
-	// documented simplification the pre-existing monthlyWages/monthlyTax
-	// stub already uses, pending a real population-scaled balance pass
-	// once seedCitizenCount is real-derived).
+	// monthlyConsumptionSpendMicropounds is the PER-HOUSEHOLD price
+	// postConsumptionAndTax multiplies by the current household count
+	// (FEAT-083, 2026-09-02) — the real per-capita utility figure above,
+	// posted at full scale since BUG-452 retired ledgerScaleDivisor. Was a
+	// flat, non-population-scaled quantity=1 post before FEAT-083; see
+	// postConsumptionAndTax's doc comment for the household-vs-population
+	// scaling call flagged for Aaron.
 	monthlyConsumptionSpendMicropounds = monthlyUtilitySpendPerCapitaMicropounds
 
 	// baselineOneMonthlyRentPerHousehold is the real UK Kent/Folkestone
@@ -128,10 +129,12 @@ const (
 	// the money base-unit change (same real £47).
 	councilTaxPerCapitaMicropounds = 47_000
 
-	// monthlyCouncilTaxMicropounds is the LEDGER-facing amount
-	// PostCouncilTax actually posts each month, posted DIRECTLY at full
-	// scale since BUG-452 retired ledgerScaleDivisor (see
-	// monthlyConsumptionSpendMicropounds' doc comment — same treatment).
+	// monthlyCouncilTaxMicropounds is the PER-HOUSEHOLD price
+	// postConsumptionAndTax multiplies by the current household count
+	// (FEAT-083, 2026-09-02 — UK council tax is genuinely billed per
+	// dwelling/household, so this leg's household-scaling is the MORE
+	// correct of the two, unlike the consumption-spend leg above). Was a
+	// flat post before FEAT-083; see postConsumptionAndTax's doc comment.
 	monthlyCouncilTaxMicropounds = councilTaxPerCapitaMicropounds
 
 	// commercialTaxRateBp is the "commercial" leg of Aaron's diversify-the-
@@ -168,6 +171,186 @@ const (
 	monthlyWageNetPerCitizenMicropounds = monthlyWageGrossPerEmployedMicropounds -
 		(monthlyWageGrossPerEmployedMicropounds * incomeNITaxRateBp / 10_000)
 )
+
+// --- FEAT-083 finance de-stub: minimal employment marking ---
+//
+// The pre-existing wage/tax legs (compose.go's old monthlyWages/monthlyTax
+// flat £150,000/month stub) never scaled with population, and
+// distributeWagesToResidents even-split the wage across EVERY resident
+// because no compose-owned path ever set Employment.State (see this
+// file's original doc comment on that function, retired below). This is
+// the MINIMAL employment-marking scope Aaron authorized directly
+// (2026-08-31/09-01 rulings): NOT the full jobs model (that is the
+// deferred FEAT-1972079929) — just enough to give the money loop a real,
+// population-scaled employed/unemployed split.
+//
+// citizens.LifeEventEmployment + CitizensAPI.ApplyLifeEventCommand
+// ALREADY EXIST (citizens/registry.go) as the registered command surface
+// for mutating Employment.State/Sector — this package uses that surface
+// exclusively (SEC-020 copyguard: no reaching into Citizen fields
+// directly), the same pattern formResidentHouseholds/
+// distributeWagesToResidents already use for LifeEventPartner/
+// LifeEventWealth.
+//
+// citizens.ColdShard.matchJob (coldpass.go) is a SEPARATE, pre-existing,
+// citizens-owned employment-transition mechanism gated by
+// ColdPassParams.JobMatchRate (workingAge-fraction-of-sample derived).
+// It is NOT reused here for two reasons, both DOCUMENTED FINDINGS flagged
+// for Aaron rather than silently worked around: (1) it only fires for
+// COLD (non-elevated) citizens (applyMonthly's hot-citizen skip), and (2)
+// far more significantly, EVERY citizen this engine mints today — seed
+// population (compose.go's spawnCitizens) AND admitted migrants
+// (attract/migration.go's applyImmigration) — is created with
+// BirthMonth = the CURRENT sim month, i.e. every citizen is a literal
+// newborn at creation. Gating employment on any realistic UK working-age
+// floor (16+ years = 192+ months) would therefore pin EVERY employment
+// draw (this package's own, and matchJob's) at "child" for the entire
+// observable game/test horizon (baseline-one's tests run 12-400 months =
+// 1-33 years) — the money loop would never visibly scale. This is a real,
+// separate gap (no citizen is ever minted pre-aged into adulthood) that
+// this ticket does not fix; workingAgeMinMonths below is set to 0 as an
+// explicit, documented interim placeholder pending that fix, so the wage
+// bill is observable NOW rather than dormant for decades of sim-time.
+const (
+	// workingAgeMinMonths is the floor age (in months) below which a
+	// resident is never drawn for employment (EmploymentNone, "child").
+	// GROUNDED FIGURE WOULD BE 192 (UK compulsory-education-leaving age,
+	// 16 years) but is set to 0 here — see the doc comment above: every
+	// citizen in this engine is minted at age 0, so a real 16-year floor
+	// would leave employment (and hence wages) at zero for the entire
+	// observable baseline-one horizon. FLAGGED for Aaron: the correct fix
+	// is minting seed/migrant citizens with a realistic age distribution,
+	// not lowering this floor — tracked as a follow-up, not solved here.
+	workingAgeMinMonths = 0
+
+	// retirementAgeMonths is the UK State Pension age (~66 years,
+	// docs/planning/money-numbers-real-world.md's UK-grounded figures
+	// share this basis) — real-world-grounded, balance-pass adjustable.
+	// A resident at or beyond this age is marked EmploymentRetired and
+	// never redrawn. Given every citizen starts at age 0 (see above), this
+	// only bites in very long runs (33+ years / 400+ months), but is kept
+	// at its real value since it costs nothing to be correct here.
+	retirementAgeMonths = 66 * 12
+
+	// employmentRateOfWorkingAgeFraction is the UK ONS employment rate for
+	// the working-age population (~75%, ONS labour-market statistics,
+	// 16-64 age band) — real-world-grounded, balance-pass adjustable. A
+	// working-age resident not yet decided (EmploymentNone/EmploymentStudent,
+	// never EmploymentEmployed/EmploymentUnemployed/EmploymentOffMap —
+	// see employmentDecision's doc comment) draws Employed against this
+	// fraction, Unemployed otherwise.
+	employmentRateOfWorkingAgeFraction = 0.75
+
+	// employedSectorPlaceholder is the sector newly-Employed residents are
+	// assigned: UK employment is ~80% services (ONS sector-share
+	// statistics) — real-world-grounded, balance-pass adjustable. A single
+	// sector for every employed resident is the minimal-scope
+	// simplification; per-sector distribution is part of the deferred
+	// FEAT-1972079929 full jobs model.
+	employedSectorPlaceholder = citizens.SectorTertiary
+)
+
+// employmentDecision draws ONE resident's Employed/Unemployed verdict,
+// deterministically and PERMANENTLY (keyed (seed, id, "employment-marking")
+// with a FIXED month argument of 0 — never the calendar month) so the
+// decision, once made, never flip-flops from one month to the next the
+// way a per-month re-draw would. It is a pure function (no citizens
+// lookup), which lets tests predict the exact employed/unemployed split
+// for a known seed and id set WITHOUT running any ticks (GR#15 — derive
+// expected values from the same formula production uses, never a
+// hand-picked hardcoded count).
+func employmentDecision(seed, id uint64) (citizens.EmploymentState, citizens.Sector) {
+	stream := det.NewStream(seed, id, 0, "employment-marking")
+	if stream.Float64() < employmentRateOfWorkingAgeFraction {
+		return citizens.EmploymentEmployed, employedSectorPlaceholder
+	}
+	return citizens.EmploymentUnemployed, citizens.SectorNone
+}
+
+// desiredEmployment is the pure age/current-state decision table
+// markEmploymentAndCount applies to one resident: EmploymentNone below
+// workingAgeMinMonths, EmploymentRetired at/above retirementAgeMonths,
+// the current state unchanged if already
+// Employed/Unemployed/EmploymentOffMap (never redrawn/flapped/overwritten
+// — EmploymentOffMap in particular already has a real off-map job,
+// engine.extcommute, see citizens/types.go's EmploymentOffMap doc
+// comment), or a fresh employmentDecision draw otherwise. Extracted as a
+// pure function (age and current state as plain arguments, no CitizensAPI
+// lookup) so it is directly unit-testable against synthetic ages without
+// needing to advance CitizensAPI's internal clock hundreds of simulated
+// months to observe the retirement/off-map branches.
+func desiredEmployment(seed, id uint64, age int64, cur citizens.Employment) (citizens.EmploymentState, citizens.Sector) {
+	switch {
+	case age < workingAgeMinMonths:
+		return citizens.EmploymentNone, cur.Sector
+	case age >= retirementAgeMonths:
+		return citizens.EmploymentRetired, cur.Sector
+	case cur.State == citizens.EmploymentEmployed, cur.State == citizens.EmploymentUnemployed, cur.State == citizens.EmploymentOffMap:
+		return cur.State, cur.Sector
+	default:
+		return employmentDecision(seed, id)
+	}
+}
+
+// markEmploymentAndCount is FEAT-083's minimal employment-marking pass:
+// for every resident, it decides EmploymentNone (child, age <
+// workingAgeMinMonths), EmploymentRetired (age >= retirementAgeMonths), or
+// — for a working-age resident not yet decided — a one-time
+// employmentDecision draw, applied through CitizensAPI's registered
+// LifeEventEmployment command (never a direct field write, SEC-020). A
+// resident already EmploymentEmployed/EmploymentUnemployed/EmploymentOffMap
+// is left untouched (no re-draw, no flapping); EmploymentOffMap in
+// particular already has a real off-map job (engine.extcommute, see
+// citizens/types.go's EmploymentOffMap doc comment) and must never be
+// overwritten by this on-map-only marking. Returns the resulting Employed
+// count (the wage bill's basis — see financeHook.ApplyEffect), counted in
+// the SAME pass so the wage bill and the marking can never observe two
+// different snapshots of the same month.
+func (st *simState) markEmploymentAndCount(month int64) (employed int, err error) {
+	for _, id := range st.residentIDs() {
+		cit, ok := st.citizens.CitizenAt(id, st.cid)
+		if !ok {
+			continue // departed — not a corruption, just skip
+		}
+		desired, sector := desiredEmployment(st.seed, id, cit.Age(), cit.Employment)
+		cur := cit.Employment.State
+		if desired != cur {
+			if applyErr := st.citizens.ApplyLifeEventCommand(citizens.LifeEventCommand{
+				CorrelationID: st.cid,
+				Kind:          citizens.LifeEventEmployment,
+				CitizenID:     id,
+				Employment:    desired,
+				Sector:        sector,
+			}); applyErr != nil {
+				return employed, errs.Wrap(ErrModuleFailed, st.cid, applyErr, map[string]any{"module": "citizens", "op": "markEmploymentAndCount", "id": id, "month": month})
+			}
+		}
+		if desired == citizens.EmploymentEmployed {
+			employed++
+		}
+	}
+	return employed, nil
+}
+
+// employedResidentCount is a read-only re-count of the current Employed
+// resident set (used by observability/tests; markEmploymentAndCount
+// already returns this count for the production hot path, so this helper
+// avoids a second full pass there — it exists for callers that only need
+// the count, not the marking side-effect, e.g. tests reading state AFTER
+// a tick has already run markEmploymentAndCount for that month).
+func (st *simState) employedResidentCount() int {
+	n := 0
+	for _, id := range st.residentIDs() {
+		cit, ok := st.citizens.CitizenAt(id, st.cid)
+		if !ok {
+			continue
+		}
+		if cit.Employment.State == citizens.EmploymentEmployed {
+			n++
+		}
+	}
+	return n
+}
 
 // monthlyRentForHouseholds is FEAT-1972079927 Q2's rent figure. BUG-452
 // (2026-09-01) retired the old flat hand-tuned placeholder
@@ -226,24 +409,25 @@ func (st *simState) formResidentHouseholds(month int64) error {
 }
 
 // distributeWagesToResidents is FEAT-1972079927 Q5's ongoing per-citizen
-// wealth accrual: every resident citizen that still resolves (departed
-// citizens are skipped, never a corruption) gains
-// monthlyWageNetPerCitizenMicropounds via LifeEventWealth. "Proportional to
-// employment" (the brief's Q5 recommendation) collapses to an equal split
-// across every resident today because no compose-owned path ever marks a
-// citizen Employed yet (engine.attract's admitted migrants are always
-// created Unemployed, and spawnCitizens never sets Employment either) — a
-// documented inc1 simplification. TODO(FEAT-1972079927 inc2+): once
-// staffing/employment is wired to citizens broadly, weight this by each
-// citizen's real Employment.State/Sector instead of splitting evenly.
-// citizen.Wealth is a per-citizen data field the conservation invariant
-// does not track (see this file's ledger-scale doc comment), so crediting
-// it every month at the real per-capita wage figure is safe and does not
-// affect StockMoney's conservation check.
+// wealth accrual: every resident citizen currently EmploymentEmployed
+// (departed citizens are skipped, never a corruption) gains
+// monthlyWageNetPerCitizenMicropounds via LifeEventWealth. FEAT-083
+// (2026-09-02) closes the Q5 TODO this doc comment used to carry — "weight
+// this by each citizen's real Employment.State" — now that
+// markEmploymentAndCount (financeHook.ApplyEffect, called earlier the same
+// month) actually marks residents Employed/Unemployed: an unemployed
+// resident receives nothing, matching real-world wage income. citizen.Wealth
+// is a per-citizen data field the conservation invariant does not track
+// (see this file's ledger-scale doc comment), so crediting it every month
+// at the real per-capita wage figure is safe and does not affect
+// StockMoney's conservation check.
 func (st *simState) distributeWagesToResidents() error {
 	for _, id := range st.residentIDs() {
 		cit, ok := st.citizens.CitizenAt(id, st.cid)
 		if !ok {
+			continue
+		}
+		if cit.Employment.State != citizens.EmploymentEmployed {
 			continue
 		}
 		newWealth := num.SatAdd(cit.Wealth, monthlyWageNetPerCitizenMicropounds)
@@ -261,18 +445,41 @@ func (st *simState) distributeWagesToResidents() error {
 
 // postConsumptionAndTax is FEAT-1972079927 Q4's monthly household spend and
 // the commercial/industrial tax legs that close the loop back to the
-// treasury (Aaron's 2026-08-31 diversify-the-base steer, BUG-391): a flat
-// monthlyConsumptionSpendMicropounds (households -> firms, the degenerate
-// quantity=1/price=spend PostHouseholdSpend pattern the brief recommends),
-// then commercial (VAT-like) + industrial (corp-tax-like) tax on whatever
-// was ACTUALLY posted (not the nominal target — a rejected spend post
-// leaves nothing to tax, matching PostWages/CollectTax's existing
-// all-or-nothing pairing pattern in financeHook). Every leg's success or
-// failure is logged loudly (GR#1) rather than silently skipped; a failure
-// here never blocks the finance hook's other legs (each Post is
-// independently validated/atomic).
+// treasury (Aaron's 2026-08-31 diversify-the-base steer, BUG-391): FEAT-083
+// (2026-09-02) replaced the flat quantity=1 stub with household-count
+// scaling — quantity=len(HouseholdIDs), price=the real per-capita figure
+// (households -> firms) — then commercial (VAT-like) + industrial
+// (corp-tax-like) tax on whatever was ACTUALLY posted (not the nominal
+// target — a rejected spend post leaves nothing to tax, matching
+// PostWages/CollectTax's existing all-or-nothing pairing pattern in
+// financeHook). Every leg's success or failure is logged loudly (GR#1)
+// rather than silently skipped; a failure here never blocks the finance
+// hook's other legs (each Post is independently validated/atomic).
+//
+// FLAGGED FOR AARON (a genuine balance/design call, not solved here):
+// scaling a PER-CAPITA figure (monthlyConsumptionSpendMicropounds/
+// councilTaxPerCapitaMicropounds are both documented "per resident") by
+// HOUSEHOLD count rather than population count under-states the true
+// city-wide total by roughly the average household size (~2x, formed
+// households pair 2 residents — moneycirc.go's formResidentHouseholds).
+// UK council tax is genuinely billed per DWELLING (so household-count
+// scaling is arguably MORE correct for that leg specifically), but
+// household-scaling a per-capita utility-spend figure is a coarser
+// approximation; population-count scaling was the alternative considered.
+// Following this ticket's brief (household-count scaling for both legs)
+// as the documented placeholder pending Aaron's balance-pass call.
 func (st *simState) postConsumptionAndTax() (flowed int64) {
-	spendPosted, err := st.finance.PostHouseholdSpend(1, finance.Money(monthlyConsumptionSpendMicropounds))
+	households := int64(len(st.citizens.HouseholdIDs(st.cid)))
+	if households <= 0 {
+		// No households formed yet this month (should not happen once
+		// formResidentHouseholds has run — PhasePopulation precedes
+		// PhaseFinance — but degenerate-city defense-in-depth keeps the
+		// loop from freezing at a permanent zero rather than a transient
+		// one): fall back to a single household-equivalent.
+		households = 1
+	}
+
+	spendPosted, err := st.finance.PostHouseholdSpend(households, finance.Money(monthlyConsumptionSpendMicropounds))
 	if err != nil {
 		_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostHouseholdSpend", "cause": err.Error()})
 		spendPosted = 0
@@ -293,7 +500,7 @@ func (st *simState) postConsumptionAndTax() (flowed int64) {
 		}
 	}
 
-	councilPosted, err := st.finance.PostCouncilTax(finance.Money(monthlyCouncilTaxMicropounds))
+	councilPosted, err := st.finance.PostCouncilTax(finance.Money(households * monthlyCouncilTaxMicropounds))
 	if err != nil {
 		_ = errs.New(ErrModuleFailed, st.cid, map[string]any{"module": "finance", "op": "PostCouncilTax", "cause": err.Error()})
 	} else {

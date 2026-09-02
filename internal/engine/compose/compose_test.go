@@ -322,12 +322,13 @@ func TestHeadless_TwelveMonthsLedgerMatchesSimState(t *testing.T) {
 // one month's wage bill.
 func TestBUG355_WagesPosted_IsPerMonthNotCumulative(t *testing.T) {
 	e, comp := newTestEngine(t, 42)
+	wantWage := int64(monthlyWagesFloor)
 	for m := int64(1); m <= 3; m++ {
 		if err := e.AdvanceTicks(errs.NewCorrelationID(), core.DailyTicksPerMonth); err != nil {
 			t.Fatalf("AdvanceTicks(month %d): %v", m, err)
 		}
-		if got := int64(comp.state.finance.WagesPosted()); got != monthlyWages {
-			t.Fatalf("WagesPosted after month %d = %d, want exactly one month's wage bill %d (per-month, not cumulative)", m, got, monthlyWages)
+		if got := int64(comp.state.finance.WagesPosted()); got != wantWage {
+			t.Fatalf("WagesPosted after month %d = %d, want exactly one month's wage bill %d (per-month, not cumulative)", m, got, wantWage)
 		}
 	}
 }
@@ -341,7 +342,8 @@ func TestBUG355_WagesPosted_IsPerMonthNotCumulative(t *testing.T) {
 // figures.
 func TestBUG355_PostRejection_SimStateMirrorsLedgerAtMonthEnd(t *testing.T) {
 	e, comp := newTestEngine(t, 42)
-	drain := initialTreasury - monthlyWages + 1 // leaves 999_999 < one wage bill
+	wageBill := int64(monthlyWagesFloor)
+	drain := initialTreasury - wageBill + 1 // leaves treasury just short of one wage bill
 	if _, err := comp.state.finance.SettleConstruction(finance.Money(drain)); err != nil {
 		t.Fatalf("SettleConstruction(drain): %v", err)
 	}
@@ -366,7 +368,8 @@ func TestBUG355_PostRejection_SimStateMirrorsLedgerAtMonthEnd(t *testing.T) {
 // identical, at the ledger's own exact figures.
 func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 	e, comp := newTestEngine(t, 42)
-	drain := initialCitizenWealth - monthlyWages + 1 // leaves households monthlyWages-1
+	wageBill := int64(monthlyWagesFloor)
+	drain := initialCitizenWealth - wageBill + 1 // leaves households wageBill-1
 	if _, err := comp.state.finance.Post(finance.Transaction{
 		Description: "test drain of household wealth",
 		Entries: []finance.Entry{
@@ -380,21 +383,33 @@ func TestBUG355_PartialPost_TaxRejectionStillMirrorsLedger(t *testing.T) {
 		t.Fatalf("AdvanceTicks: %v", err)
 	}
 	// FEAT-1972079927 inc1 adds two more household->elsewhere legs this
-	// same month (Q4 consumption spend + the flat council tax), both of
-	// which still fit comfortably in the wage/tax pair's thinnest-pot
-	// balance (monthlyWages-1) and so post successfully too — the pair's
-	// own all-or-nothing property (this test's real subject) is
+	// same month (Q4 consumption spend + council tax, both FEAT-083
+	// household-count-scaled — see postConsumptionAndTax's doc comment),
+	// both of which still fit comfortably in the wage/tax pair's
+	// thinnest-pot balance (wageBill-1) and so post successfully too — the
+	// pair's own all-or-nothing property (this test's real subject) is
 	// unaffected; only the arithmetic the new legs add needs updating.
-	wantHH := int64(monthlyWages - 1 - monthlyConsumptionSpendMicropounds - monthlyCouncilTaxMicropounds)
+	// households is read from state (GR#15 — derive from data, never a
+	// hardcoded constant): a naive "seedCitizenCount/2 households formed
+	// in month 1" assumption is WRONG once month 1's own income-lag
+	// affordability dip (HousingAffordability reads the PREVIOUS tick's
+	// WagesPosted, which is genuinely zero on month 1 — a documented
+	// pre-existing baseline-one characteristic, not something this ticket
+	// introduces) triggers some emigration the SAME month households
+	// form, dissolving a few of them before financeHook runs.
+	households := int64(len(comp.state.citizens.HouseholdIDs(comp.state.cid)))
+	spend := households * monthlyConsumptionSpendMicropounds
+	councilTax := households * monthlyCouncilTaxMicropounds
+	wantHH := int64(wageBill - 1 - spend - councilTax)
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctHouseholds), comp.CitizenWealth(); led != st || led != wantHH {
 		t.Fatalf("month end: FinanceAPI households = %d, Composition.CitizenWealth = %d, want both %d", led, st, wantHH)
 	}
 	// Treasury gains the commercial+industrial tax on the posted spend,
-	// plus the flat council tax (the old wage/tax pair nets zero on
-	// treasury, unchanged from before this increment).
-	commercial := monthlyConsumptionSpendMicropounds * commercialTaxRateBp / 10_000
-	industrial := monthlyConsumptionSpendMicropounds * industrialTaxRateBp / 10_000
-	wantTr := int64(initialTreasury + commercial + industrial + monthlyCouncilTaxMicropounds)
+	// plus council tax (the old wage/tax pair nets zero on treasury,
+	// unchanged from before this increment).
+	commercial := spend * commercialTaxRateBp / 10_000
+	industrial := spend * industrialTaxRateBp / 10_000
+	wantTr := int64(initialTreasury + commercial + industrial + councilTax)
 	if led, st := ledgerBalance(comp.state.finance, finance.AcctTreasury), comp.Treasury(); led != st || led != wantTr {
 		t.Fatalf("month end: FinanceAPI treasury = %d, Composition.Treasury = %d, want both %d", led, st, wantTr)
 	}
