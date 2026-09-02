@@ -91,8 +91,12 @@ export function isFastBuildEnabled(storage?: {
       return false;
     }
   }
-  const now = Date.now();
-  if (flagCache !== null && now - flagCacheAt < FLAG_CACHE_TTL_MS) return flagCache;
+  // No wall-clock in the read path: capture-before-wipe's determinism guard
+  // asserts Date.now is NEVER called during a capture, and this sits on the
+  // capture's derivation path. Staleness is instead bounded by a 1s
+  // self-clearing interval (armed lazily below, unref'd so node test
+  // processes can still exit).
+  if (flagCache !== null) return flagCache;
   const s = typeof localStorage !== 'undefined' ? localStorage : undefined;
   let v = false;
   if (s) {
@@ -103,18 +107,28 @@ export function isFastBuildEnabled(storage?: {
     }
   }
   flagCache = v;
-  flagCacheAt = now;
+  armFlagCacheClearer();
   return v;
 }
 
 let flagCache: boolean | null = null;
-let flagCacheAt = 0;
+let flagCacheClearer: ReturnType<typeof setInterval> | null = null;
 const FLAG_CACHE_TTL_MS = 1000;
+
+/** Arm (once) the interval that drops the cached flag read every second, so a
+ * devtools toggle is picked up within ~1s without any clock read on the hot
+ * path. `unref` exists in node only — optional-called so browsers no-op. */
+function armFlagCacheClearer(): void {
+  if (flagCacheClearer !== null) return;
+  flagCacheClearer = setInterval(() => {
+    flagCache = null;
+  }, FLAG_CACHE_TTL_MS);
+  (flagCacheClearer as unknown as { unref?: () => void }).unref?.();
+}
 
 /** Test seam: drop the cached default-storage flag read (BUG-602). */
 export function resetFastBuildFlagCache(): void {
   flagCache = null;
-  flagCacheAt = 0;
 }
 
 /**
