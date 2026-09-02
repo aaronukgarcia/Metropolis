@@ -356,13 +356,18 @@ func TestAttack_EmptyDistrictKeySurvivesLiveButNotLoad(t *testing.T) {
 	t.Logf("BUG-594 live: DistrictIDs=%v CoverageForDistrict(D1) err=%v", liveIDs, liveErr)
 	t.Logf("BUG-594 loaded: DistrictIDs=%v CoverageForDistrict(D1) err=%v", loadedIDs, loadedErr)
 
-	// Current behaviour, characterised (invert both halves when BUG-594 is
-	// fixed in UnregisterService).
-	if !reflect.DeepEqual(liveIDs, []DistrictID{"D1"}) || liveErr != nil {
-		t.Fatalf("BUG-594 characterisation stale (live side changed): DistrictIDs=%v err=%v — re-audit and update or invert this test", liveIDs, liveErr)
+	// Fixed behaviour (round's ruling: UnregisterService prunes a district
+	// key the instant stripping its last service empties the inner map, so
+	// the restored shape — which the save participant can only ever
+	// reconstruct — is also what the live API reports; no divergence).
+	if len(liveIDs) != 0 || liveErr == nil {
+		t.Fatalf("BUG-594 regressed (live side): UnregisterService should have pruned the emptied district key: DistrictIDs=%v err=%v", liveIDs, liveErr)
 	}
 	if len(loadedIDs) != 0 || loadedErr == nil {
-		t.Fatalf("BUG-594 characterisation stale (load side changed): DistrictIDs=%v err=%v — if the empty district key now round-trips, BUG-594 is fixed: invert this test", loadedIDs, loadedErr)
+		t.Fatalf("BUG-594 regressed (load side): DistrictIDs=%v err=%v", loadedIDs, loadedErr)
+	}
+	if !reflect.DeepEqual(liveIDs, loadedIDs) {
+		t.Fatalf("BUG-594 regressed: live/restored shape diverge: live=%v loaded=%v", liveIDs, loadedIDs)
 	}
 }
 

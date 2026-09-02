@@ -224,6 +224,13 @@ func (a *ServicesAPI) districtCoverageLocked(district DistrictID) DistrictCovera
 // DistrictID (ErrUnknownDistrict — no valid district identity), an
 // unregistered ServiceID (ErrServiceNotRegistered), and a NaN/±Inf demand or
 // distance (ErrNonFiniteInput, SEC-093).
+//
+// This method can never introduce an empty inner map into districtDemand
+// (BUG-594's invariant): every successful call writes exactly one record
+// before returning, and every rejection returns before allocating the
+// district's inner map. Only UnregisterService removes records, and it
+// prunes the district key itself when doing so would otherwise leave an
+// empty map behind.
 func (a *ServicesAPI) UpdateDistrictDemand(district DistrictID, service ServiceID, demand, distance float64) error {
 	if err := a.checkNotCopied("UpdateDistrictDemand"); err != nil {
 		return err

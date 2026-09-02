@@ -61,6 +61,16 @@ type ServicesAPI struct {
 	// district → service → (demand, distance) record (AC-21). The district
 	// identity is supplied by the caller; this package performs no spatial
 	// read.
+	//
+	// Invariant (BUG-594): districtDemand never holds a district key whose
+	// inner map is empty. UpdateDistrictDemand cannot introduce one (it
+	// always writes exactly one record before returning); UnregisterService
+	// is the only mutator that removes records, and it prunes a district
+	// key the instant stripping empties it. This keeps the live shape
+	// identical to what a save/load round-trip reconstructs — the save
+	// participant emits one record per (district, service) pair, so an
+	// empty inner map here would silently fail to survive a restore
+	// (DistrictIDs listing it live, ErrUnknownDistrict after load).
 	districtDemand map[DistrictID]map[ServiceID]demandRecord
 	pools          []StaffingPool
 	poolAvailable  map[string]float64
@@ -237,8 +247,24 @@ func (a *ServicesAPI) UnregisterService(id ServiceID) error {
 	// behind would silently accumulate orphaned demand for a service that
 	// no longer exists (GR#3: no stale duplicate of state that belongs
 	// solely to the instances map).
-	for _, records := range a.districtDemand {
+	//
+	// Invariant (BUG-594, save-participant round finding): districtDemand
+	// never holds a district key whose inner map is empty. The save
+	// participant (participant.go) emits one "services.districtdemand"
+	// record per (district, service) pair — an empty inner map emits zero
+	// records, so a district key that survives here only in memory does
+	// NOT survive a save/load round-trip: DistrictIDs()/CoverageForDistrict
+	// would report the district live but ErrUnknownDistrict after restore,
+	// a live-vs-restored divergence. Deleting the district key the instant
+	// its last service is stripped makes the live shape match the
+	// restored shape unconditionally — the round's ruling that the
+	// restored (participant-derived) shape is canonical, applied at the
+	// source instead of papered over in the participant.
+	for d, records := range a.districtDemand {
 		delete(records, id)
+		if len(records) == 0 {
+			delete(a.districtDemand, d)
+		}
 	}
 	return nil
 }
