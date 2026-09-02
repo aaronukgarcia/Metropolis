@@ -17,6 +17,19 @@ export function DemandDock() {
   // uncapped shortfall AND an unlocked provider; keyed by serviceKey so each
   // row looks up its own plan entry (services.map below).
   const fixPlanByService = new Map(demandFixPlan(state).map((p) => [p.serviceKey, p]));
+  // BUG-572 AC-2/AC-3: dynamic sort by demand height (worst shortfall first —
+  // same `.value` descending comparator pickAutoSpec() already applies at
+  // data.ts, reused verbatim), with Health pinned at the top — Aaron-approved
+  // reading (a1): BOTH gp and hosp rows pinned together, sorted between
+  // themselves by `.value` (whichever is in worse shortfall leads), above the
+  // sorted rest. Stable tiebreak by id (GR#21 determinism — ties never flap).
+  const sortedServices = [...services].sort((a, b) => {
+    const aHealth = a.id === 'gp' || a.id === 'hosp';
+    const bHealth = b.id === 'gp' || b.id === 'hosp';
+    if (aHealth !== bHealth) return aHealth ? -1 : 1;
+    if (b.value !== a.value) return b.value - a.value;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
 
   function runResolveDemand(serviceKey: string) {
     run(() => {
@@ -50,7 +63,7 @@ export function DemandDock() {
         <DemandMeter label="Housing" value={demand.residential} color={SPECS.res_hut.color} />
         <DemandMeter label="Shops" value={demand.commercial} color={SPECS.com_shop.color} />
         <DemandMeter label="Industry" value={demand.industrial} color={SPECS.ind_factory.color} />
-        {services.map((m) => {
+        {sortedServices.map((m) => {
           const fix = fixPlanByService.get(m.id);
           return (
             <DemandMeter

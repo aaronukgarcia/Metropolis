@@ -17,7 +17,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
 import { recordAction, isStateAffecting } from '../src/sim/journal.ts';
-import { SPECS, occupiedSet, computeRoadConnectivity } from '../src/sim/data.ts';
+import { SPECS, occupiedSet, computeRoadConnectivity, demandFixPlan } from '../src/sim/data.ts';
 
 /** Mirrors test/demand-fix.test.mjs's shortfallState(): a real population, no
  *  service buildings, all specs unlocked, ample treasury — guarantees a
@@ -234,17 +234,33 @@ test('FEAT/BUG-b2d31bc7 FIX 2: a non-road placement that triggers autoConnect DO
 // ---------------------------------------------------------------------------
 
 test('BUG-566: resolveDemand aggregates the road-topology flag across its WHOLE batch, never stale', () => {
-  let s = shortfallState(4000);
+  // FEAT-demanddock-overhaul: optimalProvider()'s "1 dam not 20 towers" branch
+  // now clears a small power shortfall with ONE big unit (e.g. pop 4,000 used
+  // to need several pow_wind turbines; it now resolves to a single
+  // pow_windfarm) — that would make this fixture place only 1 building,
+  // vacuously satisfying (not exercising) the multi-placement aggregation this
+  // test targets. Pop 10,000 on a capped £100M budget excludes every unit
+  // whose capacity alone would clear the shortfall in one (windfarm/coal both
+  // affordable but both under the 126MW shortfall), so optimalProvider() falls
+  // back to the cheapest absolute-cost unit (pow_wind, 8MW) needing 16 units —
+  // still a real multi-unit, connector-laying batch.
+  let s = shortfallState(10_000, 100_000_000);
   s = { ...s, roadConnectivity: computeRoadConnectivity(s) };
   const before = s.roadConnectivity;
 
+  // Independent round follow-up: the original precondition counted ALL new
+  // buildings (power units + any connector tiles), which can pass vacuously
+  // even when only ONE power unit was placed (a single unit can still need a
+  // multi-tile road connector). Count placements of the PLAN's own spec
+  // specifically — that is what "a multi-unit batch" actually means.
+  const plan = demandFixPlan(s).find((p) => p.serviceKey === 'power');
+  assert.ok(plan && plan.count > 1, 'precondition: the power demand-fix plan itself must call for 2+ units');
+
   const after = reducer(s, { type: 'resolveDemand', serviceKey: 'power' });
 
-  // Precondition: this repro actually placed a multi-unit batch that included
-  // connector tiles (buildings grew by MORE than the plan's power-unit count
-  // alone) — otherwise the test would pass vacuously for the wrong reason.
-  const placedCount = after.buildings.length - s.buildings.length;
-  assert.ok(placedCount > 1, 'precondition: resolveDemand placed a real batch (power units + connectors)');
+  const placedUnits = after.buildings.filter((b) => b.spec === plan.specId).length -
+    s.buildings.filter((b) => b.spec === plan.specId).length;
+  assert.ok(placedUnits > 1, `precondition: resolveDemand placed multiple power UNITS (not just connector tiles), got ${placedUnits}`);
 
   // RED PROOF (verified live during this fix): reverting the aggregation in
   // the 'resolveDemand' case (dropping `anyRoadTopologyChange` back to

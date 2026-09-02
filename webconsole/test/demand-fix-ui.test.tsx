@@ -124,18 +124,20 @@ test('FEAT-2326609728 inc2 (a): advisor shows "place N <building>s" with the cor
     const { demandFixPlan, SPECS } = await import('../src/sim/data.ts');
     const { MapView } = await import('../src/components/MapView.tsx');
 
-    // population 8,000 deliberately mirrors demand-fix.test.mjs's fixture: the
-    // +5% headroom is load-bearing here too (without it, cleanwater needs
-    // exactly 2 wat_towers; with it, 3 — a dropped-headroom regression in the
-    // UI wiring would show "2" and this assertion would redden).
+    // population 8,000: every population-scaled service (gp/hosp/police/fire/
+    // cleanwater/waste) ties on gap (need*1.05 = 8,400), and 'cleanwater' wins
+    // the alphabetical tie-break. FEAT-demanddock-overhaul: optimalProvider()'s
+    // "1 dam not 20 towers" clears-in-one branch now picks Water Works
+    // (wat_clean, served 20,000, best cost-per-capacity of the units that can
+    // singlehandedly clear 8,400) over Water Tower — a single unit, count 1.
     const state = shortfallState(initialState, 8000);
     const plan = demandFixPlan(state);
     const top = expectedWorstFix(plan);
     assert.ok(top, 'precondition: population 8,000 with zero service buildings must yield a real shortfall');
     assert.equal(top.serviceKey, 'cleanwater', 'precondition: cleanwater must win the deterministic tie-break at this population');
-    assert.equal(top.count, 3, 'precondition: 8,400/4,000 ceilings to 3 (the +5% headroom pushing past the bare-2 figure)');
+    assert.equal(top.count, 1, 'precondition: one Water Works (served 20,000) clears the 8,400 shortfall in a single unit');
     const spName = SPECS[top.specId].name;
-    assert.equal(spName, 'Water Tower');
+    assert.equal(spName, 'Water Works');
 
     const { ctx, calls } = makeCtx(state);
     const { container, root, act } = await mountReal(MapView, ctx);
@@ -144,8 +146,8 @@ test('FEAT-2326609728 inc2 (a): advisor shows "place N <building>s" with the cor
     assert.ok(advisor, 'precondition: the advisor element must render');
     const text = advisor!.textContent ?? '';
     assert.ok(
-      text.includes(`place ${top.count} Water Towers`),
-      `advisor text must quantify the fix as "place ${top.count} Water Towers", got: "${text}"`,
+      text.includes(`place ${top.count} Water Works`),
+      `advisor text must quantify the fix as "place ${top.count} Water Works", got: "${text}"`,
     );
     assert.ok(text.includes('clean water'), 'advisor text must name the service the fix clears');
     assert.ok(container.querySelector('.advisor.clickable'), 'the advisor must be clickable when a fix is offered');
@@ -187,16 +189,25 @@ test('FEAT-2326609728 inc2 (b): a DEMAND-panel row in shortfall shows a "Fix (N)
     const plan = demandFixPlan(state);
     const water = plan.find((p: any) => p.serviceKey === 'cleanwater');
     assert.ok(water, 'precondition: cleanwater must be in the plan (row-lookup key must actually exist — a typo would silently show zero buttons)');
-    assert.equal(water.count, 3);
-    assert.equal(SPECS[water.specId].name, 'Water Tower');
+    // FEAT-demanddock-overhaul: at pop 8,000 optimalProvider() picks Water
+    // Works (1 unit clears the 8,400 shortfall) over Water Tower — see (a).
+    assert.equal(water.count, 1);
+    assert.equal(SPECS[water.specId].name, 'Water Works');
 
     const { ctx, calls } = makeCtx(state);
     const { container, root, act } = await mountReal(DemandDock, ctx);
 
     const buttons = Array.from(container.querySelectorAll('.demand-fix-btn')) as any[];
     assert.ok(buttons.length > 0, 'at least one Fix button must render for a city in shortfall');
-    const waterBtn = buttons.find((b) => /Fix \(3\)/.test(b.textContent ?? ''));
-    assert.ok(waterBtn, `expected a "Fix (3)" button for the clean-water row among: ${buttons.map((b) => b.textContent).join(', ')}`);
+    // FEAT-demanddock-overhaul: at pop 8,000 several rows independently show
+    // "Fix (1)" (cleanwater AND hosp both clear in one unit) — disambiguate by
+    // the button's title, which names the specific spec (fixTitle embeds
+    // SPECS[fix.specId].name), not just the count.
+    const waterBtn = buttons.find((b) => /Fix \(1\)/.test(b.textContent ?? '') && /Water Works/.test(b.title ?? ''));
+    assert.ok(
+      waterBtn,
+      `expected a "Fix (1)" Water Works button for the clean-water row among: ${buttons.map((b) => `${b.textContent}/${b.title}`).join(', ')}`
+    );
 
     await act(async () => {
       waterBtn!.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));

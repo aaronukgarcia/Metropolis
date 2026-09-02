@@ -42,6 +42,10 @@ export const DEMAND_FIX_SERVICE_LABELS: Record<string, string> = {
   waste: 'sewage',
   power: 'power',
   refuse: 'refuse collection',
+  // FEAT-demanddock-overhaul / BUG-571: fire now has a real DEMAND_FIX_PROVIDERS
+  // rule (data.ts) so demandFixPlan() can emit a 'fire' entry — without this
+  // label the advisor's fallback `?? fix.serviceKey` would render the raw key.
+  fire: 'fire cover',
 };
 
 /**

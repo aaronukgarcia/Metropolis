@@ -2209,7 +2209,11 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
     row('gp', 'GP clinics', pop, gp, 'hea_clinic'),
     row('hosp', 'Hospital', pop, hosp, 'hea_hospital'),
     row('police', 'Police', pop, police, 'pol_station'),
-    row('fire', 'Fire cover', pop, fire, 'fire_station'),
+    // BUG-571: recommended spec is now unlock-aware via optimalProvider() —
+    // no more hardcoded 'fire_station' (which stays locked at low city
+    // levels). Fallback literal only for the pathological all-locked case
+    // (mirrors pickAutoSpec/DemandDock's existing "needs unlock" null-handling).
+    row('fire', 'Fire cover', pop, fire, optimalProvider(s, 'fire', s.funds, pop - fire)?.id ?? 'fire_post'),
     row('cleanwater', 'Clean water', pop, clean, 'wat_clean'),
     row('waste', 'Sewage', pop, waste, 'wat_waste'),
     row('power', `Power (${formatPower(pw.cap)}/${formatPower(pw.need)})`, pw.need, pw.cap, pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind'),
@@ -2236,7 +2240,7 @@ export function serviceDemandOf(
   s: SimState
 ): { id: string; label: string; value: number; spec: string; alert?: boolean }[] {
   const f = earlyGameFactor(s.population);
-  return serviceCoverageOf(s).map((c) => {
+  const rows = serviceCoverageOf(s).map((c) => {
     if (c.id !== 'power') {
       return { id: c.id, label: c.label, value: Math.round(demandIndexOf(c.coverage) * f), spec: c.spec };
     }
@@ -2263,6 +2267,20 @@ export function serviceDemandOf(
       : Math.round(demandIndexOf(c.coverage) * f);
     return { id: c.id, label: c.label, value, spec: c.spec, alert: deficit };
   });
+  // BUG-572 AC-1: fold the refuse/collection row (wasteStatsOf's twin coverage
+  // metric — demandFixPlan() already has a 'refuse' entry, DemandDock never had
+  // a row to attach it to) using the SAME demandIndexOf curve every non-power
+  // row uses. Spec is unlock-aware via optimalProvider (no hardcoded literal);
+  // 'waste_depot' fallback is the only refuse-capable spec today, matching the
+  // fire row's pathological-all-locked fallback pattern above.
+  const waste = wasteStatsOf(s);
+  const refuseRow = {
+    id: 'refuse',
+    label: 'Refuse',
+    value: Math.round(demandIndexOf(waste.coverage) * f),
+    spec: optimalProvider(s, 'refuse', s.funds, waste.generated - waste.capacity)?.id ?? 'waste_depot',
+  };
+  return [...rows, refuseRow];
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -2798,25 +2816,98 @@ const DEMAND_FIX_PROVIDERS: Record<
   },
   power: { match: (sp) => sp.kind === 'power', unitCapacity: (sp) => sp.mw ?? 0 },
   refuse: { match: (sp) => (sp.wasteCapacity ?? 0) > 0, unitCapacity: (sp) => sp.wasteCapacity ?? 0 },
+  // BUG-571/FEAT-demanddock-overhaul §4: fire was deliberately excluded pending
+  // this follow-up — fire_post/fire_station/fire_hq are already kind:'fire'.
+  fire: { match: (sp) => sp.kind === 'fire', unitCapacity: (sp) => sp.served ?? 0 },
 };
 
 /**
- * Cheapest UNLOCKED, non-placeholder spec providing `serviceKey`, tie-broken by
- * id (deterministic, GR#21 — no reliance on Object.values() insertion order
- * beyond a stable sort). Returns null when nothing unlocked qualifies (the
- * caller then omits the service — it cannot be one-click-fixed yet).
+ * Unified provider selector (FEAT-demanddock-overhaul §2, re-scored after the
+ * independent round's REJECT on the original two-branch draft) — replaces
+ * cheapestProvider() at both call sites (serviceCoverageOf's fire row,
+ * demandFixPlan). Unlock-aware (BUG-571) AND value-aware (FEAT-2326609735,
+ * "1 dam not 20 towers").
+ *
+ * BUG (the REJECT): the original draft ranked cost-per-capacity ONLY among
+ * specs that clear the whole shortfall in a SINGLE unit, and never compared
+ * that winner against a cheaper MULTI-unit plan of a smaller spec. Proven
+ * broken with real SPECS numbers: cleanwater shortfall 20,000 picked one
+ * wat_reservoir (£81.0M) over 6× wat_tower (£16.2M, 5x cheaper); shortfall
+ * 20,001 fell off a 17x cliff (wat_clean £4.68M -> wat_reservoir £81.0M for
+ * ONE extra person of shortfall, when 2× wat_clean is £9.36M); pop 8,000
+ * power picked one Offshore Wind Array (£225M) over 14× pow_wind (£67.2M);
+ * and a strictly-dominated case (shortfall 2,000: wat_clean £4.68M over
+ * wat_tower £2.70M for the SAME single-unit count).
+ *
+ * THE FIX: score every candidate by its TOTAL PLAN COST to clear the whole
+ * shortfall with THAT spec alone — units = ceil(shortfall/unitCapacity),
+ * planCost = units*cost — and pick the minimum. This is the plain "which
+ * plan costs least" comparison the original draft skipped; it naturally
+ * reproduces Aaron's "1 dam not 20 towers" intent whenever the dam's total
+ * cost genuinely beats N towers, and picks the towers otherwise — no
+ * capacity-boundary cliff, no dominated pick, because it is always comparing
+ * WHOLE PLANS, never a bare per-unit or clears-in-one-only figure.
+ *
+ * Affordability: prefer the cheapest plan whose planCost fits `budget`
+ * (so demandFixPlan's downstream resolveDemand loop can complete the WHOLE
+ * plan without hitting its own funds cap mid-batch); if no plan fits
+ * wholesale, fall back to the cheapest single-unit-affordable spec (Q100055
+ * A1 — resolveDemand still places as many of THAT spec as funds allow, it
+ * just needs one to start with); if nothing is even single-unit-affordable,
+ * fall back to the globally cheapest spec (never returns null while the
+ * candidate set is non-empty — same policy as the prior draft).
+ *
+ * Tie-break: fewer units first (the "prefer 1 dam" preference expressed
+ * CORRECTLY — it only wins genuine ties or real value, never overspends),
+ * then id ascending (deterministic, GR#21). Returns null only when the
+ * candidate set (step 1, unlocked+enterable) is empty — identical null
+ * contract to cheapestProvider(), so no caller-side handling changes.
  */
-function cheapestProvider(s: SimState, serviceKey: string): Spec | null {
+export function optimalProvider(s: SimState, serviceKey: string, budget: number, shortfall: number): Spec | null {
   const rule = DEMAND_FIX_PROVIDERS[serviceKey];
   if (!rule) return null;
-  let best: Spec | null = null;
+
+  const candidates: { sp: Spec; units: number; planCost: number }[] = [];
   for (const sp of Object.values(SPECS)) {
     if (!canEnterSim(sp) || !specUnlocked(s, sp)) continue;
     if (!rule.match(sp)) continue;
-    if (rule.unitCapacity(sp) <= 0) continue;
-    if (!best || sp.cost < best.cost || (sp.cost === best.cost && sp.id < best.id)) best = sp;
+    const unitCapacity = rule.unitCapacity(sp);
+    if (unitCapacity <= 0) continue;
+    const units = Math.max(1, Math.ceil(shortfall / unitCapacity));
+    candidates.push({ sp, units, planCost: units * sp.cost });
   }
-  return best;
+  if (candidates.length === 0) return null;
+
+  const better = (
+    a: { sp: Spec; units: number; planCost: number },
+    b: { sp: Spec; units: number; planCost: number },
+    key: 'planCost' | 'cost'
+  ): boolean => {
+    const av = key === 'planCost' ? a.planCost : a.sp.cost;
+    const bv = key === 'planCost' ? b.planCost : b.sp.cost;
+    if (av !== bv) return av < bv;
+    if (a.units !== b.units) return a.units < b.units;
+    return a.sp.id < b.sp.id;
+  };
+
+  // Step 1: cheapest WHOLE PLAN that fits the budget wholesale.
+  let bestFittingPlan: { sp: Spec; units: number; planCost: number } | null = null;
+  // Step 2 fallback: cheapest single-unit-affordable spec.
+  let bestSingleAffordable: { sp: Spec; units: number; planCost: number } | null = null;
+  // Step 3 fallback: globally cheapest spec, regardless of affordability.
+  let bestGlobalCheapest: { sp: Spec; units: number; planCost: number } | null = null;
+
+  for (const c of candidates) {
+    if (!bestGlobalCheapest || better(c, bestGlobalCheapest, 'cost')) bestGlobalCheapest = c;
+    if (c.sp.cost <= budget && (!bestSingleAffordable || better(c, bestSingleAffordable, 'cost'))) {
+      bestSingleAffordable = c;
+    }
+    if (c.planCost <= budget && (!bestFittingPlan || better(c, bestFittingPlan, 'planCost'))) {
+      bestFittingPlan = c;
+    }
+  }
+
+  return (bestFittingPlan ?? bestSingleAffordable ?? bestGlobalCheapest)!.sp;
 }
 
 /**
@@ -2836,7 +2927,7 @@ export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
     if (row.need <= 0) continue;
     const target = row.need * 1.05;
     if (row.have >= target) continue; // already at/above target+headroom
-    const sp = cheapestProvider(s, row.serviceKey);
+    const sp = optimalProvider(s, row.serviceKey, s.funds, target - row.have);
     if (!sp) continue; // no unlocked provider yet — omit (needs-unlock)
     const rule = DEMAND_FIX_PROVIDERS[row.serviceKey];
     const unitCapacity = rule.unitCapacity(sp);

@@ -38,14 +38,19 @@ function forceOnline(state) {
 }
 
 test('demandFixPlan: clean-water count = ceil((need*1.05 - have) / unitCapacity)', () => {
-  // 8,000 chosen deliberately: need/unitCapacity (wat_tower, served 4,000) is
-  // EXACTLY 2 without headroom, so the +5% is the ONLY thing that pushes the
-  // ceiling to 3 — a population where headroom is a no-op (like 10,000, where
-  // both 2.5 and 2.625 already ceil to 3) would let a dropped-1.05 bug hide.
-  const s = shortfallState(8_000);
+  // 60,000 chosen deliberately (FEAT-demanddock-overhaul / optimalProvider,
+  // re-scored to a TOTAL-PLAN-COST comparison after the independent round's
+  // REJECT of the original clears-in-one-only draft): at shortfall 63,000,
+  // wat_clean's 4-unit plan (£18.72M) is the cheapest total among wat_tower's
+  // 16-unit plan (£43.2M) and wat_reservoir's 2-unit plan (£162M), so
+  // wat_clean wins. need/unitCapacity (wat_clean, served 20,000) is EXACTLY 3
+  // without headroom (60,000 is an exact multiple of 20,000), so the +5% is
+  // the ONLY thing that pushes the ceiling to 4 — a population where headroom
+  // is a no-op would let a dropped-1.05 bug hide.
+  const s = shortfallState(60_000);
   const plan = demandFixPlan(s);
   const water = plan.find((p) => p.serviceKey === 'cleanwater');
-  assert.ok(water, 'clean-water shortfall present at pop 8,000 with zero water buildings');
+  assert.ok(water, 'clean-water shortfall present at pop 60,000 with zero water buildings');
 
   // Cross-check against the SAME coverage row demandFixPlan is required to use
   // (GR#3 SSOT — not re-derived), so this test would redden if demandFixPlan
@@ -66,21 +71,26 @@ test('demandFixPlan: clean-water count = ceil((need*1.05 - have) / unitCapacity)
   // a strictly smaller number whenever need isn't already a multiple of
   // unitCapacity, i.e. the +1.05 term is load-bearing, not decorative.
   const countWithoutHeadroom = Math.ceil(Math.max(0, water.need - water.have) / water.unitCapacity);
-  assert.equal(countWithoutHeadroom, 2, 'sanity: without headroom, 8,000/4,000 needs exactly 2 towers');
+  assert.equal(countWithoutHeadroom, 3, 'sanity: without headroom, 60,000/20,000 needs exactly 3 Water Works');
   assert.ok(
     water.count > countWithoutHeadroom,
     `the 5% headroom must push the count above the bare no-headroom figure (got ${water.count} vs ${countWithoutHeadroom})`
   );
 });
 
-test('demandFixPlan: picks the cheapest unlocked provider for the service (wat_tower over wat_clean/wat_reservoir)', () => {
-  const s = shortfallState(1_000);
+test('demandFixPlan: a dominated multi-unit plan never wins — same unit count must go to the cheaper spec (wat_tower over wat_clean at pop 2,000)', () => {
+  // FEAT-demanddock-overhaul re-score: optimalProvider() picks the cheapest
+  // TOTAL PLAN cost, not per-capacity efficiency. At pop 2,000 (shortfall
+  // 2,100) BOTH wat_tower (served 4,000) and wat_clean (served 20,000) clear
+  // the shortfall in exactly 1 unit — with the unit count tied, the cheaper
+  // spec must win (wat_tower £2.7M < wat_clean £4.68M), never the pricier one
+  // just because it has better cost-per-capacity in the abstract.
+  const s = shortfallState(2_000);
   const plan = demandFixPlan(s);
   const water = plan.find((p) => p.serviceKey === 'cleanwater');
   assert.ok(water);
-  // wat_tower (£2.7M) < wat_clean (£4.68M) < wat_reservoir (£81M); all unlock
-  // at/below the god-mode-unlocked test state, so the cheapest must win.
-  assert.equal(water.specId, 'wat_tower');
+  assert.equal(water.count, 1, 'precondition: both candidate specs clear this shortfall in exactly 1 unit');
+  assert.equal(water.specId, 'wat_tower', 'a strictly dominated (same units, higher cost) pick must never win');
 });
 
 test('demandFixPlan: no shortfall (population 0) returns an empty plan', () => {
@@ -117,29 +127,46 @@ test('resolveDemand: dispatching clears the service (capacity >= need*1.05)', ()
 });
 
 test('resolveDemand: affordability cap places only what is affordable and reports the shortfall (no negative funds)', () => {
-  const s = shortfallState(10_000);
+  // 60,000 gives a plan.count safely >= 2 (wat_clean x4, the cheapest total
+  // plan at this shortfall — see the headroom test above), unlike a smaller
+  // population where the "1 dam not 20 towers" scoring would plan exactly 1
+  // (large) unit.
+  const s = shortfallState(60_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'cleanwater');
   assert.ok(plan && plan.count >= 2, 'need a plan needing 2+ units to prove a partial cap');
-  const sp = SPECS[plan.specId];
-  const unitCost = sp.cost; // placementCost() for a non-road spec == sp.cost.
 
-  // Fund exactly enough for HALF the plan (rounded down), never zero, never all.
-  const affordableUnits = Math.max(1, Math.floor(plan.count / 2));
-  assert.ok(affordableUnits < plan.count, 'the capped scenario must be strictly partial');
-  const limited = { ...s, funds: unitCost * affordableUnits };
+  // Determine the REAL total cost of completing the whole plan by running once
+  // with ample funds — as placements spread out across the map, road-adjacency
+  // may add connector costs beyond a bare sp.cost per unit, so don't assume a
+  // uniform per-unit price (a naive `sp.cost * N` funds budget can straddle a
+  // connector-cost boundary and place one fewer/more unit than expected).
+  const full = reducer(s, { type: 'resolveDemand', serviceKey: 'cleanwater' });
+  const totalSpent = s.funds - full.funds;
+  assert.ok(totalSpent > 0, 'precondition: the full-funds run must actually spend money');
+  const limitedFunds = Math.floor(totalSpent / 2); // never zero, never all
+  assert.ok(limitedFunds > 0);
+  const limited = { ...s, funds: limitedFunds };
+
+  // optimalProvider() is budget-sensitive (a whole plan must fit the budget
+  // to win outright, else it falls back to the cheapest single-unit-affordable
+  // spec) — at this LOWER budget the plan may legitimately pick a DIFFERENT,
+  // cheaper spec than the ample-funds run did. Recompute the plan against the
+  // actual `limited` state rather than assuming continuity with `plan`.
+  const limitedPlan = demandFixPlan(limited).find((p) => p.serviceKey === 'cleanwater');
+  assert.ok(limitedPlan, 'a clean-water shortfall (and a provider) must still exist at the reduced budget');
 
   const result = reducer(limited, { type: 'resolveDemand', serviceKey: 'cleanwater' });
 
-  const placedCount = result.buildings.filter((b) => b.spec === plan.specId).length -
-    limited.buildings.filter((b) => b.spec === plan.specId).length;
-  assert.equal(placedCount, affordableUnits, 'placed exactly as many as funds allowed');
+  const placedCount = result.buildings.filter((b) => b.spec === limitedPlan.specId).length -
+    limited.buildings.filter((b) => b.spec === limitedPlan.specId).length;
+  assert.ok(placedCount > 0 && placedCount < limitedPlan.count, `expected a strictly partial placement, got ${placedCount} of ${limitedPlan.count}`);
   assert.ok(result.funds >= 0, 'funds never went negative from the bulk placement');
   assert.ok(
     result.placeNotice && /insufficient funds/i.test(result.placeNotice),
     `placeNotice must report the shortfall, got: ${result.placeNotice}`
   );
   assert.ok(
-    result.placeNotice.includes(String(affordableUnits)) && result.placeNotice.includes(String(plan.count)),
+    result.placeNotice.includes(String(placedCount)) && result.placeNotice.includes(String(limitedPlan.count)),
     'placeNotice reports both placed count and wanted count'
   );
 });
