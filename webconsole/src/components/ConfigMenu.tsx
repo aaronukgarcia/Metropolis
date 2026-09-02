@@ -9,7 +9,7 @@ import {
 import { PREWIPE_ARCHIVE_KEY } from '../sim/captureBeforeWipe';
 import { QUEUE_KEY } from '../sim/commitqueue';
 import { NAMED_SAVES_INDEX_KEY, NAMED_SAVE_SLOT_PREFIX } from '../sim/namedsaves';
-import { SAVEPOINT_KEY_PREFIX } from '../sim/replay';
+import { SAVEPOINT_KEY_PREFIX, SAVEPOINT_CAP } from '../sim/replay';
 import { JOURNAL_KEY } from '../sim/journal';
 import { encode, decode } from '../sim/saveCodec';
 
@@ -77,13 +77,15 @@ function reclaimPrewipeArchive(storage: Storage): void {
 }
 
 /**
- * BUG-457: evict superseded autosave slots ONLY (any slot beyond the current
- * rotation, i.e. never `.0`, which holds the CURRENT city's active state).
- * persistSavepoint already prunes these on every save; this is a defensive
- * sweep for leftovers from an older, larger SAVEPOINT_CAP.
+ * BUG-457 / BUG-469: evict superseded autosave slots ONLY — slots beyond the
+ * CURRENT SAVEPOINT_CAP, i.e. leftovers from an older, larger cap. Slots
+ * `0..SAVEPOINT_CAP-1` are the live rotating autosave HISTORY (BUG-469) and
+ * MUST survive Reclaim untouched, same as persistSavepoint's own legacy
+ * cleanup sweep — a hardcoded "slot 1+" here would silently delete the
+ * rotation history the moment SAVEPOINT_CAP was raised above 1.
  */
 function reclaimSuperseededSavepoints(storage: Storage): void {
-  for (let slot = 1; slot < 8; slot++) {
+  for (let slot = SAVEPOINT_CAP; slot < 8; slot++) {
     try {
       storage.removeItem(`${SAVEPOINT_KEY_PREFIX}.${slot}`);
     } catch {

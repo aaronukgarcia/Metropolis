@@ -335,20 +335,27 @@ describe('savepoint: persistence and restoration', () => {
     const storage = new MockStorage();
 
     // Create and persist SAVEPOINT_CAP + 1 savepoints.
+    // BUG-469: dates are deliberately kept close together (not the 1970
+    // epoch) and readAllSavepoints() below is given an explicit `now` right
+    // after the last write — the epoch timestamps this test used to use are
+    // now (correctly) purged as stale by the BUG-469 retention window, which
+    // would otherwise make this rotation-only test collide with retention.
+    let last = new Date(2026, 0, 1, 0, 0);
     for (let i = 0; i < SAVEPOINT_CAP + 1; i++) {
       const s = initialState();
-      const savepoint = createSavepoint(s, [], new Date(1000 * i * 1000));
-      persistSavepoint(storage, savepoint);
+      last = new Date(2026, 0, 1, 0, i); // distinct, monotonically increasing minute
+      const savepoint = createSavepoint(s, [], last);
+      persistSavepoint(storage, savepoint, last);
     }
 
-    // Read all savepoints.
-    const savepoints = readAllSavepoints(storage);
+    // Read all savepoints (as of right after the last write).
+    const savepoints = readAllSavepoints(storage, last);
     // Should have at most SAVEPOINT_CAP (oldest evicted).
     assert.ok(savepoints.length <= SAVEPOINT_CAP);
 
     // Most recent should be the last one created.
     const recent = mostRecentSavepoint(savepoints);
-    assert.ok(recent?.savedAt.includes('1970-01-01')); // The latest timestamp.
+    assert.ok(recent?.savedAt.includes('2026-01-01')); // The latest timestamp.
   });
 
   test('corrupt JSON in savepoint slot is skipped', () => {

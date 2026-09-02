@@ -71,11 +71,23 @@ export interface RestoreResult {
  */
 export const SAVEPOINT_KEY_PREFIX = 'metropolis.savepoint';
 
-/** Number of rolling savepoints kept (newest SAVEPOINT_CAP). PLACEHOLDER per spec. */
-export const SAVEPOINT_CAP = 1;
+/**
+ * BUG-469 (Aaron ruling, Q100029): a single autosave slot means ANY overwrite
+ * (a reload, a second tab, a race) destroys the only autosave with no recovery.
+ * A rotating history of 3+ slots means no single bad/stale write can destroy
+ * every prior good autosave. PLACEHOLDER tunable per spec — Aaron may retune.
+ */
+export const SAVEPOINT_CAP = 3;
 
 /** Time in milliseconds between autosaves. PLACEHOLDER per spec; wall-clock timer in UI. */
 export const AUTOSAVE_INTERVAL_MS = 30000; // 30 seconds
+
+/**
+ * BUG-469 (Aaron ruling, Q100029): autosaves auto-purge after ~1 month (dev
+ * placeholder). Named saves are a completely separate storage mechanism
+ * (namedsaves.ts) and are NEVER touched by this retention window.
+ */
+export const AUTOSAVE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // ~1 month
 
 /**
  * The subset of the Web Storage API the replay module needs — injectable for tests.
@@ -94,23 +106,49 @@ function savepointKey(slot: number): string {
 }
 
 /**
+ * Read a single savepoint slot. Fail-safe: a missing key, corrupt JSON, or a
+ * parse error all degrade to `null` — never throws.
+ */
+function readSlot(storage: StorageLike, slot: number): Savepoint | null {
+  try {
+    const raw = storage.getItem(savepointKey(slot));
+    if (!raw) return null;
+    // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value
+    // (no LZv1: prefix), so this reads both old and new savepoints.
+    return JSON.parse(decode(raw)) as Savepoint;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * BUG-469 (Aaron ruling, Q100029): autosaves older than AUTOSAVE_RETENTION_MS
+ * are auto-purged (dev placeholder ~1 month). An unparsable `savedAt` is
+ * treated as "not stale" — never purge on a timestamp we can't trust.
+ */
+function isStaleAutosave(sp: Savepoint, nowMs: number): boolean {
+  const savedMs = Date.parse(sp?.savedAt as unknown as string);
+  if (Number.isNaN(savedMs)) return false;
+  return nowMs - savedMs > AUTOSAVE_RETENTION_MS;
+}
+
+/**
  * Read all savepoints from localStorage, in order (slot 0, 1, 2).
  * Fail-safe: corrupt JSON or missing keys degrade to an empty list.
+ *
+ * BUG-469: also filters out any autosave older than AUTOSAVE_RETENTION_MS —
+ * purge-on-read, so a stale slot never gets restored even if a purge-on-write
+ * hasn't happened yet (e.g. the app has not autosaved since the retention
+ * window passed). `now` is injectable for deterministic tests.
  */
-export function readAllSavepoints(storage: StorageLike): Savepoint[] {
+export function readAllSavepoints(storage: StorageLike, now: Date = new Date()): Savepoint[] {
+  const nowMs = now.getTime();
   const savepoints: Savepoint[] = [];
   for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
-    try {
-      const raw = storage.getItem(savepointKey(slot));
-      if (!raw) continue;
-      // FEAT-1972079935: decode() is a no-op on a legacy uncompressed value
-      // (no LZv1: prefix), so this reads both old and new savepoints.
-      const parsed = JSON.parse(decode(raw));
-      savepoints.push(parsed as Savepoint);
-    } catch {
-      // Corrupt JSON or parse error — skip this slot.
-      continue;
-    }
+    const sp = readSlot(storage, slot);
+    if (!sp) continue;
+    if (isStaleAutosave(sp, nowMs)) continue;
+    savepoints.push(sp);
   }
   return savepoints;
 }
@@ -124,16 +162,37 @@ export function mostRecentSavepoint(savepoints: Savepoint[]): Savepoint | null {
 }
 
 /**
- * Persist a new savepoint, rotating slots (round-robin, keeping only the newest
- * SAVEPOINT_CAP). Fail-safe: localStorage errors are caught and logged silently;
- * the app continues without the savepoint.
+ * Persist a new savepoint, rotating slots so a bounded HISTORY of the newest
+ * SAVEPOINT_CAP autosaves is kept (BUG-469) — never a single overwritten slot.
  *
- * Returns whether the save succeeded (true = persisted, false = failed).
- * The caller should display a quiet indicator on failure (FEAT-1972079854 spec).
+ * Target-slot choice (no separate "next slot" cursor — GR#3, the slots
+ * themselves are the only source of truth): prefer an empty slot; if all
+ * SAVEPOINT_CAP slots are occupied, overwrite the OLDEST occupied one. That
+ * is exactly a rotating history — the newest SAVEPOINT_CAP autosaves always
+ * survive, the single oldest one rolls off.
+ *
+ * Overwrite protection (BUG-469): before overwriting an occupied slot, the
+ * incoming savepoint must be strictly newer (by snapshotTick, then by
+ * savedAt) than what is already there. A stale/older writer — a backgrounded
+ * tab whose timer fires after a fresher autosave already landed, a slow
+ * reload racing a live tab — is REJECTED (returns false) rather than
+ * clobbering a fresher save. The prior good savepoint is left untouched.
+ *
+ * BUG-469: also purges any autosave older than AUTOSAVE_RETENTION_MS before
+ * picking a target slot, so long-idle dev installs don't accumulate
+ * autosaves forever (named saves are a separate mechanism and are never
+ * touched here).
+ *
+ * Fail-safe: localStorage errors are caught and logged silently; the app
+ * continues without the savepoint. Returns whether the save succeeded (true
+ * = persisted, false = failed OR protected-against-stale-overwrite). The
+ * caller should display a quiet indicator on failure (FEAT-1972079854 spec,
+ * AC-7 / GR#1).
  */
 export function persistSavepoint(
   storage: StorageLike,
-  savepoint: Savepoint
+  savepoint: Savepoint,
+  now: Date = new Date()
 ): boolean {
   try {
     for (let slot = SAVEPOINT_CAP; slot < 8; slot++) {
@@ -143,13 +202,44 @@ export function persistSavepoint(
         /* leftover slots from older caps */
       }
     }
-    const existing = readAllSavepoints(storage);
-    const nextSlot = existing.length % SAVEPOINT_CAP;
+
+    const nowMs = now.getTime();
+    const slots: Array<{ slot: number; sp: Savepoint | null }> = [];
+    for (let slot = 0; slot < SAVEPOINT_CAP; slot++) {
+      let sp = readSlot(storage, slot);
+      // BUG-469: purge-on-write — drop autosaves older than the retention
+      // window so a slot they occupy is free for rotation again.
+      if (sp && isStaleAutosave(sp, nowMs)) {
+        try {
+          storage.removeItem(savepointKey(slot));
+        } catch {
+          /* ignore — worst case the stale slot lingers, filtered on read */
+        }
+        sp = null;
+      }
+      slots.push({ slot, sp });
+    }
+
+    const emptySlot = slots.find((s) => s.sp === null);
+    const target = emptySlot ?? slots.reduce((oldest, s) => (s.sp!.savedAt < oldest.sp!.savedAt ? s : oldest));
+
+    if (target.sp) {
+      const incomingTick = savepoint.snapshotTick;
+      const existingTick = target.sp.snapshotTick;
+      const incomingIsNewer =
+        incomingTick > existingTick || (incomingTick === existingTick && savepoint.savedAt >= target.sp.savedAt);
+      if (!incomingIsNewer) {
+        // BUG-469 overwrite protection: reject the stale write outright.
+        // The prior (fresher) savepoint in this slot is left intact.
+        return false;
+      }
+    }
+
     // BUG-457: route through the shared quota-safe helper instead of a bare
-    // setItem — the outer try/catch still covers readAllSavepoints/removeItem.
+    // setItem — the outer try/catch still covers readSlot/removeItem.
     // FEAT-1972079935: encode() compresses the (large) serialized savepoint
     // before it hits localStorage — smaller payload, same quota-safe path.
-    const result = safeSetItem(storage, savepointKey(nextSlot), encode(JSON.stringify(savepoint)));
+    const result = safeSetItem(storage, savepointKey(target.slot), encode(JSON.stringify(savepoint)));
     return result.ok;
   } catch {
     return false;

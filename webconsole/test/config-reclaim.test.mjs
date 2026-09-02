@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { JOURNAL_KEY, emptyJournal, recordAction } from '../src/sim/journal.ts';
 import { PREWIPE_ARCHIVE_KEY, readPreWipeArchive } from '../src/sim/captureBeforeWipe.ts';
-import { SAVEPOINT_KEY_PREFIX, persistSavepoint, createSavepoint } from '../src/sim/replay.ts';
+import { SAVEPOINT_KEY_PREFIX, SAVEPOINT_CAP, persistSavepoint, createSavepoint } from '../src/sim/replay.ts';
 import { getPrewipeCap, localStorageUsage } from '../src/sim/storageConfig.ts';
 import { initialState, reducer } from '../src/sim/engine.ts';
 
@@ -49,6 +49,10 @@ function keyByteLength(storage, key) {
   return v == null ? 0 : (key.length + v.length) * 2;
 }
 
+// BUG-469: reclaimSuperseededSavepoints must evict slots BEYOND the live
+// rotation (SAVEPOINT_CAP), never slots WITHIN it — a hardcoded "slot 1+"
+// would delete the autosave HISTORY the moment SAVEPOINT_CAP rose above 1.
+//
 // Mirrors ConfigMenu.tsx's runReclaim exactly (kept in lockstep deliberately —
 // see the source-parity assertion below, which fails if the real component's
 // algorithm diverges from this test's model without the test being updated).
@@ -84,7 +88,7 @@ function reclaimPrewipeArchive(storage) {
 }
 
 function reclaimSuperseededSavepoints(storage) {
-  for (let slot = 1; slot < 8; slot++) {
+  for (let slot = SAVEPOINT_CAP; slot < 8; slot++) {
     try {
       storage.removeItem(`${SAVEPOINT_KEY_PREFIX}.${slot}`);
     } catch {
@@ -135,14 +139,26 @@ describe('ConfigMenu Reclaim algorithm (BUG-457)', () => {
     storage.setItem(PREWIPE_ARCHIVE_KEY, JSON.stringify(overCapped));
     assert.ok(overCapped.length > cap, 'fixture must actually exceed the cap to test the trim');
 
-    // Seed a leftover superseded savepoint slot (from an old, larger SAVEPOINT_CAP).
-    storage.setItem(`${SAVEPOINT_KEY_PREFIX}.1`, JSON.stringify({ leftover: true, junk: 'x'.repeat(5_000) }));
+    // Seed a genuinely leftover savepoint slot — BEYOND the current
+    // SAVEPOINT_CAP, i.e. from an OLDER, larger cap. This is what Reclaim
+    // must evict.
+    const leftoverSlot = `${SAVEPOINT_KEY_PREFIX}.${SAVEPOINT_CAP}`;
+    storage.setItem(leftoverSlot, JSON.stringify({ leftover: true, junk: 'x'.repeat(5_000) }));
 
     // Seed the CURRENT city's active savepoint (slot .0) — must survive untouched.
     const currentSave = createSavepoint(state, [], new Date('2026-08-31T00:00:00Z'));
     persistSavepoint(storage, currentSave);
     const currentSlotBefore = storage.getItem(`${SAVEPOINT_KEY_PREFIX}.0`);
     assert.ok(currentSlotBefore, 'fixture must actually have a current savepoint to protect');
+
+    // BUG-469: also seed a second WITHIN-cap autosave slot (part of the live
+    // rotation, e.g. slot .1 with SAVEPOINT_CAP=3) — Reclaim must leave the
+    // whole live rotation alone, not just slot .0.
+    const rotationSave = createSavepoint(state, [], new Date('2026-08-31T00:05:00Z'));
+    persistSavepoint(storage, rotationSave);
+    const rotationSlotKey = `${SAVEPOINT_KEY_PREFIX}.1`;
+    const rotationSlotBefore = storage.getItem(rotationSlotKey);
+    assert.ok(rotationSlotBefore, 'fixture must actually populate a second live rotation slot');
 
     const usageBefore = localStorageUsage(storage).bytes;
 
@@ -163,11 +179,15 @@ describe('ConfigMenu Reclaim algorithm (BUG-457)', () => {
     const trimmedArchive = readPreWipeArchive(storage);
     assert.equal(trimmedArchive.length, cap);
 
-    // --- Superseded savepoint slot evicted. ---
-    assert.equal(storage.getItem(`${SAVEPOINT_KEY_PREFIX}.1`), null, 'leftover superseded slot must be evicted');
+    // --- Superseded savepoint slot (beyond SAVEPOINT_CAP) evicted. ---
+    assert.equal(storage.getItem(leftoverSlot), null, 'leftover superseded slot (beyond cap) must be evicted');
 
     // --- CURRENT city's active state (slot .0) is UNTOUCHED. ---
     assert.equal(storage.getItem(`${SAVEPOINT_KEY_PREFIX}.0`), currentSlotBefore, 'Reclaim must never touch the current city active state');
+
+    // --- BUG-469: the live rotation slot (slot .1, WITHIN cap) also survives —
+    // Reclaim must not treat the autosave HISTORY as superseded junk. ---
+    assert.equal(storage.getItem(rotationSlotKey), rotationSlotBefore, 'Reclaim must never touch a live autosave rotation slot within SAVEPOINT_CAP');
   });
 
   test('a corrupt journal is dropped (cannot be safely trimmed) rather than left corrupt', () => {
