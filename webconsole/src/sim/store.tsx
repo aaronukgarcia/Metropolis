@@ -734,7 +734,16 @@ export function SimProvider({ children }: { children: ReactNode }) {
     const s = stateRefForDispatch.current;
     return buildGameSave({
       state: s,
-      journal: emptyJournal(),
+      // BUG-439 FIX: the GameSave's `journal` field is the FULL action history that
+      // a later rebuild (replayFromGenesisDefensiveChunked, driven off the live
+      // `journal`/hotJournalRef state — see applyLoadedSave below) replays from
+      // genesis. Writing `emptyJournal()` here discarded that history at save time,
+      // so ANY save (manual, Save As, or the exported file) produced an empty
+      // journal on disk — a subsequent rebuild-after-load had nothing to replay and
+      // rebuilt a blank/initial city instead of reproducing the saved one.
+      // `journal` (the live React state) is captured fresh here because this
+      // closure is re-created on every render — not a stale ref.
+      journal,
       journalTail: [],
       name: displayCityName(name),
       buildVersion: currentBuildVersion(),
@@ -786,11 +795,27 @@ export function SimProvider({ children }: { children: ReactNode }) {
         const persisted = persistSavepoint(window.localStorage, {
           ...save.savepoint,
           snapshot,
+          // journalTail stays [] deliberately: this is the tail-since-snapshot used
+          // by the FAST boot-time restoreFromSavepoint() path, and `snapshot` here
+          // already IS the fully-replayed end state, so there is no pending tail.
+          // This is unrelated to `save.journal` (the FULL history) restored below.
           journalTail: [],
           buildVersion: running,
         });
+        // BUG-439 FIX: restore the loaded save's FULL journal (save.journal) into
+        // the live journal state/on-disk journal file instead of discarding it as
+        // emptyJournal(). Without this, a rebuild triggered right after a load (or
+        // at a later version-crossing boot) replayed an empty journal from genesis
+        // and produced a blank/initial city instead of reproducing the loaded one
+        // (replayFromGenesisDefensiveChunked reads hotJournalRef.current ?? journal
+        // — both must reflect the loaded history, not an empty one).
         // BUG-458: flush (not schedule) — loading a save resets the journal boundary.
-        journalPersisterRef.current?.flush(emptyJournal());
+        // (hotJournalRef is deliberately left untouched: setJournal below lands in
+        // the same render batch as the phase transition to 'prompt', so `journal`
+        // is already correct by the time the Rebuild button is clickable — setting
+        // hotJournalRef here would instead go STALE the moment the player keeps
+        // playing post-load and a LATER version-crossing rebuild reads it back.)
+        journalPersisterRef.current?.flush(save.journal);
         persistStashedCamera(window.localStorage, save.savepoint.camera ?? currentCamera());
         setRebuildProgress({ actionsDone: 3, actionsTotal: 4, phaseLabel: 'Hydrating city…' });
         setCityName(displayCityName(save.name));
@@ -799,8 +824,8 @@ export function SimProvider({ children }: { children: ReactNode }) {
         } catch {
           /* ignore */
         }
-        setJournal(emptyJournal());
-        setLastSaveIndex(0);
+        setJournal(save.journal);
+        setLastSaveIndex(save.journal.entries.length);
         dispatch({ type: 'hydrate', state: snapshot });
         if (!persisted) {
           recordError('City loaded in memory; session persist failed (quota). Use Config → Clear journal, then Save.', {
