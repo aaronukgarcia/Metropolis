@@ -9,8 +9,6 @@ import {
   ROW_BAND,
   yLabel,
   serviceDemandOf,
-  findSpot,
-  pickAutoSpec,
   fits,
   occupiedSet,
   stationLinks,
@@ -50,6 +48,7 @@ import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
 import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine } from '../sim/profile';
 import { useBlockingOverlay, useEscapeKey } from './overlayManager';
 import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from './overlayLayers';
+import { pluralizeBuildingName, DEMAND_FIX_SERVICE_LABELS, worstDemandFix } from './demandFixUi';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -730,20 +729,24 @@ export function MapView() {
         go: undefined as (() => void) | undefined,
       };
 
-    const auto = pickAutoSpec(s);
-    if (auto) {
-      const sp = SPECS[auto.spec];
-      if (specUnlocked(s, sp)) {
+    // FEAT-2326609728 inc2: the advisor's build prompt is now QUANTIFIED — it
+    // names the count that clears the whole shortfall (+5% headroom), reading
+    // demandFixPlan(state) (the SAME pure plan the DemandDock "Fix (N)" buttons
+    // use — SSOT, GR#3) rather than pickAutoSpec()'s single-building pick.
+    // pickAutoSpec() / serviceDemandOf() still drive OTHER advisor branches
+    // below (unlock nagging, DemandDock's own single-unit Auto-build button) —
+    // this only replaces the "here's what to build next" branch.
+    const fix = worstDemandFix(s);
+    if (fix) {
+      const sp = SPECS[fix.specId];
+      if (sp) {
+        const label = DEMAND_FIX_SERVICE_LABELS[fix.serviceKey] ?? fix.serviceKey;
+        const buildingLabel = pluralizeBuildingName(sp.name, fix.count);
         return {
-          text: `Do you want a ${sp.name} (${sp.blurb}) to cover ${auto.label.toLowerCase()}?`,
+          text: `Do you want to place ${fix.count} ${buildingLabel}? (clears ${label} demand +5%)`,
           go: () => {
             run(() => {
-              const spot = findSpot(s, auto.spec);
-              if (!spot) return;
-              dispatch({ type: 'place', spec: auto.spec, x: spot.x, y: spot.y });
-              setView((v) =>
-                clampView({ zoom: Math.max(v.zoom, 8), cx: spot.x, cy: spot.y }, size.w, size.h)
-              );
+              dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey });
             });
           },
         };
