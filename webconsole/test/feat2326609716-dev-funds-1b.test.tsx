@@ -38,23 +38,24 @@ test('FEAT-2326609716 AC-1: DevFundsLargeButton component exists', async () => {
   );
 });
 
-test('FEAT-2326609716 AC-2: DEV_FUNDS_GRANT_LARGE constant is 1_000_000_000', async () => {
+test('FEAT-2326609716 AC-2: DEV_FUNDS_GRANT_LARGE constant is 1_000_000_000_000 (1T, Aaron Q100094)', async () => {
   const { DEV_FUNDS_GRANT_LARGE, DEV_FUNDS_GRANT } = await import(
     '../src/components/TopBar.tsx'
   );
 
-  // AC-2: constant exists and has the correct value (1B = 1_000_000_000)
+  // AC-2: constant exists and has the correct value (1T = 1_000_000_000_000, raised from 1B per Aaron Q100094 2026-09-03)
   assert.strictEqual(
     DEV_FUNDS_GRANT_LARGE,
-    1_000_000_000,
-    'DEV_FUNDS_GRANT_LARGE must be exactly 1_000_000_000'
+    1_000_000_000_000,
+    'DEV_FUNDS_GRANT_LARGE must be exactly 1_000_000_000_000'
   );
 
-  // Sanity: 1B is 100x the 10m button
+  // Sanity: 1T is 100,000x the 10m button (raised from 100x/1B per Aaron
+  // Q100094, 2026-09-03).
   assert.strictEqual(
     DEV_FUNDS_GRANT_LARGE / DEV_FUNDS_GRANT,
-    100,
-    '+1B button should be 100x the +10m button'
+    100_000,
+    '+1T button should be 100,000x the +10m button'
   );
 });
 

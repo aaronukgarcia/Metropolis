@@ -169,9 +169,10 @@ export function StartOverButton() {
 /** Amount granted by the dev funds button (FEAT-1972079883). */
 export const DEV_FUNDS_GRANT = 10_000_000;
 
-/** Amount granted by the large dev funds button (FEAT-2326609716, Aaron
- *  2026-09-01: "+1B next to the +10m" for start-over testing). */
-export const DEV_FUNDS_GRANT_LARGE = 1_000_000_000;
+/** Amount granted by the large dev funds button (FEAT-2326609716; raised
+ *  1B -> 1T per Aaron's Q100094 ruling, 2026-09-03: "change the +1B to make
+ *  it 1T (trillion)"). */
+export const DEV_FUNDS_GRANT_LARGE = 1_000_000_000_000;
 
 // DevFundsButton — DEV-ONLY debug helper (FEAT-1972079883) sitting next to
 // Start Over. Renders only when import.meta.env.DEV is true, so a production
@@ -204,7 +205,7 @@ export function DevFundsLargeButton() {
       title={`Dev only: grant ${fmtMoney(DEV_FUNDS_GRANT_LARGE)}`}
       onClick={() => dispatch({ type: 'debugFunds', amount: DEV_FUNDS_GRANT_LARGE })}
     >
-      +£1B
+      +£1T
     </button>
   );
 }

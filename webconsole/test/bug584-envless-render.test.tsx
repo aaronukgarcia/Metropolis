@@ -97,7 +97,7 @@ test('BUG-584: StartOverButton (Unlock-All gate + DevFundsButton + DevFundsLarge
   // DEV-gated bits must be absent — DEV is undefined/falsy in this runtime.
   assert.ok(!html.includes('Unlock All'), 'Unlock-All god-mode button must not render with DEV falsy');
   assert.ok(!/\+£10m/.test(html), 'DevFundsButton must not render with DEV falsy');
-  assert.ok(!/\+£1B/.test(html), 'DevFundsLargeButton must not render with DEV falsy');
+  assert.ok(!/\+£1T/.test(html), 'DevFundsLargeButton must not render with DEV falsy');
 });
 
 test('BUG-584: PerfHud renders (as null) under an env-less runtime without throwing', async () => {
