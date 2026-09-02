@@ -10,11 +10,42 @@
 // reloads so nothing a session committed is lost before a backend exists.
 // When a backend arrives it drains this queue: read `readQueue()`, POST each
 // entry (oldest first — array order IS commit order), and remove entries only
-// on a 2xx. Until then entries are never removed, only capped at QUEUE_CAP
-// (oldest dropped first) to bound storage. Do not change QUEUE_KEY or the
+// on a 2xx. Until then entries are never removed except to stay under bounds:
+// QUEUE_CAP (entry count) and QUEUE_BYTE_BUDGET (serialized bytes), both of
+// which drop the OLDEST entries first. Do not change QUEUE_KEY or the
 // QueuedCommit shape without a migration — persisted queues in players'
 // browsers are written in this exact schema.
+//
+// ── BUG-607: BYTE BUDGET + CONTENT COMPACTION ───────────────────────────────
+// Debug frames scale with city size (buildings.list, road monitors, ...), so
+// a 50-ENTRY cap alone does not bound bytes — one real browser showed 8.02MB
+// in this single key of a ~5-10MB origin quota, which made every OTHER
+// localStorage.setItem in the app (including autosaves) start throwing.
+// Two changes, both SCHEMA-COMPATIBLE — readQueue() of an old, pre-BUG-607 fat
+// entry still works unchanged, because QueuedCommit.payload is `unknown` and
+// its internal shape was never part of the persisted contract:
+//   1. `compactPayload()` strips the heaviest, least-needed sections from a
+//      debug-json-shaped `payload` before it is queued — mirrors
+//      captureBeforeWipe.ts's compactDebugForArchive (buildings.list,
+//      sim.roadMonitors / sim.roadConnectivity.connectedRoadTiles, and
+//      perfHud all dropped; meta / sim scalars / flows / consistency / errors
+//      are KEPT so a future backend drain stays useful). A payload that
+//      doesn't look like a DebugJson (missing/wrong-typed buildings/sim)
+//      passes through unchanged rather than throwing — this module has no
+//      DebugJson import and stays duck-typed against `unknown`.
+//   2. After append, `enqueueCommit` evicts OLDEST entries until the
+//      serialized queue fits QUEUE_BYTE_BUDGET. A single (already-compacted)
+//      entry that alone exceeds the budget is dropped rather than starving
+//      out the rest of the queue for one outsized frame — the caller records
+//      MET-V854 for this (this module stays pure/throw-free, no recordError
+//      import). A QuotaExceededError from the underlying storage.setItem
+//      itself degrades further: drop the oldest half of what would have been
+//      written and retry ONCE, then give up WITHOUT throwing (the caller
+//      records MET-V855) — a queue write must never break the commit button
+//      or the sim (GR#1).
 // ────────────────────────────────────────────────────────────────────────────
+
+import { safeSetItem } from './safeStorage.ts';
 
 /** localStorage key holding the persisted queue (ASM-453 schema — stable). */
 export const QUEUE_KEY = 'metropolis.debugQueue';
@@ -22,13 +53,22 @@ export const QUEUE_KEY = 'metropolis.debugQueue';
 /** Max queued commits kept; overflow drops the OLDEST entries first. */
 export const QUEUE_CAP = 50;
 
+/**
+ * ⚠ BALANCE/config placeholder (BUG-607): serialized-queue byte budget. 2MB
+ * leaves headroom under a ~5-10MB origin quota so autosaves/journal/named
+ * saves/pre-wipe archive keep working alongside a full debug queue. Revisit
+ * once real dogfood data shows the actual multi-key quota pressure.
+ */
+export const QUEUE_BYTE_BUDGET = 2 * 1024 * 1024;
+
 /** One committed-but-unsent debug.json frame awaiting a backend (ASM-453). */
 export interface QueuedCommit {
   /** Commit id (DBG-...), assigned at commit time. */
   id: string;
   /** ISO-8601 wall-clock time of the commit. */
   at: string;
-  /** The committed debug.json frame, exactly as shown on screen (WYSIWYG). */
+  /** The committed debug.json frame, exactly as shown on screen (WYSIWYG) —
+   * BUT compacted (BUG-607) before persisting; see compactPayload(). */
   payload: unknown;
 }
 
@@ -57,20 +97,112 @@ export function pendingCount(storage: StorageLike): number {
   return readQueue(storage).length;
 }
 
+/** UTF-8 byte length of a string — the real localStorage quota unit (not .length). */
+function byteLength(s: string): number {
+  if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(s).length;
+  // Node fallback: TextEncoder has been global since Node 11, this is belt-and-braces.
+  return Buffer.byteLength(s, 'utf8');
+}
+
 /**
- * Append one commit and persist, enforcing QUEUE_CAP (keeps the NEWEST
- * QUEUE_CAP entries). Returns the queue length after the append.
- * `atIso` is injected so tests are clock-deterministic.
+ * BUG-607: strip the heaviest, least-needed sections from a debug-json-shaped
+ * payload before it is queued, mirroring captureBeforeWipe.ts's
+ * compactDebugForArchive. Duck-typed against `unknown` (this module does not
+ * import DebugJson) — any section that isn't present/well-shaped is left
+ * alone rather than throwing, so a payload that doesn't match the expected
+ * debug.json shape passes through unchanged.
+ */
+export function compactPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+  const p = payload as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...p, perfHud: null };
+
+  const buildings = p.buildings;
+  if (buildings && typeof buildings === 'object' && !Array.isArray(buildings)) {
+    out.buildings = { ...(buildings as Record<string, unknown>), list: [] };
+  }
+
+  const sim = p.sim;
+  if (sim && typeof sim === 'object' && !Array.isArray(sim)) {
+    const s = sim as Record<string, unknown>;
+    const roadConnectivity =
+      s.roadConnectivity && typeof s.roadConnectivity === 'object' && !Array.isArray(s.roadConnectivity)
+        ? { ...(s.roadConnectivity as Record<string, unknown>), connectedRoadTiles: [] }
+        : s.roadConnectivity;
+    out.sim = { ...s, roadMonitors: [], roadConnectivity };
+  }
+
+  return out;
+}
+
+/** Serialize a candidate queue and report whether it fits QUEUE_BYTE_BUDGET. */
+function fitsBudget(q: QueuedCommit[], budget: number): boolean {
+  return byteLength(JSON.stringify(q)) <= budget;
+}
+
+/** Drop OLDEST entries (never the newest) until the queue fits the byte budget. */
+function evictToByteBudget(q: QueuedCommit[], budget: number): QueuedCommit[] {
+  let out = q;
+  while (out.length > 1 && !fitsBudget(out, budget)) {
+    out = out.slice(1);
+  }
+  return out;
+}
+
+/** Outcome of an enqueueCommit call — the caller (backend.ts) decides how to surface it (GR#1). */
+export interface EnqueueOutcome {
+  /** Queue length AFTER this call. Unchanged from before the call when ok is false. */
+  length: number;
+  /** False when the entry could not be persisted at all. Never throws either way. */
+  ok: boolean;
+  /** True: this entry alone (even compacted) exceeded QUEUE_BYTE_BUDGET and was dropped (MET-V854). */
+  droppedOversize?: boolean;
+  /** True: storage.setItem hit quota; recovered by evicting the oldest half and retrying once. */
+  quotaRecovered?: boolean;
+}
+
+/**
+ * Append one commit and persist, enforcing QUEUE_CAP (entry count) and
+ * QUEUE_BYTE_BUDGET (serialized bytes) — both evict the OLDEST entries first.
+ * The payload is compacted (BUG-607) before it is measured or stored.
+ * `atIso` is injected so tests are clock-deterministic. Never throws — a
+ * QuotaExceededError from storage.setItem degrades to one retry (oldest half
+ * dropped) then gives up, reporting failure via the returned EnqueueOutcome.
  */
 export function enqueueCommit(
   storage: StorageLike,
   id: string,
   payload: unknown,
   atIso: string
-): number {
-  const q = readQueue(storage);
-  q.push({ id, at: atIso, payload });
-  const trimmed = q.slice(-QUEUE_CAP);
-  storage.setItem(QUEUE_KEY, JSON.stringify(trimmed));
-  return trimmed.length;
+): EnqueueOutcome {
+  const entry: QueuedCommit = { id, at: atIso, payload: compactPayload(payload) };
+  const entryBytes = byteLength(JSON.stringify(entry));
+
+  if (entryBytes > QUEUE_BYTE_BUDGET) {
+    // Even compacted, this ONE frame alone blows the whole budget — drop it
+    // rather than evict every other queued commit to make room for it.
+    return { length: pendingCount(storage), ok: false, droppedOversize: true };
+  }
+
+  let q = readQueue(storage);
+  q.push(entry);
+  q = q.slice(-QUEUE_CAP);
+  q = evictToByteBudget(q, QUEUE_BYTE_BUDGET);
+
+  const first = safeSetItem(storage, QUEUE_KEY, JSON.stringify(q));
+  if (first.ok) return { length: q.length, ok: true };
+
+  if (!first.quota) {
+    // Not a recoverable quota condition — give up without throwing; storage
+    // still holds whatever it held before this call.
+    return { length: pendingCount(storage), ok: false };
+  }
+
+  // QuotaExceeded: drop the OLDEST half of the candidate queue (keep the
+  // newer ceil(n/2), including the just-appended entry) and retry ONCE.
+  const halved = q.slice(Math.floor(q.length / 2));
+  const second = safeSetItem(storage, QUEUE_KEY, JSON.stringify(halved));
+  if (second.ok) return { length: halved.length, ok: true, quotaRecovered: true };
+
+  return { length: pendingCount(storage), ok: false };
 }

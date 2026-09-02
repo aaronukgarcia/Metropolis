@@ -123,7 +123,8 @@
       "H500-H509": "reserved for harness.converge (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 10-wide block found after scanning existing codes and reservations on layer \"H\")",
       "P035-P039": "reserved for int.protocol (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-01 by Aaron Garcia -- BUG-273: lowest free 5-wide block found after scanning existing codes and reservations on layer \"P\")",
       "V850-V851": "reserved for ui.webconsole (FEAT-2326609714 save robustness: MET-V850 malformed-save rejection + MET-V851 named-save slug-collision block; same owner as the V800-V849 webconsole error framework. Auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")",
-      "V852-V852": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")"
+      "V852-V852": "reserved for ui.webconsole (auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 1-wide block found after scanning existing codes and reservations on layer \"V\")",
+      "V854-V855": "reserved for ui.webconsole (FEAT-1972079885 debug commit queue byte-budget + compaction: MET-V854 oversize-entry drop + MET-V855 quota-exhausted give-up; same owner as the V800-V853 webconsole error framework. Auto-claimed via tools/plan/add-error.js claim-range on 2026-09-02 by Aaron Garcia -- BUG-273: lowest free 2-wide block found after scanning existing codes and reservations on layer \"V\")"
     
     },
     "toolingNote": "tools/plan/generate.js currently raises inline string codes MET-T001..MET-T030 (see its header comment) and is NOT wired to this registry — it runs before code.json/data/errors.json can be trusted to exist. Migrating it to read data/errors.json (or a generated tooling subset) is future work; do not remove or renumber its inline codes without updating this note and the script together."
@@ -5276,6 +5277,18 @@
       "module": "ui.webconsole",
       "message": "Residential zone spec '{specId}' has no 'residents' field -- capacityAtTier would silently fall back to 0, freezing the population ceiling for this building type.",
       "remedy": "Add a 'residents' (and, if scalable, capacityTiers) field to the spec definition in data.ts before shipping it."
+    },
+    "MET-V854": {
+      "severity": "warn",
+      "module": "FEAT-1972079885",
+      "message": "Debug commit {id} dropped: frame exceeds the {budgetMB}MB queue byte budget even after compaction",
+      "remedy": "A single debug.json frame is larger than QUEUE_BYTE_BUDGET even with buildings/perfHud/road-monitor sections stripped (huge city, or the budget is tuned too low for this save). The commit was NOT queued -- download it directly (Debug tab -> Download) instead of relying on the local queue, or raise QUEUE_BYTE_BUDGET in commitqueue.ts."
+    },
+    "MET-V855": {
+      "severity": "error",
+      "module": "FEAT-1972079885",
+      "message": "Debug commit {id} could not be queued locally: localStorage quota exhausted even after evicting the oldest half of the queue",
+      "remedy": "The debugQueue key plus everything else in this origin's localStorage (autosaves, journal, named saves) is at quota. The commit was NOT queued -- use Config -> Clear queue or Config -> Reclaim storage to free space, then retry, or download the frame directly (Debug tab -> Download)."
     }
   }
 }

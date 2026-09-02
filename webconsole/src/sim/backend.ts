@@ -5,7 +5,7 @@
 // every commit queues client-side in localStorage until one arrives); this
 // file only binds it to the real window.localStorage and the real network.
 
-import { enqueueCommit, pendingCount, type StorageLike } from './commitqueue.ts';
+import { enqueueCommit, pendingCount, QUEUE_BYTE_BUDGET, type StorageLike } from './commitqueue.ts';
 import type { SimState } from './types.ts';
 // The captured-error record shape is owned by debugjson.ts (CapturedError) so the
 // debug.json artefact and the live "Errors captured" panel can never drift. This
@@ -566,12 +566,34 @@ export async function commitDebug(payload: unknown): Promise<CommitResult> {
     return { ok: true, queued: false, id, message: `Committed to backend as ${id}` };
   } catch {
     // ASM-453: no backend exists — queue locally and report honestly.
-    const n = enqueueCommit(queueStorage(), id, payload, new Date().toISOString());
+    // BUG-607: enqueueCommit never throws (byte-budget eviction + a
+    // quota-degrade retry are internal to commitqueue.ts), but it CAN fail to
+    // persist the entry at all — that failure must reach the player and the
+    // registry (GR#1/#7), never a silent "queued" lie, and it must never
+    // break this button or the sim (the try/catch above is for the fetch,
+    // not for this call — enqueueCommit itself is throw-free).
+    const outcome = enqueueCommit(queueStorage(), id, payload, new Date().toISOString());
+    if (!outcome.ok) {
+      const code = outcome.droppedOversize ? 'MET-V854' : 'MET-V855';
+      const budgetMB = (QUEUE_BYTE_BUDGET / (1024 * 1024)).toFixed(1);
+      const msg = outcome.droppedOversize
+        ? `Debug commit ${id} dropped: frame exceeds the ${budgetMB}MB queue byte budget even after compaction`
+        : `Debug commit ${id} could not be queued locally: localStorage quota exhausted even after evicting the oldest half of the queue`;
+      recordError(msg, { type: 'app', action: 'commit', code });
+      return {
+        ok: false,
+        queued: false,
+        id,
+        message: outcome.droppedOversize
+          ? `Backend unreachable and this frame is too large to queue locally (even compacted) — download it instead (Debug tab → Download).`
+          : `Backend unreachable and the local queue is full (storage quota) — commit was NOT saved. Free storage (Config → Clear queue / Reclaim storage) and retry, or download it (Debug tab → Download).`,
+      };
+    }
     return {
       ok: true,
       queued: true,
       id,
-      message: `Backend unreachable — queued locally as ${id} (${n} awaiting processing)`,
+      message: `Backend unreachable — queued locally as ${id} (${outcome.length} awaiting processing)`,
     };
   }
 }
