@@ -99,7 +99,7 @@ type Employment struct {
 // (AC-1b), never by direct field assignment.
 type Citizen struct {
 	ID           uint64
-	BirthMonth   int32 // absolute month index, 0 = world genesis
+	BirthMonth   int32 // absolute month index, 0 = world genesis; may be negative (born before genesis — BUG-517)
 	Sex          Sex
 	Household    uint64 // household id
 	Partner      uint64 // partner citizen id, 0 = none
@@ -153,7 +153,7 @@ func NewCitizen(c Citizen, householdExists func(uint64) bool, correlationID stri
 // never mutates the input and never clamps — out-of-contract values are
 // rejected with a registry-sourced error, never silently narrowed.
 func ValidateCitizen(c Citizen, householdExists func(uint64) bool, correlationID string) error {
-	if c.BirthMonth < 0 || int64(c.BirthMonth) > math.MaxInt16 {
+	if int64(c.BirthMonth) < math.MinInt16 || int64(c.BirthMonth) > math.MaxInt16 {
 		return errs.New(ErrInvalidBirthMonth, correlationID, map[string]any{
 			"id":         c.ID,
 			"birthMonth": c.BirthMonth,
@@ -276,7 +276,7 @@ func validateEnums(id uint64, sex Sex, health HealthBand, stage Stage, state Emp
 // store is the single source of truth, so a seed record that would narrow
 // to a wrapped or out-of-domain value is rejected rather than appended.
 func ValidateColdRecord(r ColdRecord, correlationID string) error {
-	if r.BirthMonth < 0 || r.BirthMonth > math.MaxInt16 {
+	if r.BirthMonth < math.MinInt16 || r.BirthMonth > math.MaxInt16 {
 		return errs.New(ErrInvalidBirthMonth, correlationID, map[string]any{
 			"id":         r.ID,
 			"birthMonth": r.BirthMonth,

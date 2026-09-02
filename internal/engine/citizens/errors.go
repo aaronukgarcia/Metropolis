@@ -23,12 +23,20 @@ package citizens
 // sub-range instead of a new layer letter, that is their call.
 const (
 	// ErrInvalidBirthMonth: a citizen record was constructed with a
-	// birthMonth outside the representable range [0, MaxInt16] — negative
-	// (before the world's epoch, month 0), or so large it would overflow
-	// the int16 delta the cold store encodes the age in (int16(40000)
-	// wraps to -25536). Rejected outright (AC-13/GR#16) rather than
-	// silently clamped or wrapped — a wrapped birth month would corrupt
-	// the age derivation every later system reads.
+	// birthMonth outside the representable range [MinInt16, MaxInt16] —
+	// too far before the world's month-0 genesis, or so large it would
+	// overflow the int16 delta the cold store encodes the age in
+	// (int16(40000) wraps to -25536). Rejected outright (AC-13/GR#16)
+	// rather than silently clamped or wrapped — a wrapped birth month
+	// would corrupt the age derivation every later system reads.
+	//
+	// BUG-517 widened the lower bound from 0 to MinInt16 (symmetric with
+	// the upper bound): a real city's founding population is NOT all
+	// newborns — the seed population and arriving migrants legitimately
+	// have BirthMonth < 0 (born before the simulation's own month 0),
+	// exactly the way a real city's residents were mostly born decades
+	// before "day one". Age() = Month - BirthMonth was already correct for
+	// any sign of BirthMonth; only this domain check needed widening.
 	ErrInvalidBirthMonth = "MET-G001"
 
 	// ErrPersonalityAxisOutOfRange: a personality axis fell outside the

@@ -1384,9 +1384,16 @@ func (st *simState) spawnCitizens(month int64, count int) error {
 			})
 		}
 		st.nextCitizenID++
+		// BUG-517: the seed population is a founding city's residents, not
+		// a nursery — it must arrive with a realistic UK-like age spread,
+		// not uniformly age 0. The age is drawn deterministically (never
+		// math/rand or time) from citizens' age pyramid, keyed on this
+		// citizen's own id and the mint month so two runs draw identical
+		// ages for identical citizens (GR#21).
+		age := citizens.DrawAgeAtCreationMonths(st.seed, id, month)
 		cit := citizens.Citizen{
 			ID:          id,
-			BirthMonth:  int32(month),
+			BirthMonth:  citizens.BirthMonthForAge(month, age),
 			Personality: citizens.InitPersonality(st.seed, id, month, citizens.Personality{}, citizens.Personality{}),
 		}
 		if err := st.citizens.ApplyLifeEventCommand(citizens.LifeEventCommand{

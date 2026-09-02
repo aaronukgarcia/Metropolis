@@ -2,6 +2,7 @@ package citizens
 
 import (
 	"errors"
+	"math"
 	"reflect"
 	"testing"
 	"unsafe"
@@ -115,11 +116,25 @@ func assertRegistryCode(t *testing.T, err error, code string) {
 	}
 }
 
-// TestValidateCitizenRejectsInvalidBirthMonth (AC-13): a negative birthMonth
-// returns the registry-sourced ErrInvalidBirthMonth, not a clamped record.
-func TestValidateCitizenRejectsInvalidBirthMonth(t *testing.T) {
+// TestValidateCitizenAcceptsPreGenesisBirthMonth (BUG-517): a negative
+// birthMonth is now legitimate (a citizen born before the world's month-0
+// genesis — the seed population and migrants are exactly this case) and
+// must NOT be rejected, as long as it stays inside the widened
+// [MinInt16, MaxInt16] domain.
+func TestValidateCitizenAcceptsPreGenesisBirthMonth(t *testing.T) {
 	c := testCitizen()
 	c.BirthMonth = -1
+	if err := ValidateCitizen(c, func(uint64) bool { return true }, "corr"); err != nil {
+		t.Fatalf("ValidateCitizen rejected a legitimate pre-genesis birthMonth: %v", err)
+	}
+}
+
+// TestValidateCitizenRejectsInvalidBirthMonth (AC-13, widened by BUG-517): a
+// birthMonth outside the [MinInt16, MaxInt16] domain returns the
+// registry-sourced ErrInvalidBirthMonth, not a clamped record.
+func TestValidateCitizenRejectsInvalidBirthMonth(t *testing.T) {
+	c := testCitizen()
+	c.BirthMonth = math.MinInt16 - 1
 	err := ValidateCitizen(c, func(uint64) bool { return true }, "corr")
 	assertRegistryCode(t, err, ErrInvalidBirthMonth)
 }
@@ -159,7 +174,10 @@ func TestBirthCommandRejectsInvalidAndDoesNotPersist(t *testing.T) {
 
 	bad := testCitizen()
 	bad.ID = 500
-	bad.BirthMonth = -5
+	// BUG-517 widened the domain to admit pre-genesis (negative) birth
+	// months, so this must use a value outside the WIDENED domain to still
+	// exercise the rejection path.
+	bad.BirthMonth = math.MinInt16 - 1
 	cmd := LifeEventCommand{CorrelationID: "corr", Kind: LifeEventBirth, Citizen: bad}
 	if err := api.ApplyLifeEventCommand(cmd); err == nil {
 		t.Fatal("expected an error for an invalid birth, got nil")

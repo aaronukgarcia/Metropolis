@@ -341,9 +341,13 @@ func (a *AttractAPI) birthMigrant(cit *citizens.CitizensAPI, id uint64, month in
 	if err := a.checkNotCopied("birthMigrant"); err != nil {
 		return err
 	}
+	// BUG-517: an arriving migrant is not a newborn — they arrive with a
+	// realistic UK-like age (drawn deterministically from citizens' age
+	// pyramid, same mechanism as the seed population), never a flat age 0.
+	age := citizens.DrawAgeAtCreationMonths(a.seed, id, month)
 	rec := citizens.Citizen{
 		ID:          id,
-		BirthMonth:  clampBirthMonth(month),
+		BirthMonth:  citizens.BirthMonthForAge(month, age),
 		Sex:         citizens.Sex(id & 1),
 		Personality: neutralMigrantPersonality(),
 		HealthBand:  citizens.HealthGood,
@@ -362,20 +366,6 @@ func (a *AttractAPI) birthMigrant(cit *citizens.CitizensAPI, id uint64, month in
 		Kind:          citizens.LifeEventBirth,
 		Citizen:       rec,
 	})
-}
-
-// clampBirthMonth coerces a simulation month into the citizens hot record's
-// int16 birth-month domain (defensive — a month beyond 32767 would wrap a
-// bare int32→int16 narrowing). Baseline One's months never approach the
-// bound; the clamp keeps a fuzzed month from ever wrapping negative.
-func clampBirthMonth(month int64) int32 {
-	if month < 0 {
-		return 0
-	}
-	if month > math.MaxInt16 {
-		return math.MaxInt16
-	}
-	return int32(month)
 }
 
 // neutralMigrantPersonality returns the v1 neutral migrant personality
