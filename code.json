@@ -806,6 +806,10 @@
             "outboundGuid": "f4f37400-9913-4c53-b2eb-675921b8dc99"
           },
           {
+            "key": "engine.services",
+            "outboundGuid": "47f5426b-85c0-4bce-a70e-621762f9f8f3"
+          },
+          {
             "key": "engine.traffic",
             "outboundGuid": "bae63a41-866d-45f3-a0da-ff38fabd8c79"
           },
@@ -5477,6 +5481,11 @@
             "key": "foundation.num",
             "moduleGuid": "c9aeccd2-a449-48a0-8ccb-13bdc997ad0f",
             "inboundGuid": "74ff5b3b-bfc6-4376-b461-267f4467a39f"
+          },
+          {
+            "key": "int.serializer",
+            "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
+            "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
           }
         ]
       },

@@ -1934,7 +1934,8 @@
         "engine.citizens",
         "foundation.data",
         "foundation.errors",
-        "foundation.num"
+        "foundation.num",
+        "int.serializer"
       ],
       "sprint": 4
     },
