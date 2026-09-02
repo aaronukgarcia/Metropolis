@@ -21,6 +21,7 @@ import {
   wasteStatsOf,
   pickAutoSpec,
   SPECS,
+  AUTO_BUILD_DEMAND_FRACTION,
 } from '../src/sim/data.ts';
 
 /** Mirrors demand-fix.test.mjs's shortfallState(): real population, no service
@@ -170,25 +171,32 @@ test('AC-5: fire routes through optimalProvider and never recommends a locked ti
 // Independent-round follow-up (re-score after the FEAT-2326609735 REJECT):
 // confirm the accepted BUG-571 behaviour survives the total-plan-cost rewrite
 // of optimalProvider() — these are the two canonical tiers the round verified.
-test('BUG-571 regression: level 2 (fire_post only) picks fire_post, sized 3 units', () => {
+test('BUG-571 regression: level 2 (fire_post only) picks fire_post, sized 2 units', () => {
+  // BUG-601: sized to AUTO_BUILD_DEMAND_FRACTION (50%) of the 10,000
+  // shortfall = a 5,000 fixAmount; fire_post (served 4,000) needs
+  // ceil(5,000/4,000) = 2 units.
   const base = initialState();
   const s = { ...base, population: 10_000, unlockedAll: false, xp: xpForLevel(2), funds: 1_000_000_000, administrationState: null };
   assert.equal(levelOf(s.xp), 2, 'precondition: level 2 unlocks fire_post only');
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(plan);
   assert.equal(plan.specId, 'fire_post');
-  assert.equal(plan.count, 3, 'fire_post (served 4,000) needs 3 units for a 10,500 shortfall');
+  assert.equal(plan.count, 2, 'fire_post (served 4,000) needs 2 units for a 5,000 fixAmount (50% of the 10,000 shortfall)');
 });
 
 test('BUG-571 regression: level 4 (fire_post + fire_station unlocked) picks fire_station when its TOTAL plan cost is genuinely cheaper', () => {
-  // Shortfall 18,900: fire_post would need 5 units (5 * £1.8M = £9.0M);
-  // fire_station clears it in 1 unit (£8.64M) — fire_station's WHOLE PLAN is
-  // cheaper, which is exactly the comparison the REJECTed draft never made
-  // (it only compared per-unit/cost-per-capacity among clears-in-one
-  // candidates, or fell back to bare per-unit cost — never a real total-cost
-  // comparison across differently-sized plans).
+  // BUG-601: sized to AUTO_BUILD_DEMAND_FRACTION (50%) of the shortfall.
+  // Population 37,800 gives a fixAmount of 18,900 (37,800 * 0.5) — the SAME
+  // 18,900 target the pre-BUG-601 (full-shortfall) version of this test used
+  // at population 18,000, so the total-plan-cost comparison is unchanged:
+  // fire_post would need 5 units (5 * £1.8M = £9.0M); fire_station clears it
+  // in 1 unit (£8.64M) — fire_station's WHOLE PLAN is cheaper, which is
+  // exactly the comparison the REJECTed draft never made (it only compared
+  // per-unit/cost-per-capacity among clears-in-one candidates, or fell back
+  // to bare per-unit cost — never a real total-cost comparison across
+  // differently-sized plans).
   const base = initialState();
-  const s = { ...base, population: 18_000, unlockedAll: false, xp: xpForLevel(4), funds: 1_000_000_000, administrationState: null };
+  const s = { ...base, population: 37_800, unlockedAll: false, xp: xpForLevel(4), funds: 1_000_000_000, administrationState: null };
   assert.equal(levelOf(s.xp), 4, 'precondition: level 4 unlocks fire_post + fire_station (fire_hq still locked)');
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(plan);
@@ -196,23 +204,28 @@ test('BUG-571 regression: level 4 (fire_post + fire_station unlocked) picks fire
   assert.equal(plan.count, 1);
 
   // Sanity: prove fire_post really would have been the worse TOTAL plan here.
-  const postUnits = Math.ceil(18_900 / SPECS.fire_post.served);
+  const fixAmount = 37_800 * AUTO_BUILD_DEMAND_FRACTION; // 18,900
+  const postUnits = Math.ceil(fixAmount / SPECS.fire_post.served);
   const postTotal = postUnits * SPECS.fire_post.cost;
   const stationTotal = SPECS.fire_station.cost; // 1 unit
   assert.ok(stationTotal < postTotal, `fire_station's plan (£${stationTotal}) must beat fire_post's ${postUnits}-unit plan (£${postTotal})`);
 });
 
-test('AC-6: fire single-click auto-build still places exactly one unit (sizing is unaffected)', () => {
-  // pickAutoSpec() (the per-click Auto-build advisor) returns a single
-  // {spec,label} pair, never a count/plan — the BUG-571 fix only changes WHICH
-  // spec is chosen, not the one-unit-per-click contract. resolveDemand/
-  // demandFixPlan (a SEPARATE code path, already count-based) is where sizing
-  // lives — see AC-9.
+test('AC-6: pickAutoSpec() itself never carries a count/plan field (sizing lives in demandFixPlan, not here)', () => {
+  // pickAutoSpec() (the per-click Auto-build advisor's spec/label pick)
+  // returns a pure {spec,label,serviceKey} triple, never a count/plan — the
+  // BUG-571 fix only changed WHICH spec is chosen; BUG-601 (2026-09-02) then
+  // changed how DemandDock.tsx's runAuto() USES that pick (routing through
+  // demandFixPlan/resolveDemand for a properly-sized, funds-capped batch
+  // instead of a single unit) — but pickAutoSpec's own return shape is
+  // unaffected by either change. resolveDemand/demandFixPlan (a SEPARATE
+  // code path, already count-based) is where sizing lives — see AC-9.
   const s = shortfallState(10_000);
   const auto = pickAutoSpec(s);
   assert.ok(auto, 'precondition: a real shortfall exists');
   assert.equal(typeof auto.spec, 'string');
   assert.equal(typeof auto.label, 'string');
+  assert.equal(typeof auto.serviceKey, 'string', 'BUG-601: serviceKey lets the caller look up this service\'s demandFixPlan entry');
   assert.equal(Object.prototype.hasOwnProperty.call(auto, 'count'), false, 'pickAutoSpec must never carry a count/plan field');
 });
 
@@ -220,7 +233,7 @@ test('AC-6: fire single-click auto-build still places exactly one unit (sizing i
 // AC-9/AC-10 — fire gets a sized Fix button, respecting affordability.
 // ---------------------------------------------------------------------------
 
-test('AC-9: demandFixPlan emits a fire entry sized ceil((need*1.05-have)/unitCapacity)', () => {
+test('AC-9: demandFixPlan emits a fire entry sized ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION/unitCapacity) (BUG-601)', () => {
   // RED-PROOF: before this fix, DEMAND_FIX_PROVIDERS had no 'fire' rule, so
   // demandFixPlan() silently skipped fire (cheapestProvider(s,'fire') === null
   // for lack of any rule) — no entry, no Fix button, regardless of shortfall.
@@ -230,18 +243,19 @@ test('AC-9: demandFixPlan emits a fire entry sized ceil((need*1.05-have)/unitCap
   assert.ok(fire, 'a fire shortfall with an unlocked provider must yield a demandFixPlan entry');
 
   const row = serviceCoverageOf(s).find((c) => c.id === 'fire');
-  const target = row.need * 1.05;
   // NOTE: ServiceCoverage's field is `cap` (not `have`) — demandFixPlan()
   // maps c.cap -> DemandFixPlanItem.have for exactly this row (data.ts).
-  const expectedCount = Math.ceil(Math.max(0, target - row.cap) / fire.unitCapacity);
-  assert.equal(fire.count, expectedCount, 'fire count must use the same ceil((need*1.05-have)/unitCapacity) formula every other service uses');
+  const fixAmount = (row.need - row.cap) * AUTO_BUILD_DEMAND_FRACTION;
+  const expectedCount = Math.ceil(fixAmount / fire.unitCapacity);
+  assert.equal(fire.count, expectedCount, 'fire count must use the same ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION/unitCapacity) formula every other service uses');
   assert.equal(fire.unitCapacity, SPECS[fire.specId].served);
 });
 
 test('AC-10: resolveDemand for fire respects affordability — places only what funds allow, never goes negative', () => {
-  // Population large enough that no fire tier clears the shortfall in one
-  // unit (need*1.05 > fire_hq's 80,000 capacity), forcing the multi-unit
-  // fallback path (cheapest absolute cost = fire_post) with count > 1.
+  // Population large enough that the cheapest TOTAL plan (BUG-601: sized to
+  // 50% of the shortfall) is still a multi-unit fire_post plan, not a
+  // single fire_hq unit, forcing the affordability-capping path with
+  // count > 1.
   const s = shortfallState(100_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'fire');
   assert.ok(plan && plan.count >= 2, 'need a fire plan needing 2+ units to prove a partial affordability cap');
@@ -411,4 +425,150 @@ test('AC-4: sort is deterministic — identical input sorts identically every ca
   const sortedTied2 = sortServiceRows(tied).map((r) => r.id);
   assert.deepEqual(sortedTied1, ['aaa', 'zzz']);
   assert.deepEqual(sortedTied1, sortedTied2, 'tie-break must be stable across repeated sorts');
+});
+
+// ---------------------------------------------------------------------------
+// BUG-572 FOLLOW-UP (2026-09-02, Aaron rec-on-all) — parks/leisure was the
+// last serviceCoverageOf()-modellable resource with a REAL coverage formula
+// (crimeRateOf's Parks reducer, present since FEAT-2326609731) that was still
+// never folded into a demand row — the same defect class the refuse row (AC-1
+// above) closed. Also: a generic, DATA-DERIVED (GR#15) completeness check so
+// a FUTURE resource with a real coverage function cannot silently regress
+// this same gap without reddening a test.
+// ---------------------------------------------------------------------------
+
+test('BUG-572 follow-up: serviceDemandOf includes a parks row when parks footprint is short of need', () => {
+  const s = shortfallState(300_000); // parksNeed = pop*0.002 = 600 footprint units; no parks built.
+  // RED-PROOF: pre-fix serviceCoverageOf() never emitted a 'parks' row (it was
+  // computed inline inside crimeRateOf and wellbeingOf only) — this find()
+  // would return undefined, exactly like the pre-fix refuse row in AC-1.
+  const parksRow = serviceDemandOf(s).find((r) => r.id === 'parks');
+  assert.ok(parksRow, 'serviceDemandOf must include a parks entry when a footprint shortfall exists');
+  assert.equal(parksRow.label, 'Parks & leisure');
+  assert.ok(parksRow.value > 0, 'a real shortfall must show a positive demand value');
+  assert.ok(SPECS[parksRow.spec], 'the parks row must reference a real, buildable spec');
+  assert.equal(SPECS[parksRow.spec].kind, 'park', 'the recommended spec must actually be a park building');
+});
+
+test('BUG-572 follow-up: an empty (population 0) city reports zero parks demand — no manufactured baseline shortfall', () => {
+  // Guards against reusing crimeRateOf's Math.max(1, pop*0.002) need floor for
+  // the demand row: that floor exists only to keep crimeRateOf's OWN division
+  // defined at pop 0, and would otherwise invent a permanent "needs 1 unit of
+  // park" shortfall on a fresh genesis city that no other resource has.
+  const s = initialState();
+  assert.equal(s.population, 0, 'precondition: genesis city starts at zero population');
+  const parksRow = serviceDemandOf(s).find((r) => r.id === 'parks');
+  assert.ok(parksRow, 'the row itself must still exist (need=0 is a valid coverage=1 state, not a missing row)');
+  assert.equal(parksRow.value, 0, 'zero population must never manufacture a parks shortfall');
+  // Cross-check against demandFixPlan too — it must not suggest a park build
+  // on a brand-new empty city either.
+  assert.equal(demandFixPlan(s).find((p) => p.serviceKey === 'parks'), undefined);
+});
+
+test('BUG-572 follow-up: demandFixPlan sizes a parks fix by the same ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION/unitCapacity) formula every service uses (BUG-601)', () => {
+  const s = shortfallState(300_000);
+  const plan = demandFixPlan(s);
+  const parks = plan.find((p) => p.serviceKey === 'parks');
+  assert.ok(parks, 'a parks shortfall with an unlocked provider must yield a demandFixPlan entry');
+  const row = serviceCoverageOf(s).find((c) => c.id === 'parks');
+  const fixAmount = (row.need - row.cap) * AUTO_BUILD_DEMAND_FRACTION;
+  const expectedCount = Math.ceil(fixAmount / parks.unitCapacity);
+  assert.equal(parks.count, expectedCount);
+  assert.equal(parks.unitCapacity, SPECS[parks.specId].w * SPECS[parks.specId].h);
+});
+
+test('BUG-572 completeness (GR#15, data-derived not hand-listed): every serviceCoverageOf() id, plus refuse, appears in serviceDemandOf()', () => {
+  // Deliberately derives the expected-id set from serviceCoverageOf() itself
+  // (the coverage functions), not a hand-maintained literal array — a NEW
+  // coverage row added in the future is automatically required to also reach
+  // serviceDemandOf(), or this test reddens without needing an edit.
+  const s = shortfallState(50_000);
+  const coverageIds = serviceCoverageOf(s).map((r) => r.id);
+  const demandIds = new Set(serviceDemandOf(s).map((r) => r.id));
+  for (const id of coverageIds) {
+    assert.ok(demandIds.has(id), `serviceCoverageOf() row '${id}' must have a matching serviceDemandOf() row`);
+  }
+  // wasteStatsOf's refuse metric is a twin coverage function outside
+  // serviceCoverageOf() (documented above) — still must be present.
+  assert.ok(demandIds.has('refuse'), 'the refuse row (wasteStatsOf twin coverage) must be present');
+  // Full expected roster, spelled out once as a cross-check against the
+  // derived assertions above (documents the current complete set for a
+  // human reader; the loop above is what actually guards against drift).
+  const expected = [
+    'nursery', 'primary', 'college', 'gp', 'hosp', 'police', 'fire',
+    'cleanwater', 'waste', 'power', 'parks', 'refuse',
+  ];
+  assert.deepEqual([...demandIds].sort(), [...expected].sort());
+});
+
+// ---------------------------------------------------------------------------
+// BUG-601 (Aaron ruling, 2026-09-02) — a Fix/Auto-build action sizes to
+// AUTO_BUILD_DEMAND_FRACTION (50%) of the OUTSTANDING shortfall, funds-capped
+// otherwise, never the whole deficit in one press. Cross-service proof (gp,
+// distinct from demand-fix.test.mjs's cleanwater-focused coverage) that the
+// rule applies uniformly, plus the funds-capped case and pickAutoSpec's
+// runAuto() routing through the SAME demandFixPlan-sized batch.
+// ---------------------------------------------------------------------------
+
+test('BUG-601: ample funds — demandFixPlan sizes a gp fix to exactly ceil((need-have)*0.5/unitCapacity), and resolveDemand places exactly that many, leaving real residual demand', () => {
+  const s = shortfallState(50_000);
+  const plan = demandFixPlan(s).find((p) => p.serviceKey === 'gp');
+  assert.ok(plan, 'a gp shortfall with an unlocked provider must yield a demandFixPlan entry');
+
+  const row = serviceCoverageOf(s).find((c) => c.id === 'gp');
+  const fixAmount = (row.need - row.cap) * AUTO_BUILD_DEMAND_FRACTION;
+  const expectedCount = Math.ceil(fixAmount / plan.unitCapacity);
+  assert.equal(plan.count, expectedCount);
+  // Sanity the fraction is genuinely ~50%, not a no-op or a full clear.
+  assert.ok(plan.count * plan.unitCapacity < row.need - row.cap, 'the sized batch must be LESS than the full outstanding shortfall');
+  assert.ok(plan.count * plan.unitCapacity >= (row.need - row.cap) * 0.4, 'the sized batch must be a REAL fraction, not negligible');
+
+  const result = reducer(s, { type: 'resolveDemand', serviceKey: 'gp' });
+  const placedCount = result.buildings.filter((b) => b.spec === plan.specId).length -
+    s.buildings.filter((b) => b.spec === plan.specId).length;
+  assert.equal(placedCount, plan.count, 'ample funds must place exactly the planned count, no more no less');
+
+  // A residual shortfall (a second action's worth) must remain — one
+  // ample-funds dispatch never fully resolves the service.
+  const remaining = demandFixPlan(result).find((p) => p.serviceKey === 'gp');
+  assert.ok(remaining, 'a real gp shortfall must remain after a single ample-funds resolveDemand dispatch');
+});
+
+test('BUG-601: funds-capped — a poor city places only what it can afford, still sized off the 50% target, never overspends', () => {
+  // 100,000 forces a multi-unit gp plan (hea_clinic served 25,000 or similar
+  // — recomputed generically below, no magic number) so a funds cap has room
+  // to bite partway through the batch.
+  const s = shortfallState(100_000);
+  const plan = demandFixPlan(s).find((p) => p.serviceKey === 'gp');
+  assert.ok(plan && plan.count >= 2, 'need a gp plan needing 2+ units to prove a partial affordability cap');
+
+  const full = reducer(s, { type: 'resolveDemand', serviceKey: 'gp' });
+  const totalSpent = s.funds - full.funds;
+  assert.ok(totalSpent > 0, 'precondition: the full-funds run must actually spend money');
+  const limitedFunds = Math.floor(totalSpent / 2);
+  assert.ok(limitedFunds > 0);
+  const limited = { ...s, funds: limitedFunds };
+
+  const limitedPlan = demandFixPlan(limited).find((p) => p.serviceKey === 'gp');
+  assert.ok(limitedPlan, 'a gp shortfall (and a provider) must still exist at the reduced budget');
+  // The plan itself is STILL sized off the 50%-of-shortfall target (funds
+  // capping happens in the resolveDemand PLACEMENT loop, never by shrinking
+  // the target itself) — this is what distinguishes "funds-capped otherwise"
+  // from silently redefining what "50%" means when a player is poor.
+  assert.equal(limitedPlan.count, plan.count, 'the funds-limited plan target is unchanged — only how much of it gets PLACED is capped');
+
+  const result = reducer(limited, { type: 'resolveDemand', serviceKey: 'gp' });
+  const placedCount = result.buildings.filter((b) => b.spec === limitedPlan.specId).length -
+    limited.buildings.filter((b) => b.spec === limitedPlan.specId).length;
+  assert.ok(placedCount > 0 && placedCount < limitedPlan.count, `expected a strictly partial gp placement, got ${placedCount} of ${limitedPlan.count}`);
+  assert.ok(result.funds >= 0, 'funds never went negative from the bulk gp placement');
+});
+
+test('BUG-601: pickAutoSpec exposes serviceKey so the Auto-build click can route through the SAME 50%-sized demandFixPlan batch', () => {
+  const s = shortfallState(50_000);
+  const auto = pickAutoSpec(s);
+  assert.ok(auto, 'precondition: a real shortfall exists');
+  const plan = demandFixPlan(s).find((p) => p.serviceKey === auto.serviceKey);
+  assert.ok(plan, 'the auto-picked service must have a matching demandFixPlan entry to size the Auto-build click');
+  assert.ok(plan.count > 0);
 });

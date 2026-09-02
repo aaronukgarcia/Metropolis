@@ -46,6 +46,22 @@ export function DemandDock() {
   function runAuto() {
     if (!auto) return;
     run(() => {
+      // BUG-601 (Aaron ruling, 2026-09-02): Auto-build now sizes the SAME way
+      // the Fix (N) button does — ceil(50% of the outstanding shortfall /
+      // unit capacity), funds-capped by the resolveDemand reducer — instead
+      // of always placing exactly one unit regardless of how large the
+      // shortfall is. fixPlanByService is the SAME demandFixPlan(state) map
+      // the Fix buttons read (SSOT, GR#3), keyed by auto.serviceKey.
+      const plan = fixPlanByService.get(auto.serviceKey);
+      if (plan) {
+        dispatch({ type: 'resolveDemand', serviceKey: auto.serviceKey });
+        return;
+      }
+      // Fallback for the pathological case where pickAutoSpec() recommends a
+      // service demandFixPlan() has no entry for (e.g. a single-unit-only
+      // affordability gap the plan's whole-shortfall budget check declines) —
+      // preserves the pre-BUG-601 one-unit placement rather than silently
+      // doing nothing.
       const spot = findSpot(state, auto.spec);
       if (!spot) return;
       dispatch({ type: 'place', spec: auto.spec, x: spot.x, y: spot.y });
@@ -75,8 +91,11 @@ export function DemandDock() {
               fixCount={fix?.count}
               // BUG-587: "N x <Name>" (formatBuildingCount) — same shape as the
               // MapView advisor prompt and engine.ts's placeNotice (BUG-583),
-              // sidestepping English pluralisation entirely.
-              fixTitle={fix ? `Place ${formatBuildingCount(SPECS[fix.specId].name, fix.count)} to clear this shortfall +5%` : undefined}
+              // sidestepping English pluralisation entirely. BUG-601: the
+              // action now sizes to 50% of the outstanding shortfall (not a
+              // full clear+5% headroom) — the copy says so, matching what
+              // demandFixPlan()/resolveDemand actually place.
+              fixTitle={fix ? `Place ${formatBuildingCount(SPECS[fix.specId].name, fix.count)} to fix 50% of this shortfall` : undefined}
               onFix={fix ? () => runResolveDemand(m.id) : undefined}
             />
           );

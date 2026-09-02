@@ -783,12 +783,15 @@ export function MapView() {
       };
 
     // FEAT-2326609728 inc2: the advisor's build prompt is now QUANTIFIED — it
-    // names the count that clears the whole shortfall (+5% headroom), reading
-    // demandFixPlan(state) (the SAME pure plan the DemandDock "Fix (N)" buttons
-    // use — SSOT, GR#3) rather than pickAutoSpec()'s single-building pick.
-    // pickAutoSpec() / serviceDemandOf() still drive OTHER advisor branches
-    // below (unlock nagging, DemandDock's own single-unit Auto-build button) —
-    // this only replaces the "here's what to build next" branch.
+    // names the count that fixes 50% of the outstanding shortfall (BUG-601,
+    // Aaron ruling 2026-09-02 — was the whole shortfall +5% headroom until
+    // then), reading demandFixPlan(state) (the SAME pure plan the DemandDock
+    // "Fix (N)" buttons use — SSOT, GR#3) rather than pickAutoSpec()'s
+    // single-building pick. pickAutoSpec() / serviceDemandOf() still drive
+    // OTHER advisor branches below (unlock nagging) — DemandDock's own
+    // Auto-build button ALSO now routes through this same demandFixPlan
+    // sizing (BUG-601) rather than always placing one unit; this branch only
+    // replaces the "here's what to build next" prompt.
     const fix = worstDemandFix(s);
     if (fix) {
       const sp = SPECS[fix.specId];
@@ -799,7 +802,7 @@ export function MapView() {
         // rule survives the full SPECS catalogue (e.g. "Water Works").
         const buildingLabel = formatBuildingCount(sp.name, fix.count);
         return {
-          text: `Do you want to place ${buildingLabel}? (clears ${label} demand +5%)`,
+          text: `Do you want to place ${buildingLabel}? (fixes 50% of ${label} demand)`,
           go: () => {
             run(() => {
               dispatch({ type: 'resolveDemand', serviceKey: fix.serviceKey });

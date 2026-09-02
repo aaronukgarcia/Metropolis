@@ -4,18 +4,22 @@
 // place reducer action. Both reuse the existing SSOTs: serviceCoverageOf/
 // wasteStatsOf for need/have, findSpot + the single-tile 'place' path for
 // mutation — no second placement mechanism, so tests here focus on the NEW
-// arithmetic (the ceil(need*1.05-have)/unitCapacity count) and the bulk-place
-// contract (affordability cap, determinism), not on re-proving coverage math
-// covered elsewhere (consistency.test.mjs).
+// arithmetic (BUG-601, 2026-09-02: ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION
+// /unitCapacity) — was ceil((need*1.05-have)/unitCapacity), a full clear+5%
+// headroom, until Aaron's ruling that a single Fix/Auto-build action must
+// leave headroom for a follow-up action) and the bulk-place contract
+// (affordability cap, determinism), not on re-proving coverage math covered
+// elsewhere (consistency.test.mjs).
 //
 // RED-PROOF (documented per test): each test's assertion is shown to be able
 // to fail by describing the mutation that would redden it — the canonical
-// proof (breaking the +5%/ceil formula) is run live in the first test below.
+// proof (breaking the AUTO_BUILD_DEMAND_FRACTION/ceil formula) is run live in
+// the first test below.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { initialState, reducer } from '../src/sim/engine.ts';
-import { demandFixPlan, SPECS, serviceCoverageOf } from '../src/sim/data.ts';
+import { demandFixPlan, SPECS, serviceCoverageOf, AUTO_BUILD_DEMAND_FRACTION } from '../src/sim/data.ts';
 
 /** A state with `population` citizens, no service buildings, all specs unlocked,
  *  and a large treasury — guarantees every population-scaled service is in
@@ -37,16 +41,11 @@ function forceOnline(state) {
   return { ...state, buildings: state.buildings.map((b) => ({ ...b, builtTick: null })) };
 }
 
-test('demandFixPlan: clean-water count = ceil((need*1.05 - have) / unitCapacity)', () => {
+test('demandFixPlan: clean-water count = ceil((need-have)*AUTO_BUILD_DEMAND_FRACTION / unitCapacity) (BUG-601)', () => {
   // 60,000 chosen deliberately (FEAT-demanddock-overhaul / optimalProvider,
   // re-scored to a TOTAL-PLAN-COST comparison after the independent round's
-  // REJECT of the original clears-in-one-only draft): at shortfall 63,000,
-  // wat_clean's 4-unit plan (£18.72M) is the cheapest total among wat_tower's
-  // 16-unit plan (£43.2M) and wat_reservoir's 2-unit plan (£162M), so
-  // wat_clean wins. need/unitCapacity (wat_clean, served 20,000) is EXACTLY 3
-  // without headroom (60,000 is an exact multiple of 20,000), so the +5% is
-  // the ONLY thing that pushes the ceiling to 4 — a population where headroom
-  // is a no-op would let a dropped-1.05 bug hide.
+  // REJECT of the original clears-in-one-only draft) — see the sibling tests
+  // below for the total-plan-cost comparisons at other populations.
   const s = shortfallState(60_000);
   const plan = demandFixPlan(s);
   const water = plan.find((p) => p.serviceKey === 'cleanwater');
@@ -62,19 +61,18 @@ test('demandFixPlan: clean-water count = ceil((need*1.05 - have) / unitCapacity)
   const sp = SPECS[water.specId];
   assert.equal(water.unitCapacity, sp.served, 'unitCapacity is the chosen spec\'s served field');
 
-  const expectedCount = Math.ceil(Math.max(0, water.need * 1.05 - water.have) / water.unitCapacity);
+  const expectedCount = Math.ceil((water.need - water.have) * AUTO_BUILD_DEMAND_FRACTION / water.unitCapacity);
   assert.equal(water.count, expectedCount);
   assert.ok(water.count > 0, 'a real shortfall always yields count > 0');
 
-  // RED-PROOF: the count math can fail. Recompute WITHOUT the 5% headroom (the
-  // bug this feature fixes — "just enough" leaves zero margin) and show it is
-  // a strictly smaller number whenever need isn't already a multiple of
-  // unitCapacity, i.e. the +1.05 term is load-bearing, not decorative.
-  const countWithoutHeadroom = Math.ceil(Math.max(0, water.need - water.have) / water.unitCapacity);
-  assert.equal(countWithoutHeadroom, 3, 'sanity: without headroom, 60,000/20,000 needs exactly 3 Water Works');
+  // RED-PROOF (BUG-601): recompute using the FULL (unfractioned) shortfall —
+  // the pre-BUG-601 formula's basis — and show the actual count is strictly
+  // SMALLER: a single Fix/Auto-build action must leave real headroom for a
+  // follow-up action, never fully clear the deficit in one press.
+  const countFullShortfall = Math.ceil((water.need - water.have) / water.unitCapacity);
   assert.ok(
-    water.count > countWithoutHeadroom,
-    `the 5% headroom must push the count above the bare no-headroom figure (got ${water.count} vs ${countWithoutHeadroom})`
+    water.count < countFullShortfall,
+    `AUTO_BUILD_DEMAND_FRACTION must reduce the count below the full-shortfall figure (got ${water.count} vs ${countFullShortfall})`
   );
 });
 
@@ -107,19 +105,32 @@ test('demandFixPlan is pure — calling it twice on the same state never mutates
   assert.equal(JSON.stringify(s), before, 'demandFixPlan must not mutate its input');
 });
 
-test('resolveDemand: dispatching clears the service (capacity >= need*1.05)', () => {
-  const s = shortfallState(10_000);
+test('resolveDemand: one action fixes AUTO_BUILD_DEMAND_FRACTION of the shortfall, not the whole deficit (BUG-601)', () => {
+  // 200,000 chosen so the sized batch (50% of a 200,000 shortfall = 100,000)
+  // divides evenly into wat_clean's 20,000-served capacity (5 units, exactly
+  // 100,000) — the resulting capacity lands EXACTLY halfway to need with no
+  // ceiling-rounding overshoot, so "still short after one dispatch" is a
+  // clean, unambiguous assertion rather than a coin-flip on rounding.
+  const s = shortfallState(200_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'cleanwater');
   assert.ok(plan);
   const s1 = reducer(s, { type: 'resolveDemand', serviceKey: 'cleanwater' });
   const s1Online = forceOnline(s1); // see forceOnline() doc — isolates the count math from construction timing
 
-  const row = serviceCoverageOf(s1Online).find((c) => c.id === 'cleanwater');
-  assert.ok(row.cap >= row.need * 1.05 - 1e-9, `capacity ${row.cap} should clear need*1.05 = ${row.need * 1.05}`);
+  const rowBefore = serviceCoverageOf(s).find((c) => c.id === 'cleanwater');
+  const rowAfter = serviceCoverageOf(s1Online).find((c) => c.id === 'cleanwater');
+  assert.ok(rowAfter.cap > rowBefore.cap, 'the dispatch must place real capacity');
+  // RED-PROOF: pre-BUG-601, resolveDemand cleared need*1.05 in a single
+  // dispatch — this assertion (capacity still below need after ONE action on
+  // a shortfall this large) would fail under that code.
+  assert.ok(
+    rowAfter.cap < rowAfter.need,
+    `one resolveDemand dispatch must NOT fully clear a large shortfall — capacity ${rowAfter.cap} should remain below need ${rowAfter.need}`
+  );
 
-  // The plan for this service should now be empty (shortfall resolved).
+  // A second action must still find a real remaining shortfall to fix.
   const remaining = demandFixPlan(s1Online).find((p) => p.serviceKey === 'cleanwater');
-  assert.equal(remaining, undefined, 'no residual clean-water shortfall after resolveDemand');
+  assert.ok(remaining, 'a residual clean-water shortfall must still exist after a single resolveDemand action');
 
   // Placed buildings are all the planned spec, and exactly `count` of them.
   const placedCount = s1.buildings.filter((b) => b.spec === plan.specId).length - s.buildings.filter((b) => b.spec === plan.specId).length;
@@ -127,10 +138,10 @@ test('resolveDemand: dispatching clears the service (capacity >= need*1.05)', ()
 });
 
 test('resolveDemand: affordability cap places only what is affordable and reports the shortfall (no negative funds)', () => {
-  // 60,000 gives a plan.count safely >= 2 (wat_clean x4, the cheapest total
-  // plan at this shortfall — see the headroom test above), unlike a smaller
-  // population where the "1 dam not 20 towers" scoring would plan exactly 1
-  // (large) unit.
+  // 60,000 gives a plan.count safely >= 2 (BUG-601: wat_clean x2 covering 50%
+  // of the 60,000 shortfall, the cheapest total plan at this size — see the
+  // fractioned-count test above), unlike a smaller population where the "1
+  // dam not 20 towers" scoring would plan exactly 1 (large) unit.
   const s = shortfallState(60_000);
   const plan = demandFixPlan(s).find((p) => p.serviceKey === 'cleanwater');
   assert.ok(plan && plan.count >= 2, 'need a plan needing 2+ units to prove a partial cap');

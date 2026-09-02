@@ -32,7 +32,7 @@ export function formatBuildingCount(name: string, count: number): string {
 
 /**
  * Short, static display label per demandFixPlan() serviceKey, for the
- * advisor's "clears <service> demand +5%" sentence. Deliberately separate
+ * advisor's "fixes 50% of <service> demand" sentence (BUG-601). Deliberately separate
  * from serviceCoverageOf()'s ServiceCoverage.label (which embeds live MW
  * numbers for 'power' and reads oddly inline in a sentence) and from
  * DemandDock's per-row label (which stays exactly as serviceDemandOf()
@@ -53,19 +53,27 @@ export const DEMAND_FIX_SERVICE_LABELS: Record<string, string> = {
   // rule (data.ts) so demandFixPlan() can emit a 'fire' entry — without this
   // label the advisor's fallback `?? fix.serviceKey` would render the raw key.
   fire: 'fire cover',
+  // BUG-572 follow-up: parks/leisure now has a real serviceCoverageOf() row
+  // + DEMAND_FIX_PROVIDERS rule (data.ts) so demandFixPlan() can emit a
+  // 'parks' entry — same fallback-key reasoning as fire above.
+  parks: 'park space',
 };
 
 /**
  * The single most-pressing demandFixPlan() entry, by absolute coverage gap
- * (need*1.05 - have — the same quantity demandFixPlan() itself clears),
- * largest first. Deterministic tie-break by serviceKey (GR#21 — never rely on
- * array order alone when two gaps tie). Returns null when nothing is short.
+ * (need - have — the RAW outstanding shortfall, not the 50%-of-gap amount
+ * BUG-601's demandFixPlan() actually sizes each action to; this is a pure
+ * ranking heuristic for "which service hurts most right now", monotone in
+ * the same (need, have) pair regardless of how much of it one action
+ * clears), largest first. Deterministic tie-break by serviceKey (GR#21 —
+ * never rely on array order alone when two gaps tie). Returns null when
+ * nothing is short.
  */
 export function worstDemandFix(s: SimState): DemandFixPlanItem | null {
   const plan = demandFixPlan(s);
   if (plan.length === 0) return null;
   const ranked = plan
-    .map((item) => ({ item, gap: item.need * 1.05 - item.have }))
+    .map((item) => ({ item, gap: item.need - item.have }))
     .sort((a, b) => b.gap - a.gap || a.item.serviceKey.localeCompare(b.item.serviceKey));
   return ranked[0].item;
 }

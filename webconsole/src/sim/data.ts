@@ -2568,7 +2568,42 @@ export function serviceCoverageOf(s: SimState): ServiceCoverage[] {
     row('cleanwater', 'Clean water', pop, clean, 'wat_clean'),
     row('waste', 'Sewage', pop, waste, 'wat_waste'),
     row('power', `Power (${formatPower(pw.cap)}/${formatPower(pw.need)})`, pw.need, pw.cap, pw.need - pw.cap > 60 ? 'pow_coal' : 'pow_wind'),
+    // BUG-572 follow-up (Aaron: "cross check ALL resources are listed"):
+    // Parks & leisure already has a REAL coverage formula in this file
+    // (crimeRateOf's Parks reducer, above) and a second copy in engine.ts's
+    // wellbeingOf() — genuinely modelled, exactly the class of gap BUG-572's
+    // refuse row closed, but never folded into a serviceCoverageOf() row so
+    // it never reached the DemandDock. need = pop*0.002 WITHOUT crimeRateOf's
+    // `Math.max(1, …)` floor deliberately: every other row here reads need=0
+    // at population 0 (row()'s own `need<=0 ⇒ coverage=1` guard), and that
+    // floor exists only to keep crimeRateOf's/wellbeingOf's OWN division
+    // defined at pop 0 — reusing it here would manufacture a permanent
+    // "needs 1 unit of park" demand in an empty city that no other resource
+    // has. Deliberately NOT refactored to share crimeRateOf's/wellbeingOf's
+    // exact computation: crimeRateOf is independently round-verified and
+    // wellbeingOf lives in engine.ts (another lane's surface) — same capacity
+    // predicate (sp.kind==='park', Σ w×h), different need floor, by design.
+    row('parks', 'Parks & leisure', pop * 0.002, parksCapacityOf(s), optimalProvider(s, 'parks', s.funds, pop * 0.002 - parksCapacityOf(s))?.id ?? 'park'),
   ];
+}
+
+/**
+ * Parks footprint capacity (Σ w×h over every 'park'-kind building), the SAME
+ * sum crimeRateOf's Parks reducer and engine.ts's wellbeingOf() Parks &
+ * leisure part each compute inline — extracted here only so the new
+ * serviceCoverageOf() 'parks' row (above) doesn't hand-roll a FOURTH copy of
+ * this loop. Deliberately NOT online-gated: matches the pre-existing
+ * crimeRateOf/wellbeingOf behaviour exactly, so calling this from a new site
+ * cannot silently change what those two already-verified computations do.
+ * Pure/deterministic (GR#21): unconditional forward scan, no early break.
+ */
+function parksCapacityOf(s: SimState): number {
+  let capacity = 0;
+  for (const b of s.buildings) {
+    const sp = SPECS[b.spec];
+    if (sp?.kind === 'park') capacity += sp.w * sp.h;
+  }
+  return capacity;
 }
 
 /**
@@ -2710,13 +2745,12 @@ export const crimeRateOf: (s: SimState) => number = memoOnState((s) => {
     3;
 
   // Parks coverage — same capacity/need formula wellbeingOf()'s Parks &
-  // leisure part and serviceDemandOf() use (GR#3 SSOT). Unconditional
-  // forward scan, no early break (GR#21).
-  let parksCapacity = 0;
-  for (const b of s.buildings) {
-    const sp = SPECS[b.spec];
-    if (sp?.kind === 'park') parksCapacity += sp.w * sp.h;
-  }
+  // leisure part and the serviceCoverageOf() 'parks' row (BUG-572 follow-up,
+  // below) use (GR#3 SSOT). parksCapacityOf() is the shared Σw×h sum; the
+  // `Math.max(1, …)` need floor stays LOCAL to this function deliberately —
+  // it exists only so THIS division is defined at pop 0, and the demand row
+  // intentionally does NOT apply it (see that row's comment).
+  const parksCapacity = parksCapacityOf(s);
   const parksNeed = Math.max(1, pop * 0.002);
   const parksCov = Math.min(1, parksCapacity / parksNeed);
 
@@ -3278,7 +3312,13 @@ export function noBuildableSiteReason(specId: string): string {
 
 export function pickAutoSpec(
   s: SimState
-): { spec: string; label: string } | null {
+  // BUG-601: `serviceKey` added (the raw serviceDemandOf() id, e.g. 'fire') so
+  // a caller can look up this SAME service's demandFixPlan() entry and place
+  // the whole 50%-of-shortfall batch through resolveDemand, instead of the
+  // single unit this function's own spec/label pair used to imply — see
+  // DemandDock.tsx's runAuto(). Never a count/plan field itself (AC-6): this
+  // function stays a pure "what/where to recommend" pick.
+): { spec: string; label: string; serviceKey: string } | null {
   // Positive value = shortfall (BUG-392 semantics), so the descending sort
   // surfaces the WORST-covered service. (Under the pre-BUG-392 surplus-positive
   // index this same code auto-built the most OVERsupplied service.)
@@ -3303,7 +3343,7 @@ export function pickAutoSpec(
     // the player. A £0 (free zone/road) suggestion is still fine under admin.
     if (s.administrationState && cost > 0) continue;
     if (cost <= s.funds) {
-      return { spec: m.spec, label: m.label };
+      return { spec: m.spec, label: m.label, serviceKey: m.id };
     }
   }
   return null;
@@ -3322,24 +3362,31 @@ export function pickAutoSpec(
 // a later feature) all plug in for free — this file introduces NO second
 // placement mechanism.
 //
-// SCOPE: covers exactly the services with a REAL demand/coverage number today —
-// nine of the TEN serviceCoverageOf() rows (nursery/primary/college/gp/hosp/
-// police/cleanwater/waste/power) plus refuse (wasteStatsOf() generated-vs-
-// capacity, the twin coverage function for the collection-depot service).
-// Parks have no coverage/demand metric in the engine yet (BUG-392/
-// serviceDemandOf scope), so — per the "don't invent demand" rule — parks are
-// never a candidate here. Fire (BUG-526, Q100046 A1) gained a REAL
-// serviceCoverageOf row and now shows in the DEMAND panel, but is
-// DELIBERATELY NOT added to DEMAND_FIX_PROVIDERS below in this pass — the
-// one-click bulk-place feature for it is a separate follow-up, not part of
-// the wellbeing-wiring fix; demandFixPlan only ever emits an entry when a
-// real (need, have) pair says there IS a shortfall AND a registered provider
-// exists.
+// SCOPE (BUG-572 follow-up, 2026-09-02): covers every serviceCoverageOf() row
+// with a REAL demand/coverage number today — nursery/primary/college/gp/hosp/
+// police/fire/cleanwater/waste/power/parks (BUG-571 gave fire a real
+// unlock-aware provider via optimalProvider(); this pass adds parks, the last
+// serviceCoverageOf() row that still lacked one) — plus refuse (wasteStatsOf()
+// generated-vs-capacity, the twin coverage function for the collection-depot
+// service). demandFixPlan only ever emits an entry when a real (need, have)
+// pair says there IS a shortfall AND a registered provider exists.
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * One shortfall-clearing build plan for a single service.
- *   count = ceil(max(0, need*1.05 - have) / unitCapacity)   (always > 0 when present)
+ * ⚠ BALANCE-NUMBER PLACEHOLDER — Aaron ruling BUG-601 (2026-09-02): a
+ * shortfall-clearing action (the Fix (N) button, and now the Auto-build
+ * click too) sizes to THIS fraction of the OUTSTANDING shortfall per action,
+ * funds-capped otherwise — never the whole deficit in one press. Replaces
+ * the prior `need*1.05` (fill to 100% + 5% headroom) behaviour, which Aaron
+ * read as building far too much per click. Directional only, pending
+ * Aaron's row-by-row balance pass.
+ */
+export const AUTO_BUILD_DEMAND_FRACTION = 0.5;
+
+/**
+ * One shortfall-clearing build plan for a single service (BUG-601: sized to
+ * AUTO_BUILD_DEMAND_FRACTION of the shortfall, not the whole deficit).
+ *   count = ceil((need - have) * AUTO_BUILD_DEMAND_FRACTION / unitCapacity)   (always > 0 when present)
  */
 export interface DemandFixPlanItem {
   /** serviceCoverageOf() id, or 'refuse' for the wasteStatsOf() collection service. */
@@ -3352,7 +3399,8 @@ export interface DemandFixPlanItem {
   need: number;
   /** Current online capacity/coverage for the service. */
   have: number;
-  /** Units to place to reach need*1.05 (5% headroom) — always > 0. */
+  /** Units to place to close AUTO_BUILD_DEMAND_FRACTION of the (need-have) gap
+   *  (BUG-601) — always > 0 when this item is present. */
   count: number;
 }
 
@@ -3391,6 +3439,12 @@ const DEMAND_FIX_PROVIDERS: Record<
   // BUG-571/FEAT-demanddock-overhaul §4: fire was deliberately excluded pending
   // this follow-up — fire_post/fire_station/fire_hq are already kind:'fire'.
   fire: { match: (sp) => sp.kind === 'fire', unitCapacity: (sp) => sp.served ?? 0 },
+  // BUG-572 follow-up: parks/leisure specs (park/park_playground/park_town/
+  // park_botanical/park_nature) are all kind:'park'; unit capacity is the
+  // SAME footprint measure (w×h) parksCapacityOf() sums, so a placed unit's
+  // contribution here always matches what the coverage row will count next
+  // tick.
+  parks: { match: (sp) => sp.kind === 'park', unitCapacity: (sp) => sp.w * sp.h },
 };
 
 /**
@@ -3484,8 +3538,23 @@ export function optimalProvider(s: SimState, serviceKey: string, budget: number,
 
 /**
  * Pure demand-fix plan (FEAT-2326609728): one entry per service currently in
- * shortfall (need*1.05 > have) that has an unlocked provider. No mutation, no
+ * shortfall (need > have) that has an unlocked provider. No mutation, no
  * Date/Math.random (GR#21) — a pure function of `s`.
+ *
+ * BUG-601 (Aaron ruling, 2026-09-02): the plan sizes to
+ * AUTO_BUILD_DEMAND_FRACTION (50%) of the OUTSTANDING shortfall, not the
+ * whole deficit — a single Fix/Auto-build action deliberately leaves
+ * headroom for a follow-up action rather than fully resolving the service in
+ * one press. `have` (the row's CURRENT capacity, unaffected by the fraction)
+ * still gates whether a row appears at all: any real deficit (need > have)
+ * yields an entry, derived straight from the coverage functions (GR#15),
+ * never a hand-picked threshold. optimalProvider's shortfall/budget
+ * arguments below are this SAME 50%-of-gap amount, so the chosen spec's
+ * total-plan-cost comparison (its own doc comment) is scored against the
+ * actual quantity this action will build, not the whole deficit — funds
+ * capping beyond that still happens downstream in the resolveDemand reducer
+ * (engine.ts), which places at most `count` units and stops early if funds
+ * run out.
  */
 export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
   const waste = wasteStatsOf(s);
@@ -3497,14 +3566,15 @@ export function demandFixPlan(s: SimState): DemandFixPlanItem[] {
   const plan: DemandFixPlanItem[] = [];
   for (const row of rows) {
     if (row.need <= 0) continue;
-    const target = row.need * 1.05;
-    if (row.have >= target) continue; // already at/above target+headroom
-    const sp = optimalProvider(s, row.serviceKey, s.funds, target - row.have);
+    const shortfall = row.need - row.have;
+    if (shortfall <= 0) continue; // already at/above need — nothing to fix
+    const fixAmount = shortfall * AUTO_BUILD_DEMAND_FRACTION;
+    const sp = optimalProvider(s, row.serviceKey, s.funds, fixAmount);
     if (!sp) continue; // no unlocked provider yet — omit (needs-unlock)
     const rule = DEMAND_FIX_PROVIDERS[row.serviceKey];
     const unitCapacity = rule.unitCapacity(sp);
     if (unitCapacity <= 0) continue;
-    const count = Math.ceil(Math.max(0, target - row.have) / unitCapacity);
+    const count = Math.ceil(fixAmount / unitCapacity);
     if (count <= 0) continue;
     plan.push({ serviceKey: row.serviceKey, specId: sp.id, unitCapacity, need: row.need, have: row.have, count });
   }

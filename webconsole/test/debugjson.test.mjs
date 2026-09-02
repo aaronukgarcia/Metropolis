@@ -135,8 +135,11 @@ test('demand carries power need/capacity in MW matching powerStats', () => {
   // (fire stations now feed wellbeing via the new Fire safety part, GR#3 SSOT),
   // growing the demand-services set from 9 to 10; BUG-572 (the DemandDock
   // overhaul, 88bb6fa) then folded the previously-unrendered 'refuse' row in
-  // from wasteStatsOf, growing it to 11.
-  assert.equal(dj.demand.services.length, 11, 'all eleven service demand indices present (incl. BUG-526 fire + BUG-572 refuse)');
+  // from wasteStatsOf, growing it to 11; a BUG-572 follow-up (2026-09-02) then
+  // folded in a 'parks' row (parksCapacityOf, the same footprint sum
+  // crimeRateOf/wellbeingOf already computed but never surfaced as demand),
+  // growing it to 12.
+  assert.equal(dj.demand.services.length, 12, 'all twelve service demand indices present (incl. BUG-526 fire + BUG-572 refuse + parks)');
 });
 
 test('info tabs: experience ladder spans levels 1-20; policy rows reflect toggles; milestones evaluated', () => {
