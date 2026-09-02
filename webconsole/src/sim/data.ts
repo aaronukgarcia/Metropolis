@@ -2858,6 +2858,26 @@ export function fits(set: Set<string>, w: number, h: number, x: number, y: numbe
 const cheb = (ax: number, ay: number, bx: number, by: number) =>
   Math.max(Math.abs(ax - bx), Math.abs(ay - by));
 
+// BUG-593: an earlier draft of this fix replaced housingCentroid() with a
+// bounding-box centre of ALL buildings ("builtUpCentroid"), reasoning that a
+// residential-only centroid was the thing collapsing to a corner. An
+// independent destructive round REJECTed that draft with a decisive
+// isolation: initialState() ships ~1,855 map-spanning infrastructure
+// buildings (motorway/rail/highspeed-rail tiles) whose bounding box already
+// spans most of the map on EVERY game, so the all-buildings centroid sits at
+// ~the map centre regardless of where the city actually is — on a FRESH game
+// at pop 10,000 it placed 16 pow_wind turbines at (217..223,128..134),
+// 0/16 road-adjacent, "no road access", instead of HEAD's behaviour of
+// placing all 16 next to the actual (small, real) road network. Isolating the
+// two changes proved the OLD housingCentroid + ONLY the widen-before-giving-up
+// loop below is sufficient for Aaron's original repro (his residential
+// centroid was fine — the fixed-size WINDOW was the bug) and restores the
+// fresh-game placement behaviour. So this stays housingCentroid(): the
+// average position of `kind==='residential'` buildings, falling back to a
+// hardcoded (150,78) with zero residential buildings — unchanged from before
+// BUG-593, kept because a better city-tracking centre (e.g. excluding
+// infrastructure kinds) is a real possible refinement but is NOT required to
+// fix the reported bug and was explicitly deferred by the round's ruling.
 function housingCentroid(s: SimState): { x: number; y: number } {
   let hx = 0;
   let hy = 0;
@@ -2897,55 +2917,109 @@ export function findSpot(s: SimState, specId: string): { x: number; y: number } 
     return min;
   };
 
-  let best: { x: number; y: number; score: number } | null = null;
-  const WIN = 90;
-  const xa = Math.max(2, Math.floor(hc.x - WIN / 2));
-  const ya = Math.max(2, Math.floor(hc.y - WIN / 2));
-  const xb = Math.min(MAP_W - sp.w - 2, xa + WIN);
-  const yb = Math.min(MAP_H - sp.h - 2, ya + WIN);
+  // BUG-593 FIX: score every fitting tile in [xa,xb]x[ya,yb] at the given
+  // stride, returning the best (or null). Factored out so the widen loop
+  // below can call it once per pass without duplicating the scoring rules —
+  // the rules themselves are untouched from before BUG-593.
+  const scanWindow = (
+    xa: number,
+    ya: number,
+    xb: number,
+    yb: number,
+    stride: number
+  ): { x: number; y: number; score: number } | null => {
+    let best: { x: number; y: number; score: number } | null = null;
+    for (let y = ya; y <= yb; y += stride) {
+      for (let x = xa; x <= xb; x += stride) {
+        if (!fits(occ, sp.w, sp.h, x, y)) continue;
+        const cx = x + sp.w / 2;
+        const cy = y + sp.h / 2;
+        let score = -cheb(x, y, hc.x, hc.y) / 4;
+        const poll = distTo(tagged.pollution, cx, cy);
+        const waste = distTo(tagged.waste, cx, cy);
+        const clean = distTo(tagged.clean, cx, cy);
+        const resNear = distTo(resList, cx, cy);
 
-  for (let y = ya; y <= yb; y += 2) {
-    for (let x = xa; x <= xb; x += 2) {
-      if (!fits(occ, sp.w, sp.h, x, y)) continue;
-      const cx = x + sp.w / 2;
-      const cy = y + sp.h / 2;
-      let score = -cheb(x, y, hc.x, hc.y) / 4;
-      const poll = distTo(tagged.pollution, cx, cy);
-      const waste = distTo(tagged.waste, cx, cy);
-      const clean = distTo(tagged.clean, cx, cy);
-      const resNear = distTo(resList, cx, cy);
+        if ((sp.stage === 'nursery' || sp.stage === 'primary') && poll < 8) score -= 1000;
+        if ((sp.stage === 'city' || sp.stage === 'tertiary') && poll < 6) score -= 800;
+        if (sp.stage && waste < 6) score -= 800;
+        if (sp.stage && resNear > 14) score -= (resNear - 14) * 10;
 
-      if ((sp.stage === 'nursery' || sp.stage === 'primary') && poll < 8) score -= 1000;
-      if ((sp.stage === 'city' || sp.stage === 'tertiary') && poll < 6) score -= 800;
-      if (sp.stage && waste < 6) score -= 800;
-      if (sp.stage && resNear > 14) score -= (resNear - 14) * 10;
+        if ((sp.id === 'hea_clinic' || sp.id === 'pol_station') && poll < 5) score -= 600;
+        if (sp.id === 'hea_hospital' && poll < 7) score -= 800;
 
-      if ((sp.id === 'hea_clinic' || sp.id === 'pol_station') && poll < 5) score -= 600;
-      if (sp.id === 'hea_hospital' && poll < 7) score -= 800;
+        if (sp.id === 'park') {
+          if (resNear > 6) score -= (resNear - 6) * 8;
+          else score += 20;
+        }
 
-      if (sp.id === 'park') {
-        if (resNear > 6) score -= (resNear - 6) * 8;
-        else score += 20;
+        if (sp.id === 'ind_factory' && resNear < 6) score -= 600;
+        if (sp.id === 'ind_farm' && resNear < 4) score -= 200;
+        if (sp.tag === 'pollution' && sp.kind === 'power') {
+          if (sp.mw && sp.mw >= 600 && resNear < 15) score -= 5000;
+          else if (sp.mw && sp.mw >= 80 && resNear < 10) score -= 2000;
+          else if (resNear < 3) score -= 400;
+        }
+
+        if (sp.tag === 'waste') {
+          if (clean < 8) score -= 2000;
+          if (resNear < 5) score -= 800;
+        }
+        if (sp.tag === 'clean' && waste < 8) score -= 2000;
+
+        if (!best || score > best.score) best = { x, y, score };
       }
-
-      if (sp.id === 'ind_factory' && resNear < 6) score -= 600;
-      if (sp.id === 'ind_farm' && resNear < 4) score -= 200;
-      if (sp.tag === 'pollution' && sp.kind === 'power') {
-        if (sp.mw && sp.mw >= 600 && resNear < 15) score -= 5000;
-        else if (sp.mw && sp.mw >= 80 && resNear < 10) score -= 2000;
-        else if (resNear < 3) score -= 400;
-      }
-
-      if (sp.tag === 'waste') {
-        if (clean < 8) score -= 2000;
-        if (resNear < 5) score -= 800;
-      }
-      if (sp.tag === 'clean' && waste < 8) score -= 2000;
-
-      if (!best || score > best.score) best = { x, y, score };
     }
+    return best;
+  };
+
+  // BUG-593 FIX: the original code searched ONLY the initial WIN x WIN window
+  // and returned null the instant it came up empty, with no notion of "try
+  // harder before giving up" — a small window that happens to sit over
+  // already-built-out tiles reads as "the whole map is full" even when free
+  // land is abundant elsewhere. Now: on an empty pass, DOUBLE the window and
+  // scan again, up to the point where the window already covers the entire
+  // map. That final, whole-map pass switches to STRIDE 1 (independent-round
+  // finding, moderate #4): stride 2 samples only 1 of every 4 tiles, so an
+  // empty stride-2 pass over the whole map could still be lying — a genuinely
+  // free 1x1 tile at an odd offset would be skipped and "no free area" would
+  // be a false claim. Every earlier (non-final) pass keeps stride 2 — it is
+  // only a widen-and-retry step, not the last word, so its cost stays cheap;
+  // paying stride-1 exactly once, only when the search is about to give up
+  // entirely, keeps the message that follows honest without making every
+  // successful (usually first-pass) call more expensive. Scan order inside
+  // each pass is fixed row-major with a constant stride (GR#21 determinism:
+  // no map/set iteration order dependency, pure function of `s` and
+  // `specId`), so the same state always yields the same spot, and doubling is
+  // a bounded, deterministic number of passes (map is finite).
+  let win = 90;
+  for (;;) {
+    const xa = Math.max(2, Math.floor(hc.x - win / 2));
+    const ya = Math.max(2, Math.floor(hc.y - win / 2));
+    const xb = Math.min(MAP_W - sp.w - 2, xa + win);
+    const yb = Math.min(MAP_H - sp.h - 2, ya + win);
+    const coversWholeMap = xa <= 2 && ya <= 2 && xb >= MAP_W - sp.w - 2 && yb >= MAP_H - sp.h - 2;
+
+    const best = scanWindow(xa, ya, xb, yb, coversWholeMap ? 1 : 2);
+    if (best) return { x: best.x, y: best.y };
+    if (coversWholeMap) return null; // genuinely nothing fits anywhere on the map — proven at stride 1
+    win *= 2;
   }
-  return best ? { x: best.x, y: best.y } : null;
+}
+
+/**
+ * BUG-593 FIX: a human-readable reason findSpot() found nothing, for the
+ * placeNotice text — "no buildable site found" alone reads as "the map is
+ * full", which was misleading even before the fix (a tiny search window could
+ * fail with 94% of the map free) and stays worth spelling out afterwards
+ * (findSpot() now genuinely means "searched the whole map") so a real
+ * map-full state is distinguishable at a glance from a config/footprint
+ * problem. Pure formatting, no state.
+ */
+export function noBuildableSiteReason(specId: string): string {
+  const sp = SPECS[specId];
+  if (!sp) return 'no buildable site found';
+  return `no free ${sp.w}x${sp.h} area on the map for ${sp.name}`;
 }
 
 export function pickAutoSpec(

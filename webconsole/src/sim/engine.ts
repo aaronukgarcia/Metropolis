@@ -48,6 +48,7 @@ import {
   onlineResidentsCapacity,
   demandFixPlan,
   findSpot,
+  noBuildableSiteReason,
   crimeRateOf,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
@@ -3021,7 +3022,7 @@ function reduceCore(state: SimState, action: Action): SimState {
         if (cost > 0 && cur.administrationState) break;
         if (cost > 0 && cur.funds < cost) break;
         const spot = findSpot(cur, plan.specId);
-        if (!spot) break; // out of buildable sites near the housing centroid
+        if (!spot) break; // findSpot() widened its search to the whole map (BUG-593) and still found nothing
         const beforeLen = cur.buildings.length;
         const next = reduceCore(cur, { type: 'place', spec: plan.specId, x: spot.x, y: spot.y });
         if (next === cur) break; // defensive: 'place' declined for a reason not checked above
@@ -3032,7 +3033,8 @@ function reduceCore(state: SimState, action: Action): SimState {
       roadTopologyMayHaveChanged = anyRoadTopologyChange;
 
       if (placed >= plan.count) return cur; // full shortfall cleared — 'place' already cleared placeNotice
-      const shortBy = cost > 0 && cur.funds < cost ? 'insufficient funds' : 'no buildable site found';
+      const shortBy =
+        cost > 0 && cur.funds < cost ? 'insufficient funds' : noBuildableSiteReason(plan.specId);
       return {
         ...cur,
         placeNotice: `Placed ${placed} of ${formatPlacedCount(plan.count, sp.name)} — ${shortBy}`,
