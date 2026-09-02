@@ -16,6 +16,18 @@
 // visibly wired and lights up the instant protocol asks start flowing —
 // per the brief's point 4.
 //
+// BUG-499 (Aaron dogfood, 2026-09-01): reported as "a thin green vertical
+// line on the far right lower half ... over the top of other information
+// ... points to being the queue but I don't understand it". Two problems,
+// both fixed here: (1) this HUD used to be `position: fixed` to the
+// viewport corner and painted over the right-col fiscal panel underneath
+// it regardless of layout — it is now laid out IN-FLOW as a normal
+// .right-col flex child (see App.tsx/styles.css), so it owns its own
+// space and never overdraws a sibling; (2) even though a `title` tooltip
+// already named it, nothing was legible WITHOUT hovering — an
+// aria-label plus a one-line always-visible caption now say what it is
+// without requiring a mouseover.
+//
 // Display-only: subscribes to the module-level queueDepthTracker singleton
 // (sim/queueDepth.ts) and re-renders on every increment/decrement/reset.
 // Never touches SimState/the journal/determinism — pure telemetry, same
@@ -23,15 +35,19 @@
 import { useEffect, useState } from 'react';
 import { queueDepthTracker, type QueueDepthSnapshot } from '../../sim/queueDepth';
 
+const HUD_LABEL = 'Queue depth HUD — asks currently waiting per backend engine (diagnostic only)';
+
 export function QueueDepthHud() {
   const [snapshot, setSnapshot] = useState<QueueDepthSnapshot>(() => queueDepthTracker.snapshot());
 
   useEffect(() => queueDepthTracker.subscribe(setSnapshot), []);
 
+  // GR#1: an unexpected/empty tracker state (nothing has ever been tracked)
+  // renders a defined placeholder row, never a blank/crashed panel.
   const rows = snapshot.entries.length > 0 ? snapshot.entries : [{ engine: 'protocol', depth: 0, highWaterMark: 0 }];
 
   return (
-    <div className="queue-depth-hud mono" title="Queue Depth HUD — asks currently waiting per engine (diagnostic only, FEAT-1972079938)">
+    <div className="queue-depth-hud mono" role="group" aria-label={HUD_LABEL} title={HUD_LABEL}>
       <div className="qd-head">
         <span className="qd-title">Queue depth</span>
         <button
@@ -43,6 +59,7 @@ export function QueueDepthHud() {
           reset
         </button>
       </div>
+      <p className="qd-caption muted">Asks waiting per backend engine — not the build queue; safe to ignore day-to-day.</p>
       <div className="qd-rows">
         {rows.map((r) => (
           <div key={r.engine} className="qd-row" data-engine={r.engine}>

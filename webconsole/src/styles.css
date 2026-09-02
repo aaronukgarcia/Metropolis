@@ -55,7 +55,12 @@ body {
 /* RIGHT column (FEAT-1972079874): demand (natural height) above fiscal (grows). */
 .right-col { grid-area: right; }
 .right-col > .panel:first-child { flex: 0 0 auto; max-height: 45%; }
-.right-col > .panel:last-child { flex: 1 1 auto; min-height: 0; }
+/* BUG-499: was `:last-child` — the Queue Depth HUD is now a 3rd, non-.panel
+   flex child appended after LeftDock (see App.tsx), so LeftDock's panel is no
+   longer the literal last DOM child. Target it by position (2nd of the two
+   .panel elements in this column) instead, so it keeps growing to fill the
+   remaining space exactly as before. */
+.right-col > .panel:nth-child(2) { flex: 1 1 auto; min-height: 0; }
 
 /* BOTTOM row (FEAT-1972079874): the information panel. */
 .bottom-col { grid-area: bottom; }
@@ -874,16 +879,21 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   }
 }
 
-/* FEAT-1972079938: Queue Depth HUD — small, always-visible, corner-anchored
-   on the far right (mirrors .perf-hud's fixed/corner idiom, but bottom-right
-   rather than top-right so it never collides with the dev-only,
-   toggle-shown PerfHud). Diagnostic tone (Aaron: "10 waiting = fine, 100 =
-   cool") — no danger/warn colours, just the mono readout. */
+/* FEAT-1972079938 / BUG-499: Queue Depth HUD — a small, always-visible
+   readout that used to be `position: fixed; bottom: 20px; right: 20px`
+   (mirroring .perf-hud's fixed/corner idiom). That anchored it to the
+   viewport corner regardless of layout, so it painted directly over
+   whatever else occupied the lower-right of the screen — the right-col
+   fiscal panel's own lower half (Aaron's "thin green vertical line ...
+   over the top of other information", BUG-499). It is now an ordinary
+   flex child laid out IN-FLOW inside .right-col, after LeftDock (see
+   App.tsx) — a reserved slot of its own that nothing else can occupy, no
+   fixed positioning or stacking-context tricks required. Diagnostic tone
+   preserved (Aaron: "10 waiting = fine, 100 = cool") — no danger/warn
+   colours, just the mono readout. */
 .queue-depth-hud {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  min-width: 150px;
+  flex: 0 0 auto;
+  width: 100%;
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
@@ -891,11 +901,12 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   font-size: 11px;
   line-height: 1.4;
   color: var(--ink);
-  z-index: 900;
   padding: 6px 8px;
+  box-sizing: border-box;
 }
 .qd-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
 .qd-title { font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; font-size: 10px; color: var(--muted); }
+.qd-caption { font-size: 10px; margin: 0 0 4px; }
 .qd-reset { font: inherit; font-size: 10px; color: var(--muted); background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 6px; cursor: pointer; }
 .qd-reset:hover { color: var(--ink); }
 .qd-rows { display: flex; flex-direction: column; gap: 1px; }

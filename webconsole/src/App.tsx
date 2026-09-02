@@ -31,12 +31,23 @@ export default function App() {
               <div className="col-wrap right-col">
                 <DemandDock />
                 <LeftDock />
+                {/* BUG-499: this used to be a position:fixed overlay pinned to the
+                    viewport's bottom-right corner, which drew directly over the
+                    lower half of this same column's fiscal panel (LeftDock) no
+                    matter what was on screen — the "thin green vertical line ...
+                    over the top of other information" Aaron reported. It now
+                    lives IN this flex column as its own reserved slot (3rd
+                    child, after LeftDock) so it never shares screen space with a
+                    sibling panel — see styles.css's .queue-depth-hud rule and
+                    the .right-col > .panel:nth-child(2) rule that keeps
+                    targeting LeftDock specifically now that it is no longer the
+                    literal last child. */}
+                <QueueDepthHud />
               </div>
               <div className="col-wrap bottom-col">
                 <RightDock />
               </div>
               <PerfHud />
-              <QueueDepthHud />
             </div>
             <BusyIndicator />
           </ErrorBoundary>
