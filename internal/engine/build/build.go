@@ -228,6 +228,61 @@ type BuildAPI struct {
 	logistics *logistics.LogisticsAPI
 	services  *services.ServicesAPI
 
+	// servicesSweepDirty (BUG-586) gates registerCompletedServicesLocked:
+	// Tick used to run the sweep on EVERY call, rebuilding a
+	// b.structures-derived standing-membership set each time — measured at
+	// 621,453 ns/op / 73,888 B / 9 allocs at 2000 standing structures versus
+	// 8,742 ns/op / 0 B / 0 allocs with the sweep disabled (a 71x, per-tick-
+	// allocating regression proportional to estate size). The sweep is only
+	// EVER needed to catch a `complete` order that has no serviceByOrder
+	// record. An independent destructive round REJECTed the first cut of
+	// this enumeration for missing a third path (below); it is corrected
+	// here per GR#6 rather than left standing:
+	//
+	//   (a) applyLoadRecord (participant.go) installs a b.queue entry with
+	//       Complete:true directly from a save/restore, bypassing Tick's
+	//       completion step entirely — serviceByOrder is NOT part of the
+	//       save schema (resetForLoad's comment), so a restored complete
+	//       order never carries one forward.
+	//   (b) SetServices wires engine.services after some already-complete
+	//       orders exist that a PRIOR sweep pass skipped because b.services
+	//       was nil at the time (registerCompletedServicesLocked's "not
+	//       wired yet" branch) — newly wiring the dependency can retroactively
+	//       make those orders registrable.
+	//
+	// A PRIOR version of this comment additionally claimed "Tick's OWN
+	// completion block is never a source of this gap" because
+	// registerServiceLocked runs before order.complete = true. That claim
+	// was FALSE: Tick's completion block also writes b.structures[key] and
+	// then calls b.world.SetStructure, which CAN fail (world.ErrTileNotOwned/
+	// ErrTileOutOfBounds, reachable via a composition-root SetWorld re-wire)
+	// and abort the tick with a return — and serviceByOrder used to be
+	// written only AFTER that SetStructure call succeeded. A SetStructure
+	// failure therefore left a complete + standing + registered-in-services
+	// order with NO serviceByOrder record, and — unlike (a)/(b) above —
+	// nothing set servicesSweepDirty for it, making the gap PERMANENT (pre-
+	// BUG-586, the unconditional every-tick sweep healed this the very next
+	// tick; the flag this field adds took that self-healing away without
+	// closing the gap it was healing). TestAttackBUG586_TickCompletionAbortLeavesUnhealableGap
+	// pins this. The fix is NOT a third flag-set site: Tick's completion
+	// block now writes serviceByOrder in the SAME locked step as
+	// order.complete/zoneState/structures, strictly BEFORE the SetStructure
+	// call that can fail (see the completion block below for the full
+	// reasoning) — so the gap cannot open in the first place and no sweep
+	// is needed to catch it. No other method sets order.complete or removes
+	// a serviceByOrder entry for a still-complete order
+	// (SubmitDemolishCommand deletes structures/serviceByOrder together, so
+	// a demolished order is never "complete without an entry" — it is
+	// simply no longer standing, which registerCompletedServicesLocked's own
+	// b.structures membership check already excludes). So (a) and (b) are
+	// now the exhaustive set of gap-creating paths, and Tick's own
+	// completion block is verified (not merely asserted) never to be a
+	// third: setting the flag at resetForLoad and SetServices, and clearing
+	// it after a clean sweep (Tick's own gated call, and the explicit
+	// RegisterCompletedServices call compose.Load makes post-restore), is
+	// sound.
+	servicesSweepDirty bool
+
 	// self is the SEC-020 copy guard, stored exactly once in Load before
 	// the value is returned to any caller (mirroring FinanceAPI/LogisticsAPI).
 	self atomic.Pointer[BuildAPI]
@@ -369,6 +424,11 @@ func (b *BuildAPI) SetServices(s *services.ServicesAPI) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.services = s
+	// BUG-586: wiring engine.services can retroactively make an
+	// already-complete order (skipped by an earlier sweep pass because
+	// b.services was nil) registrable — mark the sweep dirty so the next
+	// Tick (or an explicit RegisterCompletedServices call) re-drives it.
+	b.servicesSweepDirty = true
 	return nil
 }
 
@@ -682,13 +742,23 @@ func (b *BuildAPI) Tick(month int64) error {
 	// snapshot restore brings back complete=true orders with services'
 	// instance table empty and no further Tick would ever revisit a
 	// complete order to notice). Idempotent (registerCompletedServicesLocked
-	// skips anything already tracked or not a service order at all), so
-	// running it at the top of EVERY Tick call is cheap and self-heals
-	// within one simulation day even if a caller forgets the explicit
-	// RegisterCompletedServices call the composition root makes right after
-	// a restore (compose/save_wire.go's Composition.Load).
-	if err := b.registerCompletedServicesLocked(); err != nil {
-		return err
+	// skips anything already tracked or not a service order at all), so this
+	// self-heals within one simulation day even if a caller forgets the
+	// explicit RegisterCompletedServices call the composition root makes
+	// right after a restore (compose/save_wire.go's Composition.Load).
+	//
+	// BUG-586: only run the sweep when servicesSweepDirty says a gap could
+	// exist (see its field doc for the exhaustive enumeration of how the
+	// gap arises) — unconditionally running it every tick rebuilt a
+	// b.structures-derived membership set from scratch each call, an
+	// allocating O(standing estate) cost for what is a no-op the overwhelming
+	// majority of ticks. Clearing the flag only after a clean (error-free)
+	// sweep means a failed pass is retried on the very next Tick.
+	if b.servicesSweepDirty {
+		if err := b.registerCompletedServicesLocked(); err != nil {
+			return err
+		}
+		b.servicesSweepDirty = false
 	}
 
 	for _, order := range b.queue {
@@ -758,15 +828,60 @@ func (b *BuildAPI) Tick(month int64) error {
 			}
 
 			order.complete = true
+			// BUG-586 F1 remedy: record serviceByOrder HERE, immediately
+			// after order.complete = true and BEFORE zoneState/structures/
+			// SetStructure below, not after SetStructure succeeds. A
+			// destructive round found that the old placement (after
+			// SetStructure) left a transient-turned-permanent gap: if
+			// SetStructure fails (world.ErrTileNotOwned/ErrTileOutOfBounds,
+			// reachable via a composition-root SetWorld re-wire), the tick
+			// returns the error right here, and the order is left complete
+			// + standing (b.structures already has it, below) + registered
+			// live in engine.services, but WITHOUT a serviceByOrder record.
+			// Pre-BUG-586, the unconditional every-tick sweep re-derived and
+			// healed that record on the very next Tick; the servicesSweepDirty
+			// gate that fix introduced made the gap PERMANENT, because
+			// nothing else ever sets the flag for this case (SubmitDemolishCommand
+			// then finds no serviceByOrder entry and demolishes the cell
+			// while leaving the service permanently registered — an
+			// undemolishable ghost). Writing serviceByOrder in the same
+			// locked step as order.complete/zoneState/structures — rather
+			// than after the world sync — closes the gap outright: there is
+			// no longer a window where the order is complete without its
+			// service tracked, so no sweep is needed to heal it and no
+			// dirty-flag interaction is required.
+			//
+			// Fail-closed semantics on a SetStructure failure, decided and
+			// documented here rather than assumed: this method does NOT
+			// unwind order.complete/zoneState/structures/serviceByOrder/the
+			// live engine.services registration on that failure. zoneState
+			// and structures already landed unconditionally on a
+			// SetStructure failure before this fix (pre-existing behaviour,
+			// not something BUG-586 touches) — the domain's build/zone/
+			// service state commits together in this one locked step, and
+			// world.SetStructure is a best-effort render-sync call whose
+			// failure does not roll back the domain state it renders (the
+			// domain has no compensating "un-build" primitive, and AC-8's
+			// "never landed and then silently unregistered" language above
+			// concerns REGISTRATION failing before landing, not SetStructure
+			// failing after — registration already ran and succeeded before
+			// this point in both the pre- and post-fix orderings). Keeping
+			// serviceByOrder inside the SAME commit step as zoneState/
+			// structures makes it consistent with that pre-existing model
+			// instead of being the one field that lagged a tick behind it;
+			// TestAttackBUG586_TickCompletionAbortLeavesUnhealableGap relies
+			// on exactly this — the standing, service-registered order must
+			// remain demolishable (deregisterable) after the abort, not be
+			// rolled back to incomplete.
+			if registeredService != "" {
+				b.serviceByOrder[order.id] = registeredService
+			}
 			key := cellKey{tile: order.tile, local: order.local}
 			b.zoneState[key] = order.zone
 			b.structures[key] = order.id
 			// Sync the structure reference to world.structureRef so the viewport publishes it
 			if err := b.world.SetStructure(order.tile, order.local, uint32(order.id), b.correlationID); err != nil {
 				return err
-			}
-			if registeredService != "" {
-				b.serviceByOrder[order.id] = registeredService
 			}
 		}
 	}
@@ -933,7 +1048,14 @@ func (b *BuildAPI) RegisterCompletedServices() error {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.registerCompletedServicesLocked()
+	if err := b.registerCompletedServicesLocked(); err != nil {
+		return err
+	}
+	// BUG-586: a clean explicit sweep (this is the call compose.Load makes
+	// right after a restore) clears the dirty flag the same way Tick's own
+	// gated sweep does, so a subsequent Tick does not immediately re-run it.
+	b.servicesSweepDirty = false
+	return nil
 }
 
 // Queue returns a read-only snapshot of the build queue in insertion (order

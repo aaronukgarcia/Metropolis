@@ -309,6 +309,12 @@ func (b *BuildAPI) resetForLoad() error {
 	// so a load must not carry forward index entries naming orders the
 	// freshly-reset queue no longer has.
 	b.serviceByOrder = make(map[BuildOrderID]services.ServiceID)
+	// BUG-586: a restore can bring back `complete` orders (via
+	// applyLoadRecord below) with no serviceByOrder record — serviceByOrder
+	// is not itself part of the save schema (see above) — so mark the sweep
+	// dirty for the next Tick or explicit RegisterCompletedServices call
+	// (compose.Load's post-restore call) to catch.
+	b.servicesSweepDirty = true
 	return nil
 }
 
