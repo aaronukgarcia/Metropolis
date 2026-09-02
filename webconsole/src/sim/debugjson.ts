@@ -74,7 +74,7 @@ import {
   efwPowerOf,
 } from './data.ts';
 import type { PipeTierAgg } from './data.ts';
-import { sanitizeCrimeRate } from './data.ts';
+import { sanitizeCrimeRate, sanitizeCongestionTicksBySpec } from './data.ts';
 import {
   HISTORY_CAP,
   LEDGER_CAP,
@@ -254,6 +254,8 @@ export interface DebugJson {
     playModeLatched: boolean;
     /** FEAT-crime-mechanic-2026-09-02 — last month-boundary-snapshotted crime rate. */
     crimeRatePreviousMonth: number;
+    /** FEAT-congestion-teeth-2026-09-02 (AC-1) — per road-line-spec sustained-congestion tick counters. */
+    congestionTicksBySpec: Record<string, number>;
   };
   flows: {
     inflows: FlowItem[];
@@ -530,6 +532,8 @@ export const SIMSTATE_COVERAGE: Record<keyof SimState, string> = {
   playModeLatched: 'sim.playModeLatched',
   // FEAT-crime-mechanic-2026-09-02.
   crimeRatePreviousMonth: 'sim.crimeRatePreviousMonth',
+  // FEAT-congestion-teeth-2026-09-02 (AC-1).
+  congestionTicksBySpec: 'sim.congestionTicksBySpec',
 };
 
 const round3 = (n: number) => Math.round(n * 1000) / 1000;
@@ -802,6 +806,10 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       // debugjson.test.mjs's "BUG-595" test (RED-proof: reverting this to a
       // raw `s.crimeRatePreviousMonth as number` cast turns it red).
       crimeRatePreviousMonth: sanitizeCrimeRate(s.crimeRatePreviousMonth),
+      // FEAT-congestion-teeth-2026-09-02 (GR#16): same shape as crimeRatePreviousMonth
+      // above — sanitizeCongestionTicksBySpec covers backward tolerance AND a corrupt
+      // save's non-object/negative/fractional entries.
+      congestionTicksBySpec: sanitizeCongestionTicksBySpec(s.congestionTicksBySpec),
     },
     flows: {
       inflows: s.lastFlows.inflows,

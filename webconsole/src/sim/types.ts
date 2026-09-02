@@ -507,6 +507,25 @@ export interface SimState {
    * calculations exactly where a fresh genesis state would).
    */
   crimeRatePreviousMonth?: number;
+  /**
+   * FEAT-congestion-teeth-2026-09-02 (Q100057 A1, Q100071 rec-on-all) —
+   * per road/motorway-class line spec id, consecutive ticks that line's
+   * saturation (data.ts lineUsageOf) has been >= CONGESTION_PENALTY_THRESHOLD,
+   * capped at CONGESTION_SUSTAINED_TICKS (data.ts CONGESTION_CONSTANTS — the
+   * counter never needs to exceed the value that already proves "sustained").
+   * RESET RULE: a line's counter is hard-reset to 0 the instant its saturation
+   * drops below the threshold (no decay/grace window — mirrors BUG-506's
+   * recoveryStreak idiom), and specs with a zero count are OMITTED from the
+   * map entirely (keeps the record small/deterministic and self-pruning when
+   * a line is bulldozed). engine.ts's advance() is the SOLE writer, computed
+   * from THIS tick's own lineUsageOf(next) — there is no circular risk
+   * because congestion depends only on buildings/population, never on
+   * wellbeing (see congestionFactorOf's doc comment, data.ts). Optional for
+   * backward tolerance: a legacy state without it is treated as `{}` (no
+   * line has ever been sustained — a fresh genesis city starts penalty-free,
+   * AC-4).
+   */
+  congestionTicksBySpec?: Record<string, number>;
 }
 
 /**

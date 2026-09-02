@@ -1953,6 +1953,140 @@ export function lineUsageOf(s: SimState): LineUsage[] {
   return out;
 }
 
+/**
+ * FEAT-congestion-teeth-2026-09-02 (Q100057 A1 "congestion must have felt
+ * consequences", Q100071 rec-on-all — every BA recommendation in the spec
+ * taken as written) — PLACEHOLDER balance constants, grouped in one named
+ * object per the house pattern (CRIME_CONSTANTS mirror) so Aaron's future
+ * balance-pass row replaces all three in a single commit.
+ *
+ * Values below are the spec's own BA recommendations (Open Questions 2/3/6):
+ *   - CONGESTION_PENALTY_THRESHOLD = 0.75 (bites before the ~0.80 auto-widen
+ *     trigger, so the player feels congestion BEFORE auto-scale, not after)
+ *   - CONGESTION_SUSTAINED_TICKS = 60 (~2 game-months; long enough that a
+ *     temporary spike doesn't sting — see the burst-tolerance proof)
+ *   - CONGESTION_INCOME_K = 0.10 (a fully congested line-set costs ~10% of
+ *     the powered-income basis, AC-9)
+ * Aggregation across sustained lines is AVERAGE (spec Q5) and the per-line
+ * penalty ramp is LINEAR (spec Q4) — see congestionLinesOf/congestionFactorOf.
+ */
+export const CONGESTION_CONSTANTS = {
+  /** Saturation ratio (usage/capacity) above which a line starts accruing sustained-congestion ticks. */
+  CONGESTION_PENALTY_THRESHOLD: 0.75,
+  /** Consecutive ticks a line must stay >= threshold before it counts as "sustained" (isSustained/AC-1). */
+  CONGESTION_SUSTAINED_TICKS: 60,
+  /** AC-9 income-drag coefficient: a fully-penalized (congestionFactor=0) sustained network costs this fraction of powered income. */
+  CONGESTION_INCOME_K: 0.1,
+} as const;
+
+/**
+ * FEAT-congestion-teeth-2026-09-02 (GR#16) — Type-Safe Storage Boundary
+ * sanitiser for `s.congestionTicksBySpec`, same shape as sanitizeCrimeRate:
+ * a corrupt save can hand back ANY JSON-representable value for this field
+ * (a string, an array, an object with non-numeric values, NaN-bearing
+ * entries, negative/fractional counts). Non-object collapses to `{}` (the
+ * field's own documented old-save default — types.ts); each entry is
+ * independently sanitised to a non-negative integer, capped at
+ * CONGESTION_SUSTAINED_TICKS (a corrupt `1e9` count can never fabricate a
+ * false "more sustained than sustained" reading — the flag only ever needs
+ * >= the ticks constant to fire).
+ */
+export function sanitizeCongestionTicksBySpec(v: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return out;
+  for (const [spec, raw] of Object.entries(v as Record<string, unknown>)) {
+    const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+    const clamped = Math.max(0, Math.min(CONGESTION_CONSTANTS.CONGESTION_SUSTAINED_TICKS, Math.floor(n)));
+    if (clamped > 0) out[spec] = clamped; // zero entries omitted — self-pruning (see types.ts doc)
+  }
+  return out;
+}
+
+/**
+ * FEAT-congestion-teeth-2026-09-02 (AC-1) — advance the per-line sustained-
+ * congestion tick counters ONE tick, given the PRIOR counters and THIS
+ * tick's lineUsageOf() rows. PURE + DETERMINISTIC (GR#21): no Date/random;
+ * folds over `usages`, which is already spec-id-sorted by lineUsageOf, so
+ * the resulting object's insertion order (irrelevant for a Record, but kept
+ * for hygiene) is itself deterministic. Only road/motorway lines (kind ===
+ * 'road') accrue congestion — rail commuter flow is a separate mechanic
+ * (spec §1, "road class line"). Sole caller: engine.ts's advance().
+ */
+export function advanceCongestionTicks(
+  prevTicks: Record<string, number>,
+  usages: LineUsage[]
+): Record<string, number> {
+  const { CONGESTION_PENALTY_THRESHOLD, CONGESTION_SUSTAINED_TICKS } = CONGESTION_CONSTANTS;
+  const out: Record<string, number> = {};
+  for (const u of usages) {
+    if (u.kind !== 'road') continue;
+    const prev = prevTicks[u.spec] ?? 0;
+    const next =
+      u.saturation >= CONGESTION_PENALTY_THRESHOLD
+        ? Math.min(prev + 1, CONGESTION_SUSTAINED_TICKS)
+        : 0; // RESET RULE (types.ts doc): hard reset the instant saturation drops below threshold.
+    if (next > 0) out[u.spec] = next;
+  }
+  return out;
+}
+
+/**
+ * FEAT-congestion-teeth-2026-09-02 (AC-1/AC-6/AC-8) — one road/motorway
+ * LineUsage row extended with its sustained-congestion state. `congestionFactor`
+ * is the spec's linear damping ramp ∈ [0,1]: 1.0 while NOT sustained (AC-4 —
+ * a short burst under the sustained window imposes nothing) or while
+ * saturation is still <= threshold; ramps linearly down to 0.0 as saturation
+ * climbs from threshold to full (1.0) ONLY once the line is sustained.
+ * Bounded by construction (AC-6): both terms of the ramp are pre-clamped to
+ * [0,1] before the subtraction, and the final Math.max(0, …) forbids the
+ * ramp from going negative past full saturation.
+ */
+export interface CongestionLine extends LineUsage {
+  /** Consecutive ticks >= CONGESTION_PENALTY_THRESHOLD, capped at CONGESTION_SUSTAINED_TICKS. */
+  sustainedTicks: number;
+  /** True once sustainedTicks >= CONGESTION_SUSTAINED_TICKS (AC-1). */
+  isSustained: boolean;
+  /** LINEAR damping factor; 1.0 = no penalty, 0.0 = fully penalized. Only < 1.0 while isSustained. */
+  congestionFactor: number;
+}
+
+export function congestionLinesOf(s: SimState): CongestionLine[] {
+  const ticks = sanitizeCongestionTicksBySpec(s.congestionTicksBySpec);
+  const { CONGESTION_PENALTY_THRESHOLD, CONGESTION_SUSTAINED_TICKS } = CONGESTION_CONSTANTS;
+  const out: CongestionLine[] = [];
+  // lineUsageOf() already returns a spec-id-sorted, order-independent array
+  // (GR#21) — no map-range-with-break, no early exit.
+  for (const u of lineUsageOf(s)) {
+    if (u.kind !== 'road') continue;
+    const sustainedTicks = ticks[u.spec] ?? 0;
+    const isSustained = sustainedTicks >= CONGESTION_SUSTAINED_TICKS;
+    const sat = Math.max(0, Math.min(1, u.saturation));
+    const congestionFactor = !isSustained
+      ? 1
+      : Math.max(0, 1 - Math.max(0, sat - CONGESTION_PENALTY_THRESHOLD) / (1 - CONGESTION_PENALTY_THRESHOLD));
+    out.push({ ...u, sustainedTicks, isSustained, congestionFactor });
+  }
+  return out;
+}
+
+/**
+ * FEAT-congestion-teeth-2026-09-02 (AC-2/AC-3/AC-4/AC-9) — the city-wide
+ * congestion factor wellbeing/income consume: AVERAGE of the congestionFactor
+ * of every SUSTAINED road/motorway line (spec Q5, BA rec "AVERAGE… if no
+ * lines are sustained, factor = 1.0" — AC-4's zero-penalty case). Non-
+ * sustained lines are excluded from the average entirely (they are already
+ * pegged at 1.0 and including them would just dilute the signal toward 1.0
+ * without changing the "uncongested = exactly 1.0" invariant AC-4 needs).
+ * PURE + DETERMINISTIC: order-independent reduce over an already-sorted
+ * array, no early break.
+ */
+export function congestionFactorOf(s: SimState): number {
+  const sustained = congestionLinesOf(s).filter((l) => l.isSustained);
+  if (sustained.length === 0) return 1; // AC-4: nothing sustained -> zero penalty.
+  const sum = sustained.reduce((a, l) => a + l.congestionFactor, 0);
+  return sum / sustained.length;
+}
+
 // BUG-527 — sumBy backs GP/hospital/police/school coverage in BOTH
 // serviceCoverageOf and utilisationOf. Before this fix it iterated every
 // building regardless of activation state, so an OFFLINE / road-disconnected

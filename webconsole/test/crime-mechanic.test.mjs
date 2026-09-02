@@ -178,8 +178,22 @@ test('AC-5: low wellbeing increases crime (mutant: wellbeing feedback reversed, 
   // not the AC doc's illustrative ">10" (still requires a clearly
   // meaningful, correctly-signed gap; a mutant reversing/zeroing/constant-
   // -ing the wellbeing term fails this outright).
+  //
+  // RETARGETED (FEAT-congestion-teeth-2026-09-02, honestly, per that spec's
+  // build brief): this city has NO road/motorway tiles, so the new
+  // Traffic/Commute wellbeing part reads exactly 100 in BOTH cities
+  // (congestionFactorOf -> 1, no lines to penalize) — a neutral, identical
+  // 12th part folded into wellbeingCoreOf's average. That's an honest
+  // widening of the denominator (11 parts -> 12), which mechanically
+  // compresses the wbCore(high)-vs-wbCore(low) percentage gap and, with it,
+  // the achievable crime delta: measured 6 before this feature, 5 after
+  // (verified by temporarily removing the new part and re-running this exact
+  // scenario) — still clearly signed and meaningful, just one point lower.
+  // Threshold lowered from >5 to >4 to track the real, still-decisive gap;
+  // a reversed/zeroed/constant-ed wellbeing term still fails this outright
+  // (it would produce delta <= 0, not 5).
   assert.ok(
-    crimeLow - crimeHigh > 5,
+    crimeLow - crimeHigh > 4,
     `low-wellbeing city must have meaningfully higher crime: low=${crimeLow}, high=${crimeHigh}`
   );
 });

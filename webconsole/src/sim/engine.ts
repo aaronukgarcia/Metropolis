@@ -50,6 +50,11 @@ import {
   findSpot,
   noBuildableSiteReason,
   crimeRateOf,
+  lineUsageOf,
+  advanceCongestionTicks,
+  congestionFactorOf,
+  sanitizeCongestionTicksBySpec,
+  CONGESTION_CONSTANTS,
 } from './data.ts';
 import type { Spec, RoadTier } from './data.ts';
 import { planConnector } from './roadConnect.ts';
@@ -621,6 +626,33 @@ export function computeFlows(s: SimState): { inflows: FlowItem[]; outflows: Flow
     const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);
     for (const fl of inflows) {
       if (poweredIncome.has(fl.label)) fl.value = Math.round(fl.value * brownout.incomeFactor);
+    }
+  }
+
+  // FEAT-congestion-teeth-2026-09-02 (AC-9, Q100057 A1 / Q100071 rec-on-all —
+  // the spec's optional income drag is INCLUDED). Applied AFTER the brownout
+  // block above (spec's explicit sequencing note) so the two penalties are
+  // independently visible and never double-charge a single root cause: a
+  // brownout-throttled Business Tax can ALSO be congestion-throttled, each by
+  // its own factor, same as compounding any two independent multipliers.
+  //
+  // FORMULA CORRECTION (documented, not a silent deviation): the spec's prose
+  // literally states `incomeFactor = 1.0 - congestionFactor * K`, but its own
+  // congestionFactor convention (1.0 = no congestion, 0.0 = fully penalized —
+  // see congestionFactorOf's doc, data.ts) makes that formula charge an
+  // UNCONGESTED city the full 10% and a FULLY congested one nothing, the
+  // exact inverse of the spec's own stated intent ("a fully congested city
+  // loses ~10% of business income", Q6). Implemented to match the STATED
+  // INTENT: the PENALTY scales with (1 - congestionFactor), i.e. with how far
+  // below 1.0 the factor has dropped, so a fully congested sustained network
+  // (congestionFactor -> 0) loses up to CONGESTION_INCOME_K and an
+  // uncongested one (congestionFactor === 1, AC-4) loses nothing.
+  const congestionFactor = congestionFactorOf(s);
+  if (congestionFactor < 1) {
+    const congestionIncomeFactor = 1 - (1 - congestionFactor) * CONGESTION_CONSTANTS.CONGESTION_INCOME_K;
+    const poweredIncome = new Set(['Business Tax', 'Freight Tax', 'Office Tax']);
+    for (const fl of inflows) {
+      if (poweredIncome.has(fl.label)) fl.value = Math.round(fl.value * congestionIncomeFactor);
     }
   }
 
@@ -1605,6 +1637,22 @@ function advance(s: SimState): SimState {
   // only internally for the bailout trigger/popup logic; this is the ONLY
   // place the overlay is applied, so a replay reproduces the exact same
   // exposed value at every tick.
+  // FEAT-congestion-teeth-2026-09-02 (AC-1) — advance the per-line sustained-
+  // congestion tick counters using THIS tick's OWN traffic snapshot (post
+  // auto-scale/growth, so a same-tick road auto-widen or population change
+  // is already reflected in the saturation the counter reacts to). Read back
+  // ONLY by the NEXT tick's wellbeingOf(s)/computeFlows(s) calls (both read
+  // `s`, the state BEFORE this write) — a genuine one-tick LAG, never
+  // same-tick self-reference, exactly like BUG-506's recoveryStreak and the
+  // crime mechanic's month-lag (data.ts congestionFactorOf's doc comment has
+  // the full no-cycle argument: congestion depends only on buildings/
+  // population, never on wellbeing).
+  const congestionUsages = lineUsageOf({ ...s, buildings: scaledBuildings, population });
+  const congestionTicksBySpec = advanceCongestionTicks(
+    sanitizeCongestionTicksBySpec(s.congestionTicksBySpec),
+    congestionUsages
+  );
+
   const exposedInsolvencyState: InsolvencyState =
     declineState !== null
       ? 'decline'
@@ -1662,6 +1710,9 @@ function advance(s: SimState): SimState {
     recoveryStreak,
     // BUG-506 (AC-506-3/4): rolling window of the last N ticks' funds.
     recentFundsWindow,
+    // FEAT-congestion-teeth-2026-09-02 (AC-1): this tick's advanced per-line
+    // sustained-congestion counters, read by the NEXT tick's wellbeing/income.
+    congestionTicksBySpec,
   };
 
   // FEAT-crime-mechanic-2026-09-02 (Q100069 rec-on-all Q4, "immediate
@@ -3938,6 +3989,18 @@ function buildWellbeingCoreParts(s: SimState): { label: string; value: number }[
   // this part would double-count the exact same signal twice in one tick.
   const employment = part(clampN(1 - unemploymentOf(s), 0, 1));
 
+  // FEAT-congestion-teeth-2026-09-02 (AC-2, Q100057 A1 / Q100071 rec-on-all)
+  // — Traffic/Commute wellbeing part: sustained road/motorway saturation
+  // drags commute-time wellbeing down via congestionFactorOf(s) (data.ts),
+  // an AVERAGE-across-sustained-lines ramp already bounded to [0,1] (1.0 =
+  // no penalty, AC-4's uncongested case; 0.0 = fully penalized, AC-6). Safe
+  // to fold into the SHARED core-parts list (unlike Crime, which needed its
+  // own wellbeingCoreOf exclusion) because congestion depends only on
+  // buildings/population/its own tick counter — never on wellbeing itself —
+  // so there is no cycle risk feeding it into crimeRateOf's wellbeing input
+  // too (data.ts congestionFactorOf doc comment has the full argument).
+  const congestion = part(congestionFactorOf(s));
+
   const parts = [
     { label: 'Approval', value: approvalOf(s) },
     { label: 'Parks & leisure', value: parks },
@@ -3960,6 +4023,7 @@ function buildWellbeingCoreParts(s: SimState): { label: string; value: number }[
     // the part is neutral and adds no penalty. (A disease/health track is inc2.)
     // ⚠ BALANCE-NUMBER PLACEHOLDER: reuses the shared coverage→part map.
     { label: 'Refuse', value: part(collectionCoverageOf(s)) },
+    { label: 'Traffic/Commute', value: congestion },
   ];
   return parts;
 }
