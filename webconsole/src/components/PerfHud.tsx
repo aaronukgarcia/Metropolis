@@ -30,7 +30,7 @@ import { getGlobalWorkerQueueTracker } from '../sim/workerQueueDepth';
  */
 export function PerfHud() {
   // Only render in dev builds
-  if (!import.meta.env.DEV) return null;
+  if (!import.meta.env?.DEV) return null;
 
   const [visible, setVisible] = useState(false);
   const [snapshot, setSnapshot] = useState<PerfHudSnapshot | null>(null);

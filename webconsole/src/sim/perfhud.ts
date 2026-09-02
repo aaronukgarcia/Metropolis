@@ -302,7 +302,14 @@ let globalTickTracker: TickTrackerState | null = null;
  * Returns null in production builds.
  */
 export function getGlobalTickTracker(): TickTrackerState | null {
-  if (import.meta.env.DEV) {
+  // BUG-584 advisory (round 2026-09-02): use the same optional-chain idiom
+  // as every other DEV-flag read in the codebase, so a runtime without
+  // `import.meta.env` itself (SSR-style render, the tsx test runner) never
+  // throws here either — currently unreachable in practice since both call
+  // sites (store.tsx, PerfHud.tsx) already guard with `import.meta.env?.DEV`
+  // before reaching this function, but the same class of bug, fixed for
+  // completeness rather than left as a latent landmine.
+  if (import.meta.env?.DEV) {
     if (!globalTickTracker) {
       globalTickTracker = createTickTracker();
     }

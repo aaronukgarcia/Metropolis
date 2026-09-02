@@ -150,7 +150,7 @@ export function StartOverButton() {
       >
         Start Over
       </button>
-      {import.meta.env.DEV && (
+      {import.meta.env?.DEV && (
         <button
           className="btn accent unlock-all"
           disabled={!canUnlockAll}
@@ -178,7 +178,7 @@ export const DEV_FUNDS_GRANT_LARGE = 1_000_000_000;
 // `vite build` (DEV=false) omits it entirely. Grants +£10m via debugFunds.
 export function DevFundsButton() {
   const { dispatch } = useSim();
-  if (!import.meta.env.DEV) return null;
+  if (!import.meta.env?.DEV) return null;
   return (
     <button
       className="btn accent dev-funds"
@@ -197,7 +197,7 @@ export function DevFundsButton() {
 // button wherever DevFundsButton is mounted.
 export function DevFundsLargeButton() {
   const { dispatch } = useSim();
-  if (!import.meta.env.DEV) return null;
+  if (!import.meta.env?.DEV) return null;
   return (
     <button
       className="btn accent dev-funds"

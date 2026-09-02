@@ -247,3 +247,33 @@ test('perfHud: does not appear in SIMSTATE_COVERAGE (not sim state)', () => {
     'perfHud is NOT a SimState field and should NOT be in SIMSTATE_COVERAGE'
   );
 });
+
+// ---------- BUG-595: crimeRatePreviousMonth display-sanitise pin ----------
+//
+// debugjson.ts's `sim.crimeRatePreviousMonth` field runs the stored value
+// through `sanitizeCrimeRate` before emission (GR#16 type-safe storage
+// boundary). That wiring had no red-proof of its own — a raw
+// `s.crimeRatePreviousMonth` cast would pass every OTHER test in this file
+// (COMPLETENESS only checks the path resolves, not that it is sanitised).
+// Decision (a) — KEEP the sanitised display (see the ruling comment beside
+// the call site in debugjson.ts for the full justification: debug.json is a
+// consumed-by-tooling boundary, not the corruption-forensics surface, and
+// the live SimState / localStorage dump remains available for anyone
+// chasing the raw corrupt byte value).
+//
+// RED-PROOF (recorded, restored via scratch cp/mv — GR#24, never git):
+// reverting the call site from `sanitizeCrimeRate(s.crimeRatePreviousMonth)`
+// to a raw `(s.crimeRatePreviousMonth as number)` cast turned this test red
+// — the emitted field read back the literal corrupt string `'abc'` instead
+// of the sanitised baseline (35). Confirmed, then restored.
+test('BUG-595: a corrupt crimeRatePreviousMonth (non-number) emits the sanitised baseline in debug.json, never the raw garbage', () => {
+  const state = { ...initialState(), crimeRatePreviousMonth: 'abc' };
+  const dj = buildDebugJson(state, testUi());
+  const parsed = JSON.parse(debugJsonText(dj));
+  assert.strictEqual(
+    parsed.sim.crimeRatePreviousMonth,
+    35, // CRIME_CONSTANTS.BASELINE_CRIME_RATE
+    'a corrupt (non-number) crimeRatePreviousMonth must emit the sanitised baseline, not the raw garbage value'
+  );
+  assert.notStrictEqual(parsed.sim.crimeRatePreviousMonth, 'abc', 'the raw corrupt string must never reach the serialized debug.json');
+});

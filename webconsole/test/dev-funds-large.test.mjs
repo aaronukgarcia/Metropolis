@@ -27,7 +27,12 @@ test('FEAT-2326609716: DevFundsLargeButton exists, DEV-gated, next to DevFundsBu
   assert.ok(/export function DevFundsLargeButton\(\)/.test(topBarSource),
     'DevFundsLargeButton must be exported from TopBar.tsx');
   const largeBody = topBarSource.split('export function DevFundsLargeButton()')[1] ?? '';
-  assert.ok(largeBody.includes('if (!import.meta.env.DEV) return null;'),
+  // BUG-584: the gate now reads `import.meta.env?.DEV` (optional-chain idiom,
+  // codebase-wide, so a runtime without `import.meta.env` itself — SSR-style
+  // render, the tsx test runner — doesn't throw). The substring pinned here
+  // is retargeted to match; intent (the +£1B button carries the identical
+  // DEV-only gate as +£10m) is unchanged.
+  assert.ok(largeBody.includes('if (!import.meta.env?.DEV) return null;'),
     'the +£1B button must carry the identical DEV-only gate as the +£10m button');
   assert.ok(largeBody.includes("dispatch({ type: 'debugFunds', amount: DEV_FUNDS_GRANT_LARGE })"),
     'the +£1B button must grant via the SAME debugFunds action path (GR#3)');

@@ -779,6 +779,28 @@ export function buildDebugJson(s: SimState, ui: DebugUiInput): DebugJson {
       // covers BOTH backward tolerance for a legacy state predating this
       // field AND a corrupt save's non-number value (a raw `?? default`
       // only catches null/undefined — see crimeRateOf's doc comment).
+      //
+      // BUG-595 ruling (2026-09-02): kept the sanitised display, chose (a)
+      // over dropping the wrap to show raw corruption. The "show the
+      // corruption, it's a diagnostic tool" argument has real merit in the
+      // abstract, but loses here on two counts specific to THIS field: (1)
+      // debug.json is auto-verified by SIMSTATE_COVERAGE's completeness walk
+      // AND consumed by other tooling (crime-mechanic tests, the reward/
+      // conservation checks) that expects every emitted numeric field to be
+      // a finite number in-domain — an unsanitised `"abc"` or `NaN` here
+      // would silently poison anything downstream that reads debug.json
+      // rather than the live SimState (GR#16 is explicit: never trust the
+      // TS `number` annotation for stored data, coerce via the safeX()
+      // helper at every boundary, and a debug export IS a boundary); and (2)
+      // sanitizeCrimeRate does not erase the corruption signal — the value
+      // it degrades TO (BASELINE_CRIME_RATE, 35) never coincides with a
+      // genuine in-range live reading of exactly 35 by chance across a
+      // whole run, and a diagnostician chasing corruption has the live
+      // SimState / localStorage dump available for the raw byte-for-byte
+      // value; debug.json's job is a SAFE, always-parseable snapshot, not
+      // the corruption forensics tool itself. Pinned by
+      // debugjson.test.mjs's "BUG-595" test (RED-proof: reverting this to a
+      // raw `s.crimeRatePreviousMonth as number` cast turns it red).
       crimeRatePreviousMonth: sanitizeCrimeRate(s.crimeRatePreviousMonth),
     },
     flows: {

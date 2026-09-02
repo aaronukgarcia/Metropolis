@@ -125,10 +125,14 @@ test('Q100047 c/C2: the Unlock All BUTTON is DEV-gated, same idiom as DevFundsBu
   // (unlockAll) and its cost logic are UNCHANGED -- only the button's visibility.
   const startOverBody = topBarSource.split('export function StartOverButton()')[1] ?? '';
   assert.ok(startOverBody.includes('unlock-all'), 'precondition: the unlock-all button markup exists');
-  // The className marker must appear strictly inside an `import.meta.env.DEV &&` guard,
+  // The className marker must appear strictly inside an `import.meta.env?.DEV &&` guard,
   // not merely somewhere in the file (which would pass even if gating were removed).
-  const guardMatch = /\{import\.meta\.env\.DEV\s*&&\s*\(([\s\S]*?)\)\s*\}/.exec(startOverBody);
-  assert.ok(guardMatch, 'the Unlock All button must be wrapped in an `{import.meta.env.DEV && (...)}` guard');
+  // BUG-584: the gate now reads `import.meta.env?.DEV` (optional-chain idiom,
+  // codebase-wide, so a runtime without `import.meta.env` itself — SSR-style
+  // render, the tsx test runner — doesn't throw). The regex is retargeted to
+  // match the `?.` form; intent (Unlock-All is wrapped in the DEV guard) unchanged.
+  const guardMatch = /\{import\.meta\.env\?\.DEV\s*&&\s*\(([\s\S]*?)\)\s*\}/.exec(startOverBody);
+  assert.ok(guardMatch, 'the Unlock All button must be wrapped in an `{import.meta.env?.DEV && (...)}` guard');
   assert.ok(guardMatch[1].includes('unlock-all'),
     'the import.meta.env.DEV guard must wrap the unlock-all button specifically (not an unrelated block)');
   assert.ok(guardMatch[1].includes("dispatch({ type: 'unlockAll' })"),
