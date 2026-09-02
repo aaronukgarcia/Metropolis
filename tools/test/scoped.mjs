@@ -163,6 +163,17 @@ async function main() {
   process.exit(0);
 }
 
+// This file lives under a `test/` directory, so CI's repo-root `node --test`
+// auto-discovers it and runs it AS a test. It is a CLI tool, not a test suite —
+// run with no args it would exit non-zero and report as a failed test
+// (`not ok - tools/test/scoped.mjs`, the BUG-543 CI red). `node --test` sets
+// NODE_TEST_CONTEXT for every discovered file it executes; detect that and
+// no-op out as a passing empty test file. Direct CLI invocation (env unset)
+// runs normally.
+if (process.env.NODE_TEST_CONTEXT) {
+  process.exit(0);
+}
+
 main().catch((err) => {
   process.stderr.write(`scoped.mjs crashed: ${err && err.stack ? err.stack : err}\n`);
   process.exit(1);
