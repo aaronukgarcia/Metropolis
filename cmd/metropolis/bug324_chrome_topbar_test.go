@@ -91,6 +91,40 @@ func freezeClock(t *testing.T, w *skeletonWiring) {
 	// The status delta lands on the pump/router goroutines, so wait for
 	// the bar itself to report the pause rather than assuming it has.
 	awaitStatus(t, w, "PAUSED")
+	// BUG-510 (sibling of the awaitStatus fix): the STATUS line and the
+	// CHROME bar's Figures are two separate rendered surfaces fed by
+	// distinct deltas. awaitStatus above only proves the status LINE says
+	// PAUSED; the chrome Figures.Speed can still be the pre-pause 1 for a
+	// few more scheduler ticks. A caller that then captures
+	// chromeUI.Figures() as its "last known good" baseline (e.g.
+	// TestBUG324_MalformedPatchKeepsLastKnownGood) races the late Speed:1->0
+	// delta and sees the baseline change under it. Wait for the chrome bar
+	// itself to reflect the pause (Speed 0) so the baseline is settled —
+	// same t.Context() contract as awaitStatus, never a wall-clock guess.
+	awaitChromeSpeed(t, w, 0)
+}
+
+// awaitChromeSpeed blocks until the chrome bar's Figures report the wanted
+// Speed, or fails at the test's own deadline. The chrome Figures arrive
+// asynchronously through the chrome.topbar subscription — a separate
+// surface from the status line awaitStatus polls — so a test that reads
+// Figures right after a Pause must wait for THIS surface to settle, not
+// just the status line. Same t.Context() bound as awaitStatus (BUG-510):
+// never a fixed wall-clock deadline.
+func awaitChromeSpeed(t *testing.T, w *skeletonWiring, want int) {
+	t.Helper()
+	ctx := t.Context()
+	for {
+		if got := w.chromeUI.Figures().Speed; got == want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the chrome bar never reported Speed %d before the test's own deadline; last figures: %+v", want, w.chromeUI.Figures())
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 // awaitStatus blocks until the live status line contains want, or fails
