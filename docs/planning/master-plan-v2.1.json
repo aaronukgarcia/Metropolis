@@ -1610,6 +1610,7 @@
         "foundation.num",
         "engine.staffing",
         "engine.firms",
+        "engine.services",
         "int.serializer"
       ],
       "sprint": 6,

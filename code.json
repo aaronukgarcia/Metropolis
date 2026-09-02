@@ -4625,6 +4625,11 @@
             "inboundGuid": "f6c47094-fae7-4d93-8267-653b15cc1a2a"
           },
           {
+            "key": "engine.services",
+            "moduleGuid": "ab443390-0a8a-459a-ae5a-4b8a35308751",
+            "inboundGuid": "3e1f24aa-a539-447c-9e63-874fa58f3f9e"
+          },
+          {
             "key": "int.serializer",
             "moduleGuid": "8ee49e96-0de9-4326-9b90-e94622874f94",
             "inboundGuid": "2ed08d03-985d-4f84-941b-12aa7d3285f2"
@@ -5370,6 +5375,10 @@
         "format": "Go package API + deltas",
         "pattern": "per-service capacity/demand/coverage; funding sliders are commands",
         "consumers": [
+          {
+            "key": "engine.build",
+            "outboundGuid": "7e791c72-d564-4504-b921-33adb1d486c9"
+          },
           {
             "key": "engine.capexport",
             "outboundGuid": "193c8b07-48ae-41ee-999f-5b16654f51df"
