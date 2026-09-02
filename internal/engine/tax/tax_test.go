@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/aaronukgarcia/Metropolis/internal/engine/finance"
+	"github.com/aaronukgarcia/Metropolis/internal/foundation/data"
 	"github.com/aaronukgarcia/Metropolis/internal/foundation/errs"
 )
 
@@ -804,5 +805,127 @@ func TestMoneyFromFloatClampsNonFinite(t *testing.T) {
 	}
 	if got := moneyFromFloat(math.Inf(-1)); got != 0 {
 		t.Fatalf("moneyFromFloat(-Inf) = %d, want 0 (money is never negative)", got)
+	}
+}
+
+// f64ptr returns a pointer to a float64 literal — ZoneOverride.RateMultiplier
+// is a pointer field (present-vs-absent distinguishability, GR#16/GR#17), so
+// test fixtures need an addressable literal.
+func f64ptr(f float64) *float64 { return &f }
+
+// TestZoneOverrideGeneralisedAcrossInstruments (AC-19 / ASM-416 / BUG-588):
+// a zone-scoped override is honoured for EVERY loaded instrument, not only
+// the property-category one BusinessRateRevenue's zoneOverrideInstrument
+// helper is scoped to. For each of the six data-defined instruments, this
+// injects a zoneOverrides entry directly onto that instrument's own def
+// (same package as tax.go, so the unexported instrumentState.def field is
+// reachable without a second data file) and proves via RateInZone/
+// RevenueInZone that:
+//   - the overridden zone's rate/revenue DIFFERS from the citywide rate/
+//     revenue for that same instrument (the false-pass AC-19 calls out is a
+//     schema field honoured only for business-rates; asserting on all six
+//     closes that gap);
+//   - a zone the instrument declares NO override for is untouched (equals
+//     citywide) — an override is scoped, never a blanket instrument-wide
+//     rate change;
+//   - the override changes a RATE only — the untouched full base is
+//     identical before and after (conservation: a rate lever, never a mint).
+func TestZoneOverrideGeneralisedAcrossInstruments(t *testing.T) {
+	const (
+		overriddenZone = "mining"   // free of any real data-authored override
+		untouchedZone  = "dwelling" // ditto — never overridden by any instrument
+	)
+	instrumentIDs := []string{
+		"vat", "import-duties", "corporation-tax", "paye", "council-tax", "business-rates",
+	}
+
+	for _, id := range instrumentIDs {
+		t.Run(id, func(t *testing.T) {
+			api := newTestAPI(t)
+			if err := api.SetBase(id, gbp(1_000_000)); err != nil {
+				t.Fatalf("SetBase(%s): %v", id, err)
+			}
+
+			st, ok := api.instruments[id]
+			if !ok {
+				t.Fatalf("instrument %s not loaded", id)
+			}
+			if st.def.ZoneOverrides == nil {
+				st.def.ZoneOverrides = map[string]data.ZoneOverride{}
+			}
+
+			citywideRate, err := api.Instrument(id)
+			if err != nil {
+				t.Fatalf("Instrument(%s): %v", id, err)
+			}
+			citywideRevenue, err := api.Revenue(id)
+			if err != nil {
+				t.Fatalf("Revenue(%s): %v", id, err)
+			}
+
+			// Inject a 50%-of-citywide zone override directly on this
+			// instrument's own def — never routed through the
+			// property-only zoneOverrideInstrument helper.
+			st.def.ZoneOverrides[overriddenZone] = data.ZoneOverride{RateMultiplier: f64ptr(0.5)}
+
+			zoneRate, err := api.RateInZone(id, overriddenZone)
+			if err != nil {
+				t.Fatalf("RateInZone(%s, %s): %v", id, overriddenZone, err)
+			}
+			if zoneRate == citywideRate.Rate {
+				t.Fatalf("%s: zone-scoped rate %v == citywide rate %v — override not honoured (BUG-588 regression)", id, zoneRate, citywideRate.Rate)
+			}
+			wantZoneRate := citywideRate.Rate * 0.5
+			if math.Abs(zoneRate-wantZoneRate) > 1e-9 {
+				t.Fatalf("%s: zone-scoped rate = %v, want %v", id, zoneRate, wantZoneRate)
+			}
+
+			zoneRevenue, err := api.RevenueInZone(id, overriddenZone)
+			if err != nil {
+				t.Fatalf("RevenueInZone(%s, %s): %v", id, overriddenZone, err)
+			}
+			if citywideRevenue > 0 && zoneRevenue == citywideRevenue {
+				t.Fatalf("%s: zone-scoped revenue %d == citywide revenue %d — override not honoured", id, zoneRevenue, citywideRevenue)
+			}
+
+			// A zone with no override is untouched: rate == citywide.
+			plainRate, err := api.RateInZone(id, untouchedZone)
+			if err != nil {
+				t.Fatalf("RateInZone(%s, %s): %v", id, untouchedZone, err)
+			}
+			if plainRate != citywideRate.Rate {
+				t.Fatalf("%s: unoverridden zone rate = %v, want citywide %v", id, plainRate, citywideRate.Rate)
+			}
+
+			// Conservation: the override moved the RATE, never the base.
+			baseAfter, err := api.TaxedBase(id)
+			if err != nil {
+				t.Fatalf("TaxedBase(%s): %v", id, err)
+			}
+			baseBefore := taxedBaseAt(gbp(1_000_000), 0, referenceRate(st.def), elasticityCoeff(st.def), citywideRate.Rate)
+			if baseAfter != baseBefore {
+				t.Fatalf("%s: citywide taxed base changed after a zone override was set (%d != %d) — a zone override must be a rate lever, never a base mutation", id, baseAfter, baseBefore)
+			}
+		})
+	}
+}
+
+// TestZoneOverrideNoOverrideInstrumentIdentity (AC-19 regression identity):
+// an instrument that carries NO zoneOverrides at all behaves exactly as
+// before this fix — every zone resolves to the citywide rate.
+func TestZoneOverrideNoOverrideInstrumentIdentity(t *testing.T) {
+	api := newTestAPI(t)
+	citywide, err := api.Instrument("vat")
+	if err != nil {
+		t.Fatalf("Instrument(vat): %v", err)
+	}
+	for zone := range zoneClassEnum {
+		got, err := api.RateInZone("vat", zone)
+		if err != nil {
+			t.Fatalf("RateInZone(vat, %s): %v", zone, err)
+		}
+		if got != citywide.Rate {
+			t.Fatalf("RateInZone(vat, %s) = %v, want citywide %v (vat carries no zoneOverrides)", zone, got, citywide.Rate)
+		}
 	}
 }

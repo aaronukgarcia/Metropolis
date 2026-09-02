@@ -449,6 +449,58 @@ func (t *TaxAPI) RevenueInDistrict(instrumentID string, district DistrictID) (fi
 	return revenueAt(st.base, st.evShare, referenceRate(st.def), elasticityCoeff(st.def), rate), nil
 }
 
+// RateInZone returns instrumentID's rate in a §34 zone class (AC-19,
+// ASM-416): the citywide rate × the instrument's OWN zoneCoefficient for that
+// zone — never the fixed categoryProperty lookup [zoneOverrideInstrument]
+// uses for the land-value-based [BusinessRateRevenue] calculation. Any of
+// the six loaded instruments may carry a populated zoneOverrides entry (the
+// schema is generalised, not businessRates-only); this is the read path that
+// honours it regardless of the instrument's category. A zone class outside
+// §34's closed enum is rejected by the underlying zoneCoefficient call
+// (ErrUnknownZoneClass) — never normalised.
+func (t *TaxAPI) RateInZone(instrumentID, zoneClass string) (float64, error) {
+	if err := t.checkNotCopied("RateInZone"); err != nil {
+		return 0, err
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	st, err := t.lookupLocked(instrumentID)
+	if err != nil {
+		return 0, err
+	}
+	coeff, err := t.zoneCoefficient(st.def, zoneClass)
+	if err != nil {
+		return 0, err
+	}
+	return st.rate * coeff, nil
+}
+
+// RevenueInZone returns an instrument's revenue at its zone-scoped rate
+// (AC-19's revenue counterpart to [RateInZone]): the instrument's own full
+// base run through the elasticity/EV-share curve at rate × zoneCoefficient(
+// zoneClass) — never a second, independently-derived base. A zone override
+// changes which RATE the base is taxed at; it never adds or removes money
+// from the base itself (conservation — an override is a rate lever, not a
+// mint). Zones the instrument declares no override for resolve to the
+// citywide rate (zoneCoefficient's 1.0 default), matching RateInZone.
+func (t *TaxAPI) RevenueInZone(instrumentID, zoneClass string) (finance.Money, error) {
+	if err := t.checkNotCopied("RevenueInZone"); err != nil {
+		return 0, err
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	st, err := t.lookupLocked(instrumentID)
+	if err != nil {
+		return 0, err
+	}
+	coeff, err := t.zoneCoefficient(st.def, zoneClass)
+	if err != nil {
+		return 0, err
+	}
+	rate := st.rate * coeff
+	return revenueAt(st.base, st.evShare, referenceRate(st.def), elasticityCoeff(st.def), rate), nil
+}
+
 // IncidenceDisplay is AC-5's per-bearer-category incidence breakdown at the
 // current rate: who bears the cost, recomputed from the rate at call time
 // (never a fixed lookup table).
@@ -559,9 +611,18 @@ type ZoneCell struct {
 }
 
 // zoneOverrideInstrument returns the instrument whose zoneOverrides drive
-// the zone-scoped property tax: the property-category instrument carrying at
-// least one zone override (the data's zone-scoped property entry). Sorted
-// scan so the result is deterministic if the set ever grows.
+// [BusinessRateRevenue]'s AC-7 land-value×zone calculation: the
+// property-category instrument carrying at least one zone override (the
+// data's zone-scoped business-rates entry). Sorted scan so the result is
+// deterministic if the set ever grows.
+//
+// This is BusinessRateRevenue's own lookup, scoped to categoryProperty
+// because AC-7 is specifically the land-value-based revenue calculation —
+// it is NOT the general zoneOverrides dispatch for the other five
+// instruments (ASM-416/AC-19, BUG-588). A non-property instrument's own
+// zoneOverrides is honoured via [RateInZone]/[RevenueInZone], which resolve
+// zoneCoefficient against that instrument's own def — never this
+// category-filtered helper.
 func (t *TaxAPI) zoneOverrideInstrument() (*instrumentState, bool) {
 	if err := t.checkNotCopied("zoneOverrideInstrument"); err != nil {
 		return nil, false
