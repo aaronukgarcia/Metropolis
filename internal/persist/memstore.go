@@ -20,10 +20,12 @@ type MemStore struct {
 }
 
 type memCity struct {
-	key       CityKey
-	journal   [][]byte
-	snapshots map[SnapshotID][]byte
-	seqs      []int64
+	key          CityKey
+	journal      [][]byte
+	snapshots    map[SnapshotID][]byte
+	seqs         []int64
+	worldSeed    uint64
+	worldSeedSet bool
 }
 
 var _ Store = (*MemStore)(nil)
@@ -207,7 +209,11 @@ func (s *MemStore) ListCities(ctx context.Context, tenant string) ([]CityKey, er
 	defer s.mu.Unlock()
 	var keys []CityKey
 	for _, c := range s.cities {
-		if c.key.TenantID == tenant {
+		// BUG-488: same "seed-only entry is invisible" rule as Exists —
+		// a city that only ever had SetWorldSeedIfAbsent called for it,
+		// with no real journal record or snapshot, must not appear
+		// here, matching DiskStore's meta.json-gated ListCities.
+		if c.key.TenantID == tenant && (len(c.journal) > 0 || len(c.snapshots) > 0) {
 			keys = append(keys, c.key)
 		}
 	}
@@ -225,6 +231,51 @@ func (s *MemStore) Exists(ctx context.Context, city CityKey) (bool, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.cities[cityMapKey(city)]
-	return ok, nil
+	c, ok := s.cities[cityMapKey(city)]
+	if !ok {
+		return false, nil
+	}
+	// BUG-488: a city entry can now exist in the map purely because
+	// SetWorldSeedIfAbsent stamped it (getOrCreate is also called from
+	// there) — Exists' documented contract is "has any durably committed
+	// journal or snapshot data", so a seed-only entry with neither must
+	// still report false, exactly matching DiskStore's meta.json-gated
+	// semantics (meta.json is only ever written by a real
+	// AppendJournal/PutSnapshot, never by the seed stamp).
+	return len(c.journal) > 0 || len(c.snapshots) > 0, nil
+}
+
+// SetWorldSeedIfAbsent implements Store (BUG-488).
+func (s *MemStore) SetWorldSeedIfAbsent(ctx context.Context, city CityKey, seed uint64) (uint64, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.getOrCreate(city)
+	if !c.worldSeedSet {
+		c.worldSeed = seed
+		c.worldSeedSet = true
+	}
+	return c.worldSeed, nil
+}
+
+// WorldSeed implements Store (BUG-488).
+func (s *MemStore) WorldSeed(ctx context.Context, city CityKey) (uint64, bool, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return 0, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.cities[cityMapKey(city)]
+	if !ok || !c.worldSeedSet {
+		return 0, false, nil
+	}
+	return c.worldSeed, true, nil
 }

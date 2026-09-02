@@ -255,6 +255,12 @@ func (failingStore) ListCities(context.Context, string) ([]persist.CityKey, erro
 func (failingStore) Exists(context.Context, persist.CityKey) (bool, error) {
 	panic("failingStore.Exists called")
 }
+func (failingStore) SetWorldSeedIfAbsent(context.Context, persist.CityKey, uint64) (uint64, error) {
+	panic("failingStore.SetWorldSeedIfAbsent called")
+}
+func (failingStore) WorldSeed(context.Context, persist.CityKey) (uint64, bool, error) {
+	panic("failingStore.WorldSeed called")
+}
 
 // TestPersistJournal_FailClosed proves a durable-persist failure is
 // surfaced, never swallowed (AC-1 fail-closed): the adapter's ObserveCommand

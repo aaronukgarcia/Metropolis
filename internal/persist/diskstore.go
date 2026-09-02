@@ -26,12 +26,24 @@ var ErrStoreCopied = errors.New("persist: store used after being copied")
 const (
 	journalFileName   = "journal.dat"
 	metaFileName      = "meta.json"
+	seedFileName      = "seed.json" // BUG-488: originating world-seed sidecar
 	snapshotsDirName  = "snapshots"
 	snapshotSuffix    = ".bin"
 	snapshotTmpPrefix = ".tmp-"
 	dirPerm           = 0o755
 	filePerm          = 0o644
 )
+
+// citySeed is the sidecar BUG-488 writes once per city directory, the
+// first time SetWorldSeedIfAbsent is ever called for it: the world seed
+// the city's journal was ORIGINATING replayed under. Distinct from
+// cityMeta (which only recovers the unhashed CityKey strings) so a
+// pre-BUG-488 city directory with no seed.json is unambiguously "no seed
+// ever recorded" rather than a zero-value seed -- WorldSeed's ok=false
+// case relies on the file's mere absence, never a zero-value field.
+type citySeed struct {
+	WorldSeed uint64 `json:"world_seed"`
+}
 
 // cityMeta is the small sidecar written once per city directory so
 // ListCities can recover the original (unhashed) CityKey strings —
@@ -491,4 +503,87 @@ func (s *DiskStore) Exists(ctx context.Context, city CityKey) (bool, error) {
 		return false, fmt.Errorf("persist: stat city meta: %w", err)
 	}
 	return true, nil
+}
+
+// SetWorldSeedIfAbsent implements Store (BUG-488). The seed.json sidecar is
+// written via the same temp-then-rename atomicWrite discipline as meta.json
+// and the FIRST-CALL-WINS semantics are enforced by an os.Stat check under
+// the per-city lock (so a concurrent racer for the SAME city can never
+// stamp a second, different seed — the single-writer-per-city model
+// lockFor already documents).
+func (s *DiskStore) SetWorldSeedIfAbsent(ctx context.Context, city CityKey, seed uint64) (uint64, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return 0, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	dir := s.cityDir(city)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if existing, ok, err := s.readCitySeedLocked(dir); err != nil {
+		return 0, err
+	} else if ok {
+		return existing, nil
+	}
+
+	// Deliberately does NOT call ensureCityMeta: stamping a seed must
+	// never, by itself, make an otherwise-untouched city look like it
+	// has durable data (Store.Exists/ListCities are keyed on meta.json
+	// alone, written only by a real AppendJournal/PutSnapshot) — a city
+	// that is only ever Wired with persistence enabled but never actually
+	// journals a command or takes a snapshot must stay invisible to
+	// Exists/ListCities, exactly as it did before BUG-488. Only the
+	// directory itself is created, so the seed.json write below has
+	// somewhere to land.
+	if err := os.MkdirAll(dir, dirPerm); err != nil {
+		return 0, fmt.Errorf("persist: create city dir: %w", err)
+	}
+	data, err := json.Marshal(citySeed{WorldSeed: seed})
+	if err != nil {
+		return 0, fmt.Errorf("persist: encode city seed: %w", err)
+	}
+	if err := atomicWrite(dir, seedFileName, data); err != nil {
+		return 0, fmt.Errorf("persist: write city seed: %w", err)
+	}
+	return seed, nil
+}
+
+// WorldSeed implements Store (BUG-488).
+func (s *DiskStore) WorldSeed(ctx context.Context, city CityKey) (uint64, bool, error) {
+	if err := s.checkNotCopied(); err != nil {
+		return 0, false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	dir := s.cityDir(city)
+
+	lock := s.lockFor(dir)
+	lock.Lock()
+	defer lock.Unlock()
+
+	return s.readCitySeedLocked(dir)
+}
+
+// readCitySeedLocked reads dir's seed.json sidecar, if any. Must be called
+// with dir's per-city lock already held. A missing file is ok=false, not
+// an error — the explicit backward-compatible default for a city with no
+// seed ever recorded (BUG-488).
+func (s *DiskStore) readCitySeedLocked(dir string) (uint64, bool, error) {
+	data, err := os.ReadFile(filepath.Join(dir, seedFileName))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("persist: read city seed: %w", err)
+	}
+	var cs citySeed
+	if err := json.Unmarshal(data, &cs); err != nil {
+		return 0, false, fmt.Errorf("persist: decode city seed: %w", err)
+	}
+	return cs.WorldSeed, true, nil
 }

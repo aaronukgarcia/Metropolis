@@ -235,6 +235,98 @@ func runStoreConformance(t *testing.T, newStore storeFactory) {
 		}
 	})
 
+	t.Run("world_seed_absent_by_default", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "never-seeded"}
+
+		seed, ok, err := s.WorldSeed(ctx, city)
+		if err != nil {
+			t.Fatalf("WorldSeed on never-seeded city: %v", err)
+		}
+		if ok {
+			t.Fatalf("WorldSeed ok=true seed=%d before any SetWorldSeedIfAbsent call, want ok=false", seed)
+		}
+	})
+
+	t.Run("world_seed_set_once_first_call_wins", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "seeded-once"}
+
+		recorded, err := s.SetWorldSeedIfAbsent(ctx, city, 111)
+		if err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent (first): %v", err)
+		}
+		if recorded != 111 {
+			t.Fatalf("first SetWorldSeedIfAbsent recorded = %d, want 111", recorded)
+		}
+
+		// A second call with a DIFFERENT seed must NOT overwrite — BUG-488's
+		// whole point is "the ORIGINATING seed", which is only ever set
+		// once per city.
+		recorded2, err := s.SetWorldSeedIfAbsent(ctx, city, 222)
+		if err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent (second, different seed): %v", err)
+		}
+		if recorded2 != 111 {
+			t.Fatalf("second SetWorldSeedIfAbsent recorded = %d, want 111 (first-call-wins, never overwritten)", recorded2)
+		}
+
+		seed, ok, err := s.WorldSeed(ctx, city)
+		if err != nil {
+			t.Fatalf("WorldSeed after two SetWorldSeedIfAbsent calls: %v", err)
+		}
+		if !ok {
+			t.Fatal("WorldSeed ok=false after a successful SetWorldSeedIfAbsent")
+		}
+		if seed != 111 {
+			t.Fatalf("WorldSeed = %d, want 111", seed)
+		}
+	})
+
+	t.Run("world_seed_isolated_per_city", func(t *testing.T) {
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		cityX := CityKey{TenantID: "t", CityID: "seed-city-x"}
+		cityY := CityKey{TenantID: "t", CityID: "seed-city-y"}
+
+		if _, err := s.SetWorldSeedIfAbsent(ctx, cityX, 42); err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent(X): %v", err)
+		}
+		seedY, okY, err := s.WorldSeed(ctx, cityY)
+		if err != nil {
+			t.Fatalf("WorldSeed(Y): %v", err)
+		}
+		if okY {
+			t.Fatalf("city Y reports a recorded seed (%d) after only city X was ever stamped — seed isolation leak", seedY)
+		}
+	})
+
+	t.Run("stamping_a_seed_alone_does_not_make_a_city_exist", func(t *testing.T) {
+		// BUG-488 regression: SetWorldSeedIfAbsent must never, by itself,
+		// make Exists/ListCities report a city that has no real durable
+		// data (no journal record, no snapshot) — that was an actual
+		// regression caught while landing this fix
+		// (TestAttackInc3b_ForeignCitySnapshotNotUsed briefly broke because
+		// an earlier version of this stamp wrote meta.json as a side
+		// effect).
+		s := newStore(t) // static type Store — see storeFactory's signature
+		ctx := context.Background()
+		city := CityKey{TenantID: "t", CityID: "seed-only-no-data"}
+
+		if _, err := s.SetWorldSeedIfAbsent(ctx, city, 7); err != nil {
+			t.Fatalf("SetWorldSeedIfAbsent: %v", err)
+		}
+		ok, err := s.Exists(ctx, city)
+		if err != nil {
+			t.Fatalf("Exists: %v", err)
+		}
+		if ok {
+			t.Fatal("Exists = true after ONLY a world-seed stamp, no journal or snapshot — a seed-only city must stay invisible")
+		}
+	})
+
 	t.Run("concurrent_append_same_city_no_corruption", func(t *testing.T) {
 		s := newStore(t) // static type Store — see storeFactory's signature
 		ctx := context.Background()

@@ -70,4 +70,27 @@ type Store interface {
 	// Exists reports whether the given city has any durably committed
 	// data (journal or snapshot) in the store.
 	Exists(ctx context.Context, city CityKey) (bool, error)
+
+	// SetWorldSeedIfAbsent durably records seed as the city's ORIGINATING
+	// world seed the first time this is ever called for city, and is a
+	// no-op on every later call (BUG-488: the persist layer has no
+	// concept of "the seed changed", only "the seed was never recorded
+	// yet" -- a genesis journal carries no bundle header the way a save
+	// bundle does, so this sidecar record is what lets a later restore
+	// verify it is replaying the journal it thinks it is). Returns the
+	// seed now durably on record for city -- either the one just written
+	// (first call) or the pre-existing one (every later call, regardless
+	// of what seed was passed this time), so a caller can always tell
+	// which actually won.
+	SetWorldSeedIfAbsent(ctx context.Context, city CityKey, seed uint64) (recorded uint64, err error)
+
+	// WorldSeed returns the durably-recorded originating world seed for
+	// city, and ok=true iff one has ever been recorded via
+	// SetWorldSeedIfAbsent. ok=false covers two cases a caller must
+	// treat identically (no durable seed to check against): a city with
+	// no durable data at all, and a city whose durable data predates
+	// BUG-488's fix (an old journal/snapshot with no seed ever stamped) --
+	// the explicit backward-compatible default is "no check possible",
+	// never a guessed value.
+	WorldSeed(ctx context.Context, city CityKey) (seed uint64, ok bool, err error)
 }

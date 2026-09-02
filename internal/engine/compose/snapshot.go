@@ -303,11 +303,35 @@ func (c *Composition) restoreFromSnapshotBytes(data []byte) (int64, error) {
 //     path: every durably journaled command replayed from tick 0
 //     (RestoreCommands, inc2).
 //
+// Before either branch runs, checkOrStampWorldSeed (BUG-488) verifies e's
+// world seed against city's durably-recorded originating seed (or, if none
+// has ever been recorded, stamps e's seed as the seed of record and
+// proceeds — the explicit backward-compatible default for a journal that
+// predates this check). This is what makes the genesis-replay fallback
+// above refuse a cross-city restore exactly like the snapshot walk-back
+// already does via BUG-479's bundle-header check, closing the sibling gap
+// a bare genesis journal otherwise leaves wide open (no bundle header to
+// validate against a journal-only restore at all).
+//
 // Returns whether a snapshot was used (false == genesis fallback) and the
 // final restored tick (read back from the engine's own clock after replay,
 // since a tail can itself contain further AdvanceTicks commands that move
 // the tick past the snapshot's own recorded value).
 func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Composition, store persist.Store, city persist.CityKey) (usedSnapshot bool, tick int64, err error) {
+	// BUG-488: verify (or, for a pre-fix journal, establish) city's
+	// durable originating world seed BEFORE touching a single journal
+	// record or snapshot — the snapshot walk-back below already gets its
+	// own seed check for free (tryRestoreCandidate -> LoadAt -> BUG-479's
+	// WithExpectedWorldSeed), but the GENESIS-REPLAY fallback
+	// (restoreGenesis, below) has no bundle header to check against at
+	// all: a genesis journal is just command frames, so this is the
+	// PERSIST-LAYER check the item calls for. See
+	// checkOrStampWorldSeed's own doc comment for the three cases
+	// (mismatch/match/never-recorded).
+	if err := checkOrStampWorldSeed(ctx, store, city, e.WorldSeed(), c.state.cid); err != nil {
+		return false, 0, err
+	}
+
 	ids, err := store.ListSnapshots(ctx, city)
 	if err != nil {
 		return false, 0, err
@@ -370,6 +394,79 @@ func RestoreLatestSnapshotOrGenesis(ctx context.Context, e *core.Engine, c *Comp
 	// Every snapshot's tail proved inconsistent with the journal: fall back
 	// to a full genesis replay, which never depends on a snapshot at all.
 	return restoreGenesis(e, c, cmds)
+}
+
+// checkOrStampWorldSeed is BUG-488's persist-layer seed guard, called once
+// at the top of RestoreLatestSnapshotOrGenesis before any journal record or
+// snapshot is read. It closes the sibling gap BUG-479 left open: BUG-479
+// made a restored SAVE BUNDLE (a snapshot) refuse a foreign seed via its
+// own header, but a bare genesis journal has no header at all to check —
+// nothing on the wire distinguishes "city A's journal" from "city B's
+// journal" once restoreGenesis starts replaying protocol.Commands. This
+// function makes that distinguishable by durably recording a city's
+// ORIGINATING world seed (persist.Store.SetWorldSeedIfAbsent, stamped once
+// per city the moment persistence is first wired for it — see compose.go's
+// Wire) and validating restoringSeed against it here, early enough that a
+// refusal never touches e or c.
+//
+// Three cases:
+//
+//  1. store has a recorded seed for city AND it equals restoringSeed: the
+//     common case (a normal restart, or the correct city) — no-op, restore
+//     proceeds.
+//  2. store has a recorded seed for city and it does NOT equal
+//     restoringSeed: EXACTLY BUG-488's measured scenario (a
+//     differently-seeded engine restoring city's journal) — refused with
+//     save.ErrSaveSeedMismatch (MET-E819, reusing BUG-479's registered
+//     code for the identical failure class) before any command replays.
+//  3. store has NO recorded seed for city at all: either a genuinely
+//     brand-new city (nothing durable exists yet — Wire's stamp call
+//     races this one and either can win harmlessly, both write the same
+//     value for a fresh city) or a PRE-BUG-488 journal that predates this
+//     fix and was never stamped. Both are the SAME explicit
+//     backward-compatible default: no check is possible, so none is
+//     performed (never a guessed refusal) — restoringSeed is stamped as
+//     the durable seed of record now, so every FUTURE restore of this
+//     same city IS protected from this point on. This mirrors BUG-479's
+//     "old-savepoint defaults explicit" handling: the gap for pre-fix
+//     data is real and documented, never silently widened further, and
+//     never masked by inventing a value to fail closed against.
+func checkOrStampWorldSeed(ctx context.Context, store persist.Store, city persist.CityKey, restoringSeed uint64, correlationID string) error {
+	recorded, ok, err := store.WorldSeed(ctx, city)
+	if err != nil {
+		return errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "read-world-seed"})
+	}
+	if ok {
+		if recorded != restoringSeed {
+			// ctx keys MUST match MET-E819's registered template
+			// ({bundleSeed}/{compositionSeed}, data/errors.json) exactly —
+			// BUG-317/BUG-357 are the standing proof that "registered" is
+			// not the same as "renders": a ctx key that does not match the
+			// template's token renders a literal `{token}` in the log.
+			// "bundleSeed" is reused here for the journal's durably
+			// recorded originating seed even though this path has no save
+			// bundle — the message text ("save bundle world seed...")
+			// slightly overreaches for this path, an accepted cost of
+			// reusing BUG-479's registered code instead of minting a new
+			// one for the identical failure class (the item's own
+			// direction: "MET-E819 can be reused").
+			return errs.New(save.ErrSaveSeedMismatch, correlationID, map[string]any{
+				"city":            city.TenantID + "/" + city.CityID,
+				"bundleSeed":      recorded,
+				"compositionSeed": restoringSeed,
+				"path":            "journal-only-genesis-replay",
+			})
+		}
+		return nil
+	}
+	// Case 3: nothing recorded yet — establish it now (backward-compat /
+	// fresh-city stamp). SetWorldSeedIfAbsent never overwrites a
+	// concurrently-won stamp, so this is safe even if Wire's own call
+	// (compose.go) raced this one.
+	if _, err := store.SetWorldSeedIfAbsent(ctx, city, restoringSeed); err != nil {
+		return errs.Wrap(ErrModuleFailed, correlationID, err, map[string]any{"module": "persist", "step": "stamp-world-seed"})
+	}
+	return nil
 }
 
 // restoreGenesis replays cmds (the full durable journal) onto e/c from tick

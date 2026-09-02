@@ -1,6 +1,7 @@
 package compose
 
 import (
+	"context"
 	"errors"
 	"sync/atomic"
 
@@ -945,6 +946,23 @@ func Wire(e *core.Engine, deps *Deps) (*Composition, error) {
 			city = defaultPersistCity // PLACEHOLDER (see defaultPersistCity).
 		}
 		journaler = newPersistCommandJournaler(journaler, deps.PersistStore, city)
+
+		// BUG-488: stamp this composition's own world seed as city's
+		// durable ORIGINATING seed the first time persistence is ever
+		// wired for it. SetWorldSeedIfAbsent is a no-op once a seed is
+		// already on record (e.g. a restore target's Wire call for a
+		// city that already has real history) -- it never overwrites --
+		// so this is safe to call unconditionally on every Wire, whether
+		// this composition goes on to be the genuine originating city or
+		// a foreign-seeded restore target. The actual cross-city
+		// REFUSAL happens later, in RestoreLatestSnapshotOrGenesis
+		// (snapshot.go), which compares e.WorldSeed() against whatever
+		// this call (or an earlier one) left on record. A failure here
+		// is a durable-store fault, same class as a failed
+		// AppendJournal -- surfaced, never swallowed.
+		if _, err := deps.PersistStore.SetWorldSeedIfAbsent(context.Background(), city, e.WorldSeed()); err != nil {
+			return nil, errs.Wrap(ErrModuleFailed, cid, err, map[string]any{"module": "persist", "step": "stamp-world-seed"})
+		}
 	}
 	st.journaler = journaler
 	if err := e.SetCommandJournaler(journaler); err != nil {

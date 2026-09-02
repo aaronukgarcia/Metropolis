@@ -1856,6 +1856,10 @@
     "reason": "FEAT-1972079936 Phase 1 int.persist copyguard round (2026-08-31, approvedBy Bev/lead): ensureCityMeta is an unexported helper reachable only from the exported entry points, and is invoked with the per-city lock already held by its caller (AppendJournal/PutSnapshot after lockFor+Lock). It never acquires a lock independently on an unguarded path. Every exported caller calls checkNotCopied() pre-lock first, so a copied DiskStore never reaches ensureCityMeta. Same syntactic-no-call-graph blind spot as the accepted core/citizens *Locked helpers."
   },
   {
+    "finding": "internal/persist/diskstore.go|*DiskStore|receiver method|readCitySeedLocked|s|*DiskStore",
+    "reason": "BUG-488 journal-only genesis-replay seed check (2026-09-02): readCitySeedLocked is an unexported *Locked-suffixed helper reachable ONLY from the two new exported Store methods SetWorldSeedIfAbsent and WorldSeed, both of which call checkNotCopied() first and then take dir's per-city lock (lockFor(dir).Lock()) BEFORE ever calling readCitySeedLocked -- it never acquires a lock or checks copy-state independently on an unguarded path. Identical shape and reasoning to this same file's already-accepted ensureCityMeta entry immediately above (same file, same *DiskStore receiver, same ratchet class) and to the citizens/core *Locked helper precedents this registry already carries: astgate's syntactic, no-call-graph analysis cannot see the caller already validated copy-state and lock ownership before the helper runs."
+  },
+  {
     "finding": "internal/persist/memstore.go|*MemStore|receiver method|getOrCreate|s|*MemStore",
     "reason": "FEAT-1972079936 Phase 1 int.persist copyguard round (2026-08-31, approvedBy Bev/lead): getOrCreate is an unexported helper on *MemStore called only with m.mu already held by its exported caller; it does not lock independently. All 7 exported MemStore methods call checkNotCopied() pre-lock, so a copied MemStore is rejected before getOrCreate is reached. Unexported-helper-behind-guarded-entry-point, the established accepted precedent."
   },
