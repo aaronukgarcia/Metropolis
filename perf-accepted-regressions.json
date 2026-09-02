@@ -1,7 +1,1 @@
-[
-  {
-    "preset": "1M",
-    "commitHash": "009cbf504c7754ddee16dbdb09d49cd6942539d7",
-    "reason": "BUG-529 (Aaron ruling Q100049=A1, 2026-09-02): the stored 1M-preset perf baseline (~175M AllocBytes / ~1.14M AllocCount) was recorded BEFORE BUG-529 fixed the money loop, which had been silently processing only ~64 of 2000 citizens (compose.residentIDs() enumerated only the seed cohort, never migrants or fertility children). BUG-529 (commit 2548a46) restored full-population wage payment via liveResidentIDs(); BUG-547 (this commit, 009cbf5) then cut the resulting allocation cost by ~7.2% via a counter-keyed memoization cache on liveResidentIDs(), without touching correctness. The corrected level -- locally re-measured at HEAD 909eac9 (BUG-520): AllocBytes ~606.8M / AllocCount ~5.54M at perf-smoke's 2000-citizen/500-month scale, and AllocBytes ~610.0M / AllocCount ~5.56M at perf-1m-probe's full 1,000,000-citizen/500-month scale (+246.8%/+386.3% over the stale pre-BUG-529 numbers at both scales) -- is the CORRECT, honest cost of paying the full simulated population, not a regression to optimise away. This entry documents that acceptance decision for audit; the companion perf-results cache-key generation bump in .github/workflows/ci.yml (v7 -> v8, same mechanism as the prior BUG-034/BUG-254 bumps) is what actually re-seeds a fresh baseline for the very next CI run, since an accepted-regressions entry can only ever match a run's OWN exact commit hash (self-referential for whichever commit lands this file) and cannot retroactively repair an already-stale cached history."
-  }
-]
+[]

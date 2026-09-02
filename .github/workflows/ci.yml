@@ -391,24 +391,49 @@ jobs:
       # fresh, honestly-measured baseline (AC-8 first-run behaviour),
       # exactly the mechanism the v2 bump above already established.
       #
-      # v8 (BUG-529, 2026-09-02, Aaron ruling Q100049=A1): every v7
-      # record was measured BEFORE BUG-529 fixed compose.residentIDs()'s
-      # money loop, which had silently processed only ~64 of 2000
-      # citizens (migrants/fertility children were never enumerated).
-      # BUG-529 restored full-population pay, legitimately raising
-      # AllocBytes/AllocCount ~247%/~386% (~175M/~1.14M -> ~607M/~5.54M
-      # at this job's own 2000-citizen scale, locally re-measured at
-      # BUG-547's landing commit 009cbf5) — a correct cost increase, not
-      # something to optimise back down. perf-accepted-regressions.json
-      # carries the audit-trail entry naming commit 009cbf5, but an
-      # accepted-regressions entry can only ever match a run's OWN exact
-      # commit hash (necessarily self-referential for whichever commit
-      # lands this file) and so cannot retroactively repair an
-      # already-stale cached v7 history. Orphaning the v7 entries — the
-      # same mechanism as the v2/v3 bumps above — lets the very next run
-      # establish a fresh, honestly-measured baseline at the corrected
-      # level (AC-8 first-run behaviour) instead of every future commit
-      # being judged against a stale, pre-fix number forever.
+      # v8 (BUG-529, 2026-09-02, Aaron ruling Q100049=A1; fixed same day
+      # after the v8 bump alone did not go green — see the "v8 fix" note
+      # below): every v7 record was measured BEFORE BUG-529 fixed
+      # compose.residentIDs()'s money loop, which had silently processed
+      # only ~64 of 2000 citizens (migrants/fertility children were
+      # never enumerated). BUG-529 restored full-population pay,
+      # legitimately raising AllocBytes/AllocCount ~247%/~386%
+      # (~175M/~1.14M -> ~607M/~5.54M at this job's own 2000-citizen
+      # scale, locally re-measured at BUG-547's landing commit 009cbf5)
+      # — a correct cost increase, not something to optimise back down.
+      # Orphaning the v7 entries lets the very next run establish a
+      # fresh, honestly-measured baseline at the corrected level (AC-8
+      # first-run behaviour) instead of every future commit being judged
+      # against a stale, pre-fix number forever.
+      #
+      # v8 FIX (same-day follow-up, 2026-09-02): the original v8 landing
+      # ALSO added a perf-accepted-regressions.json entry naming commit
+      # 009cbf5 as an audit-trail record — this broke BOTH perf jobs on
+      # every run (exit 2, not the expected AC-8 exit 0), because
+      # actions/checkout@v4 defaults to a SHALLOW clone (fetch-depth 1)
+      # on this job (no override here, unlike node-test's fetch-depth: 0
+      # for its own unrelated reason), and internal/harness/synth's
+      # BUG-245 git-provenance loader hard-verifies every ledger entry's
+      # commitHash resolves via `git rev-parse --verify <hash>^{commit}`
+      # — which fails closed on a shallow checkout for any commit older
+      # than the single fetched one. Live-verified by cloning the real
+      # public repo with --depth 1: `git rev-parse --verify
+      # 009cbf5...^{commit}` exits 1, and perfci built from that clone
+      # printed "perfci: reading accepted-regressions registry: ...
+      # references commit ... which is not a real commit in this
+      # repository (BUG-245)" and exited 2 — reproduced identically for
+      # both perf-smoke and perf-1m-probe, since they share this same
+      # ledger file and checkout step. The ledger entry was never
+      # actually load-bearing for the fix (the v8 cache-key bump alone
+      # already gives AC-8's "no prior baseline -> exit 0" behaviour on
+      # the first post-bump run), so perf-accepted-regressions.json is
+      # back to an empty array — this file's own BUG-529 rationale now
+      # lives ONLY in this comment block, not as a ledger entry, to avoid
+      # depending on git history depth this job does not fetch. If a
+      # future acceptance entry is ever added here, either add
+      # `fetch-depth: 0` to this job's Checkout step first, or name a
+      # commit no older than the single commit a depth-1 checkout always
+      # has (its own HEAD) — never an older ancestor.
       - name: Restore perf-results baseline
         uses: actions/cache@v4
         with:
@@ -643,21 +668,31 @@ jobs:
       # lets the first run under -months 500 seed the fresh baseline
       # (AC-8) instead.
       #
-      # v8 (BUG-529, 2026-09-02, Aaron ruling Q100049=A1): same rationale
-      # as perf-smoke's own v8 bump above — BUG-529 fixed
-      # compose.residentIDs()'s money loop (it had silently paid only
-      # ~64 of 2000 citizens; migrants/fertility children were never
-      # enumerated), legitimately raising AllocBytes/AllocCount ~247%/
-      # ~386% at this job's full 1,000,000-citizen scale (locally
+      # v8 (BUG-529, 2026-09-02, Aaron ruling Q100049=A1; fixed same day,
+      # see perf-smoke's own v8/v8-FIX comment block above for the full
+      # story): same rationale as perf-smoke's own v8 bump — BUG-529
+      # fixed compose.residentIDs()'s money loop (it had silently paid
+      # only ~64 of 2000 citizens; migrants/fertility children were
+      # never enumerated), legitimately raising AllocBytes/AllocCount
+      # ~247%/~386% at this job's full 1,000,000-citizen scale (locally
       # re-measured at BUG-547's landing commit 009cbf5: ~175M/~1.14M ->
-      # ~610.0M/~5.56M). perf-accepted-regressions.json documents the
-      # acceptance (naming commit 009cbf5) for audit, but that entry can
-      # only ever match a run's OWN exact commit hash and cannot
-      # retroactively repair the already-stale v7 history — orphaning
-      # v7 here (this job's history is a SEPARATE cache key from
-      # perf-smoke's, so both must be bumped independently) lets the
-      # very next dispatch establish a fresh, honestly-measured baseline
-      # at the corrected level (AC-8).
+      # ~610.0M/~5.56M). Orphaning v7 here (this job's history is a
+      # SEPARATE cache key from perf-smoke's, so both must be bumped
+      # independently) lets the very next dispatch establish a fresh,
+      # honestly-measured baseline at the corrected level (AC-8).
+      #
+      # v8 FIX (same-day, 2026-09-02): the original landing also added a
+      # perf-accepted-regressions.json entry naming commit 009cbf5 —
+      # this hard-failed BOTH perf jobs (exit 2) because this job's
+      # Checkout step (like perf-smoke's) takes actions/checkout@v4's
+      # default SHALLOW clone (fetch-depth 1), and the ledger's git-
+      # provenance loader (BUG-245) fails closed when a named commitHash
+      # cannot be resolved in that shallow history — live-reproduced by
+      # cloning the real repo with --depth 1 and running perfci against
+      # it. The ledger entry was never load-bearing for the fix (the v8
+      # cache-key bump alone already gives AC-8's fresh-baseline exit 0
+      # on the first post-bump run), so perf-accepted-regressions.json
+      # is back to an empty array.
       - name: Restore perf-results-1m-real baseline
         uses: actions/cache@v4
         with:
