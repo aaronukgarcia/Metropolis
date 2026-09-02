@@ -61,6 +61,8 @@ import { persistStashedCamera } from './cameraStash';
 import { listRecentOpened, recordRecentOpened } from './recentfiles';
 import { RebuildPrompt, type RebuildPhase } from '../components/RebuildPrompt';
 import { recordError, updateLastKnownState } from './backend';
+import { useBlockingOverlay } from '../components/overlayManager';
+import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from '../components/overlayLayers';
 
 /**
  * FEAT-1972079897 inc2: the build the RUNNING engine represents. Used both to
@@ -281,6 +283,21 @@ export function SimProvider({ children }: { children: ReactNode }) {
   }, [rebuildDecision]);
   const [rebuildPhase, setRebuildPhase] = useState<RebuildPhase>('prompt');
   const [rebuildReportState, setRebuildReportState] = useState<RebuildReport | null>(null);
+  // FEAT-2326609720 inc1: registers RebuildPrompt with the app-wide blocking-
+  // overlay resolver (overlayManager.tsx) at BLOCKING_OVERLAY_ID.REBUILD_PROMPT
+  // priority — the highest of the four known candidates, since the boot-time
+  // engine-version decision must win over the decline/insolvency/forced-sale
+  // overlays rendered deep inside MapView (a different subtree; the resolver
+  // is the only thing spanning both). In practice this is always true when
+  // rebuildDecision is set (nothing outranks it), but going through the
+  // resolver — rather than relying solely on a higher CSS z-index — means the
+  // LOWER-priority overlays are actually unmounted, not just visually
+  // covered, satisfying "at most one blocking overlay is ever mounted".
+  const isRebuildPromptTop = useBlockingOverlay(
+    BLOCKING_OVERLAY_ID.REBUILD_PROMPT,
+    BLOCKING_OVERLAY_RANK.rebuildPrompt,
+    rebuildDecision != null,
+  );
 
   // FEAT-1972079917: progress updates during chunked replay (running phase).
   const [rebuildProgress, setRebuildProgress] = useState<ReplayProgress | null>(null);
@@ -1105,7 +1122,7 @@ export function SimProvider({ children }: { children: ReactNode }) {
             : `⚠ Start Over aborted — could not archive debug snapshot (${captureError}). Your city is intact.`}
         </div>
       )}
-      {rebuildDecision && (
+      {rebuildDecision && isRebuildPromptTop && (
         <RebuildPrompt
           phase={rebuildPhase}
           savedVersion={rebuildDecision.savedVersion}

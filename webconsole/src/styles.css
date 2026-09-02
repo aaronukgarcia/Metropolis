@@ -329,6 +329,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   padding: 24px;
 }
 .insolvency-popup {
+  position: relative;
   width: min(480px, 92vw);
   background: rgba(15, 18, 22, 0.97);
   border: 1px solid var(--danger);
@@ -341,6 +342,18 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .insolvency-popup p { margin: 6px 0; font-size: 12.5px; }
 .insolvency-popup ul { margin: 6px 0; padding-left: 18px; font-size: 12.5px; }
 .insolvency-popup-note { color: var(--muted); font-style: italic; font-size: 11px; }
+/* FEAT-2326609720 inc1 (AC-4/AC-13 audit): explicit × close, mirrors
+   .forced-asset-sales-close — Escape does the same thing (overlayManager.tsx). */
+.insolvency-popup-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  padding: 0;
+  font-size: 14px;
+}
 
 /* BUG-497 (3): the FINAL DECLINE screen (hard game-over, FEAT-1972079923 inc4
    AC-11) is a HARD STOP the player can never navigate away from — it MUST win
@@ -359,6 +372,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   padding: 24px;
 }
 .decline-screen {
+  position: relative;
   width: min(480px, 92vw);
   background: rgba(15, 18, 22, 0.98);
   border: 1px solid var(--danger);
@@ -372,6 +386,42 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 .decline-cause { margin: 0 0 12px; color: var(--muted); font-size: 12.5px; }
 .decline-stats { list-style: none; margin: 0 0 16px; padding: 0; text-align: left; font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
 .decline-screen-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+/* FEAT-2326609720 inc1 (AC-6/I-4 audit): explicit × close — DeclineScreen had
+   NO dismiss path at all before this increment (only the three resolving
+   actions). Closing does NOT resume the clock (declineState is untouched;
+   engine.ts's advance() short-circuit is what actually freezes it) — it only
+   hides the dialog, replaced by .decline-reopen-chip below so the mandatory
+   Start Over / Load Save / Play Mode choice is never permanently stranded. */
+.decline-screen-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 22px;
+  height: 22px;
+  line-height: 1;
+  padding: 0;
+  font-size: 14px;
+}
+/* Small, unmissable but non-blocking chip shown after the Decline Screen is
+   closed without resolving — pointer-events default (auto) since it IS the
+   interactive reopen affordance; z-index one below DECLINE_SCREEN
+   (overlayLayers.ts) so the real overlay always wins when reopened. */
+.decline-reopen-chip {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 1999;
+  background: rgba(60, 18, 16, 0.92);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.decline-reopen-chip:hover { background: rgba(60, 18, 16, 1); }
 
 /* FEAT-2326609723 (Play Mode) — the escape-hatch button, deliberately styled
    distinct from Start Over/Load Save so it never reads as a normal recovery
@@ -406,11 +456,14 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 /* FEAT-2326609725 (dev-server staleness guard, 2026-09-02) — a loud, persistent
    warning that the running bundle is behind disk (a stale vite dev server kept
    serving an old module graph while the badge and /version.json both looked
-   current). Pinned above even the play-mode banner (z-index 3000) since a
-   stale build is the more urgent developer-facing fact. `pointer-events: none`
-   on the wrapper means it NEVER blocks a click on anything beneath it — it is
-   a thin strip a developer is meant to read and act on (restart + hard
-   reload), not a control surface, so it needs no interactive area at all. */
+   current). Pinned above even the play-mode banner (z-index 3000, matches
+   overlayLayers.ts's Z_INDEX.STALE_BUILD_BANNER) since a stale build is the
+   more urgent developer-facing fact.
+   FEAT-2326609720 inc1 (staleness banner UX): `pointer-events: none` stays on
+   the WRAPPER (I-3 — it still never blocks a click on the map/controls
+   beneath it), but the two buttons it now contains (Reload / ×) re-enable
+   `pointer-events: auto` on themselves only, per the toast pointer-passthrough
+   rule. */
 .stale-build-banner {
   position: fixed;
   top: 0;
@@ -425,7 +478,29 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   letter-spacing: 0.02em;
   padding: 5px 10px;
   pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
 }
+.stale-build-banner-text { pointer-events: none; }
+.stale-build-banner-reload,
+.stale-build-banner-dismiss {
+  pointer-events: auto;
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border: 1px solid #250505;
+  border-radius: 5px;
+  background: rgba(37, 5, 5, 0.14);
+  color: #250505;
+  cursor: pointer;
+  padding: 1px 9px;
+}
+.stale-build-banner-reload:hover,
+.stale-build-banner-dismiss:hover { background: rgba(37, 5, 5, 0.26); }
+.stale-build-banner-dismiss { padding: 1px 7px; }
 
 /* BUG-497 (2): the "SIMULATION ENDED" HUD badge — a frozen clock is otherwise
    indistinguishable from a hang. */

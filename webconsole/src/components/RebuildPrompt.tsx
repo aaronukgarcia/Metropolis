@@ -12,6 +12,7 @@
 
 import type { RebuildReport, SkippedAction, ReplayProgress } from '../sim/genesisReplay';
 import { classifyVersionChange } from '../sim/genesisReplay';
+import { Z_INDEX } from './overlayLayers';
 
 export type RebuildPhase = 'prompt' | 'running' | 'report' | 'stalled';
 
@@ -54,7 +55,9 @@ const overlayStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
-  zIndex: 10000,
+  // FEAT-2326609720 inc1: SSOT z-index (overlayLayers.ts) — this must win over
+  // literally everything else in the app, see Z_INDEX.REBUILD_PROMPT's doc.
+  zIndex: Z_INDEX.REBUILD_PROMPT,
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
 };
 

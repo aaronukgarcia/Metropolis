@@ -48,6 +48,8 @@ import type { Building, ZoneKind, TaxRates } from '../sim/types';
 import type { Spec } from '../sim/data';
 import { fmtMoney, fmtNum, formatPower } from '../sim/utils';
 import { buildingProfile, specClassLabel, buildingCopyPayload, type ProfileLine } from '../sim/profile';
+import { useBlockingOverlay, useEscapeKey } from './overlayManager';
+import { BLOCKING_OVERLAY_ID, BLOCKING_OVERLAY_RANK } from './overlayLayers';
 
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 48;
@@ -1184,10 +1186,28 @@ function AdministrationBanner() {
 function InsolvencyPopup() {
   const { state, dispatch } = useSim();
   const popup = state.insolvencyPopup;
-  if (!popup) return null;
+  // FEAT-2326609720 inc1: registers with the app-wide single-blocking-overlay
+  // resolver (overlayManager.tsx) — even though engine.ts already force-clears
+  // insolvencyPopup the tick declineState is set (BUG-497(1)), the resolver is
+  // a structural second line of defence against the whole CLASS of co-mount
+  // bug, not a re-fix of that one already-closed state-layer defect. Hooks
+  // called unconditionally (rules-of-hooks) BEFORE the early return below.
+  const isTop = useBlockingOverlay(BLOCKING_OVERLAY_ID.INSOLVENCY_POPUP, BLOCKING_OVERLAY_RANK.insolvencyPopup, !!popup);
+  // AC-5/AC-13: Escape dismisses the popup exactly like "I understand" — it
+  // does NOT resolve any bailout choice, only acknowledges the notice.
+  useEscapeKey(isTop, () => dispatch({ type: 'dismissInsolvencyPopup' }));
+  if (!popup || !isTop) return null;
   return (
     <div className="insolvency-popup-overlay" role="alertdialog" aria-modal="true">
       <div className="insolvency-popup">
+        <button
+          className="btn tiny insolvency-popup-close"
+          aria-label="Dismiss (does not resolve the bailout)"
+          title="Dismiss — same as “I understand” below (Esc also works)"
+          onClick={() => dispatch({ type: 'dismissInsolvencyPopup' })}
+        >
+          ×
+        </button>
         <h3>BAILOUT: 1 Game-Year Intervention</h3>
         <p>
           The treasury has crossed the insolvency threshold at tick {popup.enteredAt}
@@ -1241,8 +1261,19 @@ function ForcedAssetSalesPanel() {
   useEffect(() => {
     setDismissed(false);
   }, [activeEnteredAt]);
+  // FEAT-2326609720 inc1: single-blocking-overlay invariant — this is the
+  // LOWEST-priority of the four known blocking candidates (Decline outranks
+  // Insolvency Popup outranks Forced Asset Sales, per Aaron's ordering), so it
+  // is structurally suppressed while either of those is up, even though its
+  // own bailoutState/bailoutSecondState condition remains true underneath.
+  const wantsToShow = !!active && !dismissed;
+  const isTop = useBlockingOverlay(BLOCKING_OVERLAY_ID.FORCED_ASSET_SALES, BLOCKING_OVERLAY_RANK.forcedAssetSales, wantsToShow);
+  // AC-4/AC-13: Escape dismisses the panel exactly like the × button — UI-only,
+  // never touches bailoutState/funds (GR#3, mirrors the existing close button).
+  useEscapeKey(isTop, () => setDismissed(true));
   if (!active) return null;
   if (dismissed) return null;
+  if (!isTop) return null;
   const isSecond = bailout === null && bailoutSecond !== null;
   const duration = isSecond ? SECOND_BAILOUT_DURATION_TICKS : BAILOUT_DURATION_TICKS;
   const assets = forcedSaleAssets(state);
@@ -1327,12 +1358,49 @@ function SecondBailoutBanner() {
 function DeclineScreen() {
   const { state, dispatch, loadGame } = useSim();
   const decline = state.declineState;
-  if (!decline) return null;
+  // FEAT-2326609720 inc1: registers as the HIGHEST-priority of the three
+  // MapView candidates (only RebuildPrompt, a different subtree entirely,
+  // outranks it) — see overlayLayers.ts's BLOCKING_OVERLAY_PRIORITY.
+  const isTop = useBlockingOverlay(BLOCKING_OVERLAY_ID.DECLINE_SCREEN, BLOCKING_OVERLAY_RANK.declineScreen, !!decline);
+  // AC-6/I-4: the Decline Screen must be closable WITHOUT resuming the game —
+  // `closed` is pure UI-local state (never touches SimState/declineState,
+  // which is what actually freezes the clock in engine.ts). Closing just
+  // hides the dialog; a small reopen chip (below) keeps the still-required
+  // Start Over / Load Save / Play Mode choice reachable so the player is
+  // never permanently stranded (I-4: no modal may trap with no escape path).
+  const [closed, setClosed] = useState(false);
+  const declineEnteredAt = decline?.enteredAt ?? null;
+  useEffect(() => {
+    setClosed(false);
+  }, [declineEnteredAt]);
+  useEscapeKey(isTop && !closed, () => setClosed(true));
+  if (!decline || !isTop) return null;
   const yearsPlayed = Math.round(decline.enteredAt / TICKS_PER_YEAR);
+  if (closed) {
+    return (
+      <button
+        type="button"
+        className="decline-reopen-chip"
+        onClick={() => setClosed(false)}
+        title="City is in decline and the clock is paused. Reopen to choose Start Over, Load Save, or Play Mode."
+      >
+        ⏸ City declined — reopen
+      </button>
+    );
+  }
   return (
     <div className="decline-screen-overlay" role="alertdialog" aria-modal="true">
       <div className="decline-screen">
-        <h2>City in Decline: Insolvency Unresolved</h2>
+        <button
+          type="button"
+          className="btn tiny decline-screen-close"
+          aria-label="Close (the game stays paused — reopen from the chip to choose Start Over, Load Save, or Play Mode)"
+          title="Close without resuming — the clock stays paused (Esc also works)"
+          onClick={() => setClosed(true)}
+        >
+          ×
+        </button>
+        <h2>⏸ City in Decline: Insolvency Unresolved</h2>
         <p className="decline-cause">Persistent insolvency after 2 bailout years.</p>
         <ul className="decline-stats">
           <li>Peak population: {fmtNum(decline.peakPopulation)}</li>

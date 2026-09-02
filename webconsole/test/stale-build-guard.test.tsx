@@ -97,3 +97,123 @@ test("StaleBuildBannerView: renders nothing for an unreachable poll ('dev'/null)
   const html2 = renderToString(React.default.createElement(StaleBuildBannerView, { result: devBuild }));
   assert.equal(html2, '', "no banner when the running build is the 'dev' fallback");
 });
+
+// ---------------------------------------------------------------------------
+// BUG (staleness banner UX, refines FEAT-2326609725 — 2026-09-02, folded into
+// the FEAT-2326609720 inc1 overlay-discipline pass): the original copy told
+// every reader to "restart the dev server (Ctrl+C then npm run dev)" — wrong
+// for the common case (server live and current, only the loaded PAGE is
+// stale) and dev jargon a player cannot act on. The fix is copy/affordance
+// only (checkStaleBuild itself is untouched — see the comparison cases
+// above, still green): a player-safe headline + one-click Reload button
+// (location.reload()) and a dismiss (×) that hides the banner for the
+// session. These two tests mount the REAL component with react-dom/client +
+// jsdom (renderToString cannot exercise onClick) and drive real clicks.
+//
+// RED PROOF: reverting StaleBuildBannerView to the pre-fix single <div> (no
+// buttons at all) makes `container.querySelector('.stale-build-banner-reload')`
+// and `.stale-build-banner-dismiss` both null, failing the precondition
+// assertions in both tests below before the click-behaviour assertions are
+// even reached — verified against a scratch copy of the pre-fix component
+// (GR#24 — no git revert used).
+
+function installJsdom() {
+  return import('jsdom').then(({ JSDOM }) => {
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+      url: 'http://localhost/',
+      pretendToBeVisual: true,
+    });
+    const { window } = dom;
+    (globalThis as any).window = window;
+    (globalThis as any).document = window.document;
+    Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true, writable: true });
+    (globalThis as any).HTMLElement = window.HTMLElement;
+    (globalThis as any).requestAnimationFrame = window.requestAnimationFrame.bind(window);
+    (globalThis as any).cancelAnimationFrame = window.cancelAnimationFrame.bind(window);
+    (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+    return dom;
+  });
+}
+
+test('StaleBuildBannerView: clicking Reload fires the reload callback exactly once', async () => {
+  const dom: any = await installJsdom();
+  try {
+    const React = await import('react');
+    const { createRoot } = await import('react-dom/client');
+    const { act } = await import('react-dom/test-utils');
+    const { StaleBuildBannerView } = await import('../src/components/StaleBuildBanner');
+
+    let reloadCalls = 0;
+    // jsdom's `location.reload` is a non-configurable, non-writable OWN
+    // property with no prototype indirection to stub (verified directly:
+    // Object.getOwnPropertyDescriptor(window.location, 'reload').configurable
+    // === false) — so the component accepts an injectable `onReload` prop
+    // (defaulting to a real window.location.reload() in production) and this
+    // test verifies the button's click wiring through that seam instead.
+    const result = checkStaleBuild('abc1234', 'def5678');
+    const container = dom.window.document.getElementById('root');
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        React.default.createElement(StaleBuildBannerView, {
+          result,
+          onReload: () => {
+            reloadCalls++;
+          },
+        }),
+      );
+    });
+
+    const reloadBtn = container.querySelector('.stale-build-banner-reload');
+    assert.ok(reloadBtn, 'precondition: the Reload button must be rendered while stale');
+
+    await act(async () => {
+      reloadBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+
+    assert.equal(reloadCalls, 1, 'clicking Reload must fire the reload callback exactly once');
+
+    await act(async () => {
+      root.unmount();
+    });
+  } finally {
+    dom.window.close();
+  }
+});
+
+test('StaleBuildBannerView: clicking dismiss (×) hides the banner for this session', async () => {
+  const dom: any = await installJsdom();
+  try {
+    const React = await import('react');
+    const { createRoot } = await import('react-dom/client');
+    const { act } = await import('react-dom/test-utils');
+    const { StaleBuildBannerView } = await import('../src/components/StaleBuildBanner');
+
+    const result = checkStaleBuild('abc1234', 'def5678');
+    const container = dom.window.document.getElementById('root');
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(React.default.createElement(StaleBuildBannerView, { result }));
+    });
+
+    assert.ok(container.querySelector('.stale-build-banner'), 'precondition: banner must be visible while stale and not yet dismissed');
+    const dismissBtn = container.querySelector('.stale-build-banner-dismiss');
+    assert.ok(dismissBtn, 'precondition: the dismiss (×) button must be rendered');
+
+    await act(async () => {
+      dismissBtn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+
+    assert.equal(
+      container.querySelector('.stale-build-banner'),
+      null,
+      'the banner must no longer render after dismiss is clicked',
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
+  } finally {
+    dom.window.close();
+  }
+});
