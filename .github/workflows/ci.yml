@@ -390,13 +390,32 @@ jobs:
       # Orphaning the v2 entries lets the first post-fix run establish a
       # fresh, honestly-measured baseline (AC-8 first-run behaviour),
       # exactly the mechanism the v2 bump above already established.
+      #
+      # v8 (BUG-529, 2026-09-02, Aaron ruling Q100049=A1): every v7
+      # record was measured BEFORE BUG-529 fixed compose.residentIDs()'s
+      # money loop, which had silently processed only ~64 of 2000
+      # citizens (migrants/fertility children were never enumerated).
+      # BUG-529 restored full-population pay, legitimately raising
+      # AllocBytes/AllocCount ~247%/~386% (~175M/~1.14M -> ~607M/~5.54M
+      # at this job's own 2000-citizen scale, locally re-measured at
+      # BUG-547's landing commit 009cbf5) — a correct cost increase, not
+      # something to optimise back down. perf-accepted-regressions.json
+      # carries the audit-trail entry naming commit 009cbf5, but an
+      # accepted-regressions entry can only ever match a run's OWN exact
+      # commit hash (necessarily self-referential for whichever commit
+      # lands this file) and so cannot retroactively repair an
+      # already-stale cached v7 history. Orphaning the v7 entries — the
+      # same mechanism as the v2/v3 bumps above — lets the very next run
+      # establish a fresh, honestly-measured baseline at the corrected
+      # level (AC-8 first-run behaviour) instead of every future commit
+      # being judged against a stale, pre-fix number forever.
       - name: Restore perf-results baseline
         uses: actions/cache@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v7-${{ github.run_id }}
+          key: perf-results-1m-smoke-v8-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-smoke-v7-
+            perf-results-1m-smoke-v8-
 
       # BUG-071: cmd/perfci now exits a DISTINCT code (3) when the gate
       # could not evaluate a regression (ScaleMismatch or, live-verified
@@ -450,7 +469,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: perf-results.ndjson
-          key: perf-results-1m-smoke-v7-${{ github.run_id }}
+          key: perf-results-1m-smoke-v8-${{ github.run_id }}
 
       # BUG-097: this job's save key above is unique per run (github.run_id)
       # because actions/cache/save cannot overwrite an existing key -- but
@@ -480,7 +499,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-smoke-v7-"
+          $prefix = "perf-results-1m-smoke-v8-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
@@ -623,13 +642,29 @@ jobs:
       # across regimes would brick every merge; orphaning the v2 history
       # lets the first run under -months 500 seed the fresh baseline
       # (AC-8) instead.
+      #
+      # v8 (BUG-529, 2026-09-02, Aaron ruling Q100049=A1): same rationale
+      # as perf-smoke's own v8 bump above — BUG-529 fixed
+      # compose.residentIDs()'s money loop (it had silently paid only
+      # ~64 of 2000 citizens; migrants/fertility children were never
+      # enumerated), legitimately raising AllocBytes/AllocCount ~247%/
+      # ~386% at this job's full 1,000,000-citizen scale (locally
+      # re-measured at BUG-547's landing commit 009cbf5: ~175M/~1.14M ->
+      # ~610.0M/~5.56M). perf-accepted-regressions.json documents the
+      # acceptance (naming commit 009cbf5) for audit, but that entry can
+      # only ever match a run's OWN exact commit hash and cannot
+      # retroactively repair the already-stale v7 history — orphaning
+      # v7 here (this job's history is a SEPARATE cache key from
+      # perf-smoke's, so both must be bumped independently) lets the
+      # very next dispatch establish a fresh, honestly-measured baseline
+      # at the corrected level (AC-8).
       - name: Restore perf-results-1m-real baseline
         uses: actions/cache@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v7-${{ github.run_id }}
+          key: perf-results-1m-real-v8-${{ github.run_id }}
           restore-keys: |
-            perf-results-1m-real-v7-
+            perf-results-1m-real-v8-
 
       - name: Build perfci
         run: go build -o perfci.exe ./internal/harness/synth/cmd/perfci
@@ -710,12 +745,12 @@ jobs:
           path: perf-results-1m-real.ndjson
           if-no-files-found: warn
 
-      - name: Save perf-results-1m-real baseline (v3 generation, see restore step)
+      - name: Save perf-results-1m-real baseline (v8 generation, see restore step)
         if: always()
         uses: actions/cache/save@v4
         with:
           path: perf-results-1m-real.ndjson
-          key: perf-results-1m-real-v7-${{ github.run_id }}
+          key: perf-results-1m-real-v8-${{ github.run_id }}
 
       # BUG-097: identical rationale to perf-smoke's own pruning step —
       # this job's cache key is also unique-per-run and would otherwise
@@ -731,7 +766,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $prefix = "perf-results-1m-real-v7-"
+          $prefix = "perf-results-1m-real-v8-"
           $keepNewest = 3
           $raw = gh cache list --repo ${{ github.repository }} --key $prefix --limit 100 --json id,key,createdAt
           if (-not $raw) { Write-Host "no cache entries listed under prefix $prefix"; exit 0 }
