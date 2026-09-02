@@ -49,6 +49,7 @@ import {
   decideTickReply,
   shouldForceSyncTick,
   afterForcedSyncTick,
+  clearWorkerBusy,
   type OffloadControllerState,
 } from './simWorkerOffloadController';
 import {
@@ -503,7 +504,15 @@ export function SimProvider({ children }: { children: ReactNode }) {
     offloadControllerRef.current = invalidateInFlight(before);
     if (before.pendingTick) {
       const tracker = getGlobalWorkerQueueTracker();
-      tracker.drain();
+      // BUG-592 fix: NO tracker.drain() here anymore. Draining at
+      // invalidation time made depth() lie ("caught up") while the worker
+      // was still actually crunching the superseded computation — see
+      // simWorkerOffloadController.ts's `workerBusy` header for the full
+      // story. depth() now only drains when the worker is ACTUALLY observed
+      // to finish (worker.onmessage/onerror/teardown below, alongside
+      // clearWorkerBusy), so a skipped-because-busy interval correctly
+      // keeps reading as outstanding backlog, not as caught-up.
+      //
       // N1 fix / FEAT-2326609734 AC-7 honesty: report the (now possibly
       // incremented) consecutive-supersede streak so a UI readout can show
       // "behind / catching up" instead of misreading depth()'s post-drain 0
@@ -614,12 +623,28 @@ export function SimProvider({ children }: { children: ReactNode }) {
         stateRefForDispatch.current.tick
       );
       const wasStaleMismatch = nextControllerState === offloadControllerRef.current;
+      // BUG-592 fix: ANY reply — matched or stale — means the worker has
+      // actually finished the ONE computation it was given. Clear
+      // workerBusy unconditionally, before branching on match/stale, so the
+      // NEXT tick-driver interval fire is allowed to post again (see
+      // beginTickRequest's workerBusy guard). Previously this slot was
+      // freed at INVALIDATION time instead of at actual worker-completion
+      // time, letting main post a second (or third, ...) real ~1.77MB
+      // SimState clone into the worker's serial, uncancellable mailbox
+      // every interval the round trip outlasted — 501 queued / ~887MB
+      // measured over a 60s sustained drag at interval=100ms/rt=600ms.
+      offloadControllerRef.current = clearWorkerBusy(nextControllerState);
+      tracker.drain();
+      tracker.reportSupersedeStreak(offloadControllerRef.current.supersedeStreak);
       if (wasStaleMismatch) {
-        // N2 fix (independent round 3 REJECT, 2026-09-02): this reply was
-        // already invalidated (a superseding action, or a reset/load) —
-        // its own enqueue()/drain() bookkeeping was already settled at
-        // invalidation time (invalidateInFlightWorkerTick), so nothing to
-        // drain here.
+        // N2 fix (independent round 3 REJECT, 2026-09-02) / BUG-592: this
+        // reply was already invalidated (a superseding action, or a
+        // reset/load) — its request/reply bookkeeping was already settled
+        // at invalidation time (invalidateInFlightWorkerTick); the drain()
+        // and workerBusy-clear above are the ONLY things this arrival still
+        // needed to do, since (BUG-592) invalidation no longer drains or
+        // frees the worker slot itself — only an actual observed
+        // reply/error does.
         //
         // DELIBERATELY DISCARD, do NOT rebase. The round-2 fix immediately
         // re-issued a new request right here — combined with the K-supersede
@@ -644,9 +669,6 @@ export function SimProvider({ children }: { children: ReactNode }) {
         // request, exactly like the AC-8 fallback's own cadence.
         return;
       }
-      offloadControllerRef.current = nextControllerState;
-      tracker.drain();
-      tracker.reportSupersedeStreak(nextControllerState.supersedeStreak);
       if (decision.kind === 'apply') {
         // B3 fix: journal the tick HERE, only now that we know the result
         // will actually be applied — never at request time (see
@@ -673,7 +695,13 @@ export function SimProvider({ children }: { children: ReactNode }) {
       // see invalidateInFlightWorkerTick's header comment): every non-tick
       // action already applied to main state the instant it was dispatched.
       workerRef.current = null;
-      if (offloadControllerRef.current.pendingTick) tracker.drain();
+      // BUG-592: whatever was outstanding (pendingTick and/or workerBusy —
+      // an errored/dying worker may have been mid-computation on an
+      // already-superseded request) is moot the instant the worker itself
+      // is torn down — tracker.reset() unconditionally zeroes both the
+      // backlog count and the reported supersede streak, and
+      // initialOffloadControllerState() resets workerBusy to false, so
+      // there is nothing left to selectively drain first.
       tracker.reset(); // also clears the reported supersedeStreak — a torn-down worker has nothing left to be "behind" on.
       offloadControllerRef.current = initialOffloadControllerState();
     };
@@ -681,7 +709,9 @@ export function SimProvider({ children }: { children: ReactNode }) {
     return () => {
       worker.terminate();
       workerRef.current = null;
-      if (offloadControllerRef.current.pendingTick) tracker.drain();
+      // BUG-592: see worker.onerror's comment just above — reset()/
+      // initialOffloadControllerState() unconditionally clear any
+      // outstanding pendingTick/workerBusy, so no selective drain is needed.
       tracker.reset();
       offloadControllerRef.current = initialOffloadControllerState();
     };

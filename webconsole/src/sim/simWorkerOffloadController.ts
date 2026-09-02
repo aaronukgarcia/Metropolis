@@ -46,6 +46,38 @@ export interface OffloadControllerState {
    * were discarded, not queued).
    */
   supersedeStreak: number;
+  /**
+   * BUG-592 fix (Web Worker round 4 follow-up, 2026-09-02) — true from the
+   * instant a tick request is actually POSTED to the (serial, uncancellable)
+   * worker until its reply/error/teardown is actually observed. Deliberately
+   * tracked SEPARATELY from `pendingTick`: `pendingTick` is the controller's
+   * own "do I still care about this request's eventual reply" bookkeeping
+   * and is cleared the moment a supersede occurs (invalidateInFlight) —
+   * correctly, from the JOURNAL/APPLY point of view, since the superseded
+   * reply must never be applied. But invalidateInFlight does NOT, and
+   * cannot, cancel the actual computation already running inside the
+   * worker — the worker has no cancellation channel, and Landing 2's
+   * postMessage payload is a full ~1.77MB SimState clone. With the OLD
+   * design, beginTickRequest's gate read ONLY `pendingTick`, so the very
+   * next tick-driver interval fire (post-supersede) was free to
+   * postMessage a SECOND real computation while the FIRST was still
+   * running — and under sustained input with round-trip > interval, every
+   * subsequent interval fire did the same, piling up an unbounded backlog
+   * in the worker's actual (invisible to this controller) mailbox: 501
+   * queued / ~887MB measured over a 60s drag at interval=100ms/rt=600ms. A
+   * correctness non-issue (stale replies are still discarded by requestId,
+   * replay is still byte-identical) but a straightforward tab-OOM memory
+   * hazard. `workerBusy` closes that gap: beginTickRequest now refuses to
+   * issue while it is true, so at most ONE computation can EVER be
+   * outstanding in the worker's mailbox at a time, regardless of how many
+   * times invalidateInFlight fires in between. Cleared ONLY by
+   * clearWorkerBusy — called by the caller (store.tsx's worker.onmessage,
+   * for BOTH a matched and a stale/superseded reply, and worker.onerror /
+   * teardown) the instant the worker is actually observed to be done with
+   * that one computation, never merely because the controller stopped
+   * caring about its result.
+   */
+  workerBusy: boolean;
 }
 
 export function initialOffloadControllerState(): OffloadControllerState {
@@ -55,6 +87,7 @@ export function initialOffloadControllerState(): OffloadControllerState {
     activeRequestTick: null,
     nextRequestId: 0,
     supersedeStreak: 0,
+    workerBusy: false,
   };
 }
 
@@ -114,16 +147,23 @@ export function afterForcedSyncTick(s: OffloadControllerState): OffloadControlle
 }
 
 /**
- * The tick-driver wants to issue a new tick request. Returns null if one is
- * already in flight — the caller (store.tsx's interval) should skip this
- * fire rather than pile up a second request (Landing 2's "at most one in
- * flight" design; see simWorkerProtocol.ts for why).
+ * The tick-driver wants to issue a new tick request. Returns null if the
+ * worker is BUSY (BUG-592 fix: gated on `workerBusy`, not `pendingTick` —
+ * see the field's own header comment) — the caller (store.tsx's interval)
+ * should skip this fire rather than post a second real message into the
+ * worker's serial, uncancellable mailbox while the first is still running
+ * (Landing 2's "at most one in flight" design; see simWorkerProtocol.ts for
+ * why). Before the fix this checked `pendingTick`, which invalidateInFlight
+ * clears on every supersede even though the worker itself is still crunching
+ * the superseded request — that mismatch is exactly what let an unbounded
+ * backlog of real ~1.77MB SimState clones pile up in the worker's mailbox
+ * under sustained input with round-trip > interval.
  */
 export function beginTickRequest(
   s: OffloadControllerState,
   currentTick: number
 ): { state: OffloadControllerState; requestId: number } | null {
-  if (s.pendingTick) return null;
+  if (s.workerBusy) return null;
   const requestId = s.nextRequestId;
   return {
     state: {
@@ -132,6 +172,7 @@ export function beginTickRequest(
       activeRequestTick: currentTick,
       nextRequestId: requestId + 1,
       supersedeStreak: s.supersedeStreak, // preserved — only apply/forced-tick resets it.
+      workerBusy: true, // BUG-592: set the instant we're about to postMessage; cleared only by clearWorkerBusy.
     },
     requestId,
   };
@@ -149,6 +190,14 @@ export function beginTickRequest(
  * than merely unlikely: the decision no longer depends on comparing tick
  * numbers against a state that may already have been replaced.
  * No-op (returns the same object) when nothing is in flight.
+ *
+ * BUG-592: deliberately does NOT touch `workerBusy` — it is carried through
+ * unchanged by the `...s` spread. Superseding a request stops the
+ * CONTROLLER from caring about its reply, but it does nothing to the actual
+ * computation already running inside the worker (no cancellation channel
+ * exists) — `workerBusy` stays true until the worker is actually observed
+ * to finish (clearWorkerBusy, called from the eventual reply/error), so
+ * beginTickRequest continues to refuse a new post until then.
  */
 export function invalidateInFlight(s: OffloadControllerState): OffloadControllerState {
   if (!s.pendingTick) return s;
@@ -165,6 +214,24 @@ export function invalidateInFlight(s: OffloadControllerState): OffloadController
     activeRequestTick: null,
     supersedeStreak: s.supersedeStreak + 1,
   };
+}
+
+/**
+ * BUG-592 fix — call the instant the worker is ACTUALLY observed to be done
+ * with its one outstanding computation: a matched reply, a stale/superseded
+ * reply (the worker doesn't know it was superseded — it always finishes the
+ * tick it was given and posts back), an onerror, or a teardown/terminate.
+ * Unconditional and idempotent (clearing an already-clear flag is a no-op
+ * value-wise); deliberately separate from decideTickReply so that function's
+ * existing requestId-match/discard semantics (and its reference-equality
+ * "was this a stale mismatch" convention relied on by store.tsx and the
+ * B2/B3 regression tests) stay completely untouched by this fix — this is
+ * purely an additional, independent field transition applied on top of
+ * whatever decideTickReply already decided.
+ */
+export function clearWorkerBusy(s: OffloadControllerState): OffloadControllerState {
+  if (!s.workerBusy) return s;
+  return { ...s, workerBusy: false };
 }
 
 export type TickReplyDecision =

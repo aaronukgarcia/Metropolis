@@ -17,10 +17,21 @@ export interface QueueDepthTracker {
   drain(): void;
   /** Current backlog: 0 means no request is currently posted-and-unacked.
    *  NOTE: 0 here does NOT by itself mean "caught up" — see supersedeStreak
-   *  below (N1 fix). A tick that gets superseded/discarded drains this
-   *  counter (its slot is no longer outstanding) even though the SIM CLOCK
-   *  made no progress; depth() alone cannot distinguish "genuinely idle"
-   *  from "churning through discarded ticks under sustained contention". */
+   *  below (N1 fix). BUG-592 fix (2026-09-02): this counter now drains ONLY
+   *  when the worker is ACTUALLY observed to finish a computation (a reply,
+   *  an error, or teardown) — a superseded/discarded request does NOT drain
+   *  it, because the worker itself is still crunching it (no cancellation
+   *  channel exists). Before this fix, a supersede drained the slot
+   *  immediately even though the underlying worker computation was still
+   *  running, which both misreported an actual outstanding backlog as "0
+   *  pending" AND (worse — the actual bug) let the caller post a SECOND
+   *  real message on top of the still-running first one, unboundedly, under
+   *  sustained input with round-trip > interval. depth() is now an honest
+   *  reflection of the worker's real mailbox depth, capped at 1 by
+   *  construction (see simWorkerOffloadController.ts's workerBusy). It
+   *  still cannot, on its own, distinguish "genuinely idle" from "one real
+   *  computation outstanding, discarded ticks notwithstanding" — that is
+   *  what supersedeStreak below is for. */
   depth(): number;
   /** Reset to 0 — used when the worker is torn down/recreated (e.g. a
    *  reset/load-save invalidates every outstanding request). */

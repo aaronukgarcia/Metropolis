@@ -24,6 +24,7 @@ import {
   decideTickReply,
   shouldForceSyncTick,
   afterForcedSyncTick,
+  clearWorkerBusy,
   FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD,
 } from '../src/sim/simWorkerOffloadController.ts';
 
@@ -611,7 +612,17 @@ function simulateOffload({ frames, roundTripIntervals, actionCadence, actionFact
   let journal = emptyJournal();
   let appliedTicks = 0;
   let forcedTicks = 0;
-  let pendingReply = null; // { requestId, dueAtFrame, preTick }
+  // BUG-592: a real FIFO queue, not a single variable — a single variable
+  // would OVERWRITE (silently drop) an earlier still-outstanding request's
+  // completion event the instant a later one is issued, which would leave
+  // that earlier request's workerBusy NEVER cleared (its "reply" would
+  // simply never arrive in the model) and permanently wedge
+  // beginTickRequest's workerBusy gate for the rest of the run — exactly
+  // the kind of harness inaccuracy this fix's own arrival (a real,
+  // workerBusy-gated beginTickRequest) would otherwise expose as a false
+  // failure here, unrelated to the K-escape/liveness behaviour this
+  // particular harness exists to test.
+  let pendingReplies = []; // FIFO: { requestId, dueAtFrame, preTick }
   const tracker = createQueueDepthTracker();
   // Instrumentation for the queue-depth-honesty assertion: every sample
   // where depth()===0 AND supersedeStreak()>0 is exactly the "silently
@@ -627,7 +638,7 @@ function simulateOffload({ frames, roundTripIntervals, actionCadence, actionFact
     if (!begun) return;
     controller = begun.state;
     tracker.enqueue();
-    pendingReply = { requestId: begun.requestId, dueAtFrame: frame + roundTripIntervals, preTick: state.tick };
+    pendingReplies.push({ requestId: begun.requestId, dueAtFrame: frame + roundTripIntervals, preTick: state.tick });
   };
 
   // Mirrors store.tsx's guardedDispatch (invalidate-if-pending, apply,
@@ -653,17 +664,28 @@ function simulateOffload({ frames, roundTripIntervals, actionCadence, actionFact
   };
 
   for (let frame = 0; frame < frames; frame++) {
-    // (1) deliver a due worker reply — mirrors worker.onmessage.
-    if (pendingReply && pendingReply.dueAtFrame === frame) {
-      const resultTick = pendingReply.preTick + 1;
+    // (1) deliver EVERY due worker reply — mirrors worker.onmessage, once
+    // per real message the (FIFO, serial) worker actually finishes. A
+    // superseded request still gets its own completion event here (the
+    // worker doesn't know it was superseded) — necessary so its
+    // workerBusy gets cleared even though its result will be discarded.
+    while (pendingReplies.length > 0 && pendingReplies[0].dueAtFrame === frame) {
+      const reply = pendingReplies.shift();
+      const resultTick = reply.preTick + 1;
       const { state: nextController, decision } = decideTickReply(
         controller,
-        { requestId: pendingReply.requestId, resultTick },
+        { requestId: reply.requestId, resultTick },
         state.tick
       );
       const wasStale = nextController === controller;
-      controller = nextController;
-      pendingReply = null;
+      // BUG-592: the real beginTickRequest() this harness calls now gates on
+      // workerBusy, not pendingTick — clear it here, unconditionally,
+      // exactly like store.tsx's worker.onmessage does, or NO further
+      // request could ever be issued after the first (this is the harness
+      // being kept faithful to the real production call sites now that
+      // workerBusy exists — not a BUG-592-specific assertion in this N1/N2
+      // section, which is about the K-escape, not the memory hazard).
+      controller = clearWorkerBusy(nextController);
       if (wasStale) {
         // N2 fix (independent round 3 REJECT, 2026-09-02): DISCARD, do not
         // rebase — the next interval fire (step 3 below, or the NEXT frame's
@@ -674,7 +696,7 @@ function simulateOffload({ frames, roundTripIntervals, actionCadence, actionFact
         // interval-independent tick generator (the round's N2 finding).
       } else {
         tracker.drain();
-        tracker.reportSupersedeStreak(nextController.supersedeStreak);
+        tracker.reportSupersedeStreak(controller.supersedeStreak);
         if (decision.kind === 'apply') {
           journal = recordAction(journal, decision.tickToJournal, { type: 'tick' });
           state = reducer(state, { type: 'tick' });
@@ -716,13 +738,21 @@ test('N1 RED PROOF: continuous action-every-frame input no longer starves the cl
   assert.ok(forcedTicks > 0, 'progress here can ONLY come from the forced-sync-tick escape (the worker path is provably starved at cadence=1, roundTrip=4) — forcedTicks must be > 0');
   assert.equal(appliedTicks, forcedTicks, 'at this cadence/round-trip combination NO worker-path tick can ever land — every applied tick must be a forced one');
 
-  // Forward-progress FLOOR: a forced tick fires at most once every
-  // FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD actions (one supersede per action
-  // at cadence=1), so over 200 frames the clock must advance at least
-  // roughly frames/(K+1) times. Loose lower bound (not tight — avoids
-  // flaking on exact off-by-one framing) still clearly separates
-  // "genuinely progressing" from "stuck at 0".
-  const floor = Math.floor(200 / (FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD + 1)) - 2;
+  // Forward-progress FLOOR (BUG-592-corrected): with the workerBusy fix in
+  // place, invalidateInFlight's supersedeStreak can only usefully increment
+  // once a request has actually been ISSUED — and beginTickRequest now
+  // refuses to issue while workerBusy (i.e. for most of a busy worker's own
+  // roundTripIntervals-frame processing window, there is nothing pending
+  // left to invalidate, so dispatchNonTick's invalidate branch is simply
+  // skipped on those frames). One supersede-worthy cycle therefore takes
+  // roughly `roundTripIntervals` frames, not 1 — a real, WELCOME consequence
+  // of the fix (it's exactly what caps the worker's mailbox at 1 outstanding
+  // computation — see BUG-592's dedicated section further down), not a
+  // regression in liveness: forcedTicks still fires at least once every K
+  // such cycles, i.e. roughly every `roundTripIntervals * (K+1)` frames.
+  // Loose lower bound (not tight — avoids flaking on exact off-by-one
+  // framing) still clearly separates "genuinely progressing" from "stuck at 0".
+  const floor = Math.floor(200 / (4 /* roundTripIntervals */ * (FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD + 1))) - 2;
   assert.ok(appliedTicks >= floor, `expected at least ~${floor} applied ticks over 200 frames at K=${FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD}, got ${appliedTicks}`);
   assert.ok(state.tick > 1, 'the live SimState tick counter must have actually advanced, not just an internal counter');
 });
@@ -749,7 +779,12 @@ test('N1 RED PROOF: WITHOUT the forced-sync-tick escape, the same scenario truly
     if (pendingReply && pendingReply.dueAtFrame === frame) {
       const resultTick = pendingReply.preTick + 1;
       const { state: nextController, decision } = decideTickReply(controller, { requestId: pendingReply.requestId, resultTick }, state.tick);
-      controller = nextController;
+      // BUG-592: clear workerBusy so this harness stays faithful to the
+      // real production call sites (a reply always frees the worker slot)
+      // — otherwise beginTickRequest's workerBusy gate would itself stall
+      // all future issuance after the very first cycle, for a reason
+      // unrelated to the OLD (no-escape) design this test means to isolate.
+      controller = clearWorkerBusy(nextController);
       pendingReply = null;
       // NOTE: no rebase-on-stale, no forced-sync-tick — this is the OLD design.
       if (decision.kind === 'apply') {
@@ -916,13 +951,50 @@ test('decideTickReply belt-and-braces guard: a matched requestId whose tick does
 // one interval period if (and only if) an immediate reissue exists.
 // ===========================================================================
 
+// BUG-592 (Web Worker round 4 follow-up, 2026-09-02) — pre-fix stand-in for
+// beginTickRequest: gates on `pendingTick` only, exactly the shipped design
+// BEFORE this fix, completely ignoring `workerBusy`. Used ONLY by the
+// `legacyNoBusyGate: true` RED-proof scratch variant below, never by the
+// real (shipped) simulateOffloadTimed path, which always calls the real
+// beginTickRequest (imported above) and therefore gets the fix for free.
+function legacyBeginTickRequestIgnoringBusy(s, currentTick) {
+  if (s.pendingTick) return null;
+  const requestId = s.nextRequestId;
+  return {
+    state: {
+      pendingTick: true,
+      activeRequestId: requestId,
+      activeRequestTick: currentTick,
+      nextRequestId: requestId + 1,
+      supersedeStreak: s.supersedeStreak,
+      workerBusy: true, // set but never consulted by this legacy gate — kept only so the shape matches OffloadControllerState.
+    },
+    requestId,
+  };
+}
+
 /**
- * @param {{durationMs:number, speedMs:number, roundTripMs:number, actionIntervalMs:number, rebase?:boolean, forceThreshold?:number}} opts
+ * @param {{durationMs:number, speedMs:number, roundTripMs:number, actionIntervalMs:number, rebase?:boolean, forceThreshold?:number, legacyNoBusyGate?:boolean}} opts
  * `rebase` (default false, matching the SHIPPED design) and `forceThreshold`
  * (default the real FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD) are ONLY ever
  * overridden by the RED-proof tests below, to reproduce the round's exact
  * findings against a controlled scratch variant — never to change the real
- * shipped behaviour.
+ * shipped behaviour. `legacyNoBusyGate` (default false) is the BUG-592
+ * RED-proof equivalent of `rebase`: default false uses the real, FIXED
+ * beginTickRequest (workerBusy-gated); true swaps in
+ * legacyBeginTickRequestIgnoringBusy to reproduce the pre-fix hazard.
+ *
+ * BUG-592 modelling (2026-09-02): `pendingReply` used to be a SINGLE
+ * variable — too optimistic a model, since it can never represent more than
+ * one outstanding real computation and so could never expose the round's
+ * actual finding (an unbounded worker mailbox under sustained input with
+ * round-trip > interval). It is now a real FIFO queue (`workerQueue`)
+ * modelling the (serial, single-threaded, uncancellable) worker's actual
+ * mailbox: each posted message occupies a slot until its OWN completion
+ * time, computed serially (a message cannot start processing before the
+ * previous one in the queue has finished — `workerFreeAtMs`). `maxOutstanding`
+ * is the peak queue length ever observed — the direct memory-hazard proxy
+ * (each queued message carries a full SimState clone in real code).
  */
 function simulateOffloadTimed({
   durationMs,
@@ -931,21 +1003,30 @@ function simulateOffloadTimed({
   actionIntervalMs,
   rebase = false,
   forceThreshold = FORCE_SYNC_TICK_SUPERSEDE_THRESHOLD,
+  legacyNoBusyGate = false,
 }) {
   let controller = initialOffloadControllerState();
   let state = initialState();
   let journal = emptyJournal();
   let appliedTicks = 0;
   let intervalFireCount = 0;
-  let pendingReply = null; // { requestId, dueAtMs, preTick }
+  const workerQueue = []; // FIFO: { requestId, preTick, dueAtMs }
+  let workerFreeAtMs = 0; // when the serial worker will next be idle.
+  let maxOutstanding = 0;
 
   const forceCheck = (c) => c.supersedeStreak >= forceThreshold;
 
   const issueRequest = (nowMs) => {
-    const begun = beginTickRequest(controller, state.tick);
+    const begun = legacyNoBusyGate
+      ? legacyBeginTickRequestIgnoringBusy(controller, state.tick)
+      : beginTickRequest(controller, state.tick);
     if (!begun) return;
     controller = begun.state;
-    pendingReply = { requestId: begun.requestId, dueAtMs: nowMs + roundTripMs, preTick: state.tick };
+    const startAt = Math.max(nowMs, workerFreeAtMs);
+    const dueAtMs = startAt + roundTripMs;
+    workerFreeAtMs = dueAtMs;
+    workerQueue.push({ requestId: begun.requestId, preTick: state.tick, dueAtMs });
+    maxOutstanding = Math.max(maxOutstanding, workerQueue.length);
   };
 
   const dispatchNonTick = () => {
@@ -968,27 +1049,33 @@ function simulateOffloadTimed({
   let nextActionAt = actionIntervalMs > 0 ? actionIntervalMs : Infinity;
 
   // Discrete-event loop: advance to the next scheduled event (an interval
-  // fire, a scheduled action, or a due worker reply — whichever is soonest)
-  // rather than stepping one fixed unit at a time, so round-trip/interval/
-  // action-interval can differ by orders of magnitude without either an
-  // absurdly fine step size or missed events.
+  // fire, a scheduled action, or the EARLIEST due worker reply — whichever
+  // is soonest) rather than stepping one fixed unit at a time, so round-
+  // trip/interval/action-interval can differ by orders of magnitude without
+  // either an absurdly fine step size or missed events.
   for (;;) {
     const candidates = [nextIntervalAt, nextActionAt];
-    if (pendingReply) candidates.push(pendingReply.dueAtMs);
+    if (workerQueue.length > 0) candidates.push(workerQueue[0].dueAtMs);
     const t = Math.min(...candidates);
     if (t > durationMs) break;
     nowMs = t;
 
-    if (pendingReply && pendingReply.dueAtMs === nowMs) {
-      const resultTick = pendingReply.preTick + 1;
+    if (workerQueue.length > 0 && workerQueue[0].dueAtMs === nowMs) {
+      const msg = workerQueue.shift(); // FIFO: the worker replies in the order it was given work.
+      const resultTick = msg.preTick + 1;
       const { state: nextController, decision } = decideTickReply(
         controller,
-        { requestId: pendingReply.requestId, resultTick },
+        { requestId: msg.requestId, resultTick },
         state.tick
       );
       const wasStale = nextController === controller;
-      controller = nextController;
-      pendingReply = null;
+      // BUG-592: ANY reply (matched or stale) means the worker is actually
+      // done with THIS one computation — clear workerBusy unconditionally,
+      // exactly like store.tsx's worker.onmessage, so the fixed
+      // (legacyNoBusyGate: false) path's beginTickRequest is allowed to
+      // issue again. The legacy scratch path never consults workerBusy, so
+      // this is a no-op for it either way.
+      controller = clearWorkerBusy(nextController);
       if (wasStale) {
         // N2: this is the ONE call site the fix removes from the real
         // code. `rebase` defaults to false; only the RED-proof test below
@@ -1010,7 +1097,7 @@ function simulateOffloadTimed({
       nextIntervalAt += speedMs;
     }
   }
-  return { state, journal, appliedTicks, intervalFireCount };
+  return { state, journal, appliedTicks, intervalFireCount, maxOutstanding, finalOutstanding: workerQueue.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -1126,5 +1213,152 @@ test('N2 RED PROOF: an effectively-infinite supersede threshold (scratch variant
   // the K-escape — proves that assertion (appliedTicks > 0) is genuinely
   // meaningful, not vacuously true regardless of design.
   assert.equal(appliedTicks, 0, 'with the forced-sync-tick escape disabled (K=Infinity), sustained contention must stall the clock completely — confirms the liveness-floor assertion above is not vacuous');
+});
+
+// ===========================================================================
+// BUG-592 (Web Worker round 4 follow-up, 2026-09-02) — unbounded worker
+// mailbox / tab-OOM memory hazard. A supersede clears `pendingTick`,
+// unblocking the next interval's beginTickRequest, but the superseded
+// computation is STILL running inside the worker (no cancellation channel).
+// Under sustained input with round-trip > interval, main posted faster than
+// the worker could drain: 501 queued / ~887MB measured over a 60s drag at
+// interval=100ms/rt=600ms. Fix: `workerBusy` (simWorkerOffloadController.ts)
+// tracks the worker's real busy/idle state SEPARATELY from `pendingTick` —
+// beginTickRequest now refuses to issue while it is true, capping the real
+// worker mailbox at exactly 1 outstanding computation by construction.
+// ===========================================================================
+
+describe('BUG-592: peak outstanding worker computations is capped at 1 (the round\'s hazard cells)', () => {
+  // The round's own browser-measured figures (501 / 351 queued) came from a
+  // real 60s mouse drag against a real Worker's actual postMessage mailbox —
+  // not bit-for-bit reproducible in this simplified discrete-event ms
+  // harness. What IS reproducible, and is what this test actually proves:
+  // (a) the LEGACY (pre-fix) gate lets the queue grow far past 1 under the
+  // same interval/round-trip/sustained-input shape the round used, and
+  // (b) the FIXED gate caps it at exactly 1, always, regardless of how long
+  // the round-trip or how sustained the input.
+  const hazardCells = [
+    { name: 'interval=100ms, round-trip=600ms (the round\'s primary repro: 501 queued live)', speedMs: 100, roundTripMs: 600 },
+    { name: 'interval=100ms, round-trip=240ms (the round\'s second repro: 351 queued live)', speedMs: 100, roundTripMs: 240 },
+  ];
+
+  for (const cell of hazardCells) {
+    test(`${cell.name}: FIXED design caps peak outstanding at 1`, () => {
+      const { maxOutstanding, finalOutstanding, appliedTicks } = simulateOffloadTimed({
+        durationMs: 60_000, // the round's own "60s drag" duration.
+        speedMs: cell.speedMs,
+        roundTripMs: cell.roundTripMs,
+        actionIntervalMs: 16, // ~60Hz sustained drag input — faster than both the interval and the round-trip.
+      });
+      assert.ok(appliedTicks > 0, 'precondition: the run actually produced some ticks (forced-sync-tick escape at minimum) — not a vacuous all-zero run');
+      assert.equal(maxOutstanding, 1, `${cell.name}: the worker mailbox must NEVER hold more than 1 outstanding computation at once — got peak ${maxOutstanding}`);
+      assert.equal(finalOutstanding <= 1, true, 'at most one computation left outstanding at run end');
+    });
+
+    test(`${cell.name}: RED PROOF — LEGACY (pre-fix, pendingTick-only) gate lets the queue grow far past 1`, () => {
+      const { maxOutstanding } = simulateOffloadTimed({
+        durationMs: 60_000,
+        speedMs: cell.speedMs,
+        roundTripMs: cell.roundTripMs,
+        actionIntervalMs: 16,
+        legacyNoBusyGate: true, // the ONLY thing this scratch variant changes — reproduces the round's exact defect.
+      });
+      // This is what the "FIXED design caps peak outstanding at 1" assertion
+      // above would have looked like BEFORE the fix — proves that assertion
+      // is genuinely meaningful, not vacuously true regardless of design.
+      // Order-of-magnitude corroboration of the round's own measured figures
+      // (501/351), not a bit-exact reproduction (see this describe block's
+      // header for why an exact match isn't the point).
+      assert.ok(maxOutstanding > 50, `${cell.name}: expected the legacy (pendingTick-only) gate to let the worker mailbox grow far past 1 under sustained sub-round-trip-interval input — got peak ${maxOutstanding}`);
+    });
+  }
+});
+
+test('BUG-592: correctness is unaffected by the busy-gate fix — replay stays byte-identical at the primary hazard cell', () => {
+  const { state: liveState, journal } = simulateOffloadTimed({
+    durationMs: 60_000,
+    speedMs: 100,
+    roundTripMs: 600,
+    actionIntervalMs: 16,
+  });
+  let replayed = initialState();
+  for (const entry of journal.entries) {
+    replayed = reducer(replayed, entry.action);
+  }
+  assert.equal(
+    stableStringify(replayed),
+    stableStringify(liveState),
+    'the busy-gate fix changes ONLY when a real worker message is posted, never what gets journaled/applied — replay must still be byte-identical'
+  );
+});
+
+describe('BUG-592: the N2 ceiling matrix still holds (≤1.0) with the busy-gate fix in place', () => {
+  const SPEED_MS_UNDER_TEST = 1000;
+  const roundTripsMs = [8, 16, 33, 66, 600]; // 600 added: a round-trip far longer than the interval, the BUG-592 hazard shape.
+  const actionIntervalsMs = [8, 16, 33, 50, 66, 100];
+
+  for (const roundTripMs of roundTripsMs) {
+    for (const actionIntervalMs of actionIntervalsMs) {
+      test(`roundTrip=${roundTripMs}ms, drag-input every ${actionIntervalMs}ms: ratio <= 1.0 AND peak outstanding <= 1`, () => {
+        const { appliedTicks, intervalFireCount, maxOutstanding } = simulateOffloadTimed({
+          durationMs: SPEED_MS_UNDER_TEST * 20,
+          speedMs: SPEED_MS_UNDER_TEST,
+          roundTripMs,
+          actionIntervalMs,
+        });
+        assert.ok(intervalFireCount > 0, 'precondition: the interval actually fired during the run');
+        const ratio = appliedTicks / intervalFireCount;
+        assert.ok(ratio <= 1.0, `roundTrip=${roundTripMs}ms cadence=${actionIntervalMs}ms: ratio ${ratio.toFixed(3)} exceeds 1.0`);
+        assert.ok(maxOutstanding <= 1, `roundTrip=${roundTripMs}ms cadence=${actionIntervalMs}ms: peak outstanding ${maxOutstanding} exceeds 1 — the BUG-592 memory hazard is back`);
+      });
+    }
+  }
+});
+
+test('BUG-592: floor/liveness — the K-escape STILL fires (progress still happens) even while the worker is busy', () => {
+  // Directly proves the "a busy worker must never block the SYNC path"
+  // invariant: guardedDispatch's forced-sync-tick escape
+  // (afterForcedSyncTick + wrappedDispatch({type:'tick'})) runs on MAIN
+  // THREAD ONLY — it never consults workerRef/workerBusy at all (see
+  // store.tsx's guardedDispatch, which gates the escape ONLY on
+  // shouldForceSyncTick(controller), never on worker state). This scenario
+  // sustains input faster than a deliberately very slow round-trip, so the
+  // worker is busy (a real computation outstanding) for nearly the entire
+  // run — progress must still occur via the K-escape regardless.
+  const { appliedTicks, intervalFireCount, maxOutstanding } = simulateOffloadTimed({
+    durationMs: 20_000,
+    speedMs: 1000,
+    roundTripMs: 5000, // MUCH slower than the interval — the worker is busy almost continuously.
+    actionIntervalMs: 7, // continuous sustained input, faster than both interval and round-trip.
+  });
+  assert.equal(maxOutstanding, 1, 'precondition: the busy-gate fix still holds even at this extreme round-trip — never more than 1 outstanding');
+  assert.ok(appliedTicks > 0, 'the clock must still make progress via the forced-sync-tick escape even while the worker is (almost) continuously busy — a busy worker must never block the sync path');
+  assert.ok(appliedTicks / intervalFireCount <= 1.0, 'the ceiling still holds even in this busy-heavy scenario');
+});
+
+test('BUG-592 RED PROOF: disabling the busy-skip (scratch legacy variant) reproduces peak-outstanding > 1 at the primary hazard cell', () => {
+  // Mirrors the round's exact finding one more time, explicitly worded as
+  // the required RED-proof for the busy-skip mechanism itself: scratch-
+  // disable it, watch the assertion the FIXED test above relies on
+  // (maxOutstanding === 1) go red, then this test file's own use of the
+  // real (non-legacy) path elsewhere proves it is restored.
+  const disabled = simulateOffloadTimed({
+    durationMs: 60_000,
+    speedMs: 100,
+    roundTripMs: 600,
+    actionIntervalMs: 16,
+    legacyNoBusyGate: true,
+  });
+  assert.notEqual(disabled.maxOutstanding, 1, 'RED PROOF: with the busy-skip scratch-disabled, peak outstanding must NOT read 1 — proves the maxOutstanding===1 assertions elsewhere in this file are genuinely meaningful, not vacuously true');
+  assert.ok(disabled.maxOutstanding > 1, `expected peak outstanding to exceed 1 with the busy-skip disabled — got ${disabled.maxOutstanding}`);
+
+  // Restore: the SAME scenario through the real (fixed) path caps at 1.
+  const restored = simulateOffloadTimed({
+    durationMs: 60_000,
+    speedMs: 100,
+    roundTripMs: 600,
+    actionIntervalMs: 16,
+  });
+  assert.equal(restored.maxOutstanding, 1, 'the real (shipped) beginTickRequest, unmodified, caps peak outstanding at exactly 1 for the identical scenario — confirms the fix, not the scratch toggle, is what the shipped code relies on');
 });
 
