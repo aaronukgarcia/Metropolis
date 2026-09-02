@@ -289,7 +289,10 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   z-index: 19;
 }
 
-/* Persistent insolvency band banner (AC-1). */
+/* Persistent insolvency band banner (AC-1). BUG-500 audit: every variant of
+   this banner (warning/crisis/administration/second-bailout) is pure status
+   text with no button or control of its own — pointer-events:none so it can
+   never capture a click meant for whatever sits underneath it on the map. */
 .insolvency-banner {
   position: absolute;
   top: 8px;
@@ -302,6 +305,7 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   text-align: right;
   box-shadow: var(--shadow);
   z-index: 18;
+  pointer-events: none;
 }
 .insolvency-banner.warning { background: rgba(227, 179, 65, 0.14); border: 1px solid var(--warn); color: var(--warn); }
 .insolvency-banner.crisis { background: rgba(255, 123, 114, 0.15); border: 1px solid var(--danger); color: var(--danger); text-transform: uppercase; letter-spacing: 0.03em; }
@@ -375,11 +379,20 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
 
 /* ---------- IMF insolvency flow inc2 (FEAT-1972079923) ---------- */
 /* Forced Asset Sales panel (AC-2/AC-3/AC-4) — visible for the whole active
-   bailout, listing sellable assets by capital value descending. */
+   bailout, listing sellable assets by capital value descending.
+   BUG-500: this used to share the advisor's top-left corner (top:8/left:8)
+   and, being the higher z-index of the two, silently overdrew and captured
+   every click meant for the advisor's "click to place it now" control for
+   the ENTIRE bailout — auto-place was unreachable whenever a bailout was
+   active. Given its own reserved region (vertically centred on the left
+   edge) so it never shares an anchor with the advisor (top-left), the
+   compass (top-left), the tier legend / map hint / building card
+   (bottom-left), or any top-right insolvency banner. */
 .forced-asset-sales-panel {
   position: absolute;
-  top: 8px;
+  top: 50%;
   left: 8px;
+  transform: translateY(-50%);
   max-width: 320px;
   max-height: 60vh;
   overflow-y: auto;
@@ -391,7 +404,18 @@ h4 { margin: 12px 0 6px; font-size: 10.5px; letter-spacing: 0.09em; text-transfo
   color: var(--ink);
   z-index: 17;
 }
-.forced-asset-sales-panel h4 { margin: 0 0 6px; color: var(--danger); font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; }
+/* BUG-498: explicit dismiss affordance — UI-only, does not touch bailout state. */
+.forced-asset-sales-close {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  line-height: 1;
+  padding: 0;
+  font-size: 13px;
+}
+.forced-asset-sales-panel h4 { margin: 0 22px 6px 0; color: var(--danger); font-size: 13px; text-transform: uppercase; letter-spacing: 0.02em; }
 .forced-asset-sales-note, .forced-asset-sales-empty { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
 /* Enter Administration button (FEAT-1972079923 inc3, AC-5). */
 .forced-asset-sales-admin-btn { margin: 0 0 10px; width: 100%; }

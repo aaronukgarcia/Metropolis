@@ -1126,16 +1126,26 @@ function PlaceNoticeBanner() {
 // FEAT-1972079923 inc1 (AC-1): persistent status banner for the insolvency band.
 // Solvent renders nothing. 'warning' gives advance notice before the crisis
 // threshold is crossed (task point 3) so the eventual bailout is not a surprise;
-// 'crisis' is the AC-1 banner text (the IMF bailout EVENT itself — forced sales,
-// administration — is inc2/3, not built yet; this only surfaces the state).
+// 'crisis' is the AC-1 banner text — it also covers the FIRST bailout (a plain
+// `bailoutState` overlays nothing onto `insolvencyState`, so the first bailout
+// still reads as the raw 'crisis' band; there is no separate first-bailout
+// banner component, so this text IS the first-bailout banner).
 function InsolvencyBanner() {
   const { state } = useSim();
   const band = state.insolvencyState ?? 'solvent';
-  // FEAT-1972079923 inc3 (AC-5): 'administration' has its own dedicated
-  // AdministrationBanner below — this banner only covers the pure
-  // solvent/warning/crisis bands, never renders the stale crisis-style copy
-  // over an active administration.
-  if (band === 'solvent' || band === 'administration') return null;
+  // BUG-501: 'administration', 'bailout_second' and 'decline' each have their
+  // own dedicated overlay/banner (AdministrationBanner, SecondBailoutBanner,
+  // DeclineScreen) — this banner must return null for ALL of them, never just
+  // 'administration'. Before this fix, 'bailout_second' fell through to the
+  // `crisis` check below (false, since band !== 'crisis' literally once
+  // overlaid), rendering the FALSE 'warning' copy ("funds are approaching the
+  // insolvency threshold ... before the IMF steps in") stacked on top of
+  // SecondBailoutBanner at the same top-right anchor — a contradiction, since
+  // the IMF is already two bailouts deep. GR#1: an unrecognised/overlaid band
+  // must fall back to "render nothing" here, never to the generic warning text.
+  if (band === 'solvent' || band === 'administration' || band === 'bailout_second' || band === 'decline') {
+    return null;
+  }
   const crisis = band === 'crisis';
   return (
     <div className={`insolvency-banner ${crisis ? 'crisis' : 'warning'}`} role="status">
@@ -1210,18 +1220,42 @@ function InsolvencyPopup() {
 // order). Selling dispatches 'sellAsset', which atomically removes the
 // building and credits the treasury the placeholder sale value (journaled
 // through replay like any other action).
+// BUG-498: the panel is year-pinned BY DESIGN (visibility clears at bailout
+// year-end or on enterAdministration, see engine.ts) — that is not a trap,
+// but the player still feels stuck with no way to get it off the screen
+// mid-year. `dismissed` is PURE UI-local React state, never touches
+// SimState/dispatch, so it cannot alter funds, bailoutState, or any
+// journaled/conserved value (GR#3: no second source of truth for money).
+// The effect below resets `dismissed` whenever `active.enteredAt` changes
+// identity (a NEW bailout starting — first or second — after this one ended)
+// so a dismissal of THIS bailout's panel never silently suppresses a LATER
+// bailout's panel too.
 function ForcedAssetSalesPanel() {
   const { state, dispatch } = useSim();
   const bailout = state.bailoutState;
   const bailoutSecond = state.bailoutSecondState;
   const active = bailout ?? bailoutSecond;
+  const [dismissed, setDismissed] = useState(false);
+  const activeEnteredAt = active?.enteredAt ?? null;
+  useEffect(() => {
+    setDismissed(false);
+  }, [activeEnteredAt]);
   if (!active) return null;
+  if (dismissed) return null;
   const isSecond = bailout === null && bailoutSecond !== null;
   const duration = isSecond ? SECOND_BAILOUT_DURATION_TICKS : BAILOUT_DURATION_TICKS;
   const assets = forcedSaleAssets(state);
   const ticksLeft = Math.max(0, active.enteredAt + duration - state.tick);
   return (
     <div className="forced-asset-sales-panel" role="region" aria-label="Forced Asset Sales">
+      <button
+        className="btn tiny forced-asset-sales-close"
+        aria-label="Dismiss Forced Asset Sales panel"
+        title="Dismiss (reappears next time a bailout starts; bailout is unaffected)"
+        onClick={() => setDismissed(true)}
+      >
+        ×
+      </button>
       <h4>FORCED ASSET SALES{isSecond ? ' — SECOND BAILOUT (WORSE TERMS)' : ''}</h4>
       <p className="forced-asset-sales-note">
         IMF {isSecond ? 'second ' : ''}bailout active since tick {active.enteredAt} ({ticksLeft} ticks
