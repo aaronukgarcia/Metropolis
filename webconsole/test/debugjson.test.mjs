@@ -131,7 +131,10 @@ test('demand carries power need/capacity in MW matching powerStats', () => {
   const pw = powerStats(s);
   assert.equal(dj.demand.power.needMw, pw.need);
   assert.equal(dj.demand.power.capMw, pw.cap);
-  assert.equal(dj.demand.services.length, 9, 'all nine service demand indices present');
+  // BUG-526 (Q100046 A1) added a 'fire' row to serviceCoverageOf/serviceDemandOf
+  // (fire stations now feed wellbeing via the new Fire safety part, GR#3 SSOT),
+  // so the demand-services set grew from 9 to 10 indices.
+  assert.equal(dj.demand.services.length, 10, 'all ten service demand indices present (incl. BUG-526 fire)');
 });
 
 test('info tabs: experience ladder spans levels 1-20; policy rows reflect toggles; milestones evaluated', () => {
@@ -236,7 +239,7 @@ test('perfHud: section shape when snapshot is provided (mocked)', () => {
 });
 
 test('perfHud: does not appear in SIMSTATE_COVERAGE (not sim state)', () => {
-  // perfHud is UI-layer, wall-clock, non-deterministic — not a SimState field
+  // perfHud is UI-layer, wall-clock, non-deterministic ï¿½ not a SimState field
   assert.ok(
     !Object.prototype.hasOwnProperty.call(SIMSTATE_COVERAGE, 'perfHud'),
     'perfHud is NOT a SimState field and should NOT be in SIMSTATE_COVERAGE'

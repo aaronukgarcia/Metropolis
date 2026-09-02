@@ -241,6 +241,12 @@ test('regression: the Y11 dump signature (wellbeing ≥ 85 while demand pegs) is
             hea_clinic: n * 2,
             hea_hospital: n,
             pol_station: n,
+            // BUG-526 (Q100046 A1) — fire stations now feed a wellbeing part
+            // (Safety's sibling), so the sweep must provision fire cover the
+            // same way it already provisions police, or the new part sits at
+            // its uncovered floor and overall wellbeing can never reach the
+            // ≥85 threshold this test needs to be non-vacuous.
+            fire_station: n,
             wat_clean: n,
             wat_waste: n,
             edu_nursery: Math.ceil((pop * 0.06) / 30) * Math.min(n, 1),
@@ -248,6 +254,15 @@ test('regression: the Y11 dump signature (wellbeing ≥ 85 while demand pegs) is
             col_sixth: n,
             pow_fusion: n,
             park_town: n * 12,
+            // BUG-524 (Q100046 C1) — unemployment now has teeth via a
+            // "Jobs/Employment" wellbeing part (coverage = 1 - unemployment,
+            // workers = pop * WORKING_AGE_FRACTION). With zero job-providing
+            // buildings this part sat pinned near its floor for any pop > 0,
+            // making overall ≥ 85 permanently unreachable regardless of
+            // service coverage. Provision enough job capacity (ind_estate,
+            // 2000 jobs/unit at base tier) to cover ~0.55·pop workers,
+            // gated on n > 0 the same way edu_nursery is.
+            ind_estate: Math.ceil((pop * 0.55) / 2000) * Math.min(n, 1),
           },
           (s) => {
             // Push the non-service parts up so high overall wellbeing is reachable
